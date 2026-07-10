@@ -1,0 +1,353 @@
+package dashboard
+
+import (
+	"crypto/sha1"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"sort"
+	"time"
+
+	"controltower/server/internal/aggregator"
+	"controltower/server/internal/storage"
+)
+
+type AlertStore interface {
+	UpsertCurrentAlerts(alerts []storage.Alert, now time.Time) error
+	ResolveMissingAlerts(currentIDs []string, now time.Time) error
+	QueryAlerts(query storage.AlertQuery) ([]storage.Alert, error)
+	UpdateAlertAction(id string, status string, silenceUntil *time.Time, now time.Time) error
+	ExpireSilencedAlerts(now time.Time) error
+}
+
+type AlertListResponse struct {
+	Items []AlertItem `json:"items"`
+}
+
+type AlertItem struct {
+	ID           string     `json:"id"`
+	InstanceID   string     `json:"instance_id"`
+	RuleKey      string     `json:"rule_key"`
+	Severity     string     `json:"severity"`
+	Status       string     `json:"status"`
+	Title        string     `json:"title"`
+	Summary      string     `json:"summary"`
+	SeenAt       time.Time  `json:"seen_at"`
+	FirstSeenAt  time.Time  `json:"first_seen_at"`
+	LastSeenAt   time.Time  `json:"last_seen_at"`
+	ResolvedAt   *time.Time `json:"resolved_at,omitempty"`
+	SilenceUntil *time.Time `json:"silence_until,omitempty"`
+}
+
+type AlertActionRequest struct {
+	ID             string `json:"id"`
+	Action         string `json:"action"`
+	SilenceMinutes int    `json:"silence_minutes"`
+}
+
+type AlertActionResponse struct {
+	OK bool `json:"ok"`
+}
+
+func (h Handler) WithAlertStore(store AlertStore) Handler {
+	h.alertStore = store
+	return h
+}
+
+func (h Handler) HandleAlerts(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeDashboardError(w, http.StatusMethodNotAllowed, "method_not_allowed")
+		return
+	}
+	computed, err := h.currentAlerts()
+	if err != nil {
+		writeDashboardError(w, http.StatusInternalServerError, "query_failed")
+		return
+	}
+	if h.alertStore == nil {
+		writeDashboardJSON(w, http.StatusOK, AlertListResponse{Items: computed})
+		return
+	}
+	now := time.Now().UTC()
+	if err := h.alertStore.ExpireSilencedAlerts(now); err != nil {
+		writeDashboardError(w, http.StatusInternalServerError, "query_failed")
+		return
+	}
+	if err := h.alertStore.UpsertCurrentAlerts(alertItemsToStorage(computed), now); err != nil {
+		writeDashboardError(w, http.StatusInternalServerError, "query_failed")
+		return
+	}
+	if err := h.alertStore.ResolveMissingAlerts(alertIDs(computed), now); err != nil {
+		writeDashboardError(w, http.StatusInternalServerError, "query_failed")
+		return
+	}
+	alerts, err := h.alertStore.QueryAlerts(parseAlertQuery(r))
+	if err != nil {
+		writeDashboardError(w, http.StatusInternalServerError, "query_failed")
+		return
+	}
+	writeDashboardJSON(w, http.StatusOK, AlertListResponse{Items: storageAlertsToItems(alerts)})
+}
+
+func (h Handler) HandleAlertAction(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeDashboardError(w, http.StatusMethodNotAllowed, "method_not_allowed")
+		return
+	}
+	if h.alertStore == nil {
+		writeDashboardError(w, http.StatusInternalServerError, "alert_store_not_configured")
+		return
+	}
+	var request AlertActionRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeDashboardError(w, http.StatusBadRequest, "invalid_json")
+		return
+	}
+	status, silenceUntil, ok := alertActionStatus(request, time.Now().UTC())
+	if request.ID == "" || !ok {
+		writeDashboardError(w, http.StatusBadRequest, "invalid_alert_action")
+		return
+	}
+	if err := h.alertStore.UpdateAlertAction(request.ID, status, silenceUntil, time.Now().UTC()); err != nil {
+		writeDashboardError(w, http.StatusInternalServerError, "query_failed")
+		return
+	}
+	writeDashboardJSON(w, http.StatusOK, AlertActionResponse{OK: true})
+}
+
+func (h Handler) currentAlerts() ([]AlertItem, error) {
+	metrics, err := latestOverviewMetrics(h.source)
+	if err != nil {
+		return nil, err
+	}
+	var serverMetrics []storage.ServerMetric
+	var healthChecks []storage.HealthCheck
+	var dockerStatuses []storage.DockerStatus
+	var agents []storage.Agent
+	if h.runtimeStore != nil {
+		agents, err = h.runtimeStore.QueryAgents(storage.AgentQuery{Limit: storage.MaxRuntimeQueryLimit})
+		if err != nil {
+			return nil, err
+		}
+		serverMetrics, err = h.runtimeStore.QueryServerMetrics(storage.ServerMetricQuery{Limit: storage.MaxRuntimeQueryLimit})
+		if err != nil {
+			return nil, err
+		}
+		healthChecks, err = h.runtimeStore.QueryHealthChecks(storage.HealthCheckQuery{Limit: storage.MaxRuntimeQueryLimit})
+		if err != nil {
+			return nil, err
+		}
+		dockerStatuses, err = h.runtimeStore.QueryDockerStatuses(storage.DockerStatusQuery{Limit: storage.MaxRuntimeQueryLimit})
+		if err != nil {
+			return nil, err
+		}
+	}
+	items := BuildCurrentAlerts(metrics, serverMetrics, healthChecks, dockerStatuses)
+	return appendAgentBacklogAlerts(items, agents, time.Now().UTC()), nil
+}
+
+func appendAgentBacklogAlerts(items []AlertItem, agents []storage.Agent, now time.Time) []AlertItem {
+	for _, agent := range agents {
+		if agent.BacklogEstimate < 3000 || agent.LastSeenAt.IsZero() || now.Sub(agent.LastSeenAt) > 120*time.Second {
+			continue
+		}
+		severity := "warning"
+		if agent.BacklogEstimate >= 10000 {
+			severity = "critical"
+		}
+		items = append(items, AlertItem{
+			ID: alertID(agent.InstanceID, "agent_backlog", agent.ID), InstanceID: agent.InstanceID,
+			RuleKey: "agent_backlog", Severity: severity, Status: "firing", Title: "Agent \u65e5\u5fd7\u79ef\u538b",
+			Summary: fmt.Sprintf("Agent %s \u4f30\u7b97\u79ef\u538b %d \u6761\uff0c\u6e90\u5e93\u6700\u65b0 ID %d\uff0c\u5df2\u5904\u7406 ID %d", agent.ID, agent.BacklogEstimate, agent.SourceLatestLogID, agent.LastLogID),
+			SeenAt:  agent.LastSeenAt, FirstSeenAt: agent.LastSeenAt, LastSeenAt: agent.LastSeenAt,
+		})
+	}
+	sortAlerts(items)
+	return items
+}
+
+func BuildCurrentAlerts(metrics []aggregator.Metric, serverMetrics []storage.ServerMetric, healthChecks []storage.HealthCheck, dockerStatuses []storage.DockerStatus) []AlertItem {
+	items := make([]AlertItem, 0)
+	for _, metric := range latestInstanceMetrics(metrics) {
+		items = appendMetricAlerts(items, metric)
+	}
+	for _, metric := range latestServerMetricsByInstance(serverMetrics) {
+		items = appendServerMetricAlerts(items, metric)
+	}
+	for _, item := range latestHealthChecksByTarget(healthChecks) {
+		if item.Status != "up" {
+			items = append(items, AlertItem{ID: alertID(item.InstanceID, "health_down", item.Target), InstanceID: item.InstanceID, RuleKey: "health_down", Severity: "critical", Status: "firing", Title: "\u5065\u5eb7\u68c0\u67e5\u5931\u8d25", Summary: fmt.Sprintf("%s \u8fd4\u56de %s\uff0cHTTP %d\uff0c\u5ef6\u8fdf %dms", item.Target, item.Status, item.HTTPStatusCode, item.LatencyMS), SeenAt: item.CheckedAt, FirstSeenAt: item.CheckedAt, LastSeenAt: item.CheckedAt})
+		}
+	}
+	for _, item := range latestDockerStatusesByContainer(dockerStatuses) {
+		if !item.Running {
+			items = append(items, AlertItem{ID: alertID(item.InstanceID, "docker_stopped", item.ContainerName), InstanceID: item.InstanceID, RuleKey: "docker_stopped", Severity: "warning", Status: "firing", Title: "\u5bb9\u5668\u672a\u8fd0\u884c", Summary: fmt.Sprintf("%s \u5f53\u524d\u72b6\u6001\uff1a%s", item.ContainerName, item.Status), SeenAt: item.CollectedAt, FirstSeenAt: item.CollectedAt, LastSeenAt: item.CollectedAt})
+		}
+	}
+	sortAlerts(items)
+	return items
+}
+
+func appendMetricAlerts(items []AlertItem, metric aggregator.Metric) []AlertItem {
+	if metric.ErrorRate != nil && metric.RequestCount >= 5 && *metric.ErrorRate >= 0.2 {
+		severity := "warning"
+		if *metric.ErrorRate >= 0.5 {
+			severity = "critical"
+		}
+		items = append(items, AlertItem{ID: alertID(metric.InstanceID, "high_error_rate", metric.DimensionKey), InstanceID: metric.InstanceID, RuleKey: "high_error_rate", Severity: severity, Status: "firing", Title: "\u9519\u8bef\u7387\u5347\u9ad8", Summary: fmt.Sprintf("\u6700\u8fd1 1 \u5206\u949f\u9519\u8bef\u7387 %.1f%%\uff0c%d/%d \u8bf7\u6c42\u5931\u8d25", *metric.ErrorRate*100, metric.ErrorCount, metric.RequestCount), SeenAt: metric.BucketTime, FirstSeenAt: metric.BucketTime, LastSeenAt: metric.BucketTime})
+	}
+	if metric.P95UseTime != nil && *metric.P95UseTime >= 5 {
+		severity := "warning"
+		if *metric.P95UseTime >= 10 {
+			severity = "critical"
+		}
+		items = append(items, AlertItem{ID: alertID(metric.InstanceID, "high_p95_latency", metric.DimensionKey), InstanceID: metric.InstanceID, RuleKey: "high_p95_latency", Severity: severity, Status: "firing", Title: "P95 \u8017\u65f6\u504f\u9ad8", Summary: fmt.Sprintf("\u6700\u8fd1 1 \u5206\u949f P95 %.2fs", *metric.P95UseTime), SeenAt: metric.BucketTime, FirstSeenAt: metric.BucketTime, LastSeenAt: metric.BucketTime})
+	}
+	return items
+}
+
+func appendServerMetricAlerts(items []AlertItem, metric storage.ServerMetric) []AlertItem {
+	thresholds := []struct {
+		key      string
+		title    string
+		value    float64
+		warning  float64
+		critical float64
+	}{
+		{key: "high_cpu", title: "CPU \u4f7f\u7528\u7387\u504f\u9ad8", value: metric.CPUPercent, warning: 80, critical: 90},
+		{key: "high_memory", title: "\u5185\u5b58\u4f7f\u7528\u7387\u504f\u9ad8", value: metric.MemoryUsedPercent, warning: 80, critical: 90},
+		{key: "high_disk", title: "\u78c1\u76d8\u4f7f\u7528\u7387\u504f\u9ad8", value: metric.DiskUsedPercent, warning: 85, critical: 95},
+	}
+	for _, threshold := range thresholds {
+		if threshold.value < threshold.warning {
+			continue
+		}
+		severity := "warning"
+		if threshold.value >= threshold.critical {
+			severity = "critical"
+		}
+		items = append(items, AlertItem{ID: alertID(metric.InstanceID, threshold.key, "server"), InstanceID: metric.InstanceID, RuleKey: threshold.key, Severity: severity, Status: "firing", Title: threshold.title, Summary: fmt.Sprintf("\u5f53\u524d %.1f%%", threshold.value), SeenAt: metric.CollectedAt, FirstSeenAt: metric.CollectedAt, LastSeenAt: metric.CollectedAt})
+	}
+	return items
+}
+func latestInstanceMetrics(metrics []aggregator.Metric) []aggregator.Metric {
+	latest := make(map[string]aggregator.Metric)
+	for _, metric := range metrics {
+		if metric.DimensionType != "instance" {
+			continue
+		}
+		current, ok := latest[metric.InstanceID]
+		if !ok || metric.BucketTime.After(current.BucketTime) {
+			latest[metric.InstanceID] = metric
+		}
+	}
+	result := make([]aggregator.Metric, 0, len(latest))
+	for _, metric := range latest {
+		result = append(result, metric)
+	}
+	return result
+}
+
+func latestHealthChecksByTarget(items []storage.HealthCheck) []storage.HealthCheck {
+	latest := make(map[string]storage.HealthCheck)
+	for _, item := range items {
+		key := item.InstanceID + "\x00" + item.Target
+		current, ok := latest[key]
+		if !ok || item.CheckedAt.After(current.CheckedAt) {
+			latest[key] = item
+		}
+	}
+	result := make([]storage.HealthCheck, 0, len(latest))
+	for _, item := range latest {
+		result = append(result, item)
+	}
+	return result
+}
+
+func latestDockerStatusesByContainer(items []storage.DockerStatus) []storage.DockerStatus {
+	latest := make(map[string]storage.DockerStatus)
+	for _, item := range items {
+		key := item.InstanceID + "\x00" + item.ContainerName
+		current, ok := latest[key]
+		if !ok || item.CollectedAt.After(current.CollectedAt) {
+			latest[key] = item
+		}
+	}
+	result := make([]storage.DockerStatus, 0, len(latest))
+	for _, item := range latest {
+		result = append(result, item)
+	}
+	return result
+}
+
+func alertActionStatus(request AlertActionRequest, now time.Time) (string, *time.Time, bool) {
+	switch request.Action {
+	case "acknowledge":
+		return "acknowledged", nil, true
+	case "silence":
+		minutes := request.SilenceMinutes
+		if minutes <= 0 {
+			minutes = 60
+		}
+		until := now.Add(time.Duration(minutes) * time.Minute)
+		return "silenced", &until, true
+	case "resolve":
+		return "resolved", nil, true
+	default:
+		return "", nil, false
+	}
+}
+
+func parseAlertQuery(r *http.Request) storage.AlertQuery {
+	query := r.URL.Query()
+	return storage.AlertQuery{
+		InstanceID: query.Get("instance_id"),
+		Status:     query.Get("status"),
+		Severity:   query.Get("severity"),
+		ActiveOnly: query.Get("active_only") == "true",
+		Limit:      parseInt(query.Get("limit")),
+		Offset:     parseInt(query.Get("offset")),
+	}
+}
+
+func alertItemsToStorage(items []AlertItem) []storage.Alert {
+	alerts := make([]storage.Alert, 0, len(items))
+	for _, item := range items {
+		alerts = append(alerts, storage.Alert{ID: item.ID, InstanceID: item.InstanceID, RuleKey: item.RuleKey, Severity: item.Severity, Status: item.Status, Title: item.Title, Summary: item.Summary, FirstSeenAt: item.FirstSeenAt, LastSeenAt: item.LastSeenAt, ResolvedAt: item.ResolvedAt, SilenceUntil: item.SilenceUntil})
+	}
+	return alerts
+}
+
+func storageAlertsToItems(alerts []storage.Alert) []AlertItem {
+	items := make([]AlertItem, 0, len(alerts))
+	for _, alert := range alerts {
+		items = append(items, AlertItem{ID: alert.ID, InstanceID: alert.InstanceID, RuleKey: alert.RuleKey, Severity: alert.Severity, Status: alert.Status, Title: alert.Title, Summary: alert.Summary, SeenAt: alert.LastSeenAt, FirstSeenAt: alert.FirstSeenAt, LastSeenAt: alert.LastSeenAt, ResolvedAt: alert.ResolvedAt, SilenceUntil: alert.SilenceUntil})
+	}
+	sortAlerts(items)
+	return items
+}
+
+func alertIDs(items []AlertItem) []string {
+	ids := make([]string, 0, len(items))
+	for _, item := range items {
+		ids = append(ids, item.ID)
+	}
+	return ids
+}
+
+func alertID(instanceID string, ruleKey string, target string) string {
+	key := instanceID + ":" + ruleKey + ":" + target
+	sum := sha1.Sum([]byte(key))
+	return hex.EncodeToString(sum[:])
+}
+
+func sortAlerts(items []AlertItem) {
+	weight := map[string]int{"critical": 0, "warning": 1, "info": 2}
+	sort.Slice(items, func(i, j int) bool {
+		if weight[items[i].Severity] != weight[items[j].Severity] {
+			return weight[items[i].Severity] < weight[items[j].Severity]
+		}
+		return items[i].SeenAt.After(items[j].SeenAt)
+	})
+}

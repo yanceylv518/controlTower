@@ -1,0 +1,27 @@
+package logcollector
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestCollectLogsSQLUsesReadOnlyIncrementalQuery(t *testing.T) {
+	sqlText := collectLogsSQL()
+	for _, fragment := range []string{
+		"SELECT id, created_at, type, content",
+		"FROM logs",
+		"WHERE id > ? AND type IN (2, 5)",
+		"ORDER BY id ASC",
+		"LIMIT ?",
+		"`group`",
+	} {
+		if !strings.Contains(sqlText, fragment) {
+			t.Fatalf("collector SQL missing %q: %s", fragment, sqlText)
+		}
+	}
+	for _, forbidden := range []string{"INSERT", "UPDATE", "DELETE", "content LIKE"} {
+		if strings.Contains(strings.ToUpper(sqlText), forbidden) {
+			t.Fatalf("collector SQL contains forbidden fragment %q: %s", forbidden, sqlText)
+		}
+	}
+}

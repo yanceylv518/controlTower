@@ -1,0 +1,20 @@
+﻿# Local runtime data and secrets
+local/
+*.log
+*.err.log
+*.out.log
+
+# Build artifacts
+dist/
+
+# Local config and credentials
+.env
+.env.*
+*.local.config
+mysql-test.config.ps1
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
