@@ -129,7 +129,8 @@ PrivateTmp=true
 WantedBy=multi-user.target
 EOF
 systemctl daemon-reload
-systemctl enable --now control-tower-agent
+systemctl enable control-tower-agent
+systemctl restart control-tower-agent
 sleep 1
 systemctl --no-pager --lines=5 status control-tower-agent || true
 
