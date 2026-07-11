@@ -81,6 +81,10 @@ func (r *Result) checkDataDir(dataDir string) {
 }
 
 func (r *Result) checkServer(ctx context.Context, cfg config.Config) {
+	if cfg.ServerURL == "" {
+		r.add(StatusPass, "control_tower_server", "skipped: standalone alert-only mode")
+		return
+	}
 	url := strings.TrimRight(cfg.ServerURL, "/") + "/healthz"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {

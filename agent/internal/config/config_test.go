@@ -175,3 +175,57 @@ func TestLoadFromMapRejectsInvalidLogEventMode(t *testing.T) {
 		t.Fatalf("expected invalid log event mode error")
 	}
 }
+
+func TestLoadFromMapAllowsStandaloneDingTalkMode(t *testing.T) {
+	cfg, err := LoadFromMap(map[string]string{
+		"CT_AGENT_ID":             "agent-1",
+		"CT_INSTANCE_ID":          "inst-1",
+		"CT_LOG_DSN":              "readonly-dsn",
+		"CT_DINGTALK_WEBHOOK_URL": "https://oapi.dingtalk.com/robot/send?access_token=x",
+	})
+	if err != nil {
+		t.Fatalf("standalone dingtalk mode should be valid: %v", err)
+	}
+	if cfg.ServerURL != "" || cfg.AlertErrorWindow != 10 || cfg.AlertErrorThreshold != 3 {
+		t.Fatalf("unexpected standalone config: %#v", cfg)
+	}
+}
+
+func TestLoadFromMapRejectsMissingServerAndDingTalk(t *testing.T) {
+	_, err := LoadFromMap(map[string]string{
+		"CT_AGENT_ID":    "agent-1",
+		"CT_INSTANCE_ID": "inst-1",
+		"CT_LOG_DSN":     "readonly-dsn",
+	})
+	if err == nil {
+		t.Fatalf("expected error when neither server nor dingtalk webhook is configured")
+	}
+}
+
+func TestLoadFromMapRejectsInvalidAlertSettings(t *testing.T) {
+	base := map[string]string{
+		"CT_AGENT_ID":             "agent-1",
+		"CT_INSTANCE_ID":          "inst-1",
+		"CT_LOG_DSN":              "readonly-dsn",
+		"CT_DINGTALK_WEBHOOK_URL": "https://oapi.dingtalk.com/robot/send?access_token=x",
+	}
+
+	invalidURL := map[string]string{}
+	for key, value := range base {
+		invalidURL[key] = value
+	}
+	invalidURL["CT_DINGTALK_WEBHOOK_URL"] = "oapi.dingtalk.com/robot"
+	if _, err := LoadFromMap(invalidURL); err == nil {
+		t.Fatalf("expected error for webhook url without scheme")
+	}
+
+	badThreshold := map[string]string{}
+	for key, value := range base {
+		badThreshold[key] = value
+	}
+	badThreshold["CT_ALERT_ERROR_WINDOW"] = "5"
+	badThreshold["CT_ALERT_ERROR_THRESHOLD"] = "6"
+	if _, err := LoadFromMap(badThreshold); err == nil {
+		t.Fatalf("expected error when threshold exceeds window")
+	}
+}

@@ -14,8 +14,8 @@ type AlertNotificationRunner struct {
 	interval time.Duration
 }
 
-func NewAlertNotificationRunner(source OverviewSource, runtimeStore RuntimeStore, alertStore AlertStore, notificationStore NotificationStore, interval time.Duration) AlertNotificationRunner {
-	handler := NewHandler(source).WithRuntimeStore(runtimeStore).WithAlertStore(alertStore).WithNotificationStore(notificationStore)
+func NewAlertNotificationRunner(source OverviewSource, logStore LogStore, runtimeStore RuntimeStore, alertStore AlertStore, notificationStore NotificationStore, interval time.Duration) AlertNotificationRunner {
+	handler := NewHandler(source).WithLogStore(logStore).WithRuntimeStore(runtimeStore).WithAlertStore(alertStore).WithNotificationStore(notificationStore)
 	return AlertNotificationRunner{handler: handler, interval: interval}
 }
 

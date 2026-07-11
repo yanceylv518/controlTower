@@ -16,6 +16,8 @@ CT_LOG_BATCH_SIZE=1000
 CT_LOG_QUERY_TIMEOUT_SECONDS=2
 CT_REPORT_TIMEOUT_SECONDS=3
 CT_MAX_LOCAL_BUFFER_EVENTS=5000
+# full_debug is only needed if you also want the SERVER-side recent_errors rule;
+# the agent-side DingTalk alert below works in every mode
 CT_LOG_EVENT_MODE=aggregate_with_samples
 CT_LOG_SAMPLE_LIMIT=50
 CT_SLOW_LOG_THRESHOLD_SECONDS=10
@@ -36,3 +38,12 @@ CT_NEW_API_ADMIN_USERNAME=REPLACE_WITH_NEW_API_ADMIN_USERNAME
 CT_NEW_API_ADMIN_PASSWORD=REPLACE_WITH_NEW_API_ADMIN_PASSWORD
 CT_NEW_API_ADMIN_ACCESS_TOKEN=REPLACE_WITH_NEW_API_ADMIN_ACCESS_TOKEN
 CT_NEW_API_ADMIN_USER_ID=REPLACE_WITH_NEW_API_ADMIN_USER_ID
+
+# Agent-side DingTalk error alert: any channel and any user with
+# CT_ALERT_ERROR_THRESHOLD or more errors within the most recent
+# CT_ALERT_ERROR_WINDOW requests triggers one group message per episode.
+# With CT_DINGTALK_WEBHOOK_URL set, CT_SERVER_URL becomes optional
+# (standalone alert-only mode).
+CT_DINGTALK_WEBHOOK_URL=
+CT_ALERT_ERROR_WINDOW=10
+CT_ALERT_ERROR_THRESHOLD=3

@@ -77,7 +77,7 @@ func startAggregationRunner(store mysqlstore.Store, interval time.Duration) {
 }
 
 func startNotificationRunner(store mysqlstore.Store, interval time.Duration) {
-	runner := dashboard.NewAlertNotificationRunner(store, store, store, store, interval)
+	runner := dashboard.NewAlertNotificationRunner(store, store, store, store, store, interval)
 	go func() {
 		if err := runner.Run(context.Background()); err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("notification runner stopped: %v", err)

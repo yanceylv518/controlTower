@@ -1,0 +1,20 @@
+[Unit]
+Description=Control Tower Agent (new-api monitoring)
+After=network-online.target mysql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ct-agent
+Group=ct-agent
+ExecStart=/usr/local/bin/control-tower-agent -config /etc/control-tower/agent.config
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/control-tower-agent
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

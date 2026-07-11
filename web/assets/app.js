@@ -561,7 +561,7 @@ function renderNotificationDeliveries(rows) {
 
 async function saveWebhookChannel(form) {
   const data = new FormData(form);
-  const payload = { name: String(data.get("name") || "").trim(), webhook_url: String(data.get("webhook_url") || "").trim(), enabled: String(data.get("enabled") || "true") === "true" };
+  const payload = { name: String(data.get("name") || "").trim(), channel_type: String(data.get("channel_type") || "webhook"), webhook_url: String(data.get("webhook_url") || "").trim(), enabled: String(data.get("enabled") || "true") === "true" };
   const response = await fetch(apiURL("/api/dashboard/notification-channels"), { method: "POST", headers: { Authorization: `Bearer ${state.token}`, "Content-Type": "application/json" }, body: JSON.stringify(payload) });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   form.reset();

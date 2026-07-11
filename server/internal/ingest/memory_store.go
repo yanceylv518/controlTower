@@ -390,6 +390,24 @@ func (s *MemoryStore) InsertNotificationDelivery(delivery storage.NotificationDe
 	return nil
 }
 
+func (s *MemoryStore) ExpireDeliveriesForResolvedAlerts(now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for key, delivery := range s.notificationDeliveries {
+		if delivery.Status != "sent" {
+			continue
+		}
+		alert, ok := s.alerts[delivery.AlertID]
+		if !ok || alert.Status != "resolved" {
+			continue
+		}
+		delivery.Status = "expired"
+		delivery.NextAttemptAt = now
+		s.notificationDeliveries[key] = delivery
+	}
+	return nil
+}
+
 func (s *MemoryStore) NotificationDeliveryDue(alertID string, channelID string, now time.Time) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

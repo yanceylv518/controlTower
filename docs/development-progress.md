@@ -89,6 +89,50 @@
 | 运行态页面接入 | 已完成 | `web/assets/app.js` | 页面可请求 metrics、health、docker 三类 API |
 | 告警中心页面接入 | 已完成 | `web/index.html`、`web/assets/**` | 总览当前告警与告警中心接入 `/api/dashboard/alerts`，支持确认、静默、状态筛选和历史切换 |
 | 通知设置页接入 | 已完成 | `web/index.html`、`web/assets/app.js` | 设置页支持 Webhook 表单、通知渠道列表和发送记录列表，展示重试次数和下次重试 |
+| recent_errors 告警规则 + 钉钉通知（Server 侧） | 已完成 | `server/internal/dashboard/recent_errors.go`、`notification_handler.go`、`notification_runner.go`、`mysqlstore/notification_store.go`、`ingest/memory_store.go`、`web/**` | 规则：任一渠道/任一客户最近 10 条请求中错误 ≥3（≥5 升级 critical）触发告警；通知渠道支持 `channel_type=dingtalk`（msgtype=text，校验 errcode）；告警恢复后再次触发可重新通知（sent 投递随告警 resolved 过期）；此路径需 Agent `CT_LOG_EVENT_MODE=full_debug`；`go test ./server/...` 含链路 E2E（规则→告警→钉钉→恢复→再通知）通过 |
+| 临时版：Agent 端错误告警直发钉钉 | 已完成 | `agent/internal/erroralert/**`、`agent/internal/config/**`、`agent/cmd/control-tower-agent/main.go`、`deploy/agent.*.example` | 同一规则在 Agent 端直接对源库采集到的事件评估（任意 log event mode 均可用，不依赖 Server）；配置 `CT_DINGTALK_WEBHOOK_URL` 启用，`CT_ALERT_ERROR_WINDOW`/`CT_ALERT_ERROR_THRESHOLD` 可调（默认 10/3）；同一维度一个 episode 只发一次，恢复后再触发可再发，发送失败下个 pass 重试；不配 `CT_SERVER_URL` 时进入独立告警模式（只采集+告警，不心跳不上报）；独立模式首次启动自动从 logs 表当前位置起步（不回放历史，防旧事件刷屏）；`deploy/install-agent.sh` 一键安装（交互问 DSN+webhook，自动装二进制/配置/systemd/preflight/启动）；`go test ./agent/...` 通过（含窗口/去重/恢复重发/errcode 失败重试/游标自动定位用例） |
+
+## Agent 采集与上报修复计划
+
+2026-07-10 代码复核结论：Agent 采集/上报主干逻辑正确（游标断点续采、缓冲先落盘再推进游标、`metric_batch_id` 幂等已验证 Server 端 `metric_batches` INSERT IGNORE 去重 + 同分钟跨批次累加合并）。以下为复核发现的问题与完善项，按优先级排序。
+
+### P0 确定性缺陷（真实库验收前必须修）
+
+| 子项 | 状态 | 问题 | 文件范围 | 验证方式 |
+| --- | --- | --- | --- | --- |
+| logs 采集 NULL 字段防护 | 未开始 | 采集 SQL 直接 SELECT 原始列并 Scan 进 `string`/`int64`/`bool`，无 COALESCE 或 `sql.Null*` 保护；new-api gorm 建表大部分列可为 NULL，一旦某行含 NULL，Scan 报错导致 pass 失败、游标不推进，Agent 在该行上无限退避重试，采集永久停摆 | `agent/internal/logcollector/mysql.go` | 单元测试覆盖 NULL 列行；源测试库插入 NULL 行后采集不中断且游标推进 |
+| 渠道快照 collector 常驻化 | 未开始 | `channelcollector.MySQLCollector` 在每个采集 pass 内新建（DB 连接也是每 pass 开关），`lastCheckedAt`/`lastHash` 每次归零，`CT_CHANNEL_SNAPSHOT_INTERVAL_SECONDS` 与内容哈希去重完全失效，实际每 30s 全量查询并全量上报 channels | `agent/cmd/control-tower-agent/main.go`、`agent/internal/channelcollector/**` | 30s 轮询下验证快照间隔内只采一次、内容未变不上报；DB 连接池常驻不再每 pass 开关 |
+
+### P1 可靠性完善
+
+| 子项 | 状态 | 问题 | 文件范围 | 验证方式 |
+| --- | --- | --- | --- | --- |
+| 心跳与采集解耦 | 未开始 | 心跳是采集 pass 的第一步之后（缓冲 flush 之后），源库慢/挂或缓冲堵塞时心跳一起消失，Server 无法区分"Agent 挂了"和"源库出问题"；心跳应独立 goroutine 并携带 Agent 自身健康信息（连续失败次数、buffer 深度、上次采集耗时） | `agent/cmd/control-tower-agent/main.go`、`agent/internal/reporter/**` | 模拟源库不可用时心跳仍按周期到达 Server |
+| 缓冲毒条目防护 | 未开始 | `flushBufferedReports` 队头阻塞：某条目因确定性原因（如超过 Server 413 大小限制）永远发不出去时，flush 卡死队头，新采集与心跳全部停摆 | `agent/internal/localbuffer/**`、`agent/cmd/control-tower-agent/main.go` | 单元测试：条目连续失败达上限后丢弃并记日志，后续条目继续投递 |
+| 缓冲 flush 独立超时预算 | 未开始 | `collectPassTimeout` 为 report+query 超时简单相加，宕机恢复后一个 pass 需串行发 N 条积压缓冲，容易整体超时→失败→继续积压，恢复过程打滑 | `agent/cmd/control-tower-agent/main.go` | 积压多条缓冲时恢复过程可在有限 pass 内清空 |
+| channel.update 命令去重与本地审计 | 未开始 | report 失败重发或 Server 重复下发时同一命令可能执行两次；命令执行前应按 command ID 本地去重（执行过的 ID 记入 state），并在 Agent 本地追加执行流水。启用 `CT_NEW_API_CONTROL_ENABLED` 前必须完成 | `agent/cmd/control-tower-agent/command_executor.go`、`agent/internal/state/**` | 单元测试：同一 command ID 二次下发不重复执行；本地审计文件有完整流水 |
+
+### P2 数据质量与打磨
+
+| 子项 | 状态 | 问题 | 文件范围 | 验证方式 |
+| --- | --- | --- | --- | --- |
+| backlog 估算按采集类型过滤 | 未开始 | `Backlog` 用全表 `MAX(id)` 减游标，而游标只推进到 type 2/5 行；源表最新行为充值/管理类日志时 `backlog_estimate` 永久虚高，面板显示假积压 | `agent/internal/logcollector/mysql.go` | 源表末尾插入 type 1/3/4 行后 backlog 显示为 0 |
+| 首个采样跳过假零值 | 未开始 | CPU 使用率与网络速率靠前后采样差值计算，Agent 重启后首个 pass 无前值直接上报 0，图表出现假数据点 | `agent/internal/syscollector/collector.go` | 首个 pass 不上报 CPU/网络速率（或置 null），第二个 pass 起正常 |
+| 退避加抖动 | 未开始 | `BackoffDelay` 为固定阶梯，多 Agent 在 Server 恢复后同步重试冲击 | `agent/internal/reporter/backoff.go` | 单元测试验证退避带随机抖动 |
+| 清理死代码 | 未开始 | `metricaggregator` 中 `p95` 函数已被 latencyhist 直方图取代但未删除 | `agent/internal/metricaggregator/aggregator.go` | `go test ./...` 通过 |
+
+### P3 生产化（Agent 部署形态）
+
+| 子项 | 状态 | 问题 | 文件范围 | 验证方式 |
+| --- | --- | --- | --- | --- |
+| Linux 构建与部署形态 | 未开始 | `deploy/` 全部为 PowerShell、构建产物仅 Windows exe，而 new-api 生产环境以 Linux + Docker 为主；缺 Linux 构建脚本、systemd unit（或 sidecar Dockerfile） | `deploy/**` | Linux 下一键构建；systemd/容器方式启动并通过 preflight |
+| 构建版本注入 | 未开始 | 版本号硬编码 `agentVersion = "0.1.0"`，未用 `-ldflags` 注入构建版本，多机排查无法确认运行版本 | `agent/cmd/control-tower-agent/main.go`、`deploy/**` | 构建产物 `-version` 或心跳上报中体现构建版本 |
+
+### 已评估暂缓
+
+- 传输安全（TLS 强制、自定义 CA、mTLS）：当前本地/内网部署阶段不做；跨公网部署前优先采用 Server 前置反代（Nginx/Caddy）承担 TLS，Agent 仅需改配置 URL，代码零改动。
+- Docker 采集换 Docker API（容器 CPU/内存、重启次数）、多磁盘路径监控、结构化日志：按需排期。
+
 ## 每阶段验收规则
 
 ### 通用验收
@@ -134,12 +178,14 @@
 
 ## 当前推荐下一步
 
-当前单实例 Web 监控分析台 MVP 已可运行。建议下一步优先补齐产品闭环能力：
+当前单实例 Web 监控分析台 MVP 已可运行。**从当前状态到可交付、可上线产品的完整开发计划见 `development-plan.md`**（里程碑 M0–M5：工程基础与 Agent 修复 → Server 产品化 → Web 正式前端 → Mobile App/PWA → 部署闭环 → 试运行与发布）。执行顺序：
 
-1. 补独立告警事件时间线，记录 firing/acknowledged/silenced/resolved 变更。
-2. 补通知手动重发、最大重试次数和指数退避。
-3. 将当前静态 Web 继续产品化为正式前端工程，补移动端/H5 和交互状态。
-4. 做正式部署编排与真实 new-api 只读账号端到端验收。
+1. M0：git/CI 工程基础 + 「Agent 采集与上报修复计划」P0/P1 项（NULL 字段防护、渠道快照常驻化、心跳解耦、毒条目防护、命令去重），这是真实库端到端验收的前置条件。
+2. M1：Server 产品化补齐——用户登录认证、按实例 Agent Token、告警事件时间线、通知重试上限/手动重发、渠道命令闭环；结束时 API 契约冻结。
+3. M2：Vue3 正式前端工程替换静态 Web（九个页面，验收后删除旧 `web/assets`）。
+4. M3：移动端 PWA App（巡检/告警/运行态，可安装到主屏）。
+5. M4：Docker Compose 部署 + Agent Linux 安装脚本与 systemd（可与 M2/M3 并行）。
+6. M5：真实 new-api 只读账号 7 天试运行，验收后发布 v1.0.0。
 
 这样顺序更稳：先把单实例监控、告警和查询闭环做完整，再扩展多实例与正式部署。
 

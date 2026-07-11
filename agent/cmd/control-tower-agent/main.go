@@ -16,6 +16,7 @@ import (
 	"controltower/agent/internal/channelcontrol"
 	"controltower/agent/internal/config"
 	"controltower/agent/internal/dockercollector"
+	"controltower/agent/internal/erroralert"
 	"controltower/agent/internal/healthcheck"
 	"controltower/agent/internal/localbuffer"
 	"controltower/agent/internal/logcollector"
@@ -88,6 +89,20 @@ func run() error {
 		return sendFakeReport(passCtx, client, cfg)
 	}
 
+	var alertNotifier *erroralert.Notifier
+	if cfg.DingTalkWebhookURL != "" {
+		alertNotifier = erroralert.New(cfg.DingTalkWebhookURL, cfg.InstanceID, cfg.AlertErrorWindow, cfg.AlertErrorThreshold, log.Printf)
+	}
+
+	// Standalone alert-only mode: no server configured, so skip heartbeat and
+	// reporting entirely and only collect from the source logs table to feed
+	// the DingTalk error alert.
+	if cfg.ServerURL == "" {
+		return runCollectorLoop(ctx, cfg, func(passCtx context.Context) error {
+			return collectAndAlertOnce(passCtx, cfg, alertNotifier)
+		})
+	}
+
 	metricCollector := syscollector.New(cfg.DataDir)
 	checker := healthcheck.New(time.Duration(cfg.LogQueryTimeoutSeconds) * time.Second)
 	var channelControllerClient channelController
@@ -99,8 +114,50 @@ func run() error {
 		dockerCollector = dockercollector.New()
 	}
 	return runCollectorLoop(ctx, cfg, func(passCtx context.Context) error {
-		return collectAndReportOnceWithController(passCtx, client, cfg, metricCollector, checker, dockerCollector, channelControllerClient)
+		return collectAndReportFullPass(passCtx, client, cfg, metricCollector, checker, dockerCollector, channelControllerClient, alertNotifier)
 	})
+}
+
+type standaloneCollector interface {
+	Collect(ctx context.Context, afterID int64, limit int) ([]logcollector.Event, int64, error)
+	Backlog(ctx context.Context, afterID int64) (logcollector.BacklogStats, error)
+}
+
+func collectAndAlertOnce(ctx context.Context, cfg config.Config, notifier *erroralert.Notifier) error {
+	db, err := logcollector.OpenMySQL(cfg.LogDSN)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	stateStore := state.NewFileStore(filepath.Join(cfg.DataDir, "state.json"))
+	return runStandalonePass(ctx, cfg, logcollector.NewMySQLCollector(db), notifier, stateStore)
+}
+
+func runStandalonePass(ctx context.Context, cfg config.Config, collector standaloneCollector, notifier *erroralert.Notifier, stateStore state.FileStore) error {
+	current, err := stateStore.Load()
+	if err != nil {
+		return err
+	}
+	// Fresh install: start from the current end of the logs table instead of
+	// replaying history, which would fire alerts for long-resolved incidents.
+	if current.LastLogID == 0 && current.LastSuccessReportAt.IsZero() {
+		stats, err := collector.Backlog(ctx, 0)
+		if err != nil {
+			return err
+		}
+		current.LastLogID = stats.SourceLatestLogID
+		current.LastSuccessReportAt = time.Now().UTC()
+		log.Printf("control tower standalone mode: starting from current log id %d", current.LastLogID)
+		return stateStore.Save(current)
+	}
+	events, lastLogID, err := collector.Collect(ctx, current.LastLogID, cfg.LogBatchSize)
+	if err != nil {
+		return err
+	}
+	notifier.Process(ctx, events)
+	current.LastLogID = lastLogID
+	current.LastSuccessReportAt = time.Now().UTC()
+	return stateStore.Save(current)
 }
 
 func runCollectorLoop(ctx context.Context, cfg config.Config, collect func(context.Context) error) error {
@@ -147,10 +204,14 @@ func collectPassTimeout(cfg config.Config) time.Duration {
 }
 
 func collectAndReportOnce(ctx context.Context, client controlTowerReporter, cfg config.Config, metricCollector serverMetricCollector, checker healthChecker, dockerCollector dockerStatusCollector) error {
-	return collectAndReportOnceWithController(ctx, client, cfg, metricCollector, checker, dockerCollector, nil)
+	return collectAndReportFullPass(ctx, client, cfg, metricCollector, checker, dockerCollector, nil, nil)
 }
 
 func collectAndReportOnceWithController(ctx context.Context, client controlTowerReporter, cfg config.Config, metricCollector serverMetricCollector, checker healthChecker, dockerCollector dockerStatusCollector, controller channelController) error {
+	return collectAndReportFullPass(ctx, client, cfg, metricCollector, checker, dockerCollector, controller, nil)
+}
+
+func collectAndReportFullPass(ctx context.Context, client controlTowerReporter, cfg config.Config, metricCollector serverMetricCollector, checker healthChecker, dockerCollector dockerStatusCollector, controller channelController, notifier *erroralert.Notifier) error {
 	stateStore := state.NewFileStore(filepath.Join(cfg.DataDir, "state.json"))
 	bufferStore := localbuffer.NewFileStore(filepath.Join(cfg.DataDir, "report-buffer.json"))
 	current, err := stateStore.Load()
@@ -215,6 +276,10 @@ func collectAndReportOnceWithController(ctx context.Context, client controlTower
 		_ = stateStore.Save(current)
 		return err
 	}
+
+	// Alert evaluation runs right after collection so a report failure below
+	// does not delay or drop DingTalk notifications.
+	notifier.Process(ctx, events)
 
 	backlog := logcollector.BacklogStats{}
 	if stats, backlogErr := collector.Backlog(ctx, lastLogID); backlogErr != nil {

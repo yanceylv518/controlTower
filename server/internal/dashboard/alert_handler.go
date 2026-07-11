@@ -144,6 +144,13 @@ func (h Handler) currentAlerts() ([]AlertItem, error) {
 		}
 	}
 	items := BuildCurrentAlerts(metrics, serverMetrics, healthChecks, dockerStatuses)
+	if h.logStore != nil {
+		events, err := h.logStore.QueryLogEvents(storage.LogQuery{Limit: storage.MaxLogQueryLimit})
+		if err != nil {
+			return nil, err
+		}
+		items = appendRecentErrorAlerts(items, events)
+	}
 	return appendAgentBacklogAlerts(items, agents, time.Now().UTC()), nil
 }
 

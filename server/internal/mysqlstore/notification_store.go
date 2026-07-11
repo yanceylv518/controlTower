@@ -82,6 +82,15 @@ ON DUPLICATE KEY UPDATE
 	return err
 }
 
+func (s Store) ExpireDeliveriesForResolvedAlerts(now time.Time) error {
+	_, err := s.db.ExecContext(context.Background(), `
+UPDATE notification_deliveries d
+JOIN alerts a ON a.id = d.alert_id
+SET d.status = 'expired', d.next_attempt_at = ?
+WHERE d.status = 'sent' AND a.status = 'resolved'`, now)
+	return err
+}
+
 func (s Store) NotificationDeliveryDue(alertID string, channelID string, now time.Time) (bool, error) {
 	var status string
 	var nextAttemptAt time.Time

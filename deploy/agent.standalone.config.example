@@ -1,0 +1,28 @@
+# Control Tower Agent - standalone DingTalk alert-only mode
+# Copy to /etc/control-tower/agent.config and fill in real values.
+# In this mode the agent only reads the new-api logs table and sends DingTalk
+# alerts; no Control Tower Server is required.
+
+CT_AGENT_ID=agent-prod-01
+CT_INSTANCE_ID=inst-prod
+
+# Read-only account; only SELECT on the logs table is needed in this mode.
+CT_LOG_DSN=ct_readonly:REPLACE_PASSWORD@tcp(127.0.0.1:3306)/newapi?parseTime=false&timeout=2s
+
+# Local state directory (cursor persistence).
+CT_DATA_DIR=/var/lib/control-tower-agent
+
+# DingTalk group robot webhook. Robot security setting: custom keyword 告警
+CT_DINGTALK_WEBHOOK_URL=https://oapi.dingtalk.com/robot/send?access_token=REPLACE_TOKEN
+
+# Rule: alert when >= threshold errors within the most recent window requests,
+# evaluated per channel and per user.
+CT_ALERT_ERROR_WINDOW=10
+CT_ALERT_ERROR_THRESHOLD=3
+
+# Poll interval in seconds.
+CT_LOG_POLL_INTERVAL_SECONDS=30
+
+# Not used in standalone mode but harmless to leave unset:
+# CT_SERVER_URL=
+# CT_AGENT_TOKEN=

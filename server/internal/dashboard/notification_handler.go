@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -19,13 +20,15 @@ type NotificationStore interface {
 	InsertNotificationDelivery(delivery storage.NotificationDelivery) error
 	NotificationDeliveryDue(alertID string, channelID string, now time.Time) (bool, error)
 	QueryNotificationDeliveries(query storage.NotificationDeliveryQuery) ([]storage.NotificationDelivery, error)
+	ExpireDeliveriesForResolvedAlerts(now time.Time) error
 }
 
 type NotificationChannelRequest struct {
-	ID         string `json:"id"`
-	Name       string `json:"name"`
-	WebhookURL string `json:"webhook_url"`
-	Enabled    bool   `json:"enabled"`
+	ID          string `json:"id"`
+	ChannelType string `json:"channel_type"`
+	Name        string `json:"name"`
+	WebhookURL  string `json:"webhook_url"`
+	Enabled     bool   `json:"enabled"`
 }
 
 type NotificationChannelItem struct {
@@ -118,6 +121,11 @@ func (h Handler) dispatchAlertNotifications(alerts []storage.Alert) error {
 	if h.notificationStore == nil {
 		return nil
 	}
+	// Release "sent" deliveries of resolved alerts so a later firing episode
+	// of the same alert notifies again instead of being deduplicated forever.
+	if err := h.notificationStore.ExpireDeliveriesForResolvedAlerts(time.Now().UTC()); err != nil {
+		return err
+	}
 	channels, err := h.notificationStore.QueryNotificationChannels(true)
 	if err != nil {
 		return err
@@ -149,8 +157,7 @@ func (h Handler) dispatchAlertNotifications(alerts []storage.Alert) error {
 
 func sendWebhookNotification(client http.Client, alert storage.Alert, channel storage.NotificationChannel, now time.Time) storage.NotificationDelivery {
 	delivery := storage.NotificationDelivery{ID: notificationDeliveryID(alert.ID, channel.ID), AlertID: alert.ID, ChannelID: channel.ID, Status: "failed", AttemptedAt: now, NextAttemptAt: now.Add(5 * time.Minute), Attempts: 1}
-	payload := map[string]any{"alert_id": alert.ID, "instance_id": alert.InstanceID, "rule_key": alert.RuleKey, "severity": alert.Severity, "status": alert.Status, "title": alert.Title, "summary": alert.Summary, "last_seen_at": alert.LastSeenAt}
-	body, err := json.Marshal(payload)
+	body, err := json.Marshal(notificationPayload(alert, channel))
 	if err != nil {
 		delivery.ErrorSummary = truncateSummary(err.Error())
 		return delivery
@@ -161,7 +168,7 @@ func sendWebhookNotification(client http.Client, alert storage.Alert, channel st
 		return delivery
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if channel.SecretValue != "" {
+	if channel.SecretValue != "" && channel.ChannelType != "dingtalk" {
 		req.Header.Set("X-Control-Tower-Secret", channel.SecretValue)
 	}
 	resp, err := client.Do(req)
@@ -172,6 +179,14 @@ func sendWebhookNotification(client http.Client, alert storage.Alert, channel st
 	defer resp.Body.Close()
 	delivery.StatusCode = resp.StatusCode
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		if channel.ChannelType == "dingtalk" {
+			// DingTalk robots answer HTTP 200 even on rejection; the real
+			// outcome is in the errcode field of the response body.
+			if err := checkDingTalkResponse(resp.Body); err != nil {
+				delivery.ErrorSummary = truncateSummary(err.Error())
+				return delivery
+			}
+		}
 		delivery.Status = "sent"
 		delivery.NextAttemptAt = time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)
 		return delivery
@@ -180,17 +195,51 @@ func sendWebhookNotification(client http.Client, alert storage.Alert, channel st
 	return delivery
 }
 
+func notificationPayload(alert storage.Alert, channel storage.NotificationChannel) map[string]any {
+	if channel.ChannelType == "dingtalk" {
+		content := fmt.Sprintf("【Control Tower 告警】%s\n级别: %s\n实例: %s\n详情: %s\n时间: %s",
+			alert.Title, alert.Severity, alert.InstanceID, alert.Summary, alert.LastSeenAt.Local().Format("2006-01-02 15:04:05"))
+		return map[string]any{"msgtype": "text", "text": map[string]string{"content": content}}
+	}
+	return map[string]any{"alert_id": alert.ID, "instance_id": alert.InstanceID, "rule_key": alert.RuleKey, "severity": alert.Severity, "status": alert.Status, "title": alert.Title, "summary": alert.Summary, "last_seen_at": alert.LastSeenAt}
+}
+
+func checkDingTalkResponse(body io.Reader) error {
+	data, err := io.ReadAll(io.LimitReader(body, 4096))
+	if err != nil {
+		return fmt.Errorf("read dingtalk response: %w", err)
+	}
+	var result struct {
+		ErrCode int    `json:"errcode"`
+		ErrMsg  string `json:"errmsg"`
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil
+	}
+	if result.ErrCode != 0 {
+		return fmt.Errorf("dingtalk errcode %d: %s", result.ErrCode, result.ErrMsg)
+	}
+	return nil
+}
+
 func notificationChannelFromRequest(request NotificationChannelRequest, now time.Time) (storage.NotificationChannel, bool) {
 	name := strings.TrimSpace(request.Name)
 	webhookURL := strings.TrimSpace(request.WebhookURL)
 	if name == "" || webhookURL == "" || !(strings.HasPrefix(webhookURL, "http://") || strings.HasPrefix(webhookURL, "https://")) {
 		return storage.NotificationChannel{}, false
 	}
+	channelType := strings.ToLower(strings.TrimSpace(request.ChannelType))
+	if channelType == "" {
+		channelType = "webhook"
+	}
+	if channelType != "webhook" && channelType != "dingtalk" {
+		return storage.NotificationChannel{}, false
+	}
 	id := strings.TrimSpace(request.ID)
 	if id == "" {
 		id = notificationChannelID(name, webhookURL, now)
 	}
-	return storage.NotificationChannel{ID: id, ChannelType: "webhook", Name: name, WebhookURL: webhookURL, Enabled: request.Enabled, CreatedAt: now, UpdatedAt: now}, true
+	return storage.NotificationChannel{ID: id, ChannelType: channelType, Name: name, WebhookURL: webhookURL, Enabled: request.Enabled, CreatedAt: now, UpdatedAt: now}, true
 }
 
 func notificationChannelItems(channels []storage.NotificationChannel) []NotificationChannelItem {

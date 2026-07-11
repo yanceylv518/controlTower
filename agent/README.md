@@ -29,7 +29,50 @@ Production defaults to `CT_LOG_EVENT_MODE=aggregate_with_samples`.
 
 - `aggregate_only`: upload aggregated metrics only; no log event details.
 - `aggregate_with_samples`: upload aggregated metrics plus limited error/slow log samples.
-- `full_debug`: upload every collected log event; use only for local debugging.
+- `full_debug`: upload every collected log event; needed only for the server-side `recent_errors` rule or local debugging.
+
+## Agent-Side DingTalk Error Alert
+
+Set `CT_DINGTALK_WEBHOOK_URL` to a DingTalk group robot webhook to enable the
+built-in error alert: for any channel and any user, when
+`CT_ALERT_ERROR_THRESHOLD` (default 3) or more of that dimension's most recent
+`CT_ALERT_ERROR_WINDOW` (default 10) requests are errors, the agent sends one
+group message. The dimension does not notify again until it first recovers
+(errors drop below the threshold), so a continuously failing dimension does not
+spam the group. Failed sends are retried on the next collector pass.
+
+- The rule is evaluated directly on rows read from the source `logs` table, so
+  it works in every log event mode and does not require the server.
+- With the webhook configured, `CT_SERVER_URL` becomes optional: leaving it
+  empty runs the agent in standalone alert-only mode (collect + alert, no
+  heartbeat/report).
+- Configure the robot's security setting with custom keyword `告警` — every
+  message starts with `【Control Tower 告警】`.
+- Windows are in-memory; after a restart, counting starts from the next
+  collected batch.
+- On a fresh install (no state file), standalone mode starts from the current
+  end of the logs table instead of replaying history, so old incidents never
+  trigger alerts.
+
+### One-Command Install (Linux)
+
+Copy the agent binary and `deploy/install-agent.sh` to the new-api server, then:
+
+```bash
+sudo ./install-agent.sh
+```
+
+The installer asks for the read-only MySQL DSN and the DingTalk webhook, then
+installs the binary, config (0600), a hardened systemd unit, runs preflight,
+and starts the service. Re-running the installer overwrites the config and
+restarts the service. Non-interactive options:
+
+- `--dsn ... --webhook ...`: generate the config from flags.
+- `--config my-agent.config`: install a prepared config file as-is; start
+  from `deploy/agent.standalone.config.example`.
+
+The live config always ends up at `/etc/control-tower/agent.config`; edit it
+and `systemctl restart control-tower-agent` to apply changes.
 
 `CT_LOG_SAMPLE_LIMIT` caps samples per report. `CT_SLOW_LOG_THRESHOLD_SECONDS` controls slow request sampling.
 ## Health And Metrics
