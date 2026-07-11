@@ -351,3 +351,82 @@ sudo journalctl -u control-tower-agent -n 50 --no-pager
 - amd64/arm64 构建：通过。
 - 两个包均验证为 Linux ELF。
 - Shell/systemd 文件：已验证无 CRLF。
+
+
+## v1.0.3 安装升级重启修复与新部署包（2026-07-11）
+
+### 1. 问题
+
+使用旧安装脚本升级已运行的 Agent 时，脚本虽然复制了新二进制并执行了 `systemctl enable --now`，但如果服务已经处于运行状态，systemd 不会因为 `enable --now` 自动重启已有进程。结果是磁盘上的二进制已更新，但运行中的 Main PID 仍然是旧进程。
+
+### 2. 修复
+
+安装脚本现在使用：
+
+```bash
+systemctl enable control-tower-agent
+systemctl restart control-tower-agent
+```
+
+因此首次安装和已有服务升级都会真正启动/重启 Agent。
+
+### 3. 新部署包
+
+基于提交 `f7d3df1` 生成：
+
+- `error-alert-agent-f7d3df1-linux-amd64.zip`
+- `error-alert-agent-f7d3df1-linux-arm64.zip`
+
+校验值：
+
+```text
+amd64  ECCE9C4D5F8F3DEB8163D0F57BB63D6DB78A2F714F71F29FDAF8391389777880
+arm64  ACA7D6F80383A45818FE2A000996B7625DE7300C577BBE2D1A5E744F0F065C72
+```
+
+包内 Shell 和 systemd 文件均已验证为 LF 换行。
+
+### 4. 推荐升级步骤
+
+升级前备份配置：
+
+```bash
+sudo cp /etc/control-tower/agent.config /etc/control-tower/agent.config.bak
+```
+
+进入新包目录并执行：
+
+```bash
+sed -i 's/\\r$//' install-agent.sh
+sed -i 's/\\r$//' control-tower-agent.service
+chmod +x control-tower-agent install-agent.sh
+
+sudo cp /etc/control-tower/agent.config ./agent.config
+
+sudo ./install-agent.sh \
+  --binary ./control-tower-agent \
+  --config ./agent.config
+```
+
+验证新进程已经加载：
+
+```bash
+sudo systemctl status control-tower-agent
+sudo systemctl show control-tower-agent -p MainPID -p ActiveEnterTimestamp
+sudo journalctl -u control-tower-agent -n 50 --no-pager
+```
+
+重点确认 `ActiveEnterTimestamp` 是本次升级时间，而不是旧启动时间。
+
+### 5. 回滚
+
+如果升级异常：
+
+```bash
+sudo systemctl stop control-tower-agent
+sudo cp /etc/control-tower/agent.config.bak /etc/control-tower/agent.config
+sudo cp /path/to/previous/control-tower-agent /usr/local/bin/control-tower-agent
+sudo systemctl start control-tower-agent
+```
+
+不要删除 `/var/lib/control-tower-agent/state.json`，避免重新读取历史日志。
