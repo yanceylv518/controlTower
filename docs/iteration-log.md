@@ -251,3 +251,103 @@ sudo systemctl daemon-reload
 ### 8. 遗留问题
 ### 9. 下一版本方向
 ```
+
+
+## v1.0.2 错误预警部署包与升级记录（2026-07-11）
+
+### 1. 本次发布
+
+基于提交 `1e5ecf7` 生成错误预警 Agent 部署包：
+
+- `error-alert-agent-1e5ecf7-linux-amd64.zip`
+- `error-alert-agent-1e5ecf7-linux-arm64.zip`
+
+校验值：
+
+```text
+amd64  4190DC85FB3F67AE026FCF5AF26D4113C64820D2CFC7EE9A80A4B0124E9FE4F1
+arm64  E29726651DE6DC984CED73E0A9E65EA0BC368D45782EE1FAF8765B3C9E316327
+```
+
+本次包内 Shell 脚本和 systemd 文件已统一为 Linux LF 换行，避免在 Ubuntu 上出现：
+
+```text
+/usr/bin/env: 'bash\r': No such file or directory
+```
+
+### 2. 更新部署步骤
+
+在服务器上选择对应架构的包：
+
+```bash
+uname -m
+# x86_64 选择 linux-amd64
+# aarch64 选择 linux-arm64
+```
+
+上传并解压：
+
+```bash
+unzip error-alert-agent-1e5ecf7-linux-amd64.zip -d /tmp/control-tower-agent
+cd /tmp/control-tower-agent
+```
+
+使用已有生产配置升级前，先备份：
+
+```bash
+sudo cp /etc/control-tower/agent.config /etc/control-tower/agent.config.bak
+```
+
+停止旧 Agent：
+
+```bash
+sudo systemctl stop control-tower-agent
+```
+
+执行安装升级：
+
+```bash
+sudo ./install-agent.sh \
+  --binary ./control-tower-agent \
+  --config /etc/control-tower/agent.config
+```
+
+安装脚本会覆盖二进制和 systemd 服务，并重新执行 preflight。数据库用户名从 DSN 中读取，安装脚本不假设用户名固定为 `ct_readonly`。
+
+启动并验证：
+
+```bash
+sudo systemctl status control-tower-agent
+sudo systemctl is-active control-tower-agent
+sudo journalctl -u control-tower-agent -n 50 --no-pager
+```
+
+### 3. 配置和权限说明
+
+- `CT_LOG_DSN` 中的用户名和密码必须替换为实际数据库账号。
+- `logs` 表的 `SELECT` 权限是必需的。
+- `channels` 表的 `SELECT` 权限是可选的，仅用于在钉钉消息中显示渠道名称。
+- 没有 `channels` 权限时，Agent 继续运行，告警显示渠道 ID。
+- 不要删除 `/var/lib/control-tower-agent/state.json`，否则 Agent 会从当前日志末尾重新建立游标。
+- Webhook 或数据库密码出现在截图、日志或聊天中后，应立即轮换。
+
+### 4. 回滚步骤
+
+如果升级后异常：
+
+```bash
+sudo systemctl stop control-tower-agent
+sudo cp /etc/control-tower/agent.config.bak /etc/control-tower/agent.config
+sudo cp /path/to/previous/control-tower-agent /usr/local/bin/control-tower-agent
+sudo systemctl start control-tower-agent
+sudo journalctl -u control-tower-agent -n 50 --no-pager
+```
+
+回滚只替换二进制和配置，不删除状态文件，避免重复读取历史 `logs`。
+
+### 5. 验证结果
+
+- Agent 单元测试：通过。
+- amd64/arm64 构建：通过。
+- 两个包均验证为 Linux ELF。
+- Shell/systemd 文件：已验证无 CRLF。
