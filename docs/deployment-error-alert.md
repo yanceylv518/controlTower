@@ -42,9 +42,9 @@ error-alert-agent-63b31fc-linux-amd64.zip
 Agent 只需要读取 new-api 的日志表。在 new-api MySQL 中执行：
 
 ```sql
-CREATE USER 'ct_readonly'@'%' IDENTIFIED BY '设置强密码';
+CREATE USER 'actual_user'@'%' IDENTIFIED BY '设置强密码';
 
-GRANT SELECT ON newapi.logs TO 'ct_readonly'@'%';
+GRANT SELECT ON newapi.logs TO 'actual_user'@'allowed_host';
 
 FLUSH PRIVILEGES;
 ```
@@ -52,7 +52,7 @@ FLUSH PRIVILEGES;
 检查权限：
 
 ```sql
-SHOW GRANTS FOR 'ct_readonly'@'%';
+SHOW GRANTS FOR 'actual_user'@'allowed_host';
 ```
 
 不应授予 `INSERT`、`UPDATE`、`DELETE`、`ALTER` 或 `DROP` 权限。
@@ -142,7 +142,7 @@ nano agent.config
 ```ini
 CT_AGENT_ID=agent-prod-01
 CT_INSTANCE_ID=inst-prod-01
-CT_LOG_DSN=ct_readonly:数据库密码@tcp(127.0.0.1:3306)/newapi?parseTime=false&timeout=2s
+CT_LOG_DSN=actual_user:数据库密码@tcp(127.0.0.1:3306)/newapi?parseTime=false&timeout=2s
 CT_DATA_DIR=/var/lib/control-tower-agent
 CT_DINGTALK_WEBHOOK_URL=https://oapi.dingtalk.com/robot/send?access_token=钉钉Token
 CT_ALERT_ERROR_WINDOW=10
