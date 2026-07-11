@@ -61,7 +61,8 @@ fi
 if [[ -z "$CONFIG_SRC" ]]; then
   if [[ -z "$DSN" ]]; then
     echo "MySQL 只读 DSN，格式: user:password@tcp(127.0.0.1:3306)/newapi"
-    echo "(只读账号只需要 logs 表: GRANT SELECT ON newapi.logs TO 'ct_readonly'@'%';)"
+    echo "(必需: GRANT SELECT ON newapi.logs TO 'ct_readonly'@'%';"
+    echo " 可选: GRANT SELECT ON newapi.channels TO 'ct_readonly'@'%'; 告警消息显示渠道名字)"
     read -rp "DSN: " DSN
   fi
   if [[ -z "$WEBHOOK" ]]; then

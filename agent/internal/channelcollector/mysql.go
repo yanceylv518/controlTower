@@ -96,6 +96,25 @@ func snapshotHash(items []Snapshot) string {
 	return hex.EncodeToString(hasher.Sum(nil))
 }
 
+// FetchNames returns the channel id to name mapping for alert messages.
+func FetchNames(ctx context.Context, db *sql.DB) (map[int64]string, error) {
+	rows, err := db.QueryContext(ctx, "SELECT id, COALESCE(name, '') FROM channels")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	names := make(map[int64]string)
+	for rows.Next() {
+		var id int64
+		var name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return nil, err
+		}
+		names[id] = strings.TrimSpace(name)
+	}
+	return names, rows.Err()
+}
+
 func collectChannelsSQL() string {
 	return `SELECT id, COALESCE(name, ''), CAST(status AS CHAR), COALESCE(weight, 0), COALESCE(models, '')
 FROM channels

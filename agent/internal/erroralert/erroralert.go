@@ -32,8 +32,9 @@ type Notifier struct {
 	now        func() time.Time
 	logf       func(format string, args ...any)
 
-	mu     sync.Mutex
-	states map[string]*dimensionState
+	mu           sync.Mutex
+	states       map[string]*dimensionState
+	channelNames map[int64]string
 }
 
 type dimensionState struct {
@@ -79,7 +80,7 @@ func (n *Notifier) Process(ctx context.Context, events []logcollector.Event) {
 	for _, event := range events {
 		if event.ChannelID > 0 {
 			key := "channel:" + strconv.FormatInt(event.ChannelID, 10)
-			n.observeLocked(key, "渠道错误激增", fmt.Sprintf("渠道 %d", event.ChannelID), event)
+			n.observeLocked(key, "渠道错误激增", n.channelLabelLocked(event.ChannelID), event)
 		}
 		if event.UserID > 0 {
 			label := fmt.Sprintf("客户 %d", event.UserID)
@@ -103,6 +104,25 @@ func (n *Notifier) Process(ctx context.Context, events []logcollector.Event) {
 			n.mu.Unlock()
 		}
 	}
+}
+
+// UpdateChannelNames replaces the channel id to name mapping used in alert
+// labels. Existing window labels refresh as new events for the dimension
+// arrive.
+func (n *Notifier) UpdateChannelNames(names map[int64]string) {
+	if n == nil || names == nil {
+		return
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.channelNames = names
+}
+
+func (n *Notifier) channelLabelLocked(channelID int64) string {
+	if name := n.channelNames[channelID]; name != "" {
+		return fmt.Sprintf("渠道 %d(%s)", channelID, name)
+	}
+	return fmt.Sprintf("渠道 %d", channelID)
 }
 
 func (n *Notifier) observeLocked(key string, title string, label string, event logcollector.Event) {

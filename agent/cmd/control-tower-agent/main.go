@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"flag"
 	"fmt"
 	"log"
@@ -90,8 +91,10 @@ func run() error {
 	}
 
 	var alertNotifier *erroralert.Notifier
+	var nameRefresher *channelNameRefresher
 	if cfg.DingTalkWebhookURL != "" {
 		alertNotifier = erroralert.New(cfg.DingTalkWebhookURL, cfg.InstanceID, cfg.AlertErrorWindow, cfg.AlertErrorThreshold, log.Printf)
+		nameRefresher = newChannelNameRefresher()
 	}
 
 	// Standalone alert-only mode: no server configured, so skip heartbeat and
@@ -99,7 +102,7 @@ func run() error {
 	// the DingTalk error alert.
 	if cfg.ServerURL == "" {
 		return runCollectorLoop(ctx, cfg, func(passCtx context.Context) error {
-			return collectAndAlertOnce(passCtx, cfg, alertNotifier)
+			return collectAndAlertOnce(passCtx, cfg, alertNotifier, nameRefresher)
 		})
 	}
 
@@ -114,7 +117,7 @@ func run() error {
 		dockerCollector = dockercollector.New()
 	}
 	return runCollectorLoop(ctx, cfg, func(passCtx context.Context) error {
-		return collectAndReportFullPass(passCtx, client, cfg, metricCollector, checker, dockerCollector, channelControllerClient, alertNotifier)
+		return collectAndReportFullPass(passCtx, client, cfg, metricCollector, checker, dockerCollector, channelControllerClient, alertNotifier, nameRefresher)
 	})
 }
 
@@ -123,12 +126,45 @@ type standaloneCollector interface {
 	Backlog(ctx context.Context, afterID int64) (logcollector.BacklogStats, error)
 }
 
-func collectAndAlertOnce(ctx context.Context, cfg config.Config, notifier *erroralert.Notifier) error {
+// channelNameRefresher keeps the alert notifier's channel id to name mapping
+// fresh. Lookup failures degrade to id-only labels: the channels table needs
+// an extra read grant that v1.0 deployments may not have.
+type channelNameRefresher struct {
+	interval    time.Duration
+	lastAttempt time.Time
+	warned      bool
+}
+
+func newChannelNameRefresher() *channelNameRefresher {
+	return &channelNameRefresher{interval: 10 * time.Minute}
+}
+
+func (r *channelNameRefresher) maybeRefresh(ctx context.Context, db *sql.DB, notifier *erroralert.Notifier) {
+	if r == nil || notifier == nil || db == nil {
+		return
+	}
+	if !r.lastAttempt.IsZero() && time.Since(r.lastAttempt) < r.interval {
+		return
+	}
+	r.lastAttempt = time.Now()
+	names, err := channelcollector.FetchNames(ctx, db)
+	if err != nil {
+		if !r.warned {
+			log.Printf("control tower channel name lookup failed; alerts will show channel ids only (grant SELECT ON channels to enable names): %v", err)
+			r.warned = true
+		}
+		return
+	}
+	notifier.UpdateChannelNames(names)
+}
+
+func collectAndAlertOnce(ctx context.Context, cfg config.Config, notifier *erroralert.Notifier, nameRefresher *channelNameRefresher) error {
 	db, err := logcollector.OpenMySQL(cfg.LogDSN)
 	if err != nil {
 		return err
 	}
 	defer db.Close()
+	nameRefresher.maybeRefresh(ctx, db, notifier)
 	stateStore := state.NewFileStore(filepath.Join(cfg.DataDir, "state.json"))
 	return runStandalonePass(ctx, cfg, logcollector.NewMySQLCollector(db), notifier, stateStore)
 }
@@ -204,14 +240,14 @@ func collectPassTimeout(cfg config.Config) time.Duration {
 }
 
 func collectAndReportOnce(ctx context.Context, client controlTowerReporter, cfg config.Config, metricCollector serverMetricCollector, checker healthChecker, dockerCollector dockerStatusCollector) error {
-	return collectAndReportFullPass(ctx, client, cfg, metricCollector, checker, dockerCollector, nil, nil)
+	return collectAndReportFullPass(ctx, client, cfg, metricCollector, checker, dockerCollector, nil, nil, nil)
 }
 
 func collectAndReportOnceWithController(ctx context.Context, client controlTowerReporter, cfg config.Config, metricCollector serverMetricCollector, checker healthChecker, dockerCollector dockerStatusCollector, controller channelController) error {
-	return collectAndReportFullPass(ctx, client, cfg, metricCollector, checker, dockerCollector, controller, nil)
+	return collectAndReportFullPass(ctx, client, cfg, metricCollector, checker, dockerCollector, controller, nil, nil)
 }
 
-func collectAndReportFullPass(ctx context.Context, client controlTowerReporter, cfg config.Config, metricCollector serverMetricCollector, checker healthChecker, dockerCollector dockerStatusCollector, controller channelController, notifier *erroralert.Notifier) error {
+func collectAndReportFullPass(ctx context.Context, client controlTowerReporter, cfg config.Config, metricCollector serverMetricCollector, checker healthChecker, dockerCollector dockerStatusCollector, controller channelController, notifier *erroralert.Notifier, nameRefresher *channelNameRefresher) error {
 	stateStore := state.NewFileStore(filepath.Join(cfg.DataDir, "state.json"))
 	bufferStore := localbuffer.NewFileStore(filepath.Join(cfg.DataDir, "report-buffer.json"))
 	current, err := stateStore.Load()
@@ -264,6 +300,7 @@ func collectAndReportFullPass(ctx context.Context, client controlTowerReporter, 
 		return err
 	}
 	defer db.Close()
+	nameRefresher.maybeRefresh(ctx, db, notifier)
 
 	collector := logcollector.NewMySQLCollector(db)
 	var channelCollector channelSnapshotCollector

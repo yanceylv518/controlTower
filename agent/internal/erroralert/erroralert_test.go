@@ -184,3 +184,29 @@ func TestNotifierRetriesAfterSendFailure(t *testing.T) {
 		t.Fatalf("expected no duplicate after successful retry, got %d", got)
 	}
 }
+
+func TestNotifierIncludesChannelNameWhenKnown(t *testing.T) {
+	c := &capture{}
+	server := c.server()
+	defer server.Close()
+	n := New(server.URL, "inst-a", 10, 3, nil)
+	n.UpdateChannelNames(map[int64]string{18: "OpenAI-主力"})
+
+	n.Process(context.Background(), events("error", 3, 18, 0, ""))
+	if got := c.matching("渠道 18(OpenAI-主力)"); got != 1 {
+		t.Fatalf("expected named channel label, got %v", c.contents)
+	}
+}
+
+func TestNotifierFallsBackToChannelIDWithoutName(t *testing.T) {
+	c := &capture{}
+	server := c.server()
+	defer server.Close()
+	n := New(server.URL, "inst-a", 10, 3, nil)
+	n.UpdateChannelNames(map[int64]string{21: "其他渠道"})
+
+	n.Process(context.Background(), events("error", 3, 18, 0, ""))
+	if got := c.matching("渠道 18 最近"); got != 1 {
+		t.Fatalf("expected id-only label for unknown channel, got %v", c.contents)
+	}
+}

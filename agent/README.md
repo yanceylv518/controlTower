@@ -43,6 +43,10 @@ spam the group. Failed sends are retried on the next collector pass.
 
 - The rule is evaluated directly on rows read from the source `logs` table, so
   it works in every log event mode and does not require the server.
+- Alert messages show the channel name next to the id (`渠道 18(OpenAI-主力)`)
+  when the read-only account also has `GRANT SELECT ON newapi.channels`; the
+  mapping refreshes every 10 minutes. Without that grant the agent logs one
+  warning and falls back to id-only labels.
 - With the webhook configured, `CT_SERVER_URL` becomes optional: leaving it
   empty runs the agent in standalone alert-only mode (collect + alert, no
   heartbeat/report).
