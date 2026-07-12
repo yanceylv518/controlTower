@@ -93,7 +93,9 @@ func run() error {
 	var alertNotifier *erroralert.Notifier
 	var nameRefresher *channelNameRefresher
 	if cfg.DingTalkWebhookURL != "" {
-		alertNotifier = erroralert.New(cfg.DingTalkWebhookURL, cfg.InstanceID, cfg.AlertErrorWindow, cfg.AlertErrorThreshold, log.Printf)
+		alertNotifier = erroralert.New(cfg.DingTalkWebhookURL, cfg.InstanceID, cfg.AlertErrorWindow, cfg.AlertErrorThreshold, log.Printf).
+			WithWindowMaxAge(time.Duration(cfg.AlertWindowMaxAgeMinutes) * time.Minute).
+			WithRemindInterval(time.Duration(cfg.AlertRemindMinutes) * time.Minute)
 		nameRefresher = newChannelNameRefresher()
 	}
 

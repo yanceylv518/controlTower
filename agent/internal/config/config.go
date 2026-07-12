@@ -39,6 +39,8 @@ type Config struct {
 	DingTalkWebhookURL             string
 	AlertErrorWindow               int
 	AlertErrorThreshold            int
+	AlertWindowMaxAgeMinutes       int
+	AlertRemindMinutes             int
 }
 
 func Load() (Config, error) {
@@ -99,6 +101,8 @@ func LoadFromMap(values map[string]string) (Config, error) {
 		DingTalkWebhookURL:             values["CT_DINGTALK_WEBHOOK_URL"],
 		AlertErrorWindow:               intOrDefault(values, "CT_ALERT_ERROR_WINDOW", 10),
 		AlertErrorThreshold:            intOrDefault(values, "CT_ALERT_ERROR_THRESHOLD", 3),
+		AlertWindowMaxAgeMinutes:       intOrDefault(values, "CT_ALERT_WINDOW_MAX_AGE_MINUTES", 60),
+		AlertRemindMinutes:             intOrDefault(values, "CT_ALERT_REMIND_MINUTES", 240),
 	}
 
 	if cfg.AgentID == "" || cfg.InstanceID == "" || cfg.LogDSN == "" {
@@ -120,6 +124,12 @@ func LoadFromMap(values map[string]string) (Config, error) {
 	}
 	if cfg.AlertErrorThreshold < 1 || cfg.AlertErrorThreshold > cfg.AlertErrorWindow {
 		return Config{}, errors.New("CT_ALERT_ERROR_THRESHOLD must be between 1 and CT_ALERT_ERROR_WINDOW")
+	}
+	if cfg.AlertWindowMaxAgeMinutes < 0 {
+		return Config{}, errors.New("CT_ALERT_WINDOW_MAX_AGE_MINUTES must be >= 0 (0 disables time decay)")
+	}
+	if cfg.AlertRemindMinutes < 0 {
+		return Config{}, errors.New("CT_ALERT_REMIND_MINUTES must be >= 0 (0 disables reminders)")
 	}
 	if cfg.LogPollIntervalSeconds < 1 || cfg.LogPollIntervalSeconds > 3600 {
 		return Config{}, errors.New("CT_LOG_POLL_INTERVAL_SECONDS must be between 1 and 3600")
@@ -182,6 +192,8 @@ func envMap() map[string]string {
 		"CT_DINGTALK_WEBHOOK_URL",
 		"CT_ALERT_ERROR_WINDOW",
 		"CT_ALERT_ERROR_THRESHOLD",
+		"CT_ALERT_WINDOW_MAX_AGE_MINUTES",
+		"CT_ALERT_REMIND_MINUTES",
 	}
 	values := make(map[string]string, len(keys))
 	for _, key := range keys {

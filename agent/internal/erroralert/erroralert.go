@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -28,9 +29,11 @@ type Notifier struct {
 	instanceID string
 	window     int
 	threshold  int
-	client     *http.Client
-	now        func() time.Time
-	logf       func(format string, args ...any)
+	client         *http.Client
+	now            func() time.Time
+	logf           func(format string, args ...any)
+	windowMaxAge   time.Duration // 0 = no time decay
+	remindInterval time.Duration // 0 = no reminders
 
 	mu           sync.Mutex
 	states       map[string]*dimensionState
@@ -40,9 +43,17 @@ type Notifier struct {
 type dimensionState struct {
 	title            string
 	label            string
-	outcomes         []bool // true = error; newest last, capped at window
+	outcomes         []outcome // newest last, capped at window
 	lastErrorSummary string
 	alerted          bool
+	episodeStartAt   time.Time
+	episodeErrors    int
+	lastRemindAt     time.Time
+}
+
+type outcome struct {
+	isError bool
+	at      time.Time
 }
 
 // ProcessStats describes one alert evaluation pass without exposing log
@@ -77,6 +88,22 @@ func New(webhookURL string, instanceID string, window int, threshold int, logf f
 		logf:       logf,
 		states:     make(map[string]*dimensionState),
 	}
+}
+
+// WithWindowMaxAge drops window entries older than maxAge during evaluation,
+// so stale errors on low-traffic dimensions eventually leave the window and
+// the episode re-arms. Zero disables time decay.
+func (n *Notifier) WithWindowMaxAge(maxAge time.Duration) *Notifier {
+	n.windowMaxAge = maxAge
+	return n
+}
+
+// WithRemindInterval re-sends a reminder message while an episode keeps
+// firing, so a dimension that never recovers is not silent forever after its
+// first alert. Zero disables reminders.
+func (n *Notifier) WithRemindInterval(interval time.Duration) *Notifier {
+	n.remindInterval = interval
+	return n
 }
 
 // Process feeds newly collected events (ordered oldest first, exactly as the
@@ -124,7 +151,12 @@ func (n *Notifier) Process(ctx context.Context, events []logcollector.Event) Pro
 			n.logf("control tower dingtalk alert failed: %v", err)
 			n.mu.Lock()
 			if state, ok := n.states[message.key]; ok {
-				state.alerted = false
+				switch message.kind {
+				case "remind":
+					state.lastRemindAt = message.prevRemindAt
+				default:
+					state.alerted = false
+				}
 			}
 			n.mu.Unlock()
 			continue
@@ -161,46 +193,99 @@ func (n *Notifier) observeLocked(key string, title string, label string, event l
 	}
 	state.label = label
 	isError := event.LogType == "error"
-	state.outcomes = append(state.outcomes, isError)
+	at := event.CreatedAt
+	if at.IsZero() {
+		at = n.now()
+	}
+	state.outcomes = append(state.outcomes, outcome{isError: isError, at: at})
 	if len(state.outcomes) > n.window {
 		state.outcomes = state.outcomes[len(state.outcomes)-n.window:]
 	}
-	if isError && event.ErrorSummary != "" {
-		state.lastErrorSummary = truncate(event.ErrorSummary, 120)
+	if isError {
+		if state.alerted {
+			state.episodeErrors++
+		}
+		if event.ErrorSummary != "" {
+			state.lastErrorSummary = truncate(event.ErrorSummary, 120)
+		}
 	}
 }
 
 type pendingMessage struct {
-	key     string
-	content string
+	key          string
+	content      string
+	kind         string // "alert" or "remind"
+	prevRemindAt time.Time
 }
 
 func (n *Notifier) evaluateLocked() []pendingMessage {
+	now := n.now()
 	var pending []pendingMessage
 	for key, state := range n.states {
+		if n.windowMaxAge > 0 {
+			cutoff := now.Add(-n.windowMaxAge)
+			kept := state.outcomes[:0]
+			for _, item := range state.outcomes {
+				if item.at.After(cutoff) {
+					kept = append(kept, item)
+				}
+			}
+			state.outcomes = kept
+		}
 		errors := 0
-		for _, isError := range state.outcomes {
-			if isError {
+		for _, item := range state.outcomes {
+			if item.isError {
 				errors++
 			}
 		}
 		if errors < n.threshold {
 			state.alerted = false
+			state.episodeErrors = 0
+			state.episodeStartAt = time.Time{}
+			state.lastRemindAt = time.Time{}
+			if len(state.outcomes) == 0 {
+				delete(n.states, key)
+			}
 			continue
 		}
-		if state.alerted {
+		if !state.alerted {
+			state.alerted = true
+			state.episodeStartAt = now
+			state.episodeErrors = errors
+			state.lastRemindAt = now
+			n.logf("control tower alert trigger: dimension=%s kind=alert window=%d errors=%d", key, len(state.outcomes), errors)
+			pending = append(pending, pendingMessage{key: key, kind: "alert", content: n.alertContent(state, errors, now)})
 			continue
 		}
-		state.alerted = true
-		content := fmt.Sprintf("[\u544a\u8b66] 【Control Tower 告警】%s\n实例: %s\n%s 最近 %d 条请求中 %d 条失败",
-			state.title, n.instanceID, state.label, len(state.outcomes), errors)
-		if state.lastErrorSummary != "" {
-			content += "\n最新错误: " + state.lastErrorSummary
+		if n.remindInterval > 0 && now.Sub(state.lastRemindAt) >= n.remindInterval {
+			prev := state.lastRemindAt
+			state.lastRemindAt = now
+			n.logf("control tower alert trigger: dimension=%s kind=remind window=%d errors=%d episode_errors=%d", key, len(state.outcomes), errors, state.episodeErrors)
+			pending = append(pending, pendingMessage{key: key, kind: "remind", prevRemindAt: prev, content: n.remindContent(state, errors, now)})
 		}
-		content += "\n时间: " + n.now().Local().Format("2006-01-02 15:04:05")
-		pending = append(pending, pendingMessage{key: key, content: content})
 	}
 	return pending
+}
+
+func (n *Notifier) alertContent(state *dimensionState, errors int, now time.Time) string {
+	content := fmt.Sprintf("[\u544a\u8b66] 【Control Tower 告警】%s\n实例: %s\n%s 最近 %d 条请求中 %d 条失败",
+		state.title, n.instanceID, state.label, len(state.outcomes), errors)
+	if state.lastErrorSummary != "" {
+		content += "\n最新错误: " + state.lastErrorSummary
+	}
+	content += "\n时间: " + now.Local().Format("2006-01-02 15:04:05")
+	return content
+}
+
+func (n *Notifier) remindContent(state *dimensionState, errors int, now time.Time) string {
+	title := strings.TrimSuffix(state.title, "激增") + "持续"
+	content := fmt.Sprintf("[\u544a\u8b66] 【Control Tower 告警】%s\n实例: %s\n%s 自 %s 起持续异常，累计 %d 条错误，最近 %d 条请求中 %d 条失败",
+		title, n.instanceID, state.label, state.episodeStartAt.Local().Format("01-02 15:04"), state.episodeErrors, len(state.outcomes), errors)
+	if state.lastErrorSummary != "" {
+		content += "\n最新错误: " + state.lastErrorSummary
+	}
+	content += "\n时间: " + now.Local().Format("2006-01-02 15:04:05")
+	return content
 }
 
 func (n *Notifier) send(ctx context.Context, content string) error {

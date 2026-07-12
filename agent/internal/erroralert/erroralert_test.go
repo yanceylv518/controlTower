@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"controltower/agent/internal/logcollector"
 )
@@ -243,5 +244,100 @@ func TestNotifierProcessStats(t *testing.T) {
 	}
 	if stats.AlertsTriggered != 2 || stats.AlertsSent != 2 || stats.AlertsSendFailures != 0 {
 		t.Fatalf("unexpected alert stats: %#v", stats)
+	}
+}
+
+func timedEvents(startID int64, at time.Time, logType string, count int, channelID int64) []logcollector.Event {
+	items := make([]logcollector.Event, 0, count)
+	for i := 0; i < count; i++ {
+		e := event(startID+int64(i), logType, channelID, 0, "")
+		e.CreatedAt = at.Add(time.Duration(i) * time.Second)
+		items = append(items, e)
+	}
+	return items
+}
+
+func TestNotifierWindowTimeDecayReArmsSparseDimension(t *testing.T) {
+	c := &capture{}
+	server := c.server()
+	defer server.Close()
+	n := New(server.URL, "inst-a", 10, 3, nil).WithWindowMaxAge(time.Hour)
+	base := time.Date(2026, 7, 12, 3, 0, 0, 0, time.UTC)
+	n.now = func() time.Time { return base }
+
+	// Episode 1: sparse channel, three errors, no successes ever.
+	n.Process(context.Background(), timedEvents(1, base, "error", 3, 26))
+	if got := c.matching("渠道错误激增"); got != 1 {
+		t.Fatalf("expected first episode alert, got %d", got)
+	}
+
+	// 2 hours later the stale errors decay out of the window and the
+	// dimension re-arms even without any successful requests.
+	n.now = func() time.Time { return base.Add(2 * time.Hour) }
+	n.Process(context.Background(), nil)
+
+	// Episode 2: a fresh error burst must alert again.
+	n.Process(context.Background(), timedEvents(100, base.Add(2*time.Hour), "error", 3, 26))
+	if got := c.matching("渠道错误激增"); got != 2 {
+		t.Fatalf("expected second episode alert after decay, got %d (%v)", got, c.contents)
+	}
+}
+
+func TestNotifierRemindsWhileEpisodeKeepsFiring(t *testing.T) {
+	c := &capture{}
+	server := c.server()
+	defer server.Close()
+	n := New(server.URL, "inst-a", 10, 3, nil).WithRemindInterval(time.Hour)
+	base := time.Date(2026, 7, 12, 3, 0, 0, 0, time.UTC)
+	n.now = func() time.Time { return base }
+
+	n.Process(context.Background(), timedEvents(1, base, "error", 3, 26))
+	if got := c.matching("渠道错误激增"); got != 1 {
+		t.Fatalf("expected initial alert, got %d", got)
+	}
+
+	// Half an hour later: episode still firing, no reminder yet.
+	n.now = func() time.Time { return base.Add(30 * time.Minute) }
+	n.Process(context.Background(), timedEvents(50, base.Add(30*time.Minute), "error", 2, 26))
+	if got := c.matching("渠道错误持续"); got != 0 {
+		t.Fatalf("expected no reminder before interval, got %d", got)
+	}
+
+	// Past the interval: one reminder with cumulative episode errors.
+	n.now = func() time.Time { return base.Add(61 * time.Minute) }
+	n.Process(context.Background(), nil)
+	if got := c.matching("渠道错误持续"); got != 1 {
+		t.Fatalf("expected one reminder, got %d (%v)", got, c.contents)
+	}
+	if got := c.matching("累计 5 条错误"); got != 1 {
+		t.Fatalf("expected cumulative episode errors in reminder, got %v", c.contents)
+	}
+
+	// Shortly after: no duplicate reminder.
+	n.now = func() time.Time { return base.Add(70 * time.Minute) }
+	n.Process(context.Background(), nil)
+	if got := c.matching("渠道错误持续"); got != 1 {
+		t.Fatalf("expected no duplicate reminder, got %d", got)
+	}
+}
+
+func TestNotifierRetriesFailedReminder(t *testing.T) {
+	c := &capture{}
+	server := c.server()
+	defer server.Close()
+	n := New(server.URL, "inst-a", 10, 3, nil).WithRemindInterval(time.Hour)
+	base := time.Date(2026, 7, 12, 3, 0, 0, 0, time.UTC)
+	n.now = func() time.Time { return base }
+
+	n.Process(context.Background(), timedEvents(1, base, "error", 3, 26))
+
+	c.setErrcode(`{"errcode":310000,"errmsg":"keywords not in content"}`)
+	n.now = func() time.Time { return base.Add(61 * time.Minute) }
+	n.Process(context.Background(), nil)
+
+	c.setErrcode("")
+	n.Process(context.Background(), nil)
+	if got := c.matching("渠道错误持续"); got != 2 {
+		t.Fatalf("expected rejected then retried reminder, got %d (%v)", got, c.contents)
 	}
 }

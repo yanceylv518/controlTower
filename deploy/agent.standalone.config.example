@@ -26,3 +26,9 @@ CT_LOG_POLL_INTERVAL_SECONDS=30
 # Not used in standalone mode but harmless to leave unset:
 # CT_SERVER_URL=
 # CT_AGENT_TOKEN=
+
+# Window entries older than this leave the window (0 disables); keeps sparse
+# channels from staying alert-suppressed forever on stale errors.
+CT_ALERT_WINDOW_MAX_AGE_MINUTES=60
+# Re-send a reminder while an episode keeps firing (0 disables).
+CT_ALERT_REMIND_MINUTES=240
