@@ -430,3 +430,81 @@ sudo systemctl start control-tower-agent
 ```
 
 不要删除 `/var/lib/control-tower-agent/state.json`，避免重新读取历史日志。
+
+
+## v1.0.4 钉钉告警关键词编码修复与新部署包（2026-07-12）
+
+### 1. 问题
+
+Agent 服务正常运行，但发生多条错误后钉钉没有收到告警。检查发现告警消息模板中的关键词存在编码异常，而钉钉机器人安全设置使用的是关键词“告警”。钉钉机器人可能返回 HTTP 200，但通过 `errcode` 拒绝关键词不匹配的消息。
+
+### 2. 修复
+
+告警消息前缀改为 Go Unicode 转义，运行时明确输出真实关键词：
+
+```text
+[告警]
+```
+
+同时增加自动化测试，确保消息包含“告警”关键词。当前规则和采集逻辑不变：
+
+- 每 30 秒增量查询 `logs`
+- 按渠道和客户维护最近 10 条
+- 错误达到 3 条触发
+- 同一故障期间只发送一次
+- 发送失败时下一轮重试
+
+### 3. 新部署包
+
+基于提交 `f77d495` 生成：
+
+- `error-alert-agent-f77d495-linux-amd64.zip`
+- `error-alert-agent-f77d495-linux-arm64.zip`
+
+校验值：
+
+```text
+amd64  6BC11D2A18832CB8FC5678295E2D8BFCFF62961DCF6DC0DD7491DBA45A2073BB
+arm64  8A097911A60B37F742AA6A23E6F2A7393849DA9377240E33C19501D4FF90A494
+```
+
+### 4. 服务器升级
+
+上传对应架构的新包，解压后执行：
+
+```bash
+cd /tmp/error-alert-agent-f77d495-linux-amd64
+sed -i 's/\\r$//' install-agent.sh
+sed -i 's/\\r$//' control-tower-agent.service
+chmod +x control-tower-agent install-agent.sh
+
+sudo cp /etc/control-tower/agent.config /etc/control-tower/agent.config.bak
+sudo cp /etc/control-tower/agent.config ./agent.config
+
+sudo ./install-agent.sh \
+  --binary ./control-tower-agent \
+  --config ./agent.config
+```
+
+确认新进程已加载：
+
+```bash
+sudo systemctl show control-tower-agent -p MainPID -p ActiveEnterTimestamp
+sudo journalctl -u control-tower-agent -n 50 --no-pager
+```
+
+### 5. 钉钉验证
+
+机器人安全设置中的自定义关键词必须是：
+
+```text
+告警
+```
+
+如果仍然没有收到消息，先检查 Agent 日志：
+
+```bash
+sudo journalctl -u control-tower-agent --since "10 minutes ago" | grep -i "dingtalk\|alert\|failed"
+```
+
+如果出现关键词不匹配、Webhook 失效或 `errcode`，重新生成钉钉机器人 Webhook 并更新 Agent 配置。
