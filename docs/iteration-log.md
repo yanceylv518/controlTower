@@ -521,7 +521,7 @@ sudo journalctl -u control-tower-agent --since "10 minutes ago" | grep -i "dingt
 | 修复 | 配置 | 默认 | 说明 |
 | --- | --- | --- | --- |
 | 窗口时间衰减 | `CT_ALERT_WINDOW_MAX_AGE_MINUTES` | 60（0 关闭） | 超龄事件滑出窗口；稀疏渠道错误清空后 episode 自然重臂，新故障=新告警 |
-| 持续告警重提醒 | `CT_ALERT_REMIND_MINUTES` | 240（0 关闭） | episode 持续 firing 超过该时长再发提醒，附起始时间与累计错误数 |
+| 持续告警重提醒 | `CT_ALERT_REMIND_MINUTES` | 60（0 关闭；初版 240，按反馈调短） | episode 持续 firing 超过该时长再发提醒，附起始时间与累计错误数；因窗口衰减，提醒只发给仍在持续出错的维度 |
 | 按维度审计日志 | 无 | 常开 | 触发/提醒时输出 `dimension=... kind=... window=... errors=...`，补齐调查文档第 9 节要求 |
 
 提醒消息示例：
@@ -537,7 +537,7 @@ sudo journalctl -u control-tower-agent --since "10 minutes ago" | grep -i "dingt
 ### 3. 验证
 
 - `go test ./agent/...` 通过；新增用例：时间衰减后稀疏渠道重臂再告警、提醒间隔与累计计数、提醒失败重试、间隔内不重复提醒。
-- 按本次事故重放：03:02 首告警 → 每 4 小时"持续异常"提醒；或渠道曾有 1 小时无错误 → 窗口清空 → 17:56 为全新告警。两条路径均不再丢失。
+- 按本次事故重放：03:02 首告警 → 每小时"持续异常"提醒；或渠道曾有 1 小时无错误 → 窗口清空 → 17:56 为全新告警。两条路径均不再丢失。
 
 ### 4. 升级说明
 

@@ -56,9 +56,10 @@ spam the group. Failed sends are retried on the next collector pass.
   leave the window, so a sparse channel with stale errors re-arms and a new
   error burst alerts again instead of being deduplicated forever.
 - While an episode keeps firing, a reminder is re-sent every
-  `CT_ALERT_REMIND_MINUTES` (default 240) with the episode start time and
+  `CT_ALERT_REMIND_MINUTES` (default 60) with the episode start time and
   cumulative error count, so a channel that never recovers is not silent
-  after its first alert.
+  after its first alert. Reminders only continue while new errors keep
+  arriving: a dimension quiet for the decay window ends its episode.
 - Windows are in-memory; after a restart, counting starts from the next
   collected batch.
 - On a fresh install (no state file), standalone mode starts from the current

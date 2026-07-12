@@ -102,7 +102,7 @@ func LoadFromMap(values map[string]string) (Config, error) {
 		AlertErrorWindow:               intOrDefault(values, "CT_ALERT_ERROR_WINDOW", 10),
 		AlertErrorThreshold:            intOrDefault(values, "CT_ALERT_ERROR_THRESHOLD", 3),
 		AlertWindowMaxAgeMinutes:       intOrDefault(values, "CT_ALERT_WINDOW_MAX_AGE_MINUTES", 60),
-		AlertRemindMinutes:             intOrDefault(values, "CT_ALERT_REMIND_MINUTES", 240),
+		AlertRemindMinutes:             intOrDefault(values, "CT_ALERT_REMIND_MINUTES", 60),
 	}
 
 	if cfg.AgentID == "" || cfg.InstanceID == "" || cfg.LogDSN == "" {
