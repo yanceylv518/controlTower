@@ -190,7 +190,11 @@ func runStandalonePass(ctx context.Context, cfg config.Config, collector standal
 	if err != nil {
 		return err
 	}
-	notifier.Process(ctx, events)
+	alertStats := notifier.Process(ctx, events)
+	log.Printf("control tower alert pass: after_log_id=%d last_log_id=%d events=%d errors=%d channel_dimensions=%d user_dimensions=%d alerts_triggered=%d alerts_sent=%d alerts_failed=%d",
+		current.LastLogID, lastLogID, alertStats.EventCount, alertStats.ErrorCount,
+		alertStats.ChannelDimensions, alertStats.UserDimensions, alertStats.AlertsTriggered,
+		alertStats.AlertsSent, alertStats.AlertsSendFailures)
 	current.LastLogID = lastLogID
 	current.LastSuccessReportAt = time.Now().UTC()
 	return stateStore.Save(current)
@@ -316,7 +320,11 @@ func collectAndReportFullPass(ctx context.Context, client controlTowerReporter, 
 
 	// Alert evaluation runs right after collection so a report failure below
 	// does not delay or drop DingTalk notifications.
-	notifier.Process(ctx, events)
+	alertStats := notifier.Process(ctx, events)
+	log.Printf("control tower alert pass: after_log_id=%d last_log_id=%d events=%d errors=%d channel_dimensions=%d user_dimensions=%d alerts_triggered=%d alerts_sent=%d alerts_failed=%d",
+		current.LastLogID, lastLogID, alertStats.EventCount, alertStats.ErrorCount,
+		alertStats.ChannelDimensions, alertStats.UserDimensions, alertStats.AlertsTriggered,
+		alertStats.AlertsSent, alertStats.AlertsSendFailures)
 
 	backlog := logcollector.BacklogStats{}
 	if stats, backlogErr := collector.Backlog(ctx, lastLogID); backlogErr != nil {

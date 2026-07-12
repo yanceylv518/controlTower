@@ -223,3 +223,25 @@ func TestNotifierMessageContainsDingTalkKeyword(t *testing.T) {
 		t.Fatalf("expected DingTalk keyword in alert message, got %d", got)
 	}
 }
+
+func TestNotifierProcessStats(t *testing.T) {
+	c := &capture{}
+	server := c.server()
+	defer server.Close()
+	n := New(server.URL, "inst-a", 10, 3, nil)
+
+	stats := n.Process(context.Background(), append(
+		events("error", 3, 26, 9, "alice"),
+		events("consume", 1, 26, 9, "alice")...,
+	))
+
+	if stats.EventCount != 4 || stats.ErrorCount != 3 {
+		t.Fatalf("unexpected event stats: %#v", stats)
+	}
+	if stats.ChannelDimensions != 1 || stats.UserDimensions != 1 {
+		t.Fatalf("unexpected dimension stats: %#v", stats)
+	}
+	if stats.AlertsTriggered != 2 || stats.AlertsSent != 2 || stats.AlertsSendFailures != 0 {
+		t.Fatalf("unexpected alert stats: %#v", stats)
+	}
+}

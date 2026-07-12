@@ -45,6 +45,18 @@ type dimensionState struct {
 	alerted          bool
 }
 
+// ProcessStats describes one alert evaluation pass without exposing log
+// contents or other request-sensitive fields.
+type ProcessStats struct {
+	EventCount          int
+	ErrorCount          int
+	ChannelDimensions   int
+	UserDimensions      int
+	AlertsTriggered     int
+	AlertsSent          int
+	AlertsSendFailures  int
+}
+
 func New(webhookURL string, instanceID string, window int, threshold int, logf func(format string, args ...any)) *Notifier {
 	if window <= 0 {
 		window = DefaultWindow
@@ -72,17 +84,26 @@ func New(webhookURL string, instanceID string, window int, threshold int, logf f
 // dimension that is at or above the threshold and has not alerted yet in the
 // current episode. A dimension re-arms once its window drops back below the
 // threshold. Failed sends re-arm immediately so the next pass retries.
-func (n *Notifier) Process(ctx context.Context, events []logcollector.Event) {
+func (n *Notifier) Process(ctx context.Context, events []logcollector.Event) ProcessStats {
+	var stats ProcessStats
 	if n == nil {
-		return
+		return stats
 	}
+	stats.EventCount = len(events)
+	channelDimensions := make(map[int64]struct{})
+	userDimensions := make(map[int64]struct{})
 	n.mu.Lock()
 	for _, event := range events {
+		if event.LogType == "error" {
+			stats.ErrorCount++
+		}
 		if event.ChannelID > 0 {
+			channelDimensions[event.ChannelID] = struct{}{}
 			key := "channel:" + strconv.FormatInt(event.ChannelID, 10)
 			n.observeLocked(key, "渠道错误激增", n.channelLabelLocked(event.ChannelID), event)
 		}
 		if event.UserID > 0 {
+			userDimensions[event.UserID] = struct{}{}
 			label := fmt.Sprintf("客户 %d", event.UserID)
 			if event.Username != "" {
 				label = fmt.Sprintf("客户 %s(%d)", event.Username, event.UserID)
@@ -93,17 +114,24 @@ func (n *Notifier) Process(ctx context.Context, events []logcollector.Event) {
 	}
 	pending := n.evaluateLocked()
 	n.mu.Unlock()
+	stats.ChannelDimensions = len(channelDimensions)
+	stats.UserDimensions = len(userDimensions)
+	stats.AlertsTriggered = len(pending)
 
 	for _, message := range pending {
 		if err := n.send(ctx, message.content); err != nil {
+			stats.AlertsSendFailures++
 			n.logf("control tower dingtalk alert failed: %v", err)
 			n.mu.Lock()
 			if state, ok := n.states[message.key]; ok {
 				state.alerted = false
 			}
 			n.mu.Unlock()
+			continue
 		}
+		stats.AlertsSent++
 	}
+	return stats
 }
 
 // UpdateChannelNames replaces the channel id to name mapping used in alert
