@@ -164,7 +164,7 @@ func (n *Notifier) evaluateLocked() []pendingMessage {
 			continue
 		}
 		state.alerted = true
-		content := fmt.Sprintf("【Control Tower 告警】%s\n实例: %s\n%s 最近 %d 条请求中 %d 条失败",
+		content := fmt.Sprintf("[\u544a\u8b66] 【Control Tower 告警】%s\n实例: %s\n%s 最近 %d 条请求中 %d 条失败",
 			state.title, n.instanceID, state.label, len(state.outcomes), errors)
 		if state.lastErrorSummary != "" {
 			content += "\n最新错误: " + state.lastErrorSummary

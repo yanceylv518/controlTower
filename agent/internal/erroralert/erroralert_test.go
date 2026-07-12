@@ -210,3 +210,16 @@ func TestNotifierFallsBackToChannelIDWithoutName(t *testing.T) {
 		t.Fatalf("expected id-only label for unknown channel, got %v", c.contents)
 	}
 }
+
+func TestNotifierMessageContainsDingTalkKeyword(t *testing.T) {
+	c := &capture{}
+	server := c.server()
+	defer server.Close()
+
+	n := New(server.URL, "inst-a", 10, 3, nil)
+	n.Process(context.Background(), events("error", 3, 18, 0, ""))
+
+	if got := c.matching("\u544a\u8b66"); got != 1 {
+		t.Fatalf("expected DingTalk keyword in alert message, got %d", got)
+	}
+}
