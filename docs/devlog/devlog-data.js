@@ -5,6 +5,15 @@ window.DEVLOG = [
     date: "2026-07-13",
     type: "decision",
     version: "",
+    title: "延时分诊体系：Nginx timing 日志启用 + 信号 E 升级",
+    summary: "针对『new-api 记录延时大而上游自报很小』的对账问题：确认根因候选（内部重试掩盖/跨境传输段/本机瓶颈/DB 收尾），用户在两台 new-api 的 Nginx 启用 timed 日志格式（rt/uct/uht/urt/bytes）。产出 latency-diagnosis.md（分诊公式+现场命令+SOP）；v1.1 信号 E 升级为 TTFT 告警与分段归因，配套网关开销分解探测（无 key 握手基线，不违边界）。",
+    docs: ["docs/latency-diagnosis.md", "docs/design-v1.1-early-warning.md"],
+    commits: []
+  },
+  {
+    date: "2026-07-13",
+    type: "decision",
+    version: "",
     title: "v2.1 自动调权设计定稿：三档模式 + 命中率自证",
     summary: "按渠道质量自动调整权重/优先级的完整设计：observe（默认，只记录建议+30 分钟事后回填）→ confirm（人工一键采纳，走既有命令链路）→ auto（护栏约束+可回滚）。标准全部可配（阈值型规则保持可解释），护栏含最小可用集/步长/冷却/人工优先/双端开关。关键机制：关闭自动时持续产出建议记录与命中率报表（≥85% 为切 auto 判据），用数据回答『开自动是否合理』。执行全部复用 M1-B4 命令闭环与审计。排期 v2.0 上线后三批。",
     docs: ["docs/design-v2.1-auto-tuning.md"],

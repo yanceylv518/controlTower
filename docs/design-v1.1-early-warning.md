@@ -143,9 +143,16 @@ v1.0 的告警只基于 new-api `logs` 表中**已完成**的请求：
 
 配套配置：`CT_RECOVERY_MIN_SUCCESS`（默认 10）、`CT_RECOVERY_MAX_FAILURES`（默认 1）、`CT_RECOVERY_PROBE_SUCCESSES`（默认 3）。
 
-### 可选信号 E：Nginx 访问日志采集（独立可选模块，可放 v1.2）
+### 可选信号 E：Nginx timing 日志采集（2026-07-13 升级：生产已启用 timed 格式）
 
-只读 tail Nginx access log（不改 Nginx 配置，日志里有什么用什么）：504/5xx 即时告警、request_time 慢请求统计。网关在自身超时点写日志，是最快的"已完成失败"信号；但通常识别不了渠道/客户，且依赖目标环境日志格式，故作为可选模块（`CT_NGINX_ACCESS_LOG` 留空禁用）。若日志格式缺 request_time，仅做状态码规则。
+生产两台 new-api 的 Nginx 已配置 `timed` 日志格式（rt/uct/uht/urt/bytes，见 `latency-diagnosis.md`）。Agent 只读 tail 该日志：
+
+- 504/5xx 即时告警（网关超时点，最快的失败确认）；
+- **TTFT 告警**：`uht`（upstream 首字节 = new-api+上游首响应段）超阈值——不受流式传输拖累的真延时信号；
+- **分段归因**：慢请求告警消息直接注明"首字节慢（new-api/上游前段）"或"传输段慢（流式/链路）"，与 `bytes` 推算的吞吐佐证；
+- 局限不变：识别不了渠道/客户（业务维度仍由 logs 采集负责），`CT_NGINX_ACCESS_LOG` 留空禁用。
+
+配套增强：**网关开销分解探测**——经 new-api 的整链探测耗时，减去不带 key 的上游 TCP/TLS 握手基线探测（不读渠道密钥，不违边界），得到"new-api 内部开销"曲线，开销突增单独预警——直接回答"延时大是不是 new-api 的问题"。
 
 ## 4. 信号覆盖矩阵
 
