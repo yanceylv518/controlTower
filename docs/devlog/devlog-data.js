@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-13",
+    type: "release",
+    version: "M2",
+    title: "M2 阶段验证 PASS：Web 管理端完成",
+    summary: "两轮走查闭环：首轮零功能失败，第二轮用种子数据补齐空库引导、双实例隔离（OpenAI/Claude 演示数据肉眼可辨不串）、渠道快照展示、样本筛选分页、通知重发、命令与审计全链路；三项高成本重复项正式豁免（有单测/前批实测覆盖）。Vue3 管理端 13 页接管根路径，旧静态页退役。M2 关闭，进入 v2.0 发布准备：最小部署编排 + 生产 Agent 双模式接入。",
+    docs: ["docs/m2-stage-verification.md"],
+    commits: ["c9b8ef9"]
+  },
+  {
+    date: "2026-07-13",
     type: "review",
     version: "",
     title: "M2 阶段第二轮验证通过，M2 正式关闭",
