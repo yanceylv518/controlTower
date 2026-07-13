@@ -7,7 +7,7 @@ local/
 # Build artifacts
 dist/
 web/dist/
-webapp/node_modules/
+webapp/**/node_modules/
 
 # Local config and credentials
 .env
