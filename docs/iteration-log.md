@@ -542,3 +542,19 @@ sudo journalctl -u control-tower-agent --since "10 minutes ago" | grep -i "dingt
 ### 4. 升级说明
 
 替换二进制重启即可，新配置项有默认值无需修改配置文件；如需关闭新行为，设 `CT_ALERT_WINDOW_MAX_AGE_MINUTES=0`、`CT_ALERT_REMIND_MINUTES=0`。
+
+
+## v1.0.6 logs 采集 NULL 字段防护与告警时间兜底（2026-07-13）
+
+### 1. 内容
+
+- **NULL 字段防护（P0，`f6c81f0`）**：采集 SQL 对全部可空列统一 `COALESCE`（文本→空串、数值→0），消除"源表出现 NULL 行 → Scan 报错 → 游标不推进 → 采集永久停摆"的风险。`id`/`type` 保持原样（主键不可空；type 为 NULL 的行匹配不上 `WHERE type IN (2,5)`）。
+- **加固（review 发现）**：`COALESCE(created_at, 0)` 会把 NULL 时间变成 Unix 0（1970 年），这样的错误事件进入告警窗口后会被 60 分钟时间衰减立即清出、静默漏计。`observeLocked` 的时间兜底从"仅零值"扩展为"零值或 Unix ≤0 一律用当前时间"，并补回归测试（epoch 时间戳的 3 条错误必须正常触发告警）。
+
+### 2. 验证
+
+`go vet ./...`、`go test ./...` 全部通过；SQL 契约测试覆盖可空列默认值；真实源库 NULL 行验证待部署环境执行（测试库插入除 id/type 外全 NULL 的行，确认采集不中断、游标推进、错误正常计入窗口）。
+
+### 3. 升级说明
+
+替换二进制重启即可，无配置变化。此修复只有部署新二进制后才在生产生效。

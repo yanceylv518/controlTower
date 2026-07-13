@@ -341,3 +341,26 @@ func TestNotifierRetriesFailedReminder(t *testing.T) {
 		t.Fatalf("expected rejected then retried reminder, got %d (%v)", got, c.contents)
 	}
 }
+
+func TestNotifierCountsEventsWithNullCreatedAt(t *testing.T) {
+	c := &capture{}
+	server := c.server()
+	defer server.Close()
+	n := New(server.URL, "inst-a", 10, 3, nil).WithWindowMaxAge(time.Hour)
+	base := time.Date(2026, 7, 13, 10, 0, 0, 0, time.UTC)
+	n.now = func() time.Time { return base }
+
+	// NULL created_at is coalesced to 0 by the collector, which arrives here
+	// as unix epoch. Such errors must still count instead of being pruned by
+	// time decay immediately.
+	items := make([]logcollector.Event, 0, 3)
+	for i := int64(1); i <= 3; i++ {
+		e := event(i, "error", 26, 0, "")
+		e.CreatedAt = time.Unix(0, 0)
+		items = append(items, e)
+	}
+	n.Process(context.Background(), items)
+	if got := c.matching("渠道错误激增"); got != 1 {
+		t.Fatalf("expected epoch-timestamp errors to trigger alert, got %d (%v)", got, c.contents)
+	}
+}

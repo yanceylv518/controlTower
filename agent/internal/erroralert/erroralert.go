@@ -194,7 +194,10 @@ func (n *Notifier) observeLocked(key string, title string, label string, event l
 	state.label = label
 	isError := event.LogType == "error"
 	at := event.CreatedAt
-	if at.IsZero() {
+	// Unix 0 covers NULL created_at coalesced to 0 by the collector; without
+	// this, such an event would enter the window with a 1970 timestamp and be
+	// silently dropped by time decay before it could ever count.
+	if at.IsZero() || at.Unix() <= 0 {
 		at = n.now()
 	}
 	state.outcomes = append(state.outcomes, outcome{isError: isError, at: at})
