@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-13",
+    type: "review",
+    version: "",
+    title: "验收 M2-B2（通用组件 + 六只读页）：通过",
+    summary: "复用达标且超出预期：三个维度页共用一个 DimensionView（单组件 + 路由参数，而非三个薄壳）；useAutoRefresh 抽出并回灌 Overview；九个通用件齐全。功能审计全绿：维度详情接 metric-history 历史趋势（P1-1 缺失的完整兑现）、渠道快照联动、P50/P95/P99、样本分页与四筛选、runtime 网络列、用量排行、全局实例筛选。边界零改动（server/agent/旧页/依赖），CI 双 job 绿。自查清单诚实标注两项未验证（单实例环境无法验证多实例切换；停 Server 后会话中断未点到重试按钮）——留 M2 阶段点覆盖。",
+    docs: ["docs/codex-task-m2-b2-readonly-pages.md"],
+    commits: ["97885c0"]
+  },
+  {
+    date: "2026-07-13",
     type: "release",
     version: "M2-B2",
     title: "Web 六个只读监控页与通用组件完成",
