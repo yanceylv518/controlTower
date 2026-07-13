@@ -211,7 +211,15 @@ CT_EPISODE_MAX_HOURS=24       # episode 超时自动关闭兜底
 - 【恢复】绿色语义：任一维度回到健康。
 - 模板延续 v1.0：标题 + 实例 + 维度标签 + 量化描述 + 时间；探测类附最近一次失败原因摘要。
 
-## 8. 测试与验收要点
+## 8. 信号持久化与可视化（为 Web 可见性打地基）
+
+2026-07-13 Web review（`review-web-monitoring-2026-07-13.md` P1-2）发现：Agent 独立模式的真实告警（episode 触发/提醒/恢复）只存在于内存和钉钉群，Web 完全不可见。v1.1 实现时补齐地基：
+
+- **本地持久化**：每个 episode 事件（alert / remind / recover / disposed / probe_fail / silence_confirmed）追加写 `CT_DATA_DIR/alert-events.jsonl`（JSON lines，按大小轮转保留最近 2 个文件），字段：时间、维度、kind、窗口统计、episode 起始与累计错误。价值：重启后可追溯、故障调查不再依赖钉钉群翻历史（渠道 26 事故的调查成本教训）。
+- **上报扩展**：双模式（配置了 `CT_SERVER_URL`）下，report 增加 `alert_events` 数组增量上报，Server 落库（v2.0 前 Server 侧仅存储）。
+- **可视化**：v2.0 Web 增加"Agent 告警时间线"（按维度的 episode 列表与事件流），与 Server 端规则告警在告警中心并列展示、来源标注。
+
+## 9. 测试与验收要点
 
 - 静默检测：构造"有基线后停止产生日志"的事件序列单测；夜间低谷不误报（无基线不触发）；实例活跃但单渠道静默触发渠道级告警。
 - 探测：httptest 模拟 new-api 测试接口的成功/失败/超时/慢响应；连续失败阈值与恢复重臂；错峰调度。
