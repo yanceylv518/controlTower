@@ -84,4 +84,4 @@ SELECT operation_type, target_id, actor_id FROM operation_audits; -- channel.upd
 - `Access denied` → DSN 账号密码错，或账号无该库权限。
 - e2e 第一步 `health` 失败 → Server 没起来或端口不对（`CT_BASE` 默认 8080，可 `export CT_BASE=` 调整）。
 - `gzip: command not found` → 未在 Git Bash/WSL 中运行。
-- 端口占用 → 换 `CT_PUBLIC_BASE_URL`/监听端口需查 `CT_LISTEN_ADDR`（见 server.env.example），并同步 `CT_BASE`。
+- 端口占用 → 换 `CT_PUBLIC_BASE_URL`/监听端口用 `CT_SERVER_LISTEN_ADDR`（默认 0.0.0.0:8080），并同步 `CT_BASE`。
