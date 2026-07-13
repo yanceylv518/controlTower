@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -16,6 +17,12 @@ func (h Handler) authenticate(r *http.Request) (string, bool) {
 	}
 	if h.lookup != nil {
 		id, ok, err := h.lookup.InstanceIDByTokenHash(hashToken(h.pepper, token), time.Now().UTC())
+		if err != nil {
+			// A lookup failure is an operational problem (e.g. the collation
+			// mismatch found by the M1 stage verification), not a bad token.
+			// It must be visible in logs instead of silently becoming a 401.
+			log.Printf("control tower agent token lookup failed: %v", err)
+		}
 		if err == nil && ok {
 			return id, true
 		}

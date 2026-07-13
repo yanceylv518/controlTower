@@ -6,4 +6,4 @@ CREATE TABLE IF NOT EXISTS alert_events (
   note VARCHAR(500) NOT NULL DEFAULT '',
   created_at DATETIME(3) NOT NULL,
   INDEX idx_alert_events_alert (alert_id, created_at)
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

@@ -10,4 +10,4 @@ CREATE TABLE IF NOT EXISTS channel_commands (
   created_at DATETIME(3) NOT NULL,
   updated_at DATETIME(3) NOT NULL,
   INDEX idx_channel_commands_instance (instance_id, status)
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

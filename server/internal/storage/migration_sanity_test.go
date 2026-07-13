@@ -17,7 +17,7 @@ func TestMigrationCreateTablesHaveNoDuplicateColumns(t *testing.T) {
 	if err != nil || len(files) == 0 {
 		t.Fatalf("migrations not found: %v", err)
 	}
-	tableRE := regexp.MustCompile(`(?s)CREATE TABLE IF NOT EXISTS (\w+) \((.*?)\n\)`)
+	tableRE := regexp.MustCompile(`(?s)CREATE TABLE IF NOT EXISTS (\w+) \((.*?)\n\)([^;]*);`)
 	for _, file := range files {
 		data, err := os.ReadFile(file)
 		if err != nil {
@@ -25,6 +25,12 @@ func TestMigrationCreateTablesHaveNoDuplicateColumns(t *testing.T) {
 		}
 		for _, match := range tableRE.FindAllStringSubmatch(string(data), -1) {
 			table, body := match[1], match[2]
+			// Mixed collations broke the instance_tokens JOIN instances token
+			// lookup on MySQL 9 (default 0900_ai_ci vs 001's unicode_ci):
+			// every table must pin the same charset and collation.
+			if !strings.Contains(match[3], "COLLATE=utf8mb4_unicode_ci") {
+				t.Fatalf("%s: table %s must pin COLLATE=utf8mb4_unicode_ci", filepath.Base(file), table)
+			}
 			seen := map[string]bool{}
 			for _, line := range strings.Split(body, "\n") {
 				line = strings.TrimSpace(line)

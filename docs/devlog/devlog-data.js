@@ -5,6 +5,15 @@ window.DEVLOG = [
     date: "2026-07-13",
     type: "bugfix",
     version: "",
+    title: "M1 阶段验证第二轮 FAIL 定位与修复：排序规则冲突 + 网关吞错",
+    summary: "heartbeat 401 且 Server 零日志。根因：M1 新增的 002~005 迁移表未钉 COLLATE，在 MySQL 8/9 上继承默认 utf8mb4_0900_ai_ci，与 001 表的 unicode_ci 在 instance_tokens JOIN instances 的 token 查询中触发 1267 排序规则冲突；网关 authenticate 将查询错误静默当作 401。修复：002~005 全部 CREATE TABLE 钉 ENGINE/CHARSET/COLLATE 与 001 一致；网关 token 查询出错必打日志；迁移体检测试新增排序规则强制项。需 DROP 重建测试库后第三次验证。",
+    docs: ["docs/m1-stage-verification.md"],
+    commits: ["9b94eff"]
+  },
+  {
+    date: "2026-07-13",
+    type: "bugfix",
+    version: "",
     title: "M1 阶段验证 FAIL 定位与修复：迁移重复列 + 迁移器吞错漏洞",
     summary: "阶段验证在全新空库首跑即抓到发布级缺陷：metric_1m/metric_5m 建表语句中 10 个延迟直方图列被重复粘贴，CREATE TABLE 报 1060 被迁移器的幂等容错吞掉，表未建成导致后续 1146 启动失败（上次空库跑迁移还是 P4 时期，之后验证全在内存存储上——正是阶段点存在的意义）。修复：去重列；迁移器改为 CREATE TABLE 的错误绝不忽略（1060/1061 仅对 ALTER/INDEX 幂等重放豁免）；新增迁移文件重复列扫描测试防复发。待 Codex 重跑验证。",
     docs: ["docs/m1-stage-verification.md", "docs/codex-task-m1-stage-verify.md"],
