@@ -18,13 +18,22 @@ const mysqlDuplicateColumnError = 1060
 func ApplySQL(ctx context.Context, db *sql.DB, sqlText string) error {
 	for _, statement := range splitSQLStatements(sqlText) {
 		if _, err := db.ExecContext(ctx, statement); err != nil {
-			if ignorableMigrationError(err) {
+			// Duplicate-column/key errors are only expected from idempotent
+			// re-runs of ALTER/CREATE INDEX statements. A CREATE TABLE must
+			// never fail silently: swallowing its error leaves the table
+			// missing and every later statement on it failing confusingly
+			// (this exact failure shipped once; see the M1 stage report).
+			if ignorableMigrationError(err) && !isCreateTableStatement(statement) {
 				continue
 			}
 			return err
 		}
 	}
 	return nil
+}
+
+func isCreateTableStatement(statement string) bool {
+	return strings.HasPrefix(strings.ToUpper(strings.TrimSpace(statement)), "CREATE TABLE")
 }
 
 func ApplyDir(ctx context.Context, db *sql.DB, dir string) error {
