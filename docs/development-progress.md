@@ -100,7 +100,7 @@
 
 | 子项 | 状态 | 问题 | 文件范围 | 验证方式 |
 | --- | --- | --- | --- | --- |
-| logs 采集 NULL 字段防护 | 未开始 | 采集 SQL 直接 SELECT 原始列并 Scan 进 `string`/`int64`/`bool`，无 COALESCE 或 `sql.Null*` 保护；new-api gorm 建表大部分列可为 NULL，一旦某行含 NULL，Scan 报错导致 pass 失败、游标不推进，Agent 在该行上无限退避重试，采集永久停摆 | `agent/internal/logcollector/mysql.go` | 单元测试覆盖 NULL 列行；源测试库插入 NULL 行后采集不中断且游标推进 |
+| logs 采集 NULL 字段防护 | 已完成 | 采集 SQL 对 `created_at`、文本、维度 ID、token、quota、耗时和流式标记等可空列统一使用 `COALESCE`，避免 NULL 扫描进 Go 基础类型导致 pass 永久阻塞；`id/type` 保持为必需字段 | `agent/internal/logcollector/mysql.go`、`agent/internal/logcollector/mysql_test.go` | SQL 契约测试覆盖可空列默认值；`go test ./agent/...` 与 `go test ./...` 通过；真实源库 NULL 行验证待部署环境执行 |
 | 渠道快照 collector 常驻化 | 未开始 | `channelcollector.MySQLCollector` 在每个采集 pass 内新建（DB 连接也是每 pass 开关），`lastCheckedAt`/`lastHash` 每次归零，`CT_CHANNEL_SNAPSHOT_INTERVAL_SECONDS` 与内容哈希去重完全失效，实际每 30s 全量查询并全量上报 channels | `agent/cmd/control-tower-agent/main.go`、`agent/internal/channelcollector/**` | 30s 轮询下验证快照间隔内只采一次、内容未变不上报；DB 连接池常驻不再每 pass 开关 |
 
 ### P1 可靠性完善

@@ -81,9 +81,12 @@ func (c MySQLCollector) Collect(ctx context.Context, afterID int64, limit int) (
 }
 
 func collectLogsSQL() string {
-	return `SELECT id, created_at, type, content, user_id, username, channel_id, model_name,
-  token_id, token_name, prompt_tokens, completion_tokens, quota, use_time,
-  is_stream, ` + "`group`" + `, request_id, upstream_request_id, other
+	return `SELECT id, COALESCE(created_at, 0), type, COALESCE(content, ''),
+	  COALESCE(user_id, 0), COALESCE(username, ''), COALESCE(channel_id, 0),
+	  COALESCE(model_name, ''), COALESCE(token_id, 0), COALESCE(token_name, ''),
+	  COALESCE(prompt_tokens, 0), COALESCE(completion_tokens, 0), COALESCE(quota, 0),
+	  COALESCE(use_time, 0), COALESCE(is_stream, 0), COALESCE(` + "`group`" + `, ''),
+	  COALESCE(request_id, ''), COALESCE(upstream_request_id, ''), COALESCE(other, '')
 FROM logs
 WHERE id > ? AND type IN (2, 5)
 ORDER BY id ASC
