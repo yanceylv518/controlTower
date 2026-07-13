@@ -120,7 +120,14 @@ func scanLogRow(rows interface{ Scan(dest ...any) error }) (Row, error) {
 	); err != nil {
 		return Row{}, err
 	}
-	row.CreatedAt = time.Unix(createdAtUnix, 0).UTC()
+	// NULL created_at is coalesced to 0 by the query; collection time is the
+	// best available approximation and keeps every downstream consumer
+	// (alert windows, metric buckets, uploads) free of epoch timestamps.
+	if createdAtUnix <= 0 {
+		row.CreatedAt = time.Now().UTC()
+	} else {
+		row.CreatedAt = time.Unix(createdAtUnix, 0).UTC()
+	}
 	row.UseTime = float64(useTimeSeconds)
 	return row, nil
 }

@@ -549,7 +549,7 @@ sudo journalctl -u control-tower-agent --since "10 minutes ago" | grep -i "dingt
 ### 1. 内容
 
 - **NULL 字段防护（P0，`f6c81f0`）**：采集 SQL 对全部可空列统一 `COALESCE`（文本→空串、数值→0），消除"源表出现 NULL 行 → Scan 报错 → 游标不推进 → 采集永久停摆"的风险。`id`/`type` 保持原样（主键不可空；type 为 NULL 的行匹配不上 `WHERE type IN (2,5)`）。
-- **加固（review 发现）**：`COALESCE(created_at, 0)` 会把 NULL 时间变成 Unix 0（1970 年），这样的错误事件进入告警窗口后会被 60 分钟时间衰减立即清出、静默漏计。`observeLocked` 的时间兜底从"仅零值"扩展为"零值或 Unix ≤0 一律用当前时间"，并补回归测试（epoch 时间戳的 3 条错误必须正常触发告警）。
+- **加固（review 发现）**：`COALESCE(created_at, 0)` 会把 NULL 时间变成 Unix 0（1970 年），污染所有下游——告警窗口的时间衰减会立即清出该事件（错误静默漏计），指标聚合会生成 1970 年的桶，上报路径会入库错误时间戳。修复放在**采集边界**（`scanLogRow`：`createdAtUnix <= 0` 时用采集时间代替，一处修好全部下游），`observeLocked` 保留 Unix ≤0 兜底作纵深防御；两层均有回归测试。
 
 ### 2. 验证
 
