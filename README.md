@@ -37,3 +37,9 @@ Web/H5, alerts, notification sending, controlled operations, and deployment hard
 - `pnpm dev` starts the desktop app at `/` with `/api` proxied to the Go Server.
 - `pnpm typecheck && pnpm build` validates and builds assets into `web/dist/desktop`.
 - After building and starting the Server, open `/`; legacy `/next/*` bookmarks redirect to the corresponding root route.
+
+## Deployment
+
+Docker Compose can build and start the Server, Web, and a persistent MySQL 8 database. Follow the zero-to-running, upgrade, rebuild, optional backup, and troubleshooting instructions in [`deploy/compose/README.md`](deploy/compose/README.md).
+
+Release tags matching `v*` build Linux Agent packages for amd64/arm64, a Linux Server package, checksums, and the GHCR Server image through the release workflow.

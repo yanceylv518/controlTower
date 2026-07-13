@@ -1,0 +1,66 @@
+services:
+  mysql:
+    image: mysql:8
+    restart: unless-stopped
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+    volumes:
+      - ct-mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$${MYSQL_ROOT_PASSWORD} --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    logging:
+      options:
+        max-size: 50m
+        max-file: "3"
+
+  server:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    # 使用已发布镜像时，注释上方 build 并启用下一行：
+    # image: ghcr.io/yanceylv518/controltower-server:latest
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      CT_SERVER_LISTEN_ADDR: ${CT_SERVER_LISTEN_ADDR}
+      CT_PUBLIC_BASE_URL: ${CT_PUBLIC_BASE_URL}
+      CT_DATABASE_DRIVER: ${CT_DATABASE_DRIVER}
+      CT_DATABASE_DSN: ${CT_DATABASE_DSN}
+      CT_MIGRATION_PATH: ${CT_MIGRATION_PATH}
+      CT_REDIS_ADDR: ${CT_REDIS_ADDR}
+      CT_REDIS_PASSWORD: ${CT_REDIS_PASSWORD}
+      CT_AGENT_TOKEN: ${CT_AGENT_TOKEN}
+      CT_DASHBOARD_TOKEN: ${CT_DASHBOARD_TOKEN}
+      CT_AGENT_TOKEN_PEPPER: ${CT_AGENT_TOKEN_PEPPER}
+      CT_ADMIN_USERNAME: ${CT_ADMIN_USERNAME}
+      CT_ADMIN_INITIAL_PASSWORD: ${CT_ADMIN_INITIAL_PASSWORD}
+      CT_SESSION_TTL_HOURS: ${CT_SESSION_TTL_HOURS}
+      CT_AGGREGATION_INTERVAL_SECONDS: ${CT_AGGREGATION_INTERVAL_SECONDS}
+      CT_NOTIFICATION_INTERVAL_SECONDS: ${CT_NOTIFICATION_INTERVAL_SECONDS}
+      CT_NOTIFICATION_MAX_ATTEMPTS: ${CT_NOTIFICATION_MAX_ATTEMPTS}
+      CT_CHANNEL_SNAPSHOT_RETENTION_DAYS: ${CT_CHANNEL_SNAPSHOT_RETENTION_DAYS}
+      CT_COMMAND_EXPIRY_MINUTES: ${CT_COMMAND_EXPIRY_MINUTES}
+      CT_RETENTION_DETAIL_DAYS: ${CT_RETENTION_DETAIL_DAYS}
+      CT_RETENTION_METRIC5M_DAYS: ${CT_RETENTION_METRIC5M_DAYS}
+      CT_RETENTION_RUNTIME_DAYS: ${CT_RETENTION_RUNTIME_DAYS}
+    ports:
+      - "8080:8080"
+    logging:
+      options:
+        max-size: 50m
+        max-file: "3"
+
+volumes:
+  ct-mysql-data:

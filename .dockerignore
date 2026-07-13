@@ -1,0 +1,5 @@
+.git
+webapp/**/node_modules
+web/dist
+dist
+docs

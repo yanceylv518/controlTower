@@ -2,6 +2,15 @@
 // type: release(发版) | bugfix(缺陷修复) | incident(生产事故) | review(代码评审) | decision(方案决策)
 window.DEVLOG = [
   {
+    date: "2026-07-14",
+    type: "release",
+    version: "v2.0-B1",
+    title: "Docker Compose 部署与发布流水线完成",
+    summary: "完成 Server 多阶段非 root 镜像、MySQL 8 持久化 Compose 与中文部署手册；共享 package.sh 生成 amd64/arm64 Agent、amd64 Server 和 SHA256SUMS，tag 流水线同时发布 GitHub Release 与 GHCR 镜像。Agent 版本支持 ldflags 注入并在启动时打印，业务行为无变化；本地 Compose 实测 MySQL healthy、健康接口和登录页均为 200。",
+    docs: ["docs/codex-task-v2-b1-deploy.md"],
+    commits: []
+  },
+  {
     date: "2026-07-13",
     type: "review",
     version: "",

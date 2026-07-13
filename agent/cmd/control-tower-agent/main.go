@@ -29,7 +29,7 @@ import (
 	"controltower/agent/internal/syscollector"
 )
 
-const agentVersion = "0.1.0"
+var agentVersion = "0.1.0"
 
 type controlTowerReporter interface {
 	Heartbeat(context.Context, reporter.AgentHeartbeatRequest) (reporter.AgentHeartbeatResponse, error)
@@ -55,6 +55,7 @@ type dockerStatusCollector interface {
 }
 
 func main() {
+	log.Printf("control tower agent %s", agentVersion)
 	if err := run(); err != nil {
 		log.Fatalf("control tower agent failed: %v", err)
 	}
