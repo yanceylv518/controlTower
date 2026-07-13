@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-13",
+    type: "review",
+    version: "",
+    title: "验收 M1-B3（告警时间线 + 通知强化）：部分通过，3 项返工",
+    summary: "通过：actor context 贯通、确定性抖动指数退避、exhausted 死信与 resolved 释放归零、手动重发、钉钉加签（has_secret 掩码）、时间线 API、MemoryStore 全部转换事件。返工：R1 致命——MySQL 侧三个状态机方法未写系统事件（生产时间线将只有用户动作）；R2 e2e 生长再次缺失；R3 nil 守卫与两组规格测试。两处遗漏均为自查清单明列项，返工要求把填好的清单粘贴进 commit message。",
+    docs: ["docs/codex-task-m1-b3-rework.md"],
+    commits: ["b712086"]
+  },
+  {
+    date: "2026-07-13",
     type: "feature",
     version: "M1-B3",
     title: "告警生命周期时间线与通知强化",
