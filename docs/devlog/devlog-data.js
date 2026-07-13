@@ -5,6 +5,15 @@ window.DEVLOG = [
     date: "2026-07-13",
     type: "review",
     version: "",
+    title: "M2 阶段首轮走查 PARTIAL 处置：3 项豁免 + 6 项种子数据补验",
+    summary: "首轮已执行项零功能失败（认证/切换/错误态恢复/告警确认落库/实例 token 全流程/命令确认纪律均实测通过），9 个未闭环项全部为环境数据依赖。处置：锁定/自动刷新/静默过期 3 项豁免（自动化已覆盖或纯时间等待）；新增 deploy/seed-demo-data.sh 一键产出双实例 12 桶指标、渠道快照、错误慢样本、告警与必失败通知渠道，支撑余下 6 项 20 分钟聚焦复验。清单已更新第二轮章节。",
+    docs: ["docs/m2-stage-verification.md", "docs/m2-stage-checklist.md", "deploy/seed-demo-data.sh"],
+    commits: ["c935922"]
+  },
+  {
+    date: "2026-07-13",
+    type: "review",
+    version: "",
     title: "M2 阶段走查：已执行项通过，仍有环境依赖项待闭环",
     summary: "提交 a9fb16f 的 typecheck/build、Go vet/test、CI、入口认证、全路由、深链/404、断服错误态恢复、告警确认落库、钉钉 secret 不回显、实例 Token 轮换与停用 401、渠道危险操作保护均通过。多实例完整数据、渠道快照、静默时序、通知重发、命令经 Agent 全状态流转等 9 项尚未闭环，结论为 PARTIAL，不能正式关闭 M2。",
     docs: ["docs/m2-stage-verification.md", "docs/m2-stage-checklist.md"],

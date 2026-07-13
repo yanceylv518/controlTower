@@ -34,3 +34,27 @@
 ## 结果
 
 全部通过 → 回复"M2 阶段验证通过"，M2 正式关闭，进入 v2.0 发布准备（Agent 双模式接入方案 + 部署）。
+
+
+---
+
+## 第二轮聚焦清单（2026-07-13，针对首轮 PARTIAL 的 9 个未闭环项）
+
+**处置**：3 项豁免（已有自动化覆盖或纯时间等待，不值得人工重复）：
+- 连续错误登录锁定（auth 单测覆盖，浏览器实测会锁死唯一管理员）——豁免
+- 30 秒自动刷新与标签页恢复（B1 手工验证过同一 composable，全页复用）——豁免
+- 告警静默 30 分钟后的状态变化（需等待 30 分钟；过期语义有单测）——豁免
+
+**6 项用种子数据补验**（~20 分钟）：
+
+1. `DROP DATABASE control_tower_test; CREATE DATABASE control_tower_test CHARACTER SET utf8mb4;` 重启 Server（顺带验证：**空库首登总览出现"前往实例管理"引导条**——趁 seed 之前看一眼）。
+2. 跑 `bash deploy/seed-demo-data.sh`（env 同 e2e：CT_BASE/CT_ADMIN_USER/CT_ADMIN_PASS）——产出双实例、各 12 桶指标、快照、样本、告警与必失败通知渠道。
+3. 走查打勾：
+   - [ ] 空库引导条（步骤 1 时）
+   - [ ] 多实例切换：顶栏 inst-demo-a / inst-demo-b 切换，总览与维度页数据互不串（a 是 OpenAI/alice/gpt-4o，b 是 Claude/bob/claude-sonnet，肉眼可辨）
+   - [ ] 渠道快照展示：渠道页看到"OpenAI-主力 (#77)"、权重、enabled/disabled 状态、模型 chips
+   - [ ] 样本分析：错误与慢两类样本；kind/model/user 筛选生效；分页控件工作
+   - [ ] 通知重发：告警触发后等通知 runner 一两个周期，投递记录出现 failed 行 → 点重发 → 次数/下次重试变化
+   - [ ] 命令流转：对 #77 下发命令（confirm 勾选）→ 用 seed 输出的实例 token 手动模拟心跳+回传（参考 e2e 脚本 command 段）或接受 pending→expired（10 分钟）语义 → 审计页出现记录
+
+全部通过 → 回复"M2 阶段验证通过"。
