@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-13",
+    type: "release",
+    version: "",
+    title: "v1.1-B5 批次下发：Nginx timing 日志告警（信号 E）",
+    summary: "codex 指令就绪：新包 nginxtiming（timed 格式解析 + tail + 轮转检测），三条规则（504 即时 / 5xx 窗口 / TTFT 窗口带分段归因文案），钉钉发送提取为共用 dingtalk 包。第一验收项是失效安全：未配置零启动、文件缺失只 WARN 并重试、脏行静默跳过，任何故障不伤主告警链路。不做：网关开销分解探测（归 v1.1 探测批次）、渠道/客户归因、指标上报 Server。",
+    docs: ["docs/codex-task-v1.1-b5-nginx-timing.md"],
+    commits: []
+  },
+  {
+    date: "2026-07-13",
     type: "decision",
     version: "",
     title: "延时分诊体系：Nginx timing 日志启用 + 信号 E 升级",
