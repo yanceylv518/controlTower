@@ -1,0 +1,1 @@
+.latest-title{margin:18px 0 4px}.trend-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:20px;min-height:430px}.trend-chart{border:1px solid #e7ebf2;border-radius:10px;padding:12px;background:#fff;min-width:0}.trend-chart h3{font-size:14px;margin:0 0 4px}.trend-chart-canvas{height:180px;width:100%}.trend-chart .el-empty{height:180px;padding:0}

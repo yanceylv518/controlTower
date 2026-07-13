@@ -4,6 +4,15 @@ window.DEVLOG = [
   {
     date: "2026-07-13",
     type: "release",
+    version: "M2-B5",
+    title: "维度监控页补齐重要指标趋势图",
+    summary: "客户、渠道、模型详情共用 TrendChart，一次历史请求驱动请求/错误、成功率/错误率、P50/P95/P99 延迟和 Token 入/出四张曲线；1h 使用 1m 桶，6h/24h 自动切换 5m 桶，加载期间保留旧图。",
+    docs: ["docs/codex-task-m2-b5-dimension-trends.md", "docs/development-progress.md"],
+    commits: []
+  },
+  {
+    date: "2026-07-13",
+    type: "release",
     version: "M2",
     title: "M2 阶段验证 PASS：Web 管理端完成",
     summary: "两轮走查闭环：首轮零功能失败，第二轮用种子数据补齐空库引导、双实例隔离（OpenAI/Claude 演示数据肉眼可辨不串）、渠道快照展示、样本筛选分页、通知重发、命令与审计全链路；三项高成本重复项正式豁免（有单测/前批实测覆盖）。Vue3 管理端 13 页接管根路径，旧静态页退役。M2 关闭，进入 v2.0 发布准备：最小部署编排 + 生产 Agent 双模式接入。",

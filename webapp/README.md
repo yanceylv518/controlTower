@@ -11,3 +11,5 @@ pnpm build
 The development server proxies `/api` to `http://127.0.0.1:8080`. Production assets are built to `web/dist/desktop` and served by the Go Server at `/`, including SPA deep-link fallback. If assets have not been built, the Server returns HTTP 503 with `webapp_not_built` and the build command hint.
 
 Routes: `/` overview, `/customers`, `/channels`, `/models`, `/samples`, `/runtime`, `/usage`, `/alerts`, `/notifications`, `/instances`, and `/audits`. All authenticated pages share the global instance filter where the frozen contract supports it.
+
+Customer, channel, and model detail pages share four metric trend charts (requests/errors, rates, latency, and token usage). The 1-hour range uses 1-minute buckets; 6-hour and 24-hour ranges automatically use 5-minute buckets.
