@@ -5,6 +5,15 @@ window.DEVLOG = [
     date: "2026-07-13",
     type: "review",
     version: "",
+    title: "M2 阶段走查：已执行项通过，仍有环境依赖项待闭环",
+    summary: "提交 a9fb16f 的 typecheck/build、Go vet/test、CI、入口认证、全路由、深链/404、断服错误态恢复、告警确认落库、钉钉 secret 不回显、实例 Token 轮换与停用 401、渠道危险操作保护均通过。多实例完整数据、渠道快照、静默时序、通知重发、命令经 Agent 全状态流转等 9 项尚未闭环，结论为 PARTIAL，不能正式关闭 M2。",
+    docs: ["docs/m2-stage-verification.md", "docs/m2-stage-checklist.md"],
+    commits: []
+  },
+  {
+    date: "2026-07-13",
+    type: "review",
+    version: "",
     title: "验收 M2-B4（切换转正）：通过，M2 开发完成",
     summary: "切换语义六条全部落实并有 mux 测试：SPA 接管 /、/next 301 兼容、深链 fallback、未构建 503 带构建提示、/api 与 /healthz 保护、旧静态页删除（-933 行，git ls-files 确认为零）。设置页改密强制重登、404/标题/favicon/空环境引导齐备。25 包全绿、CI 双 job 绿。服役自 P6 骨架的旧静态页正式退役。M2 四批开发全部完成，阶段点走查清单已生成（m2-stage-checklist.md），待用户浏览器走查。",
     docs: ["docs/codex-task-m2-b4-cutover.md", "docs/m2-stage-checklist.md"],
