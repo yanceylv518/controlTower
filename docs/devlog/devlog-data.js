@@ -3,8 +3,17 @@
 window.DEVLOG = [
   {
     date: "2026-07-13",
-    type: "release",
-    version: "v1.1 B1",
+    type: "review",
+    version: "",
+    title: "验收 v1.1 B1（慢返回规则 + 事件持久化）：逻辑全对，补齐 3 组回归测试后通过",
+    summary: "实现核对无误：ruleState 双规则重构、窗口共享按各自尾部计数、流式独立阈值、rearm 前先记录事件、fail-safe 事件日志（一次告警式禁用）、23 包测试全绿。缺口：双规则独立性、慢规则提醒、慢告警失败按 rule 回滚三组测试未写，review 时补齐。小项：慢消息对流式触发也显示非流式阈值秒数（措辞瑕疵，记入 B2 顺带）。",
+    docs: ["docs/codex-task-v1.1-b1.md"],
+    commits: ["ed0fe7e"]
+  },
+  {
+    date: "2026-07-13",
+    type: "feature",
+    version: "v1.1-B1",
     title: "慢返回窗口规则与 episode 事件持久化",
     summary: "Agent 新增与错误告警相互独立的慢返回窗口：非流式与流式分别配置阈值，支持触发、持续提醒、重臂和发送失败重试；全部 episode 状态变迁写入 alert-events.jsonl，5 MiB 轮转保留一个旧文件，写入失败不影响告警链路。",
     docs: ["docs/codex-task-v1.1-b1.md", "docs/development-progress.md", "agent/README.md"],

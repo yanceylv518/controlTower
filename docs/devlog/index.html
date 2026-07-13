@@ -9,7 +9,7 @@
     --bg: #f4f6fa; --card: #ffffff; --ink: #1c2733; --muted: #66748a;
     --line: #dfe5ee; --accent: #1769e0;
     --c-release: #1769e0; --c-bugfix: #2e9e5b; --c-incident: #d64545;
-    --c-review: #8a5cd6; --c-decision: #c07f1f;
+    --c-review: #8a5cd6; --c-decision: #c07f1f; --c-feature: #0e8f8a;
   }
   * { box-sizing: border-box; margin: 0; }
   body { font: 15px/1.65 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; background: var(--bg); color: var(--ink); }
@@ -53,6 +53,7 @@
 (function () {
   var TYPES = {
     release: ["发版", "var(--c-release)"],
+    feature: ["功能", "var(--c-feature)"],
     bugfix: ["缺陷修复", "var(--c-bugfix)"],
     incident: ["生产事故", "var(--c-incident)"],
     review: ["代码评审", "var(--c-review)"],

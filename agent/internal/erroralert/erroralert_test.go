@@ -472,3 +472,84 @@ func TestNotifierCountsEventsWithNullCreatedAt(t *testing.T) {
 		t.Fatalf("expected epoch-timestamp errors to trigger alert, got %d (%v)", got, c.contents)
 	}
 }
+
+func slowEvent(id int64, channelID int64, useTime float64, logType string, stream bool) logcollector.Event {
+	return logcollector.Event{SourceLogID: id, ChannelID: channelID, LogType: logType, UseTime: useTime, IsStream: stream, CreatedAt: time.Now()}
+}
+
+func TestSlowAndErrorEpisodesAreIndependent(t *testing.T) {
+	c := &capture{}
+	server := c.server()
+	defer server.Close()
+	n := New(server.URL, "inst-a", 10, 3, nil).WithRemindInterval(time.Hour).WithSlowRule(120, 10, 3, 0)
+	base := time.Date(2026, 7, 13, 10, 0, 0, 0, time.UTC)
+	n.now = func() time.Time { return base }
+
+	// Three events that are both errors and slow fire both rules at once.
+	for i := int64(1); i <= 3; i++ {
+		n.Process(context.Background(), []logcollector.Event{slowEvent(i, 18, 150, "error", false)})
+	}
+	if got := c.matching("渠道错误激增"); got != 1 {
+		t.Fatalf("expected error alert, got %d (%v)", got, c.contents)
+	}
+	if got := c.matching("渠道慢返回激增"); got != 1 {
+		t.Fatalf("expected slow alert, got %d (%v)", got, c.contents)
+	}
+
+	// Streams are fully excluded when the stream threshold is zero.
+	for i := int64(10); i <= 12; i++ {
+		n.Process(context.Background(), []logcollector.Event{slowEvent(i, 19, 500, "consume", true)})
+	}
+	if got := c.matching("渠道慢返回激增"); got != 1 {
+		t.Fatalf("stream events must not count as slow when threshold is 0, got %d", got)
+	}
+
+	// Both episodes remind independently past the interval.
+	n.now = func() time.Time { return base.Add(61 * time.Minute) }
+	n.Process(context.Background(), nil)
+	if got := c.matching("渠道错误持续"); got != 1 {
+		t.Fatalf("expected error reminder, got %d (%v)", got, c.contents)
+	}
+	if got := c.matching("渠道慢返回持续"); got != 1 {
+		t.Fatalf("expected slow reminder, got %d (%v)", got, c.contents)
+	}
+
+	// Ten slow-but-successful events rearm only the error rule: a fresh error
+	// burst alerts again while the ongoing slow episode stays deduplicated.
+	for i := int64(20); i < 30; i++ {
+		n.Process(context.Background(), []logcollector.Event{slowEvent(i, 18, 150, "consume", false)})
+	}
+	for i := int64(30); i < 33; i++ {
+		n.Process(context.Background(), []logcollector.Event{slowEvent(i, 18, 150, "error", false)})
+	}
+	if got := c.matching("渠道错误激增"); got != 2 {
+		t.Fatalf("expected error rule to rearm and fire again, got %d", got)
+	}
+	if got := c.matching("渠道慢返回激增"); got != 1 {
+		t.Fatalf("slow episode must stay deduplicated, got %d", got)
+	}
+}
+
+func TestSlowAlertSendFailureRetriesIndependently(t *testing.T) {
+	c := &capture{}
+	server := c.server()
+	defer server.Close()
+	n := New(server.URL, "inst-a", 10, 3, nil).WithSlowRule(120, 10, 3, 300)
+
+	c.setErrcode(`{"errcode":310000,"errmsg":"keywords not in content"}`)
+	for i := int64(1); i <= 3; i++ {
+		n.Process(context.Background(), []logcollector.Event{slowEvent(i, 18, 150, "consume", false)})
+	}
+	c.setErrcode("")
+	n.Process(context.Background(), nil)
+	if got := c.matching("渠道慢返回激增"); got != 2 {
+		t.Fatalf("expected rejected then retried slow alert, got %d (%v)", got, c.contents)
+	}
+	if got := c.matching("渠道错误激增"); got != 0 {
+		t.Fatalf("error rule must stay untouched, got %d", got)
+	}
+	n.Process(context.Background(), nil)
+	if got := c.matching("渠道慢返回激增"); got != 2 {
+		t.Fatalf("expected no duplicate after successful retry, got %d", got)
+	}
+}
