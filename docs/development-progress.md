@@ -80,6 +80,7 @@
 | Server 静态托管 | 已完成 | `server/internal/httpapi/mux.go` | `go test ./...`；`/api/**` 不被静态路由抢占 |
 | Dashboard 首页接入 | 已完成 | `web/assets/app.js` | `/api/dashboard/overview` 与 `/api/dashboard/metrics` 同源请求通过 |
 | Dashboard metrics API | 已完成 | `server/internal/dashboard/metric_handler.go`、`server/internal/httpapi/**` | `go test ./...`；本地 E2E 验证 `/api/dashboard/metrics` 鉴权与 JSON 返回 |
+| Web 监控展示修复（P1 批次） | 已完成 | `server/internal/dashboard/**`、`server/internal/mysqlstore/**`、`server/internal/ingest/memory_store.go`、`web/**` | 完成 `review-web-monitoring-2026-07-13.md` P1-1、P1-3～P1-8：指标历史/latest、自动刷新、网络列、P50/P99、用量排行、双线趋势；`go vet ./...`、`go test ./...`、`node --check web/assets/app.js` 通过 |
 | 当前告警 API | 已完成 | `server/internal/dashboard/alert_handler.go`、`server/internal/httpapi/**` | `go test ./...`；本地 E2E 验证 `/api/dashboard/alerts` 鉴权与 JSON 返回 |
 | 告警确认/静默/自动恢复 | 已完成 | `server/internal/dashboard/alert_handler.go`、`server/internal/mysqlstore/alert_store.go`、`server/internal/ingest/memory_store.go` | `go test ./...`；本地 E2E 验证 acknowledge、silence 状态落库 |
 | Webhook 通知渠道与发送记录 | 已完成 | `server/internal/dashboard/notification_handler.go`、`server/internal/mysqlstore/notification_store.go`、`server/migrations/001_init.sql` | `go test ./...`；本地 E2E 验证渠道保存、脱敏回显和 failed 发送记录 |

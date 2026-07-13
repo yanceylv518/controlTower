@@ -3,15 +3,22 @@ package dashboard
 import (
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
+	"controltower/internal/latencyhist"
 	"controltower/server/internal/aggregator"
+	"controltower/server/internal/storage"
 )
 
 type MetricSource interface {
 	Recent1mMetrics() ([]aggregator.Metric, error)
 	Recent5mMetrics() ([]aggregator.Metric, error)
+	Latest1mMetrics() ([]aggregator.Metric, error)
+	Latest5mMetrics() ([]aggregator.Metric, error)
+	QueryMetricHistory(window, dimensionType, dimensionKey string, since time.Time) ([]aggregator.Metric, error)
+	UsageSummary(since time.Time) ([]storage.UsageRow, error)
 }
 
 type MetricListResponse struct {
@@ -35,6 +42,8 @@ type MetricItem struct {
 	Quota            int64     `json:"quota"`
 	AvgUseTime       *float64  `json:"avg_use_time"`
 	P95UseTime       *float64  `json:"p95_use_time"`
+	P50UseTime       *float64  `json:"p50_use_time,omitempty"`
+	P99UseTime       *float64  `json:"p99_use_time,omitempty"`
 	StreamRate       *float64  `json:"stream_rate"`
 	CacheTokenRate   *float64  `json:"cache_token_rate"`
 }
@@ -57,8 +66,13 @@ func (h Handler) HandleMetrics(w http.ResponseWriter, r *http.Request) {
 	window := query.Get("window")
 	var metrics []aggregator.Metric
 	var err error
-	if window == "5m" {
+	latest := query.Get("latest") == "true"
+	if window == "5m" && latest {
+		metrics, err = h.metricSource.Latest5mMetrics()
+	} else if window == "5m" {
 		metrics, err = h.metricSource.Recent5mMetrics()
+	} else if latest {
+		metrics, err = h.metricSource.Latest1mMetrics()
 	} else {
 		metrics, err = h.metricSource.Recent1mMetrics()
 	}
@@ -67,6 +81,42 @@ func (h Handler) HandleMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	items := filterMetricItems(metrics, query.Get("dimension_type"), query.Get("dimension_key"))
+	writeDashboardJSON(w, http.StatusOK, MetricListResponse{Items: items})
+}
+
+func (h Handler) HandleMetricHistory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeDashboardError(w, http.StatusMethodNotAllowed, "method_not_allowed")
+		return
+	}
+	if h.metricSource == nil {
+		writeDashboardError(w, http.StatusInternalServerError, "metric_source_not_configured")
+		return
+	}
+	query := r.URL.Query()
+	dimensionType, dimensionKey := query.Get("dimension_type"), query.Get("dimension_key")
+	window := query.Get("window")
+	if window == "" {
+		window = "1m"
+	}
+	hours := 1
+	if raw := query.Get("hours"); raw != "" {
+		var err error
+		if hours, err = strconv.Atoi(raw); err != nil {
+			hours = 0
+		}
+	}
+	if dimensionType == "" || dimensionKey == "" || (window != "1m" && window != "5m") || hours < 1 || hours > 24 {
+		writeDashboardError(w, http.StatusBadRequest, "invalid_query")
+		return
+	}
+	metrics, err := h.metricSource.QueryMetricHistory(window, dimensionType, dimensionKey, time.Now().UTC().Add(-time.Duration(hours)*time.Hour))
+	if err != nil {
+		writeDashboardError(w, http.StatusInternalServerError, "query_failed")
+		return
+	}
+	items := filterMetricItems(metrics, "", "")
+	sort.Slice(items, func(i, j int) bool { return items[i].BucketTime.Before(items[j].BucketTime) })
 	writeDashboardJSON(w, http.StatusOK, MetricListResponse{Items: items})
 }
 
@@ -96,6 +146,8 @@ func filterMetricItems(metrics []aggregator.Metric, dimensionType string, dimens
 			Quota:            metric.Quota,
 			AvgUseTime:       metric.AvgUseTime,
 			P95UseTime:       metric.P95UseTime,
+			P50UseTime:       latencyhist.Quantile(metric.LatencyBuckets, 0.5),
+			P99UseTime:       latencyhist.Quantile(metric.LatencyBuckets, 0.99),
 			StreamRate:       metric.StreamRate,
 			CacheTokenRate:   metric.CacheTokenRate,
 		})

@@ -1,0 +1,71 @@
+package dashboard
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"controltower/internal/latencyhist"
+	"controltower/server/internal/aggregator"
+	"controltower/server/internal/storage"
+)
+
+type metricSourceStub struct {
+	metrics []aggregator.Metric
+	usage   []storage.UsageRow
+	since   time.Time
+}
+
+func (s *metricSourceStub) Recent1mMetrics() ([]aggregator.Metric, error) { return s.metrics, nil }
+func (s *metricSourceStub) Recent5mMetrics() ([]aggregator.Metric, error) { return s.metrics, nil }
+func (s *metricSourceStub) Latest1mMetrics() ([]aggregator.Metric, error) { return s.metrics, nil }
+func (s *metricSourceStub) Latest5mMetrics() ([]aggregator.Metric, error) { return s.metrics, nil }
+func (s *metricSourceStub) QueryMetricHistory(_ string, _ string, _ string, since time.Time) ([]aggregator.Metric, error) {
+	s.since = since
+	return s.metrics, nil
+}
+func (s *metricSourceStub) UsageSummary(since time.Time) ([]storage.UsageRow, error) {
+	s.since = since
+	return s.usage, nil
+}
+
+func TestMetricHistoryValidatesQuery(t *testing.T) {
+	h := NewHandler(nil).WithMetricSource(&metricSourceStub{})
+	response := httptest.NewRecorder()
+	h.HandleMetricHistory(response, httptest.NewRequest(http.MethodGet, "/api/dashboard/metric-history?window=bad", nil))
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d", response.Code)
+	}
+}
+
+func TestMetricHistoryReturnsItemsWithQuantiles(t *testing.T) {
+	now := time.Now().UTC()
+	buckets := latencyhist.Buckets{1, 0, 0, 0, 0, 0, 0, 0, 0, 1}
+	source := &metricSourceStub{metrics: []aggregator.Metric{{BucketTime: now.Add(-time.Minute), DimensionType: "instance", DimensionKey: "inst", LatencyBuckets: buckets}, {BucketTime: now, DimensionType: "instance", DimensionKey: "inst"}}}
+	h := NewHandler(nil).WithMetricSource(source)
+	response := httptest.NewRecorder()
+	h.HandleMetricHistory(response, httptest.NewRequest(http.MethodGet, "/api/dashboard/metric-history?dimension_type=instance&dimension_key=inst&hours=1", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if source.since.IsZero() || !strings.Contains(response.Body.String(), "p50_use_time") || !strings.Contains(response.Body.String(), "p99_use_time") {
+		t.Fatalf("unexpected response: %s", response.Body.String())
+	}
+}
+
+func TestUsageValidatesHoursAndReturnsTotals(t *testing.T) {
+	source := &metricSourceStub{usage: []storage.UsageRow{{DimensionType: "instance_user", DimensionKey: "inst:user:7", RequestCount: 2, PromptTokens: 3, CompletionTokens: 4, Quota: 5}}}
+	h := NewHandler(nil).WithMetricSource(source)
+	bad := httptest.NewRecorder()
+	h.HandleUsage(bad, httptest.NewRequest(http.MethodGet, "/api/dashboard/usage?hours=0", nil))
+	if bad.Code != http.StatusBadRequest {
+		t.Fatalf("bad status=%d", bad.Code)
+	}
+	ok := httptest.NewRecorder()
+	h.HandleUsage(ok, httptest.NewRequest(http.MethodGet, "/api/dashboard/usage?hours=24", nil))
+	if ok.Code != http.StatusOK || !strings.Contains(ok.Body.String(), `"total_tokens":7`) {
+		t.Fatalf("response=%s", ok.Body.String())
+	}
+}

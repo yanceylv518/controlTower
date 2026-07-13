@@ -3,6 +3,7 @@ const state = {
   apiBase: localStorage.getItem("ct.api.base") || "",
   view: "overview",
   metrics: [],
+  trendMetrics: [],
   channelSnapshots: [],
   selectedChannelID: "",
   selectedCustomerID: "",
@@ -18,6 +19,7 @@ const titles = {
   models: ["\u6a21\u578b\u76d1\u63a7", "\u6309\u6a21\u578b\u7ef4\u5ea6\u67e5\u770b\u8bf7\u6c42\u8d8b\u52bf\u3001\u9519\u8bef\u548c\u5ef6\u8fdf"],
   logs: ["\u6837\u672c\u5206\u6790", "\u67e5\u770b\u5f53\u524d new-api \u7684\u9519\u8bef\u548c\u6162\u8bf7\u6c42\u6837\u672c"],
   runtime: ["\u7cfb\u7edf\u72b6\u6001", "\u67e5\u770b\u670d\u52a1\u5668\u3001\u5065\u5eb7\u68c0\u67e5\u548c Docker \u8fd0\u884c\u72b6\u6001"],
+  usage: ["\u7528\u91cf\u7edf\u8ba1", "\u6309\u5ba2\u6237\u3001\u6e20\u9053\u548c\u6a21\u578b\u67e5\u770b\u8bf7\u6c42\u3001Token \u548c Quota \u6392\u884c"],
   settings: ["\u8bbe\u7f6e", "\u672c\u5730\u4fdd\u5b58 Dashboard Token \u548c API Base URL"],
 };
 
@@ -124,11 +126,18 @@ function dimensionItems(type) {
 }
 
 async function loadMetrics() {
-  const response = await requestJSON(`/api/dashboard/metrics?window=${encodeURIComponent(metricWindow())}`);
+  const response = await requestJSON(`/api/dashboard/metrics?window=${encodeURIComponent(metricWindow())}&latest=true`);
   state.metrics = response.items || [];
   const trendWindow = $("#trendWindow");
   if (trendWindow) trendWindow.textContent = metricWindow();
   return state.metrics;
+}
+
+async function loadTrendMetrics() {
+  const instance = state.metrics.find((item) => item.dimension_type === "instance");
+  if (!instance) { state.trendMetrics = []; return; }
+  const response = await requestJSON(`/api/dashboard/metric-history?dimension_type=instance&dimension_key=${encodeURIComponent(instance.dimension_key)}&window=${encodeURIComponent(metricWindow())}&hours=1`);
+  state.trendMetrics = response.items || [];
 }
 
 async function loadChannelSnapshots() {
@@ -201,6 +210,7 @@ async function loadOverview() {
     loadChannelSnapshots(),
     loadAlerts(),
   ]);
+  await loadTrendMetrics();
   renderKPIs(overview.recent_1m || {});
   renderRuntimeSummary(overview.runtime || {});
   renderAlertLists();
@@ -252,8 +262,8 @@ function renderTrend() {
   ctx.clearRect(0, 0, width, height);
   ctx.fillStyle = "#ffffff";
   ctx.fillRect(0, 0, width, height);
-  const points = state.metrics.filter((item) => item.dimension_type === "instance").sort((a, b) => new Date(a.bucket_time) - new Date(b.bucket_time));
-  const padding = { left: 38, right: 14, top: 18, bottom: 28 };
+  const points = state.trendMetrics;
+  const padding = { left: 38, right: 14, top: 34, bottom: 28 };
   ctx.strokeStyle = "#d7dee9";
   ctx.lineWidth = 1;
   for (let i = 0; i < 4; i += 1) {
@@ -263,24 +273,20 @@ function renderTrend() {
   if (!points.length) {
     ctx.fillStyle = "#66748a"; ctx.font = "13px sans-serif"; ctx.fillText("\u6682\u65e0\u8d8b\u52bf\u6570\u636e", padding.left, height / 2); return;
   }
-  const values = points.map((item) => item.request_count || 0);
+  const values = points.flatMap((item) => [item.request_count || 0, item.error_count || 0]);
   const max = Math.max(1, ...values);
   const plotWidth = width - padding.left - padding.right;
   const plotHeight = height - padding.top - padding.bottom;
-  ctx.strokeStyle = "#1769e0"; ctx.lineWidth = 2; ctx.beginPath();
-  points.forEach((item, index) => {
-    const x = padding.left + (points.length === 1 ? plotWidth : (plotWidth / (points.length - 1)) * index);
-    const y = padding.top + plotHeight - ((item.request_count || 0) / max) * plotHeight;
-    if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-  });
-  ctx.stroke();
-  ctx.fillStyle = "#1769e0";
-  points.forEach((item, index) => {
-    const x = padding.left + (points.length === 1 ? plotWidth : (plotWidth / (points.length - 1)) * index);
-    const y = padding.top + plotHeight - ((item.request_count || 0) / max) * plotHeight;
-    ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI * 2); ctx.fill();
-  });
-  ctx.fillStyle = "#66748a"; ctx.font = "12px sans-serif"; ctx.fillText(`max ${max}`, 6, padding.top + 4); ctx.fillText("\u8bf7\u6c42\u91cf", 6, height - 10);
+  const drawLine = (field, color) => {
+    ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.beginPath();
+    points.forEach((item, index) => { const x = padding.left + (points.length === 1 ? plotWidth / 2 : (plotWidth / (points.length - 1)) * index); const y = padding.top + plotHeight - ((item[field] || 0) / max) * plotHeight; if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); });
+    ctx.stroke();
+  };
+  drawLine("request_count", "#1769e0"); drawLine("error_count", "#d64545");
+  ctx.font = "12px sans-serif"; ctx.fillStyle = "#1769e0"; ctx.fillRect(padding.left, 10, 10, 3); ctx.fillStyle = "#334155"; ctx.fillText("\u8bf7\u6c42", padding.left + 15, 15); ctx.fillStyle = "#d64545"; ctx.fillRect(padding.left + 60, 10, 10, 3); ctx.fillStyle = "#334155"; ctx.fillText("\u9519\u8bef", padding.left + 75, 15);
+  ctx.fillStyle = "#66748a"; ctx.textAlign = "center";
+  [0, Math.floor((points.length - 1) / 2), points.length - 1].forEach((index) => { const x = padding.left + (points.length === 1 ? plotWidth / 2 : (plotWidth / (points.length - 1)) * index); ctx.fillText(new Date(points[index].bucket_time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }), x, height - 8); });
+  ctx.textAlign = "start"; ctx.fillText(`max ${max}`, 6, padding.top + 4);
 }
 
 function renderOverviewDimensions() {
@@ -324,8 +330,8 @@ function alertStatusText(status) {
 }
 
 function alertExtraTime(item) {
-  if (item.status === "resolved" && item.resolved_at) return ` ? \u6062\u590d ${formatTime(item.resolved_at)}`;
-  if (item.status === "silenced" && item.silence_until) return ` ? \u9759\u9ed8\u5230 ${formatTime(item.silence_until)}`;
+  if (item.status === "resolved" && item.resolved_at) return ` \u00b7 \u6062\u590d ${formatTime(item.resolved_at)}`;
+  if (item.status === "silenced" && item.silence_until) return ` \u00b7 \u9759\u9ed8\u5230 ${formatTime(item.silence_until)}`;
   return "";
 }
 
@@ -337,7 +343,7 @@ function alertActions(item) {
 function renderAlertList(element, alerts, compact) {
   if (!element) return;
   if (!alerts.length) { element.innerHTML = `<div class="empty">\u5f53\u524d\u6ca1\u6709\u544a\u8b66</div>`; return; }
-  element.innerHTML = alerts.map((item) => `<div class="alert-item ${escapeHTML(item.severity)}"><div class="alert-title"><span>${escapeHTML(item.title)}</span><span>${badge(item.severity, item.severity !== "critical")} ${badge(alertStatusText(item.status), item.status !== "firing")}</span></div><div class="alert-summary">${escapeHTML(item.summary)}</div>${compact ? "" : `<div class="alert-meta">${escapeHTML(item.instance_id)} ? ${escapeHTML(item.rule_key)} ? \u9996\u6b21 ${formatTime(item.first_seen_at)} ? \u6700\u8fd1 ${formatTime(item.last_seen_at)}${alertExtraTime(item)}</div>${alertActions(item)}`}</div>`).join("");
+  element.innerHTML = alerts.map((item) => `<div class="alert-item ${escapeHTML(item.severity)}"><div class="alert-title"><span>${escapeHTML(item.title)}</span><span>${badge(item.severity, item.severity !== "critical")} ${badge(alertStatusText(item.status), item.status !== "firing")}</span></div><div class="alert-summary">${escapeHTML(item.summary)}</div>${compact ? "" : `<div class="alert-meta">${escapeHTML(item.instance_id)} \u00b7 ${escapeHTML(item.rule_key)} \u00b7 \u9996\u6b21 ${formatTime(item.first_seen_at)} \u00b7 \u6700\u8fd1 ${formatTime(item.last_seen_at)}${alertExtraTime(item)}</div>${alertActions(item)}`}</div>`).join("");
 }
 
 function renderModelRows(body, rows, compact = false) {
@@ -386,7 +392,7 @@ function renderChannelListItem(item) {
   const healthClass = channelHealthClass(item, snapshot);
   return `<button type="button" class="channel-list-item ${selected} ${healthClass}" data-channel-select="${escapeHTML(id)}">
     <span class="channel-list-top"><strong>${escapeHTML(name)}</strong>${channelStatusBadge(snapshot?.status)}</span>
-    <span class="channel-list-meta">ID ${escapeHTML(id || "--")} ? W ${formatNumber(snapshot?.weight)} ? ${formatNumber(item.request_count)} \u8bf7\u6c42</span>
+    <span class="channel-list-meta">ID ${escapeHTML(id || "--")} \u00b7 W ${formatNumber(snapshot?.weight)} \u00b7 ${formatNumber(item.request_count)} \u8bf7\u6c42</span>
     <span class="channel-list-bottom"><span>${formatPercent(item.success_rate)} \u6210\u529f</span><span>${formatSeconds(item.p95_use_time)} P95</span></span>
     ${rateBar(item.error_rate, "bad")}
   </button>`;
@@ -406,7 +412,7 @@ function renderChannelDetail(item) {
     ${miniMetric("\u8bf7\u6c42", formatNumber(item.request_count), `${formatNumber(item.tpm)} TPM`)}
     ${miniMetric("\u6210\u529f\u7387", formatPercent(item.success_rate), "", "ok")}
     ${miniMetric("\u9519\u8bef\u7387", formatPercent(item.error_rate), "", (item.error_rate || 0) > 0 ? "bad" : "")}
-    ${miniMetric("P95", formatSeconds(item.p95_use_time), `avg ${formatSeconds(item.avg_use_time)}`)}
+    ${miniMetric("P95", formatSeconds(item.p95_use_time), `P50 ${formatSeconds(item.p50_use_time)} \u00b7 P99 ${formatSeconds(item.p99_use_time)}`)}
     ${miniMetric("Token", formatNumber(tokenTotal), `${formatNumber(item.quota || 0)} quota`)}
   </div>
   <div class="channel-detail-section"><div class="section-heading compact"><h3>\u6a21\u578b\u8986\u76d6</h3><span>${modelList(snapshot?.models_text).length} models</span></div>${modelChips(snapshot?.models_text)}</div>
@@ -476,7 +482,7 @@ function renderDimensionDetail(view, item) {
     miniMetric("\u8bf7\u6c42", formatNumber(item.request_count), formatNumber(item.tpm) + " TPM") +
     miniMetric("\u6210\u529f\u7387", formatPercent(item.success_rate), "", "ok") +
     miniMetric("\u9519\u8bef\u7387", formatPercent(item.error_rate), formatNumber(item.error_count) + " \u9519\u8bef", (item.error_rate || 0) > 0 ? "bad" : "") +
-    miniMetric("P95", formatSeconds(item.p95_use_time), "avg " + formatSeconds(item.avg_use_time)) +
+    miniMetric("P95", formatSeconds(item.p95_use_time), "P50 " + formatSeconds(item.p50_use_time) + " \u00b7 P99 " + formatSeconds(item.p99_use_time)) +
     miniMetric("Token", formatNumber(tokenTotal), formatNumber(item.prompt_tokens) + " in / " + formatNumber(item.completion_tokens) + " out") + "</div>" +
     '<div class="dimension-detail-section"><div class="section-heading compact"><h3>\u8d28\u91cf\u4fe1\u53f7</h3></div><div class="signal-grid"><div><span>\u6210\u529f\u7387</span>' + rateBar(item.success_rate, "ok") + "</div><div><span>\u9519\u8bef\u7387</span>" + rateBar(item.error_rate, "bad") + "</div><div><span>\u6d41\u5f0f\u5360\u6bd4</span>" + rateBar(item.stream_rate, "ok") + "</div><div><span>Cache token</span>" + rateBar(item.cache_token_rate, "ok") + "</div></div></div>" +
     '<div class="dimension-detail-section"><div class="section-heading compact"><h3>\u7528\u91cf</h3></div><div class="detail-usage-row"><span>Quota</span><strong>' + formatNumber(item.quota || 0) + "</strong><span>Dimension ID</span><strong>" + escapeHTML(id) + "</strong></div></div>";
@@ -527,9 +533,23 @@ async function loadRuntime() {
 
 function renderRuntimeTables(agents, metrics, health, docker) {
   $("#agentsBody").innerHTML = agents.length ? agents.map((item) => `<tr><td><strong>${escapeHTML(item.id || "--")}</strong><div class="muted-text">${escapeHTML(item.version || "--")}</div></td><td>${escapeHTML(item.instance_id || "--")}</td><td>${badge(item.online ? "online" : "offline", item.online)} ${badge(item.status || "--", item.status === "ok" ? true : undefined)}</td><td>${formatTime(item.last_seen_at)}<div class="muted-text">${formatDuration(item.seconds_since_seen)} ago</div></td><td>${formatNumber(item.last_log_id || 0)}<div class="muted-text">source ${formatNumber(item.source_latest_log_id || 0)} · seq ${formatNumber(item.last_sequence || 0)}</div></td><td>${badge(formatNumber(item.backlog_estimate || 0), (item.backlog_estimate || 0) < 3000 ? true : false)}</td><td>${formatNumber(item.report_delay_ms || 0)}ms</td></tr>`).join("") : tableEmpty(7);
-  $("#metricsBody").innerHTML = metrics.length ? metrics.map((item) => `<tr><td>${formatTime(item.collected_at)}</td><td>${formatMetricPercent(item.cpu_percent)}</td><td>${formatMetricPercent(item.memory_used_percent)}</td><td>${formatMetricPercent(item.disk_used_percent)}</td><td>${Number(item.load_1m || 0).toFixed(2)}</td></tr>`).join("") : tableEmpty(5);
+  $("#metricsBody").innerHTML = metrics.length ? metrics.map((item) => `<tr><td>${formatTime(item.collected_at)}</td><td>${formatMetricPercent(item.cpu_percent)}</td><td>${formatMetricPercent(item.memory_used_percent)}</td><td>${formatMetricPercent(item.disk_used_percent)}</td><td>${Number(item.load_1m || 0).toFixed(2)}</td><td>${formatNumber(item.network_rx_bytes_per_second)} / ${formatNumber(item.network_tx_bytes_per_second)}</td></tr>`).join("") : tableEmpty(6);
   $("#healthBody").innerHTML = health.length ? health.map((item) => `<tr><td>${formatTime(item.checked_at)}</td><td>${escapeHTML(item.target || "--")}</td><td>${badge(item.status || "--", item.status === "up" ? true : item.status === "down" ? false : undefined)}</td><td>${item.http_status_code || "--"}</td><td>${formatNumber(item.latency_ms || 0)}ms</td></tr>`).join("") : tableEmpty(5);
   $("#dockerBody").innerHTML = docker.length ? docker.map((item) => `<tr><td>${formatTime(item.collected_at)}</td><td>${escapeHTML(item.container_name || "--")}</td><td>${badge(item.running ? "running" : "stopped", item.running)}</td><td>${escapeHTML(item.status || "--")}</td></tr>`).join("") : tableEmpty(4);
+}
+
+async function loadUsage() {
+  const hours = $("#usageHours")?.value || "24";
+  const response = await requestJSON(`/api/dashboard/usage?hours=${encodeURIComponent(hours)}`);
+  const rows = response.items || [];
+  renderUsageTable($("#usageCustomerBody"), rows.filter((item) => item.dimension_type === "instance_user").slice(0, 20));
+  renderUsageTable($("#usageChannelBody"), rows.filter((item) => item.dimension_type === "instance_channel").slice(0, 20));
+  renderUsageTable($("#usageModelBody"), rows.filter((item) => item.dimension_type === "instance_model").slice(0, 20));
+}
+
+function renderUsageTable(body, rows) {
+  if (!body) return;
+  body.innerHTML = rows.length ? rows.map((item) => `<tr><td>${escapeHTML(item.display_key)}</td><td>${formatNumber(item.request_count)}</td><td>${formatNumber(item.prompt_tokens)} / ${formatNumber(item.completion_tokens)}</td><td>${formatNumber(item.quota)}</td></tr>`).join("") : tableEmpty(4);
 }
 
 function showSettings() {
@@ -576,6 +596,7 @@ async function refreshCurrentView() {
     if (["customers", "channels", "models"].includes(state.view)) await loadDimensionView(state.view);
     if (state.view === "logs") await loadLogs();
     if (state.view === "runtime") await loadRuntime();
+    if (state.view === "usage") await loadUsage();
     if (state.view === "settings") await loadNotificationSettings();
     setConnection(true, "\u5df2\u8fde\u63a5");
     setUpdated();
@@ -599,6 +620,7 @@ function bindEvents() {
   $$("[data-view-link]").forEach((button) => button.addEventListener("click", () => switchView(button.dataset.viewLink)));
   $("#refreshButton").addEventListener("click", refreshCurrentView);
   $("#metricWindow").addEventListener("change", async () => { state.metrics = []; await refreshCurrentView(); });
+  $("#usageHours").addEventListener("change", refreshCurrentView);
   $("#globalModel").addEventListener("input", () => { if (["overview", "customers", "channels", "models"].includes(state.view)) { renderOverviewDimensions(); if (state.view !== "overview") loadDimensionView(state.view); } });
   $("#globalStatus").addEventListener("change", () => { if (state.view === "logs") refreshCurrentView(); });
   $("#webhookForm").addEventListener("submit", (event) => { event.preventDefault(); saveWebhookChannel(event.currentTarget).then(() => { setConnection(true, "\u5df2\u8fde\u63a5"); setUpdated(); }).catch((error) => setConnection(false, error.message)); });
@@ -608,7 +630,9 @@ function bindEvents() {
   $("#clearSettingsButton").addEventListener("click", (event) => { event.preventDefault(); state.token = "local-dashboard-token"; state.apiBase = ""; localStorage.removeItem("ct.dashboard.token"); localStorage.removeItem("ct.api.base"); showSettings(); });
   document.addEventListener("click", (event) => { const dimensionButton = event.target.closest("[data-dimension-select]"); if (dimensionButton) { const view = dimensionButton.dataset.dimensionView; setSelectedDimensionID(view, dimensionButton.dataset.dimensionSelect || ""); loadDimensionView(view); return; } const channelButton = event.target.closest("[data-channel-select]"); if (channelButton) { state.selectedChannelID = channelButton.dataset.channelSelect || ""; renderChannelWorkspace(dimensionItems("instance_channel").slice(0, 50)); return; } const button = event.target.closest("[data-alert-action]"); if (!button) return; sendAlertAction(button.dataset.alertId, button.dataset.alertAction).catch((error) => setConnection(false, error.message)); });
   window.addEventListener("resize", () => { if (state.view === "overview") renderTrend(); });
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") refreshCurrentView(); });
 }
 
 bindEvents();
 refreshCurrentView();
+setInterval(() => { if (document.visibilityState === "visible") refreshCurrentView(); }, 30000);

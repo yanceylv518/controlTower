@@ -21,8 +21,19 @@ func TestRecentMetricsSQLReadsLatestMetrics(t *testing.T) {
 
 func TestLatestMetricsSQLRestrictsToNewestBucket(t *testing.T) {
 	sqlText := recentMetricsSQL("metric_1m", true)
-	if !strings.Contains(sqlText, "WHERE bucket_time = (SELECT MAX(bucket_time) FROM metric_1m)") {
-		t.Fatalf("latest metrics query missing newest-bucket filter: %s", sqlText)
+	for _, fragment := range []string{"MAX(candidate.bucket_time)", "candidate.dimension_type = current.dimension_type", "candidate.dimension_key = current.dimension_key"} {
+		if !strings.Contains(sqlText, fragment) {
+			t.Fatalf("latest metrics query missing %q: %s", fragment, sqlText)
+		}
+	}
+}
+
+func TestMetricHistorySQLFiltersAndSorts(t *testing.T) {
+	sqlText := metricHistorySQL("metric_5m")
+	for _, fragment := range []string{"FROM metric_5m", "dimension_type = ?", "dimension_key = ?", "bucket_time >= ?", "ORDER BY bucket_time ASC"} {
+		if !strings.Contains(sqlText, fragment) {
+			t.Fatalf("history query missing %q: %s", fragment, sqlText)
+		}
 	}
 }
 func TestFloatPointerConvertsSQLNullFloat(t *testing.T) {

@@ -76,7 +76,7 @@ func (s *testStore) QueryLogEvents(query storage.LogQuery) ([]storage.LogEvent, 
 }
 func TestNewMuxProtectsRuntimeDashboardRoutes(t *testing.T) {
 	mux := NewMux(Options{AgentToken: "agent-token", DashboardToken: "dashboard-token", Store: newTestStore()})
-	for _, path := range []string{"/api/dashboard/metrics", "/api/dashboard/channel-snapshots", "/api/dashboard/alerts", "/api/dashboard/notification-channels", "/api/dashboard/notification-deliveries", "/api/dashboard/server-metrics", "/api/dashboard/health-checks", "/api/dashboard/docker-statuses"} {
+	for _, path := range []string{"/api/dashboard/metrics", "/api/dashboard/metric-history?dimension_type=instance&dimension_key=inst-1", "/api/dashboard/usage", "/api/dashboard/channel-snapshots", "/api/dashboard/alerts", "/api/dashboard/notification-channels", "/api/dashboard/notification-deliveries", "/api/dashboard/server-metrics", "/api/dashboard/health-checks", "/api/dashboard/docker-statuses"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		rr := httptest.NewRecorder()
 		mux.ServeHTTP(rr, req)

@@ -44,6 +44,8 @@ func NewMux(options Options) *http.ServeMux {
 	mux.Handle("/api/dashboard/log-samples", dashboard.RequireBearerToken(options.DashboardToken, http.HandlerFunc(dashboardHandler.HandleLogSamples)))
 	mux.Handle("/api/dashboard/logs", dashboard.RequireBearerToken(options.DashboardToken, http.HandlerFunc(dashboardHandler.HandleLogs)))
 	mux.Handle("/api/dashboard/metrics", dashboard.RequireBearerToken(options.DashboardToken, http.HandlerFunc(dashboardHandler.HandleMetrics)))
+	mux.Handle("/api/dashboard/metric-history", dashboard.RequireBearerToken(options.DashboardToken, http.HandlerFunc(dashboardHandler.HandleMetricHistory)))
+	mux.Handle("/api/dashboard/usage", dashboard.RequireBearerToken(options.DashboardToken, http.HandlerFunc(dashboardHandler.HandleUsage)))
 	mux.Handle("/api/dashboard/channel-snapshots", dashboard.RequireBearerToken(options.DashboardToken, http.HandlerFunc(dashboardHandler.HandleChannelSnapshots)))
 	mux.Handle("/api/dashboard/alerts", dashboard.RequireBearerToken(options.DashboardToken, http.HandlerFunc(dashboardHandler.HandleAlerts)))
 	mux.Handle("/api/dashboard/alerts/action", dashboard.RequireBearerToken(options.DashboardToken, http.HandlerFunc(dashboardHandler.HandleAlertAction)))

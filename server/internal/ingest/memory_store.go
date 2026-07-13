@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"sort"
 	"sync"
 	"time"
 
@@ -83,19 +84,7 @@ func (s *MemoryStore) Recent1mMetrics() ([]aggregator.Metric, error) {
 func (s *MemoryStore) Latest1mMetrics() ([]aggregator.Metric, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var latest time.Time
-	for _, metric := range s.metrics1m {
-		if metric.BucketTime.After(latest) {
-			latest = metric.BucketTime
-		}
-	}
-	items := make([]aggregator.Metric, 0)
-	for _, metric := range s.metrics1m {
-		if metric.BucketTime.Equal(latest) {
-			items = append(items, metric)
-		}
-	}
-	return items, nil
+	return latestMetrics(s.metrics1m), nil
 }
 
 func (s *MemoryStore) Recent5mMetrics() ([]aggregator.Metric, error) {
@@ -105,6 +94,70 @@ func (s *MemoryStore) Recent5mMetrics() ([]aggregator.Metric, error) {
 	for _, metric := range s.metrics5m {
 		items = append(items, metric)
 	}
+	return items, nil
+}
+
+func (s *MemoryStore) Latest5mMetrics() ([]aggregator.Metric, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return latestMetrics(s.metrics5m), nil
+}
+
+func (s *MemoryStore) QueryMetricHistory(window, dimensionType, dimensionKey string, since time.Time) ([]aggregator.Metric, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	source := s.metrics1m
+	if window == "5m" {
+		source = s.metrics5m
+	}
+	items := make([]aggregator.Metric, 0)
+	for _, metric := range source {
+		if metric.DimensionType == dimensionType && metric.DimensionKey == dimensionKey && !metric.BucketTime.Before(since) {
+			items = append(items, metric)
+		}
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].BucketTime.Before(items[j].BucketTime) })
+	return items, nil
+}
+
+func latestMetrics(source map[string]aggregator.Metric) []aggregator.Metric {
+	latest := make(map[string]aggregator.Metric)
+	for _, metric := range source {
+		key := metric.InstanceID + ":" + metric.DimensionType + ":" + metric.DimensionKey
+		if current, ok := latest[key]; !ok || metric.BucketTime.After(current.BucketTime) {
+			latest[key] = metric
+		}
+	}
+	items := make([]aggregator.Metric, 0, len(latest))
+	for _, metric := range latest {
+		items = append(items, metric)
+	}
+	return items
+}
+
+func (s *MemoryStore) UsageSummary(since time.Time) ([]storage.UsageRow, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	grouped := make(map[string]storage.UsageRow)
+	for _, metric := range s.metrics1m {
+		if metric.BucketTime.Before(since) || (metric.DimensionType != "instance_user" && metric.DimensionType != "instance_channel" && metric.DimensionType != "instance_model") {
+			continue
+		}
+		key := metric.DimensionType + ":" + metric.DimensionKey
+		row := grouped[key]
+		row.DimensionType = metric.DimensionType
+		row.DimensionKey = metric.DimensionKey
+		row.RequestCount += metric.RequestCount
+		row.PromptTokens += metric.PromptTokens
+		row.CompletionTokens += metric.CompletionTokens
+		row.Quota += metric.Quota
+		grouped[key] = row
+	}
+	items := make([]storage.UsageRow, 0, len(grouped))
+	for _, row := range grouped {
+		items = append(items, row)
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].Quota > items[j].Quota })
 	return items, nil
 }
 func (s *MemoryStore) UpsertAgent(agent storage.Agent) error {
