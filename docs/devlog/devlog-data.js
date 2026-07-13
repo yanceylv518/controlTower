@@ -5,6 +5,15 @@ window.DEVLOG = [
     date: "2026-07-13",
     type: "review",
     version: "",
+    title: "M2 阶段第二轮验证通过，M2 正式关闭",
+    summary: "在全新 control_tower_test 上验证空库引导，并用 seed-demo-data.sh 补齐双实例、48 条维度指标、渠道快照、样本、运行态、告警与失败通知。双实例隔离、快照名称/权重/状态/chips、样本组合筛选、通知重发 attempts 重置、命令 pending→delivered→succeeded 与 admin 审计全部通过；三项按聚焦清单由既有手工/单测覆盖而豁免。M2 阶段结论由 PARTIAL 更新为 PASS。",
+    docs: ["docs/m2-stage-verification.md", "docs/m2-stage-checklist.md"],
+    commits: ["b654f5a"]
+  },
+  {
+    date: "2026-07-13",
+    type: "review",
+    version: "",
     title: "M2 阶段首轮走查 PARTIAL 处置：3 项豁免 + 6 项种子数据补验",
     summary: "首轮已执行项零功能失败（认证/切换/错误态恢复/告警确认落库/实例 token 全流程/命令确认纪律均实测通过），9 个未闭环项全部为环境数据依赖。处置：锁定/自动刷新/静默过期 3 项豁免（自动化已覆盖或纯时间等待）；新增 deploy/seed-demo-data.sh 一键产出双实例 12 桶指标、渠道快照、错误慢样本、告警与必失败通知渠道，支撑余下 6 项 20 分钟聚焦复验。清单已更新第二轮章节。",
     docs: ["docs/m2-stage-verification.md", "docs/m2-stage-checklist.md", "deploy/seed-demo-data.sh"],
