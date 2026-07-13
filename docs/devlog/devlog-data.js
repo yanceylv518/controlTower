@@ -5,6 +5,15 @@ window.DEVLOG = [
     date: "2026-07-13",
     type: "release",
     version: "",
+    title: "v2.1-B1 批次下发：调权评估引擎（observe 模式）",
+    summary: "codex 指令就绪：006 迁移（tuning_policies + tuning_recommendations，钉 COLLATE）、策略 API（默认值照设计 §3，mode 仅接受 observe）、评估引擎 runner（加权错误率 + sustained_windows + cooldown + weight_floor）、30 分钟事后回填与命中率口径、建议流水与报表 API。硬性纪律：本批零动作——不建渠道命令不碰 new-api。发现并写明：channel_snapshots 无 priority 字段，severe/priority_drop 规则预留不实现，待 Agent 快照升级补采。",
+    docs: ["docs/codex-task-v2.1-b1-tuning-observe.md", "docs/design-v2.1-auto-tuning.md"],
+    commits: []
+  },
+  {
+    date: "2026-07-13",
+    type: "release",
+    version: "",
     title: "v1.1-B5 批次下发：Nginx timing 日志告警（信号 E）",
     summary: "codex 指令就绪：新包 nginxtiming（timed 格式解析 + tail + 轮转检测），三条规则（504 即时 / 5xx 窗口 / TTFT 窗口带分段归因文案），钉钉发送提取为共用 dingtalk 包。第一验收项是失效安全：未配置零启动、文件缺失只 WARN 并重试、脏行静默跳过，任何故障不伤主告警链路。不做：网关开销分解探测（归 v1.1 探测批次）、渠道/客户归因、指标上报 Server。",
     docs: ["docs/codex-task-v1.1-b5-nginx-timing.md"],
