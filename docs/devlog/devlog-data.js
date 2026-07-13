@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-13",
+    type: "review",
+    version: "",
+    title: "验收 M1-B2（实例管理 + 按实例 Token）：部分通过，5 项返工",
+    summary: "通过项：003 迁移、存储双实现、token 只显示一次且列表无泄漏、instance_mismatch 403、24h 轮换宽限、e2e-server.sh 完整起步。返工项：R1 任务 4 多实例过滤整体缺失；R2 网关五场景零测试；R3 实例列表缺 agents 概要且裸序列化 storage 结构体（PascalCase 与全 API snake_case 相悖）；R4 安全回归——鉴权完成前解析 gzip 请求体（旧代码先验 token）；R5 Update/Rotate 吞掉 store 错误。返工清单：codex-task-m1-b2-rework.md。",
+    docs: ["docs/codex-task-m1-b2-rework.md"],
+    commits: ["24ada7a"]
+  },
+  {
+    date: "2026-07-13",
     type: "feature",
     version: "M1-B2",
     title: "实例管理与按实例 Agent Token",
