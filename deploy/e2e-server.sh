@@ -12,13 +12,25 @@ step create-instance; response=$(curl -fsS -b "$jar" -H 'X-Requested-With: XMLHt
 token=$(printf '%s' "$response" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p'); test -n "$token"
 heartbeat(){ printf '%s' "{\"instance_id\":\"$1\",\"agent_id\":\"e2e\",\"agent_version\":\"e2e\",\"reported_at\":\"$(date -u +%FT%TZ)\",\"sequence\":1}" | gzip -c | curl -fsS -H "Authorization: Bearer $2" -H 'Content-Encoding: gzip' -H 'Content-Type: application/json' --data-binary @- "$base/api/agent/heartbeat"; }
 step heartbeat; heartbeat "$id" "$token" >/dev/null
+step command-confirm-required
+code=$(curl -sS -o /dev/null -w '%{http_code}' -b "$jar" -H 'X-Requested-With: XMLHttpRequest' -H 'Content-Type: application/json' -d "{\"instance_id\":\"$id\",\"status\":2}" "$base/api/dashboard/channels/77/commands"); test "$code" = 400
+step command-create
+command=$(curl -fsS -b "$jar" -H 'X-Requested-With: XMLHttpRequest' -H 'Content-Type: application/json' -d "{\"instance_id\":\"$id\",\"confirm\":true,\"status\":2}" "$base/api/dashboard/channels/77/commands")
+command_id=$(printf '%s' "$command" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p'); test -n "$command_id"
+step command-deliver
+heartbeat_response=$(heartbeat "$id" "$token"); printf '%s' "$heartbeat_response" | grep -q "\"id\":\"$command_id\""
+step command-complete
+now="$(date -u +%FT%TZ)"
+printf '%s' "{\"instance_id\":\"$id\",\"agent_id\":\"e2e\",\"agent_version\":\"e2e\",\"reported_at\":\"$now\",\"sequence\":2,\"command_results\":[{\"id\":\"$command_id\",\"channel_id\":77,\"status\":\"succeeded\",\"applied_at\":\"$now\"}]}" | gzip -c | curl -fsS -H "Authorization: Bearer $token" -H 'Content-Encoding: gzip' -H 'Content-Type: application/json' --data-binary @- "$base/api/agent/report" >/dev/null
+commands=$(curl -fsS -b "$jar" "$base/api/dashboard/channel-commands?instance_id=$id&status=succeeded"); printf '%s' "$commands" | grep -q "\"id\":\"$command_id\""
+audits=$(curl -fsS -b "$jar" "$base/api/dashboard/operation-audits?instance_id=$id"); printf '%s' "$audits" | grep -q '"actor_id":"'"$CT_ADMIN_USER"'"'; printf '%s' "$audits" | grep -q '"target_id":"77"'
 step notification-channel
 curl -fsS -b "$jar" -H 'X-Requested-With: XMLHttpRequest' -H 'Content-Type: application/json' -d '{"id":"e2e-failing","channel_type":"dingtalk","name":"e2e-failing","webhook_url":"http://127.0.0.1:1","enabled":true,"secret":"e2e"}' "$base/api/dashboard/notification-channels" >/dev/null
 step error-report
 now="$(date -u +%FT%TZ)"
 events=''
 for n in 1 2 3; do events="${events}${events:+,}{\"source_log_id\":$n,\"created_at\":\"$now\",\"log_type\":\"error\",\"channel_id\":77,\"request_id\":\"e2e-$n\",\"error_summary\":\"e2e\"}"; done
-printf '%s' "{\"instance_id\":\"$id\",\"agent_id\":\"e2e\",\"agent_version\":\"e2e\",\"reported_at\":\"$now\",\"sequence\":2,\"last_log_id\":3,\"log_events\":[$events]}" | gzip -c | curl -fsS -H "Authorization: Bearer $token" -H 'Content-Encoding: gzip' -H 'Content-Type: application/json' --data-binary @- "$base/api/agent/report" >/dev/null
+printf '%s' "{\"instance_id\":\"$id\",\"agent_id\":\"e2e\",\"agent_version\":\"e2e\",\"reported_at\":\"$now\",\"sequence\":3,\"last_log_id\":3,\"log_events\":[$events]}" | gzip -c | curl -fsS -H "Authorization: Bearer $token" -H 'Content-Encoding: gzip' -H 'Content-Type: application/json' --data-binary @- "$base/api/agent/report" >/dev/null
 step alert-timeline
 alerts=$(curl -fsS -b "$jar" "$base/api/dashboard/alerts?status=firing&instance_id=$id")
 alert_id=$(printf '%s' "$alerts" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p'); test -n "$alert_id"

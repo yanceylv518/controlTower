@@ -19,6 +19,9 @@ type Sink interface {
 	SaveHeartbeat(req AgentHeartbeatRequest) (int64, error)
 	SaveReport(req AgentReportRequest) error
 }
+type commandSink interface {
+	SaveHeartbeatWithCommands(AgentHeartbeatRequest) (int64, []ChannelCommand, error)
+}
 
 type Handler struct {
 	expectedToken string
@@ -64,12 +67,19 @@ func (h Handler) HandleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "instance_mismatch")
 		return
 	}
-	serverLastLogID, err := h.sink.SaveHeartbeat(req)
+	var serverLastLogID int64
+	var err error
+	var commands []ChannelCommand
+	if commandAware, ok := h.sink.(commandSink); ok {
+		serverLastLogID, commands, err = commandAware.SaveHeartbeatWithCommands(req)
+	} else {
+		serverLastLogID, err = h.sink.SaveHeartbeat(req)
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "save_failed")
 		return
 	}
-	writeJSON(w, http.StatusOK, AgentHeartbeatResponse{Accepted: true, ServerLastLogID: serverLastLogID})
+	writeJSON(w, http.StatusOK, AgentHeartbeatResponse{Accepted: true, ServerLastLogID: serverLastLogID, Commands: commands})
 }
 
 func (h Handler) HandleReport(w http.ResponseWriter, r *http.Request) {
@@ -139,7 +149,8 @@ func validReportSize(req AgentReportRequest) bool {
 		len(req.ServerMetrics) <= 100 &&
 		len(req.DockerStatuses) <= 5000 &&
 		len(req.HealthChecks) <= 100 &&
-		len(req.ChannelSnapshots) <= 5000
+		len(req.ChannelSnapshots) <= 5000 &&
+		len(req.CommandResults) <= 5000
 }
 
 func requestBodyReader(r *http.Request) (io.Reader, func(), error) {

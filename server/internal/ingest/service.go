@@ -3,8 +3,10 @@ package ingest
 import (
 	"crypto/sha1"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"controltower/server/internal/agentgateway"
@@ -23,14 +25,26 @@ type Store interface {
 	UpdateLogOffset(instanceID string, lastLogID int64) error
 	CurrentLogOffset(instanceID string) (int64, error)
 	ApplyMetricBatch(instanceID string, batchID string, metrics []aggregator.Metric) error
+	ClaimPendingCommands(string, time.Time) ([]storage.ChannelCommand, error)
+	CompleteChannelCommand(string, string, string, time.Time) (storage.ChannelCommand, bool, error)
+	ExpireStaleCommands(time.Time) (int, error)
+	InsertOperationAudit(storage.OperationAudit) error
 }
 
 type Service struct {
-	store Store
+	store         Store
+	commandExpiry time.Duration
 }
 
 func NewService(store Store) Service {
-	return Service{store: store}
+	return Service{store: store, commandExpiry: 10 * time.Minute}
+}
+
+func NewServiceWithCommandExpiry(store Store, expiry time.Duration) Service {
+	if expiry <= 0 {
+		expiry = 10 * time.Minute
+	}
+	return Service{store: store, commandExpiry: expiry}
 }
 
 func (s Service) SaveHeartbeat(req agentgateway.AgentHeartbeatRequest) (int64, error) {
@@ -49,6 +63,34 @@ func (s Service) SaveHeartbeat(req agentgateway.AgentHeartbeatRequest) (int64, e
 		return 0, err
 	}
 	return s.store.CurrentLogOffset(req.InstanceID)
+}
+
+func (s Service) SaveHeartbeatWithCommands(req agentgateway.AgentHeartbeatRequest) (int64, []agentgateway.ChannelCommand, error) {
+	offset, err := s.SaveHeartbeat(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	now := time.Now().UTC()
+	if _, err := s.store.ExpireStaleCommands(now.Add(-s.commandExpiry)); err != nil {
+		return 0, nil, err
+	}
+	stored, err := s.store.ClaimPendingCommands(req.InstanceID, now)
+	if err != nil {
+		return 0, nil, err
+	}
+	commands := make([]agentgateway.ChannelCommand, 0, len(stored))
+	for _, v := range stored {
+		var p struct {
+			Status   *int   `json:"status"`
+			Weight   *uint  `json:"weight"`
+			Priority *int64 `json:"priority"`
+		}
+		if json.Unmarshal([]byte(v.PayloadJSON), &p) != nil {
+			continue
+		}
+		commands = append(commands, agentgateway.ChannelCommand{ID: v.ID, Type: v.CommandType, ChannelID: v.ChannelID, Status: p.Status, Weight: p.Weight, Priority: p.Priority})
+	}
+	return offset, commands, err
 }
 
 func (s Service) SaveReport(req agentgateway.AgentReportRequest) error {
@@ -71,6 +113,23 @@ func (s Service) SaveReport(req agentgateway.AgentReportRequest) error {
 		Status:            "online",
 	}); err != nil {
 		return err
+	}
+	for _, result := range req.CommandResults {
+		status := "failed"
+		if result.Status == "succeeded" {
+			status = "succeeded"
+		}
+		command, changed, err := s.store.CompleteChannelCommand(result.ID, status, result.Error, time.Now().UTC())
+		if err != nil {
+			return err
+		}
+		if !changed {
+			continue
+		}
+		summary, _ := json.Marshal(map[string]any{"payload": json.RawMessage(command.PayloadJSON), "result": map[string]any{"status": status, "error": result.Error, "applied_at": result.AppliedAt}})
+		if err = s.store.InsertOperationAudit(storage.OperationAudit{ID: command.ID, InstanceID: command.InstanceID, OperationType: "channel.update", TargetType: "channel", TargetID: strconv.FormatInt(command.ChannelID, 10), ActorID: command.CreatedBy, BeforeSummary: "", AfterSummary: string(summary), Status: status, CreatedAt: time.Now().UTC()}); err != nil {
+			return err
+		}
 	}
 
 	for _, payload := range req.LogEvents {

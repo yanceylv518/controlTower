@@ -23,6 +23,10 @@ type Config struct {
 	AdminInitialPassword         string
 	SessionTTLHours              int
 	NotificationMaxAttempts      int
+	CommandExpiryMinutes         int
+	RetentionDetailDays          int
+	RetentionMetric5mDays        int
+	RetentionRuntimeDays         int
 }
 
 func Load(values map[string]string) (Config, error) {
@@ -42,6 +46,10 @@ func Load(values map[string]string) (Config, error) {
 		ChannelSnapshotRetentionDays: intOrDefault(values, "CT_CHANNEL_SNAPSHOT_RETENTION_DAYS", 30),
 		AdminUsername:                values["CT_ADMIN_USERNAME"], AdminInitialPassword: values["CT_ADMIN_INITIAL_PASSWORD"], SessionTTLHours: intOrDefault(values, "CT_SESSION_TTL_HOURS", 720),
 		NotificationMaxAttempts: intOrDefault(values, "CT_NOTIFICATION_MAX_ATTEMPTS", 8),
+		CommandExpiryMinutes:    intOrDefault(values, "CT_COMMAND_EXPIRY_MINUTES", 10),
+		RetentionDetailDays:     intOrDefault(values, "CT_RETENTION_DETAIL_DAYS", 30),
+		RetentionMetric5mDays:   intOrDefault(values, "CT_RETENTION_METRIC5M_DAYS", 90),
+		RetentionRuntimeDays:    intOrDefault(values, "CT_RETENTION_RUNTIME_DAYS", 7),
 	}
 	if cfg.PublicBaseURL == "" || cfg.DatabaseDSN == "" || cfg.AgentToken == "" || cfg.DashboardToken == "" || cfg.AgentTokenPepper == "" {
 		return Config{}, errors.New("missing required control tower server config")
@@ -67,6 +75,12 @@ func Load(values map[string]string) (Config, error) {
 	if cfg.NotificationMaxAttempts < 1 || cfg.NotificationMaxAttempts > 100 {
 		return Config{}, errors.New("CT_NOTIFICATION_MAX_ATTEMPTS must be between 1 and 100")
 	}
+	if cfg.CommandExpiryMinutes < 1 || cfg.CommandExpiryMinutes > 1440 {
+		return Config{}, errors.New("CT_COMMAND_EXPIRY_MINUTES must be between 1 and 1440")
+	}
+	if cfg.RetentionDetailDays < 0 || cfg.RetentionMetric5mDays < 0 || cfg.RetentionRuntimeDays < 0 {
+		return Config{}, errors.New("retention days must not be negative")
+	}
 	return cfg, nil
 }
 
@@ -86,6 +100,7 @@ func Keys() []string {
 		"CT_NOTIFICATION_INTERVAL_SECONDS",
 		"CT_CHANNEL_SNAPSHOT_RETENTION_DAYS",
 		"CT_ADMIN_USERNAME", "CT_ADMIN_INITIAL_PASSWORD", "CT_SESSION_TTL_HOURS", "CT_NOTIFICATION_MAX_ATTEMPTS",
+		"CT_COMMAND_EXPIRY_MINUTES", "CT_RETENTION_DETAIL_DAYS", "CT_RETENTION_METRIC5M_DAYS", "CT_RETENTION_RUNTIME_DAYS",
 	}
 }
 

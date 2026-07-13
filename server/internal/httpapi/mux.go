@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"controltower/server/internal/agentgateway"
 	ctauth "controltower/server/internal/auth"
@@ -20,6 +21,7 @@ type Options struct {
 	AuthManager             *ctauth.Manager
 	AgentTokenPepper        string
 	NotificationMaxAttempts int
+	CommandExpiry           time.Duration
 }
 
 type Store interface {
@@ -33,6 +35,7 @@ type Store interface {
 	dashboard.NotificationStore
 	dashboard.ChannelSnapshotStore
 	dashboard.InstanceStore
+	dashboard.CommandStore
 	agentgateway.TokenLookup
 }
 
@@ -40,7 +43,7 @@ func NewMux(options Options) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", handleHealthz)
 
-	ingestService := ingest.NewService(options.Store)
+	ingestService := ingest.NewServiceWithCommandExpiry(options.Store, options.CommandExpiry)
 	agentHandler := agentgateway.NewHandlerWithTokens(options.AgentToken, ingestService, options.Store, options.AgentTokenPepper)
 	mux.HandleFunc("/api/agent/heartbeat", agentHandler.HandleHeartbeat)
 	mux.HandleFunc("/api/agent/report", agentHandler.HandleReport)
@@ -52,7 +55,7 @@ func NewMux(options Options) *http.ServeMux {
 		}
 		return dashboard.RequireBearerToken(options.DashboardToken, h)
 	}
-	a := ctauth.Handlers{M: options.AuthManager}
+	a := ctauth.Handlers{M: options.AuthManager, Limiter: ctauth.NewIPLimiter()}
 	mux.HandleFunc("/api/auth/login", a.Login)
 	mux.HandleFunc("/api/auth/logout", a.Logout)
 	mux.HandleFunc("/api/auth/me", a.Me)
@@ -75,6 +78,10 @@ func NewMux(options Options) *http.ServeMux {
 	mux.Handle("/api/dashboard/health-checks", protect(http.HandlerFunc(dashboardHandler.HandleHealthChecks)))
 	mux.Handle("/api/dashboard/docker-statuses", protect(http.HandlerFunc(dashboardHandler.HandleDockerStatuses)))
 	instances := dashboard.InstanceHandler{Store: options.Store, Runtime: options.Store, Pepper: options.AgentTokenPepper}
+	commands := dashboard.CommandHandler{Store: options.Store, Instances: options.Store}
+	mux.Handle("POST /api/dashboard/channels/{channelID}/commands", protect(http.HandlerFunc(commands.Create)))
+	mux.Handle("GET /api/dashboard/channel-commands", protect(http.HandlerFunc(commands.List)))
+	mux.Handle("GET /api/dashboard/operation-audits", protect(http.HandlerFunc(commands.Audits)))
 	mux.Handle("GET /api/dashboard/instances", protect(http.HandlerFunc(instances.List)))
 	mux.Handle("POST /api/dashboard/instances", protect(http.HandlerFunc(instances.Create)))
 	mux.Handle("PUT /api/dashboard/instances/{id}", protect(http.HandlerFunc(instances.Update)))

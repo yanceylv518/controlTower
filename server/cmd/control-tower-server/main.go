@@ -77,14 +77,54 @@ func run() error {
 	startAggregationRunner(store, time.Duration(cfg.AggregationIntervalSeconds)*time.Second)
 	startNotificationRunner(store, time.Duration(cfg.NotificationIntervalSeconds)*time.Second)
 	startChannelSnapshotRetentionRunner(store, cfg.ChannelSnapshotRetentionDays)
+	startRetentionRunner(store, cfg.RetentionDetailDays, cfg.RetentionMetric5mDays, cfg.RetentionRuntimeDays)
 
 	server := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           httpapi.NewMux(httpapi.Options{AgentToken: cfg.AgentToken, DashboardToken: cfg.DashboardToken, Store: store, AuthManager: authManager, AgentTokenPepper: cfg.AgentTokenPepper, NotificationMaxAttempts: cfg.NotificationMaxAttempts}),
+		Handler:           httpapi.NewMux(httpapi.Options{AgentToken: cfg.AgentToken, DashboardToken: cfg.DashboardToken, Store: store, AuthManager: authManager, AgentTokenPepper: cfg.AgentTokenPepper, NotificationMaxAttempts: cfg.NotificationMaxAttempts, CommandExpiry: time.Duration(cfg.CommandExpiryMinutes) * time.Minute}),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	log.Printf("control tower server listening on %s", cfg.ListenAddr)
 	return server.ListenAndServe()
+}
+
+type retentionStore interface {
+	PruneBefore(string, time.Time) (int64, error)
+}
+
+func startRetentionRunner(store retentionStore, detailDays, metric5mDays, runtimeDays int) {
+	prune := func() { pruneRetention(store, detailDays, metric5mDays, runtimeDays, time.Now().UTC()) }
+	go func() {
+		timer := time.NewTimer(time.Minute)
+		defer timer.Stop()
+		<-timer.C
+		prune()
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		for range ticker.C {
+			prune()
+		}
+	}()
+}
+func pruneRetention(store retentionStore, detailDays, metric5mDays, runtimeDays int, now time.Time) {
+	groups := []struct {
+		days  int
+		kinds []string
+	}{{detailDays, []string{"log_events", "log_samples", "metric_1m"}}, {metric5mDays, []string{"metric_5m"}}, {runtimeDays, []string{"server_metrics", "health_checks", "docker_statuses"}}}
+	for _, g := range groups {
+		if g.days == 0 {
+			continue
+		}
+		cutoff := now.Add(-time.Duration(g.days) * 24 * time.Hour)
+		for _, kind := range g.kinds {
+			n, e := store.PruneBefore(kind, cutoff)
+			if e != nil {
+				log.Printf("retention prune %s failed: %v", kind, e)
+			} else {
+				log.Printf("retention prune %s rows=%d", kind, n)
+			}
+		}
+	}
 }
 
 func startAggregationRunner(store mysqlstore.Store, interval time.Duration) {

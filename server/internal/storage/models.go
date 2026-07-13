@@ -171,3 +171,15 @@ type NotificationDelivery struct {
 	StatusCode    int
 	ErrorSummary  string
 }
+
+type ChannelCommand struct {
+	ID, InstanceID, CommandType, PayloadJSON, Status, CreatedBy, ErrorSummary string
+	ChannelID                                                                 int64
+	CreatedAt, UpdatedAt                                                      time.Time
+}
+
+type OperationAudit struct {
+	ID, InstanceID, OperationType, TargetType, TargetID, ActorID, Status string
+	BeforeSummary, AfterSummary                                          string
+	CreatedAt                                                            time.Time
+}

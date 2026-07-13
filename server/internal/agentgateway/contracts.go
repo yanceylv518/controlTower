@@ -54,6 +54,7 @@ type AgentReportRequest struct {
 	DockerStatuses    []DockerStatusPayload     `json:"docker_statuses"`
 	HealthChecks      []HealthCheckPayload      `json:"health_checks"`
 	ChannelSnapshots  []ChannelSnapshotPayload  `json:"channel_snapshots"`
+	CommandResults    []ChannelCommandResult    `json:"command_results"`
 }
 
 type AggregatedMetricPayload struct {

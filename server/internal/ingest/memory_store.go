@@ -32,6 +32,8 @@ type MemoryStore struct {
 	instances              map[string]storage.Instance
 	instanceTokens         []storage.InstanceToken
 	alertEvents            []storage.AlertEvent
+	channelCommands        map[string]storage.ChannelCommand
+	operationAudits        map[string]storage.OperationAudit
 }
 
 func (s *MemoryStore) InsertAlertEvents(v []storage.AlertEvent) error {
@@ -90,7 +92,8 @@ func NewMemoryStore() *MemoryStore {
 		metrics5m:              make(map[string]aggregator.Metric),
 		metricBatches:          make(map[string]struct{}),
 		users:                  make(map[int64]storage.User), sessions: make(map[string]storage.Session), nextUserID: 1,
-		instances: make(map[string]storage.Instance),
+		instances:       make(map[string]storage.Instance),
+		channelCommands: make(map[string]storage.ChannelCommand), operationAudits: make(map[string]storage.OperationAudit),
 	}
 }
 func (s *MemoryStore) ListInstances() ([]storage.Instance, error) {

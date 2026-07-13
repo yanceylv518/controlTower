@@ -5,8 +5,10 @@ import (
 	"controltower/server/internal/storage"
 	"crypto/subtle"
 	"encoding/json"
+	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -17,8 +19,53 @@ func withActor(r *http.Request, v string) *http.Request {
 	return r.WithContext(context.WithValue(r.Context(), actorKey{}, v))
 }
 
-type Handlers struct{ M *Manager }
+type Handlers struct {
+	M       *Manager
+	Limiter *IPLimiter
+}
 
+type IPLimiter struct {
+	mu      sync.Mutex
+	entries map[string][]time.Time
+	now     func() time.Time
+}
+
+func NewIPLimiter() *IPLimiter { return &IPLimiter{entries: map[string][]time.Time{}, now: time.Now} }
+func (l *IPLimiter) Allow(ip string) bool {
+	if l == nil {
+		return true
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := l.now().UTC()
+	cutoff := now.Add(-time.Minute)
+	items := l.entries[ip][:0]
+	for _, t := range l.entries[ip] {
+		if t.After(cutoff) {
+			items = append(items, t)
+		}
+	}
+	if len(items) >= 10 {
+		l.entries[ip] = items
+		return false
+	}
+	l.entries[ip] = append(items, now)
+	if len(l.entries) > 1000 {
+		for key, v := range l.entries {
+			if len(v) == 0 || !v[len(v)-1].After(cutoff) {
+				delete(l.entries, key)
+			}
+		}
+	}
+	return true
+}
+func clientIP(r *http.Request) string {
+	host, _, e := net.SplitHostPort(r.RemoteAddr)
+	if e == nil {
+		return host
+	}
+	return r.RemoteAddr
+} // Deliberately ignore X-Forwarded-For; the reverse proxy must enforce its own IP limits.
 func write(w http.ResponseWriter, s int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(s)
@@ -27,6 +74,10 @@ func write(w http.ResponseWriter, s int, v any) {
 func (h Handlers) Login(w http.ResponseWriter, r *http.Request) {
 	if h.M == nil {
 		write(w, http.StatusServiceUnavailable, map[string]string{"error": "auth_unavailable"})
+		return
+	}
+	if h.Limiter != nil && !h.Limiter.Allow(clientIP(r)) {
+		write(w, 429, map[string]string{"error": "rate_limited"})
 		return
 	}
 	var q struct {

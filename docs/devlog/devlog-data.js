@@ -4,6 +4,15 @@ window.DEVLOG = [
   {
     date: "2026-07-13",
     type: "feature",
+    version: "M1-B4",
+    title: "M1 收官：渠道命令闭环、服务硬化与 API 契约冻结",
+    summary: "新增渠道命令 pending→delivered→succeeded/failed/expired 闭环及操作审计；登录增加 IP 滑动窗口限流，明细/指标/运行态数据分层保留；Dashboard API v1 完整编目并冻结字段语义。",
+    docs: ["docs/codex-task-m1-b4-commands-freeze.md", "docs/api-contracts.md", "docs/development-progress.md"],
+    commits: []
+  },
+  {
+    date: "2026-07-13",
+    type: "feature",
     version: "v1.0.7",
     title: "告警工具：禁用渠道不再检测",
     summary: "渠道被禁用（status != 1）后立即退出渠道级监控：事件不入窗口、进行中 episode 静默关闭（事件日志 kind=disposed）、重新启用从零开始；客户维度不受影响。状态随名字缓存每 10 分钟刷新（禁用到静默最长 10 分钟滞后）。用户插队需求，主线 M1-B4 前直接实现。",
