@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-13",
+    type: "review",
+    version: "",
+    title: "验收 M2-B1（Web 行走骨架）：通过",
+    summary: "依赖与批准清单逐项一致零越界；API client 语义正确（非 GET 自动 CSRF 头、401 统一回调跳登录、错误码归一）；路由守卫与 redirect 回跳、ECharts 按需引入、总览四要素齐全（KPI/趋势/告警/30 秒可见性刷新）；Go 托管 /next/ 带路径穿越防护与未构建 503 诊断、目录可注入可测；旧静态页零改动；CI 双 job 绿。一个流程事故：node_modules 曾被整体提交（8312 文件）随即移除，仓库历史 +~9MB（可接受），.gitignore 已补 webapp/**/node_modules 防复发。",
+    docs: ["docs/codex-task-m2-b1-skeleton.md"],
+    commits: ["f75996d", "3f5d732", "c359ffa"]
+  },
+  {
+    date: "2026-07-13",
     type: "release",
     version: "M2-B1",
     title: "Vue3 Web 行走骨架打通",
