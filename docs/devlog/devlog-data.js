@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-13",
+    type: "feature",
+    version: "M0-lite",
+    title: "GitHub Actions 质量门与 Makefile",
+    summary: "新增仓库级 make test/make build：统一执行 vet、全量测试，并交叉编译 Linux Agent amd64/arm64 与 Server amd64；GitHub Actions 在 main push 和所有 PR 上运行测试与构建，并启用同分支并发取消。发布打包、版本注入和 Agent 重构仍按计划挂起。",
+    docs: ["docs/codex-task-m0-lite-ci.md", "docs/development-progress.md", "README.md"],
+    commits: []
+  },
+  {
+    date: "2026-07-13",
     type: "decision",
     version: "",
     title: "方向修正：主线回归监控系统产品，告警线挂起",

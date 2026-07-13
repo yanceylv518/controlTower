@@ -1,5 +1,7 @@
 # Control Tower
 
+[![CI](https://github.com/yanceylv518/controlTower/actions/workflows/ci.yml/badge.svg)](https://github.com/yanceylv518/controlTower/actions/workflows/ci.yml)
+
 Control Tower V1 is an independent monitoring and light-operations system for multiple new-api instances.
 
 ## V1 Boundaries
@@ -27,3 +29,7 @@ Phase 1 builds the smallest production-shaped loop:
 
 Web/H5, alerts, notification sending, controlled operations, and deployment hardening are later phases.
 
+## Development
+
+- `make test` runs `go vet ./...` and the complete Go test suite.
+- `make build` cross-compiles Linux Agent binaries for amd64/arm64 and the Linux Server binary for amd64 into `dist/`.

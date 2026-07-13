@@ -11,6 +11,8 @@
 
 ## 阶段总览
 
+M0-lite 工程质量门已完成：根目录 Makefile 提供测试和 Linux 交叉编译目标，GitHub Actions 对 `main` push 与所有 PR 执行 `make test`、`make build`。发布打包、版本注入和 Agent 重构继续挂起。
+
 | 阶段 | 状态 | 目标 | 主要产物 | 可验证点 |
 | --- | --- | --- | --- | --- |
 | P0 架构边界与需求确认 | 已完成 | 明确 Control Tower 与 new-api 的隔离边界 | 需求设计文档、原型、实施计划 | 人工复核架构边界；确认 Agent 只读、主动上报、不进入请求链路 |
