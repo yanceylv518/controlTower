@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-13",
+    type: "release",
+    version: "M2-B2",
+    title: "Web 六个只读监控页与通用组件完成",
+    summary: "补齐实例、渠道快照、样本、运行态和用量 typed API；沉淀自动刷新、异步三态、状态标签、比率条、迷你指标、维度工作台、时间与实例筛选组件；新增客户、渠道、模型、样本、系统状态、用量六个只读页。",
+    docs: ["docs/codex-task-m2-b2-readonly-pages.md", "docs/development-progress.md"],
+    commits: []
+  },
+  {
+    date: "2026-07-13",
     type: "review",
     version: "",
     title: "验收 M2-B1（Web 行走骨架）：通过",

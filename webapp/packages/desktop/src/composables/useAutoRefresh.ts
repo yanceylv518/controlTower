@@ -1,0 +1,2 @@
+import { onBeforeUnmount, onMounted } from 'vue'
+export function useAutoRefresh(fn: () => void | Promise<void>, ms = 30_000) { let timer: number | undefined; const visible = () => { if (document.visibilityState === 'visible') void fn() }; onMounted(() => { visible(); timer = window.setInterval(visible, ms); document.addEventListener('visibilitychange', visible) }); onBeforeUnmount(() => { if (timer) clearInterval(timer); document.removeEventListener('visibilitychange', visible) }) }

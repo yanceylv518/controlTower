@@ -1,0 +1,2 @@
+<script setup lang="ts">import { onMounted } from 'vue'; import { useFiltersStore } from '../stores/filters'; const store=useFiltersStore(); onMounted(()=>void store.loadInstances());</script>
+<template><el-select v-model="store.instance_id" placeholder="全部实例" clearable style="width:180px"><el-option label="全部实例" value=""/><el-option v-for="item in store.instances" :key="item.instance_id" :label="item.name || item.instance_id" :value="item.instance_id"/></el-select></template>

@@ -1,0 +1,2 @@
+<script setup lang="ts">withDefaults(defineProps<{ modelValue:number; options?:number[] }>(),{options:()=>[1,6,24]}); defineEmits<{ 'update:modelValue':[value:number] }>();</script>
+<template><el-select :model-value="modelValue" style="width:110px" @update:model-value="$emit('update:modelValue', Number($event))"><el-option v-for="h in options" :key="h" :label="`${h}h`" :value="h" /></el-select></template>
