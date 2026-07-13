@@ -553,3 +553,49 @@ func TestSlowAlertSendFailureRetriesIndependently(t *testing.T) {
 		t.Fatalf("expected no duplicate after successful retry, got %d", got)
 	}
 }
+
+func TestDisabledChannelIsNotMonitored(t *testing.T) {
+	c := &capture{}
+	server := c.server()
+	defer server.Close()
+	n := New(server.URL, "inst-a", 10, 3, nil)
+	n.UpdateDisabledChannels(map[int64]bool{18: true})
+
+	// Errors on a disabled channel never alert; the user dimension still does.
+	n.Process(context.Background(), events("error", 3, 18, 7, "alice"))
+	if got := c.matching("渠道错误激增"); got != 0 {
+		t.Fatalf("disabled channel must not alert, got %d (%v)", got, c.contents)
+	}
+	if got := c.matching("客户错误激增"); got != 1 {
+		t.Fatalf("user dimension must stay monitored, got %d", got)
+	}
+}
+
+func TestDisablingChannelClosesOngoingEpisodeSilently(t *testing.T) {
+	c := &capture{}
+	server := c.server()
+	defer server.Close()
+	n := New(server.URL, "inst-a", 10, 3, nil).WithRemindInterval(time.Hour)
+	base := time.Date(2026, 7, 13, 10, 0, 0, 0, time.UTC)
+	n.now = func() time.Time { return base }
+
+	n.Process(context.Background(), timedEvents(1, base, "error", 3, 26))
+	if got := c.matching("渠道错误激增"); got != 1 {
+		t.Fatalf("expected initial alert, got %d", got)
+	}
+
+	// Channel gets disabled: no reminders even past the interval.
+	n.UpdateDisabledChannels(map[int64]bool{26: true})
+	n.now = func() time.Time { return base.Add(61 * time.Minute) }
+	n.Process(context.Background(), nil)
+	if got := c.matching("渠道错误持续"); got != 0 {
+		t.Fatalf("disabled channel must not remind, got %d (%v)", got, c.contents)
+	}
+
+	// Re-enabled: a fresh error burst is a brand-new episode and alerts again.
+	n.UpdateDisabledChannels(map[int64]bool{})
+	n.Process(context.Background(), timedEvents(100, base.Add(2*time.Hour), "error", 3, 26))
+	if got := c.matching("渠道错误激增"); got != 2 {
+		t.Fatalf("re-enabled channel must alert on new errors, got %d (%v)", got, c.contents)
+	}
+}

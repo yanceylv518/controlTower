@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-13",
+    type: "feature",
+    version: "v1.0.7",
+    title: "告警工具：禁用渠道不再检测",
+    summary: "渠道被禁用（status != 1）后立即退出渠道级监控：事件不入窗口、进行中 episode 静默关闭（事件日志 kind=disposed）、重新启用从零开始；客户维度不受影响。状态随名字缓存每 10 分钟刷新（禁用到静默最长 10 分钟滞后）。用户插队需求，主线 M1-B4 前直接实现。",
+    docs: ["docs/iteration-log.md"],
+    commits: []
+  },
+  {
+    date: "2026-07-13",
     type: "review",
     version: "",
     title: "M1-B3 二次返工验收：通过，批次关闭",

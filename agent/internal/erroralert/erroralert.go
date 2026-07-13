@@ -41,9 +41,10 @@ type Notifier struct {
 	slowStreamSeconds float64
 	eventLog          *eventLogger
 
-	mu           sync.Mutex
-	states       map[string]*dimensionState
-	channelNames map[int64]string
+	mu               sync.Mutex
+	states           map[string]*dimensionState
+	channelNames     map[int64]string
+	disabledChannels map[int64]bool
 }
 
 type dimensionState struct {
@@ -148,7 +149,7 @@ func (n *Notifier) Process(ctx context.Context, events []logcollector.Event) Pro
 		if event.LogType == "error" {
 			stats.ErrorCount++
 		}
-		if event.ChannelID > 0 {
+		if event.ChannelID > 0 && !n.disabledChannels[event.ChannelID] {
 			channelDimensions[event.ChannelID] = struct{}{}
 			key := "channel:" + strconv.FormatInt(event.ChannelID, 10)
 			n.observeLocked(key, "渠道错误激增", n.channelLabelLocked(event.ChannelID), event)
@@ -204,6 +205,28 @@ func (n *Notifier) UpdateChannelNames(names map[int64]string) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.channelNames = names
+}
+
+// UpdateDisabledChannels replaces the set of disabled channels. Disabled
+// channels are excluded from monitoring: their events are ignored and any
+// ongoing episode is closed silently, so a channel that was disabled because
+// of its errors stops alerting. Re-enabling starts from a fresh window.
+func (n *Notifier) UpdateDisabledChannels(disabled map[int64]bool) {
+	if n == nil || disabled == nil {
+		return
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.disabledChannels = disabled
+}
+
+func channelIDFromKey(key string) (int64, bool) {
+	raw, ok := strings.CutPrefix(key, "channel:")
+	if !ok {
+		return 0, false
+	}
+	id, err := strconv.ParseInt(raw, 10, 64)
+	return id, err == nil
 }
 
 func (n *Notifier) channelLabelLocked(channelID int64) string {
@@ -270,6 +293,14 @@ func (n *Notifier) evaluateLocked() ([]pendingMessage, []EventRecord) {
 	var pending []pendingMessage
 	var records []EventRecord
 	for key, state := range n.states {
+		if id, isChannel := channelIDFromKey(key); isChannel && n.disabledChannels[id] {
+			if state.errorRule.alerted || state.slowRule.alerted {
+				n.logf("control tower alert trigger: dimension=%s kind=disposed (channel disabled)", key)
+				records = append(records, EventRecord{Time: now, Dimension: key, Label: state.label, Rule: "channel", Kind: "disposed"})
+			}
+			delete(n.states, key)
+			continue
+		}
 		if n.windowMaxAge > 0 {
 			cutoff := now.Add(-n.windowMaxAge)
 			kept := state.outcomes[:0]

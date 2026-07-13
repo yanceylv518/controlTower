@@ -153,15 +153,24 @@ func (r *channelNameRefresher) maybeRefresh(ctx context.Context, db *sql.DB, not
 		return
 	}
 	r.lastAttempt = time.Now()
-	names, err := channelcollector.FetchNames(ctx, db)
+	states, err := channelcollector.FetchStates(ctx, db)
 	if err != nil {
 		if !r.warned {
-			log.Printf("control tower channel name lookup failed; alerts will show channel ids only (grant SELECT ON channels to enable names): %v", err)
+			log.Printf("control tower channel state lookup failed; alerts will show channel ids only and disabled channels stay monitored (grant SELECT ON channels to enable): %v", err)
 			r.warned = true
 		}
 		return
 	}
+	names := make(map[int64]string, len(states))
+	disabled := make(map[int64]bool)
+	for id, state := range states {
+		names[id] = state.Name
+		if state.Disabled {
+			disabled[id] = true
+		}
+	}
 	notifier.UpdateChannelNames(names)
+	notifier.UpdateDisabledChannels(disabled)
 }
 
 func collectAndAlertOnce(ctx context.Context, cfg config.Config, notifier *erroralert.Notifier, nameRefresher *channelNameRefresher) error {

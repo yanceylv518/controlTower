@@ -96,23 +96,45 @@ func snapshotHash(items []Snapshot) string {
 	return hex.EncodeToString(hasher.Sum(nil))
 }
 
-// FetchNames returns the channel id to name mapping for alert messages.
-func FetchNames(ctx context.Context, db *sql.DB) (map[int64]string, error) {
-	rows, err := db.QueryContext(ctx, "SELECT id, COALESCE(name, '') FROM channels")
+// ChannelState carries the fields the alert notifier needs per channel.
+type ChannelState struct {
+	Name     string
+	Disabled bool
+}
+
+// FetchStates returns per-channel name and enabled/disabled state for alert
+// labeling and suppression. new-api status 1 means enabled; anything else
+// (2 manual disabled, 3 auto disabled) counts as disabled.
+func FetchStates(ctx context.Context, db *sql.DB) (map[int64]ChannelState, error) {
+	rows, err := db.QueryContext(ctx, "SELECT id, COALESCE(name, ''), COALESCE(status, 1) FROM channels")
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	names := make(map[int64]string)
+	states := make(map[int64]ChannelState)
 	for rows.Next() {
 		var id int64
 		var name string
-		if err := rows.Scan(&id, &name); err != nil {
+		var status int
+		if err := rows.Scan(&id, &name, &status); err != nil {
 			return nil, err
 		}
-		names[id] = strings.TrimSpace(name)
+		states[id] = ChannelState{Name: strings.TrimSpace(name), Disabled: status != 1}
 	}
-	return names, rows.Err()
+	return states, rows.Err()
+}
+
+// FetchNames returns the channel id to name mapping for alert messages.
+func FetchNames(ctx context.Context, db *sql.DB) (map[int64]string, error) {
+	states, err := FetchStates(ctx, db)
+	if err != nil {
+		return nil, err
+	}
+	names := make(map[int64]string, len(states))
+	for id, state := range states {
+		names[id] = state.Name
+	}
+	return names, nil
 }
 
 func collectChannelsSQL() string {

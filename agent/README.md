@@ -69,6 +69,12 @@ spam the group. Failed sends are retried on the next collector pass.
   JSON lines. Records identify the dimension, rule, alert/remind/rearm kind,
   window count, threshold, and episode totals. The file rotates at 5 MiB and
   retains one `.1` file; logging failures never block alert delivery.
+- Disabled channels (new-api status != 1) are excluded from channel-level
+  monitoring: their events are ignored, an ongoing episode closes silently
+  (recorded as kind=disposed in the event log), and re-enabling starts from a
+  fresh window. Channel states refresh every 10 minutes together with names,
+  so suppression may lag a disable action by up to 10 minutes. The user
+  dimension is unaffected.
 - Windows are in-memory; after a restart, counting starts from the next
   collected batch.
 - On a fresh install (no state file), standalone mode starts from the current
