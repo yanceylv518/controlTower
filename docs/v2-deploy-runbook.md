@@ -1,86 +1,267 @@
-# v2.0-B2 生产上线 Runbook
+# v2.0-B2 生产上线 Runbook（手把手版）
 
-执行者：用户本人（碰生产步骤逐一确认）。拓扑：new-api ×2（阿里云杭州 / 腾讯云香港），Control Tower 新购腾讯云 Ubuntu 服务器，Compose 自建 MySQL。
+**拓扑**：Control Tower 服务器 = 腾讯云上海 Ubuntu（下文占位 `CT_IP`，替换为实际公网 IP）；new-api ×2 = 阿里云杭州（`HZ_IP`）、腾讯云香港（`HK_IP`）。数据库 = CT 服务器上 Compose 自建 MySQL。
 
-## 拓扑要点（开工前读一遍）
+**原则**：一次只做一步，每步有"预期结果"，不符就停下把输出贴给 Claude。全程钉钉告警不中断（接入动作可随时回滚）。
 
-1. **流量方向只有 Agent → Server 出站**（gzip 上报，每 30 秒几 KB）。杭州 Agent 到腾讯云服务器如跨境（香港区），偶发抖动由 Agent 本地缓冲+重试兜底，钉钉告警链路完全独立不受影响——架构上天然容忍。
-2. **服务器地域二选一**（下单前定）：**香港**——免备案、离港区 new-api 近，但你从内地开 Web 面板偶尔慢；**内地（如广州/上海）**——面板访问快，用 `IP:8080` 直连实践上无需备案（不绑域名不走 80/443）。两者皆可，Agent 端无差别。
-3. **安全基线（必做其一，推荐 A）**：面板与上报走公网明文 HTTP，必须收口——
-   - **方案 A（零成本，推荐先用）**：腾讯云安全组仅放行 8080 给三个来源——杭州 new-api 公网 IP、香港 new-api 公网 IP、你的办公/家庭 IP（变动时改安全组）。22 端口同理收紧。
-   - **方案 B（有域名再加）**：域名解析到服务器 + Caddy 反代自动 HTTPS，8080 只监听内网、443 对外。可上线后随时补，不阻塞本次。
+---
 
-## 阶段 1：服务器初始化（新腾讯云 Ubuntu，~15 分钟）
+## 阶段 0：购机与安全组（腾讯云控制台，~15 分钟）
+
+### 0.1 购买服务器
+
+- 地域：**上海**；镜像：**Ubuntu 22.04 LTS 或 24.04 LTS**；
+- 规格：2 核 4G 起步足够（Server+MySQL+面板都很轻）；系统盘 ≥40G；
+- 公网：分配公网 IP，带宽 1~3Mbps 即可（上报流量极小）。
+
+### 0.2 查你自己的公网 IP（配安全组用）
+
+本机浏览器打开 `https://ifconfig.me` 或终端 `curl ifconfig.me`，记下（下文 `MY_IP`）。注意家庭宽带 IP 会变，变了就来控制台改这条规则。
+
+### 0.3 配置安全组（控制台 → 云服务器 → 安全组 → 新建）
+
+入站规则**只放这四条**，其余默认拒绝：
+
+| 协议端口 | 来源 | 用途 |
+| --- | --- | --- |
+| TCP:22 | `MY_IP/32` | 你 SSH 管理 |
+| TCP:8080 | `MY_IP/32` | 你开 Web 面板 |
+| TCP:8080 | `HZ_IP/32` | 杭州 Agent 上报 |
+| TCP:8080 | `HK_IP/32` | 香港 Agent 上报 |
+
+出站：默认全放行即可（Server 不主动外连，出站仅系统更新）。绑定到新购主机。
+
+**检查点**：手机 4G（非 MY_IP 网络）访问 `http://CT_IP:8080` 应**连不上**——白名单生效。
+
+---
+
+## 阶段 1：CT 服务器部署（SSH 到 CT_IP，~20 分钟）
+
+### 1.1 装 Docker
 
 ```bash
-# 1. 装 Docker（官方脚本）
 curl -fsSL https://get.docker.com | sudo sh
-sudo usermod -aG docker $USER && newgrp docker
-
-# 2. 拉代码并部署（自建 MySQL 随 Compose 起）
-git clone https://github.com/yanceylv518/controlTower.git && cd controlTower/deploy/compose
-cp .env.example .env
-vim .env   # 逐项填：MySQL 密码、CT_DATABASE_DSN、CT_AGENT_TOKEN（全局回退，随机长串）、
-           # CT_DASHBOARD_TOKEN、CT_AGENT_TOKEN_PEPPER、CT_ADMIN_USERNAME/CT_ADMIN_INITIAL_PASSWORD、
-           # CT_PUBLIC_BASE_URL=http://<服务器公网IP>:8080
-docker compose up -d --build   # 首次构建 ~5 分钟
-
-# 3. 验证
-curl -s http://127.0.0.1:8080/healthz        # {"status":"ok"} 之类
-docker compose logs server | head            # 看到迁移完成 + initial admin created + listening
+sudo usermod -aG docker $USER
+exit   # 重新 SSH 登录使 docker 组生效
 ```
 
-浏览器开 `http://<服务器IP>:8080` → 登录 → 修改初始密码（设置页）。
-
-## 阶段 2：建实例、拿 token（Web 上操作，~5 分钟）
-
-实例管理页创建两个实例（**Token 弹窗只显示一次，先复制存好**）：
-
-| instance_id | 对应 |
-| --- | --- |
-| `inst-hangzhou` | 阿里云杭州 new-api |
-| `inst-hongkong` | 腾讯云香港 new-api |
-
-## 阶段 3：Agent 接入（一台一台来，先香港后杭州）
-
-对每台 new-api 服务器（香港这台如尚无 Agent 则走 `install-agent.sh` 全新安装，配置含下方新增三行）：
+重新登录后验证：
 
 ```bash
-# 1. 下载 Release 的 Agent 包（v2.0.0-rc1，含 v1.0.7 与慢返回等全部功能）
-wget https://github.com/yanceylv518/controlTower/releases/download/v2.0.0-rc1/control-tower-agent-v2.0.0-rc1-linux-amd64.tar.gz
-tar xzf control-tower-agent-v2.0.0-rc1-linux-amd64.tar.gz && cd control-tower-agent-*/
+docker version
+```
 
-# 2. 升级二进制（已有 Agent 的机器）
+**预期**：Client 与 Server 版本都打印，无 permission denied。（国内拉镜像慢可配置腾讯云镜像加速：`/etc/docker/daemon.json` 加 `{"registry-mirrors":["https://mirror.ccs.tencentyun.com"]}` 后 `sudo systemctl restart docker`。）
+
+### 1.2 拉代码
+
+```bash
+git clone https://github.com/yanceylv518/controlTower.git
+cd controlTower/deploy/compose
+```
+
+### 1.3 生成强随机凭证（一次生成，粘到 .env）
+
+```bash
+echo "AGENT_TOKEN=$(openssl rand -hex 32)"
+echo "DASHBOARD_TOKEN=$(openssl rand -hex 32)"
+echo "PEPPER=$(openssl rand -hex 16)"
+echo "MYSQL_PWD=$(openssl rand -hex 16)"
+```
+
+把四行输出复制到记事本备用。
+
+### 1.4 填写 .env
+
+```bash
+cp .env.example .env
+vim .env
+```
+
+逐项填写（右侧为示例，`<>` 处替换）：
+
+```ini
+MYSQL_ROOT_PASSWORD=<MYSQL_PWD>
+MYSQL_PASSWORD=<MYSQL_PWD>                # 若 example 中分了应用账号则两者都填
+CT_DATABASE_DSN=ct:<MYSQL_PWD>@tcp(mysql:3306)/control_tower?parseTime=true
+CT_PUBLIC_BASE_URL=http://<CT_IP>:8080
+CT_AGENT_TOKEN=<AGENT_TOKEN>              # 全局回退 token，Agent 不直接用它
+CT_DASHBOARD_TOKEN=<DASHBOARD_TOKEN>      # 脚本/API 用，浏览器不用
+CT_AGENT_TOKEN_PEPPER=<PEPPER>            # ⚠ 定了不可再改，改了全部实例 token 作废
+CT_ADMIN_USERNAME=admin
+CT_ADMIN_INITIAL_PASSWORD=<自定强密码，首登后改>
+```
+
+其余项保持 example 默认。**`.env` 权限收紧**：`chmod 600 .env`。
+
+### 1.5 启动
+
+```bash
+docker compose up -d --build
+```
+
+首次构建约 3~8 分钟（Node 前端 + Go 编译）。完成后：
+
+```bash
+docker compose ps
+```
+
+**预期**：`mysql` 状态 `healthy`，`server` 状态 `running`。
+
+```bash
+docker compose logs server | tail -20
+```
+
+**预期**：能看到 `initial admin created; change the password after first login` 和 `listening on 0.0.0.0:8080`；**没有** `apply migration` 错误。
+
+```bash
+curl -s http://127.0.0.1:8080/healthz
+```
+
+**预期**：返回 ok 状态 JSON。
+
+### 1.6 浏览器首登
+
+1. 本机浏览器开 `http://CT_IP:8080` → **预期**：Control Tower 登录页；
+2. `admin` + 初始密码登录 → **预期**：进入总览，顶栏显示 admin；总览显示"尚未创建实例——前往实例管理"引导条（空库正常现象）；
+3. **立即改密**：设置页 → 修改密码 → 会被登出 → 用新密码重新登录成功。
+
+**⚠ 检查点**：以上任一步不符，停止，贴日志/截图给 Claude。
+
+---
+
+## 阶段 2：创建实例（Web，~5 分钟）
+
+实例管理页 → 创建实例，共两个：
+
+| instance_id（严格小写） | 名称 |
+| --- | --- |
+| `inst-hangzhou` | 杭州 new-api |
+| `inst-hongkong` | 香港 new-api |
+
+每次创建成功弹出 **Token 对话框——只显示这一次**：点复制，分别存为"杭州 token"、"香港 token"（记事本/密码管理器），点"我已保存"关闭。
+
+**检查点**：实例列表出现两行，均无 Agent（尚未接入），Token 列不存在（不回显是设计）。
+
+---
+
+## 阶段 3：Agent 接入（一台一台，先香港后杭州）
+
+> 每台约 10 分钟。两条路径：**路径 A** = 该机已有 Agent 在跑（升级+接入）；**路径 B** = 该机从未装过 Agent（全新安装）。香港、杭州各自按实际情况选路径。
+
+### 3.0 每台开始前：确认出站连通
+
+在 new-api 服务器上：
+
+```bash
+curl -s -o /dev/null -w '%{http_code}' http://CT_IP:8080/healthz
+```
+
+**预期**：`200`。若超时：回头检查安全组第 3/4 条规则的来源 IP 是否就是这台机器的**出口公网 IP**（`curl ifconfig.me` 确认，NAT 环境可能与绑定 IP 不同）。
+
+### 3.1 下载发布包（两条路径都要）
+
+```bash
+cd /tmp
+wget https://github.com/yanceylv518/controlTower/releases/download/v2.0.0-rc1/control-tower-agent-v2.0.0-rc1-linux-amd64.tar.gz
+tar xzf control-tower-agent-v2.0.0-rc1-linux-amd64.tar.gz
+cd control-tower-agent-v2.0.0-rc1-linux-amd64   # 目录名以解压实际为准 ls 确认
+sha256sum -c <(grep agent-v2.0.0-rc1-linux-amd64 SHA256SUMS) 2>/dev/null || echo "校验清单在包外时跳过"
+```
+
+### 3.2 路径 A：已有 Agent 的机器（升级 + 双模式）
+
+```bash
+# 1. 停服务、备份旧二进制与配置
 sudo systemctl stop control-tower-agent
+sudo cp /usr/local/bin/control-tower-agent /usr/local/bin/control-tower-agent.bak
+sudo cp /etc/control-tower/agent.config /etc/control-tower/agent.config.bak
+
+# 2. 换新二进制
 sudo cp control-tower-agent /usr/local/bin/control-tower-agent
 
-# 3. 配置追加双模式三行（钉钉配置一行不动！）
+# 3. 编辑配置：追加三行（其余一行都不动，尤其钉钉 webhook）
 sudo vim /etc/control-tower/agent.config
-#   CT_SERVER_URL=http://<CT服务器IP>:8080
-#   CT_AGENT_TOKEN=<该实例的 token>
-#   CT_INSTANCE_ID=inst-hangzhou   ← 改为与实例一致（原值若不同必须改，网关校验不匹配会 403）
-
-# 4. 起服务并验证
-sudo systemctl start control-tower-agent
-journalctl -u control-tower-agent -f
-#   预期：版本行显示 v2.0.0-rc1；审计日志正常；无 401/403/连接错误
 ```
 
-**每台接入后立即在 Web 核验**：实例管理页该实例 Agent 显示在线、心跳更新；总览切到该实例有指标流入（等 1~2 分钟聚合）。杭州那台顺带观察跨境上报稳定性（journal 无持续报错即可）。
+追加（以香港机为例；杭州机 token 与 instance id 换成杭州的）：
 
-**回滚预案**（任一台异常）：注释掉新增三行、重启 Agent → 立即回到纯钉钉独立模式，零损失。
+```ini
+CT_SERVER_URL=http://<CT_IP>:8080
+CT_AGENT_TOKEN=<香港 token>
+CT_INSTANCE_ID=inst-hongkong
+```
 
-## 阶段 4：验收与收尾
+**⚠ 注意**：配置里若已有旧的 `CT_INSTANCE_ID`（如 `inst-prod-01`），**必须改成新实例 id**——token 与实例不匹配会被网关 403 拒绝。
 
-1. **双链路确认**：钉钉群告警照常（可临时调低慢阈值触发一条）；Web 告警中心同步可见 Server 端规则告警。
-2. **观察期 3~7 天**：每天看一眼——两实例在线状态、指标连续性（杭州跨境是否有断流）、`docker compose logs` 无异常、磁盘增长正常（保留清理在跑）。
-3. 观察结论反馈给 Claude → 写入迭代记录 v2.0 章节 → 打正式 tag `v2.0.0`（同代码重新出正式产物）→ **v2.0 发布完成**。
+```bash
+# 4. 启动并观察
+sudo systemctl start control-tower-agent
+journalctl -u control-tower-agent -f
+```
+
+**预期**（一分钟内依次出现）：版本行含 `v2.0.0-rc1`；每 30 秒一条 `alert pass` 审计日志；**无** 401/403/connection refused。Ctrl+C 退出观察。
+
+### 3.3 路径 B：全新安装的机器
+
+先按 v1.0 流程准备：该机 MySQL 建只读账号（`GRANT SELECT ON newapi.logs`、可选 `channels`），钉钉群机器人 webhook（关键词"告警"，建议与另一台同群或按需分群）。然后：
+
+```bash
+cp agent.standalone.config.example agent.config
+vim agent.config     # 填 DSN、钉钉 webhook，并加上 3.2 的三行（token/instance 用本机对应值）
+sudo ./install-agent.sh --binary ./control-tower-agent --config ./agent.config
+journalctl -u control-tower-agent -f   # 预期同 3.2
+```
+
+### 3.4 每台接入后：Web 三查（~2 分钟）
+
+1. 实例管理页：该实例 Agent **在线**、版本 `v2.0.0-rc1`、最后心跳在滚动；
+2. 总览页顶栏切到该实例：1~2 分钟后 KPI/趋势出现数据；
+3. 系统状态页：该实例的系统指标/健康检查/容器状态有记录。
+
+**全部通过才做下一台。** 香港完成 → 杭州重复 3.0~3.4。
+
+### 3.5 回滚预案（任一台异常时，30 秒）
+
+```bash
+sudo systemctl stop control-tower-agent
+sudo cp /usr/local/bin/control-tower-agent.bak /usr/local/bin/control-tower-agent   # 路径A才需要
+sudo cp /etc/control-tower/agent.config.bak /etc/control-tower/agent.config
+sudo systemctl start control-tower-agent
+```
+
+即刻回到升级前状态（纯钉钉模式），零损失。然后把异常日志贴给 Claude。
+
+---
+
+## 阶段 4：双链路验收 + 观察期
+
+### 4.1 当天验收（~15 分钟）
+
+1. **钉钉链路**：任选一台，临时 `CT_ALERT_SLOW_SECONDS=1` 重启 → 几分钟内测试消息进钉钉群 → 改回 120 重启。**预期**：钉钉照常，同时 Web 告警中心也出现对应 Server 端告警；
+2. **看板巡检**：两实例切换看总览/客户/渠道/模型/用量各页，数据归属正确不串；
+3. **磁盘基线**：CT 服务器 `df -h` 记录当前占用（观察期对比用）。
+
+### 4.2 观察期（3~7 天，每天 2 分钟）
+
+- [ ] 两实例在线、心跳正常（实例管理页）
+- [ ] 杭州→上海、香港→上海上报无持续报错（各机 `journalctl -u control-tower-agent --since today | grep -ci error` 接近 0）
+- [ ] 钉钉告警质量正常（无异常静默/刷屏）
+- [ ] CT 服务器 `docker compose logs --since 24h server | grep -ci error` 接近 0；磁盘增长符合预期（保留清理生效）
+
+### 4.3 收尾
+
+观察期通过 → 告知 Claude 结论 → Claude 写迭代记录 v2.0 章节 → 打正式 tag `v2.0.0` → **v2.0 发布完成**。之后按需：加域名 + Caddy HTTPS、`.env` 里的可选 cron 备份。
+
+---
 
 ## 故障速查
 
-| 现象 | 排查 |
+| 现象 | 处置 |
 | --- | --- |
-| Agent 日志 401 | token 填错或实例被停用；403 instance_mismatch = CT_INSTANCE_ID 与 token 不匹配 |
-| Web 打不开 | 安全组 8080 未放行你的 IP；`docker compose ps` 看容器状态 |
-| 实例显示离线 | Agent 端 journal 看连接错误；跨境抖动会自动重试补报 |
-| 面板无指标 | 等聚合周期；确认 Agent 日志有 report 成功；实例筛选是否选对 |
+| Agent 日志 `401 unauthorized` | token 粘贴错/实例被停用；重新核对 token（丢了就 Web 轮换重发） |
+| Agent 日志 `403 instance_mismatch` | `CT_INSTANCE_ID` 与 token 所属实例不一致，改配置重启 |
+| Agent `connection refused/timeout` | 安全组来源 IP 与该机出口 IP 不符（`curl ifconfig.me` 核对）；或 CT 服务器容器挂了（`docker compose ps`） |
+| Web 打不开 | 你的 IP 变了 → 控制台改安全组 22/8080 两条规则 |
+| 面板无数据但 Agent 在线 | 等 1~2 分钟聚合；确认实例筛选选对；看 server 日志有无 report 错误 |
+| MySQL 容器不 healthy | `docker compose logs mysql`；常见为磁盘满或密码改动未重建卷 |
