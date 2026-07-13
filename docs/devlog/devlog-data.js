@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-13",
+    type: "review",
+    version: "",
+    title: "验收 M1-B4（渠道命令闭环 + 硬化 + 契约冻结）：一次通过，M1 开发完成",
+    summary: "27 文件 +1152 行零返工：命令认领用 SELECT FOR UPDATE 行锁保证原子性、先过期后认领、终态命令不重复审计（幂等）、IP 限流明确忽略 XFF 并注释原因、数据保留每日清理三组可配、契约冻结横幅入档、e2e 补全命令五步断言（含审计 actor）。每个领域都带测试（25 包全绿），自查清单如实粘贴进 commit message——三批打磨出的交付纪律定型。M1 四批次全部关闭，进入阶段点人工验证。",
+    docs: ["docs/codex-task-m1-b4-commands-freeze.md"],
+    commits: ["8040bff"]
+  },
+  {
+    date: "2026-07-13",
     type: "feature",
     version: "M1-B4",
     title: "M1 收官：渠道命令闭环、服务硬化与 API 契约冻结",
