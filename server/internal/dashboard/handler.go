@@ -37,21 +37,31 @@ func (h Handler) HandleOverview(w http.ResponseWriter, r *http.Request) {
 		writeDashboardError(w, http.StatusInternalServerError, "query_failed")
 		return
 	}
+	instanceID := r.URL.Query().Get("instance_id")
+	if instanceID != "" {
+		filtered := metrics[:0]
+		for _, m := range metrics {
+			if m.InstanceID == instanceID {
+				filtered = append(filtered, m)
+			}
+		}
+		metrics = filtered
+	}
 	if h.runtimeStore == nil {
 		writeDashboardJSON(w, http.StatusOK, BuildOverview(metrics))
 		return
 	}
-	serverMetrics, err := h.runtimeStore.QueryServerMetrics(storage.ServerMetricQuery{Limit: storage.MaxRuntimeQueryLimit})
+	serverMetrics, err := h.runtimeStore.QueryServerMetrics(storage.ServerMetricQuery{InstanceID: instanceID, Limit: storage.MaxRuntimeQueryLimit})
 	if err != nil {
 		writeDashboardError(w, http.StatusInternalServerError, "query_failed")
 		return
 	}
-	healthChecks, err := h.runtimeStore.QueryHealthChecks(storage.HealthCheckQuery{Limit: storage.MaxRuntimeQueryLimit})
+	healthChecks, err := h.runtimeStore.QueryHealthChecks(storage.HealthCheckQuery{InstanceID: instanceID, Limit: storage.MaxRuntimeQueryLimit})
 	if err != nil {
 		writeDashboardError(w, http.StatusInternalServerError, "query_failed")
 		return
 	}
-	dockerStatuses, err := h.runtimeStore.QueryDockerStatuses(storage.DockerStatusQuery{Limit: storage.MaxRuntimeQueryLimit})
+	dockerStatuses, err := h.runtimeStore.QueryDockerStatuses(storage.DockerStatusQuery{InstanceID: instanceID, Limit: storage.MaxRuntimeQueryLimit})
 	if err != nil {
 		writeDashboardError(w, http.StatusInternalServerError, "query_failed")
 		return

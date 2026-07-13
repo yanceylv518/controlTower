@@ -24,6 +24,36 @@ type InstanceHandler struct {
 	Runtime RuntimeStore
 	Pepper  string
 }
+type InstanceItem struct {
+	InstanceID string          `json:"instance_id"`
+	Name       string          `json:"name"`
+	Enabled    bool            `json:"enabled"`
+	CreatedAt  time.Time       `json:"created_at"`
+	UpdatedAt  time.Time       `json:"updated_at"`
+	Agents     []InstanceAgent `json:"agents"`
+}
+type InstanceAgent struct {
+	ID              string    `json:"id"`
+	Version         string    `json:"version"`
+	LastSeenAt      time.Time `json:"last_seen_at"`
+	BacklogEstimate int64     `json:"backlog_estimate"`
+	Online          bool      `json:"online"`
+}
+
+func (i InstanceHandler) item(v storage.Instance) (InstanceItem, error) {
+	out := InstanceItem{InstanceID: v.ID, Name: v.Name, Enabled: v.Enabled, CreatedAt: v.CreatedAt, UpdatedAt: v.UpdatedAt, Agents: []InstanceAgent{}}
+	if i.Runtime != nil {
+		agents, e := i.Runtime.QueryAgents(storage.AgentQuery{InstanceID: v.ID, Limit: storage.MaxRuntimeQueryLimit})
+		if e != nil {
+			return out, e
+		}
+		now := time.Now()
+		for _, a := range agents {
+			out.Agents = append(out.Agents, InstanceAgent{ID: a.ID, Version: a.Version, LastSeenAt: a.LastSeenAt, BacklogEstimate: a.BacklogEstimate, Online: now.Sub(a.LastSeenAt) <= 2*time.Minute})
+		}
+	}
+	return out, nil
+}
 
 var instanceIDPattern = regexp.MustCompile(`^[a-z0-9-]{1,64}$`)
 
@@ -42,7 +72,16 @@ func (i InstanceHandler) List(w http.ResponseWriter, r *http.Request) {
 		writeDashboardError(w, 500, "query_failed")
 		return
 	}
-	writeDashboardJSON(w, 200, map[string]any{"items": v})
+	items := make([]InstanceItem, 0, len(v))
+	for _, instance := range v {
+		item, e := i.item(instance)
+		if e != nil {
+			writeDashboardError(w, 500, "query_failed")
+			return
+		}
+		items = append(items, item)
+	}
+	writeDashboardJSON(w, 200, map[string]any{"items": items})
 }
 func (i InstanceHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var q struct {
@@ -68,7 +107,10 @@ func (i InstanceHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeDashboardError(w, 500, "create_failed")
 		return
 	}
-	_ = i.Store.CreateInstanceToken(storage.InstanceToken{InstanceID: q.ID, TokenHash: tokenHash(i.Pepper, t), CreatedAt: n})
+	if i.Store.CreateInstanceToken(storage.InstanceToken{InstanceID: q.ID, TokenHash: tokenHash(i.Pepper, t), CreatedAt: n}) != nil {
+		writeDashboardError(w, 500, "query_failed")
+		return
+	}
 	writeDashboardJSON(w, 201, map[string]string{"instance_id": q.ID, "name": q.Name, "token": t})
 }
 func (i InstanceHandler) Update(w http.ResponseWriter, r *http.Request) {
@@ -89,23 +131,46 @@ func (i InstanceHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if q.Enabled != nil {
 		v.Enabled = *q.Enabled
 	}
-	_ = i.Store.UpdateInstance(id, v.Name, v.Enabled, time.Now().UTC())
-	writeDashboardJSON(w, 200, v)
+	if i.Store.UpdateInstance(id, v.Name, v.Enabled, time.Now().UTC()) != nil {
+		writeDashboardError(w, 500, "query_failed")
+		return
+	}
+	item, e := i.item(v)
+	if e != nil {
+		writeDashboardError(w, 500, "query_failed")
+		return
+	}
+	writeDashboardJSON(w, 200, item)
 }
 func (i InstanceHandler) Rotate(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if _, ok, _ := i.Store.InstanceByID(id); !ok {
+	instance, ok, err := i.Store.InstanceByID(id)
+	if err != nil {
+		writeDashboardError(w, 500, "query_failed")
+		return
+	}
+	if !ok {
 		writeDashboardError(w, 404, "instance_not_found")
+		return
+	}
+	if !instance.Enabled {
+		writeDashboardError(w, 409, "instance_disabled")
 		return
 	}
 	n := time.Now().UTC()
 	g := n.Add(24 * time.Hour)
-	_ = i.Store.ExpireInstanceTokens(id, g, n)
+	if i.Store.ExpireInstanceTokens(id, g, n) != nil {
+		writeDashboardError(w, 500, "query_failed")
+		return
+	}
 	t, e := newToken()
 	if e != nil {
 		writeDashboardError(w, 500, "create_failed")
 		return
 	}
-	_ = i.Store.CreateInstanceToken(storage.InstanceToken{InstanceID: id, TokenHash: tokenHash(i.Pepper, t), CreatedAt: n})
+	if i.Store.CreateInstanceToken(storage.InstanceToken{InstanceID: id, TokenHash: tokenHash(i.Pepper, t), CreatedAt: n}) != nil {
+		writeDashboardError(w, 500, "query_failed")
+		return
+	}
 	writeDashboardJSON(w, 200, map[string]any{"token": t, "grace_until": g})
 }

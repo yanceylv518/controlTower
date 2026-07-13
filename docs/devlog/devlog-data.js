@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-13",
+    type: "bugfix",
+    version: "M1-B2",
+    title: "M1-B2 验收返工：过滤、DTO 与鉴权顺序",
+    summary: "补齐 Dashboard 多实例过滤、实例列表 snake_case DTO 与 Agent 摘要；Agent Token 改为请求体解析前完成认证，避免无效凭证触发大体积解压；补全网关生命周期测试，并修复实例更新/轮换吞错与停用实例仍可轮换问题。",
+    docs: ["docs/codex-task-m1-b2-rework.md", "docs/api-contracts.md"],
+    commits: []
+  },
+  {
+    date: "2026-07-13",
     type: "review",
     version: "",
     title: "验收 M1-B2（实例管理 + 按实例 Token）：部分通过，5 项返工",

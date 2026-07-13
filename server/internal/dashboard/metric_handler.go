@@ -80,7 +80,7 @@ func (h Handler) HandleMetrics(w http.ResponseWriter, r *http.Request) {
 		writeDashboardError(w, http.StatusInternalServerError, "query_failed")
 		return
 	}
-	items := filterMetricItems(metrics, query.Get("dimension_type"), query.Get("dimension_key"))
+	items := filterMetricItems(metrics, query.Get("dimension_type"), query.Get("dimension_key"), query.Get("instance_id"))
 	writeDashboardJSON(w, http.StatusOK, MetricListResponse{Items: items})
 }
 
@@ -115,14 +115,17 @@ func (h Handler) HandleMetricHistory(w http.ResponseWriter, r *http.Request) {
 		writeDashboardError(w, http.StatusInternalServerError, "query_failed")
 		return
 	}
-	items := filterMetricItems(metrics, "", "")
+	items := filterMetricItems(metrics, "", "", query.Get("instance_id"))
 	sort.Slice(items, func(i, j int) bool { return items[i].BucketTime.Before(items[j].BucketTime) })
 	writeDashboardJSON(w, http.StatusOK, MetricListResponse{Items: items})
 }
 
-func filterMetricItems(metrics []aggregator.Metric, dimensionType string, dimensionKey string) []MetricItem {
+func filterMetricItems(metrics []aggregator.Metric, dimensionType string, dimensionKey string, instanceID ...string) []MetricItem {
 	items := make([]MetricItem, 0, len(metrics))
 	for _, metric := range metrics {
+		if len(instanceID) > 0 && instanceID[0] != "" && metric.InstanceID != instanceID[0] {
+			continue
+		}
 		if dimensionType != "" && metric.DimensionType != dimensionType {
 			continue
 		}

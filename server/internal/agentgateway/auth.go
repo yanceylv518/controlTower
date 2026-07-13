@@ -9,27 +9,21 @@ import (
 	"time"
 )
 
-func (h Handler) authorize(r *http.Request, instance string) (int, string) {
+func (h Handler) authenticate(r *http.Request) (string, bool) {
 	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	if token == "" {
-		return 401, "unauthorized"
+		return "", false
 	}
 	if h.lookup != nil {
 		id, ok, err := h.lookup.InstanceIDByTokenHash(hashToken(h.pepper, token), time.Now().UTC())
-		if err != nil {
-			return 401, "unauthorized"
-		}
-		if ok {
-			if id != instance {
-				return 403, "instance_mismatch"
-			}
-			return 0, ""
+		if err == nil && ok {
+			return id, true
 		}
 	}
 	if validBearerToken(r, h.expectedToken) {
-		return 0, ""
+		return "", true
 	}
-	return 401, "unauthorized"
+	return "", false
 }
 func hashToken(pepper, token string) string {
 	s := sha256.Sum256([]byte(pepper + token))

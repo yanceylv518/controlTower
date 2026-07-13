@@ -46,7 +46,8 @@ func (h Handler) HandleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed")
 		return
 	}
-	if !hasBearerToken(r) {
+	tokenInstanceID, authenticated := h.authenticate(r)
+	if !authenticated {
 		writeError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
@@ -59,8 +60,8 @@ func (h Handler) HandleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "missing_identity")
 		return
 	}
-	if status, code := h.authorize(r, req.InstanceID); status != 0 {
-		writeError(w, status, code)
+	if tokenInstanceID != "" && tokenInstanceID != req.InstanceID {
+		writeError(w, http.StatusForbidden, "instance_mismatch")
 		return
 	}
 	serverLastLogID, err := h.sink.SaveHeartbeat(req)
@@ -76,7 +77,8 @@ func (h Handler) HandleReport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed")
 		return
 	}
-	if !hasBearerToken(r) {
+	tokenInstanceID, authenticated := h.authenticate(r)
+	if !authenticated {
 		writeError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
@@ -89,8 +91,8 @@ func (h Handler) HandleReport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "missing_identity")
 		return
 	}
-	if status, code := h.authorize(r, req.InstanceID); status != 0 {
-		writeError(w, status, code)
+	if tokenInstanceID != "" && tokenInstanceID != req.InstanceID {
+		writeError(w, http.StatusForbidden, "instance_mismatch")
 		return
 	}
 	if !validReportSize(req) {

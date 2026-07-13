@@ -3,6 +3,7 @@ package dashboard
 import (
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"controltower/server/internal/storage"
@@ -45,7 +46,11 @@ func (h Handler) HandleUsage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	items := make([]UsageItem, 0, len(rows))
+	instanceID := r.URL.Query().Get("instance_id")
 	for _, row := range rows {
+		if instanceID != "" && !strings.HasPrefix(row.DimensionKey, instanceID+":") {
+			continue
+		}
 		items = append(items, usageItem(row))
 	}
 	writeDashboardJSON(w, http.StatusOK, map[string]any{"items": items})
