@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-13",
+    type: "review",
+    version: "",
+    title: "M1-B3 二次返工验收：通过，批次关闭",
+    summary: "R1 MySQL 三个状态机方法改为同事务先查后写（firing/refired/resolved/silence_expired 全部落事件，空 IN 正确处理，附源码契约测试）；R2 e2e 生长完整（report 触发告警→确认带 note→时间线断言 actor/note→通知重发尽力断言）；R3 nil 守卫 + 持续 firing 负断言 + 双通道 actor 全链路测试。自查清单首次被真实执行并粘贴进 commit message（含诚实注明 e2e 未能本地跑通的原因）。24 包全绿，CI 绿。",
+    docs: ["docs/codex-task-m1-b3-rework.md"],
+    commits: ["7aecc7b"]
+  },
+  {
+    date: "2026-07-13",
     type: "bugfix",
     version: "M1-B3",
     title: "M1-B3 验收返工：MySQL 系统事件与 E2E 时间线",
