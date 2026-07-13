@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-13",
+    type: "review",
+    version: "",
+    title: "验收 M2-B3（操作页四件套）：通过",
+    summary: "危险操作纪律逐项落实：命令对话框警告条+确认勾选未勾禁用+confirm:true+状态流转自动跟踪；Token 一次性对话框（警告/复制/必须确认保存）并被创建与轮换两处复用；secret 仅表单存在、列表只显 has_secret。告警时间线抽屉/备注/静默时长、通知死信重发、实例正则预校验与停用警告全到位。边界零改动、零新依赖、CI 双 job 绿、25 包 Go 全绿。Codex 手工验证覆盖 UI 层（含 Token 流程实测），写操作数据流留待 M2 阶段点 e2e 数据环境统一验证——判断合理。",
+    docs: ["docs/codex-task-m2-b3-action-pages.md"],
+    commits: ["e1714e4"]
+  },
+  {
+    date: "2026-07-13",
     type: "release",
     version: "M2-B3",
     title: "Web 操作页与危险操作保护完成",
