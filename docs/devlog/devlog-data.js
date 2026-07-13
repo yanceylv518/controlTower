@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-13",
+    type: "decision",
+    version: "",
+    title: "前端依赖批准，M2 Web 启动并定稿四批次",
+    summary: "用户批准 Node≥20+pnpm、Vue3/Vite/TypeScript/Router/Pinia、Element Plus、ECharts、Vant4（M3 用）。M2 拆四批：B1 行走骨架（脚手架+API client+登录+总览+Go 托管 /next/+CI 前端门）→ B2 通用组件+只读页 → B3 操作页 → B4 收尾切换删旧静态页。开发期间新旧前端共存，M2 阶段点浏览器过全部页面。",
+    docs: ["docs/codex-batches-plan.md", "docs/codex-task-m2-b1-skeleton.md"],
+    commits: []
+  },
+  {
+    date: "2026-07-13",
     type: "release",
     version: "M1",
     title: "M1 阶段点验证 PASS：Server 产品化完成",
