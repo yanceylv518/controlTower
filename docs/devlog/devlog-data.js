@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-13",
+    type: "review",
+    version: "",
+    title: "验收 M1-B1（Server 认证体系）：通过，review 补一处加固与缺失测试",
+    summary: "实现核对：PBKDF2-600k（Go 1.24 标准库，零新依赖）、登录锁定（锁定期连正确密码也拒绝）、session 生命周期、双通道中间件（Cookie 写操作强制 CSRF 头、token 通道豁免）、config 层挡住半配置引导、多文件迁移加载、参数化 SQL。review 补：中间件空 token 守卫（防误配空 CT_DASHBOARD_TOKEN 时无凭证放行的潜在越权）、迭代数字面量去重、CSRF 通过路径/无凭证 401/handler 级 me-logout-改密-429 锁定/mux 路由等缺失测试。24 包全绿，CI 绿。",
+    docs: ["docs/codex-task-m1-b1-auth.md"],
+    commits: ["793191b"]
+  },
+  {
+    date: "2026-07-13",
     type: "feature",
     version: "M1-B1",
     title: "Server Session 用户认证与旧 Token 兼容",

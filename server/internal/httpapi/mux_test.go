@@ -107,3 +107,13 @@ func TestNewMuxProtectsAlertActionRoute(t *testing.T) {
 		t.Fatalf("alert action without token status = %d body=%s", rr.Code, rr.Body.String())
 	}
 }
+
+func TestMuxRegistersAuthRoutes(t *testing.T) {
+	mux := NewMux(Options{AgentToken: "agent", DashboardToken: "dash", Store: ingest.NewMemoryStore()})
+	request := httptest.NewRequest(http.MethodPost, "/api/auth/login", nil)
+	response := httptest.NewRecorder()
+	mux.ServeHTTP(response, request)
+	if response.Code == http.StatusNotFound {
+		t.Fatalf("auth login route missing: %d", response.Code)
+	}
+}

@@ -81,3 +81,95 @@ func TestHandlersAndMiddleware(t *testing.T) {
 		t.Fatal(x.Code)
 	}
 }
+
+func TestMiddlewareRejectsMissingAndBlankCredentials(t *testing.T) {
+	m, _ := setup(t)
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204) })
+
+	// No credentials at all.
+	x := httptest.NewRecorder()
+	RequireSessionOrToken(m, "legacy", next).ServeHTTP(x, httptest.NewRequest("GET", "/", nil))
+	if x.Code != 401 {
+		t.Fatalf("no credentials must be rejected, got %d", x.Code)
+	}
+
+	// A blank expected token must never match a credential-less request.
+	x = httptest.NewRecorder()
+	RequireSessionOrToken(m, "", next).ServeHTTP(x, httptest.NewRequest("GET", "/", nil))
+	if x.Code != 401 {
+		t.Fatalf("blank expected token must not grant access, got %d", x.Code)
+	}
+
+	// Session-authenticated mutation with the CSRF header passes.
+	r := httptest.NewRequest("POST", "/api/auth/login", strings.NewReader(`{"username":"admin","password":"password1"}`))
+	w := httptest.NewRecorder()
+	Handlers{M: m}.Login(w, r)
+	c := w.Result().Cookies()[0]
+	q := httptest.NewRequest("POST", "/", nil)
+	q.AddCookie(c)
+	q.Header.Set("X-Requested-With", "XMLHttpRequest")
+	x = httptest.NewRecorder()
+	RequireSessionOrToken(m, "legacy", next).ServeHTTP(x, q)
+	if x.Code != 204 {
+		t.Fatalf("csrf header must allow session mutation, got %d", x.Code)
+	}
+}
+
+func TestHandlerFlowsMeLogoutPasswordAndLock(t *testing.T) {
+	m, _ := setup(t)
+	h := Handlers{M: m}
+	login := func(password string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		h.Login(w, httptest.NewRequest("POST", "/api/auth/login", strings.NewReader(`{"username":"admin","password":"`+password+`"}`)))
+		return w
+	}
+
+	// me -> logout -> me 401
+	c := login("password1").Result().Cookies()[0]
+	withCookie := func(method, path, body string) *http.Request {
+		r := httptest.NewRequest(method, path, strings.NewReader(body))
+		r.AddCookie(c)
+		return r
+	}
+	w := httptest.NewRecorder()
+	h.Me(w, withCookie("GET", "/api/auth/me", ""))
+	if w.Code != 200 {
+		t.Fatalf("me: %d", w.Code)
+	}
+	w = httptest.NewRecorder()
+	h.Logout(w, withCookie("POST", "/api/auth/logout", ""))
+	w = httptest.NewRecorder()
+	h.Me(w, withCookie("GET", "/api/auth/me", ""))
+	if w.Code != 401 {
+		t.Fatalf("me after logout: %d", w.Code)
+	}
+
+	// password change: wrong old rejected uniformly; success kills the session
+	c = login("password1").Result().Cookies()[0]
+	w = httptest.NewRecorder()
+	h.Password(w, withCookie("POST", "/api/auth/password", `{"old_password":"nope","new_password":"password2"}`))
+	if w.Code != 401 {
+		t.Fatalf("wrong old password: %d", w.Code)
+	}
+	w = httptest.NewRecorder()
+	h.Password(w, withCookie("POST", "/api/auth/password", `{"old_password":"password1","new_password":"password2"}`))
+	if w.Code != 200 {
+		t.Fatalf("password change: %d", w.Code)
+	}
+	w = httptest.NewRecorder()
+	h.Me(w, withCookie("GET", "/api/auth/me", ""))
+	if w.Code != 401 {
+		t.Fatalf("old session must be invalid after password change: %d", w.Code)
+	}
+	if login("password2").Code != 200 {
+		t.Fatal("new password must log in")
+	}
+
+	// lockout surfaces as 429 through the handler
+	for i := 0; i < 5; i++ {
+		login("bad")
+	}
+	if code := login("password2").Code; code != 429 {
+		t.Fatalf("locked login must return 429, got %d", code)
+	}
+}

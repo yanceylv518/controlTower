@@ -38,6 +38,7 @@ func (h Handlers) Login(w http.ResponseWriter, r *http.Request) {
 		write(w, 401, map[string]string{"error": "invalid_credentials"})
 		return
 	}
+	// Secure is intentionally not set: TLS terminates at the reverse proxy.
 	http.SetCookie(w, &http.Cookie{Name: "ct_session", Value: s.ID, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: int(h.M.TTL().Seconds())})
 	write(w, 200, map[string]string{"username": u.Username, "role": u.Role})
 }
@@ -102,7 +103,10 @@ func RequireSessionOrToken(m *Manager, token string, next http.Handler) http.Han
 			}
 		}
 		v := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if len(v) == len(token) && subtle.ConstantTimeCompare([]byte(v), []byte(token)) == 1 {
+		// An empty expected token must never match: without this guard a
+		// misconfigured blank CT_DASHBOARD_TOKEN would accept requests that
+		// carry no credentials at all.
+		if token != "" && v != "" && len(v) == len(token) && subtle.ConstantTimeCompare([]byte(v), []byte(token)) == 1 {
 			next.ServeHTTP(w, r)
 			return
 		}

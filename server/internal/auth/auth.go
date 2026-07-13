@@ -55,7 +55,7 @@ func HashPassword(p string) (string, error) {
 	if e != nil {
 		return "", e
 	}
-	return "pbkdf2$sha256$600000$" + base64.RawStdEncoding.EncodeToString(salt) + "$" + base64.RawStdEncoding.EncodeToString(key), nil
+	return "pbkdf2$sha256$" + strconv.Itoa(iterations) + "$" + base64.RawStdEncoding.EncodeToString(salt) + "$" + base64.RawStdEncoding.EncodeToString(key), nil
 }
 func VerifyPassword(v, p string) bool {
 	f := strings.Split(v, "$")
