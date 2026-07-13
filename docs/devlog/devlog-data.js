@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-13",
+    type: "release",
+    version: "M1",
+    title: "M1 阶段点验证 PASS：Server 产品化完成",
+    summary: "第三轮验证在真实 MySQL 9.7 上全链路通过：迁移与管理员引导、e2e 全部步骤（认证→实例/token→心跳/错配 403→轮换宽限→告警触发/确认/时间线→通知→命令下发/认领/回传/审计）、数据库四项抽查全部符合预期。三轮验证累计抓出两个发布级缺陷（迁移重复列被幂等容错掩盖、002~005 排序规则未钉导致 token 查询 1267 且被网关吞错）——均已修复并带防复发测试。M1 四批次正式关闭，Dashboard API v1 契约冻结生效，下一步 M2 Web（待前端依赖审批）。",
+    docs: ["docs/m1-stage-verification.md", "docs/api-contracts.md"],
+    commits: ["e527e25"]
+  },
+  {
+    date: "2026-07-13",
     type: "bugfix",
     version: "",
     title: "M1 阶段验证第二轮 FAIL 定位与修复：排序规则冲突 + 网关吞错",
