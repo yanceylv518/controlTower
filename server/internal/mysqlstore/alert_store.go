@@ -10,6 +10,39 @@ import (
 )
 
 func (s Store) UpsertCurrentAlerts(alerts []storage.Alert, now time.Time) error {
+	if len(alerts) == 0 {
+		return nil
+	}
+	ctx := context.Background()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	ids := make([]string, len(alerts))
+	args := make([]any, len(alerts))
+	for i, a := range alerts {
+		ids[i] = "?"
+		args[i] = a.ID
+	}
+	rows, err := tx.QueryContext(ctx, "SELECT id,status FROM alerts WHERE id IN ("+strings.Join(ids, ",")+")", args...)
+	if err != nil {
+		return err
+	}
+	states := map[string]string{}
+	for rows.Next() {
+		var id, status string
+		if err = rows.Scan(&id, &status); err != nil {
+			rows.Close()
+			return err
+		}
+		states[id] = status
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
 	for _, alert := range alerts {
 		if alert.FirstSeenAt.IsZero() {
 			alert.FirstSeenAt = now
@@ -17,7 +50,7 @@ func (s Store) UpsertCurrentAlerts(alerts []storage.Alert, now time.Time) error 
 		if alert.LastSeenAt.IsZero() {
 			alert.LastSeenAt = now
 		}
-		_, err := s.db.ExecContext(context.Background(), `
+		_, err = tx.ExecContext(ctx, `
 INSERT INTO alerts (
   id, instance_id, rule_key, severity, status, title, summary, first_seen_at, last_seen_at, resolved_at, silence_until
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
@@ -44,31 +77,115 @@ ON DUPLICATE KEY UPDATE
 		if err != nil {
 			return err
 		}
+		event := ""
+		if old, ok := states[alert.ID]; !ok {
+			event = "firing"
+		} else if old == "resolved" {
+			event = "refired"
+		}
+		if event != "" {
+			if _, err = tx.ExecContext(ctx, "INSERT INTO alert_events(alert_id,event_type,actor,note,created_at) VALUES(?,?,'system','',?)", alert.ID, event, now); err != nil {
+				return err
+			}
+		}
 	}
-	return nil
+	return tx.Commit()
 }
 
 func (s Store) ResolveMissingAlerts(currentIDs []string, now time.Time) error {
-	args := []any{now}
-	sqlText := "UPDATE alerts SET status = 'resolved', resolved_at = ? WHERE status <> 'resolved'"
+	ctx := context.Background()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	selectArgs := []any{}
+	selectSQL := "SELECT id FROM alerts WHERE status <> 'resolved'"
 	if len(currentIDs) > 0 {
 		placeholders := make([]string, 0, len(currentIDs))
 		for _, id := range currentIDs {
 			placeholders = append(placeholders, "?")
+			selectArgs = append(selectArgs, id)
+		}
+		selectSQL += " AND id NOT IN (" + strings.Join(placeholders, ",") + ")"
+	}
+	rows, err := tx.QueryContext(ctx, selectSQL, selectArgs...)
+	if err != nil {
+		return err
+	}
+	var affected []string
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		affected = append(affected, id)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	args := []any{now}
+	sqlText := "UPDATE alerts SET status = 'resolved', resolved_at = ? WHERE status <> 'resolved'"
+	if len(currentIDs) > 0 {
+		p := make([]string, len(currentIDs))
+		for i, id := range currentIDs {
+			p[i] = "?"
 			args = append(args, id)
 		}
-		sqlText += " AND id NOT IN (" + strings.Join(placeholders, ",") + ")"
+		sqlText += " AND id NOT IN (" + strings.Join(p, ",") + ")"
 	}
-	_, err := s.db.ExecContext(context.Background(), sqlText, args...)
-	return err
+	if _, err = tx.ExecContext(ctx, sqlText, args...); err != nil {
+		return err
+	}
+	for _, id := range affected {
+		if _, err = tx.ExecContext(ctx, "INSERT INTO alert_events(alert_id,event_type,actor,note,created_at) VALUES(?,'resolved','system','',?)", id, now); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (s Store) ExpireSilencedAlerts(now time.Time) error {
-	_, err := s.db.ExecContext(context.Background(), `
+	ctx := context.Background()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	rows, err := tx.QueryContext(ctx, "SELECT id FROM alerts WHERE status='silenced' AND silence_until IS NOT NULL AND silence_until<=?", now)
+	if err != nil {
+		return err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		ids = append(ids, id)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	_, err = tx.ExecContext(ctx, `
 UPDATE alerts
 SET status = 'firing', silence_until = NULL
 WHERE status = 'silenced' AND silence_until IS NOT NULL AND silence_until <= ?`, now)
-	return err
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if _, err = tx.ExecContext(ctx, "INSERT INTO alert_events(alert_id,event_type,actor,note,created_at) VALUES(?,'silence_expired','system','',?)", id, now); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (s Store) QueryAlerts(query storage.AlertQuery) ([]storage.Alert, error) {

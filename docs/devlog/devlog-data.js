@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-13",
+    type: "bugfix",
+    version: "M1-B3",
+    title: "M1-B3 验收返工：MySQL 系统事件与 E2E 时间线",
+    summary: "补齐 MySQL firing/refired/resolved/silence_expired 事件的事务内先查后写，保证与 MemoryStore 一致；Server E2E 增加错误 report、告警确认及 actor/note 时间线断言；时间线 handler 增加 Store 空值保护。",
+    docs: ["docs/codex-task-m1-b3-rework.md", "deploy/e2e-server.sh"],
+    commits: []
+  },
+  {
+    date: "2026-07-13",
     type: "review",
     version: "",
     title: "验收 M1-B3（告警时间线 + 通知强化）：部分通过，3 项返工",

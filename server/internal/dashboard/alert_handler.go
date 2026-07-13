@@ -133,6 +133,10 @@ func (h Handler) HandleAlertEvents(w http.ResponseWriter, r *http.Request) {
 		writeDashboardError(w, 405, "method_not_allowed")
 		return
 	}
+	if h.alertStore == nil {
+		writeDashboardError(w, 500, "alert_store_not_configured")
+		return
+	}
 	limit := parseInt(r.URL.Query().Get("limit"))
 	events, e := h.alertStore.QueryAlertEvents(r.PathValue("id"), limit)
 	if e != nil {
