@@ -2,6 +2,17 @@ package storage
 
 import "time"
 
+type User struct {
+	ID                           int64
+	Username, PasswordHash, Role string
+	CreatedAt, UpdatedAt         time.Time
+}
+type Session struct {
+	ID                   string
+	UserID               int64
+	ExpiresAt, CreatedAt time.Time
+}
+
 type Instance struct {
 	ID        string
 	Name      string

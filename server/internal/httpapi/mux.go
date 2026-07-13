@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"controltower/server/internal/agentgateway"
+	ctauth "controltower/server/internal/auth"
 	"controltower/server/internal/dashboard"
 	"controltower/server/internal/ingest"
 )
@@ -16,6 +17,7 @@ type Options struct {
 	DashboardToken string
 	Store          Store
 	WebDir         string
+	AuthManager    *ctauth.Manager
 }
 
 type Store interface {
@@ -40,21 +42,32 @@ func NewMux(options Options) *http.ServeMux {
 	mux.HandleFunc("/api/agent/report", agentHandler.HandleReport)
 
 	dashboardHandler := dashboard.NewHandler(options.Store).WithLogStore(options.Store).WithLogSampleStore(options.Store).WithRuntimeStore(options.Store).WithMetricSource(options.Store).WithAlertStore(options.Store).WithNotificationStore(options.Store).WithChannelSnapshotStore(options.Store)
-	mux.Handle("/api/dashboard/overview", dashboard.RequireBearerToken(options.DashboardToken, http.HandlerFunc(dashboardHandler.HandleOverview)))
-	mux.Handle("/api/dashboard/log-samples", dashboard.RequireBearerToken(options.DashboardToken, http.HandlerFunc(dashboardHandler.HandleLogSamples)))
-	mux.Handle("/api/dashboard/logs", dashboard.RequireBearerToken(options.DashboardToken, http.HandlerFunc(dashboardHandler.HandleLogs)))
-	mux.Handle("/api/dashboard/metrics", dashboard.RequireBearerToken(options.DashboardToken, http.HandlerFunc(dashboardHandler.HandleMetrics)))
-	mux.Handle("/api/dashboard/metric-history", dashboard.RequireBearerToken(options.DashboardToken, http.HandlerFunc(dashboardHandler.HandleMetricHistory)))
-	mux.Handle("/api/dashboard/usage", dashboard.RequireBearerToken(options.DashboardToken, http.HandlerFunc(dashboardHandler.HandleUsage)))
-	mux.Handle("/api/dashboard/channel-snapshots", dashboard.RequireBearerToken(options.DashboardToken, http.HandlerFunc(dashboardHandler.HandleChannelSnapshots)))
-	mux.Handle("/api/dashboard/alerts", dashboard.RequireBearerToken(options.DashboardToken, http.HandlerFunc(dashboardHandler.HandleAlerts)))
-	mux.Handle("/api/dashboard/alerts/action", dashboard.RequireBearerToken(options.DashboardToken, http.HandlerFunc(dashboardHandler.HandleAlertAction)))
-	mux.Handle("/api/dashboard/notification-channels", dashboard.RequireBearerToken(options.DashboardToken, http.HandlerFunc(dashboardHandler.HandleNotificationChannels)))
-	mux.Handle("/api/dashboard/notification-deliveries", dashboard.RequireBearerToken(options.DashboardToken, http.HandlerFunc(dashboardHandler.HandleNotificationDeliveries)))
-	mux.Handle("/api/dashboard/agents", dashboard.RequireBearerToken(options.DashboardToken, http.HandlerFunc(dashboardHandler.HandleAgents)))
-	mux.Handle("/api/dashboard/server-metrics", dashboard.RequireBearerToken(options.DashboardToken, http.HandlerFunc(dashboardHandler.HandleServerMetrics)))
-	mux.Handle("/api/dashboard/health-checks", dashboard.RequireBearerToken(options.DashboardToken, http.HandlerFunc(dashboardHandler.HandleHealthChecks)))
-	mux.Handle("/api/dashboard/docker-statuses", dashboard.RequireBearerToken(options.DashboardToken, http.HandlerFunc(dashboardHandler.HandleDockerStatuses)))
+	protect := func(h http.Handler) http.Handler {
+		if options.AuthManager != nil {
+			return ctauth.RequireSessionOrToken(options.AuthManager, options.DashboardToken, h)
+		}
+		return dashboard.RequireBearerToken(options.DashboardToken, h)
+	}
+	a := ctauth.Handlers{M: options.AuthManager}
+	mux.HandleFunc("/api/auth/login", a.Login)
+	mux.HandleFunc("/api/auth/logout", a.Logout)
+	mux.HandleFunc("/api/auth/me", a.Me)
+	mux.HandleFunc("/api/auth/password", a.Password)
+	mux.Handle("/api/dashboard/overview", protect(http.HandlerFunc(dashboardHandler.HandleOverview)))
+	mux.Handle("/api/dashboard/log-samples", protect(http.HandlerFunc(dashboardHandler.HandleLogSamples)))
+	mux.Handle("/api/dashboard/logs", protect(http.HandlerFunc(dashboardHandler.HandleLogs)))
+	mux.Handle("/api/dashboard/metrics", protect(http.HandlerFunc(dashboardHandler.HandleMetrics)))
+	mux.Handle("/api/dashboard/metric-history", protect(http.HandlerFunc(dashboardHandler.HandleMetricHistory)))
+	mux.Handle("/api/dashboard/usage", protect(http.HandlerFunc(dashboardHandler.HandleUsage)))
+	mux.Handle("/api/dashboard/channel-snapshots", protect(http.HandlerFunc(dashboardHandler.HandleChannelSnapshots)))
+	mux.Handle("/api/dashboard/alerts", protect(http.HandlerFunc(dashboardHandler.HandleAlerts)))
+	mux.Handle("/api/dashboard/alerts/action", protect(http.HandlerFunc(dashboardHandler.HandleAlertAction)))
+	mux.Handle("/api/dashboard/notification-channels", protect(http.HandlerFunc(dashboardHandler.HandleNotificationChannels)))
+	mux.Handle("/api/dashboard/notification-deliveries", protect(http.HandlerFunc(dashboardHandler.HandleNotificationDeliveries)))
+	mux.Handle("/api/dashboard/agents", protect(http.HandlerFunc(dashboardHandler.HandleAgents)))
+	mux.Handle("/api/dashboard/server-metrics", protect(http.HandlerFunc(dashboardHandler.HandleServerMetrics)))
+	mux.Handle("/api/dashboard/health-checks", protect(http.HandlerFunc(dashboardHandler.HandleHealthChecks)))
+	mux.Handle("/api/dashboard/docker-statuses", protect(http.HandlerFunc(dashboardHandler.HandleDockerStatuses)))
 
 	if options.WebDir == "" {
 		options.WebDir = "web"

@@ -19,6 +19,9 @@ type Config struct {
 	AggregationIntervalSeconds   int
 	NotificationIntervalSeconds  int
 	ChannelSnapshotRetentionDays int
+	AdminUsername                string
+	AdminInitialPassword         string
+	SessionTTLHours              int
 }
 
 func Load(values map[string]string) (Config, error) {
@@ -36,6 +39,7 @@ func Load(values map[string]string) (Config, error) {
 		AggregationIntervalSeconds:   intOrDefault(values, "CT_AGGREGATION_INTERVAL_SECONDS", 60),
 		NotificationIntervalSeconds:  intOrDefault(values, "CT_NOTIFICATION_INTERVAL_SECONDS", 30),
 		ChannelSnapshotRetentionDays: intOrDefault(values, "CT_CHANNEL_SNAPSHOT_RETENTION_DAYS", 30),
+		AdminUsername:                values["CT_ADMIN_USERNAME"], AdminInitialPassword: values["CT_ADMIN_INITIAL_PASSWORD"], SessionTTLHours: intOrDefault(values, "CT_SESSION_TTL_HOURS", 720),
 	}
 	if cfg.PublicBaseURL == "" || cfg.DatabaseDSN == "" || cfg.AgentToken == "" || cfg.DashboardToken == "" || cfg.AgentTokenPepper == "" {
 		return Config{}, errors.New("missing required control tower server config")
@@ -51,6 +55,12 @@ func Load(values map[string]string) (Config, error) {
 	}
 	if cfg.ChannelSnapshotRetentionDays < 1 || cfg.ChannelSnapshotRetentionDays > 3650 {
 		return Config{}, errors.New("CT_CHANNEL_SNAPSHOT_RETENTION_DAYS must be between 1 and 3650")
+	}
+	if cfg.SessionTTLHours < 1 || cfg.SessionTTLHours > 8760 {
+		return Config{}, errors.New("CT_SESSION_TTL_HOURS must be between 1 and 8760")
+	}
+	if (cfg.AdminUsername == "") != (cfg.AdminInitialPassword == "") {
+		return Config{}, errors.New("CT_ADMIN_USERNAME and CT_ADMIN_INITIAL_PASSWORD must be configured together")
 	}
 	return cfg, nil
 }
@@ -70,6 +80,7 @@ func Keys() []string {
 		"CT_AGGREGATION_INTERVAL_SECONDS",
 		"CT_NOTIFICATION_INTERVAL_SECONDS",
 		"CT_CHANNEL_SNAPSHOT_RETENTION_DAYS",
+		"CT_ADMIN_USERNAME", "CT_ADMIN_INITIAL_PASSWORD", "CT_SESSION_TTL_HOURS",
 	}
 }
 

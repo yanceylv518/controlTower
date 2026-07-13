@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-13",
+    type: "feature",
+    version: "M1-B1",
+    title: "Server Session 用户认证与旧 Token 兼容",
+    summary: "新增 PBKDF2 密码哈希、用户与 Session 持久化、登录限速、认证 API；Dashboard 支持 Session Cookie 与旧 Bearer Token 双通道，Cookie 写请求增加 CSRF 头校验。迁移按目录顺序执行，并支持首次管理员引导。",
+    docs: ["docs/codex-task-m1-b1-auth.md", "docs/api-contracts.md", "docs/development-progress.md"],
+    commits: []
+  },
+  {
+    date: "2026-07-13",
     type: "review",
     version: "",
     title: "验收 M0-lite（CI 质量门 + Makefile）：通过",

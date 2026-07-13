@@ -25,6 +25,9 @@ type MemoryStore struct {
 	metrics1m              map[string]aggregator.Metric
 	metrics5m              map[string]aggregator.Metric
 	metricBatches          map[string]struct{}
+	users                  map[int64]storage.User
+	sessions               map[string]storage.Session
+	nextUserID             int64
 }
 
 func NewMemoryStore() *MemoryStore {
@@ -39,7 +42,79 @@ func NewMemoryStore() *MemoryStore {
 		metrics1m:              make(map[string]aggregator.Metric),
 		metrics5m:              make(map[string]aggregator.Metric),
 		metricBatches:          make(map[string]struct{}),
+		users:                  make(map[int64]storage.User), sessions: make(map[string]storage.Session), nextUserID: 1,
 	}
+}
+
+func (s *MemoryStore) UserByUsername(n string) (storage.User, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, u := range s.users {
+		if u.Username == n {
+			return u, true, nil
+		}
+	}
+	return storage.User{}, false, nil
+}
+func (s *MemoryStore) UserByID(id int64) (storage.User, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u, ok := s.users[id]
+	return u, ok, nil
+}
+func (s *MemoryStore) CreateUser(u storage.User) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if u.ID == 0 {
+		u.ID = s.nextUserID
+		s.nextUserID++
+	}
+	s.users[u.ID] = u
+	return nil
+}
+func (s *MemoryStore) UpdateUserPassword(id int64, h string, n time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u := s.users[id]
+	u.PasswordHash = h
+	u.UpdatedAt = n
+	s.users[id] = u
+	return nil
+}
+func (s *MemoryStore) CountUsers() (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.users), nil
+}
+func (s *MemoryStore) CreateSession(v storage.Session) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessions[v.ID] = v
+	return nil
+}
+func (s *MemoryStore) SessionByID(id string) (storage.Session, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, ok := s.sessions[id]
+	return v, ok, nil
+}
+func (s *MemoryStore) DeleteSession(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.sessions, id)
+	return nil
+}
+func (s *MemoryStore) DeleteExpiredSessions(n time.Time) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c := 0
+	for id, v := range s.sessions {
+		if !v.ExpiresAt.After(n) {
+			delete(s.sessions, id)
+			c++
+		}
+	}
+	return c, nil
 }
 
 func (s *MemoryStore) Upsert1m(metrics []aggregator.Metric) error {

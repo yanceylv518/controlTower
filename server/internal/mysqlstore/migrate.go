@@ -4,6 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/go-sql-driver/mysql"
@@ -18,6 +21,24 @@ func ApplySQL(ctx context.Context, db *sql.DB, sqlText string) error {
 			if ignorableMigrationError(err) {
 				continue
 			}
+			return err
+		}
+	}
+	return nil
+}
+
+func ApplyDir(ctx context.Context, db *sql.DB, dir string) error {
+	files, err := filepath.Glob(filepath.Join(dir, "*.sql"))
+	if err != nil {
+		return err
+	}
+	sort.Strings(files)
+	for _, path := range files {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if err = ApplySQL(ctx, db, string(data)); err != nil {
 			return err
 		}
 	}

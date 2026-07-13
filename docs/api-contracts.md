@@ -110,3 +110,11 @@ Every Agent request includes:
 - Compressed request bodies are limited to 2 MiB and decoded bodies to 8 MiB.
 - Report arrays have server-side item limits; oversized reports return HTTP 413.
 
+## Dashboard Auth API
+
+- `POST /api/auth/login` accepts username/password and sets the HttpOnly, SameSite=Strict `ct_session` cookie.
+- `POST /api/auth/logout` deletes the session and clears the cookie.
+- `GET /api/auth/me` returns the current username and role.
+- `POST /api/auth/password` changes the password and invalidates the current session; new passwords require at least eight characters.
+
+Cookie-authenticated non-GET Dashboard requests require `X-Requested-With: XMLHttpRequest`. Legacy `Authorization: Bearer <dashboard-token>` remains supported without this browser CSRF header.
