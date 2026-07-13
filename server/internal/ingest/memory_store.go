@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -28,6 +29,8 @@ type MemoryStore struct {
 	users                  map[int64]storage.User
 	sessions               map[string]storage.Session
 	nextUserID             int64
+	instances              map[string]storage.Instance
+	instanceTokens         []storage.InstanceToken
 }
 
 func NewMemoryStore() *MemoryStore {
@@ -43,7 +46,84 @@ func NewMemoryStore() *MemoryStore {
 		metrics5m:              make(map[string]aggregator.Metric),
 		metricBatches:          make(map[string]struct{}),
 		users:                  make(map[int64]storage.User), sessions: make(map[string]storage.Session), nextUserID: 1,
+		instances: make(map[string]storage.Instance),
 	}
+}
+func (s *MemoryStore) ListInstances() ([]storage.Instance, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	o := make([]storage.Instance, 0, len(s.instances))
+	for _, v := range s.instances {
+		o = append(o, v)
+	}
+	sort.Slice(o, func(i, j int) bool { return o[i].ID < o[j].ID })
+	return o, nil
+}
+func (s *MemoryStore) InstanceByID(id string) (storage.Instance, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, ok := s.instances[id]
+	return v, ok, nil
+}
+func (s *MemoryStore) CreateInstance(v storage.Instance) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.instances[v.ID]; ok {
+		return fmt.Errorf("instance exists")
+	}
+	s.instances[v.ID] = v
+	return nil
+}
+func (s *MemoryStore) UpdateInstance(id, n string, e bool, now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v := s.instances[id]
+	v.Name = n
+	v.Enabled = e
+	v.UpdatedAt = now
+	s.instances[id] = v
+	return nil
+}
+func (s *MemoryStore) CreateInstanceToken(v storage.InstanceToken) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.instanceTokens = append(s.instanceTokens, v)
+	return nil
+}
+func (s *MemoryStore) InstanceIDByTokenHash(h string, n time.Time) (string, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, t := range s.instanceTokens {
+		if t.TokenHash == h && (t.ExpiresAt == nil || t.ExpiresAt.After(n)) && s.instances[t.InstanceID].Enabled {
+			return t.InstanceID, true, nil
+		}
+	}
+	return "", false, nil
+}
+func (s *MemoryStore) ExpireInstanceTokens(id string, g, n time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.instanceTokens {
+		if s.instanceTokens[i].InstanceID == id && s.instanceTokens[i].ExpiresAt == nil {
+			s.instanceTokens[i].ExpiresAt = &g
+		}
+	}
+	return nil
+}
+func (s *MemoryStore) DeleteExpiredInstanceTokens(n time.Time) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	o := s.instanceTokens[:0]
+	c := 0
+	for _, t := range s.instanceTokens {
+		if t.ExpiresAt != nil && !t.ExpiresAt.After(n) {
+			c++
+		} else {
+			o = append(o, t)
+		}
+	}
+	s.instanceTokens = o
+	return c, nil
 }
 
 func (s *MemoryStore) UserByUsername(n string) (storage.User, bool, error) {

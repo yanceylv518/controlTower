@@ -13,11 +13,12 @@ import (
 )
 
 type Options struct {
-	AgentToken     string
-	DashboardToken string
-	Store          Store
-	WebDir         string
-	AuthManager    *ctauth.Manager
+	AgentToken       string
+	DashboardToken   string
+	Store            Store
+	WebDir           string
+	AuthManager      *ctauth.Manager
+	AgentTokenPepper string
 }
 
 type Store interface {
@@ -30,6 +31,8 @@ type Store interface {
 	dashboard.AlertStore
 	dashboard.NotificationStore
 	dashboard.ChannelSnapshotStore
+	dashboard.InstanceStore
+	agentgateway.TokenLookup
 }
 
 func NewMux(options Options) *http.ServeMux {
@@ -37,7 +40,7 @@ func NewMux(options Options) *http.ServeMux {
 	mux.HandleFunc("/healthz", handleHealthz)
 
 	ingestService := ingest.NewService(options.Store)
-	agentHandler := agentgateway.NewHandler(options.AgentToken, ingestService)
+	agentHandler := agentgateway.NewHandlerWithTokens(options.AgentToken, ingestService, options.Store, options.AgentTokenPepper)
 	mux.HandleFunc("/api/agent/heartbeat", agentHandler.HandleHeartbeat)
 	mux.HandleFunc("/api/agent/report", agentHandler.HandleReport)
 
@@ -68,6 +71,11 @@ func NewMux(options Options) *http.ServeMux {
 	mux.Handle("/api/dashboard/server-metrics", protect(http.HandlerFunc(dashboardHandler.HandleServerMetrics)))
 	mux.Handle("/api/dashboard/health-checks", protect(http.HandlerFunc(dashboardHandler.HandleHealthChecks)))
 	mux.Handle("/api/dashboard/docker-statuses", protect(http.HandlerFunc(dashboardHandler.HandleDockerStatuses)))
+	instances := dashboard.InstanceHandler{Store: options.Store, Runtime: options.Store, Pepper: options.AgentTokenPepper}
+	mux.Handle("GET /api/dashboard/instances", protect(http.HandlerFunc(instances.List)))
+	mux.Handle("POST /api/dashboard/instances", protect(http.HandlerFunc(instances.Create)))
+	mux.Handle("PUT /api/dashboard/instances/{id}", protect(http.HandlerFunc(instances.Update)))
+	mux.Handle("POST /api/dashboard/instances/{id}/rotate-token", protect(http.HandlerFunc(instances.Rotate)))
 
 	if options.WebDir == "" {
 		options.WebDir = "web"

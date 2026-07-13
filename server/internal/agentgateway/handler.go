@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"time"
 )
 
 const maxAgentCompressedBytes = 2 * 1024 * 1024
@@ -22,6 +23,15 @@ type Sink interface {
 type Handler struct {
 	expectedToken string
 	sink          Sink
+	lookup        TokenLookup
+	pepper        string
+}
+type TokenLookup interface {
+	InstanceIDByTokenHash(string, time.Time) (string, bool, error)
+}
+
+func NewHandlerWithTokens(expected string, sink Sink, lookup TokenLookup, pepper string) Handler {
+	return Handler{expectedToken: expected, sink: sink, lookup: lookup, pepper: pepper}
 }
 
 func NewHandler(expectedToken string, sink Sink) Handler {
@@ -36,11 +46,10 @@ func (h Handler) HandleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed")
 		return
 	}
-	if !validBearerToken(r, h.expectedToken) {
+	if !hasBearerToken(r) {
 		writeError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
-
 	var req AgentHeartbeatRequest
 	if err := decodeJSON(w, r, &req); err != nil {
 		writeDecodeError(w, err)
@@ -48,6 +57,10 @@ func (h Handler) HandleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.InstanceID == "" || req.AgentID == "" {
 		writeError(w, http.StatusBadRequest, "missing_identity")
+		return
+	}
+	if status, code := h.authorize(r, req.InstanceID); status != 0 {
+		writeError(w, status, code)
 		return
 	}
 	serverLastLogID, err := h.sink.SaveHeartbeat(req)
@@ -63,11 +76,10 @@ func (h Handler) HandleReport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed")
 		return
 	}
-	if !validBearerToken(r, h.expectedToken) {
+	if !hasBearerToken(r) {
 		writeError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
-
 	var req AgentReportRequest
 	if err := decodeJSON(w, r, &req); err != nil {
 		writeDecodeError(w, err)
@@ -75,6 +87,10 @@ func (h Handler) HandleReport(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.InstanceID == "" || req.AgentID == "" {
 		writeError(w, http.StatusBadRequest, "missing_identity")
+		return
+	}
+	if status, code := h.authorize(r, req.InstanceID); status != 0 {
+		writeError(w, status, code)
 		return
 	}
 	if !validReportSize(req) {

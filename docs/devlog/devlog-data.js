@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-13",
+    type: "feature",
+    version: "M1-B2",
+    title: "实例管理与按实例 Agent Token",
+    summary: "新增实例管理 API、随机 Agent Token 一次性回显与哈希存储、24 小时轮换宽限、实例停用即时失效；Agent 网关校验 Token 绑定的 instance_id，同时保留全局 Token 兼容通道，并建立 Server E2E 脚本。",
+    docs: ["docs/codex-task-m1-b2-instances.md", "docs/api-contracts.md", "deploy/e2e-server.sh"],
+    commits: []
+  },
+  {
+    date: "2026-07-13",
     type: "review",
     version: "",
     title: "验收 M1-B1（Server 认证体系）：通过，review 补一处加固与缺失测试",

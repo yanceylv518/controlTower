@@ -67,13 +67,20 @@ func run() error {
 		log.Printf("no users configured; legacy dashboard token authentication only")
 	}
 	go authManager.CleanupLoop(context.Background())
+	go func() {
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for now := range ticker.C {
+			_, _ = store.DeleteExpiredInstanceTokens(now.UTC())
+		}
+	}()
 	startAggregationRunner(store, time.Duration(cfg.AggregationIntervalSeconds)*time.Second)
 	startNotificationRunner(store, time.Duration(cfg.NotificationIntervalSeconds)*time.Second)
 	startChannelSnapshotRetentionRunner(store, cfg.ChannelSnapshotRetentionDays)
 
 	server := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           httpapi.NewMux(httpapi.Options{AgentToken: cfg.AgentToken, DashboardToken: cfg.DashboardToken, Store: store, AuthManager: authManager}),
+		Handler:           httpapi.NewMux(httpapi.Options{AgentToken: cfg.AgentToken, DashboardToken: cfg.DashboardToken, Store: store, AuthManager: authManager, AgentTokenPepper: cfg.AgentTokenPepper}),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	log.Printf("control tower server listening on %s", cfg.ListenAddr)

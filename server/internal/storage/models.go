@@ -23,6 +23,12 @@ type Instance struct {
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
+type InstanceToken struct {
+	ID                    int64
+	InstanceID, TokenHash string
+	CreatedAt             time.Time
+	ExpiresAt             *time.Time
+}
 
 type Agent struct {
 	ID                string

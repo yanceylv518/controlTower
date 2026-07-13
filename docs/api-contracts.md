@@ -118,3 +118,11 @@ Every Agent request includes:
 - `POST /api/auth/password` changes the password and invalidates the current session; new passwords require at least eight characters.
 
 Cookie-authenticated non-GET Dashboard requests require `X-Requested-With: XMLHttpRequest`. Legacy `Authorization: Bearer <dashboard-token>` remains supported without this browser CSRF header.
+
+## Instance Management API
+
+Dashboard-authenticated endpoints provide `GET/POST /api/dashboard/instances`, `PUT /api/dashboard/instances/{id}`, and `POST /api/dashboard/instances/{id}/rotate-token`. Creation and rotation return the new Agent token exactly once; lists never expose token plaintext or hashes. Rotation keeps previous active tokens valid for 24 hours. Disabling an instance rejects all of its instance tokens immediately.
+
+## Per-instance Agent Authentication
+
+Instance tokens are stored only as `SHA-256(pepper + token)` hashes. A token may report only the matching `instance_id`; mismatch returns HTTP 403 `instance_mismatch`. Invalid, expired, or disabled-instance tokens return HTTP 401. The global `CT_AGENT_TOKEN` remains accepted temporarily as an unbound compatibility path.
