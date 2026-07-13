@@ -17,6 +17,15 @@ export interface ServerMetricItem { instance_id: string; collected_at: string; c
 export interface HealthCheckItem { instance_id: string; checked_at: string; target: string; status: string; http_status_code: number; latency_ms: number; error_summary: string }
 export interface DockerStatusItem { instance_id: string; collected_at: string; container_name: string; status: string; running: boolean }
 export interface UsageItem { dimension_type: string; dimension_key: string; display_key: string; request_count: number; total_tokens: number; prompt_tokens: number; completion_tokens: number; quota: number }
+export interface NotificationChannelItem { id: string; channel_type: string; name: string; webhook_url_masked: string; enabled: boolean; created_at: string; updated_at: string; has_secret: boolean }
+export interface NotificationChannelInput { id: string; channel_type: 'webhook' | 'dingtalk'; name: string; webhook_url: string; enabled: boolean; secret?: string }
+export interface NotificationDeliveryItem { id: string; alert_id: string; channel_id: string; status: string; attempted_at: string; next_attempt_at: string; attempts: number; status_code: number; error_summary: string }
+export interface InstanceCreateResponse { instance_id: string; name: string; token: string }
+export interface InstanceUpdateInput { name?: string; enabled?: boolean }
+export interface InstanceTokenResponse { token: string; grace_until?: string }
+export interface ChannelCommandInput { instance_id: string; confirm: true; status?: number; weight?: number; priority?: number }
+export interface ChannelCommandItem { id: string; instance_id: string; channel_id: number; status: string; payload: Record<string, number>; created_by: string; error_summary?: string; created_at: string }
+export interface OperationAuditItem { operation_type: string; target_type: string; target_id: string; actor_id: string; after_summary: string; created_at: string }
 
 const query = (values: Record<string, string | number | boolean | undefined>) => {
   const params = new URLSearchParams()
@@ -30,7 +39,7 @@ export const dashboardApi = (client: ApiClient) => ({
   overview: (instance_id?: string) => client.request<Overview>(`/api/dashboard/overview${query({ instance_id })}`),
   metrics: (params: { instance_id?: string; window?: string; latest?: boolean; dimension_type?: string; dimension_key?: string } = {}) => client.request<ListResponse<MetricItem>>(`/api/dashboard/metrics${query(params)}`),
   metricHistory: (params: { window: string; dimension_type: string; dimension_key: string; hours: number }) => client.request<ListResponse<MetricItem>>(`/api/dashboard/metric-history${query(params)}`),
-  alerts: (params: { instance_id?: string; active_only?: boolean; limit?: number } = {}) => client.request<ListResponse<AlertItem>>(`/api/dashboard/alerts${query(params)}`),
+  alerts: (params: { instance_id?: string; status?: string; severity?: string; active_only?: boolean; limit?: number; offset?: number } = {}) => client.request<ListResponse<AlertItem>>(`/api/dashboard/alerts${query(params)}`),
   alertEvents: (id: string, limit = 100) => client.request<ListResponse<AlertEvent>>(`/api/dashboard/alerts/${encodeURIComponent(id)}/events${query({ limit })}`),
   alertAction: (input: AlertActionInput) => client.request<DashboardOKResponse>('/api/dashboard/alerts/action', { method: 'POST', body: JSON.stringify(input) }),
   channelSnapshots: (params: { instance_id?: string; latest_only?: boolean; limit?: number } = {}) => client.request<ListResponse<ChannelSnapshot>>(`/api/dashboard/channel-snapshots${query(params)}`),
@@ -40,4 +49,14 @@ export const dashboardApi = (client: ApiClient) => ({
   healthChecks: (params: { instance_id?: string; limit?: number } = {}) => client.request<ListResponse<HealthCheckItem>>(`/api/dashboard/health-checks${query(params)}`),
   dockerStatuses: (params: { instance_id?: string; limit?: number } = {}) => client.request<ListResponse<DockerStatusItem>>(`/api/dashboard/docker-statuses${query(params)}`),
   usage: (hours: number) => client.request<ListResponse<UsageItem>>(`/api/dashboard/usage${query({ hours })}`),
+  notificationChannels: () => client.request<ListResponse<NotificationChannelItem>>('/api/dashboard/notification-channels'),
+  saveNotificationChannel: (input: NotificationChannelInput) => client.request<ListResponse<NotificationChannelItem>>('/api/dashboard/notification-channels', { method: 'POST', body: JSON.stringify(input) }),
+  notificationDeliveries: (params: { alert_id?: string; channel_id?: string; status?: string; limit?: number; offset?: number } = {}) => client.request<ListResponse<NotificationDeliveryItem>>(`/api/dashboard/notification-deliveries${query(params)}`),
+  resendDelivery: (id: string) => client.request<DashboardOKResponse>(`/api/dashboard/notification-deliveries/${encodeURIComponent(id)}/resend`, { method: 'POST' }),
+  createInstance: (input: { instance_id: string; name: string }) => client.request<InstanceCreateResponse>('/api/dashboard/instances', { method: 'POST', body: JSON.stringify(input) }),
+  updateInstance: (id: string, input: InstanceUpdateInput) => client.request<InstanceItem>(`/api/dashboard/instances/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(input) }),
+  rotateInstanceToken: (id: string) => client.request<InstanceTokenResponse>(`/api/dashboard/instances/${encodeURIComponent(id)}/rotate-token`, { method: 'POST' }),
+  createChannelCommand: (channelID: number, input: ChannelCommandInput) => client.request<ChannelCommandItem>(`/api/dashboard/channels/${channelID}/commands`, { method: 'POST', body: JSON.stringify(input) }),
+  channelCommands: (params: { instance_id?: string; status?: string; limit?: number; offset?: number } = {}) => client.request<ListResponse<ChannelCommandItem>>(`/api/dashboard/channel-commands${query(params)}`),
+  operationAudits: (params: { instance_id?: string; limit?: number; offset?: number } = {}) => client.request<ListResponse<OperationAuditItem>>(`/api/dashboard/operation-audits${query(params)}`),
 })

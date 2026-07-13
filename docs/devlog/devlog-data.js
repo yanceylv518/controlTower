@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-13",
+    type: "release",
+    version: "M2-B3",
+    title: "Web 操作页与危险操作保护完成",
+    summary: "新增告警中心、通知设置、实例管理、操作审计及渠道命令交互；落实告警时间线、通知重发、Token 一次性展示、停用与轮换确认、线上渠道命令警告和确认勾选。",
+    docs: ["docs/codex-task-m2-b3-action-pages.md", "docs/development-progress.md"],
+    commits: []
+  },
+  {
+    date: "2026-07-13",
     type: "review",
     version: "",
     title: "验收 M2-B2（通用组件 + 六只读页）：通过",

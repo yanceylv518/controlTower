@@ -10,4 +10,4 @@ pnpm build
 
 The development server proxies `/api` to `http://127.0.0.1:8080`. Production assets are built to `web/dist/desktop` and served by the Go Server under `/next/`.
 
-Routes: `/` overview, `/customers`, `/channels`, `/models`, `/samples`, `/runtime`, and `/usage`. All authenticated pages share the global instance filter; usage remains an all-instance aggregate because its frozen contract has no instance parameter.
+Routes: `/` overview, `/customers`, `/channels`, `/models`, `/samples`, `/runtime`, `/usage`, `/alerts`, `/notifications`, `/instances`, and `/audits`. All authenticated pages share the global instance filter where the frozen contract supports it.
