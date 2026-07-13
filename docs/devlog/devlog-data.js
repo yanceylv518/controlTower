@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-13",
+    type: "review",
+    version: "",
+    title: "M1-B2 返工验收：通过，review 补三组测试",
+    summary: "R1 多实例过滤（metrics/usage/overview 补齐，runtime 原生支持）、R2 网关五场景测试（含解析前拒绝断言）、R3 snake_case DTO + agents 概要、R4 认证→解析→实例匹配三段式重构、R5 错误返回与停用实例 409——全部到位。review 补齐：两实例互不串（metrics/agents/server-metrics）、DTO 字段名断言、mux 实例路由断言。24 包全绿。M1-B2 关闭。",
+    docs: ["docs/codex-task-m1-b2-rework.md"],
+    commits: ["6de2fff"]
+  },
+  {
+    date: "2026-07-13",
     type: "bugfix",
     version: "M1-B2",
     title: "M1-B2 验收返工：过滤、DTO 与鉴权顺序",

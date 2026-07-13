@@ -117,3 +117,24 @@ func TestMuxRegistersAuthRoutes(t *testing.T) {
 		t.Fatalf("auth login route missing: %d", response.Code)
 	}
 }
+
+func TestMuxRegistersInstanceRoutes(t *testing.T) {
+	mux := NewMux(Options{AgentToken: "agent", DashboardToken: "dash", Store: ingest.NewMemoryStore()})
+	for _, tc := range []struct{ method, path string }{
+		{http.MethodGet, "/api/dashboard/instances"},
+		{http.MethodPost, "/api/dashboard/instances"},
+		{http.MethodPut, "/api/dashboard/instances/inst-x"},
+		{http.MethodPost, "/api/dashboard/instances/inst-x/rotate-token"},
+	} {
+		request := httptest.NewRequest(tc.method, tc.path, nil)
+		request.Header.Set("Authorization", "Bearer dash")
+		response := httptest.NewRecorder()
+		mux.ServeHTTP(response, request)
+		if response.Code == http.StatusNotFound && tc.path == "/api/dashboard/instances" {
+			t.Fatalf("route missing: %s %s -> %d", tc.method, tc.path, response.Code)
+		}
+		if response.Code == http.StatusMethodNotAllowed && tc.method == http.MethodGet {
+			t.Fatalf("method wiring wrong: %s %s", tc.method, tc.path)
+		}
+	}
+}
