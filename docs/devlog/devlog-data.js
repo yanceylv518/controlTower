@@ -2,6 +2,15 @@
 // type: release(发版) | bugfix(缺陷修复) | incident(生产事故) | review(代码评审) | decision(方案决策)
 window.DEVLOG = [
   {
+    date: "2026-07-13",
+    type: "review",
+    version: "",
+    title: "验收 v2.0-B1（部署编排 + 发布流水线）：通过",
+    summary: "Dockerfile 三阶段布局精确满足默认相对路径、非 root 1001 运行；Compose MySQL 显式钉 utf8mb4_unicode_ci（M1 事故的部署层保险）+ healthcheck 依赖链 + 日志上限；package.sh 本地/CI 共用；发布演练真实完成——v2.0.0-rc1 Release 挂出 3 个 tar.gz + SHA256SUMS，GHCR 镜像推送成功，release workflow 1m33s 绿。Codex 本机还实测了 compose up 全链路（healthz/登录页/uid 1001）。业务代码仅 agentVersion const→var。下一步 v2.0-B2 生产上线。",
+    docs: ["docs/codex-task-v2-b1-deploy.md"],
+    commits: ["b045519"]
+  },
+  {
     date: "2026-07-14",
     type: "release",
     version: "v2.0-B1",
