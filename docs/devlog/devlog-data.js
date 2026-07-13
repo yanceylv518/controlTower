@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-13",
+    type: "review",
+    version: "",
+    title: "验收 M0-lite（CI 质量门 + Makefile）：通过",
+    summary: "Makefile 四目标与 ci.yml 完全符合规格（1.24.x + 缓存 + 并发取消，只做质量门不传产物）；本地 make test/build 通过，GitHub Actions 已真实跑绿两次（57s 首跑 / 16s 缓存跑）。从此每次 push 自动跑 vet + 23 包测试 + 双端构建，M1 起的批次验收多一道机器信号。",
+    docs: ["docs/codex-task-m0-lite-ci.md"],
+    commits: ["59529cb"]
+  },
+  {
+    date: "2026-07-13",
     type: "feature",
     version: "M0-lite",
     title: "GitHub Actions 质量门与 Makefile",
