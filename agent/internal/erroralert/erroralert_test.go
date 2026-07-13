@@ -1,11 +1,14 @@
 package erroralert
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -18,6 +21,111 @@ type capture struct {
 	mu       sync.Mutex
 	errcode  string
 	contents []string
+}
+
+func TestSlowRuleTriggersRearmsAndSeparatesStreaming(t *testing.T) {
+	var mu sync.Mutex
+	var messages []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Text struct {
+				Content string `json:"content"`
+			} `json:"text"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		mu.Lock()
+		messages = append(messages, body.Text.Content)
+		mu.Unlock()
+		_, _ = w.Write([]byte(`{"errcode":0}`))
+	}))
+	defer server.Close()
+	n := New(server.URL, "inst-a", 10, 3, nil).WithSlowRule(120, 10, 3, 300)
+	events := make([]logcollector.Event, 10)
+	for i := range events {
+		events[i] = logcollector.Event{ChannelID: 1, CreatedAt: time.Now(), UseTime: 1}
+	}
+	for i := 0; i < 3; i++ {
+		events[i].UseTime = 150
+	}
+	n.Process(context.Background(), events)
+	n.Process(context.Background(), []logcollector.Event{{ChannelID: 1, CreatedAt: time.Now(), UseTime: 150}})
+	mu.Lock()
+	if len(messages) != 1 || !strings.Contains(messages[0], "渠道慢返回激增") {
+		t.Fatalf("messages=%v", messages)
+	}
+	mu.Unlock()
+	fast := make([]logcollector.Event, 8)
+	for i := range fast {
+		fast[i] = logcollector.Event{ChannelID: 1, CreatedAt: time.Now(), UseTime: 1}
+	}
+	n.Process(context.Background(), fast)
+	n.Process(context.Background(), []logcollector.Event{{ChannelID: 1, CreatedAt: time.Now(), UseTime: 150}, {ChannelID: 1, CreatedAt: time.Now(), UseTime: 150}, {ChannelID: 1, CreatedAt: time.Now(), UseTime: 150}})
+	mu.Lock()
+	if len(messages) != 2 {
+		t.Fatalf("want rearmed second alert, got %d", len(messages))
+	}
+	mu.Unlock()
+	n2 := New(server.URL, "inst-a", 10, 3, nil).WithSlowRule(120, 10, 1, 300)
+	n2.Process(context.Background(), []logcollector.Event{{ChannelID: 2, CreatedAt: time.Now(), UseTime: 150, IsStream: true}})
+	mu.Lock()
+	before := len(messages)
+	mu.Unlock()
+	if before != 2 {
+		t.Fatalf("stream below threshold alerted")
+	}
+	n2.WithSlowRule(120, 10, 1, 100).Process(context.Background(), []logcollector.Event{{ChannelID: 2, CreatedAt: time.Now(), UseTime: 150, IsStream: true}})
+	mu.Lock()
+	if len(messages) != 3 {
+		t.Fatalf("stream above threshold did not alert")
+	}
+	mu.Unlock()
+}
+
+func TestEpisodeEventLogRecordsTransitions(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{"errcode":0}`)) }))
+	defer server.Close()
+	path := filepath.Join(t.TempDir(), "alert-events.jsonl")
+	now := time.Now()
+	n := New(server.URL, "inst-a", 2, 1, nil).WithRemindInterval(time.Hour).WithEventLog(path)
+	n.now = func() time.Time { return now }
+	n.Process(context.Background(), []logcollector.Event{{ChannelID: 7, LogType: "error", CreatedAt: now}})
+	now = now.Add(61 * time.Minute)
+	n.Process(context.Background(), []logcollector.Event{{ChannelID: 7, LogType: "error", CreatedAt: now}})
+	n.Process(context.Background(), []logcollector.Event{{ChannelID: 7, CreatedAt: now}, {ChannelID: 7, CreatedAt: now}})
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{`"kind":"alert"`, `"kind":"remind"`, `"kind":"rearm"`, `"rule":"error"`} {
+		if !bytes.Contains(data, []byte(kind)) {
+			t.Fatalf("missing %s in %s", kind, data)
+		}
+	}
+}
+
+func TestEventLogRotatesAndFailsSafe(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "events.jsonl")
+	if err := os.WriteFile(path, bytes.Repeat([]byte("x"), int(eventLogMaxBytes)+1), 0600); err != nil {
+		t.Fatal(err)
+	}
+	logger := newEventLogger(path, nil)
+	logger.logf = func(string, ...any) {}
+	logger.append([]EventRecord{{Time: time.Now(), Dimension: "channel:1", Rule: "slow", Kind: "alert", WindowCount: 3, Threshold: 3}})
+	if _, err := os.Stat(path + ".1"); err != nil {
+		t.Fatalf("rotated file missing: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || !bytes.Contains(data, []byte(`"rule":"slow"`)) {
+		t.Fatalf("new event log invalid: %v %s", err, data)
+	}
+	failCount := 0
+	bad := newEventLogger(filepath.Join(dir, "missing", "events.jsonl"), func(string, ...any) { failCount++ })
+	bad.append([]EventRecord{{Time: time.Now(), Kind: "alert"}})
+	bad.append([]EventRecord{{Time: time.Now(), Kind: "alert"}})
+	if failCount != 1 || !bad.failed {
+		t.Fatalf("failure must log once: count=%d failed=%v", failCount, bad.failed)
+	}
 }
 
 func (c *capture) server() *httptest.Server {

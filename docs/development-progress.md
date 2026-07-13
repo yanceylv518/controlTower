@@ -92,6 +92,7 @@
 | 通知设置页接入 | 已完成 | `web/index.html`、`web/assets/app.js` | 设置页支持 Webhook 表单、通知渠道列表和发送记录列表，展示重试次数和下次重试 |
 | recent_errors 告警规则 + 钉钉通知（Server 侧） | 已完成 | `server/internal/dashboard/recent_errors.go`、`notification_handler.go`、`notification_runner.go`、`mysqlstore/notification_store.go`、`ingest/memory_store.go`、`web/**` | 规则：任一渠道/任一客户最近 10 条请求中错误 ≥3（≥5 升级 critical）触发告警；通知渠道支持 `channel_type=dingtalk`（msgtype=text，校验 errcode）；告警恢复后再次触发可重新通知（sent 投递随告警 resolved 过期）；此路径需 Agent `CT_LOG_EVENT_MODE=full_debug`；`go test ./server/...` 含链路 E2E（规则→告警→钉钉→恢复→再通知）通过 |
 | 临时版：Agent 端错误告警直发钉钉 | 已完成 | `agent/internal/erroralert/**`、`agent/internal/config/**`、`agent/cmd/control-tower-agent/main.go`、`deploy/agent.*.example` | 同一规则在 Agent 端直接对源库采集到的事件评估（任意 log event mode 均可用，不依赖 Server）；配置 `CT_DINGTALK_WEBHOOK_URL` 启用，`CT_ALERT_ERROR_WINDOW`/`CT_ALERT_ERROR_THRESHOLD` 可调（默认 10/3）；同一维度一个 episode 只发一次，恢复后再触发可再发，发送失败下个 pass 重试；不配 `CT_SERVER_URL` 时进入独立告警模式（只采集+告警，不心跳不上报）；独立模式首次启动自动从 logs 表当前位置起步（不回放历史，防旧事件刷屏）；`deploy/install-agent.sh` 一键安装（交互问 DSN+webhook，自动装二进制/配置/systemd/preflight/启动）；`go test ./agent/...` 通过（含窗口/去重/恢复重发/errcode 失败重试/游标自动定位用例） |
+| v1.1 B1：慢返回规则与 episode 事件持久化 | 已完成 | `agent/internal/erroralert/**`、`agent/internal/config/**`、`agent/cmd/control-tower-agent/main.go`、Agent 配置样例 | 错误与慢返回独立窗口/episode/提醒/重臂；流式单独阈值；alert/remind/rearm 写入 5 MiB 轮转 JSONL，写失败 fail-safe；`go vet ./...`、`go test ./...` |
 
 ## Agent 采集与上报修复计划
 

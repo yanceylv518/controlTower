@@ -41,6 +41,11 @@ type Config struct {
 	AlertErrorThreshold            int
 	AlertWindowMaxAgeMinutes       int
 	AlertRemindMinutes             int
+	AlertSlowEnabled               bool
+	AlertSlowSeconds               float64
+	AlertSlowWindow                int
+	AlertSlowThreshold             int
+	AlertSlowStreamSeconds         float64
 }
 
 func Load() (Config, error) {
@@ -103,6 +108,11 @@ func LoadFromMap(values map[string]string) (Config, error) {
 		AlertErrorThreshold:            intOrDefault(values, "CT_ALERT_ERROR_THRESHOLD", 3),
 		AlertWindowMaxAgeMinutes:       intOrDefault(values, "CT_ALERT_WINDOW_MAX_AGE_MINUTES", 60),
 		AlertRemindMinutes:             intOrDefault(values, "CT_ALERT_REMIND_MINUTES", 60),
+		AlertSlowEnabled:               boolOrDefault(values, "CT_ALERT_SLOW_ENABLED", true),
+		AlertSlowSeconds:               floatOrDefault(values, "CT_ALERT_SLOW_SECONDS", 120),
+		AlertSlowWindow:                intOrDefault(values, "CT_ALERT_SLOW_WINDOW", 10),
+		AlertSlowThreshold:             intOrDefault(values, "CT_ALERT_SLOW_THRESHOLD", 3),
+		AlertSlowStreamSeconds:         floatOrDefault(values, "CT_ALERT_SLOW_STREAM_SECONDS", 300),
 	}
 
 	if cfg.AgentID == "" || cfg.InstanceID == "" || cfg.LogDSN == "" {
@@ -130,6 +140,18 @@ func LoadFromMap(values map[string]string) (Config, error) {
 	}
 	if cfg.AlertRemindMinutes < 0 {
 		return Config{}, errors.New("CT_ALERT_REMIND_MINUTES must be >= 0 (0 disables reminders)")
+	}
+	if cfg.AlertSlowSeconds <= 0 {
+		return Config{}, errors.New("CT_ALERT_SLOW_SECONDS must be > 0")
+	}
+	if cfg.AlertSlowWindow < 1 || cfg.AlertSlowWindow > 1000 {
+		return Config{}, errors.New("CT_ALERT_SLOW_WINDOW must be between 1 and 1000")
+	}
+	if cfg.AlertSlowThreshold < 1 || cfg.AlertSlowThreshold > cfg.AlertSlowWindow {
+		return Config{}, errors.New("CT_ALERT_SLOW_THRESHOLD must be between 1 and CT_ALERT_SLOW_WINDOW")
+	}
+	if cfg.AlertSlowStreamSeconds < 0 {
+		return Config{}, errors.New("CT_ALERT_SLOW_STREAM_SECONDS must be >= 0 (0 excludes streams)")
 	}
 	if cfg.LogPollIntervalSeconds < 1 || cfg.LogPollIntervalSeconds > 3600 {
 		return Config{}, errors.New("CT_LOG_POLL_INTERVAL_SECONDS must be between 1 and 3600")
@@ -194,6 +216,11 @@ func envMap() map[string]string {
 		"CT_ALERT_ERROR_THRESHOLD",
 		"CT_ALERT_WINDOW_MAX_AGE_MINUTES",
 		"CT_ALERT_REMIND_MINUTES",
+		"CT_ALERT_SLOW_ENABLED",
+		"CT_ALERT_SLOW_SECONDS",
+		"CT_ALERT_SLOW_WINDOW",
+		"CT_ALERT_SLOW_THRESHOLD",
+		"CT_ALERT_SLOW_STREAM_SECONDS",
 	}
 	values := make(map[string]string, len(keys))
 	for _, key := range keys {

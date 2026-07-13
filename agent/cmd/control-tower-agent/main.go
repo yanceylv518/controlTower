@@ -95,7 +95,11 @@ func run() error {
 	if cfg.DingTalkWebhookURL != "" {
 		alertNotifier = erroralert.New(cfg.DingTalkWebhookURL, cfg.InstanceID, cfg.AlertErrorWindow, cfg.AlertErrorThreshold, log.Printf).
 			WithWindowMaxAge(time.Duration(cfg.AlertWindowMaxAgeMinutes) * time.Minute).
-			WithRemindInterval(time.Duration(cfg.AlertRemindMinutes) * time.Minute)
+			WithRemindInterval(time.Duration(cfg.AlertRemindMinutes) * time.Minute).
+			WithEventLog(filepath.Join(cfg.DataDir, "alert-events.jsonl"))
+		if cfg.AlertSlowEnabled {
+			alertNotifier.WithSlowRule(cfg.AlertSlowSeconds, cfg.AlertSlowWindow, cfg.AlertSlowThreshold, cfg.AlertSlowStreamSeconds)
+		}
 		nameRefresher = newChannelNameRefresher()
 	}
 

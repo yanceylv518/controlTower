@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-13",
+    type: "release",
+    version: "v1.1 B1",
+    title: "慢返回窗口规则与 episode 事件持久化",
+    summary: "Agent 新增与错误告警相互独立的慢返回窗口：非流式与流式分别配置阈值，支持触发、持续提醒、重臂和发送失败重试；全部 episode 状态变迁写入 alert-events.jsonl，5 MiB 轮转保留一个旧文件，写入失败不影响告警链路。",
+    docs: ["docs/codex-task-v1.1-b1.md", "docs/development-progress.md", "agent/README.md"],
+    commits: []
+  },
+  {
+    date: "2026-07-13",
     type: "decision",
     version: "",
     title: "Codex 批次执行计划定稿：v1.1 四批次 + M1 四批次",

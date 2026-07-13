@@ -25,15 +25,21 @@ const (
 // DingTalk group message when a dimension reaches the error threshold within
 // its window. State lives in memory only: a restart starts with empty windows.
 type Notifier struct {
-	webhookURL string
-	instanceID string
-	window     int
-	threshold  int
-	client         *http.Client
-	now            func() time.Time
-	logf           func(format string, args ...any)
-	windowMaxAge   time.Duration // 0 = no time decay
-	remindInterval time.Duration // 0 = no reminders
+	webhookURL        string
+	instanceID        string
+	window            int
+	threshold         int
+	client            *http.Client
+	now               func() time.Time
+	logf              func(format string, args ...any)
+	windowMaxAge      time.Duration // 0 = no time decay
+	remindInterval    time.Duration // 0 = no reminders
+	slowEnabled       bool
+	slowSeconds       float64
+	slowWindow        int
+	slowThreshold     int
+	slowStreamSeconds float64
+	eventLog          *eventLogger
 
 	mu           sync.Mutex
 	states       map[string]*dimensionState
@@ -45,27 +51,45 @@ type dimensionState struct {
 	label            string
 	outcomes         []outcome // newest last, capped at window
 	lastErrorSummary string
-	alerted          bool
-	episodeStartAt   time.Time
-	episodeErrors    int
-	lastRemindAt     time.Time
+	errorRule        ruleState
+	slowRule         ruleState
+}
+
+type ruleState struct {
+	alerted        bool
+	episodeStartAt time.Time
+	episodeTotal   int
+	lastRemindAt   time.Time
 }
 
 type outcome struct {
 	isError bool
+	isSlow  bool
 	at      time.Time
+}
+
+// WithSlowRule enables the independent slow-return sliding-window rule.
+func (n *Notifier) WithSlowRule(seconds float64, window int, threshold int, streamSeconds float64) *Notifier {
+	n.slowEnabled, n.slowSeconds, n.slowWindow, n.slowThreshold, n.slowStreamSeconds = true, seconds, window, threshold, streamSeconds
+	return n
+}
+
+// WithEventLog persists episode transitions as rotating JSON lines.
+func (n *Notifier) WithEventLog(path string) *Notifier {
+	n.eventLog = newEventLogger(path, n.logf)
+	return n
 }
 
 // ProcessStats describes one alert evaluation pass without exposing log
 // contents or other request-sensitive fields.
 type ProcessStats struct {
-	EventCount          int
-	ErrorCount          int
-	ChannelDimensions   int
-	UserDimensions      int
-	AlertsTriggered     int
-	AlertsSent          int
-	AlertsSendFailures  int
+	EventCount         int
+	ErrorCount         int
+	ChannelDimensions  int
+	UserDimensions     int
+	AlertsTriggered    int
+	AlertsSent         int
+	AlertsSendFailures int
 }
 
 func New(webhookURL string, instanceID string, window int, threshold int, logf func(format string, args ...any)) *Notifier {
@@ -139,8 +163,11 @@ func (n *Notifier) Process(ctx context.Context, events []logcollector.Event) Pro
 			n.observeLocked(key, "客户错误激增", label, event)
 		}
 	}
-	pending := n.evaluateLocked()
+	pending, records := n.evaluateLocked()
 	n.mu.Unlock()
+	if n.eventLog != nil {
+		n.eventLog.append(records)
+	}
 	stats.ChannelDimensions = len(channelDimensions)
 	stats.UserDimensions = len(userDimensions)
 	stats.AlertsTriggered = len(pending)
@@ -151,11 +178,12 @@ func (n *Notifier) Process(ctx context.Context, events []logcollector.Event) Pro
 			n.logf("control tower dingtalk alert failed: %v", err)
 			n.mu.Lock()
 			if state, ok := n.states[message.key]; ok {
+				rule := message.ruleState(state)
 				switch message.kind {
 				case "remind":
-					state.lastRemindAt = message.prevRemindAt
+					rule.lastRemindAt = message.prevRemindAt
 				default:
-					state.alerted = false
+					rule.alerted = false
 				}
 			}
 			n.mu.Unlock()
@@ -200,17 +228,25 @@ func (n *Notifier) observeLocked(key string, title string, label string, event l
 	if at.IsZero() || at.Unix() <= 0 {
 		at = n.now()
 	}
-	state.outcomes = append(state.outcomes, outcome{isError: isError, at: at})
-	if len(state.outcomes) > n.window {
-		state.outcomes = state.outcomes[len(state.outcomes)-n.window:]
+	isSlow := n.slowEnabled && ((!event.IsStream && event.UseTime >= n.slowSeconds) || (event.IsStream && n.slowStreamSeconds > 0 && event.UseTime >= n.slowStreamSeconds))
+	state.outcomes = append(state.outcomes, outcome{isError: isError, isSlow: isSlow, at: at})
+	maxWindow := n.window
+	if n.slowEnabled && n.slowWindow > maxWindow {
+		maxWindow = n.slowWindow
+	}
+	if len(state.outcomes) > maxWindow {
+		state.outcomes = state.outcomes[len(state.outcomes)-maxWindow:]
 	}
 	if isError {
-		if state.alerted {
-			state.episodeErrors++
+		if state.errorRule.alerted {
+			state.errorRule.episodeTotal++
 		}
 		if event.ErrorSummary != "" {
 			state.lastErrorSummary = truncate(event.ErrorSummary, 120)
 		}
+	}
+	if isSlow && state.slowRule.alerted {
+		state.slowRule.episodeTotal++
 	}
 }
 
@@ -218,12 +254,21 @@ type pendingMessage struct {
 	key          string
 	content      string
 	kind         string // "alert" or "remind"
+	rule         string
 	prevRemindAt time.Time
 }
 
-func (n *Notifier) evaluateLocked() []pendingMessage {
+func (m pendingMessage) ruleState(state *dimensionState) *ruleState {
+	if m.rule == "slow" {
+		return &state.slowRule
+	}
+	return &state.errorRule
+}
+
+func (n *Notifier) evaluateLocked() ([]pendingMessage, []EventRecord) {
 	now := n.now()
 	var pending []pendingMessage
+	var records []EventRecord
 	for key, state := range n.states {
 		if n.windowMaxAge > 0 {
 			cutoff := now.Add(-n.windowMaxAge)
@@ -235,44 +280,68 @@ func (n *Notifier) evaluateLocked() []pendingMessage {
 			}
 			state.outcomes = kept
 		}
-		errors := 0
-		for _, item := range state.outcomes {
-			if item.isError {
-				errors++
-			}
+		errorItems := tail(state.outcomes, n.window)
+		errors := countMatches(errorItems, func(o outcome) bool { return o.isError })
+		p, r := n.evaluateRuleLocked(key, state, "error", &state.errorRule, errors, len(errorItems), n.threshold, now)
+		pending, records = append(pending, p...), append(records, r...)
+		if n.slowEnabled {
+			slowItems := tail(state.outcomes, n.slowWindow)
+			slows := countMatches(slowItems, func(o outcome) bool { return o.isSlow })
+			p, r = n.evaluateRuleLocked(key, state, "slow", &state.slowRule, slows, len(slowItems), n.slowThreshold, now)
+			pending, records = append(pending, p...), append(records, r...)
 		}
-		if errors < n.threshold {
-			state.alerted = false
-			state.episodeErrors = 0
-			state.episodeStartAt = time.Time{}
-			state.lastRemindAt = time.Time{}
-			if len(state.outcomes) == 0 {
-				delete(n.states, key)
-			}
-			continue
-		}
-		if !state.alerted {
-			state.alerted = true
-			state.episodeStartAt = now
-			state.episodeErrors = errors
-			state.lastRemindAt = now
-			n.logf("control tower alert trigger: dimension=%s kind=alert window=%d errors=%d", key, len(state.outcomes), errors)
-			pending = append(pending, pendingMessage{key: key, kind: "alert", content: n.alertContent(state, errors, now)})
-			continue
-		}
-		if n.remindInterval > 0 && now.Sub(state.lastRemindAt) >= n.remindInterval {
-			prev := state.lastRemindAt
-			state.lastRemindAt = now
-			n.logf("control tower alert trigger: dimension=%s kind=remind window=%d errors=%d episode_errors=%d", key, len(state.outcomes), errors, state.episodeErrors)
-			pending = append(pending, pendingMessage{key: key, kind: "remind", prevRemindAt: prev, content: n.remindContent(state, errors, now)})
+		if len(state.outcomes) == 0 && !state.errorRule.alerted && !state.slowRule.alerted {
+			delete(n.states, key)
 		}
 	}
-	return pending
+	return pending, records
 }
 
-func (n *Notifier) alertContent(state *dimensionState, errors int, now time.Time) string {
+func (n *Notifier) evaluateRuleLocked(key string, state *dimensionState, rule string, rs *ruleState, matches, windowCount, threshold int, now time.Time) ([]pendingMessage, []EventRecord) {
+	if matches < threshold {
+		if rs.alerted {
+			record := n.eventRecord(now, key, state.label, rule, "rearm", matches, threshold, rs)
+			*rs = ruleState{}
+			return nil, []EventRecord{record}
+		}
+		return nil, nil
+	}
+	if !rs.alerted {
+		rs.alerted, rs.episodeStartAt, rs.episodeTotal, rs.lastRemindAt = true, now, matches, now
+		n.logf("control tower alert trigger: dimension=%s rule=%s kind=alert window=%d matches=%d", key, rule, windowCount, matches)
+		return []pendingMessage{{key: key, rule: rule, kind: "alert", content: n.alertContent(state, rule, matches, windowCount, now)}}, []EventRecord{n.eventRecord(now, key, state.label, rule, "alert", matches, threshold, rs)}
+	}
+	if n.remindInterval > 0 && now.Sub(rs.lastRemindAt) >= n.remindInterval {
+		prev := rs.lastRemindAt
+		rs.lastRemindAt = now
+		return []pendingMessage{{key: key, rule: rule, kind: "remind", prevRemindAt: prev, content: n.remindContent(state, rule, matches, windowCount, rs, now)}}, []EventRecord{n.eventRecord(now, key, state.label, rule, "remind", matches, threshold, rs)}
+	}
+	return nil, nil
+}
+
+func tail(items []outcome, size int) []outcome {
+	if len(items) > size {
+		return items[len(items)-size:]
+	}
+	return items
+}
+func countMatches(items []outcome, match func(outcome) bool) int {
+	n := 0
+	for _, item := range items {
+		if match(item) {
+			n++
+		}
+	}
+	return n
+}
+
+func (n *Notifier) alertContent(state *dimensionState, rule string, matches, windowCount int, now time.Time) string {
+	if rule == "slow" {
+		title := strings.Replace(state.title, "错误", "慢返回", 1)
+		return fmt.Sprintf("[\u544a\u8b66] 【Control Tower 告警】%s\n实例: %s\n%s 最近 %d 条请求中 %d 条耗时超过 %g 秒\n时间: %s", title, n.instanceID, state.label, windowCount, matches, n.slowSecondsForLabel(), now.Local().Format("2006-01-02 15:04:05"))
+	}
 	content := fmt.Sprintf("[\u544a\u8b66] 【Control Tower 告警】%s\n实例: %s\n%s 最近 %d 条请求中 %d 条失败",
-		state.title, n.instanceID, state.label, len(state.outcomes), errors)
+		state.title, n.instanceID, state.label, windowCount, matches)
 	if state.lastErrorSummary != "" {
 		content += "\n最新错误: " + state.lastErrorSummary
 	}
@@ -280,15 +349,28 @@ func (n *Notifier) alertContent(state *dimensionState, errors int, now time.Time
 	return content
 }
 
-func (n *Notifier) remindContent(state *dimensionState, errors int, now time.Time) string {
-	title := strings.TrimSuffix(state.title, "激增") + "持续"
+func (n *Notifier) remindContent(state *dimensionState, rule string, matches, windowCount int, rs *ruleState, now time.Time) string {
+	title := state.title
+	if rule == "slow" {
+		title = strings.Replace(title, "错误", "慢返回", 1)
+	}
+	title = strings.TrimSuffix(title, "激增") + "持续"
+	if rule == "slow" {
+		return fmt.Sprintf("[\u544a\u8b66] 【Control Tower 告警】%s\n实例: %s\n%s 自 %s 起持续异常，累计 %d 条慢返回，最近 %d 条请求中 %d 条耗时超过 %g 秒\n时间: %s", title, n.instanceID, state.label, rs.episodeStartAt.Local().Format("01-02 15:04"), rs.episodeTotal, windowCount, matches, n.slowSecondsForLabel(), now.Local().Format("2006-01-02 15:04:05"))
+	}
 	content := fmt.Sprintf("[\u544a\u8b66] 【Control Tower 告警】%s\n实例: %s\n%s 自 %s 起持续异常，累计 %d 条错误，最近 %d 条请求中 %d 条失败",
-		title, n.instanceID, state.label, state.episodeStartAt.Local().Format("01-02 15:04"), state.episodeErrors, len(state.outcomes), errors)
+		title, n.instanceID, state.label, rs.episodeStartAt.Local().Format("01-02 15:04"), rs.episodeTotal, windowCount, matches)
 	if state.lastErrorSummary != "" {
 		content += "\n最新错误: " + state.lastErrorSummary
 	}
 	content += "\n时间: " + now.Local().Format("2006-01-02 15:04:05")
 	return content
+}
+
+func (n *Notifier) slowSecondsForLabel() float64 { return n.slowSeconds }
+
+func (n *Notifier) eventRecord(now time.Time, key, label, rule, kind string, matches, threshold int, rs *ruleState) EventRecord {
+	return EventRecord{Time: now, Dimension: key, Label: label, Rule: rule, Kind: kind, WindowCount: matches, Threshold: threshold, EpisodeStart: rs.episodeStartAt, EpisodeTotal: rs.episodeTotal}
 }
 
 func (n *Notifier) send(ctx context.Context, content string) error {
