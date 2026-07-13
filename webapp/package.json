@@ -1,0 +1,10 @@
+{
+  "name": "control-tower-webapp",
+  "private": true,
+  "packageManager": "pnpm@11.7.0",
+  "scripts": {
+    "dev": "pnpm --filter @ct/desktop dev",
+    "build": "pnpm --filter @ct/desktop build",
+    "typecheck": "pnpm --filter @ct/desktop typecheck"
+  }
+}

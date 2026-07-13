@@ -33,3 +33,6 @@ Web/H5, alerts, notification sending, controlled operations, and deployment hard
 
 - `make test` runs `go vet ./...` and the complete Go test suite.
 - `make build` cross-compiles Linux Agent binaries for amd64/arm64 and the Linux Server binary for amd64 into `dist/`.
+- `cd webapp && pnpm install` installs the Vue workspace dependencies.
+- `pnpm dev` starts the `/next/` desktop app with `/api` proxied to the Go Server.
+- `pnpm typecheck && pnpm build` validates and builds assets into `web/dist/desktop`.

@@ -18,6 +18,7 @@ type Options struct {
 	DashboardToken          string
 	Store                   Store
 	WebDir                  string
+	NextWebDir              string
 	AuthManager             *ctauth.Manager
 	AgentTokenPepper        string
 	NotificationMaxAttempts int
@@ -90,9 +91,42 @@ func NewMux(options Options) *http.ServeMux {
 	if options.WebDir == "" {
 		options.WebDir = "web"
 	}
+	if options.NextWebDir == "" {
+		options.NextWebDir = filepath.Join(options.WebDir, "dist", "desktop")
+	}
+	mux.HandleFunc("/next/", handleNextWeb(options.NextWebDir))
 	mux.Handle("/assets/", http.StripPrefix("/assets/", http.FileServer(http.Dir(filepath.Join(options.WebDir, "assets")))))
 	mux.HandleFunc("/", handleWeb(options.WebDir))
 	return mux
+}
+
+func handleNextWeb(webDir string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			_, _ = w.Write([]byte(`{"error":"method_not_allowed"}`))
+			return
+		}
+		indexPath := filepath.Join(webDir, "index.html")
+		if info, err := os.Stat(indexPath); err != nil || info.IsDir() {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"error":"webapp_not_built"}`))
+			return
+		}
+		path := filepath.Clean(strings.TrimPrefix(r.URL.Path, "/next/"))
+		if path == "." || path == "" {
+			path = "index.html"
+		}
+		fullPath := filepath.Join(webDir, path)
+		if relative, err := filepath.Rel(webDir, fullPath); err != nil || strings.HasPrefix(relative, "..") {
+			fullPath = indexPath
+		} else if info, err := os.Stat(fullPath); err != nil || info.IsDir() {
+			fullPath = indexPath
+		}
+		http.ServeFile(w, r, fullPath)
+	}
 }
 
 func handleHealthz(w http.ResponseWriter, r *http.Request) {

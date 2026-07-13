@@ -3,6 +3,9 @@ package httpapi
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,6 +13,43 @@ import (
 	"controltower/server/internal/ingest"
 	"controltower/server/internal/storage"
 )
+
+func TestNextWebReturnsServiceUnavailableWhenNotBuilt(t *testing.T) {
+	mux := NewMux(Options{AgentToken: "agent", DashboardToken: "dash", Store: newTestStore(), NextWebDir: filepath.Join(t.TempDir(), "missing")})
+	response := httptest.NewRecorder()
+	mux.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/next/", nil))
+	if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), "webapp_not_built") {
+		t.Fatalf("next missing status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestNextWebServesIndexAndSPAFallback(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("next-app"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mux := NewMux(Options{AgentToken: "agent", DashboardToken: "dash", Store: newTestStore(), NextWebDir: dir})
+	for _, path := range []string{"/next/", "/next/any/spa/route"} {
+		response := httptest.NewRecorder()
+		mux.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		if response.Code != http.StatusOK || response.Body.String() != "next-app" {
+			t.Fatalf("%s status=%d body=%q", path, response.Code, response.Body.String())
+		}
+	}
+}
+
+func TestNextWebDoesNotCaptureAPI(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("next-app"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mux := NewMux(Options{AgentToken: "agent", DashboardToken: "dash", Store: newTestStore(), NextWebDir: dir})
+	response := httptest.NewRecorder()
+	mux.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/dashboard/overview", nil))
+	if response.Code != http.StatusUnauthorized || strings.Contains(response.Body.String(), "next-app") {
+		t.Fatalf("api captured status=%d body=%s", response.Code, response.Body.String())
+	}
+}
 
 func TestNewMuxExposesHealthz(t *testing.T) {
 	mux := NewMux(Options{AgentToken: "agent-token", DashboardToken: "dashboard-token", Store: newTestStore()})
