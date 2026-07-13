@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-13",
+    type: "review",
+    version: "",
+    title: "验收 M2-B4（切换转正）：通过，M2 开发完成",
+    summary: "切换语义六条全部落实并有 mux 测试：SPA 接管 /、/next 301 兼容、深链 fallback、未构建 503 带构建提示、/api 与 /healthz 保护、旧静态页删除（-933 行，git ls-files 确认为零）。设置页改密强制重登、404/标题/favicon/空环境引导齐备。25 包全绿、CI 双 job 绿。服役自 P6 骨架的旧静态页正式退役。M2 四批开发全部完成，阶段点走查清单已生成（m2-stage-checklist.md），待用户浏览器走查。",
+    docs: ["docs/codex-task-m2-b4-cutover.md", "docs/m2-stage-checklist.md"],
+    commits: ["6aa9a39"]
+  },
+  {
+    date: "2026-07-13",
     type: "release",
     version: "M2-B4",
     title: "Vue 前端转正并完成 M2 收官",
