@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Control Tower 开发日志</title>
+<style>
+  :root {
+    --bg: #f4f6fa; --card: #ffffff; --ink: #1c2733; --muted: #66748a;
+    --line: #dfe5ee; --accent: #1769e0;
+    --c-release: #1769e0; --c-bugfix: #2e9e5b; --c-incident: #d64545;
+    --c-review: #8a5cd6; --c-decision: #c07f1f;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { font: 15px/1.65 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; background: var(--bg); color: var(--ink); }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 32px 20px 80px; }
+  header h1 { font-size: 26px; }
+  header p { color: var(--muted); margin-top: 4px; }
+  .filters { display: flex; flex-wrap: wrap; gap: 8px; margin: 22px 0 6px; }
+  .chip { border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 5px 14px; cursor: pointer; font-size: 13px; color: var(--muted); }
+  .chip.on { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  .count { color: var(--muted); font-size: 13px; margin: 6px 2px 18px; }
+  .timeline { position: relative; padding-left: 26px; }
+  .timeline::before { content: ""; position: absolute; left: 8px; top: 6px; bottom: 6px; width: 2px; background: var(--line); }
+  .entry { position: relative; margin-bottom: 18px; }
+  .entry::before { content: ""; position: absolute; left: -24px; top: 20px; width: 10px; height: 10px; border-radius: 50%; background: var(--dot, var(--accent)); border: 2px solid var(--bg); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; }
+  .meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .date { color: var(--muted); font-size: 13px; }
+  .tag { font-size: 12px; font-weight: 600; padding: 2px 10px; border-radius: 999px; color: #fff; }
+  .ver { font-size: 12px; font-weight: 700; color: var(--accent); background: #e8f0fd; border-radius: 6px; padding: 2px 8px; }
+  .card h2 { font-size: 16px; margin-bottom: 6px; }
+  .card p { color: #3d4a5c; font-size: 14px; }
+  .refs { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; }
+  .refs code { font-size: 12px; background: #f0f3f8; border: 1px solid var(--line); border-radius: 6px; padding: 2px 8px; color: var(--muted); }
+  .empty { color: var(--muted); padding: 40px 0; text-align: center; }
+  footer { margin-top: 36px; color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Control Tower 开发日志</h1>
+    <p>版本更替 · 缺陷修复 · 生产事故 · 代码评审 · 方案决策（数据：devlog-data.js，由 review 工作流维护）</p>
+  </header>
+  <div class="filters" id="filters"></div>
+  <div class="count" id="count"></div>
+  <div class="timeline" id="timeline"></div>
+  <footer>本页面为纯本地静态页，双击打开即可；详细内容见 docs/iteration-log.md 与各条目关联文档。</footer>
+</div>
+<script src="devlog-data.js"></script>
+<script>
+(function () {
+  var TYPES = {
+    release: ["发版", "var(--c-release)"],
+    bugfix: ["缺陷修复", "var(--c-bugfix)"],
+    incident: ["生产事故", "var(--c-incident)"],
+    review: ["代码评审", "var(--c-review)"],
+    decision: ["方案决策", "var(--c-decision)"]
+  };
+  var active = "all";
+  var data = (window.DEVLOG || []).slice().sort(function (a, b) {
+    return a.date === b.date ? 0 : (a.date < b.date ? 1 : -1);
+  });
+
+  function esc(value) {
+    return String(value == null ? "" : value).replace(/[&<>"']/g, function (ch) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch];
+    });
+  }
+
+  function renderFilters() {
+    var host = document.getElementById("filters");
+    var keys = ["all"].concat(Object.keys(TYPES));
+    host.innerHTML = keys.map(function (key) {
+      var label = key === "all" ? "全部" : TYPES[key][0];
+      var total = key === "all" ? data.length : data.filter(function (item) { return item.type === key; }).length;
+      return '<button class="chip' + (active === key ? " on" : "") + '" data-type="' + key + '">' + label + " " + total + "</button>";
+    }).join("");
+  }
+
+  function renderTimeline() {
+    var host = document.getElementById("timeline");
+    var rows = active === "all" ? data : data.filter(function (item) { return item.type === active; });
+    document.getElementById("count").textContent = rows.length + " 条记录";
+    if (!rows.length) { host.innerHTML = '<div class="empty">暂无记录</div>'; return; }
+    host.innerHTML = rows.map(function (item) {
+      var type = TYPES[item.type] || [item.type, "var(--accent)"];
+      var refs = (item.docs || []).map(function (doc) { return "<code>" + esc(doc) + "</code>"; })
+        .concat((item.commits || []).map(function (commit) { return "<code>" + esc(commit) + "</code>"; })).join("");
+      return '<div class="entry" style="--dot:' + type[1] + '"><div class="card">' +
+        '<div class="meta"><span class="tag" style="background:' + type[1] + '">' + esc(type[0]) + "</span>" +
+        (item.version ? '<span class="ver">' + esc(item.version) + "</span>" : "") +
+        '<span class="date">' + esc(item.date) + "</span></div>" +
+        "<h2>" + esc(item.title) + "</h2><p>" + esc(item.summary) + "</p>" +
+        (refs ? '<div class="refs">' + refs + "</div>" : "") + "</div></div>";
+    }).join("");
+  }
+
+  document.getElementById("filters").addEventListener("click", function (event) {
+    var chip = event.target.closest("[data-type]");
+    if (!chip) return;
+    active = chip.dataset.type;
+    renderFilters();
+    renderTimeline();
+  });
+
+  renderFilters();
+  renderTimeline();
+})();
+</script>
+</body>
+</html>
