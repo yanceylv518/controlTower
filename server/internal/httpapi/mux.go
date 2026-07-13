@@ -18,6 +18,7 @@ type Options struct {
 	DashboardToken          string
 	Store                   Store
 	WebDir                  string
+	WebAppDir               string
 	NextWebDir              string
 	AuthManager             *ctauth.Manager
 	AgentTokenPepper        string
@@ -88,19 +89,33 @@ func NewMux(options Options) *http.ServeMux {
 	mux.Handle("PUT /api/dashboard/instances/{id}", protect(http.HandlerFunc(instances.Update)))
 	mux.Handle("POST /api/dashboard/instances/{id}/rotate-token", protect(http.HandlerFunc(instances.Rotate)))
 
-	if options.WebDir == "" {
-		options.WebDir = "web"
+	if options.WebAppDir == "" {
+		options.WebAppDir = options.NextWebDir // Backward-compatible option name for one release cycle.
 	}
-	if options.NextWebDir == "" {
-		options.NextWebDir = filepath.Join(options.WebDir, "dist", "desktop")
+	if options.WebAppDir == "" {
+		if options.WebDir == "" {
+			options.WebDir = "web"
+		}
+		options.WebAppDir = filepath.Join(options.WebDir, "dist", "desktop")
 	}
-	mux.HandleFunc("/next/", handleNextWeb(options.NextWebDir))
-	mux.Handle("/assets/", http.StripPrefix("/assets/", http.FileServer(http.Dir(filepath.Join(options.WebDir, "assets")))))
-	mux.HandleFunc("/", handleWeb(options.WebDir))
+	mux.HandleFunc("/next", redirectNext)
+	mux.HandleFunc("/next/", redirectNext)
+	mux.HandleFunc("/", handleWebApp(options.WebAppDir))
 	return mux
 }
 
-func handleNextWeb(webDir string) http.HandlerFunc {
+func redirectNext(w http.ResponseWriter, r *http.Request) {
+	target := strings.TrimPrefix(r.URL.Path, "/next")
+	if target == "" {
+		target = "/"
+	}
+	if r.URL.RawQuery != "" {
+		target += "?" + r.URL.RawQuery
+	}
+	http.Redirect(w, r, target, http.StatusMovedPermanently)
+}
+
+func handleWebApp(webDir string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			w.Header().Set("Content-Type", "application/json")
@@ -112,10 +127,14 @@ func handleNextWeb(webDir string) http.HandlerFunc {
 		if info, err := os.Stat(indexPath); err != nil || info.IsDir() {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = w.Write([]byte(`{"error":"webapp_not_built"}`))
+			_, _ = w.Write([]byte(`{"error":"webapp_not_built","hint":"cd webapp && pnpm install && pnpm build"}`))
 			return
 		}
-		path := filepath.Clean(strings.TrimPrefix(r.URL.Path, "/next/"))
+		if r.URL.Path == "/api" || strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/healthz" {
+			http.NotFound(w, r)
+			return
+		}
+		path := filepath.Clean(strings.TrimPrefix(r.URL.Path, "/"))
 		if path == "." || path == "" {
 			path = "index.html"
 		}
@@ -139,29 +158,4 @@ func handleHealthz(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(`{"ok":true}`))
-}
-
-func handleWeb(webDir string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet && r.Method != http.MethodHead {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			_, _ = w.Write([]byte(`{"error":"method_not_allowed"}`))
-			return
-		}
-		if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/healthz" {
-			http.NotFound(w, r)
-			return
-		}
-		path := filepath.Clean(strings.TrimPrefix(r.URL.Path, "/"))
-		if path == "." || path == "" {
-			path = "index.html"
-		}
-		fullPath := filepath.Join(webDir, path)
-		info, err := os.Stat(fullPath)
-		if err != nil || info.IsDir() {
-			fullPath = filepath.Join(webDir, "index.html")
-		}
-		http.ServeFile(w, r, fullPath)
-	}
 }

@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-13",
+    type: "release",
+    version: "M2-B4",
+    title: "Vue 前端转正并完成 M2 收官",
+    summary: "新增账户设置、404、动态标题、内联 favicon 与空实例引导；Vue SPA 从 /next/ 切换到根路径，保留旧书签 301 兼容并正式删除旧静态页。",
+    docs: ["docs/codex-task-m2-b4-cutover.md", "docs/development-progress.md", "webapp/README.md"],
+    commits: []
+  },
+  {
+    date: "2026-07-13",
     type: "review",
     version: "",
     title: "验收 M2-B3（操作页四件套）：通过",

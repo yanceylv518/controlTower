@@ -7,4 +7,5 @@ import { router } from './router'
 import './styles.css'
 import './b2.css'
 import './b3.css'
+import './b4.css'
 createApp(App).use(createPinia()).use(router).use(ElementPlus).mount('#app')

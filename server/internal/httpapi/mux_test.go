@@ -14,22 +14,22 @@ import (
 	"controltower/server/internal/storage"
 )
 
-func TestNextWebReturnsServiceUnavailableWhenNotBuilt(t *testing.T) {
-	mux := NewMux(Options{AgentToken: "agent", DashboardToken: "dash", Store: newTestStore(), NextWebDir: filepath.Join(t.TempDir(), "missing")})
+func TestWebAppReturnsServiceUnavailableWhenNotBuilt(t *testing.T) {
+	mux := NewMux(Options{AgentToken: "agent", DashboardToken: "dash", Store: newTestStore(), WebAppDir: filepath.Join(t.TempDir(), "missing")})
 	response := httptest.NewRecorder()
-	mux.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/next/", nil))
-	if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), "webapp_not_built") {
-		t.Fatalf("next missing status=%d body=%s", response.Code, response.Body.String())
+	mux.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
+	if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), "webapp_not_built") || !strings.Contains(response.Body.String(), "pnpm build") {
+		t.Fatalf("webapp missing status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 
-func TestNextWebServesIndexAndSPAFallback(t *testing.T) {
+func TestWebAppServesIndexAndSPAFallback(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("next-app"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	mux := NewMux(Options{AgentToken: "agent", DashboardToken: "dash", Store: newTestStore(), NextWebDir: dir})
-	for _, path := range []string{"/next/", "/next/any/spa/route"} {
+	mux := NewMux(Options{AgentToken: "agent", DashboardToken: "dash", Store: newTestStore(), WebAppDir: dir})
+	for _, path := range []string{"/", "/any/spa/route", "/assets/legacy.js"} {
 		response := httptest.NewRecorder()
 		mux.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
 		if response.Code != http.StatusOK || response.Body.String() != "next-app" {
@@ -38,16 +38,40 @@ func TestNextWebServesIndexAndSPAFallback(t *testing.T) {
 	}
 }
 
-func TestNextWebDoesNotCaptureAPI(t *testing.T) {
+func TestNextWebRedirectsToRootPath(t *testing.T) {
+	mux := NewMux(Options{AgentToken: "agent", DashboardToken: "dash", Store: newTestStore()})
+	for _, tc := range []struct{ from, to string }{{"/next", "/"}, {"/next/alerts?active=1", "/alerts?active=1"}} {
+		response := httptest.NewRecorder()
+		mux.ServeHTTP(response, httptest.NewRequest(http.MethodGet, tc.from, nil))
+		if response.Code != http.StatusMovedPermanently || response.Header().Get("Location") != tc.to {
+			t.Fatalf("%s -> status=%d location=%q", tc.from, response.Code, response.Header().Get("Location"))
+		}
+	}
+}
+
+func TestWebAppDoesNotCaptureAPI(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("next-app"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	mux := NewMux(Options{AgentToken: "agent", DashboardToken: "dash", Store: newTestStore(), NextWebDir: dir})
+	mux := NewMux(Options{AgentToken: "agent", DashboardToken: "dash", Store: newTestStore(), WebAppDir: dir})
 	response := httptest.NewRecorder()
 	mux.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/dashboard/overview", nil))
 	if response.Code != http.StatusUnauthorized || strings.Contains(response.Body.String(), "next-app") {
 		t.Fatalf("api captured status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestWebAppDoesNotCaptureAPIRoot(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("next-app"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mux := NewMux(Options{AgentToken: "agent", DashboardToken: "dash", Store: newTestStore(), WebAppDir: dir})
+	response := httptest.NewRecorder()
+	mux.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api", nil))
+	if response.Code != http.StatusNotFound || strings.Contains(response.Body.String(), "next-app") {
+		t.Fatalf("api root captured status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 
