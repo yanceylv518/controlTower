@@ -66,3 +66,4 @@ grep -oE 'status=5[0-9]{2}' $LOG | sort | uniq -c
 
 - **已有**：慢返回窗口告警（渠道/客户 10 条中 3 条 ≥120s，流式独立阈值）；Server 端 P95/资源告警。
 - **规划（并入挂起的 v1.1 探测批次，见 design-v1.1-early-warning.md 信号 E 升级）**：Agent tail timing 日志——504 即时告警、`uht` 超阈值的 **TTFT 告警**、分段归因写进告警消息（"首字节 3.2s，new-api 侧慢"vs"传输段 45s，流式/链路"）；配合"网关开销分解探测"（经 new-api 整链耗时 − 无 key 的 TCP/TLS 握手网络基线），开销突增单独预警。
+- **失效安全要求**：`CT_NGINX_ACCESS_LOG` 未配置 → 该模块整体不启动；配置了但文件缺失/无权限/格式对不上 → WARN 一条后照常运行并重试，绝不报错退出、不影响既有告警（详见 design-v1.1-early-warning.md 信号 E）。
