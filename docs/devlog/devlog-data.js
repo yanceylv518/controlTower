@@ -6,7 +6,7 @@ window.DEVLOG = [
     type: "release",
     version: "M2-B1",
     title: "Vue3 Web 行走骨架打通",
-    summary: "建立 pnpm workspace、typed API client、Session+CSRF 登录守卫和总览页面；总览包含 KPI、ECharts 趋势、当前告警及可见性暂停的 30 秒刷新。Go Server 新增 /next/ 托管与 SPA fallback，旧静态页继续在 / 共存；CI 增加独立前端 typecheck/build 质量门。",
+    summary: "建立 pnpm workspace（固定 Node 20 兼容的 pnpm 10）、typed API client、Session+CSRF 登录守卫和总览页面；总览包含 KPI、ECharts 趋势、当前告警及可见性暂停的 30 秒刷新。Go Server 新增 /next/ 托管与 SPA fallback，旧静态页继续在 / 共存；CI 增加独立前端 typecheck/build 质量门。",
     docs: ["docs/codex-task-m2-b1-skeleton.md", "docs/development-progress.md"],
     commits: []
   },
