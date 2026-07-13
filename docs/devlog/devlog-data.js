@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-13",
+    type: "decision",
+    version: "",
+    title: "Nginx timing 转分析线：v1.1-B5 作废，改下发 v2.2-B1",
+    summary: "用户决策：timing 数据是分析型的，不发钉钉，在 Control Tower 里看。原 v1.1-B5（钉钉告警）指令作废，重写为 v2.2-B1：Agent tail + 分钟桶聚合（TTFT/传输段分位数、5xx/504、慢请求归因计数）+ 每桶 Top5 慢样本 → 既有上报链路入库（007 迁移，编号避开在途的 006 tuning）→ Web 新增「延时分诊」页（归因卡 + 三趋势图 + 慢样本表）。失效安全仍是第一验收项；独立模式不支持（无处上报）。",
+    docs: ["docs/codex-task-v2.2-b1-nginx-timing-analytics.md", "docs/latency-diagnosis.md"],
+    commits: []
+  },
+  {
+    date: "2026-07-13",
     type: "release",
     version: "",
     title: "v2.1-B1 批次下发：调权评估引擎（observe 模式）",
@@ -14,7 +23,7 @@ window.DEVLOG = [
     date: "2026-07-13",
     type: "release",
     version: "",
-    title: "v1.1-B5 批次下发：Nginx timing 日志告警（信号 E）",
+    title: "[已作废→v2.2-B1] v1.1-B5 批次下发：Nginx timing 日志告警（信号 E）",
     summary: "codex 指令就绪：新包 nginxtiming（timed 格式解析 + tail + 轮转检测），三条规则（504 即时 / 5xx 窗口 / TTFT 窗口带分段归因文案），钉钉发送提取为共用 dingtalk 包。第一验收项是失效安全：未配置零启动、文件缺失只 WARN 并重试、脏行静默跳过，任何故障不伤主告警链路。不做：网关开销分解探测（归 v1.1 探测批次）、渠道/客户归因、指标上报 Server。",
     docs: ["docs/codex-task-v1.1-b5-nginx-timing.md"],
     commits: []

@@ -143,17 +143,15 @@ v1.0 的告警只基于 new-api `logs` 表中**已完成**的请求：
 
 配套配置：`CT_RECOVERY_MIN_SUCCESS`（默认 10）、`CT_RECOVERY_MAX_FAILURES`（默认 1）、`CT_RECOVERY_PROBE_SUCCESSES`（默认 3）。
 
-### 可选信号 E：Nginx timing 日志采集（2026-07-13 升级：生产已启用 timed 格式）
+### 信号 E：Nginx timing 日志（2026-07-13 二次决策：移出告警体系，走监控分析线）
 
-生产两台 new-api 的 Nginx 已配置 `timed` 日志格式（rt/uct/uht/urt/bytes，见 `latency-diagnosis.md`）。Agent 只读 tail 该日志：
+生产两台 new-api 的 Nginx 已配置 `timed` 日志格式（rt/uct/uht/urt/bytes，见 `latency-diagnosis.md`）。**用户决策：这路数据不发钉钉、不产生告警消息**——它是分析型数据，在 Control Tower Web 里看：Agent 只读 tail → 分钟桶聚合（TTFT/传输段分位数、5xx/504 计数、慢请求归因计数）→ 随既有上报链路入库 → Web「延时分诊」页展示趋势与归因。实现批次：`codex-task-v2.2-b1-nginx-timing-analytics.md`。
 
-- 504/5xx 即时告警（网关超时点，最快的失败确认）；
-- **TTFT 告警**：`uht`（upstream 首字节 = new-api+上游首响应段）超阈值——不受流式传输拖累的真延时信号；
-- **分段归因**：慢请求告警消息直接注明"首字节慢（new-api/上游前段）"或"传输段慢（流式/链路）"，与 `bytes` 推算的吞吐佐证；
 - 局限不变：识别不了渠道/客户（业务维度仍由 logs 采集负责）。
-- **失效安全（硬性要求）**：`CT_NGINX_ACCESS_LOG` 留空 → 模块完全不启动，零副作用；配置了但文件不存在/无读权限/被 logrotate 轮转走 → 打一条 WARN 后继续运行、周期性重试打开，**绝不 panic、不退出进程、不影响其他信号**；日志行不含 timed 字段（旧格式/其他 vhost 混写）只静默跳过该行，不告警不刷屏。与 v1.0 事件日志的 fail-safe 同一原则：可选模块的任何故障都不能伤害主告警链路。
+- **失效安全（硬性要求）**：`CT_NGINX_ACCESS_LOG` 留空 → 模块完全不启动，零副作用；配置了但文件不存在/无读权限/被 logrotate 轮转走 → 打一条 WARN 后继续运行、周期性重试打开，**绝不 panic、不退出进程、不影响其他信号**；日志行不含 timed 字段（旧格式/其他 vhost 混写）只静默跳过该行，不告警不刷屏。与 v1.0 事件日志的 fail-safe 同一原则：可选模块的任何故障都不能伤害主链路。
+- 覆盖矩阵中 E 列的"告警"能力据此作废；将来若确需网关侧即时告警（如 504），基于已入库的 timing 数据另起批次，不在 Agent 端发消息。
 
-配套增强：**网关开销分解探测**——经 new-api 的整链探测耗时，减去不带 key 的上游 TCP/TLS 握手基线探测（不读渠道密钥，不违边界），得到"new-api 内部开销"曲线，开销突增单独预警——直接回答"延时大是不是 new-api 的问题"。
+配套增强（仍归挂起的探测批次）：**网关开销分解探测**——经 new-api 的整链探测耗时，减去不带 key 的上游 TCP/TLS 握手基线探测（不读渠道密钥，不违边界），得到"new-api 内部开销"曲线——直接回答"延时大是不是 new-api 的问题"。
 
 ## 4. 信号覆盖矩阵
 
