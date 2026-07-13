@@ -13,12 +13,13 @@ import (
 )
 
 type Options struct {
-	AgentToken       string
-	DashboardToken   string
-	Store            Store
-	WebDir           string
-	AuthManager      *ctauth.Manager
-	AgentTokenPepper string
+	AgentToken              string
+	DashboardToken          string
+	Store                   Store
+	WebDir                  string
+	AuthManager             *ctauth.Manager
+	AgentTokenPepper        string
+	NotificationMaxAttempts int
 }
 
 type Store interface {
@@ -44,7 +45,7 @@ func NewMux(options Options) *http.ServeMux {
 	mux.HandleFunc("/api/agent/heartbeat", agentHandler.HandleHeartbeat)
 	mux.HandleFunc("/api/agent/report", agentHandler.HandleReport)
 
-	dashboardHandler := dashboard.NewHandler(options.Store).WithLogStore(options.Store).WithLogSampleStore(options.Store).WithRuntimeStore(options.Store).WithMetricSource(options.Store).WithAlertStore(options.Store).WithNotificationStore(options.Store).WithChannelSnapshotStore(options.Store)
+	dashboardHandler := dashboard.NewHandler(options.Store).WithLogStore(options.Store).WithLogSampleStore(options.Store).WithRuntimeStore(options.Store).WithMetricSource(options.Store).WithAlertStore(options.Store).WithNotificationStore(options.Store).WithChannelSnapshotStore(options.Store).WithNotificationMaxAttempts(options.NotificationMaxAttempts)
 	protect := func(h http.Handler) http.Handler {
 		if options.AuthManager != nil {
 			return ctauth.RequireSessionOrToken(options.AuthManager, options.DashboardToken, h)
@@ -65,8 +66,10 @@ func NewMux(options Options) *http.ServeMux {
 	mux.Handle("/api/dashboard/channel-snapshots", protect(http.HandlerFunc(dashboardHandler.HandleChannelSnapshots)))
 	mux.Handle("/api/dashboard/alerts", protect(http.HandlerFunc(dashboardHandler.HandleAlerts)))
 	mux.Handle("/api/dashboard/alerts/action", protect(http.HandlerFunc(dashboardHandler.HandleAlertAction)))
+	mux.Handle("GET /api/dashboard/alerts/{id}/events", protect(http.HandlerFunc(dashboardHandler.HandleAlertEvents)))
 	mux.Handle("/api/dashboard/notification-channels", protect(http.HandlerFunc(dashboardHandler.HandleNotificationChannels)))
 	mux.Handle("/api/dashboard/notification-deliveries", protect(http.HandlerFunc(dashboardHandler.HandleNotificationDeliveries)))
+	mux.Handle("POST /api/dashboard/notification-deliveries/{id}/resend", protect(http.HandlerFunc(dashboardHandler.HandleNotificationResend)))
 	mux.Handle("/api/dashboard/agents", protect(http.HandlerFunc(dashboardHandler.HandleAgents)))
 	mux.Handle("/api/dashboard/server-metrics", protect(http.HandlerFunc(dashboardHandler.HandleServerMetrics)))
 	mux.Handle("/api/dashboard/health-checks", protect(http.HandlerFunc(dashboardHandler.HandleHealthChecks)))

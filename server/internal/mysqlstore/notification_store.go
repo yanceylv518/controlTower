@@ -86,8 +86,8 @@ func (s Store) ExpireDeliveriesForResolvedAlerts(now time.Time) error {
 	_, err := s.db.ExecContext(context.Background(), `
 UPDATE notification_deliveries d
 JOIN alerts a ON a.id = d.alert_id
-SET d.status = 'expired', d.next_attempt_at = ?
-WHERE d.status = 'sent' AND a.status = 'resolved'`, now)
+SET d.status = 'expired', d.attempts = 0, d.next_attempt_at = ?
+WHERE d.status IN ('sent','exhausted') AND a.status = 'resolved'`, now)
 	return err
 }
 
@@ -102,7 +102,7 @@ SELECT status, next_attempt_at FROM notification_deliveries WHERE alert_id = ? A
 	if err != nil {
 		return false, err
 	}
-	if status == "sent" {
+	if status == "sent" || status == "exhausted" {
 		return false, nil
 	}
 	return !nextAttemptAt.After(now), nil

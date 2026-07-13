@@ -2,12 +2,17 @@ package dashboard
 
 import (
 	"bytes"
+	"crypto/hmac"
 	"crypto/sha1"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,6 +26,7 @@ type NotificationStore interface {
 	NotificationDeliveryDue(alertID string, channelID string, now time.Time) (bool, error)
 	QueryNotificationDeliveries(query storage.NotificationDeliveryQuery) ([]storage.NotificationDelivery, error)
 	ExpireDeliveriesForResolvedAlerts(now time.Time) error
+	MarkDeliveryForResend(string, time.Time) (bool, error)
 }
 
 type NotificationChannelRequest struct {
@@ -29,6 +35,7 @@ type NotificationChannelRequest struct {
 	Name        string `json:"name"`
 	WebhookURL  string `json:"webhook_url"`
 	Enabled     bool   `json:"enabled"`
+	Secret      string `json:"secret"`
 }
 
 type NotificationChannelItem struct {
@@ -39,6 +46,7 @@ type NotificationChannelItem struct {
 	Enabled          bool      `json:"enabled"`
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
+	HasSecret        bool      `json:"has_secret"`
 }
 
 type NotificationChannelListResponse struct {
@@ -116,6 +124,18 @@ func (h Handler) HandleNotificationDeliveries(w http.ResponseWriter, r *http.Req
 	}
 	writeDashboardJSON(w, http.StatusOK, NotificationDeliveryListResponse{Items: notificationDeliveryItems(deliveries)})
 }
+func (h Handler) HandleNotificationResend(w http.ResponseWriter, r *http.Request) {
+	ok, e := h.notificationStore.MarkDeliveryForResend(r.PathValue("id"), time.Now().UTC())
+	if e != nil {
+		writeDashboardError(w, 500, "query_failed")
+		return
+	}
+	if !ok {
+		writeDashboardError(w, 404, "delivery_not_found")
+		return
+	}
+	writeDashboardJSON(w, 200, map[string]bool{"ok": true})
+}
 
 func (h Handler) dispatchAlertNotifications(alerts []storage.Alert) error {
 	if h.notificationStore == nil {
@@ -146,7 +166,11 @@ func (h Handler) dispatchAlertNotifications(alerts []storage.Alert) error {
 			if !due {
 				continue
 			}
-			delivery := sendWebhookNotification(client, alert, channel, time.Now().UTC())
+			attempt := 1
+			if prior, e := h.notificationStore.QueryNotificationDeliveries(storage.NotificationDeliveryQuery{AlertID: alert.ID, ChannelID: channel.ID, Limit: 1}); e == nil && len(prior) > 0 {
+				attempt = prior[0].Attempts + 1
+			}
+			delivery := sendWebhookNotificationAttempt(client, alert, channel, time.Now().UTC(), attempt, h.notificationMaxAttempts)
 			if err := h.notificationStore.InsertNotificationDelivery(delivery); err != nil {
 				return err
 			}
@@ -156,13 +180,34 @@ func (h Handler) dispatchAlertNotifications(alerts []storage.Alert) error {
 }
 
 func sendWebhookNotification(client http.Client, alert storage.Alert, channel storage.NotificationChannel, now time.Time) storage.NotificationDelivery {
-	delivery := storage.NotificationDelivery{ID: notificationDeliveryID(alert.ID, channel.ID), AlertID: alert.ID, ChannelID: channel.ID, Status: "failed", AttemptedAt: now, NextAttemptAt: now.Add(5 * time.Minute), Attempts: 1}
+	return sendWebhookNotificationAttempt(client, alert, channel, now, 1, 8)
+}
+func sendWebhookNotificationAttempt(client http.Client, alert storage.Alert, channel storage.NotificationChannel, now time.Time, attempt, maxAttempts int) storage.NotificationDelivery {
+	if maxAttempts <= 0 {
+		maxAttempts = 8
+	}
+	delay := 30 * time.Second * time.Duration(1<<min(attempt-1, 7))
+	if delay > time.Hour {
+		delay = time.Hour
+	}
+	// Stable per-attempt jitter prevents a fleet-wide retry stampede while
+	// keeping tests deterministic: factor spans 80%..120%.
+	jitterSeed := sha256.Sum256([]byte(fmt.Sprintf("%s:%s:%d", alert.ID, channel.ID, attempt)))
+	delay = time.Duration(float64(delay) * (0.8 + float64(jitterSeed[0])/255*0.4))
+	delivery := storage.NotificationDelivery{ID: notificationDeliveryID(alert.ID, channel.ID), AlertID: alert.ID, ChannelID: channel.ID, Status: "failed", AttemptedAt: now, NextAttemptAt: now.Add(delay), Attempts: attempt}
+	if attempt >= maxAttempts {
+		delivery.Status = "exhausted"
+	}
 	body, err := json.Marshal(notificationPayload(alert, channel))
 	if err != nil {
 		delivery.ErrorSummary = truncateSummary(err.Error())
 		return delivery
 	}
-	req, err := http.NewRequest(http.MethodPost, channel.WebhookURL, bytes.NewReader(body))
+	webhookURL := channel.WebhookURL
+	if channel.ChannelType == "dingtalk" && channel.SecretValue != "" {
+		webhookURL = dingTalkSignedURL(webhookURL, channel.SecretValue, now)
+	}
+	req, err := http.NewRequest(http.MethodPost, webhookURL, bytes.NewReader(body))
 	if err != nil {
 		delivery.ErrorSummary = truncateSummary(err.Error())
 		return delivery
@@ -193,6 +238,27 @@ func sendWebhookNotification(client http.Client, alert storage.Alert, channel st
 	}
 	delivery.ErrorSummary = fmt.Sprintf("webhook returned HTTP %d", resp.StatusCode)
 	return delivery
+}
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+func dingTalkSignedURL(raw, secret string, now time.Time) string {
+	timestamp := strconv.FormatInt(now.UnixMilli(), 10)
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write([]byte(timestamp + "\n" + secret))
+	sign := base64.StdEncoding.EncodeToString(mac.Sum(nil))
+	u, e := url.Parse(raw)
+	if e != nil {
+		return raw
+	}
+	q := u.Query()
+	q.Set("timestamp", timestamp)
+	q.Set("sign", sign)
+	u.RawQuery = q.Encode()
+	return u.String()
 }
 
 func notificationPayload(alert storage.Alert, channel storage.NotificationChannel) map[string]any {
@@ -239,13 +305,13 @@ func notificationChannelFromRequest(request NotificationChannelRequest, now time
 	if id == "" {
 		id = notificationChannelID(name, webhookURL, now)
 	}
-	return storage.NotificationChannel{ID: id, ChannelType: channelType, Name: name, WebhookURL: webhookURL, Enabled: request.Enabled, CreatedAt: now, UpdatedAt: now}, true
+	return storage.NotificationChannel{ID: id, ChannelType: channelType, Name: name, WebhookURL: webhookURL, SecretValue: request.Secret, Enabled: request.Enabled, CreatedAt: now, UpdatedAt: now}, true
 }
 
 func notificationChannelItems(channels []storage.NotificationChannel) []NotificationChannelItem {
 	items := make([]NotificationChannelItem, 0, len(channels))
 	for _, channel := range channels {
-		items = append(items, NotificationChannelItem{ID: channel.ID, ChannelType: channel.ChannelType, Name: channel.Name, WebhookURLMasked: maskWebhookURL(channel.WebhookURL), Enabled: channel.Enabled, CreatedAt: channel.CreatedAt, UpdatedAt: channel.UpdatedAt})
+		items = append(items, NotificationChannelItem{ID: channel.ID, ChannelType: channel.ChannelType, Name: channel.Name, WebhookURLMasked: maskWebhookURL(channel.WebhookURL), Enabled: channel.Enabled, CreatedAt: channel.CreatedAt, UpdatedAt: channel.UpdatedAt, HasSecret: channel.SecretValue != ""})
 	}
 	return items
 }

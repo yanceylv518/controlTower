@@ -13,15 +13,18 @@ type OverviewSource interface {
 }
 
 type Handler struct {
-	source               OverviewSource
-	logStore             LogStore
-	logSampleStore       LogSampleStore
-	runtimeStore         RuntimeStore
-	metricSource         MetricSource
-	alertStore           AlertStore
-	notificationStore    NotificationStore
-	channelSnapshotStore ChannelSnapshotStore
+	source                  OverviewSource
+	logStore                LogStore
+	logSampleStore          LogSampleStore
+	runtimeStore            RuntimeStore
+	metricSource            MetricSource
+	alertStore              AlertStore
+	notificationStore       NotificationStore
+	channelSnapshotStore    ChannelSnapshotStore
+	notificationMaxAttempts int
 }
+
+func (h Handler) WithNotificationMaxAttempts(v int) Handler { h.notificationMaxAttempts = v; return h }
 
 func NewHandler(source OverviewSource) Handler {
 	return Handler{source: source}

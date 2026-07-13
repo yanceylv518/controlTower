@@ -80,7 +80,7 @@ func run() error {
 
 	server := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           httpapi.NewMux(httpapi.Options{AgentToken: cfg.AgentToken, DashboardToken: cfg.DashboardToken, Store: store, AuthManager: authManager, AgentTokenPepper: cfg.AgentTokenPepper}),
+		Handler:           httpapi.NewMux(httpapi.Options{AgentToken: cfg.AgentToken, DashboardToken: cfg.DashboardToken, Store: store, AuthManager: authManager, AgentTokenPepper: cfg.AgentTokenPepper, NotificationMaxAttempts: cfg.NotificationMaxAttempts}),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	log.Printf("control tower server listening on %s", cfg.ListenAddr)

@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-13",
+    type: "feature",
+    version: "M1-B3",
+    title: "告警生命周期时间线与通知强化",
+    summary: "新增告警事件表、时间线 API、操作者与动作备注；通知支持最大尝试次数、指数退避/死信、手动重发，以及钉钉 HMAC 加签。渠道列表仅返回 has_secret，永不回显 secret。",
+    docs: ["docs/codex-task-m1-b3-timeline-notify.md", "docs/api-contracts.md", "docs/development-progress.md"],
+    commits: []
+  },
+  {
+    date: "2026-07-13",
     type: "review",
     version: "",
     title: "M1-B2 返工验收：通过，review 补三组测试",

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"controltower/server/internal/aggregator"
+	ctauth "controltower/server/internal/auth"
 	"controltower/server/internal/storage"
 )
 
@@ -19,6 +20,8 @@ type AlertStore interface {
 	QueryAlerts(query storage.AlertQuery) ([]storage.Alert, error)
 	UpdateAlertAction(id string, status string, silenceUntil *time.Time, now time.Time) error
 	ExpireSilencedAlerts(now time.Time) error
+	InsertAlertEvents([]storage.AlertEvent) error
+	QueryAlertEvents(string, int) ([]storage.AlertEvent, error)
 }
 
 type AlertListResponse struct {
@@ -44,6 +47,7 @@ type AlertActionRequest struct {
 	ID             string `json:"id"`
 	Action         string `json:"action"`
 	SilenceMinutes int    `json:"silence_minutes"`
+	Note           string `json:"note"`
 }
 
 type AlertActionResponse struct {
@@ -105,7 +109,7 @@ func (h Handler) HandleAlertAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	status, silenceUntil, ok := alertActionStatus(request, time.Now().UTC())
-	if request.ID == "" || !ok {
+	if request.ID == "" || !ok || len(request.Note) > 500 {
 		writeDashboardError(w, http.StatusBadRequest, "invalid_alert_action")
 		return
 	}
@@ -113,7 +117,33 @@ func (h Handler) HandleAlertAction(w http.ResponseWriter, r *http.Request) {
 		writeDashboardError(w, http.StatusInternalServerError, "query_failed")
 		return
 	}
+	actor := ctauth.Actor(r)
+	if actor == "" {
+		actor = "unknown"
+	}
+	eventType := status
+	if request.Action == "silence" {
+		eventType = "silenced"
+	}
+	_ = h.alertStore.InsertAlertEvents([]storage.AlertEvent{{AlertID: request.ID, EventType: eventType, Actor: actor, Note: request.Note, CreatedAt: time.Now().UTC()}})
 	writeDashboardJSON(w, http.StatusOK, AlertActionResponse{OK: true})
+}
+func (h Handler) HandleAlertEvents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeDashboardError(w, 405, "method_not_allowed")
+		return
+	}
+	limit := parseInt(r.URL.Query().Get("limit"))
+	events, e := h.alertStore.QueryAlertEvents(r.PathValue("id"), limit)
+	if e != nil {
+		writeDashboardError(w, 500, "query_failed")
+		return
+	}
+	items := make([]map[string]any, 0, len(events))
+	for _, v := range events {
+		items = append(items, map[string]any{"event_type": v.EventType, "actor": v.Actor, "note": v.Note, "created_at": v.CreatedAt})
+	}
+	writeDashboardJSON(w, 200, map[string]any{"items": items})
 }
 
 func (h Handler) currentAlerts() ([]AlertItem, error) {

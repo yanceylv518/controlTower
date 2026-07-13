@@ -126,3 +126,10 @@ Dashboard-authenticated endpoints provide `GET/POST /api/dashboard/instances`, `
 ## Per-instance Agent Authentication
 
 Instance tokens are stored only as `SHA-256(pepper + token)` hashes. A token may report only the matching `instance_id`; mismatch returns HTTP 403 `instance_mismatch`. Invalid, expired, or disabled-instance tokens return HTTP 401. The global `CT_AGENT_TOKEN` remains accepted temporarily as an unbound compatibility path.
+
+## Alert Timeline and Notification Operations
+
+- `GET /api/dashboard/alerts/{id}/events?limit=100` returns chronological lifecycle events with `event_type`, `actor`, `note`, and `created_at`.
+- Alert actions accept an optional `note` of at most 500 characters; session users and legacy token callers are recorded as the event actor.
+- `POST /api/dashboard/notification-deliveries/{id}/resend` resets a failed or exhausted delivery for the notification runner.
+- Notification channels accept an optional DingTalk `secret`. List responses expose only `has_secret`; secret values are never returned. DingTalk requests include the timestamp/HMAC signature query parameters when configured.

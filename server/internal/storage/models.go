@@ -29,6 +29,11 @@ type InstanceToken struct {
 	CreatedAt             time.Time
 	ExpiresAt             *time.Time
 }
+type AlertEvent struct {
+	ID                              int64
+	AlertID, EventType, Actor, Note string
+	CreatedAt                       time.Time
+}
 
 type Agent struct {
 	ID                string

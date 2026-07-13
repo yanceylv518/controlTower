@@ -31,6 +31,50 @@ type MemoryStore struct {
 	nextUserID             int64
 	instances              map[string]storage.Instance
 	instanceTokens         []storage.InstanceToken
+	alertEvents            []storage.AlertEvent
+}
+
+func (s *MemoryStore) InsertAlertEvents(v []storage.AlertEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, e := range v {
+		e.ID = int64(len(s.alertEvents) + 1)
+		s.alertEvents = append(s.alertEvents, e)
+	}
+	return nil
+}
+func (s *MemoryStore) QueryAlertEvents(id string, limit int) ([]storage.AlertEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	var o []storage.AlertEvent
+	for _, e := range s.alertEvents {
+		if e.AlertID == id {
+			o = append(o, e)
+			if len(o) >= limit {
+				break
+			}
+		}
+	}
+	return o, nil
+}
+func (s *MemoryStore) MarkDeliveryForResend(id string, n time.Time) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, ok := s.notificationDeliveries[id]
+	if !ok {
+		return false, nil
+	}
+	v.Status = "failed"
+	v.Attempts = 0
+	v.NextAttemptAt = n
+	s.notificationDeliveries[id] = v
+	return true, nil
 }
 
 func NewMemoryStore() *MemoryStore {
@@ -472,6 +516,7 @@ func (s *MemoryStore) UpsertCurrentAlerts(alerts []storage.Alert, now time.Time)
 		if ok {
 			if current.Status == "resolved" {
 				current.Status = "firing"
+				s.alertEvents = append(s.alertEvents, storage.AlertEvent{AlertID: alert.ID, EventType: "refired", Actor: "system", CreatedAt: now})
 			}
 			current.InstanceID = alert.InstanceID
 			current.RuleKey = alert.RuleKey
@@ -493,6 +538,7 @@ func (s *MemoryStore) UpsertCurrentAlerts(alerts []storage.Alert, now time.Time)
 			alert.LastSeenAt = now
 		}
 		s.alerts[alert.ID] = alert
+		s.alertEvents = append(s.alertEvents, storage.AlertEvent{AlertID: alert.ID, EventType: "firing", Actor: "system", CreatedAt: now})
 	}
 	return nil
 }
@@ -514,6 +560,7 @@ func (s *MemoryStore) ResolveMissingAlerts(currentIDs []string, now time.Time) e
 		alert.Status = "resolved"
 		alert.ResolvedAt = &now
 		s.alerts[id] = alert
+		s.alertEvents = append(s.alertEvents, storage.AlertEvent{AlertID: id, EventType: "resolved", Actor: "system", CreatedAt: now})
 	}
 	return nil
 }
@@ -526,6 +573,7 @@ func (s *MemoryStore) ExpireSilencedAlerts(now time.Time) error {
 			alert.Status = "firing"
 			alert.SilenceUntil = nil
 			s.alerts[id] = alert
+			s.alertEvents = append(s.alertEvents, storage.AlertEvent{AlertID: id, EventType: "silence_expired", Actor: "system", CreatedAt: now})
 		}
 	}
 	return nil
@@ -602,7 +650,7 @@ func (s *MemoryStore) ExpireDeliveriesForResolvedAlerts(now time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for key, delivery := range s.notificationDeliveries {
-		if delivery.Status != "sent" {
+		if delivery.Status != "sent" && delivery.Status != "exhausted" {
 			continue
 		}
 		alert, ok := s.alerts[delivery.AlertID]
@@ -610,6 +658,7 @@ func (s *MemoryStore) ExpireDeliveriesForResolvedAlerts(now time.Time) error {
 			continue
 		}
 		delivery.Status = "expired"
+		delivery.Attempts = 0
 		delivery.NextAttemptAt = now
 		s.notificationDeliveries[key] = delivery
 	}
@@ -623,7 +672,7 @@ func (s *MemoryStore) NotificationDeliveryDue(alertID string, channelID string, 
 	if !ok {
 		return true, nil
 	}
-	if delivery.Status == "sent" {
+	if delivery.Status == "sent" || delivery.Status == "exhausted" {
 		return false, nil
 	}
 	return !delivery.NextAttemptAt.After(now), nil

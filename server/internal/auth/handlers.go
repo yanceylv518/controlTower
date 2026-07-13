@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"controltower/server/internal/storage"
 	"crypto/subtle"
 	"encoding/json"
@@ -8,6 +9,13 @@ import (
 	"strings"
 	"time"
 )
+
+type actorKey struct{}
+
+func Actor(r *http.Request) string { v, _ := r.Context().Value(actorKey{}).(string); return v }
+func withActor(r *http.Request, v string) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), actorKey{}, v))
+}
 
 type Handlers struct{ M *Manager }
 
@@ -93,12 +101,12 @@ func (h Handlers) Password(w http.ResponseWriter, r *http.Request) {
 func RequireSessionOrToken(m *Manager, token string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if c, e := r.Cookie("ct_session"); e == nil {
-			if _, ok := m.Validate(c.Value, time.Now().UTC()); ok {
+			if u, ok := m.Validate(c.Value, time.Now().UTC()); ok {
 				if r.Method != http.MethodGet && r.Header.Get("X-Requested-With") != "XMLHttpRequest" {
 					write(w, 403, map[string]string{"error": "csrf"})
 					return
 				}
-				next.ServeHTTP(w, r)
+				next.ServeHTTP(w, withActor(r, u.Username))
 				return
 			}
 		}
@@ -107,7 +115,7 @@ func RequireSessionOrToken(m *Manager, token string, next http.Handler) http.Han
 		// misconfigured blank CT_DASHBOARD_TOKEN would accept requests that
 		// carry no credentials at all.
 		if token != "" && v != "" && len(v) == len(token) && subtle.ConstantTimeCompare([]byte(v), []byte(token)) == 1 {
-			next.ServeHTTP(w, r)
+			next.ServeHTTP(w, withActor(r, "token"))
 			return
 		}
 		write(w, 401, map[string]string{"error": "unauthorized"})

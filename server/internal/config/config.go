@@ -22,6 +22,7 @@ type Config struct {
 	AdminUsername                string
 	AdminInitialPassword         string
 	SessionTTLHours              int
+	NotificationMaxAttempts      int
 }
 
 func Load(values map[string]string) (Config, error) {
@@ -40,6 +41,7 @@ func Load(values map[string]string) (Config, error) {
 		NotificationIntervalSeconds:  intOrDefault(values, "CT_NOTIFICATION_INTERVAL_SECONDS", 30),
 		ChannelSnapshotRetentionDays: intOrDefault(values, "CT_CHANNEL_SNAPSHOT_RETENTION_DAYS", 30),
 		AdminUsername:                values["CT_ADMIN_USERNAME"], AdminInitialPassword: values["CT_ADMIN_INITIAL_PASSWORD"], SessionTTLHours: intOrDefault(values, "CT_SESSION_TTL_HOURS", 720),
+		NotificationMaxAttempts: intOrDefault(values, "CT_NOTIFICATION_MAX_ATTEMPTS", 8),
 	}
 	if cfg.PublicBaseURL == "" || cfg.DatabaseDSN == "" || cfg.AgentToken == "" || cfg.DashboardToken == "" || cfg.AgentTokenPepper == "" {
 		return Config{}, errors.New("missing required control tower server config")
@@ -62,6 +64,9 @@ func Load(values map[string]string) (Config, error) {
 	if (cfg.AdminUsername == "") != (cfg.AdminInitialPassword == "") {
 		return Config{}, errors.New("CT_ADMIN_USERNAME and CT_ADMIN_INITIAL_PASSWORD must be configured together")
 	}
+	if cfg.NotificationMaxAttempts < 1 || cfg.NotificationMaxAttempts > 100 {
+		return Config{}, errors.New("CT_NOTIFICATION_MAX_ATTEMPTS must be between 1 and 100")
+	}
 	return cfg, nil
 }
 
@@ -80,7 +85,7 @@ func Keys() []string {
 		"CT_AGGREGATION_INTERVAL_SECONDS",
 		"CT_NOTIFICATION_INTERVAL_SECONDS",
 		"CT_CHANNEL_SNAPSHOT_RETENTION_DAYS",
-		"CT_ADMIN_USERNAME", "CT_ADMIN_INITIAL_PASSWORD", "CT_SESSION_TTL_HOURS",
+		"CT_ADMIN_USERNAME", "CT_ADMIN_INITIAL_PASSWORD", "CT_SESSION_TTL_HOURS", "CT_NOTIFICATION_MAX_ATTEMPTS",
 	}
 }
 
