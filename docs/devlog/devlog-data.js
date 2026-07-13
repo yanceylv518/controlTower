@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-13",
+    type: "review",
+    version: "",
+    title: "验收 M2-B5（维度页趋势图）：通过",
+    summary: "用户需求增强：客户/渠道/模型详情从单桶快照升级为 KPI 行 + 2×2 趋势网格（请求与错误/成功错误率/P50-P95-P99 延迟/Token 进出）。审计全绿：四图共用 TrendChart、单次 metric-history 请求派生四组序列、≥6h 自动切 5m 桶、零新依赖零新 ECharts 模块、server/agent 零改动。种子数据实测曲线吻合。下一步回到 v2.0-B1 部署编排。",
+    docs: ["docs/codex-task-m2-b5-dimension-trends.md"],
+    commits: ["b2d72aa"]
+  },
+  {
+    date: "2026-07-13",
     type: "release",
     version: "M2-B5",
     title: "维度监控页补齐重要指标趋势图",
