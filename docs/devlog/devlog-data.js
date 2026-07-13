@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-13",
+    type: "decision",
+    version: "",
+    title: "Codex 批次执行计划定稿：v1.1 四批次 + M1 四批次",
+    summary: "后续开发切成 Codex 可独立执行的批次：B1 慢返回+事件持久化 → B2 证据驱动探测 → B3 静默确认+正向恢复+episode 收尾 → B4 CI/发布打包+快照常驻化 → v1.1 上线观察一周 → M1 四批次。每批次含开发思路、review 验收和明确的人工验证点（做什么/预期/耗时）；一批一个任务文件，上一批通过才生成下一批。B1 任务文件已就绪。",
+    docs: ["docs/codex-batches-plan.md", "docs/codex-task-v1.1-b1.md"],
+    commits: []
+  },
+  {
+    date: "2026-07-13",
     type: "review",
     version: "",
     title: "验收 Codex 的 Web 监控 P1 批次修复：通过",
