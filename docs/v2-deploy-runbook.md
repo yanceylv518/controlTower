@@ -163,10 +163,10 @@ curl -s -o /dev/null -w '%{http_code}' http://CT_IP:8080/healthz
 
 ```bash
 cd /tmp
-wget https://github.com/yanceylv518/controlTower/releases/download/v2.0.0-rc1/control-tower-agent-v2.0.0-rc1-linux-amd64.tar.gz
-tar xzf control-tower-agent-v2.0.0-rc1-linux-amd64.tar.gz
-cd control-tower-agent-v2.0.0-rc1-linux-amd64   # 目录名以解压实际为准 ls 确认
-sha256sum -c <(grep agent-v2.0.0-rc1-linux-amd64 SHA256SUMS) 2>/dev/null || echo "校验清单在包外时跳过"
+wget https://github.com/yanceylv518/controlTower/releases/download/v2.0.0-rc2/control-tower-agent-v2.0.0-rc2-linux-amd64.tar.gz
+tar xzf control-tower-agent-v2.0.0-rc2-linux-amd64.tar.gz
+cd control-tower-agent-v2.0.0-rc2-linux-amd64   # 目录名以解压实际为准 ls 确认
+sha256sum -c <(grep agent-v2.0.0-rc2-linux-amd64 SHA256SUMS) 2>/dev/null || echo "校验清单在包外时跳过"
 ```
 
 ### 3.2 路径 A：已有 Agent 的机器（升级 + 双模式）
@@ -194,13 +194,21 @@ CT_INSTANCE_ID=inst-hongkong
 
 **⚠ 注意**：配置里若已有旧的 `CT_INSTANCE_ID`（如 `inst-prod-01`），**必须改成新实例 id**——token 与实例不匹配会被网关 403 拒绝。
 
+**可选第四行（本机 Nginx 已配 timed 日志的机器）**——启用延时分诊采集：
+
+```ini
+CT_NGINX_ACCESS_LOG=/var/log/nginx/newapi-timing.log
+```
+
+并给 Agent 运行账号日志读权限（二选一）：`sudo setfacl -m u:ct-agent:r /var/log/nginx/newapi-timing.log` 或 `sudo usermod -aG adm ct-agent`。留空/缺文件都不会报错（模块自动禁用/静默重试）。
+
 ```bash
 # 4. 启动并观察
 sudo systemctl start control-tower-agent
 journalctl -u control-tower-agent -f
 ```
 
-**预期**（一分钟内依次出现）：版本行含 `v2.0.0-rc1`；每 30 秒一条 `alert pass` 审计日志；**无** 401/403/connection refused。Ctrl+C 退出观察。
+**预期**（一分钟内依次出现）：版本行含 `v2.0.0-rc2`；每 30 秒一条 `alert pass` 审计日志；**无** 401/403/connection refused。Ctrl+C 退出观察。
 
 ### 3.3 路径 B：全新安装的机器
 
@@ -215,7 +223,7 @@ journalctl -u control-tower-agent -f   # 预期同 3.2
 
 ### 3.4 每台接入后：Web 三查（~2 分钟）
 
-1. 实例管理页：该实例 Agent **在线**、版本 `v2.0.0-rc1`、最后心跳在滚动；
+1. 实例管理页：该实例 Agent **在线**、版本 `v2.0.0-rc2`、最后心跳在滚动；
 2. 总览页顶栏切到该实例：1~2 分钟后 KPI/趋势出现数据；
 3. 系统状态页：该实例的系统指标/健康检查/容器状态有记录。
 
@@ -239,7 +247,7 @@ sudo systemctl start control-tower-agent
 ### 4.1 当天验收（~15 分钟）
 
 1. **钉钉链路**：任选一台，临时 `CT_ALERT_SLOW_SECONDS=1` 重启 → 几分钟内测试消息进钉钉群 → 改回 120 重启。**预期**：钉钉照常，同时 Web 告警中心也出现对应 Server 端告警；
-2. **看板巡检**：两实例切换看总览/客户/渠道/模型/用量各页，数据归属正确不串；
+2. **看板巡检**：两实例切换看总览/客户/渠道/模型/用量各页，数据归属正确不串；配了 nginx timing 的机器再看「延时分诊」页（/latency）有分钟桶数据；
 3. **磁盘基线**：CT 服务器 `df -h` 记录当前占用（观察期对比用）。
 
 ### 4.2 观察期（3~7 天，每天 2 分钟）
@@ -248,6 +256,7 @@ sudo systemctl start control-tower-agent
 - [ ] 杭州→上海、香港→上海上报无持续报错（各机 `journalctl -u control-tower-agent --since today | grep -ci error` 接近 0）
 - [ ] 钉钉告警质量正常（无异常静默/刷屏）
 - [ ] CT 服务器 `docker compose logs --since 24h server | grep -ci error` 接近 0；磁盘增长符合预期（保留清理生效）
+- [ ] （自动开始，无需配置）调权影子数据在积累：`「延时分诊」旁不用管，观察期结束时查一次 GET /api/dashboard/tuning/report?instance_id=<id>&days=7 有建议流水即可`
 
 ### 4.3 收尾
 
