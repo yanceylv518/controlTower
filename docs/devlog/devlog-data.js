@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-14",
+    type: "review",
+    version: "",
+    title: "v2.1-B1 验收通过（附命中率口径修正）",
+    summary: "零动作核实：全批无渠道命令创建、无 Agent 改动、无 new-api 访问；006 迁移钉扎、weight_adjustments 旧表未动；加权错误率 SQL 正确（SUM(error)/SUM(request)）；防抖/冷却/权重下限/恢复封顶原值/仅对有 degrade 前科渠道模拟（evidence 标 simulated）均有测试；PUT policy 拒绝 mode≠observe 与危险值；回填三分支覆盖；渠道状态匹配 agent normalizeStatus。验收修正一处口径：hit_rate 分母原为已回填数（含样本不足 hit=NULL 的行），会拉低命中率、干扰 ≥85% 切 auto 判据——已改为已判定数（hit 非 NULL），响应新增 judged 字段。观察期自此开始积累数据。",
+    docs: ["docs/codex-task-v2.1-b1-tuning-observe.md", "docs/design-v2.1-auto-tuning.md"],
+    commits: ["cab97ab"]
+  },
+  {
+    date: "2026-07-14",
     type: "feature",
     version: "v2.1-B1",
     title: "渠道调权评估引擎进入 observe 观察模式",

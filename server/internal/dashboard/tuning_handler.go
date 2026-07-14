@@ -121,8 +121,8 @@ func (h Handler) HandleTuningReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rate := float64(0)
-	if x.Filled > 0 {
-		rate = float64(x.Hits) / float64(x.Filled)
+	if x.Judged > 0 {
+		rate = float64(x.Hits) / float64(x.Judged)
 	}
-	writeDashboardJSON(w, 200, map[string]any{"total": x.Total, "by_rule": x.ByRule, "filled": x.Filled, "hits": x.Hits, "hit_rate": rate, "autoCriteria": "观察期命中率持续 ≥85% 且无最小可用集险情，才建议切 auto"})
+	writeDashboardJSON(w, 200, map[string]any{"total": x.Total, "by_rule": x.ByRule, "filled": x.Filled, "judged": x.Judged, "hits": x.Hits, "hit_rate": rate, "autoCriteria": "观察期命中率持续 ≥85% 且无最小可用集险情，才建议切 auto"})
 }

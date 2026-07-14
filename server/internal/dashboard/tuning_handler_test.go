@@ -61,7 +61,7 @@ func TestTuningPolicyDefaultValidationAndMode(t *testing.T) {
 	}
 }
 func TestTuningRecommendationsPaginationAndReport(t *testing.T) {
-	s := &tuningStub{recs: []tuning.Recommendation{{ID: "r", InstanceID: "i", Evidence: map[string]any{"samples": 20}}}, report: tuning.Report{Total: 2, ByRule: map[string]int64{"degrade": 2}, Filled: 2, Hits: 1}}
+	s := &tuningStub{recs: []tuning.Recommendation{{ID: "r", InstanceID: "i", Evidence: map[string]any{"samples": 20}}}, report: tuning.Report{Total: 3, ByRule: map[string]int64{"degrade": 3}, Filled: 3, Judged: 2, Hits: 1}}
 	h := NewHandler(nil).WithTuningStore(s)
 	rr := httptest.NewRecorder()
 	h.HandleTuningRecommendations(rr, httptest.NewRequest(http.MethodGet, "/api/dashboard/tuning/recommendations?instance_id=i&limit=12&before=2026-07-14T00:00:00Z", nil))

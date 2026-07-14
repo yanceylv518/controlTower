@@ -170,20 +170,21 @@ func (s Store) ListRecommendations(q tuning.RecommendationQuery) ([]tuning.Recom
 func (s Store) RecommendationReport(q tuning.RecommendationQuery) (tuning.Report, error) {
 	r := tuning.Report{ByRule: map[string]int64{}}
 	since := time.Now().UTC().Add(-time.Duration(q.Days) * 24 * time.Hour)
-	rows, e := s.db.QueryContext(context.Background(), `SELECT rule,COUNT(*),SUM(outcome_at IS NOT NULL),SUM(hit=1) FROM tuning_recommendations WHERE instance_id=? AND created_at>=? GROUP BY rule`, q.InstanceID, since)
+	rows, e := s.db.QueryContext(context.Background(), `SELECT rule,COUNT(*),SUM(outcome_at IS NOT NULL),SUM(hit IS NOT NULL),SUM(hit=1) FROM tuning_recommendations WHERE instance_id=? AND created_at>=? GROUP BY rule`, q.InstanceID, since)
 	if e != nil {
 		return r, e
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var rule string
-		var count, filled, hits sql.NullInt64
-		if e = rows.Scan(&rule, &count, &filled, &hits); e != nil {
+		var count, filled, judged, hits sql.NullInt64
+		if e = rows.Scan(&rule, &count, &filled, &judged, &hits); e != nil {
 			return r, e
 		}
 		r.ByRule[rule] = count.Int64
 		r.Total += count.Int64
 		r.Filled += filled.Int64
+		r.Judged += judged.Int64
 		r.Hits += hits.Int64
 	}
 	return r, rows.Err()

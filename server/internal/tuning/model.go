@@ -105,9 +105,11 @@ type RecommendationQuery struct {
 	Days       int
 }
 type Report struct {
-	Total        int64
-	ByRule       map[string]int64
-	Filled, Hits int64
+	Total  int64
+	ByRule map[string]int64
+	// Filled counts backfilled rows; Judged excludes insufficient-sample rows
+	// (hit IS NULL) so the auto-mode criterion is not biased by unjudgeable data.
+	Filled, Judged, Hits int64
 }
 
 func NewID(now time.Time, instance string, channel int64, rule string) string {
