@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-14",
+    type: "review",
+    version: "",
+    title: "v2.2-B1 验收：整体通过，tailer 三项数据正确性缺陷返工",
+    summary: "通过项：零消息推送、失效安全（缺文件重试有测试+复核）、独立模式 WARN、007 迁移钉扎、桶 upsert 幂等、慢样本唯一键防重、retention 并入、API 走 protect 不泄漏存储结构体、Web 延时分诊页完整（归因卡+三图+慢样本表+空态）、全测试绿。返工项（P1 已写复现测试实证）：① EOF 残行被当完整行解析，rt 截断值入桶且误判慢请求归因；② 非 EOF 读错误后重开从头回放整个文件，覆盖 Server 历史桶；③ 分钟边界乱序使同分钟桶分裂，upsert 后写覆盖先写导致该分钟缩水。修复单 codex-task-v2.2-b1-fix-tailer.md，仅动 nginxtiming 包。",
+    docs: ["docs/codex-task-v2.2-b1-fix-tailer.md", "docs/codex-task-v2.2-b1-nginx-timing-analytics.md"],
+    commits: ["ea466c4"]
+  },
+  {
+    date: "2026-07-14",
     type: "feature",
     version: "v2.2-B1",
     title: "Nginx timing 延时分诊分析链路",
