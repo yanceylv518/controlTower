@@ -96,8 +96,8 @@ func run() error {
 
 	var alertNotifier *erroralert.Notifier
 	var nameRefresher *channelNameRefresher
-	if cfg.DingTalkWebhookURL != "" {
-		alertNotifier = erroralert.New(cfg.DingTalkWebhookURL, cfg.InstanceID, cfg.AlertErrorWindow, cfg.AlertErrorThreshold, log.Printf).
+	if cfg.WeComWebhookURL != "" {
+		alertNotifier = erroralert.New(cfg.WeComWebhookURL, cfg.InstanceID, cfg.AlertErrorWindow, cfg.AlertErrorThreshold, log.Printf).
 			WithWindowMaxAge(time.Duration(cfg.AlertWindowMaxAgeMinutes) * time.Minute).
 			WithRemindInterval(time.Duration(cfg.AlertRemindMinutes) * time.Minute).
 			WithEventLog(filepath.Join(cfg.DataDir, "alert-events.jsonl"))
@@ -109,7 +109,7 @@ func run() error {
 
 	// Standalone alert-only mode: no server configured, so skip heartbeat and
 	// reporting entirely and only collect from the source logs table to feed
-	// the DingTalk error alert.
+	// the WeCom error alert.
 	if cfg.ServerURL == "" {
 		return runCollectorLoop(ctx, cfg, func(passCtx context.Context) error {
 			return collectAndAlertOnce(passCtx, cfg, alertNotifier, nameRefresher)
@@ -338,7 +338,7 @@ func collectAndReportFullPass(ctx context.Context, client controlTowerReporter, 
 	}
 
 	// Alert evaluation runs right after collection so a report failure below
-	// does not delay or drop DingTalk notifications.
+	// does not delay or drop WeCom notifications.
 	alertStats := notifier.Process(ctx, events)
 	log.Printf("control tower alert pass: after_log_id=%d last_log_id=%d events=%d errors=%d channel_dimensions=%d user_dimensions=%d alerts_triggered=%d alerts_sent=%d alerts_failed=%d",
 		current.LastLogID, lastLogID, alertStats.EventCount, alertStats.ErrorCount,

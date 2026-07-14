@@ -31,9 +31,9 @@ Production defaults to `CT_LOG_EVENT_MODE=aggregate_with_samples`.
 - `aggregate_with_samples`: upload aggregated metrics plus limited error/slow log samples.
 - `full_debug`: upload every collected log event; needed only for the server-side `recent_errors` rule or local debugging.
 
-## Agent-Side DingTalk Error Alert
+## Agent-Side WeCom Error Alert
 
-Set `CT_DINGTALK_WEBHOOK_URL` to a DingTalk group robot webhook to enable the
+Set `CT_WECOM_WEBHOOK_URL` to a WeCom group robot webhook to enable the
 built-in error alert: for any channel and any user, when
 `CT_ALERT_ERROR_THRESHOLD` (default 3) or more of that dimension's most recent
 `CT_ALERT_ERROR_WINDOW` (default 10) requests are errors, the agent sends one
@@ -93,7 +93,7 @@ Copy the agent binary and `deploy/install-agent.sh` to the new-api server, then:
 sudo ./install-agent.sh
 ```
 
-The installer asks for the read-only MySQL DSN and the DingTalk webhook, then
+The installer asks for the read-only MySQL DSN and the WeCom webhook, then
 installs the binary, config (0600), a hardened systemd unit, runs preflight,
 and starts the service. Re-running the installer overwrites the config and
 restarts the service. Non-interactive options:
@@ -202,7 +202,7 @@ Preflight only reads MySQL metadata and source rows needed to verify queryabilit
 
 ## Nginx Timing 延时分析
 
-完整上报模式可只读 tail Nginx `timed` 访问日志，将 TTFT、传输段、5xx/504 和慢样本按分钟聚合后显示在 Web「延时分诊」页。字段格式与分诊公式见 [`docs/latency-diagnosis.md`](../docs/latency-diagnosis.md)。该模块只做分析，不发送钉钉或任何告警消息。
+完整上报模式可只读 tail Nginx `timed` 访问日志，将 TTFT、传输段、5xx/504 和慢样本按分钟聚合后显示在 Web「延时分诊」页。字段格式与分诊公式见 [`docs/latency-diagnosis.md`](../docs/latency-diagnosis.md)。该模块只做分析，不发送企业微信或任何告警消息。
 
 ```ini
 CT_NGINX_ACCESS_LOG=/var/log/nginx/newapi-timing.log

@@ -22,7 +22,7 @@ const (
 
 // Notifier keeps a sliding window of recent request outcomes per channel and
 // per user, collected directly from the source logs table, and pushes a
-// DingTalk group message when a dimension reaches the error threshold within
+// WeCom group message when a dimension reaches the error threshold within
 // its window. State lives in memory only: a restart starts with empty windows.
 type Notifier struct {
 	webhookURL     string
@@ -187,7 +187,7 @@ func (n *Notifier) Process(ctx context.Context, events []logcollector.Event) Pro
 	for _, message := range pending {
 		if err := n.send(ctx, message.content); err != nil {
 			stats.AlertsSendFailures++
-			n.logf("control tower dingtalk alert failed: %v", err)
+			n.logf("control tower wecom alert failed: %v", err)
 			n.mu.Lock()
 			if state, ok := n.states[message.key]; ok {
 				rule := message.ruleState(state)
@@ -447,13 +447,13 @@ func (n *Notifier) send(ctx context.Context, content string) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("dingtalk webhook returned HTTP %d", resp.StatusCode)
+		return fmt.Errorf("wecom webhook returned HTTP %d", resp.StatusCode)
 	}
-	// DingTalk robots answer HTTP 200 even on rejection; the real outcome is
+	// WeCom robots answer HTTP 200 even on rejection; the real outcome is
 	// in the errcode field of the response body.
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	if err != nil {
-		return fmt.Errorf("read dingtalk response: %w", err)
+		return fmt.Errorf("read wecom response: %w", err)
 	}
 	var result struct {
 		ErrCode int    `json:"errcode"`
@@ -463,7 +463,7 @@ func (n *Notifier) send(ctx context.Context, content string) error {
 		return nil
 	}
 	if result.ErrCode != 0 {
-		return fmt.Errorf("dingtalk errcode %d: %s", result.ErrCode, result.ErrMsg)
+		return fmt.Errorf("wecom errcode %d: %s", result.ErrCode, result.ErrMsg)
 	}
 	return nil
 }

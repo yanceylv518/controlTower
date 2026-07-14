@@ -11,7 +11,7 @@
 - Agent 直接读取 new-api MySQL 的 `logs` 表。
 - Agent 每 30 秒增量查询一次。
 - Agent 按渠道和客户分别维护最近 10 条请求。
-- 最近 10 条中错误数达到 3 条时发送钉钉告警。
+- 最近 10 条中错误数达到 3 条时发送企业微信告警。
 - 不需要部署 Control Tower Server。
 - 不修改 new-api 代码、路由或请求链路。
 - 不读取请求体、响应体、API Key 或 Cookie。
@@ -65,23 +65,15 @@ SHOW INDEX FROM newapi.logs;
 
 重点确认 `logs.id` 存在索引。Agent 使用日志 ID 增量读取，不会每 30 秒扫描整个表。
 
-## 4. 创建钉钉机器人
+## 4. 创建企业微信机器人
 
-在钉钉目标群中：
+在企业微信目标群中：
 
 1. 打开群设置。
-2. 进入机器人管理。
-3. 添加自定义机器人。
-4. 安全设置选择“自定义关键词”。
-5. 关键词设置为：
+2. 选择“添加群机器人”。
+3. 新建机器人并复制 Webhook 地址。
 
-```text
-告警
-```
-
-6. 复制机器人 Webhook 地址。
-
-当前 Agent 使用 Webhook 方式发送文本告警，暂不支持钉钉加签模式。
+Webhook 格式为 `https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...`。Agent 发送文本消息并校验企业微信响应中的 `errcode`。
 
 ## 5. 上传和解压部署包
 
@@ -144,7 +136,7 @@ CT_AGENT_ID=agent-prod-01
 CT_INSTANCE_ID=inst-prod-01
 CT_LOG_DSN=actual_user:数据库密码@tcp(127.0.0.1:3306)/newapi?parseTime=false&timeout=2s
 CT_DATA_DIR=/var/lib/control-tower-agent
-CT_DINGTALK_WEBHOOK_URL=https://oapi.dingtalk.com/robot/send?access_token=钉钉Token
+CT_WECOM_WEBHOOK_URL=https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=企业微信机器人Key
 CT_ALERT_ERROR_WINDOW=10
 CT_ALERT_ERROR_THRESHOLD=3
 CT_LOG_POLL_INTERVAL_SECONDS=30
@@ -252,7 +244,7 @@ sudo ./install-agent.sh --binary ./control-tower-agent --config ./agent.config
 
 ### 9.4 Webhook Token 泄露
 
-如果 Webhook 出现在截图、聊天或日志中，应立即在钉钉机器人设置中重新生成 Webhook，然后更新：
+如果 Webhook 出现在截图、聊天或日志中，应立即删除并重新创建企业微信机器人，然后更新：
 
 ```bash
 sudo nano /etc/control-tower/agent.config

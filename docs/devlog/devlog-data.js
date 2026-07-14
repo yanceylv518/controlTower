@@ -4,6 +4,15 @@ window.DEVLOG = [
   {
     date: "2026-07-14",
     type: "release",
+    version: "v1.1.2",
+    title: "Agent 直发告警切换为企业微信机器人",
+    summary: "Agent 告警通道由钉钉整体切换到企业微信群机器人，配置改为 CT_WECOM_WEBHOOK_URL；文本载荷继续校验 errcode，失败保持下轮重试。告警规则、episode、提醒与缓存失效检测不变。旧钉钉变量不再读取，避免迁移期间双发；安装脚本、配置示例与部署手册已同步。Server 通知中心不在本次范围内。",
+    docs: ["docs/iteration-log.md", "docs/deployment-error-alert.md", "docs/v2-deploy-runbook.md"],
+    commits: []
+  },
+  {
+    date: "2026-07-14",
+    type: "release",
     version: "v1.1.1",
     title: "告警 Agent v1.1.1：移除慢返回告警，新增缓存失效预警",
     summary: "生产反馈：慢返回告警噪音大于价值，整条规则与配置移除。新增渠道级缓存失效检测：最近 10 条输入 >512 tokens 的成功请求全部未命中缓存（other.cache_tokens 缺失或 0）→ 钉钉告警，任一命中即重臂，episode/衰减/提醒复用既有骨架。已知限制：不支持缓存的渠道会告警（调高下限或关规则）。runbook 4.1 钉钉验收改为 webhook 直测。全测试绿；待重建二进制部署生产。",

@@ -38,7 +38,7 @@ type Config struct {
 	ChannelSnapshotLimit           int
 	ChannelSnapshotIntervalSeconds int
 	RunOnce                        bool
-	DingTalkWebhookURL             string
+	WeComWebhookURL                string
 	AlertErrorWindow               int
 	AlertErrorThreshold            int
 	AlertWindowMaxAgeMinutes       int
@@ -105,7 +105,7 @@ func LoadFromMap(values map[string]string) (Config, error) {
 		ChannelSnapshotLimit:           intOrDefault(values, "CT_CHANNEL_SNAPSHOT_LIMIT", 1000),
 		ChannelSnapshotIntervalSeconds: intOrDefault(values, "CT_CHANNEL_SNAPSHOT_INTERVAL_SECONDS", 600),
 		RunOnce:                        boolOrDefault(values, "CT_AGENT_RUN_ONCE", false),
-		DingTalkWebhookURL:             values["CT_DINGTALK_WEBHOOK_URL"],
+		WeComWebhookURL:                values["CT_WECOM_WEBHOOK_URL"],
 		AlertErrorWindow:               intOrDefault(values, "CT_ALERT_ERROR_WINDOW", 10),
 		AlertErrorThreshold:            intOrDefault(values, "CT_ALERT_ERROR_THRESHOLD", 3),
 		AlertWindowMaxAgeMinutes:       intOrDefault(values, "CT_ALERT_WINDOW_MAX_AGE_MINUTES", 60),
@@ -118,16 +118,16 @@ func LoadFromMap(values map[string]string) (Config, error) {
 	if cfg.AgentID == "" || cfg.InstanceID == "" || cfg.LogDSN == "" {
 		return Config{}, errors.New("missing required control tower agent config")
 	}
-	// Standalone alert-only mode: with a DingTalk webhook configured the
+	// Standalone alert-only mode: with a WeCom webhook configured the
 	// server connection becomes optional; otherwise it stays required.
-	if cfg.ServerURL == "" && cfg.DingTalkWebhookURL == "" {
+	if cfg.ServerURL == "" && cfg.WeComWebhookURL == "" {
 		return Config{}, errors.New("missing required control tower agent config")
 	}
 	if cfg.ServerURL != "" && cfg.AgentToken == "" {
 		return Config{}, errors.New("missing required control tower agent config")
 	}
-	if cfg.DingTalkWebhookURL != "" && !strings.HasPrefix(cfg.DingTalkWebhookURL, "http://") && !strings.HasPrefix(cfg.DingTalkWebhookURL, "https://") {
-		return Config{}, errors.New("CT_DINGTALK_WEBHOOK_URL must be an http or https URL")
+	if cfg.WeComWebhookURL != "" && !strings.HasPrefix(cfg.WeComWebhookURL, "http://") && !strings.HasPrefix(cfg.WeComWebhookURL, "https://") {
+		return Config{}, errors.New("CT_WECOM_WEBHOOK_URL must be an http or https URL")
 	}
 	if cfg.AlertErrorWindow < 1 || cfg.AlertErrorWindow > 1000 {
 		return Config{}, errors.New("CT_ALERT_ERROR_WINDOW must be between 1 and 1000")
@@ -210,7 +210,7 @@ func envMap() map[string]string {
 		"CT_CHANNEL_SNAPSHOT_LIMIT",
 		"CT_CHANNEL_SNAPSHOT_INTERVAL_SECONDS",
 		"CT_AGENT_RUN_ONCE",
-		"CT_DINGTALK_WEBHOOK_URL",
+		"CT_WECOM_WEBHOOK_URL",
 		"CT_ALERT_ERROR_WINDOW",
 		"CT_ALERT_ERROR_THRESHOLD",
 		"CT_ALERT_WINDOW_MAX_AGE_MINUTES",

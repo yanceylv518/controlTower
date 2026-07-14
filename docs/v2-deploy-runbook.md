@@ -2,7 +2,7 @@
 
 **拓扑**：Control Tower 服务器 = 腾讯云上海 Ubuntu（下文占位 `CT_IP`，替换为实际公网 IP）；new-api ×2 = 阿里云杭州（`HZ_IP`）、腾讯云香港（`HK_IP`）。数据库 = CT 服务器上 Compose 自建 MySQL。
 
-**原则**：一次只做一步，每步有"预期结果"，不符就停下把输出贴给 Claude。全程钉钉告警不中断（接入动作可随时回滚）。
+**原则**：一次只做一步，每步有“预期结果”，不符就停止并检查输出。企业微信告警切换前先直测新机器人，接入动作可随时回滚。
 
 ---
 
@@ -12,7 +12,7 @@
 
 - 地域：**上海**；镜像：**Ubuntu 22.04 LTS 或 24.04 LTS**；
 - 规格：2 核 4G 起步足够（Server+MySQL+面板都很轻）；系统盘 ≥40G；
-- 公网：分配公网 IP，**计费方式选按流量**（Agent 上报是入方向不计费，出方向只有看板和钉钉通知，月流量费不到 1 元）；峰值带宽设 20~50Mbps（看板秒开）；控制台顺手设一个流量费用告警（如月超 5 元提醒）。
+- 公网：分配公网 IP，**计费方式选按流量**（Agent 上报是入方向不计费，出方向主要是看板访问，月流量费通常很低）；峰值带宽设 20~50Mbps（看板秒开）；控制台顺手设一个流量费用告警（如月超 5 元提醒）。
 
 ### 0.2 查你自己的公网 IP（配安全组用）
 
@@ -163,10 +163,10 @@ curl -s -o /dev/null -w '%{http_code}' http://CT_IP:8080/healthz
 
 ```bash
 cd /tmp
-wget https://github.com/yanceylv518/controlTower/releases/download/v2.0.0-rc2/control-tower-agent-v2.0.0-rc2-linux-amd64.tar.gz
-tar xzf control-tower-agent-v2.0.0-rc2-linux-amd64.tar.gz
-cd control-tower-agent-v2.0.0-rc2-linux-amd64   # 目录名以解压实际为准 ls 确认
-sha256sum -c <(grep agent-v2.0.0-rc2-linux-amd64 SHA256SUMS) 2>/dev/null || echo "校验清单在包外时跳过"
+wget https://github.com/yanceylv518/controlTower/releases/download/v2.0.0-rc4/control-tower-agent-v2.0.0-rc4-linux-amd64.tar.gz
+tar xzf control-tower-agent-v2.0.0-rc4-linux-amd64.tar.gz
+cd control-tower-agent-v2.0.0-rc4-linux-amd64   # 目录名以解压实际为准 ls 确认
+sha256sum -c <(grep agent-v2.0.0-rc4-linux-amd64 SHA256SUMS) 2>/dev/null || echo "校验清单在包外时跳过"
 ```
 
 ### 3.2 路径 A：已有 Agent 的机器（升级 + 双模式）
@@ -180,8 +180,8 @@ sudo cp /etc/control-tower/agent.config /etc/control-tower/agent.config.bak
 # 2. 换新二进制
 sudo cp control-tower-agent /usr/local/bin/control-tower-agent
 
-# 3. 编辑配置：追加三行（其余一行都不动，尤其钉钉 webhook）
-sudo vim /etc/control-tower/agent.config
+# 3. 编辑配置：追加三行，并把旧钉钉变量替换为企业微信 webhook
+sudo nano /etc/control-tower/agent.config
 ```
 
 追加（以香港机为例；杭州机 token 与 instance id 换成杭州的）：
@@ -190,6 +190,7 @@ sudo vim /etc/control-tower/agent.config
 CT_SERVER_URL=http://<CT_IP>:8080
 CT_AGENT_TOKEN=<香港 token>
 CT_INSTANCE_ID=inst-hongkong
+CT_WECOM_WEBHOOK_URL=https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=<企业微信机器人Key>
 ```
 
 **⚠ 注意**：配置里若已有旧的 `CT_INSTANCE_ID`（如 `inst-prod-01`），**必须改成新实例 id**——token 与实例不匹配会被网关 403 拒绝。
@@ -208,22 +209,22 @@ sudo systemctl start control-tower-agent
 journalctl -u control-tower-agent -f
 ```
 
-**预期**（一分钟内依次出现）：版本行含 `v2.0.0-rc2`；每 30 秒一条 `alert pass` 审计日志；**无** 401/403/connection refused。Ctrl+C 退出观察。
+**预期**（一分钟内依次出现）：版本行含 `v2.0.0-rc4`；每 30 秒一条 `alert pass` 审计日志；**无** 401/403/connection refused。Ctrl+C 退出观察。
 
 ### 3.3 路径 B：全新安装的机器
 
-先按 v1.0 流程准备：该机 MySQL 建只读账号（`GRANT SELECT ON newapi.logs`、可选 `channels`），钉钉群机器人 webhook（关键词"告警"，建议与另一台同群或按需分群）。然后：
+先按 v1.0 流程准备：该机 MySQL 建只读账号（`GRANT SELECT ON newapi.logs`、可选 `channels`），并创建企业微信群机器人。然后：
 
 ```bash
 cp agent.standalone.config.example agent.config
-vim agent.config     # 填 DSN、钉钉 webhook，并加上 3.2 的三行（token/instance 用本机对应值）
+nano agent.config    # 填 DSN、企业微信 webhook，并加上 3.2 的三行（token/instance 用本机对应值）
 sudo ./install-agent.sh --binary ./control-tower-agent --config ./agent.config
 journalctl -u control-tower-agent -f   # 预期同 3.2
 ```
 
 ### 3.4 每台接入后：Web 三查（~2 分钟）
 
-1. 实例管理页：该实例 Agent **在线**、版本 `v2.0.0-rc2`、最后心跳在滚动；
+1. 实例管理页：该实例 Agent **在线**、版本 `v2.0.0-rc4`、最后心跳在滚动；
 2. 总览页顶栏切到该实例：1~2 分钟后 KPI/趋势出现数据；
 3. 系统状态页：该实例的系统指标/健康检查/容器状态有记录。
 
@@ -238,7 +239,7 @@ sudo cp /etc/control-tower/agent.config.bak /etc/control-tower/agent.config
 sudo systemctl start control-tower-agent
 ```
 
-即刻回到升级前状态（纯钉钉模式），零损失。然后把异常日志贴给 Claude。
+即刻回到升级前状态。然后检查日志定位异常。
 
 ---
 
@@ -246,7 +247,7 @@ sudo systemctl start control-tower-agent
 
 ### 4.1 当天验收（~15 分钟）
 
-1. **钉钉链路**：直接探测 webhook（不动 Agent 配置）：`curl -sS -X POST '<钉钉webhook>' -H 'Content-Type: application/json' -d '{"msgtype":"text","text":{"content":"[告警] Control Tower 链路测试"}}'`。**预期**：返回 `"errcode":0` 且群里收到消息；再 `journalctl -u control-tower-agent --since -5m | grep "alert pass"` 确认告警循环在跑；
+1. **企业微信链路**：直接探测 webhook（不动 Agent 配置）：`curl -sS -X POST '<企业微信webhook>' -H 'Content-Type: application/json' -d '{"msgtype":"text","text":{"content":"[告警] Control Tower 链路测试"}}'`。**预期**：返回 `"errcode":0` 且群里收到消息；再 `journalctl -u control-tower-agent --since -5m | grep "alert pass"` 确认告警循环在跑；
 2. **看板巡检**：两实例切换看总览/客户/渠道/模型/用量各页，数据归属正确不串；配了 nginx timing 的机器再看「延时分诊」页（/latency）有分钟桶数据；
 3. **磁盘基线**：CT 服务器 `df -h` 记录当前占用（观察期对比用）。
 
@@ -254,7 +255,7 @@ sudo systemctl start control-tower-agent
 
 - [ ] 两实例在线、心跳正常（实例管理页）
 - [ ] 杭州→上海、香港→上海上报无持续报错（各机 `journalctl -u control-tower-agent --since today | grep -ci error` 接近 0）
-- [ ] 钉钉告警质量正常（无异常静默/刷屏）
+- [ ] 企业微信告警质量正常（无异常静默/刷屏）
 - [ ] CT 服务器 `docker compose logs --since 24h server | grep -ci error` 接近 0；磁盘增长符合预期（保留清理生效）
 - [ ] （自动开始，无需配置）调权影子数据在积累：`「延时分诊」旁不用管，观察期结束时查一次 GET /api/dashboard/tuning/report?instance_id=<id>&days=7 有建议流水即可`
 

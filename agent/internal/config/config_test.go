@@ -176,45 +176,57 @@ func TestLoadFromMapRejectsInvalidLogEventMode(t *testing.T) {
 	}
 }
 
-func TestLoadFromMapAllowsStandaloneDingTalkMode(t *testing.T) {
+func TestLoadFromMapAllowsStandaloneWeComMode(t *testing.T) {
 	cfg, err := LoadFromMap(map[string]string{
-		"CT_AGENT_ID":             "agent-1",
-		"CT_INSTANCE_ID":          "inst-1",
-		"CT_LOG_DSN":              "readonly-dsn",
-		"CT_DINGTALK_WEBHOOK_URL": "https://oapi.dingtalk.com/robot/send?access_token=x",
+		"CT_AGENT_ID":          "agent-1",
+		"CT_INSTANCE_ID":       "inst-1",
+		"CT_LOG_DSN":           "readonly-dsn",
+		"CT_WECOM_WEBHOOK_URL": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=x",
 	})
 	if err != nil {
-		t.Fatalf("standalone dingtalk mode should be valid: %v", err)
+		t.Fatalf("standalone wecom mode should be valid: %v", err)
 	}
 	if cfg.ServerURL != "" || cfg.AlertErrorWindow != 10 || cfg.AlertErrorThreshold != 3 {
 		t.Fatalf("unexpected standalone config: %#v", cfg)
 	}
 }
 
-func TestLoadFromMapRejectsMissingServerAndDingTalk(t *testing.T) {
+func TestLoadFromMapRejectsMissingServerAndWeCom(t *testing.T) {
 	_, err := LoadFromMap(map[string]string{
 		"CT_AGENT_ID":    "agent-1",
 		"CT_INSTANCE_ID": "inst-1",
 		"CT_LOG_DSN":     "readonly-dsn",
 	})
 	if err == nil {
-		t.Fatalf("expected error when neither server nor dingtalk webhook is configured")
+		t.Fatalf("expected error when neither server nor wecom webhook is configured")
+	}
+}
+
+func TestLoadFromMapDoesNotUseLegacyDingTalkWebhook(t *testing.T) {
+	_, err := LoadFromMap(map[string]string{
+		"CT_AGENT_ID":             "agent-1",
+		"CT_INSTANCE_ID":          "inst-1",
+		"CT_LOG_DSN":              "readonly-dsn",
+		"CT_DINGTALK_WEBHOOK_URL": "https://oapi.dingtalk.com/robot/send?access_token=legacy",
+	})
+	if err == nil {
+		t.Fatal("legacy DingTalk webhook must not keep standalone alert mode enabled")
 	}
 }
 
 func TestLoadFromMapRejectsInvalidAlertSettings(t *testing.T) {
 	base := map[string]string{
-		"CT_AGENT_ID":             "agent-1",
-		"CT_INSTANCE_ID":          "inst-1",
-		"CT_LOG_DSN":              "readonly-dsn",
-		"CT_DINGTALK_WEBHOOK_URL": "https://oapi.dingtalk.com/robot/send?access_token=x",
+		"CT_AGENT_ID":          "agent-1",
+		"CT_INSTANCE_ID":       "inst-1",
+		"CT_LOG_DSN":           "readonly-dsn",
+		"CT_WECOM_WEBHOOK_URL": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=x",
 	}
 
 	invalidURL := map[string]string{}
 	for key, value := range base {
 		invalidURL[key] = value
 	}
-	invalidURL["CT_DINGTALK_WEBHOOK_URL"] = "oapi.dingtalk.com/robot"
+	invalidURL["CT_WECOM_WEBHOOK_URL"] = "qyapi.weixin.qq.com/cgi-bin/webhook/send"
 	if _, err := LoadFromMap(invalidURL); err == nil {
 		t.Fatalf("expected error for webhook url without scheme")
 	}
@@ -231,7 +243,7 @@ func TestLoadFromMapRejectsInvalidAlertSettings(t *testing.T) {
 }
 
 func TestNoCacheAlertDefaultsAndValidation(t *testing.T) {
-	base := map[string]string{"CT_AGENT_ID": "a", "CT_INSTANCE_ID": "i", "CT_LOG_DSN": "dsn", "CT_DINGTALK_WEBHOOK_URL": "https://example.com/hook"}
+	base := map[string]string{"CT_AGENT_ID": "a", "CT_INSTANCE_ID": "i", "CT_LOG_DSN": "dsn", "CT_WECOM_WEBHOOK_URL": "https://example.com/hook"}
 	cfg, err := LoadFromMap(base)
 	if err != nil {
 		t.Fatal(err)

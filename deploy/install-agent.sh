@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Control Tower Agent one-command installer (standalone DingTalk alert mode).
+# Control Tower Agent one-command installer (standalone WeCom alert mode).
 #
 # Usage:
 #   sudo ./install-agent.sh                          # interactive
 #   sudo ./install-agent.sh --config my-agent.config # use a prepared config file
 #   sudo ./install-agent.sh --dsn 'user:pass@tcp(127.0.0.1:3306)/newapi' \
-#                           --webhook 'https://oapi.dingtalk.com/robot/send?access_token=...'
+#                           --webhook 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...'
 #
 # Optional flags: --binary PATH   agent binary (default: auto-detect next to this script)
 #                 --window N      alert window   (default 10)
@@ -66,7 +66,7 @@ if [[ -z "$CONFIG_SRC" ]]; then
     read -rp "DSN: " DSN
   fi
   if [[ -z "$WEBHOOK" ]]; then
-    echo "钉钉群机器人 Webhook (机器人安全设置: 自定义关键词 填 告警)"
+    echo "企业微信群机器人 Webhook (https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...)"
     read -rp "Webhook URL: " WEBHOOK
   fi
   [[ -n "$DSN" && -n "$WEBHOOK" ]] || { echo "DSN and webhook are required" >&2; exit 1; }
@@ -90,7 +90,7 @@ CT_AGENT_ID=agent-$host_tag
 CT_INSTANCE_ID=inst-$host_tag
 CT_LOG_DSN=$DSN
 CT_DATA_DIR=$DATA_DIR
-CT_DINGTALK_WEBHOOK_URL=$WEBHOOK
+CT_WECOM_WEBHOOK_URL=$WEBHOOK
 CT_ALERT_ERROR_WINDOW=$WINDOW
 CT_ALERT_ERROR_THRESHOLD=$THRESHOLD
 CT_LOG_POLL_INTERVAL_SECONDS=30

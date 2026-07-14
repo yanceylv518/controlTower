@@ -259,7 +259,7 @@ func TestNotifierRetriesAfterSendFailure(t *testing.T) {
 	defer server.Close()
 	n := New(server.URL, "inst-a", 10, 3, nil)
 
-	c.setErrcode(`{"errcode":310000,"errmsg":"keywords not in content"}`)
+	c.setErrcode(`{"errcode":93000,"errmsg":"invalid webhook url"}`)
 	n.Process(context.Background(), events("error", 3, 18, 0, ""))
 
 	// The next pass retries even without new events for that dimension.
@@ -302,7 +302,7 @@ func TestNotifierFallsBackToChannelIDWithoutName(t *testing.T) {
 	}
 }
 
-func TestNotifierMessageContainsDingTalkKeyword(t *testing.T) {
+func TestNotifierMessageContainsAlertKeyword(t *testing.T) {
 	c := &capture{}
 	server := c.server()
 	defer server.Close()
@@ -311,7 +311,7 @@ func TestNotifierMessageContainsDingTalkKeyword(t *testing.T) {
 	n.Process(context.Background(), events("error", 3, 18, 0, ""))
 
 	if got := c.matching("\u544a\u8b66"); got != 1 {
-		t.Fatalf("expected DingTalk keyword in alert message, got %d", got)
+		t.Fatalf("expected alert keyword in message, got %d", got)
 	}
 }
 
@@ -421,7 +421,7 @@ func TestNotifierRetriesFailedReminder(t *testing.T) {
 
 	n.Process(context.Background(), timedEvents(1, base, "error", 3, 26))
 
-	c.setErrcode(`{"errcode":310000,"errmsg":"keywords not in content"}`)
+	c.setErrcode(`{"errcode":93000,"errmsg":"invalid webhook url"}`)
 	n.now = func() time.Time { return base.Add(61 * time.Minute) }
 	n.Process(context.Background(), nil)
 
@@ -508,7 +508,7 @@ func TestNoCacheAlertSendFailureRetriesIndependently(t *testing.T) {
 	defer server.Close()
 	n := New(server.URL, "inst-a", 10, 3, nil).WithNoCacheRule(512, 10)
 
-	c.setErrcode(`{"errcode":310000,"errmsg":"keywords not in content"}`)
+	c.setErrcode(`{"errcode":93000,"errmsg":"invalid webhook url"}`)
 	for i := int64(1); i <= 10; i++ {
 		n.Process(context.Background(), []logcollector.Event{cacheEvent(i, 18, 600, 0, false, "consume")})
 	}
