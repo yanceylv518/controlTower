@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-14",
+    type: "feature",
+    version: "v2.1-B1",
+    title: "渠道调权评估引擎进入 observe 观察模式",
+    summary: "Server 新增按实例策略、加权错误率评估、持续窗口与冷却控制，仅生成 recorded 建议；recover 只模拟有 degrade 前科的渠道并封顶原始权重。建议在 30 分钟后回填走势与命中结果，Dashboard 提供策略、建议流水和 7/30 天命中率 API。全批次不创建渠道命令、不访问 new-api、不修改 Agent。",
+    docs: ["docs/codex-task-v2.1-b1-tuning-observe.md", "docs/design-v2.1-auto-tuning.md"],
+    commits: []
+  },
+  {
+    date: "2026-07-14",
     type: "review",
     version: "",
     title: "v2.2-B1-fix 验收通过（附一处竞态补丁）",

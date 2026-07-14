@@ -17,6 +17,7 @@ import (
 	"controltower/server/internal/httpapi"
 	"controltower/server/internal/mysqlstore"
 	"controltower/server/internal/storage"
+	"controltower/server/internal/tuning"
 )
 
 func main() {
@@ -78,14 +79,24 @@ func run() error {
 	startNotificationRunner(store, time.Duration(cfg.NotificationIntervalSeconds)*time.Second)
 	startChannelSnapshotRetentionRunner(store, cfg.ChannelSnapshotRetentionDays)
 	startRetentionRunner(store, cfg.RetentionDetailDays, cfg.RetentionMetric5mDays, cfg.RetentionRuntimeDays)
+	startTuningRunner(store)
 
 	server := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           httpapi.NewMux(httpapi.Options{AgentToken: cfg.AgentToken, DashboardToken: cfg.DashboardToken, Store: store, AuthManager: authManager, AgentTokenPepper: cfg.AgentTokenPepper, NotificationMaxAttempts: cfg.NotificationMaxAttempts, CommandExpiry: time.Duration(cfg.CommandExpiryMinutes) * time.Minute}),
+		Handler:           httpapi.NewMux(httpapi.Options{AgentToken: cfg.AgentToken, DashboardToken: cfg.DashboardToken, Store: store, TuningStore: store, AuthManager: authManager, AgentTokenPepper: cfg.AgentTokenPepper, NotificationMaxAttempts: cfg.NotificationMaxAttempts, CommandExpiry: time.Duration(cfg.CommandExpiryMinutes) * time.Minute}),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	log.Printf("control tower server listening on %s", cfg.ListenAddr)
 	return server.ListenAndServe()
+}
+
+func startTuningRunner(store mysqlstore.Store) {
+	runner := tuning.NewEngine(store)
+	go func() {
+		if err := runner.Run(context.Background()); err != nil && !errors.Is(err, context.Canceled) {
+			log.Printf("tuning runner stopped: %v", err)
+		}
+	}()
 }
 
 type retentionStore interface {
