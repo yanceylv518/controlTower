@@ -11,6 +11,8 @@ import (
 const maxValuesPerBucket = 10000
 const maxSamplesPerBucket = 5
 const maxQueuedBuckets = 720
+const maxOpenBuckets = 5
+const bucketCloseGrace = 5 * time.Second
 
 type Bucket struct {
 	BucketAt          time.Time `json:"bucket_at"`
@@ -59,28 +61,38 @@ type bucketState struct {
 }
 
 type Aggregator struct {
-	mu          sync.Mutex
-	slowSeconds float64
-	current     *bucketState
-	queue       []pendingBucket
-	warnedFull  bool
+	mu            sync.Mutex
+	slowSeconds   float64
+	open          map[time.Time]*bucketState
+	closedThrough time.Time
+	forcedClosed  map[time.Time]struct{}
+	forcedOrder   []time.Time
+	queue         []pendingBucket
+	warnedFull    bool
 }
 
 func NewAggregator(slowSeconds float64) *Aggregator {
-	return &Aggregator{slowSeconds: slowSeconds}
+	return &Aggregator{slowSeconds: slowSeconds, open: make(map[time.Time]*bucketState), forcedClosed: make(map[time.Time]struct{})}
 }
 
 func (a *Aggregator) Add(entry Entry) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	bucketAt := entry.OccurredAt.UTC().Truncate(time.Minute)
-	if a.current == nil || !a.current.bucket.BucketAt.Equal(bucketAt) {
-		if a.current != nil {
-			a.enqueue(a.closeCurrent())
-		}
-		a.current = &bucketState{bucket: Bucket{BucketAt: bucketAt}}
+	if !a.closedThrough.IsZero() && !bucketAt.After(a.closedThrough) {
+		return
 	}
-	s := a.current
+	if _, closed := a.forcedClosed[bucketAt]; closed {
+		return
+	}
+	s := a.open[bucketAt]
+	if s == nil {
+		if len(a.open) >= maxOpenBuckets {
+			a.closeOldest()
+		}
+		s = &bucketState{bucket: Bucket{BucketAt: bucketAt}}
+		a.open[bucketAt] = s
+	}
 	s.bucket.RequestCount++
 	s.bucket.BytesTotal += entry.Bytes
 	if entry.Status >= 400 && entry.Status < 500 {
@@ -122,9 +134,29 @@ func (a *Aggregator) Add(entry Entry) {
 func (a *Aggregator) Flush(now time.Time) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.current != nil && a.current.bucket.BucketAt.Before(now.UTC().Truncate(time.Minute)) {
-		a.enqueue(a.closeCurrent())
-		a.current = nil
+	cutoff := now.UTC().Add(-time.Minute - bucketCloseGrace)
+	var due []time.Time
+	for bucketAt := range a.open {
+		if !bucketAt.After(cutoff) {
+			due = append(due, bucketAt)
+		}
+	}
+	sort.Slice(due, func(i, j int) bool { return due[i].Before(due[j]) })
+	for _, bucketAt := range due {
+		a.closeBucket(bucketAt)
+	}
+	closedThrough := cutoff.Truncate(time.Minute)
+	if closedThrough.After(a.closedThrough) {
+		a.closedThrough = closedThrough
+		kept := a.forcedOrder[:0]
+		for _, bucketAt := range a.forcedOrder {
+			if bucketAt.After(a.closedThrough) {
+				kept = append(kept, bucketAt)
+			} else {
+				delete(a.forcedClosed, bucketAt)
+			}
+		}
+		a.forcedOrder = kept
 	}
 }
 
@@ -149,12 +181,34 @@ func (a *Aggregator) Ack(bucketCount int) {
 	a.queue = a.queue[bucketCount:]
 }
 
-func (a *Aggregator) closeCurrent() pendingBucket {
-	s := a.current
+func (a *Aggregator) closeBucket(bucketAt time.Time) {
+	s := a.open[bucketAt]
+	if s == nil {
+		return
+	}
+	delete(a.open, bucketAt)
 	s.bucket.RTP50, s.bucket.RTP95, s.bucket.RTMax = stats(s.rt)
 	s.bucket.UHTP50, s.bucket.UHTP95, s.bucket.UHTMax = stats(s.uht)
 	s.bucket.TransferP50, s.bucket.TransferP95, s.bucket.TransferMax = stats(s.transfer)
-	return pendingBucket{bucket: s.bucket, samples: append([]SlowSample(nil), s.samples...)}
+	a.enqueue(pendingBucket{bucket: s.bucket, samples: append([]SlowSample(nil), s.samples...)})
+}
+
+func (a *Aggregator) closeOldest() {
+	var oldest time.Time
+	for bucketAt := range a.open {
+		if oldest.IsZero() || bucketAt.Before(oldest) {
+			oldest = bucketAt
+		}
+	}
+	if !oldest.IsZero() {
+		a.closeBucket(oldest)
+		a.forcedClosed[oldest] = struct{}{}
+		a.forcedOrder = append(a.forcedOrder, oldest)
+		if len(a.forcedOrder) > maxQueuedBuckets {
+			delete(a.forcedClosed, a.forcedOrder[0])
+			a.forcedOrder = a.forcedOrder[1:]
+		}
+	}
 }
 
 func (a *Aggregator) enqueue(item pendingBucket) {

@@ -1,7 +1,10 @@
 package nginxtiming
 
 import (
+	"bufio"
 	"context"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -38,7 +41,7 @@ func TestAggregatorStatsClassificationAndSamples(t *testing.T) {
 	for _, entry := range entries {
 		a.Add(entry)
 	}
-	a.Flush(base.Add(time.Minute))
+	a.Flush(base.Add(time.Minute + bucketCloseGrace))
 	buckets, samples := a.Snapshot()
 	if len(buckets) != 1 || len(samples) != 2 {
 		t.Fatalf("buckets=%d samples=%d", len(buckets), len(samples))
@@ -53,6 +56,26 @@ func TestAggregatorStatsClassificationAndSamples(t *testing.T) {
 	a.Ack(1)
 	if pending, _ := a.Snapshot(); len(pending) != 0 {
 		t.Fatal("ack did not remove bucket")
+	}
+}
+
+func TestAggregatorMinuteBoundaryOutOfOrder(t *testing.T) {
+	a := NewAggregator(10)
+	base := time.Date(2026, 7, 13, 10, 0, 0, 0, time.UTC)
+	for _, at := range []time.Time{base.Add(59 * time.Second), base.Add(time.Minute), base.Add(59 * time.Second)} {
+		a.Add(Entry{OccurredAt: at, Path: "/x", Status: 200, RT: 1})
+	}
+	a.Flush(base.Add(2*time.Minute + bucketCloseGrace))
+	buckets, _ := a.Snapshot()
+	if len(buckets) != 2 || !buckets[0].BucketAt.Equal(base) || buckets[0].RequestCount != 2 {
+		t.Fatalf("unexpected buckets: %#v", buckets)
+	}
+	// A late line for an already closed minute must not create a second bucket.
+	a.Add(Entry{OccurredAt: base.Add(30 * time.Second), Path: "/late", Status: 200, RT: 1})
+	a.Flush(base.Add(3 * time.Minute))
+	buckets, _ = a.Snapshot()
+	if len(buckets) != 2 {
+		t.Fatalf("closed minute enqueued again: %#v", buckets)
 	}
 }
 
@@ -84,24 +107,25 @@ func TestTailerAppendRotationAndMissingFileRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := NewAggregator(10)
+	baseAt := time.Now().UTC().Truncate(time.Minute)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go Tailer{Path: path, Aggregator: a, Retry: 10 * time.Millisecond}.Run(ctx)
 	time.Sleep(30 * time.Millisecond)
-	appendLine(t, path, timedLine("/one", "13/Jul/2026:10:00:00 +0800"))
+	appendLine(t, path, timedLine("/one", nginxTime(baseAt)))
 	waitForBuckets(t, a, 1)
 	if runtime.GOOS == "windows" {
 		if err := os.Truncate(path, 0); err != nil {
 			t.Fatal(err)
 		}
 		time.Sleep(1100 * time.Millisecond)
-		appendLine(t, path, timedLine("/two", "13/Jul/2026:10:01:00 +0800"))
+		appendLine(t, path, timedLine("/two", nginxTime(baseAt.Add(time.Minute))))
 	} else {
 		rotated := path + ".1"
 		if err := os.Rename(path, rotated); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(path, []byte(timedLine("/two", "13/Jul/2026:10:01:00 +0800")), 0600); err != nil {
+		if err := os.WriteFile(path, []byte(timedLine("/two", nginxTime(baseAt.Add(time.Minute)))), 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -115,13 +139,113 @@ func TestTailerAppendRotationAndMissingFileRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	time.Sleep(25 * time.Millisecond)
-	appendLine(t, missing, timedLine("/later", "13/Jul/2026:10:02:00 +0800"))
+	appendLine(t, missing, timedLine("/later", nginxTime(baseAt.Add(2*time.Minute))))
 	waitForBuckets(t, b, 1)
+}
+
+func TestTailerPartialLine(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "timing.log")
+	if err := os.WriteFile(path, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	a := NewAggregator(10)
+	baseAt := time.Now().UTC().Truncate(time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go Tailer{Path: path, Aggregator: a, Retry: 10 * time.Millisecond}.Run(ctx)
+	time.Sleep(30 * time.Millisecond)
+	appendLine(t, path, `1 - "GET /partial HTTP/1.1" [`+nginxTime(baseAt)+`] status=200 rt=12`)
+	time.Sleep(150 * time.Millisecond)
+	if buckets, _ := a.Snapshot(); len(buckets) != 0 {
+		t.Fatalf("partial line parsed: %#v", buckets)
+	}
+	appendLine(t, path, " uct=0.1 uht=8.5 urt=11 bytes=9\n")
+	waitForBuckets(t, a, 1)
+	buckets, _ := a.Snapshot()
+	if buckets[0].UpstreamCount != 1 || buckets[0].UHTMax != 8.5 {
+		t.Fatalf("partial line not joined: %#v", buckets[0])
+	}
+
+	// A residual old-file line must never be joined to the head of a rotated file.
+	appendLine(t, path, `1 - "GET /stale HTTP/1.1" [`+nginxTime(baseAt.Add(time.Minute))+`] status=200 rt=12`)
+	time.Sleep(30 * time.Millisecond)
+	if runtime.GOOS == "windows" {
+		if err := os.Truncate(path, 0); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(1100 * time.Millisecond)
+		appendLine(t, path, timedLine("/fresh", nginxTime(baseAt.Add(2*time.Minute))))
+	} else {
+		if err := os.Rename(path, path+".1"); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(timedLine("/fresh", nginxTime(baseAt.Add(2*time.Minute)))), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	waitForBuckets(t, a, 2)
+	buckets, _ = a.Snapshot()
+	if len(buckets) != 2 || buckets[1].RequestCount != 1 || buckets[1].UpstreamCount != 1 {
+		t.Fatalf("pending survived rotation: %#v", buckets)
+	}
+}
+
+func TestTailerReadErrorReopensAtOffset(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "timing.log")
+	if err := os.WriteFile(path, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	a := NewAggregator(10)
+	baseAt := time.Now().UTC().Truncate(time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	first := true
+	newReader := func(f *os.File) *bufio.Reader {
+		if first {
+			first = false
+			return bufio.NewReaderSize(&failAfterNewlineReader{source: f}, 1)
+		}
+		return bufio.NewReader(f)
+	}
+	go Tailer{Path: path, Aggregator: a, Retry: 10 * time.Millisecond, newReader: newReader}.Run(ctx)
+	time.Sleep(30 * time.Millisecond)
+	appendLine(t, path, timedLine("/one", nginxTime(baseAt)))
+	time.Sleep(80 * time.Millisecond)
+	appendLine(t, path, timedLine("/two", nginxTime(baseAt.Add(time.Second))))
+	waitForOpenRequestCount(t, a, 2)
+	waitForBuckets(t, a, 1)
+	buckets, _ := a.Snapshot()
+	if buckets[0].RequestCount != 2 {
+		t.Fatalf("same-file reopen replayed data: %#v", buckets[0])
+	}
+}
+
+type failAfterNewlineReader struct {
+	source io.Reader
+	failed bool
+}
+
+func (r *failAfterNewlineReader) Read(p []byte) (int, error) {
+	if r.failed {
+		return 0, errors.New("injected read failure")
+	}
+	if len(p) > 1 {
+		p = p[:1]
+	}
+	n, err := r.source.Read(p)
+	if n == 1 && p[0] == '\n' {
+		r.failed = true
+	}
+	return n, err
 }
 
 func timedLine(path, at string) string {
 	return `1 - "GET ` + path + ` HTTP/1.1" [` + at + `] status=200 rt=12 uct=0.1 uht=8 urt=11 bytes=9` + "\n"
 }
+
+func nginxTime(at time.Time) string { return at.Format("02/Jan/2006:15:04:05 -0700") }
 func appendLine(t *testing.T, path, line string) {
 	t.Helper()
 	f, e := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0600)
@@ -137,7 +261,17 @@ func waitForBuckets(t *testing.T, a *Aggregator, want int) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		a.Flush(time.Now().UTC().Add(time.Minute))
+		a.mu.Lock()
+		var newest time.Time
+		for bucketAt := range a.open {
+			if newest.IsZero() || bucketAt.After(newest) {
+				newest = bucketAt
+			}
+		}
+		a.mu.Unlock()
+		if !newest.IsZero() {
+			a.Flush(newest.Add(time.Minute + bucketCloseGrace))
+		}
 		buckets, _ := a.Snapshot()
 		if len(buckets) >= want {
 			return
@@ -146,4 +280,22 @@ func waitForBuckets(t *testing.T, a *Aggregator, want int) {
 	}
 	buckets, _ := a.Snapshot()
 	t.Fatalf("buckets=%d want=%d", len(buckets), want)
+}
+
+func waitForOpenRequestCount(t *testing.T, a *Aggregator, want int64) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		a.mu.Lock()
+		var got int64
+		for _, state := range a.open {
+			got += state.bucket.RequestCount
+		}
+		a.mu.Unlock()
+		if got >= want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("timed out waiting for open request count")
 }

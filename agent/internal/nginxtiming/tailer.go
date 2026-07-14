@@ -15,7 +15,10 @@ type Tailer struct {
 	Path       string
 	Aggregator *Aggregator
 	Retry      time.Duration
+	newReader  func(*os.File) *bufio.Reader
 }
+
+const maxPendingLineBytes = 64 * 1024
 
 func (t Tailer) Run(ctx context.Context) {
 	retry := t.Retry
@@ -26,6 +29,10 @@ func (t Tailer) Run(ctx context.Context) {
 	var reader *bufio.Reader
 	var openedInfo os.FileInfo
 	var offset int64
+	var pending string
+	discardPending := false
+	firstOpen := true
+	reopenAtStart := false
 	var parsed, skipped int64
 	warned := false
 	statsTicker := time.NewTicker(10 * time.Minute)
@@ -59,21 +66,50 @@ func (t Tailer) Run(ctx context.Context) {
 				}
 				continue
 			}
-			if offset == 0 {
+			if firstOpen {
 				offset, _ = opened.Seek(0, io.SeekEnd)
-			} else {
+				firstOpen = false
+			} else if reopenAtStart {
 				offset, _ = opened.Seek(0, io.SeekStart)
+				pending = ""
+				reopenAtStart = false
+			} else {
+				if _, err = opened.Seek(offset, io.SeekStart); err != nil {
+					_ = opened.Close()
+					if !waitContext(ctx, retry) {
+						return
+					}
+					continue
+				}
 			}
-			file, reader, openedInfo, warned = opened, bufio.NewReader(opened), info, false
+			reader = bufio.NewReader(opened)
+			if t.newReader != nil {
+				reader = t.newReader(opened)
+			}
+			file, openedInfo, warned = opened, info, false
 		}
 
-		line, err := reader.ReadString('\n')
-		if len(line) > 0 {
-			offset += int64(len(line))
-			if entry, ok := ParseLine(strings.TrimSpace(line)); ok {
-				t.Aggregator.Add(entry)
-				parsed++
+		chunk, err := reader.ReadString('\n')
+		if len(chunk) > 0 {
+			offset += int64(len(chunk))
+			line := pending + chunk
+			if discardPending {
+				if strings.HasSuffix(chunk, "\n") {
+					discardPending = false
+				}
+			} else if strings.HasSuffix(line, "\n") {
+				pending = ""
+				if entry, ok := ParseLine(strings.TrimSpace(line)); ok {
+					t.Aggregator.Add(entry)
+					parsed++
+				} else {
+					skipped++
+				}
+			} else if len(line) <= maxPendingLineBytes {
+				pending = line
 			} else {
+				pending = ""
+				discardPending = true
 				skipped++
 			}
 		}
@@ -86,7 +122,9 @@ func (t Tailer) Run(ctx context.Context) {
 			if statErr != nil || !os.SameFile(openedInfo, info) || (info != nil && info.Size() < offset) {
 				_ = file.Close()
 				file = nil
-				offset = 1
+				reopenAtStart = true
+				pending = ""
+				discardPending = false
 			}
 			select {
 			case <-ctx.Done():
