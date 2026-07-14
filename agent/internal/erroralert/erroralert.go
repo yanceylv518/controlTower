@@ -25,21 +25,19 @@ const (
 // DingTalk group message when a dimension reaches the error threshold within
 // its window. State lives in memory only: a restart starts with empty windows.
 type Notifier struct {
-	webhookURL        string
-	instanceID        string
-	window            int
-	threshold         int
-	client            *http.Client
-	now               func() time.Time
-	logf              func(format string, args ...any)
-	windowMaxAge      time.Duration // 0 = no time decay
-	remindInterval    time.Duration // 0 = no reminders
-	slowEnabled       bool
-	slowSeconds       float64
-	slowWindow        int
-	slowThreshold     int
-	slowStreamSeconds float64
-	eventLog          *eventLogger
+	webhookURL     string
+	instanceID     string
+	window         int
+	threshold      int
+	client         *http.Client
+	now            func() time.Time
+	logf           func(format string, args ...any)
+	windowMaxAge   time.Duration // 0 = no time decay
+	remindInterval time.Duration // 0 = no reminders
+	nocacheEnabled bool
+	nocacheMin     int64
+	nocacheWindow  int
+	eventLog       *eventLogger
 
 	mu               sync.Mutex
 	states           map[string]*dimensionState
@@ -53,7 +51,11 @@ type dimensionState struct {
 	outcomes         []outcome // newest last, capped at window
 	lastErrorSummary string
 	errorRule        ruleState
-	slowRule         ruleState
+	// cache-miss tracking, channel dimensions only: qualifying requests are
+	// successful completions whose prompt exceeds the configured size.
+	cacheOutcomes []cacheOutcome
+	lastNoCache   string
+	nocacheRule   ruleState
 }
 
 type ruleState struct {
@@ -65,13 +67,22 @@ type ruleState struct {
 
 type outcome struct {
 	isError bool
-	isSlow  bool
 	at      time.Time
 }
 
-// WithSlowRule enables the independent slow-return sliding-window rule.
-func (n *Notifier) WithSlowRule(seconds float64, window int, threshold int, streamSeconds float64) *Notifier {
-	n.slowEnabled, n.slowSeconds, n.slowWindow, n.slowThreshold, n.slowStreamSeconds = true, seconds, window, threshold, streamSeconds
+type cacheOutcome struct {
+	cached bool
+	at     time.Time
+}
+
+// WithNoCacheRule enables the per-channel cache-miss rule: when the most
+// recent `window` successful requests with prompt_tokens > minPromptTokens
+// all report no cached tokens, the channel's prompt cache is presumed broken.
+func (n *Notifier) WithNoCacheRule(minPromptTokens int64, window int) *Notifier {
+	if window <= 0 {
+		window = DefaultWindow
+	}
+	n.nocacheEnabled, n.nocacheMin, n.nocacheWindow = true, minPromptTokens, window
 	return n
 }
 
@@ -152,7 +163,7 @@ func (n *Notifier) Process(ctx context.Context, events []logcollector.Event) Pro
 		if event.ChannelID > 0 && !n.disabledChannels[event.ChannelID] {
 			channelDimensions[event.ChannelID] = struct{}{}
 			key := "channel:" + strconv.FormatInt(event.ChannelID, 10)
-			n.observeLocked(key, "渠道错误激增", n.channelLabelLocked(event.ChannelID), event)
+			n.observeLocked(key, "渠道错误激增", n.channelLabelLocked(event.ChannelID), event, true)
 		}
 		if event.UserID > 0 {
 			userDimensions[event.UserID] = struct{}{}
@@ -161,7 +172,7 @@ func (n *Notifier) Process(ctx context.Context, events []logcollector.Event) Pro
 				label = fmt.Sprintf("客户 %s(%d)", event.Username, event.UserID)
 			}
 			key := "user:" + strconv.FormatInt(event.UserID, 10)
-			n.observeLocked(key, "客户错误激增", label, event)
+			n.observeLocked(key, "客户错误激增", label, event, false)
 		}
 	}
 	pending, records := n.evaluateLocked()
@@ -236,7 +247,7 @@ func (n *Notifier) channelLabelLocked(channelID int64) string {
 	return fmt.Sprintf("渠道 %d", channelID)
 }
 
-func (n *Notifier) observeLocked(key string, title string, label string, event logcollector.Event) {
+func (n *Notifier) observeLocked(key string, title string, label string, event logcollector.Event, channelDim bool) {
 	state := n.states[key]
 	if state == nil {
 		state = &dimensionState{title: title, label: label}
@@ -251,14 +262,9 @@ func (n *Notifier) observeLocked(key string, title string, label string, event l
 	if at.IsZero() || at.Unix() <= 0 {
 		at = n.now()
 	}
-	isSlow := n.slowEnabled && ((!event.IsStream && event.UseTime >= n.slowSeconds) || (event.IsStream && n.slowStreamSeconds > 0 && event.UseTime >= n.slowStreamSeconds))
-	state.outcomes = append(state.outcomes, outcome{isError: isError, isSlow: isSlow, at: at})
-	maxWindow := n.window
-	if n.slowEnabled && n.slowWindow > maxWindow {
-		maxWindow = n.slowWindow
-	}
-	if len(state.outcomes) > maxWindow {
-		state.outcomes = state.outcomes[len(state.outcomes)-maxWindow:]
+	state.outcomes = append(state.outcomes, outcome{isError: isError, at: at})
+	if len(state.outcomes) > n.window {
+		state.outcomes = state.outcomes[len(state.outcomes)-n.window:]
 	}
 	if isError {
 		if state.errorRule.alerted {
@@ -268,8 +274,20 @@ func (n *Notifier) observeLocked(key string, title string, label string, event l
 			state.lastErrorSummary = truncate(event.ErrorSummary, 120)
 		}
 	}
-	if isSlow && state.slowRule.alerted {
-		state.slowRule.episodeTotal++
+	if channelDim && n.nocacheEnabled && event.LogType == "consume" && event.PromptTokens > n.nocacheMin {
+		cached := event.CacheFieldPresent && event.CacheTokens != nil && *event.CacheTokens > 0
+		state.cacheOutcomes = append(state.cacheOutcomes, cacheOutcome{cached: cached, at: at})
+		if len(state.cacheOutcomes) > n.nocacheWindow {
+			state.cacheOutcomes = state.cacheOutcomes[len(state.cacheOutcomes)-n.nocacheWindow:]
+		}
+		if !cached {
+			if state.nocacheRule.alerted {
+				state.nocacheRule.episodeTotal++
+			}
+			if event.ModelName != "" {
+				state.lastNoCache = fmt.Sprintf("%s, prompt %d tokens", event.ModelName, event.PromptTokens)
+			}
+		}
 	}
 }
 
@@ -282,8 +300,8 @@ type pendingMessage struct {
 }
 
 func (m pendingMessage) ruleState(state *dimensionState) *ruleState {
-	if m.rule == "slow" {
-		return &state.slowRule
+	if m.rule == "nocache" {
+		return &state.nocacheRule
 	}
 	return &state.errorRule
 }
@@ -294,7 +312,7 @@ func (n *Notifier) evaluateLocked() ([]pendingMessage, []EventRecord) {
 	var records []EventRecord
 	for key, state := range n.states {
 		if id, isChannel := channelIDFromKey(key); isChannel && n.disabledChannels[id] {
-			if state.errorRule.alerted || state.slowRule.alerted {
+			if state.errorRule.alerted || state.nocacheRule.alerted {
 				n.logf("control tower alert trigger: dimension=%s kind=disposed (channel disabled)", key)
 				records = append(records, EventRecord{Time: now, Dimension: key, Label: state.label, Rule: "channel", Kind: "disposed"})
 			}
@@ -310,18 +328,32 @@ func (n *Notifier) evaluateLocked() ([]pendingMessage, []EventRecord) {
 				}
 			}
 			state.outcomes = kept
+			keptCache := state.cacheOutcomes[:0]
+			for _, item := range state.cacheOutcomes {
+				if item.at.After(cutoff) {
+					keptCache = append(keptCache, item)
+				}
+			}
+			state.cacheOutcomes = keptCache
 		}
-		errorItems := tail(state.outcomes, n.window)
-		errors := countMatches(errorItems, func(o outcome) bool { return o.isError })
-		p, r := n.evaluateRuleLocked(key, state, "error", &state.errorRule, errors, len(errorItems), n.threshold, now)
+		errors := countMatches(state.outcomes, func(o outcome) bool { return o.isError })
+		p, r := n.evaluateRuleLocked(key, state, "error", &state.errorRule, errors, len(state.outcomes), n.threshold, now)
 		pending, records = append(pending, p...), append(records, r...)
-		if n.slowEnabled {
-			slowItems := tail(state.outcomes, n.slowWindow)
-			slows := countMatches(slowItems, func(o outcome) bool { return o.isSlow })
-			p, r = n.evaluateRuleLocked(key, state, "slow", &state.slowRule, slows, len(slowItems), n.slowThreshold, now)
-			pending, records = append(pending, p...), append(records, r...)
+		if n.nocacheEnabled && len(state.cacheOutcomes) > 0 {
+			misses := 0
+			for _, item := range state.cacheOutcomes {
+				if !item.cached {
+					misses++
+				}
+			}
+			// The rule fires only on a full window of misses: threshold equals
+			// the window size, and any cached hit breaks the streak count.
+			if len(state.cacheOutcomes) == n.nocacheWindow || state.nocacheRule.alerted {
+				p, r = n.evaluateRuleLocked(key, state, "nocache", &state.nocacheRule, misses, len(state.cacheOutcomes), n.nocacheWindow, now)
+				pending, records = append(pending, p...), append(records, r...)
+			}
 		}
-		if len(state.outcomes) == 0 && !state.errorRule.alerted && !state.slowRule.alerted {
+		if len(state.outcomes) == 0 && len(state.cacheOutcomes) == 0 && !state.errorRule.alerted && !state.nocacheRule.alerted {
 			delete(n.states, key)
 		}
 	}
@@ -350,12 +382,6 @@ func (n *Notifier) evaluateRuleLocked(key string, state *dimensionState, rule st
 	return nil, nil
 }
 
-func tail(items []outcome, size int) []outcome {
-	if len(items) > size {
-		return items[len(items)-size:]
-	}
-	return items
-}
 func countMatches(items []outcome, match func(outcome) bool) int {
 	n := 0
 	for _, item := range items {
@@ -367,9 +393,14 @@ func countMatches(items []outcome, match func(outcome) bool) int {
 }
 
 func (n *Notifier) alertContent(state *dimensionState, rule string, matches, windowCount int, now time.Time) string {
-	if rule == "slow" {
-		title := strings.Replace(state.title, "错误", "慢返回", 1)
-		return fmt.Sprintf("[\u544a\u8b66] 【Control Tower 告警】%s\n实例: %s\n%s 最近 %d 条请求中 %d 条耗时超过 %g 秒\n时间: %s", title, n.instanceID, state.label, windowCount, matches, n.slowSecondsForLabel(), now.Local().Format("2006-01-02 15:04:05"))
+	if rule == "nocache" {
+		content := fmt.Sprintf("[\u544a\u8b66] 【Control Tower 告警】渠道缓存疑似失效\n实例: %s\n%s 最近 %d 条输入超过 %d tokens 的请求全部未命中缓存",
+			n.instanceID, state.label, windowCount, n.nocacheMin)
+		if state.lastNoCache != "" {
+			content += "\n最新一条: " + state.lastNoCache
+		}
+		content += "\n时间: " + now.Local().Format("2006-01-02 15:04:05")
+		return content
 	}
 	content := fmt.Sprintf("[\u544a\u8b66] 【Control Tower 告警】%s\n实例: %s\n%s 最近 %d 条请求中 %d 条失败",
 		state.title, n.instanceID, state.label, windowCount, matches)
@@ -381,14 +412,11 @@ func (n *Notifier) alertContent(state *dimensionState, rule string, matches, win
 }
 
 func (n *Notifier) remindContent(state *dimensionState, rule string, matches, windowCount int, rs *ruleState, now time.Time) string {
-	title := state.title
-	if rule == "slow" {
-		title = strings.Replace(title, "错误", "慢返回", 1)
+	if rule == "nocache" {
+		return fmt.Sprintf("[\u544a\u8b66] 【Control Tower 告警】渠道缓存持续未命中\n实例: %s\n%s 自 %s 起大输入请求持续无缓存，累计 %d 条（输入 > %d tokens）\n时间: %s",
+			n.instanceID, state.label, rs.episodeStartAt.Local().Format("01-02 15:04"), rs.episodeTotal, n.nocacheMin, now.Local().Format("2006-01-02 15:04:05"))
 	}
-	title = strings.TrimSuffix(title, "激增") + "持续"
-	if rule == "slow" {
-		return fmt.Sprintf("[\u544a\u8b66] 【Control Tower 告警】%s\n实例: %s\n%s 自 %s 起持续异常，累计 %d 条慢返回，最近 %d 条请求中 %d 条耗时超过 %g 秒\n时间: %s", title, n.instanceID, state.label, rs.episodeStartAt.Local().Format("01-02 15:04"), rs.episodeTotal, windowCount, matches, n.slowSecondsForLabel(), now.Local().Format("2006-01-02 15:04:05"))
-	}
+	title := strings.TrimSuffix(state.title, "激增") + "持续"
 	content := fmt.Sprintf("[\u544a\u8b66] 【Control Tower 告警】%s\n实例: %s\n%s 自 %s 起持续异常，累计 %d 条错误，最近 %d 条请求中 %d 条失败",
 		title, n.instanceID, state.label, rs.episodeStartAt.Local().Format("01-02 15:04"), rs.episodeTotal, windowCount, matches)
 	if state.lastErrorSummary != "" {
@@ -397,8 +425,6 @@ func (n *Notifier) remindContent(state *dimensionState, rule string, matches, wi
 	content += "\n时间: " + now.Local().Format("2006-01-02 15:04:05")
 	return content
 }
-
-func (n *Notifier) slowSecondsForLabel() float64 { return n.slowSeconds }
 
 func (n *Notifier) eventRecord(now time.Time, key, label, rule, kind string, matches, threshold int, rs *ruleState) EventRecord {
 	return EventRecord{Time: now, Dimension: key, Label: label, Rule: rule, Kind: kind, WindowCount: matches, Threshold: threshold, EpisodeStart: rs.episodeStartAt, EpisodeTotal: rs.episodeTotal}

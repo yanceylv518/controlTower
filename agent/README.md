@@ -60,11 +60,15 @@ spam the group. Failed sends are retried on the next collector pass.
   cumulative error count, so a channel that never recovers is not silent
   after its first alert. Reminders only continue while new errors keep
   arriving: a dimension quiet for the decay window ends its episode.
-- Slow-return monitoring is enabled by default. Non-streaming requests use
-  `CT_ALERT_SLOW_SECONDS` (default 120); streaming requests use the separate
-  `CT_ALERT_SLOW_STREAM_SECONDS` threshold (default 300, or 0 to exclude
-  streams). The window and threshold default to 10 and 3 and are independent
-  from error episodes.
+- Cache-miss monitoring is enabled by default. On each channel, successful
+  requests with `prompt_tokens > CT_ALERT_NOCACHE_MIN_PROMPT_TOKENS`
+  (default 512) enter a separate window of `CT_ALERT_NOCACHE_WINDOW`
+  (default 10); when the window is full and every entry reports zero cached
+  tokens, a cache-broken alert fires. Any cache hit re-arms the episode.
+  Disable with `CT_ALERT_NOCACHE_ENABLED=false`. Channels whose models never
+  report cache usage will alert once and then remind per
+  `CT_ALERT_REMIND_MINUTES`; disable the rule or raise the token floor if
+  that is noise for your deployment.
 - Episode transitions are appended to `CT_DATA_DIR/alert-events.jsonl` as
   JSON lines. Records identify the dimension, rule, alert/remind/rearm kind,
   window count, threshold, and episode totals. The file rotates at 5 MiB and

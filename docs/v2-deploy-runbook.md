@@ -246,7 +246,7 @@ sudo systemctl start control-tower-agent
 
 ### 4.1 当天验收（~15 分钟）
 
-1. **钉钉链路**：任选一台，临时 `CT_ALERT_SLOW_SECONDS=1` 重启 → 几分钟内测试消息进钉钉群 → 改回 120 重启。**预期**：钉钉照常，同时 Web 告警中心也出现对应 Server 端告警；
+1. **钉钉链路**：直接探测 webhook（不动 Agent 配置）：`curl -sS -X POST '<钉钉webhook>' -H 'Content-Type: application/json' -d '{"msgtype":"text","text":{"content":"[告警] Control Tower 链路测试"}}'`。**预期**：返回 `"errcode":0` 且群里收到消息；再 `journalctl -u control-tower-agent --since -5m | grep "alert pass"` 确认告警循环在跑；
 2. **看板巡检**：两实例切换看总览/客户/渠道/模型/用量各页，数据归属正确不串；配了 nginx timing 的机器再看「延时分诊」页（/latency）有分钟桶数据；
 3. **磁盘基线**：CT 服务器 `df -h` 记录当前占用（观察期对比用）。
 

@@ -32,9 +32,9 @@ CT_LOG_POLL_INTERVAL_SECONDS=30
 CT_ALERT_WINDOW_MAX_AGE_MINUTES=60
 # Re-send a reminder while an episode keeps firing (0 disables).
 CT_ALERT_REMIND_MINUTES=60
-CT_ALERT_SLOW_ENABLED=true
-CT_ALERT_SLOW_SECONDS=120
-CT_ALERT_SLOW_WINDOW=10
-CT_ALERT_SLOW_THRESHOLD=3
-# Streaming responses use a separate threshold; 0 excludes them.
-CT_ALERT_SLOW_STREAM_SECONDS=300
+# Cache-miss alert: fires when the most recent CT_ALERT_NOCACHE_WINDOW
+# successful requests with prompt_tokens > CT_ALERT_NOCACHE_MIN_PROMPT_TOKENS
+# on one channel all report zero cached tokens. Any cache hit re-arms.
+CT_ALERT_NOCACHE_ENABLED=true
+CT_ALERT_NOCACHE_MIN_PROMPT_TOKENS=512
+CT_ALERT_NOCACHE_WINDOW=10

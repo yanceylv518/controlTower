@@ -23,62 +23,44 @@ type capture struct {
 	contents []string
 }
 
-func TestSlowRuleTriggersRearmsAndSeparatesStreaming(t *testing.T) {
-	var mu sync.Mutex
-	var messages []string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body struct {
-			Text struct {
-				Content string `json:"content"`
-			} `json:"text"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		mu.Lock()
-		messages = append(messages, body.Text.Content)
-		mu.Unlock()
-		_, _ = w.Write([]byte(`{"errcode":0}`))
-	}))
+func TestNoCacheRuleTriggersAndRearms(t *testing.T) {
+	c := &capture{}
+	server := c.server()
 	defer server.Close()
-	n := New(server.URL, "inst-a", 10, 3, nil).WithSlowRule(120, 10, 3, 300)
-	events := make([]logcollector.Event, 10)
-	for i := range events {
-		events[i] = logcollector.Event{ChannelID: 1, CreatedAt: time.Now(), UseTime: 1}
+	n := New(server.URL, "inst-a", 10, 3, nil).WithNoCacheRule(512, 10)
+
+	// Nine misses do not fire; the tenth qualifying miss fills the window.
+	for i := int64(1); i <= 9; i++ {
+		n.Process(context.Background(), []logcollector.Event{cacheEvent(i, 1, 600, 0, false, "consume")})
 	}
-	for i := 0; i < 3; i++ {
-		events[i].UseTime = 150
+	if got := c.matching("渠道缓存疑似失效"); got != 0 {
+		t.Fatalf("fired before window full: %d (%v)", got, c.contents)
 	}
-	n.Process(context.Background(), events)
-	n.Process(context.Background(), []logcollector.Event{{ChannelID: 1, CreatedAt: time.Now(), UseTime: 150}})
-	mu.Lock()
-	if len(messages) != 1 || !strings.Contains(messages[0], "渠道慢返回激增") {
-		t.Fatalf("messages=%v", messages)
+	n.Process(context.Background(), []logcollector.Event{cacheEvent(10, 1, 600, 0, false, "consume")})
+	if got := c.matching("渠道缓存疑似失效"); got != 1 {
+		t.Fatalf("expected alert on full window of misses, got %d (%v)", got, c.contents)
 	}
-	mu.Unlock()
-	fast := make([]logcollector.Event, 8)
-	for i := range fast {
-		fast[i] = logcollector.Event{ChannelID: 1, CreatedAt: time.Now(), UseTime: 1}
+
+	// A single cache hit re-arms the episode; a fresh full window of misses
+	// alerts again once the hit has left the window.
+	n.Process(context.Background(), []logcollector.Event{cacheEvent(11, 1, 600, 42, true, "consume")})
+	for i := int64(12); i <= 21; i++ {
+		n.Process(context.Background(), []logcollector.Event{cacheEvent(i, 1, 600, 0, false, "consume")})
 	}
-	n.Process(context.Background(), fast)
-	n.Process(context.Background(), []logcollector.Event{{ChannelID: 1, CreatedAt: time.Now(), UseTime: 150}, {ChannelID: 1, CreatedAt: time.Now(), UseTime: 150}, {ChannelID: 1, CreatedAt: time.Now(), UseTime: 150}})
-	mu.Lock()
-	if len(messages) != 2 {
-		t.Fatalf("want rearmed second alert, got %d", len(messages))
+	if got := c.matching("渠道缓存疑似失效"); got != 2 {
+		t.Fatalf("expected rearmed second alert, got %d (%v)", got, c.contents)
 	}
-	mu.Unlock()
-	n2 := New(server.URL, "inst-a", 10, 3, nil).WithSlowRule(120, 10, 1, 300)
-	n2.Process(context.Background(), []logcollector.Event{{ChannelID: 2, CreatedAt: time.Now(), UseTime: 150, IsStream: true}})
-	mu.Lock()
-	before := len(messages)
-	mu.Unlock()
-	if before != 2 {
-		t.Fatalf("stream below threshold alerted")
+
+	// Small prompts and error logs never enter the cache window.
+	for i := int64(30); i < 45; i++ {
+		n.Process(context.Background(), []logcollector.Event{cacheEvent(i, 2, 512, 0, false, "consume")})
 	}
-	n2.WithSlowRule(120, 10, 1, 100).Process(context.Background(), []logcollector.Event{{ChannelID: 2, CreatedAt: time.Now(), UseTime: 150, IsStream: true}})
-	mu.Lock()
-	if len(messages) != 3 {
-		t.Fatalf("stream above threshold did not alert")
+	for i := int64(50); i < 65; i++ {
+		n.Process(context.Background(), []logcollector.Event{cacheEvent(i, 3, 600, 0, false, "error")})
 	}
-	mu.Unlock()
+	if got := c.matching("渠道缓存疑似失效"); got != 2 {
+		t.Fatalf("small prompts or errors entered the window: %d (%v)", got, c.contents)
+	}
 }
 
 func TestEpisodeEventLogRecordsTransitions(t *testing.T) {
@@ -111,12 +93,12 @@ func TestEventLogRotatesAndFailsSafe(t *testing.T) {
 	}
 	logger := newEventLogger(path, nil)
 	logger.logf = func(string, ...any) {}
-	logger.append([]EventRecord{{Time: time.Now(), Dimension: "channel:1", Rule: "slow", Kind: "alert", WindowCount: 3, Threshold: 3}})
+	logger.append([]EventRecord{{Time: time.Now(), Dimension: "channel:1", Rule: "nocache", Kind: "alert", WindowCount: 3, Threshold: 3}})
 	if _, err := os.Stat(path + ".1"); err != nil {
 		t.Fatalf("rotated file missing: %v", err)
 	}
 	data, err := os.ReadFile(path)
-	if err != nil || !bytes.Contains(data, []byte(`"rule":"slow"`)) {
+	if err != nil || !bytes.Contains(data, []byte(`"rule":"nocache"`)) {
 		t.Fatalf("new event log invalid: %v %s", err, data)
 	}
 	failCount := 0
@@ -473,84 +455,74 @@ func TestNotifierCountsEventsWithNullCreatedAt(t *testing.T) {
 	}
 }
 
-func slowEvent(id int64, channelID int64, useTime float64, logType string, stream bool) logcollector.Event {
-	return logcollector.Event{SourceLogID: id, ChannelID: channelID, LogType: logType, UseTime: useTime, IsStream: stream, CreatedAt: time.Now()}
+func cacheEvent(id int64, channelID int64, prompt int64, cachedTokens int64, hasCacheField bool, logType string) logcollector.Event {
+	var ct *int64
+	if hasCacheField {
+		ct = &cachedTokens
+	}
+	return logcollector.Event{SourceLogID: id, ChannelID: channelID, LogType: logType, PromptTokens: prompt, CacheTokens: ct, CacheFieldPresent: hasCacheField, CreatedAt: time.Now()}
 }
 
-func TestSlowAndErrorEpisodesAreIndependent(t *testing.T) {
+func TestNoCacheAndErrorEpisodesAreIndependent(t *testing.T) {
 	c := &capture{}
 	server := c.server()
 	defer server.Close()
-	n := New(server.URL, "inst-a", 10, 3, nil).WithRemindInterval(time.Hour).WithSlowRule(120, 10, 3, 0)
-	base := time.Date(2026, 7, 13, 10, 0, 0, 0, time.UTC)
+	n := New(server.URL, "inst-a", 10, 3, nil).WithRemindInterval(time.Hour).WithNoCacheRule(512, 10)
+	base := time.Date(2026, 7, 14, 10, 0, 0, 0, time.UTC)
 	n.now = func() time.Time { return base }
 
-	// Three events that are both errors and slow fire both rules at once.
+	// Errors fill the error window without touching the cache window.
 	for i := int64(1); i <= 3; i++ {
-		n.Process(context.Background(), []logcollector.Event{slowEvent(i, 18, 150, "error", false)})
+		n.Process(context.Background(), []logcollector.Event{cacheEvent(i, 18, 600, 0, false, "error")})
 	}
 	if got := c.matching("渠道错误激增"); got != 1 {
 		t.Fatalf("expected error alert, got %d (%v)", got, c.contents)
 	}
-	if got := c.matching("渠道慢返回激增"); got != 1 {
-		t.Fatalf("expected slow alert, got %d (%v)", got, c.contents)
+	if got := c.matching("渠道缓存疑似失效"); got != 0 {
+		t.Fatalf("error logs must not fill the cache window, got %d", got)
 	}
 
-	// Streams are fully excluded when the stream threshold is zero.
-	for i := int64(10); i <= 12; i++ {
-		n.Process(context.Background(), []logcollector.Event{slowEvent(i, 19, 500, "consume", true)})
+	// Ten uncached successes fire the cache rule on the same channel.
+	for i := int64(10); i < 20; i++ {
+		n.Process(context.Background(), []logcollector.Event{cacheEvent(i, 18, 600, 0, false, "consume")})
 	}
-	if got := c.matching("渠道慢返回激增"); got != 1 {
-		t.Fatalf("stream events must not count as slow when threshold is 0, got %d", got)
+	if got := c.matching("渠道缓存疑似失效"); got != 1 {
+		t.Fatalf("expected cache alert, got %d (%v)", got, c.contents)
 	}
 
-	// Both episodes remind independently past the interval.
+	// Both episodes remind independently past the interval; the ten successes
+	// above already re-armed the error rule silently.
 	n.now = func() time.Time { return base.Add(61 * time.Minute) }
 	n.Process(context.Background(), nil)
-	if got := c.matching("渠道错误持续"); got != 1 {
-		t.Fatalf("expected error reminder, got %d (%v)", got, c.contents)
+	if got := c.matching("渠道缓存持续未命中"); got != 1 {
+		t.Fatalf("expected cache reminder, got %d (%v)", got, c.contents)
 	}
-	if got := c.matching("渠道慢返回持续"); got != 1 {
-		t.Fatalf("expected slow reminder, got %d (%v)", got, c.contents)
-	}
-
-	// Ten slow-but-successful events rearm only the error rule: a fresh error
-	// burst alerts again while the ongoing slow episode stays deduplicated.
-	for i := int64(20); i < 30; i++ {
-		n.Process(context.Background(), []logcollector.Event{slowEvent(i, 18, 150, "consume", false)})
-	}
-	for i := int64(30); i < 33; i++ {
-		n.Process(context.Background(), []logcollector.Event{slowEvent(i, 18, 150, "error", false)})
-	}
-	if got := c.matching("渠道错误激增"); got != 2 {
-		t.Fatalf("expected error rule to rearm and fire again, got %d", got)
-	}
-	if got := c.matching("渠道慢返回激增"); got != 1 {
-		t.Fatalf("slow episode must stay deduplicated, got %d", got)
+	if got := c.matching("渠道错误持续"); got != 0 {
+		t.Fatalf("error episode should have re-armed, got reminder %d", got)
 	}
 }
 
-func TestSlowAlertSendFailureRetriesIndependently(t *testing.T) {
+func TestNoCacheAlertSendFailureRetriesIndependently(t *testing.T) {
 	c := &capture{}
 	server := c.server()
 	defer server.Close()
-	n := New(server.URL, "inst-a", 10, 3, nil).WithSlowRule(120, 10, 3, 300)
+	n := New(server.URL, "inst-a", 10, 3, nil).WithNoCacheRule(512, 10)
 
 	c.setErrcode(`{"errcode":310000,"errmsg":"keywords not in content"}`)
-	for i := int64(1); i <= 3; i++ {
-		n.Process(context.Background(), []logcollector.Event{slowEvent(i, 18, 150, "consume", false)})
+	for i := int64(1); i <= 10; i++ {
+		n.Process(context.Background(), []logcollector.Event{cacheEvent(i, 18, 600, 0, false, "consume")})
 	}
 	c.setErrcode("")
 	n.Process(context.Background(), nil)
-	if got := c.matching("渠道慢返回激增"); got != 2 {
-		t.Fatalf("expected rejected then retried slow alert, got %d (%v)", got, c.contents)
+	if got := c.matching("渠道缓存疑似失效"); got != 2 {
+		t.Fatalf("expected rejected then retried cache alert, got %d (%v)", got, c.contents)
 	}
 	if got := c.matching("渠道错误激增"); got != 0 {
 		t.Fatalf("error rule must stay untouched, got %d", got)
 	}
 	n.Process(context.Background(), nil)
-	if got := c.matching("渠道慢返回激增"); got != 2 {
-		t.Fatalf("expected no duplicate after successful retry, got %d", got)
+	if got := c.matching("渠道缓存疑似失效"); got != 2 {
+		t.Fatalf("expected no duplicate after successful retry, got %d (%v)", got, c.contents)
 	}
 }
 

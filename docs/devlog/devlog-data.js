@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-14",
+    type: "release",
+    version: "v1.1.1",
+    title: "告警 Agent v1.1.1：移除慢返回告警，新增缓存失效预警",
+    summary: "生产反馈：慢返回告警噪音大于价值，整条规则与配置移除。新增渠道级缓存失效检测：最近 10 条输入 >512 tokens 的成功请求全部未命中缓存（other.cache_tokens 缺失或 0）→ 钉钉告警，任一命中即重臂，episode/衰减/提醒复用既有骨架。已知限制：不支持缓存的渠道会告警（调高下限或关规则）。runbook 4.1 钉钉验收改为 webhook 直测。全测试绿；待重建二进制部署生产。",
+    docs: ["docs/iteration-log.md", "docs/design-v1.1-early-warning.md"],
+    commits: []
+  },
+  {
+    date: "2026-07-14",
     type: "review",
     version: "",
     title: "v2.1-B1 验收通过（附命中率口径修正）",

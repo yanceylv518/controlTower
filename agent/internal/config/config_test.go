@@ -230,16 +230,16 @@ func TestLoadFromMapRejectsInvalidAlertSettings(t *testing.T) {
 	}
 }
 
-func TestSlowAlertDefaultsAndValidation(t *testing.T) {
+func TestNoCacheAlertDefaultsAndValidation(t *testing.T) {
 	base := map[string]string{"CT_AGENT_ID": "a", "CT_INSTANCE_ID": "i", "CT_LOG_DSN": "dsn", "CT_DINGTALK_WEBHOOK_URL": "https://example.com/hook"}
 	cfg, err := LoadFromMap(base)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.AlertSlowEnabled || cfg.AlertSlowSeconds != 120 || cfg.AlertSlowWindow != 10 || cfg.AlertSlowThreshold != 3 || cfg.AlertSlowStreamSeconds != 300 {
-		t.Fatalf("unexpected slow defaults: %+v", cfg)
+	if !cfg.AlertNoCacheEnabled || cfg.AlertNoCacheMinPromptTokens != 512 || cfg.AlertNoCacheWindow != 10 {
+		t.Fatalf("unexpected nocache defaults: %+v", cfg)
 	}
-	for key, value := range map[string]string{"CT_ALERT_SLOW_SECONDS": "0", "CT_ALERT_SLOW_WINDOW": "0", "CT_ALERT_SLOW_THRESHOLD": "11", "CT_ALERT_SLOW_STREAM_SECONDS": "-1"} {
+	for key, value := range map[string]string{"CT_ALERT_NOCACHE_MIN_PROMPT_TOKENS": "0", "CT_ALERT_NOCACHE_WINDOW": "0"} {
 		values := map[string]string{}
 		for k, v := range base {
 			values[k] = v
