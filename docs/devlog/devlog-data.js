@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-14",
+    type: "review",
+    version: "v1.1.2",
+    title: "v1.1.2 验收通过：Agent 告警切企业微信（附 rc4 产物补发）",
+    summary: "核实：企微与钉钉文本机器人载荷同构，send 逻辑复用成立；配置硬切换（旧 CT_DINGTALK_WEBHOOK_URL 不再读取并有拒读测试，防迁移期双群重复发送）；告警规则/episode/提醒零改动；安装脚本、示例、runbook、账本同步。验收发现并修复：runbook 引用 v2.0.0-rc4 但 tag 不存在（照文档部署会 404）——已从当前 HEAD 补打 rc4，release 流水线绿，四产物齐。注意：Server 通知中心仍是钉钉类型（账本已列遗留）；生产升级顺序＝先建企微机器人直测，再换配置键，最后换二进制重启。",
+    docs: ["docs/iteration-log.md", "docs/v2-deploy-runbook.md"],
+    commits: ["399dcee"]
+  },
+  {
+    date: "2026-07-14",
     type: "release",
     version: "v1.1.2",
     title: "Agent 直发告警切换为企业微信机器人",
