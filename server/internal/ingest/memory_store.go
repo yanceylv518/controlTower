@@ -34,6 +34,8 @@ type MemoryStore struct {
 	alertEvents            []storage.AlertEvent
 	channelCommands        map[string]storage.ChannelCommand
 	operationAudits        map[string]storage.OperationAudit
+	nginxTimingBuckets     map[string]storage.NginxTimingBucket
+	nginxSlowSamples       []storage.NginxSlowSample
 }
 
 func (s *MemoryStore) InsertAlertEvents(v []storage.AlertEvent) error {
@@ -88,6 +90,7 @@ func NewMemoryStore() *MemoryStore {
 		alerts:                 make(map[string]storage.Alert),
 		notificationChannels:   make(map[string]storage.NotificationChannel),
 		notificationDeliveries: make(map[string]storage.NotificationDelivery),
+		nginxTimingBuckets:     make(map[string]storage.NginxTimingBucket),
 		metrics1m:              make(map[string]aggregator.Metric),
 		metrics5m:              make(map[string]aggregator.Metric),
 		metricBatches:          make(map[string]struct{}),

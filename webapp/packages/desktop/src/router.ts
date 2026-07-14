@@ -14,10 +14,12 @@ import InstancesView from './views/InstancesView.vue'
 import AuditsView from './views/AuditsView.vue'
 import SettingsView from './views/SettingsView.vue'
 import NotFoundView from './views/NotFoundView.vue'
+import LatencyView from './views/LatencyView.vue'
 export const router = createRouter({ history: createWebHistory('/'), routes: [
   { path: '/login', name: 'login', component: LoginView, meta: { title: '登录' } }, { path: '/', name: 'overview', component: OverviewView, meta: { title: '运行总览' } },
   { path: '/customers', component: DimensionView, props: { kind: 'customers' }, meta: { title: '客户监控' } }, { path: '/channels', component: DimensionView, props: { kind: 'channels' }, meta: { title: '渠道监控' } }, { path: '/models', component: DimensionView, props: { kind: 'models' }, meta: { title: '模型监控' } },
   { path: '/samples', component: SamplesView, meta: { title: '样本分析' } }, { path: '/runtime', component: RuntimeView, meta: { title: '系统状态' } }, { path: '/usage', component: UsageView, meta: { title: '用量统计' } },
+  { path: '/latency', component: LatencyView, meta: { title: '延时分诊' } },
   { path: '/alerts', component: AlertsView, meta: { title: '告警中心' } }, { path: '/notifications', component: NotificationsView, meta: { title: '通知设置' } }, { path: '/instances', component: InstancesView, meta: { title: '实例管理' } }, { path: '/audits', component: AuditsView, meta: { title: '操作审计' } },
   { path: '/settings', component: SettingsView, meta: { title: '设置' } }, { path: '/:pathMatch(.*)*', component: NotFoundView, meta: { title: '页面不存在' } },
 ] })

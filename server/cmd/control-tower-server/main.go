@@ -110,7 +110,7 @@ func pruneRetention(store retentionStore, detailDays, metric5mDays, runtimeDays 
 	groups := []struct {
 		days  int
 		kinds []string
-	}{{detailDays, []string{"log_events", "log_samples", "metric_1m"}}, {metric5mDays, []string{"metric_5m"}}, {runtimeDays, []string{"server_metrics", "health_checks", "docker_statuses"}}}
+	}{{detailDays, []string{"log_events", "log_samples", "metric_1m", "nginx_timing_1m", "nginx_slow_samples"}}, {metric5mDays, []string{"metric_5m"}}, {runtimeDays, []string{"server_metrics", "health_checks", "docker_statuses"}}}
 	for _, g := range groups {
 		if g.days == 0 {
 			continue

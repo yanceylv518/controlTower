@@ -21,6 +21,7 @@ type Handler struct {
 	alertStore              AlertStore
 	notificationStore       NotificationStore
 	channelSnapshotStore    ChannelSnapshotStore
+	nginxTimingStore        NginxTimingStore
 	notificationMaxAttempts int
 }
 

@@ -196,6 +196,27 @@ Preflight checks:
 
 Preflight only reads MySQL metadata and source rows needed to verify queryability. It does not modify the new-api database.
 
+## Nginx Timing 延时分析
+
+完整上报模式可只读 tail Nginx `timed` 访问日志，将 TTFT、传输段、5xx/504 和慢样本按分钟聚合后显示在 Web「延时分诊」页。字段格式与分诊公式见 [`docs/latency-diagnosis.md`](../docs/latency-diagnosis.md)。该模块只做分析，不发送钉钉或任何告警消息。
+
+```ini
+CT_NGINX_ACCESS_LOG=/var/log/nginx/newapi-timing.log
+CT_NGINX_SLOW_RT_SECONDS=10
+```
+
+`CT_NGINX_ACCESS_LOG` 留空时完全禁用。文件暂时不存在或无权限时 Agent 只记录一次 WARN 并每 30 秒重试，不退出且不影响原有采集上报；未配置 `CT_SERVER_URL` 的独立告警模式不会启动 timing 采集。
+
+给 `ct-agent` 日志读取权限可选以下任一方式：
+
+```bash
+sudo setfacl -m u:ct-agent:r /var/log/nginx/newapi-timing.log
+# 或让 Agent 继承 Nginx 日志常用的 adm 组权限
+sudo usermod -aG adm ct-agent
+```
+
+修改组成员后需重启 `control-tower-agent` 服务使权限生效。Agent 只保留 URL path，query 会在采集边界剥离。
+
 ## Build Standalone Agent
 
 From `tools/control-tower`, build a standalone Windows binary:

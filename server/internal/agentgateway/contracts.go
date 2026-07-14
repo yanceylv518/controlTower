@@ -38,23 +38,56 @@ type ChannelCommandResult struct {
 	AppliedAt time.Time `json:"applied_at"`
 }
 type AgentReportRequest struct {
-	InstanceID        string                    `json:"instance_id"`
-	AgentID           string                    `json:"agent_id"`
-	AgentVersion      string                    `json:"agent_version"`
-	ReportedAt        time.Time                 `json:"reported_at"`
-	Sequence          int64                     `json:"sequence"`
-	LastLogID         int64                     `json:"last_log_id"`
-	SourceLatestLogID int64                     `json:"source_latest_log_id,omitempty"`
-	BacklogEstimate   int64                     `json:"backlog_estimate,omitempty"`
-	MetricBatchID     string                    `json:"metric_batch_id,omitempty"`
-	LogEvents         []LogEventPayload         `json:"log_events"`
-	LogSamples        []LogSamplePayload        `json:"log_samples"`
-	AggregatedMetrics []AggregatedMetricPayload `json:"aggregated_metrics"`
-	ServerMetrics     []ServerMetricPayload     `json:"server_metrics"`
-	DockerStatuses    []DockerStatusPayload     `json:"docker_statuses"`
-	HealthChecks      []HealthCheckPayload      `json:"health_checks"`
-	ChannelSnapshots  []ChannelSnapshotPayload  `json:"channel_snapshots"`
-	CommandResults    []ChannelCommandResult    `json:"command_results"`
+	InstanceID         string                     `json:"instance_id"`
+	AgentID            string                     `json:"agent_id"`
+	AgentVersion       string                     `json:"agent_version"`
+	ReportedAt         time.Time                  `json:"reported_at"`
+	Sequence           int64                      `json:"sequence"`
+	LastLogID          int64                      `json:"last_log_id"`
+	SourceLatestLogID  int64                      `json:"source_latest_log_id,omitempty"`
+	BacklogEstimate    int64                      `json:"backlog_estimate,omitempty"`
+	MetricBatchID      string                     `json:"metric_batch_id,omitempty"`
+	LogEvents          []LogEventPayload          `json:"log_events"`
+	LogSamples         []LogSamplePayload         `json:"log_samples"`
+	AggregatedMetrics  []AggregatedMetricPayload  `json:"aggregated_metrics"`
+	ServerMetrics      []ServerMetricPayload      `json:"server_metrics"`
+	DockerStatuses     []DockerStatusPayload      `json:"docker_statuses"`
+	HealthChecks       []HealthCheckPayload       `json:"health_checks"`
+	ChannelSnapshots   []ChannelSnapshotPayload   `json:"channel_snapshots"`
+	CommandResults     []ChannelCommandResult     `json:"command_results"`
+	NginxTimingBuckets []NginxTimingBucketPayload `json:"nginx_timing_buckets,omitempty"`
+	NginxSlowSamples   []NginxSlowSamplePayload   `json:"nginx_slow_samples,omitempty"`
+}
+
+type NginxTimingBucketPayload struct {
+	BucketAt          time.Time `json:"bucket_at"`
+	RequestCount      int64     `json:"request_count"`
+	UpstreamCount     int64     `json:"upstream_count"`
+	Status4xx         int64     `json:"status_4xx"`
+	Status5xx         int64     `json:"status_5xx"`
+	Status504         int64     `json:"status_504"`
+	RTP50             float64   `json:"rt_p50"`
+	RTP95             float64   `json:"rt_p95"`
+	RTMax             float64   `json:"rt_max"`
+	UHTP50            float64   `json:"uht_p50"`
+	UHTP95            float64   `json:"uht_p95"`
+	UHTMax            float64   `json:"uht_max"`
+	TransferP50       float64   `json:"transfer_p50"`
+	TransferP95       float64   `json:"transfer_p95"`
+	TransferMax       float64   `json:"transfer_max"`
+	BytesTotal        int64     `json:"bytes_total"`
+	SlowCount         int64     `json:"slow_count"`
+	SlowTTFTCount     int64     `json:"slow_ttft_count"`
+	SlowTransferCount int64     `json:"slow_transfer_count"`
+}
+type NginxSlowSamplePayload struct {
+	OccurredAt time.Time `json:"occurred_at"`
+	Path       string    `json:"path"`
+	Status     int       `json:"status"`
+	RT         float64   `json:"rt"`
+	UHT        float64   `json:"uht"`
+	URT        float64   `json:"urt"`
+	Bytes      int64     `json:"bytes"`
 }
 
 type AggregatedMetricPayload struct {

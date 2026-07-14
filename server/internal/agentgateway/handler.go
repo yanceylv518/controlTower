@@ -150,6 +150,8 @@ func validReportSize(req AgentReportRequest) bool {
 		len(req.DockerStatuses) <= 5000 &&
 		len(req.HealthChecks) <= 100 &&
 		len(req.ChannelSnapshots) <= 5000 &&
+		len(req.NginxTimingBuckets) <= 1500 &&
+		len(req.NginxSlowSamples) <= 5000 &&
 		len(req.CommandResults) <= 5000
 }
 

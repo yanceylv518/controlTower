@@ -123,6 +123,8 @@ func TestBuildReportIncludesBacklogTelemetry(t *testing.T) {
 	}
 }
 
+func TestStartNginxTimingDisabledAndStandalone(t *testing.T){ctx,cancel:=context.WithCancel(context.Background());defer cancel();if got:=startNginxTiming(ctx,config.Config{});got!=nil{t.Fatal("empty path must disable")};if got:=startNginxTiming(ctx,config.Config{NginxAccessLog:"missing",NginxSlowRTSeconds:10});got!=nil{t.Fatal("standalone must disable")}}
+
 func TestToPayloadsPreservesLogEventFields(t *testing.T) {
 	cacheTokens := int64(128)
 	createdAt := time.Date(2026, 7, 6, 12, 0, 0, 0, time.UTC)

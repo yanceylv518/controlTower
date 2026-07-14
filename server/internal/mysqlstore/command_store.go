@@ -168,7 +168,7 @@ func (s Store) QueryOperationAudits(q storage.OperationAuditQuery) ([]storage.Op
 }
 
 func (s Store) PruneBefore(kind string, cutoff time.Time) (int64, error) {
-	tables := map[string][2]string{"log_events": {"log_events", "created_at"}, "log_samples": {"log_samples", "created_at"}, "metric_1m": {"metric_1m", "bucket_time"}, "metric_5m": {"metric_5m", "bucket_time"}, "server_metrics": {"server_metrics_10s", "collected_at"}, "health_checks": {"health_checks", "checked_at"}, "docker_statuses": {"docker_statuses", "collected_at"}}
+	tables := map[string][2]string{"log_events": {"log_events", "created_at"}, "log_samples": {"log_samples", "created_at"}, "metric_1m": {"metric_1m", "bucket_time"}, "metric_5m": {"metric_5m", "bucket_time"}, "server_metrics": {"server_metrics_10s", "collected_at"}, "health_checks": {"health_checks", "checked_at"}, "docker_statuses": {"docker_statuses", "collected_at"}, "nginx_timing_1m": {"nginx_timing_1m", "bucket_at"}, "nginx_slow_samples": {"nginx_slow_samples", "occurred_at"}}
 	v, ok := tables[kind]
 	if !ok {
 		return 0, sql.ErrNoRows

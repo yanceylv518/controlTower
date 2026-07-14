@@ -24,6 +24,8 @@ type Config struct {
 	LogEventMode                   string
 	LogSampleLimit                 int
 	SlowLogThresholdSeconds        float64
+	NginxAccessLog                 string
+	NginxSlowRTSeconds             float64
 	NewAPIStatusURL                string
 	NewAPIAdminAPIURL              string
 	NewAPIAdminUsername            string
@@ -91,6 +93,8 @@ func LoadFromMap(values map[string]string) (Config, error) {
 		LogEventMode:                   valueOrDefault(values, "CT_LOG_EVENT_MODE", "aggregate_with_samples"),
 		LogSampleLimit:                 intOrDefault(values, "CT_LOG_SAMPLE_LIMIT", 50),
 		SlowLogThresholdSeconds:        floatOrDefault(values, "CT_SLOW_LOG_THRESHOLD_SECONDS", 10),
+		NginxAccessLog:                 values["CT_NGINX_ACCESS_LOG"],
+		NginxSlowRTSeconds:             floatOrDefault(values, "CT_NGINX_SLOW_RT_SECONDS", 10),
 		NewAPIStatusURL:                valueOrDefault(values, "CT_NEW_API_STATUS_URL", "http://127.0.0.1:3000/api/status"),
 		NewAPIAdminAPIURL:              valueOrDefault(values, "CT_NEW_API_ADMIN_API_URL", "http://127.0.0.1:3000"),
 		NewAPIAdminUsername:            values["CT_NEW_API_ADMIN_USERNAME"],
@@ -180,6 +184,9 @@ func LoadFromMap(values map[string]string) (Config, error) {
 	if cfg.SlowLogThresholdSeconds < 0 {
 		return Config{}, errors.New("CT_SLOW_LOG_THRESHOLD_SECONDS must be >= 0")
 	}
+	if cfg.NginxSlowRTSeconds <= 0 {
+		return Config{}, errors.New("CT_NGINX_SLOW_RT_SECONDS must be > 0")
+	}
 	return cfg, nil
 }
 
@@ -199,6 +206,8 @@ func envMap() map[string]string {
 		"CT_LOG_EVENT_MODE",
 		"CT_LOG_SAMPLE_LIMIT",
 		"CT_SLOW_LOG_THRESHOLD_SECONDS",
+		"CT_NGINX_ACCESS_LOG",
+		"CT_NGINX_SLOW_RT_SECONDS",
 		"CT_NEW_API_STATUS_URL",
 		"CT_NEW_API_ADMIN_API_URL",
 		"CT_NEW_API_ADMIN_USERNAME",

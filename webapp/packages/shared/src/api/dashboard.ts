@@ -26,6 +26,10 @@ export interface InstanceTokenResponse { token: string; grace_until?: string }
 export interface ChannelCommandInput { instance_id: string; confirm: true; status?: number; weight?: number; priority?: number }
 export interface ChannelCommandItem { id: string; instance_id: string; channel_id: number; status: string; payload: Record<string, number>; created_by: string; error_summary?: string; created_at: string }
 export interface OperationAuditItem { operation_type: string; target_type: string; target_id: string; actor_id: string; after_summary: string; created_at: string }
+export interface NginxTimingBucket { bucket_at: string; request_count: number; upstream_count: number; status_4xx: number; status_5xx: number; status_504: number; rt_p50: number; rt_p95: number; rt_max: number; uht_p50: number; uht_p95: number; uht_max: number; transfer_p50: number; transfer_p95: number; transfer_max: number; bytes_total: number; slow_count: number; slow_ttft_count: number; slow_transfer_count: number }
+export interface NginxTimingSummary { total_requests: number; status_5xx: number; status_504: number; slow_count: number; slow_ttft_count: number; slow_transfer_count: number; slow_ttft_percent: number; slow_transfer_percent: number }
+export interface NginxTimingResponse { items: NginxTimingBucket[]; summary: NginxTimingSummary }
+export interface NginxSlowSample { id: number; occurred_at: string; path: string; status: number; rt: number; uht: number; urt: number; bytes: number }
 
 const query = (values: Record<string, string | number | boolean | undefined>) => {
   const params = new URLSearchParams()
@@ -59,4 +63,6 @@ export const dashboardApi = (client: ApiClient) => ({
   createChannelCommand: (channelID: number, input: ChannelCommandInput) => client.request<ChannelCommandItem>(`/api/dashboard/channels/${channelID}/commands`, { method: 'POST', body: JSON.stringify(input) }),
   channelCommands: (params: { instance_id?: string; status?: string; limit?: number; offset?: number } = {}) => client.request<ListResponse<ChannelCommandItem>>(`/api/dashboard/channel-commands${query(params)}`),
   operationAudits: (params: { instance_id?: string; limit?: number; offset?: number } = {}) => client.request<ListResponse<OperationAuditItem>>(`/api/dashboard/operation-audits${query(params)}`),
+  nginxTiming: (params: { instance_id: string; hours: number }) => client.request<NginxTimingResponse>(`/api/dashboard/nginx-timing${query(params)}`),
+  nginxSlowSamples: (params: { instance_id: string; hours: number; limit?: number }) => client.request<ListResponse<NginxSlowSample>>(`/api/dashboard/nginx-timing/slow-samples${query(params)}`),
 })

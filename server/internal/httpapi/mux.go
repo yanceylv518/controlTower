@@ -36,6 +36,7 @@ type Store interface {
 	dashboard.AlertStore
 	dashboard.NotificationStore
 	dashboard.ChannelSnapshotStore
+	dashboard.NginxTimingStore
 	dashboard.InstanceStore
 	dashboard.CommandStore
 	agentgateway.TokenLookup
@@ -50,7 +51,7 @@ func NewMux(options Options) *http.ServeMux {
 	mux.HandleFunc("/api/agent/heartbeat", agentHandler.HandleHeartbeat)
 	mux.HandleFunc("/api/agent/report", agentHandler.HandleReport)
 
-	dashboardHandler := dashboard.NewHandler(options.Store).WithLogStore(options.Store).WithLogSampleStore(options.Store).WithRuntimeStore(options.Store).WithMetricSource(options.Store).WithAlertStore(options.Store).WithNotificationStore(options.Store).WithChannelSnapshotStore(options.Store).WithNotificationMaxAttempts(options.NotificationMaxAttempts)
+	dashboardHandler := dashboard.NewHandler(options.Store).WithLogStore(options.Store).WithLogSampleStore(options.Store).WithRuntimeStore(options.Store).WithMetricSource(options.Store).WithAlertStore(options.Store).WithNotificationStore(options.Store).WithChannelSnapshotStore(options.Store).WithNginxTimingStore(options.Store).WithNotificationMaxAttempts(options.NotificationMaxAttempts)
 	protect := func(h http.Handler) http.Handler {
 		if options.AuthManager != nil {
 			return ctauth.RequireSessionOrToken(options.AuthManager, options.DashboardToken, h)
@@ -79,6 +80,8 @@ func NewMux(options Options) *http.ServeMux {
 	mux.Handle("/api/dashboard/server-metrics", protect(http.HandlerFunc(dashboardHandler.HandleServerMetrics)))
 	mux.Handle("/api/dashboard/health-checks", protect(http.HandlerFunc(dashboardHandler.HandleHealthChecks)))
 	mux.Handle("/api/dashboard/docker-statuses", protect(http.HandlerFunc(dashboardHandler.HandleDockerStatuses)))
+	mux.Handle("GET /api/dashboard/nginx-timing", protect(http.HandlerFunc(dashboardHandler.HandleNginxTiming)))
+	mux.Handle("GET /api/dashboard/nginx-timing/slow-samples", protect(http.HandlerFunc(dashboardHandler.HandleNginxSlowSamples)))
 	instances := dashboard.InstanceHandler{Store: options.Store, Runtime: options.Store, Pepper: options.AgentTokenPepper}
 	commands := dashboard.CommandHandler{Store: options.Store, Instances: options.Store}
 	mux.Handle("POST /api/dashboard/channels/{channelID}/commands", protect(http.HandlerFunc(commands.Create)))

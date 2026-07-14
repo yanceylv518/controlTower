@@ -138,6 +138,13 @@ func TestHandleReportRejectsTooManyMetricItems(t *testing.T) {
 	}
 }
 
+func TestHandleReportRejectsTooManyNginxTimingItems(t *testing.T) {
+	sink := &memorySink{}; handler := NewHandler("expected-token", sink)
+	payload := AgentReportRequest{InstanceID:"inst-1", AgentID:"agent-1", NginxTimingBuckets:make([]NginxTimingBucketPayload,1501)}
+	data,_:=json.Marshal(payload); req:=httptest.NewRequest(http.MethodPost,"/api/agent/report",bytes.NewReader(data));req.Header.Set("Authorization","Bearer expected-token");rr:=httptest.NewRecorder();handler.HandleReport(rr,req)
+	if rr.Code!=http.StatusRequestEntityTooLarge||sink.reportCount!=0{t.Fatalf("status=%d saved=%d",rr.Code,sink.reportCount)}
+}
+
 func TestHandleReportRejectsLargeDecodedGzipPayload(t *testing.T) {
 	sink := &memorySink{}
 	handler := NewHandler("expected-token", sink)

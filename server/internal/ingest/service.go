@@ -22,6 +22,8 @@ type Store interface {
 	InsertDockerStatus(status storage.DockerStatus) error
 	InsertHealthCheck(check storage.HealthCheck) error
 	InsertChannelSnapshot(snapshot storage.ChannelSnapshot) error
+	UpsertNginxTimingBucket(storage.NginxTimingBucket) error
+	InsertNginxSlowSample(storage.NginxSlowSample) error
 	UpdateLogOffset(instanceID string, lastLogID int64) error
 	CurrentLogOffset(instanceID string) (int64, error)
 	ApplyMetricBatch(instanceID string, batchID string, metrics []aggregator.Metric) error
@@ -262,6 +264,16 @@ func (s Service) SaveReport(req agentgateway.AgentReportRequest) error {
 			ModelsText:  payload.ModelsText,
 			CapturedAt:  capturedAt,
 		}); err != nil {
+			return err
+		}
+	}
+	for _, payload := range req.NginxTimingBuckets {
+		if err := s.store.UpsertNginxTimingBucket(storage.NginxTimingBucket{InstanceID: req.InstanceID, BucketAt: payload.BucketAt, RequestCount: payload.RequestCount, UpstreamCount: payload.UpstreamCount, Status4xx: payload.Status4xx, Status5xx: payload.Status5xx, Status504: payload.Status504, RTP50: payload.RTP50, RTP95: payload.RTP95, RTMax: payload.RTMax, UHTP50: payload.UHTP50, UHTP95: payload.UHTP95, UHTMax: payload.UHTMax, TransferP50: payload.TransferP50, TransferP95: payload.TransferP95, TransferMax: payload.TransferMax, BytesTotal: payload.BytesTotal, SlowCount: payload.SlowCount, SlowTTFTCount: payload.SlowTTFTCount, SlowTransferCount: payload.SlowTransferCount}); err != nil {
+			return err
+		}
+	}
+	for _, payload := range req.NginxSlowSamples {
+		if err := s.store.InsertNginxSlowSample(storage.NginxSlowSample{InstanceID: req.InstanceID, OccurredAt: payload.OccurredAt, Path: payload.Path, Status: payload.Status, RT: payload.RT, UHT: payload.UHT, URT: payload.URT, Bytes: payload.Bytes}); err != nil {
 			return err
 		}
 	}

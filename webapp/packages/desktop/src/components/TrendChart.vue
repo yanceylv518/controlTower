@@ -1,18 +1,18 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import * as echarts from 'echarts/core'
-import { LineChart } from 'echarts/charts'
+import { BarChart, LineChart } from 'echarts/charts'
 import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 
-export interface TrendSeries { name: string; color: string; data: Array<[string, number | null | undefined]>; unit?: string }
+export interface TrendSeries { name: string; color: string; data: Array<[string, number | null | undefined]>; unit?: string; type?: 'line' | 'bar' }
 const props = withDefaults(defineProps<{ title: string; series: TrendSeries[]; percent?: boolean }>(), { percent: false })
 const chartEl = ref<HTMLDivElement>()
 const hasData = computed(() => props.series.some(item => item.data.some(([, value]) => value != null)))
 let chart: echarts.ECharts | undefined
 let observer: ResizeObserver | undefined
 
-echarts.use([LineChart, GridComponent, LegendComponent, TooltipComponent, CanvasRenderer])
+echarts.use([LineChart, BarChart, GridComponent, LegendComponent, TooltipComponent, CanvasRenderer])
 
 async function render() {
   if (!hasData.value) { chart?.dispose(); chart = undefined; return }
@@ -27,7 +27,7 @@ async function render() {
     grid: { left: 44, right: 18, top: 38, bottom: 28 },
     xAxis: { type: 'time', axisLabel: { hideOverlap: true } },
     yAxis: { type: 'value', min: props.percent ? 0 : undefined, max: props.percent ? 100 : undefined, axisLabel: { formatter: props.percent ? '{value}%' : '{value}' } },
-    series: props.series.map(item => ({ name: item.name, type: 'line', showSymbol: false, connectNulls: false, smooth: true, data: item.data, tooltip: { valueFormatter: (value: unknown) => value == null ? '—' : `${value}${item.unit || ''}` } })),
+    series: props.series.map(item => ({ name: item.name, type: item.type || 'line', showSymbol: false, connectNulls: false, smooth: item.type !== 'bar', data: item.data, tooltip: { valueFormatter: (value: unknown) => value == null ? '—' : `${value}${item.unit || ''}` } })),
   }, true)
 }
 

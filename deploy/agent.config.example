@@ -55,3 +55,8 @@ CT_ALERT_SLOW_WINDOW=10
 CT_ALERT_SLOW_THRESHOLD=3
 # Streaming responses use a separate threshold; 0 excludes them.
 CT_ALERT_SLOW_STREAM_SECONDS=300
+
+# Nginx timed access log analytics. Leave CT_NGINX_ACCESS_LOG empty to disable.
+# Missing/unreadable files only produce one warning and retry; standalone mode does not support this module.
+CT_NGINX_ACCESS_LOG=
+CT_NGINX_SLOW_RT_SECONDS=10

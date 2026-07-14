@@ -114,6 +114,9 @@ func (s *MemoryStore) QueryOperationAudits(q storage.OperationAuditQuery) ([]sto
 func (s *MemoryStore) PruneBefore(kind string, cutoff time.Time) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if n, ok := s.pruneNginx(kind, cutoff); ok {
+		return n, nil
+	}
 	var n int64
 	switch kind {
 	case "log_events":

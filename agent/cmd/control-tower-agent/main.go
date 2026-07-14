@@ -22,6 +22,7 @@ import (
 	"controltower/agent/internal/localbuffer"
 	"controltower/agent/internal/logcollector"
 	"controltower/agent/internal/metricaggregator"
+	"controltower/agent/internal/nginxtiming"
 	"controltower/agent/internal/preflight"
 	"controltower/agent/internal/reporter"
 	"controltower/agent/internal/samples"
@@ -30,6 +31,7 @@ import (
 )
 
 var agentVersion = "0.1.0"
+var activeNginxTiming *nginxtiming.Aggregator
 
 type controlTowerReporter interface {
 	Heartbeat(context.Context, reporter.AgentHeartbeatRequest) (reporter.AgentHeartbeatResponse, error)
@@ -74,6 +76,7 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	activeNginxTiming = startNginxTiming(ctx, cfg)
 
 	if *preflightOnly {
 		passCtx, cancel := context.WithTimeout(ctx, collectPassTimeout(cfg))
@@ -361,7 +364,10 @@ func collectAndReportFullPass(ctx context.Context, client controlTowerReporter, 
 	if err := client.Report(ctx, report); err != nil {
 		current.ConsecutiveReportFailures++
 		if reportShouldAdvanceFromBuffer(report) {
-			bufferErr := bufferStore.Append(localbuffer.Entry{CreatedAt: now, LastLogID: lastLogID, Report: report}, cfg.MaxLocalBufferEvents)
+			bufferedReport := report
+			bufferedReport.NginxTimingBuckets = nil
+			bufferedReport.NginxSlowSamples = nil
+			bufferErr := bufferStore.Append(localbuffer.Entry{CreatedAt: now, LastLogID: lastLogID, Report: bufferedReport}, cfg.MaxLocalBufferEvents)
 			if bufferErr != nil {
 				_ = stateStore.Save(current)
 				return bufferErr
@@ -370,6 +376,9 @@ func collectAndReportFullPass(ctx context.Context, client controlTowerReporter, 
 		}
 		_ = stateStore.Save(current)
 		return err
+	}
+	if activeNginxTiming != nil {
+		activeNginxTiming.Ack(len(report.NginxTimingBuckets))
 	}
 
 	current.LastLogID = lastLogID
@@ -426,7 +435,7 @@ func buildReport(ctx context.Context, cfg config.Config, reportedAt time.Time, s
 			channelSnapshots = toChannelSnapshotPayloads(snapshots)
 		}
 	}
-	return reporter.AgentReportRequest{
+	report := reporter.AgentReportRequest{
 		InstanceID:        cfg.InstanceID,
 		AgentID:           cfg.AgentID,
 		AgentVersion:      agentVersion,
@@ -444,6 +453,29 @@ func buildReport(ctx context.Context, cfg config.Config, reportedAt time.Time, s
 		HealthChecks:      healthChecks,
 		ChannelSnapshots:  channelSnapshots,
 	}
+	if activeNginxTiming != nil {
+		buckets, slowSamples := activeNginxTiming.Snapshot()
+		for _, bucket := range buckets {
+			report.NginxTimingBuckets = append(report.NginxTimingBuckets, reporter.NginxTimingBucketPayload{BucketAt: bucket.BucketAt, RequestCount: bucket.RequestCount, UpstreamCount: bucket.UpstreamCount, Status4xx: bucket.Status4xx, Status5xx: bucket.Status5xx, Status504: bucket.Status504, RTP50: bucket.RTP50, RTP95: bucket.RTP95, RTMax: bucket.RTMax, UHTP50: bucket.UHTP50, UHTP95: bucket.UHTP95, UHTMax: bucket.UHTMax, TransferP50: bucket.TransferP50, TransferP95: bucket.TransferP95, TransferMax: bucket.TransferMax, BytesTotal: bucket.BytesTotal, SlowCount: bucket.SlowCount, SlowTTFTCount: bucket.SlowTTFTCount, SlowTransferCount: bucket.SlowTransferCount})
+		}
+		for _, sample := range slowSamples {
+			report.NginxSlowSamples = append(report.NginxSlowSamples, reporter.NginxSlowSamplePayload{OccurredAt: sample.OccurredAt, Path: sample.Path, Status: sample.Status, RT: sample.RT, UHT: sample.UHT, URT: sample.URT, Bytes: sample.Bytes})
+		}
+	}
+	return report
+}
+
+func startNginxTiming(ctx context.Context, cfg config.Config) *nginxtiming.Aggregator {
+	if cfg.NginxAccessLog == "" {
+		return nil
+	}
+	if cfg.ServerURL == "" {
+		log.Printf("WARN nginx timing requires Server reporting; standalone mode disabled")
+		return nil
+	}
+	aggregator := nginxtiming.NewAggregator(cfg.NginxSlowRTSeconds)
+	go nginxtiming.Tailer{Path: cfg.NginxAccessLog, Aggregator: aggregator}.Run(ctx)
+	return aggregator
 }
 
 func metricBatchID(agentID string, events []logcollector.Event) string {
@@ -471,7 +503,7 @@ func selectLogSamplesForReport(cfg config.Config, events []logcollector.Event) [
 	return samples.Select(events, cfg.LogSampleLimit, cfg.SlowLogThresholdSeconds)
 }
 func reportIsEmpty(report reporter.AgentReportRequest) bool {
-	return len(report.LogEvents) == 0 && len(report.AggregatedMetrics) == 0 && len(report.ServerMetrics) == 0 && len(report.DockerStatuses) == 0 && len(report.HealthChecks) == 0 && len(report.ChannelSnapshots) == 0 && len(report.CommandResults) == 0
+	return len(report.LogEvents) == 0 && len(report.AggregatedMetrics) == 0 && len(report.ServerMetrics) == 0 && len(report.DockerStatuses) == 0 && len(report.HealthChecks) == 0 && len(report.ChannelSnapshots) == 0 && len(report.CommandResults) == 0 && len(report.NginxTimingBuckets) == 0 && len(report.NginxSlowSamples) == 0
 }
 
 func toPayloads(events []logcollector.Event) []reporter.LogEventPayload {

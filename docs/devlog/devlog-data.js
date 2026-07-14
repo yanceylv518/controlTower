@@ -2,6 +2,15 @@
 // type: release(发版) | bugfix(缺陷修复) | incident(生产事故) | review(代码评审) | decision(方案决策)
 window.DEVLOG = [
   {
+    date: "2026-07-14",
+    type: "feature",
+    version: "v2.2-B1",
+    title: "Nginx timing 延时分诊分析链路",
+    summary: "Agent 以失效安全方式只读 tail Nginx timed 日志，剥离 query 后按 UTC 分钟聚合 TTFT、传输段、5xx/504 与 Top5 慢样本；Server 通过 007 迁移幂等入库并提供受保护的增量 API；Web 新增延时分诊页展示归因卡、三张趋势图和慢样本表。该模块为纯分析数据，零钉钉、零 webhook、零告警事件。",
+    docs: ["docs/codex-task-v2.2-b1-nginx-timing-analytics.md", "docs/latency-diagnosis.md"],
+    commits: []
+  },
+  {
     date: "2026-07-13",
     type: "decision",
     version: "",

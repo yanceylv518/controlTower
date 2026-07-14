@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "pnpm --filter @ct/desktop dev",
     "build": "pnpm --filter @ct/desktop build",
-    "typecheck": "pnpm --filter @ct/desktop typecheck"
+    "typecheck": "pnpm --filter @ct/desktop typecheck",
+    "test": "pnpm typecheck"
   }
 }
