@@ -5,6 +5,15 @@ window.DEVLOG = [
     date: "2026-07-14",
     type: "review",
     version: "",
+    title: "v2.2-B1-fix 验收通过（附一处竞态补丁）",
+    summary: "三项返工全部修复且各有测试：残行进 pending 缓冲（64KB 上限、轮转清空）；firstOpen/reopenAtStart/续读三分支消除全量回放（注入读错误的测试验证不重复计数）；开放桶 map + 5s 宽限期 + closedThrough/forcedClosed 双防线保证同一分钟只入队一次。验收发现一处遗留竞态：发现轮转后还要空等一个 1s flush 周期才重开新文件，Linux 下轮转测试 ~50% 失败（codex 在 Windows 只跑了 truncate 分支）；已由 Claude 补一行 continue 立即重开，8 连跑稳定，全仓测试绿。v2.2-B1 至此整体验收通过。",
+    docs: ["docs/codex-task-v2.2-b1-fix-tailer.md"],
+    commits: ["162d88b"]
+  },
+  {
+    date: "2026-07-14",
+    type: "review",
+    version: "",
     title: "v2.2-B1 验收：整体通过，tailer 三项数据正确性缺陷返工",
     summary: "通过项：零消息推送、失效安全（缺文件重试有测试+复核）、独立模式 WARN、007 迁移钉扎、桶 upsert 幂等、慢样本唯一键防重、retention 并入、API 走 protect 不泄漏存储结构体、Web 延时分诊页完整（归因卡+三图+慢样本表+空态）、全测试绿。返工项（P1 已写复现测试实证）：① EOF 残行被当完整行解析，rt 截断值入桶且误判慢请求归因；② 非 EOF 读错误后重开从头回放整个文件，覆盖 Server 历史桶；③ 分钟边界乱序使同分钟桶分裂，upsert 后写覆盖先写导致该分钟缩水。修复单 codex-task-v2.2-b1-fix-tailer.md，仅动 nginxtiming 包。",
     docs: ["docs/codex-task-v2.2-b1-fix-tailer.md", "docs/codex-task-v2.2-b1-nginx-timing-analytics.md"],

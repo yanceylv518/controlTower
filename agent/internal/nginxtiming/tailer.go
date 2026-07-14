@@ -125,6 +125,7 @@ func (t Tailer) Run(ctx context.Context) {
 				reopenAtStart = true
 				pending = ""
 				discardPending = false
+				continue
 			}
 			select {
 			case <-ctx.Done():
