@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-16",
+    type: "release",
+    version: "",
+    title: "v2.4-B2 批次下发：延迟分位数桶内插值",
+    summary: "用户反馈维度页延迟图不合理。根因：latencyhist.Quantile 返回桶上界,P50/P95/P99 只取 10 个离散值——曲线方波阶梯、8s→11s 显示成 10→30、超 60s 顶格 120 拉飞纵轴压扁其余曲线。批次：分位数改桶内线性插值（histogram_quantile 标准做法）,纯读侧、历史数据即刻受益;要求核对全部调用点（生产 p95 列需换 Agent 二进制才精细,交付说明须声明）+ 改造前后曲线对比。精确分位数直报（Agent 新列）与渠道 group/priority 补采同批,留待下次 Agent 升级。",
+    docs: ["docs/codex-task-v2.4-b2-latency-quantiles.md"],
+    commits: []
+  },
+  {
+    date: "2026-07-16",
     type: "review",
     version: "",
     title: "v2.4-B1 计划验收：通过,修正一处会导致零命中的关联源",
