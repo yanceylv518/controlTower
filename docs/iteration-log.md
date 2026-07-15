@@ -19,6 +19,49 @@
 
 ---
 
+## v2.4-B1 Request ID 关联延时分诊（规划，2026-07-16）
+
+### 1. 版本定位与迭代思路
+
+现有 Nginx timing 能判断慢在首响应段还是传输段，但慢样本无法直接回答对应的用户、渠道和模型。生产验证确认 `X-Oneapi-Request-Id` 与 new-api 使用日志的 `Request ID` 完全一致，因此下一批使用 `instance_id + request_id` 做精确关联，不采用时间近邻猜测。
+
+### 2. 功能范围
+
+- Agent 从 timed access log 解析并上报慢样本 request_id；
+- Server 在 Control Tower 自有数据内关联使用日志维度；
+- 延时分诊展示并筛选用户、渠道、模型、令牌及关联状态；
+- 缺失、多匹配和旧日志均显式降级，不影响采集、上报或企业微信提醒。
+
+### 3. 开发过程与关键决策
+
+本轮先完成方案与生产前提验证，功能代码尚未开始。确认通用 `X-Request-Id` 与 new-api 业务日志 ID 不同，最终应采集 Nginx `$upstream_http_x_oneapi_request_id`。完整执行计划见 `docs/codex-task-v2.4-b1-request-linked-latency.md`。
+
+### 4. 开发问题
+
+无。当前仅形成计划。
+
+### 5. 部署实录
+
+生产 Nginx 已人工验证目标日志字段；Control Tower 代码和 Agent 尚未升级。
+
+### 6. 部署问题
+
+无。
+
+### 7. 已知限制
+
+当前 Agent 尚未解析 request_id；`uht` 是上游首响应时间，不等同于精确模型 TTFT。
+
+### 8. 遗留问题
+
+按任务文档完成 Agent、Server、Web、迁移与端到端验收。
+
+### 9. 下一版本方向
+
+完成 v2.4-B1 后再评估从 new-api 日志提取精确首字时间，以及是否需要全量而非仅慢样本的维度级延时统计。
+
+---
+
 ## v2.0.0-rc5 Control Tower Web 收尾发布（2026-07-15）
 
 ### 1. 版本定位与迭代思路
