@@ -59,13 +59,7 @@
 - [ ] 状态列（告警状态/命令状态/实例在线）→ StatusTag 统一色板；
 - [ ] 空态 → `el-empty` + 一句"为什么会空/怎么让它有数据"的引导文案。
 
-### 任务 6：系统状态页图表化（用户点名：列表看不懂）
-
-现状：`RuntimeView.vue` 把 server-metrics 最近 100 条原始采样直接铺表格,无法回答"机器现在怎么样/过去一小时什么走势"。改造为：
-
-1. **当前值卡片区**（每实例一组）：CPU%、内存%、磁盘%、负载、网络收发——取最新一条采样,复用 MetricMini,阈值配色（≥90% 红、≥70% 橙、否则绿）,带采集时间戳（超过 2 分钟未更新显示"数据陈旧"标记）；
-2. **趋势图**（复用 TrendChart + HoursSelect,1h/6h/24h）：图① CPU% + 内存%（percent 轴）；图② 磁盘使用率；图③ 网络收/发速率。数据走既有 `/api/dashboard/server-metrics`——`ServerMetricQuery` 已支持 StartTime/EndTime,handler 若未透出 start/end 查询参数则补上（additive）；多实例时按实例分组或用实例选择器过滤；
-3. 原始采样表**收进折叠面板**（排障还要用,默认收起）；Agent/健康检查/容器三个表保留,按任务 5 清单打磨。
+### 任务 6：系统状态页图表化（已移入 v2.3-B2,见 codex-task-v2.3-b2-web-followups.md,勿在本批执行）
 
 ### 任务 7：样式统一（`b7.css`）
 

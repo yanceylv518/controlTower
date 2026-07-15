@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-15",
+    type: "review",
+    version: "",
+    title: "v2.3-B1 验收：名称解析/图标/维度页通过,三处收尾移交 B2",
+    summary: "通过:nameResolver 实现正确(渠道名取最新快照、用户名取最近日志、60s 缓存、回退,均有测试),API 只增不改,维度页/总览/审计前端已接线,零 Agent 改动,Server 测试 Linux 全绿。收尾缺口:告警中心/样本页前端未接新字段与统一格式,系统状态图表化追加晚了没赶上。已并同渠道清晰化需求(搜索/状态分组/无流量禁用折叠/健康墙,纯前端)下发 v2.3-B2。供应商分组依赖渠道 group 字段,与 priority 同归下次 Agent 快照升级。",
+    docs: ["docs/codex-task-v2.3-b2-web-followups.md", "docs/v2.3-b1-delivery.md"],
+    commits: ["6fb831a"]
+  },
+  {
+    date: "2026-07-15",
     type: "release",
     version: "v2.3-B1",
     title: "Web 名称化、图标与指标视觉打磨",
