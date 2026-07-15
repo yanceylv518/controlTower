@@ -63,15 +63,15 @@ log_format timed '$remote_addr - "$request" [$time_local] '
 
 ### 任务 3：关联 new-api 日志维度
 
-关联来源使用 Control Tower 已采集的 `log_events`，不反向连接生产 new-api 数据库：
+关联来源使用 Control Tower 已采集的日志数据，不反向连接生产 new-api 数据库。**关联源修正（2026-07-16 验收发现）**：生产默认的 `aggregate_with_samples` 模式下 `log_events` 表为空（仅 `full_debug` 模式填充），**主关联源必须是 `log_samples`**——该表已含 user_id/username/channel_id/model_name/token_name/request_id 且有 `idx_log_samples_request_id` 索引；`log_events` 作为次级源（full_debug 部署时优先，条数更全）。两表都查、按来源合并去重：
 
-- 按 `instance_id + request_id` 批量查询匹配日志，避免逐样本 N+1；
+- 按 `instance_id + request_id` 批量查询匹配日志（先 log_samples 后 log_events），避免逐样本 N+1；
 - 为匹配样本补充 `user_id`、`channel_id`、`model_name`、令牌显示名（仅已有安全展示字段）；
 - 名称优先走现有 name resolver，返回用户/渠道/实例可读名称，同时保留原始 ID；
 - 一个 request_id 对应多条日志时，返回匹配数量和明确状态 `multiple`，不得静默任选造成错误归因；
 - 关联状态统一为 `matched`、`unmatched`、`multiple`；旧样本无 ID 为 `unmatched`。
 
-如现有 `log_events` 未保存关联所需字段，先以增量、安全字段补齐 Control Tower 自有存储；不得修改 new-api schema。
+**命中率预期（写进交付说明与页面空态文案）**：log_samples 是采样数据（每报最多 50 条,错误优先,慢阈值 10s 与 nginx 慢样本对齐）——正常流量下 rt≥10s 的 nginx 慢样本绝大多数可关联;错误风暴期采样截断会产生 unmatched,这是设计内行为,不是缺陷。不得为提高命中率而放宽为时间邻近匹配。
 
 ### 任务 4：Dashboard API
 
