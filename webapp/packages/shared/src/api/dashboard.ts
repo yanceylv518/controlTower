@@ -49,7 +49,7 @@ export const dashboardApi = (client: ApiClient) => ({
   channelSnapshots: (params: { instance_id?: string; latest_only?: boolean; limit?: number } = {}) => client.request<ListResponse<ChannelSnapshot>>(`/api/dashboard/channel-snapshots${query(params)}`),
   logSamples: (params: { instance_id?: string; sample_kind?: string; model_name?: string; user_id?: string; request_id?: string; limit?: number; offset?: number } = {}) => client.request<ListResponse<LogSample>>(`/api/dashboard/log-samples${query(params)}`),
   agents: (params: { instance_id?: string; limit?: number } = {}) => client.request<ListResponse<AgentItem>>(`/api/dashboard/agents${query(params)}`),
-  serverMetrics: (params: { instance_id?: string; limit?: number } = {}) => client.request<ListResponse<ServerMetricItem>>(`/api/dashboard/server-metrics${query(params)}`),
+  serverMetrics: (params: { instance_id?: string; start_time?: string; end_time?: string; limit?: number } = {}) => client.request<ListResponse<ServerMetricItem>>(`/api/dashboard/server-metrics${query(params)}`),
   healthChecks: (params: { instance_id?: string; limit?: number } = {}) => client.request<ListResponse<HealthCheckItem>>(`/api/dashboard/health-checks${query(params)}`),
   dockerStatuses: (params: { instance_id?: string; limit?: number } = {}) => client.request<ListResponse<DockerStatusItem>>(`/api/dashboard/docker-statuses${query(params)}`),
   usage: (hours: number) => client.request<ListResponse<UsageItem>>(`/api/dashboard/usage${query({ hours })}`),

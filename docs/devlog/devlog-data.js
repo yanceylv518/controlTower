@@ -14,6 +14,15 @@ window.DEVLOG = [
     date: "2026-07-15",
     type: "release",
     version: "v2.3-B1",
+    title: "系统状态页指标图表化",
+    summary: "按实例展示 CPU、内存、磁盘、负载和网络最新值，加入阈值色与两分钟数据陈旧提示；新增 1h/6h/24h 的 CPU/内存、磁盘、网络三张趋势图，原始采样默认折叠保留排障能力。",
+    docs: ["docs/codex-task-v2.3-b1-web-polish.md", "docs/v2.3-b1-delivery.md"],
+    commits: []
+  },
+  {
+    date: "2026-07-15",
+    type: "release",
+    version: "v2.3-B1",
     title: "Web 名称化、图标与指标视觉打磨",
     summary: "新增 60 秒缓存的实例/渠道/用户名称解析，Dashboard API 以附加字段保持兼容；侧栏 13 个入口加入图标，维度页加入状态点、排序和指标标签，总览 KPI 增加颜色语义与千分位，并统一前端格式化工具和 b7 样式。",
     docs: ["docs/codex-task-v2.3-b1-web-polish.md", "docs/v2.3-b1-delivery.md"],
