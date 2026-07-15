@@ -8,7 +8,7 @@
 
 - Dashboard API 契约零变化（响应字段与语义不变,新增可选查询参数除外）;前端行为除"更快出首屏"外无感;
 - 迁移幂等,索引钉名;零新依赖,零 Agent 改动;
-- 每项优化在交付说明里附 **EXPLAIN 前后对比**（用造数脚本灌 ≥50 万行验证）。
+- 每项优化在交付说明里附 **EXPLAIN 前后对比**（用造数脚本灌 ≥50 万行验证）。注意：生产已手工创建同名索引（2026-07-15 止血）,008 迁移靠 1061 容忍语义天然兼容,勿改索引名。
 
 ## 工作项
 
@@ -51,7 +51,11 @@ LIMIT ?
 
 `DimensionView.vue`：`state` 的加载器里去掉 `await loadHistory()`——列表(metrics+快照)到达即渲染左列与指标卡,趋势图区域用独立 loading 态异步补上。切换选中项/时间范围行为不变。
 
-### 任务 5：造数与验证
+### 任务 5：Dashboard 响应 gzip
+
+标准库实现一个 gzip 中间件（尊重 `Accept-Encoding`,只压 JSON 响应,`sync.Pool` 复用 writer）,包在 dashboard 路由的 protect 链上（agent 网关路由不动——上报请求侧已有自己的压缩语义）。维度页 latest 响应几千行 JSON 预计压缩 ~10 倍,远程访问的传输时间大头直接消掉。加测试：带/不带 Accept-Encoding 的响应头与解压后内容一致。
+
+### 任务 6：造数与验证
 
 - `deploy/perf-seed.sql`（或脚本）：灌 2 实例 × 120 维度 × 7 天分钟桶（≈120 万行）;
 - 交付说明记录：旧查询耗时 vs 新查询耗时（同一数据集）、两条 EXPLAIN、维度页首屏水掉的请求瀑布说明;
@@ -64,6 +68,7 @@ LIMIT ?
 - [ ] dimension_type 与 24h 活跃视野已下推;API 响应字段零变化;24h 语义变化已声明
 - [ ] nameResolver 批量预载有零额外查询测试
 - [ ] 维度页首屏不再等待历史曲线;图表区独立 loading
+- [ ] dashboard JSON 响应支持 gzip 且有测试;agent 网关路由未包压缩
 - [ ] 一个 commit：`perf(server,web): dimension page latest-metrics query and first paint (v2.3-B3)`
 
 ## 明确不做
