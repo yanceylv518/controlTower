@@ -48,6 +48,8 @@ func (s Store) QueryChannelSnapshots(query storage.ChannelSnapshotQuery) ([]stor
 			&item.Status,
 			&item.Weight,
 			&item.ModelsText,
+			&item.GroupName,
+			&item.Priority,
 			&item.CapturedAt,
 		); err != nil {
 			return nil, err
@@ -75,7 +77,7 @@ func buildChannelSnapshotQuery(query storage.ChannelSnapshotQuery) (string, []an
 	}
 	args = append(args, limit, offset)
 	builder := strings.Builder{}
-	builder.WriteString(`SELECT id, instance_id, channel_id, channel_name, status, weight, models_text, captured_at
+	builder.WriteString(`SELECT id, instance_id, channel_id, channel_name, status, weight, models_text, group_name, priority, captured_at
 FROM channel_snapshots`)
 	builder.WriteString(where)
 	builder.WriteString(`

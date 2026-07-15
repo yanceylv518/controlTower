@@ -25,8 +25,8 @@ func latencyBucketColumnSQL() string {
 }
 
 func metricValuePlaceholders() string {
-	values := make([]string, 0, 22+latencyhist.BucketCount)
-	for i := 0; i < 22+latencyhist.BucketCount; i++ {
+	values := make([]string, 0, 29+latencyhist.BucketCount)
+	for i := 0; i < 29+latencyhist.BucketCount; i++ {
 		values = append(values, "?")
 	}
 	return strings.Join(values, ", ")

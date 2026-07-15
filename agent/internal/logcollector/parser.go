@@ -51,6 +51,7 @@ type Event struct {
 	ErrorSummary      string
 	CacheTokens       *int64
 	CacheFieldPresent bool
+	FirstResponseMs   *int64
 }
 
 func ConvertRow(row Row) (Event, bool, error) {
@@ -60,6 +61,7 @@ func ConvertRow(row Row) (Event, bool, error) {
 	}
 
 	cacheTokens, cachePresent, _ := parseCacheTokens(row.Other)
+	firstResponseMs, _ := parseFirstResponseMs(row.Other)
 
 	return Event{
 		SourceLogID:       row.ID,
@@ -83,7 +85,30 @@ func ConvertRow(row Row) (Event, bool, error) {
 		ErrorSummary:      summarizeError(row.Content),
 		CacheTokens:       cacheTokens,
 		CacheFieldPresent: cachePresent,
+		FirstResponseMs:   firstResponseMs,
 	}, true, nil
+}
+
+func parseFirstResponseMs(other string) (*int64, error) {
+	if strings.TrimSpace(other) == "" {
+		return nil, nil
+	}
+	var data map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(other), &data); err != nil {
+		return nil, err
+	}
+	raw, ok := data["frt"]
+	if !ok {
+		return nil, nil
+	}
+	var value int64
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return nil, err
+	}
+	if value <= 0 || value > 3_600_000 {
+		return nil, nil
+	}
+	return &value, nil
 }
 
 func mapLogType(value int) (string, bool) {

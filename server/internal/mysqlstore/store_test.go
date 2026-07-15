@@ -94,8 +94,8 @@ func TestMetricArgsConvertsNilRatesToSQLNulls(t *testing.T) {
 		DimensionKey:  "inst-1",
 		RequestCount:  5,
 	})
-	if len(args) != 32 {
-		t.Fatalf("metric args len = %d, want 32", len(args))
+	if len(args) != 39 {
+		t.Fatalf("metric args len = %d, want 39", len(args))
 	}
 	for _, idx := range []int{7, 8, 13, 14, 15, 16} {
 		value, ok := args[idx].(interface{ IsZero() bool })
@@ -152,7 +152,7 @@ func TestBuildAlertQuerySupportsActiveOnly(t *testing.T) {
 	}
 }
 func TestMetricBatchMergeSQLAccumulatesCountsAndDerivedRates(t *testing.T) {
-	sqlText := metricBatchMergeSQL("metric_1m", 1)
+	sqlText := metricBatchMergeSQL("metric_5m", 1)
 	for _, fragment := range []string{
 		"request_count = request_count + VALUES(request_count)",
 		"success_rate = (success_count + VALUES(success_count))",
@@ -165,16 +165,22 @@ func TestMetricBatchMergeSQLAccumulatesCountsAndDerivedRates(t *testing.T) {
 			t.Fatalf("metric merge missing %q: %s", fragment, sqlText)
 		}
 	}
+	oneMinuteSQL := metricBatchMergeSQL("metric_1m", 1)
+	for _, fragment := range []string{"p50_use_time = VALUES(p50_use_time)", "p95_use_time = VALUES(p95_use_time)", "p99_use_time = VALUES(p99_use_time)", "ttft_p95_ms = VALUES(ttft_p95_ms)"} {
+		if !strings.Contains(oneMinuteSQL, fragment) {
+			t.Fatalf("1m merge missing exact percentile assignment %q", fragment)
+		}
+	}
 }
 
 func TestMetricBatchUpsertSQLAndArgs(t *testing.T) {
 	sqlText := metricBatchUpsertSQL("metric_1m", 2)
-	if strings.Count(sqlText, "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)") != 2 {
+	if strings.Count(sqlText, "("+metricValuePlaceholders()+")") != 2 {
 		t.Fatalf("expected two value rows in %s", sqlText)
 	}
 	now := time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC)
 	args := metricBatchArgs([]aggregator.Metric{{InstanceID: "inst-1", BucketTime: now}, {InstanceID: "inst-2", BucketTime: now}})
-	if len(args) != 64 {
-		t.Fatalf("args len = %d, want 64", len(args))
+	if len(args) != 78 {
+		t.Fatalf("args len = %d, want 78", len(args))
 	}
 }

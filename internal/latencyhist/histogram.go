@@ -39,15 +39,25 @@ func Quantile(buckets Buckets, quantile float64) *float64 {
 	if quantile > 1 {
 		quantile = 1
 	}
-	target := int64(math.Ceil(float64(total) * quantile))
-	if target < 1 {
+	target := float64(total) * quantile
+	if target <= 0 {
 		target = 1
 	}
 	var cumulative int64
 	for i, count := range buckets {
+		previous := cumulative
 		cumulative += count
-		if cumulative >= target {
-			value := UpperBounds[i]
+		if float64(cumulative) >= target {
+			lower := 0.0
+			if i > 0 {
+				lower = UpperBounds[i-1]
+			}
+			fraction := 1.0
+			if count > 0 {
+				fraction = (target - float64(previous)) / float64(count)
+			}
+			fraction = math.Max(0, math.Min(1, fraction))
+			value := lower + fraction*(UpperBounds[i]-lower)
 			return &value
 		}
 	}

@@ -119,3 +119,13 @@ func TestHeartbeatRequestJSONContract(t *testing.T) {
 		}
 	}
 }
+
+func TestOldMetricPayloadLeavesDataplaneFieldsNil(t *testing.T) {
+	var metric AggregatedMetricPayload
+	if err := json.Unmarshal([]byte(`{"bucket_time":"2026-07-16T10:00:00Z","window_seconds":60,"dimension_type":"instance","dimension_key":"inst-1","request_count":1}`), &metric); err != nil {
+		t.Fatal(err)
+	}
+	if metric.P50UseTime != nil || metric.P99UseTime != nil || metric.BigInputCount != nil || metric.TTFTCount != nil {
+		t.Fatalf("old payload must preserve NULL compatibility: %#v", metric)
+	}
+}

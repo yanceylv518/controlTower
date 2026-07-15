@@ -106,13 +106,20 @@ type AggregatedMetricPayload struct {
 	CompletionTokens  int64               `json:"completion_tokens"`
 	Quota             int64               `json:"quota"`
 	AvgUseTime        *float64            `json:"avg_use_time"`
+	P50UseTime        *float64            `json:"p50_use_time,omitempty"`
 	P95UseTime        *float64            `json:"p95_use_time"`
+	P99UseTime        *float64            `json:"p99_use_time,omitempty"`
 	StreamRate        *float64            `json:"stream_rate"`
 	CacheTokenRate    *float64            `json:"cache_token_rate"`
 	UseTimeSum        float64             `json:"use_time_sum"`
 	StreamCount       int64               `json:"stream_count"`
 	CacheTokensTotal  int64               `json:"cache_tokens_total"`
 	CachePromptTokens int64               `json:"cache_prompt_tokens"`
+	BigInputCount     *int64              `json:"big_input_count,omitempty"`
+	BigInputCacheHits *int64              `json:"big_input_cache_hits,omitempty"`
+	TTFTCount         *int64              `json:"ttft_count,omitempty"`
+	TTFTSumMS         *int64              `json:"ttft_sum_ms,omitempty"`
+	TTFTP95MS         *float64            `json:"ttft_p95_ms,omitempty"`
 	LatencyBuckets    latencyhist.Buckets `json:"latency_buckets"`
 }
 
@@ -196,5 +203,7 @@ type ChannelSnapshotPayload struct {
 	Status      string    `json:"status"`
 	Weight      int64     `json:"weight"`
 	ModelsText  string    `json:"models_text"`
+	GroupName   *string   `json:"group_name,omitempty"`
+	Priority    *int64    `json:"priority,omitempty"`
 	CapturedAt  time.Time `json:"captured_at"`
 }

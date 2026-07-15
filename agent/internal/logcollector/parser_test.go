@@ -48,6 +48,31 @@ func TestConvertRowBuildsConsumeEventWithCacheTokens(t *testing.T) {
 	}
 }
 
+func TestConvertRowParsesValidFirstResponseMillisecondsIndependently(t *testing.T) {
+	event, ok, err := ConvertRow(Row{ID: 2001, CreatedAt: time.Now().UTC(), Type: 2, Other: `{"frt":1234,"cache_tokens":"invalid"}`})
+	if err != nil || !ok {
+		t.Fatalf("convert row: ok=%v err=%v", ok, err)
+	}
+	if event.FirstResponseMs == nil || *event.FirstResponseMs != 1234 {
+		t.Fatalf("unexpected frt: %#v", event.FirstResponseMs)
+	}
+	if event.CacheTokens != nil {
+		t.Fatalf("cache parsing must remain independent: %#v", event.CacheTokens)
+	}
+}
+
+func TestConvertRowRejectsInvalidFirstResponseMilliseconds(t *testing.T) {
+	for _, other := range []string{`{"frt":0}`, `{"frt":3600001}`, `{"frt":"bad"}`} {
+		event, ok, err := ConvertRow(Row{ID: 2002, CreatedAt: time.Now().UTC(), Type: 2, Other: other})
+		if err != nil || !ok {
+			t.Fatalf("metadata %s blocked event: ok=%v err=%v", other, ok, err)
+		}
+		if event.FirstResponseMs != nil {
+			t.Fatalf("invalid frt accepted for %s", other)
+		}
+	}
+}
+
 func TestConvertRowRedactsAndTruncatesErrorSummary(t *testing.T) {
 	longSecret := "Authorization: Bearer sk-prod-secret-value " + strings.Repeat("x", 400)
 	event, ok, err := ConvertRow(Row{

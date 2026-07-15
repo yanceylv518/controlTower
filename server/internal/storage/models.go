@@ -133,6 +133,8 @@ type ChannelSnapshot struct {
 	Status      string
 	Weight      int64
 	ModelsText  string
+	GroupName   *string
+	Priority    *int64
 	CapturedAt  time.Time
 }
 type Alert struct {

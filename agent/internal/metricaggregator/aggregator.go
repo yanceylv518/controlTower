@@ -16,14 +16,21 @@ type accumulator struct {
 	streamCount       int64
 	cacheTokens       int64
 	cachePromptTokens int64
+	bigInputCount     int64
+	bigInputCacheHits int64
+	ttftValues        []float64
+	ttftCount         int64
+	ttftSumMS         int64
 }
+
+const maxRawValuesPerBucket = 10_000
 
 type dimension struct {
 	dimensionType string
 	dimensionKey  string
 }
 
-func Aggregate(instanceID string, events []logcollector.Event) []reporter.AggregatedMetricPayload {
+func Aggregate(instanceID string, events []logcollector.Event, cacheHitMinPromptTokens int64) []reporter.AggregatedMetricPayload {
 	accumulators := make(map[string]*accumulator)
 	for _, event := range events {
 		bucket := event.CreatedAt.Truncate(time.Minute)
@@ -34,7 +41,7 @@ func Aggregate(instanceID string, events []logcollector.Event) []reporter.Aggreg
 				acc = &accumulator{metric: reporter.AggregatedMetricPayload{BucketTime: bucket, WindowSeconds: 60, DimensionType: dimension.dimensionType, DimensionKey: dimension.dimensionKey}}
 				accumulators[key] = acc
 			}
-			acc.add(event)
+			acc.add(event, cacheHitMinPromptTokens)
 		}
 	}
 
@@ -54,7 +61,7 @@ func Aggregate(instanceID string, events []logcollector.Event) []reporter.Aggreg
 	return metrics
 }
 
-func (a *accumulator) add(event logcollector.Event) {
+func (a *accumulator) add(event logcollector.Event, cacheHitMinPromptTokens int64) {
 	a.metric.RequestCount++
 	if event.LogType == "consume" {
 		a.metric.SuccessCount++
@@ -66,7 +73,9 @@ func (a *accumulator) add(event logcollector.Event) {
 	a.metric.PromptTokens += event.PromptTokens
 	a.metric.CompletionTokens += event.CompletionTokens
 	a.metric.Quota += event.Quota
-	a.useTimes = append(a.useTimes, event.UseTime)
+	if len(a.useTimes) < maxRawValuesPerBucket {
+		a.useTimes = append(a.useTimes, event.UseTime)
+	}
 	a.metric.UseTimeSum += event.UseTime
 	a.metric.LatencyBuckets[latencyhist.Index(event.UseTime)]++
 	if event.IsStream {
@@ -79,6 +88,19 @@ func (a *accumulator) add(event logcollector.Event) {
 		a.metric.CacheTokensTotal += *event.CacheTokens
 		a.metric.CachePromptTokens += event.PromptTokens
 	}
+	if event.LogType == "consume" && event.PromptTokens > cacheHitMinPromptTokens {
+		a.bigInputCount++
+		if event.CacheTokens != nil && *event.CacheTokens > 0 {
+			a.bigInputCacheHits++
+		}
+	}
+	if event.IsStream && event.FirstResponseMs != nil {
+		a.ttftCount++
+		a.ttftSumMS += *event.FirstResponseMs
+		if len(a.ttftValues) < maxRawValuesPerBucket {
+			a.ttftValues = append(a.ttftValues, float64(*event.FirstResponseMs))
+		}
+	}
 }
 
 func (a *accumulator) finalize() reporter.AggregatedMetricPayload {
@@ -89,11 +111,20 @@ func (a *accumulator) finalize() reporter.AggregatedMetricPayload {
 		metric.StreamRate = ratio(a.streamCount, metric.RequestCount)
 	}
 	if len(a.useTimes) > 0 {
-		metric.AvgUseTime = floatPtr(avg(a.useTimes))
-		metric.P95UseTime = latencyhist.Quantile(metric.LatencyBuckets, 0.95)
+		metric.AvgUseTime = floatPtr(metric.UseTimeSum / float64(metric.RequestCount))
+		metric.P50UseTime = floatPtr(quantile(a.useTimes, 0.50))
+		metric.P95UseTime = floatPtr(quantile(a.useTimes, 0.95))
+		metric.P99UseTime = floatPtr(quantile(a.useTimes, 0.99))
 	}
 	if a.cachePromptTokens > 0 {
 		metric.CacheTokenRate = floatPtr(float64(a.cacheTokens) / float64(a.cachePromptTokens))
+	}
+	metric.BigInputCount = int64Ptr(a.bigInputCount)
+	metric.BigInputCacheHits = int64Ptr(a.bigInputCacheHits)
+	metric.TTFTCount = int64Ptr(a.ttftCount)
+	metric.TTFTSumMS = int64Ptr(a.ttftSumMS)
+	if len(a.ttftValues) > 0 {
+		metric.TTFTP95MS = floatPtr(quantile(a.ttftValues, 0.95))
 	}
 	return metric
 }
@@ -138,10 +169,10 @@ func avg(values []float64) float64 {
 	return total / float64(len(values))
 }
 
-func p95(values []float64) float64 {
+func quantile(values []float64, q float64) float64 {
 	copied := append([]float64(nil), values...)
 	sort.Float64s(copied)
-	index := int(float64(len(copied))*0.95+0.999999) - 1
+	index := int(float64(len(copied))*q+0.999999) - 1
 	if index < 0 {
 		index = 0
 	}
@@ -150,6 +181,8 @@ func p95(values []float64) float64 {
 	}
 	return copied[index]
 }
+
+func int64Ptr(value int64) *int64 { return &value }
 
 func floatPtr(value float64) *float64 {
 	return &value

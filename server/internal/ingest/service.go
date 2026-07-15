@@ -262,6 +262,8 @@ func (s Service) SaveReport(req agentgateway.AgentReportRequest) error {
 			Status:      payload.Status,
 			Weight:      payload.Weight,
 			ModelsText:  payload.ModelsText,
+			GroupName:   payload.GroupName,
+			Priority:    payload.Priority,
 			CapturedAt:  capturedAt,
 		}); err != nil {
 			return err
@@ -324,13 +326,20 @@ func toAggregatorMetrics(instanceID string, payloads []agentgateway.AggregatedMe
 			CompletionTokens:  payload.CompletionTokens,
 			Quota:             payload.Quota,
 			AvgUseTime:        payload.AvgUseTime,
+			P50UseTime:        payload.P50UseTime,
 			P95UseTime:        payload.P95UseTime,
+			P99UseTime:        payload.P99UseTime,
 			StreamRate:        payload.StreamRate,
 			CacheTokenRate:    payload.CacheTokenRate,
 			UseTimeSum:        payload.UseTimeSum,
 			StreamCount:       payload.StreamCount,
 			CacheTokensTotal:  payload.CacheTokensTotal,
 			CachePromptTokens: payload.CachePromptTokens,
+			BigInputCount:     payload.BigInputCount,
+			BigInputCacheHits: payload.BigInputCacheHits,
+			TTFTCount:         payload.TTFTCount,
+			TTFTSumMS:         payload.TTFTSumMS,
+			TTFTP95MS:         payload.TTFTP95MS,
 			LatencyBuckets:    payload.LatencyBuckets,
 		})
 	}

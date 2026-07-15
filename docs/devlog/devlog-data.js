@@ -5,9 +5,9 @@ window.DEVLOG = [
     date: "2026-07-16",
     type: "release",
     version: "",
-    title: "v2.5-B1 批次下发：Agent 数据面升级（那趟攒货的车发了）",
-    summary: "生产实测确认 logs.other 含 frt（毫秒,流式首响应）,TTFT 维度级可做。批次四合一：①精确 P50/P95/P99（1m 桶存精确列,5m 保持 NULL 读侧回退插值）;②大输入缓存命中率（仅 prompt>512,阈值与缓存失效告警对齐）;③流式 TTFT（仅 IsStream 且 frt 有效,防御 ≤0/>1h）;④渠道快照补采 group/priority（解锁供应商分组与调权 severe）。010 迁移;先升 Server 后升 Agent,新旧混布双向无害。记档待议：admin_info.use_channel 多元素可暴露内部重试链路——重试掩盖问题的潜在数据源。",
-    docs: ["docs/codex-task-v2.5-b1-agent-data-plane.md"],
+    title: "v2.5-B1 完成：Agent 精确分位数、缓存命中率与 TTFT 全链路",
+    summary: "已完成 Agent→契约→010 迁移→Server→API→维度页：1m 精确 P50/P95/P99，大输入（prompt>512）缓存命中率，流式 frt TTFT avg/P95，渠道 group/priority；5m 精确列保持 NULL 并回退桶内插值，页面明确近似语义。旧 Agent 新字段为 NULL，新 Agent 未知字段可被旧 Server 忽略；部署必须先 Server 后 Agent。Go 全量测试与前端类型检查通过。",
+    docs: ["docs/codex-task-v2.5-b1-agent-data-plane.md", "docs/codex-delivery-v2.5-b1-agent-data-plane.md"],
     commits: []
   },
   {

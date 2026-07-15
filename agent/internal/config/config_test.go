@@ -248,8 +248,16 @@ func TestNoCacheAlertDefaultsAndValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.AlertNoCacheEnabled || cfg.AlertNoCacheMinPromptTokens != 512 || cfg.AlertNoCacheWindow != 10 {
+	if !cfg.AlertNoCacheEnabled || cfg.AlertNoCacheMinPromptTokens != 512 || cfg.AlertNoCacheWindow != 10 || cfg.CacheHitMinPromptTokens != 512 {
 		t.Fatalf("unexpected nocache defaults: %+v", cfg)
+	}
+	invalidMetricThreshold := map[string]string{}
+	for key, value := range base {
+		invalidMetricThreshold[key] = value
+	}
+	invalidMetricThreshold["CT_CACHE_HIT_MIN_PROMPT_TOKENS"] = "0"
+	if _, err := LoadFromMap(invalidMetricThreshold); err == nil {
+		t.Fatal("expected metric cache threshold validation error")
 	}
 	for key, value := range map[string]string{"CT_ALERT_NOCACHE_MIN_PROMPT_TOKENS": "0", "CT_ALERT_NOCACHE_WINDOW": "0"} {
 		values := map[string]string{}

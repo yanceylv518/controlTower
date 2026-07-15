@@ -27,27 +27,33 @@ type MetricListResponse struct {
 }
 
 type MetricItem struct {
-	InstanceID       string    `json:"instance_id"`
-	InstanceName     string    `json:"instance_name"`
-	BucketTime       time.Time `json:"bucket_time"`
-	DimensionType    string    `json:"dimension_type"`
-	DimensionKey     string    `json:"dimension_key"`
-	DisplayKey       string    `json:"display_key"`
-	RequestCount     int64     `json:"request_count"`
-	SuccessCount     int64     `json:"success_count"`
-	ErrorCount       int64     `json:"error_count"`
-	SuccessRate      *float64  `json:"success_rate"`
-	ErrorRate        *float64  `json:"error_rate"`
-	TPM              int64     `json:"tpm"`
-	PromptTokens     int64     `json:"prompt_tokens"`
-	CompletionTokens int64     `json:"completion_tokens"`
-	Quota            int64     `json:"quota"`
-	AvgUseTime       *float64  `json:"avg_use_time"`
-	P95UseTime       *float64  `json:"p95_use_time"`
-	P50UseTime       *float64  `json:"p50_use_time,omitempty"`
-	P99UseTime       *float64  `json:"p99_use_time,omitempty"`
-	StreamRate       *float64  `json:"stream_rate"`
-	CacheTokenRate   *float64  `json:"cache_token_rate"`
+	InstanceID        string    `json:"instance_id"`
+	InstanceName      string    `json:"instance_name"`
+	BucketTime        time.Time `json:"bucket_time"`
+	DimensionType     string    `json:"dimension_type"`
+	DimensionKey      string    `json:"dimension_key"`
+	DisplayKey        string    `json:"display_key"`
+	RequestCount      int64     `json:"request_count"`
+	SuccessCount      int64     `json:"success_count"`
+	ErrorCount        int64     `json:"error_count"`
+	SuccessRate       *float64  `json:"success_rate"`
+	ErrorRate         *float64  `json:"error_rate"`
+	TPM               int64     `json:"tpm"`
+	PromptTokens      int64     `json:"prompt_tokens"`
+	CompletionTokens  int64     `json:"completion_tokens"`
+	Quota             int64     `json:"quota"`
+	AvgUseTime        *float64  `json:"avg_use_time"`
+	P95UseTime        *float64  `json:"p95_use_time"`
+	P50UseTime        *float64  `json:"p50_use_time,omitempty"`
+	P99UseTime        *float64  `json:"p99_use_time,omitempty"`
+	StreamRate        *float64  `json:"stream_rate"`
+	CacheTokenRate    *float64  `json:"cache_token_rate"`
+	BigInputCount     *int64    `json:"big_input_count"`
+	BigInputCacheHits *int64    `json:"big_input_cache_hits"`
+	CacheHitRate      *float64  `json:"cache_hit_rate"`
+	TTFTCount         *int64    `json:"ttft_count"`
+	TTFTAvgMS         *float64  `json:"ttft_avg_ms"`
+	TTFTP95MS         *float64  `json:"ttft_p95_ms"`
 }
 
 func (h Handler) WithMetricSource(source MetricSource) Handler {
@@ -152,28 +158,42 @@ func (h Handler) filterMetricItems(metrics []aggregator.Metric, dimensionType st
 		if dimensionKey != "" && metric.DimensionKey != dimensionKey {
 			continue
 		}
+		p50 := metric.P50UseTime
+		if p50 == nil {
+			p50 = latencyhist.Quantile(metric.LatencyBuckets, 0.5)
+		}
+		p99 := metric.P99UseTime
+		if p99 == nil {
+			p99 = latencyhist.Quantile(metric.LatencyBuckets, 0.99)
+		}
 		items = append(items, MetricItem{
-			InstanceID:       metric.InstanceID,
-			InstanceName:     h.instanceName(metric.InstanceID),
-			BucketTime:       metric.BucketTime,
-			DimensionType:    metric.DimensionType,
-			DimensionKey:     metric.DimensionKey,
-			DisplayKey:       h.displayDimensionKey(metric.DimensionType, metric.DimensionKey),
-			RequestCount:     metric.RequestCount,
-			SuccessCount:     metric.SuccessCount,
-			ErrorCount:       metric.ErrorCount,
-			SuccessRate:      metric.SuccessRate,
-			ErrorRate:        metric.ErrorRate,
-			TPM:              metric.TPM,
-			PromptTokens:     metric.PromptTokens,
-			CompletionTokens: metric.CompletionTokens,
-			Quota:            metric.Quota,
-			AvgUseTime:       metric.AvgUseTime,
-			P95UseTime:       metric.P95UseTime,
-			P50UseTime:       latencyhist.Quantile(metric.LatencyBuckets, 0.5),
-			P99UseTime:       latencyhist.Quantile(metric.LatencyBuckets, 0.99),
-			StreamRate:       metric.StreamRate,
-			CacheTokenRate:   metric.CacheTokenRate,
+			InstanceID:        metric.InstanceID,
+			InstanceName:      h.instanceName(metric.InstanceID),
+			BucketTime:        metric.BucketTime,
+			DimensionType:     metric.DimensionType,
+			DimensionKey:      metric.DimensionKey,
+			DisplayKey:        h.displayDimensionKey(metric.DimensionType, metric.DimensionKey),
+			RequestCount:      metric.RequestCount,
+			SuccessCount:      metric.SuccessCount,
+			ErrorCount:        metric.ErrorCount,
+			SuccessRate:       metric.SuccessRate,
+			ErrorRate:         metric.ErrorRate,
+			TPM:               metric.TPM,
+			PromptTokens:      metric.PromptTokens,
+			CompletionTokens:  metric.CompletionTokens,
+			Quota:             metric.Quota,
+			AvgUseTime:        metric.AvgUseTime,
+			P95UseTime:        metric.P95UseTime,
+			P50UseTime:        p50,
+			P99UseTime:        p99,
+			StreamRate:        metric.StreamRate,
+			CacheTokenRate:    metric.CacheTokenRate,
+			BigInputCount:     metric.BigInputCount,
+			BigInputCacheHits: metric.BigInputCacheHits,
+			CacheHitRate:      nullableRatio(metric.BigInputCacheHits, metric.BigInputCount),
+			TTFTCount:         metric.TTFTCount,
+			TTFTAvgMS:         nullableAverage(metric.TTFTSumMS, metric.TTFTCount),
+			TTFTP95MS:         metric.TTFTP95MS,
 		})
 	}
 	sort.Slice(items, func(i, j int) bool {
@@ -183,6 +203,21 @@ func (h Handler) filterMetricItems(metrics []aggregator.Metric, dimensionType st
 		return items[i].BucketTime.After(items[j].BucketTime)
 	})
 	return items
+}
+
+func nullableRatio(numerator, denominator *int64) *float64 {
+	if numerator == nil || denominator == nil || *denominator == 0 {
+		return nil
+	}
+	value := float64(*numerator) / float64(*denominator)
+	return &value
+}
+func nullableAverage(sum, count *int64) *float64 {
+	if sum == nil || count == nil || *count == 0 {
+		return nil
+	}
+	value := float64(*sum) / float64(*count)
+	return &value
 }
 
 func (h Handler) instanceName(instanceID string) string {

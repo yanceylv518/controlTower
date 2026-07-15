@@ -26,6 +26,8 @@ type ChannelSnapshotSummary struct {
 	Status       string    `json:"status"`
 	Weight       int64     `json:"weight"`
 	ModelsText   string    `json:"models_text"`
+	GroupName    *string   `json:"group_name"`
+	Priority     *int64    `json:"priority"`
 	CapturedAt   time.Time `json:"captured_at"`
 }
 
@@ -103,7 +105,7 @@ func latestChannelSnapshots(items []storage.ChannelSnapshot) []storage.ChannelSn
 func summarizeChannelSnapshots(items []storage.ChannelSnapshot) []ChannelSnapshotSummary {
 	summaries := make([]ChannelSnapshotSummary, 0, len(items))
 	for _, item := range items {
-		summaries = append(summaries, ChannelSnapshotSummary{ID: item.ID, InstanceID: item.InstanceID, ChannelID: item.ChannelID, ChannelName: item.ChannelName, Status: item.Status, Weight: item.Weight, ModelsText: item.ModelsText, CapturedAt: item.CapturedAt})
+		summaries = append(summaries, ChannelSnapshotSummary{ID: item.ID, InstanceID: item.InstanceID, ChannelID: item.ChannelID, ChannelName: item.ChannelName, Status: item.Status, Weight: item.Weight, ModelsText: item.ModelsText, GroupName: item.GroupName, Priority: item.Priority, CapturedAt: item.CapturedAt})
 	}
 	return summaries
 }

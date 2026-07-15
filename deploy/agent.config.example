@@ -56,6 +56,9 @@ CT_ALERT_NOCACHE_ENABLED=true
 CT_ALERT_NOCACHE_MIN_PROMPT_TOKENS=512
 CT_ALERT_NOCACHE_WINDOW=10
 
+# Dashboard cache-hit metric: successful requests with prompt_tokens above this threshold.
+CT_CACHE_HIT_MIN_PROMPT_TOKENS=512
+
 # Nginx timed access log analytics. Leave CT_NGINX_ACCESS_LOG empty to disable.
 # Missing/unreadable files only produce one warning and retry; standalone mode does not support this module.
 CT_NGINX_ACCESS_LOG=

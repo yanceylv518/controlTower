@@ -17,6 +17,8 @@ type Snapshot struct {
 	Status      string
 	Weight      int64
 	ModelsText  string
+	GroupName   string
+	Priority    int64
 	CapturedAt  time.Time
 }
 
@@ -59,7 +61,7 @@ func (c *MySQLCollector) Collect(ctx context.Context, limit int) ([]Snapshot, er
 	items := make([]Snapshot, 0)
 	for rows.Next() {
 		var item Snapshot
-		if err := rows.Scan(&item.ChannelID, &item.ChannelName, &item.Status, &item.Weight, &item.ModelsText); err != nil {
+		if err := rows.Scan(&item.ChannelID, &item.ChannelName, &item.Status, &item.Weight, &item.ModelsText, &item.GroupName, &item.Priority); err != nil {
 			return nil, err
 		}
 		item.Status = normalizeStatus(item.Status)
@@ -91,6 +93,10 @@ func snapshotHash(items []Snapshot) string {
 		_, _ = hasher.Write([]byte(strconv.FormatInt(item.Weight, 10)))
 		_, _ = hasher.Write([]byte{0})
 		_, _ = hasher.Write([]byte(item.ModelsText))
+		_, _ = hasher.Write([]byte{0})
+		_, _ = hasher.Write([]byte(item.GroupName))
+		_, _ = hasher.Write([]byte{0})
+		_, _ = hasher.Write([]byte(strconv.FormatInt(item.Priority, 10)))
 		_, _ = hasher.Write([]byte{0xff})
 	}
 	return hex.EncodeToString(hasher.Sum(nil))
@@ -138,8 +144,8 @@ func FetchNames(ctx context.Context, db *sql.DB) (map[int64]string, error) {
 }
 
 func collectChannelsSQL() string {
-	return `SELECT id, COALESCE(name, ''), CAST(status AS CHAR), COALESCE(weight, 0), COALESCE(models, '')
-FROM channels
+	return "SELECT id, COALESCE(name, ''), CAST(status AS CHAR), COALESCE(weight, 0), COALESCE(models, ''), COALESCE(`group`, ''), COALESCE(priority, 0)\n" +
+		`FROM channels
 ORDER BY id ASC
 LIMIT ?`
 }

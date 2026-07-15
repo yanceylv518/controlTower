@@ -52,7 +52,7 @@ func TestAggregate1mComputesInstanceMetrics(t *testing.T) {
 	if metric.AvgUseTime == nil || *metric.AvgUseTime != 3 {
 		t.Fatalf("unexpected avg use time: %#v", metric.AvgUseTime)
 	}
-	if metric.P95UseTime == nil || *metric.P95UseTime != 5 {
+	if metric.P95UseTime == nil || *metric.P95UseTime != 4.8 {
 		t.Fatalf("unexpected p95 use time: %#v", metric.P95UseTime)
 	}
 	if metric.StreamRate == nil || *metric.StreamRate != 0.5 {
@@ -67,12 +67,12 @@ func TestAggregate1mBuildsDimensionMetrics(t *testing.T) {
 	bucket := time.Date(2026, 7, 2, 12, 35, 0, 0, time.UTC)
 	metrics := Aggregate1m([]storage.LogEvent{
 		{
-			InstanceID: "inst-1",
-			CreatedAt:  bucket,
-			LogType:    "consume",
-			UserID:     7,
-			ChannelID:  18,
-			ModelName:  "gpt-4o",
+			InstanceID:  "inst-1",
+			CreatedAt:   bucket,
+			LogType:     "consume",
+			UserID:      7,
+			ChannelID:   18,
+			ModelName:   "gpt-4o",
 			TotalTokens: 10,
 		},
 	})

@@ -64,7 +64,8 @@ func scanMetrics(rows *sql.Rows) ([]aggregator.Metric, error) {
 	var metrics []aggregator.Metric
 	for rows.Next() {
 		var metric aggregator.Metric
-		var successRate, errorRate, avgUseTime, p95UseTime, streamRate, cacheTokenRate sql.NullFloat64
+		var successRate, errorRate, avgUseTime, p50UseTime, p95UseTime, p99UseTime, streamRate, cacheTokenRate, ttftP95MS sql.NullFloat64
+		var bigInputCount, bigInputCacheHits, ttftCount, ttftSumMS sql.NullInt64
 		var buckets latencyhist.Buckets
 		dest := []any{
 			&metric.InstanceID,
@@ -81,13 +82,20 @@ func scanMetrics(rows *sql.Rows) ([]aggregator.Metric, error) {
 			&metric.CompletionTokens,
 			&metric.Quota,
 			&avgUseTime,
+			&p50UseTime,
 			&p95UseTime,
+			&p99UseTime,
 			&streamRate,
 			&cacheTokenRate,
 			&metric.UseTimeSum,
 			&metric.StreamCount,
 			&metric.CacheTokensTotal,
 			&metric.CachePromptTokens,
+			&bigInputCount,
+			&bigInputCacheHits,
+			&ttftCount,
+			&ttftSumMS,
+			&ttftP95MS,
 		}
 		for i := range buckets {
 			dest = append(dest, &buckets[i])
@@ -99,9 +107,16 @@ func scanMetrics(rows *sql.Rows) ([]aggregator.Metric, error) {
 		metric.SuccessRate = floatPointer(successRate)
 		metric.ErrorRate = floatPointer(errorRate)
 		metric.AvgUseTime = floatPointer(avgUseTime)
-		metric.P95UseTime = floatPointer(p95UseTime)
+		metric.P50UseTime = exactOrHistogram(p50UseTime, buckets, 0.50)
+		metric.P95UseTime = exactOrHistogram(p95UseTime, buckets, 0.95)
+		metric.P99UseTime = exactOrHistogram(p99UseTime, buckets, 0.99)
 		metric.StreamRate = floatPointer(streamRate)
 		metric.CacheTokenRate = floatPointer(cacheTokenRate)
+		metric.BigInputCount = int64Pointer(bigInputCount)
+		metric.BigInputCacheHits = int64Pointer(bigInputCacheHits)
+		metric.TTFTCount = int64Pointer(ttftCount)
+		metric.TTFTSumMS = int64Pointer(ttftSumMS)
+		metric.TTFTP95MS = floatPointer(ttftP95MS)
 		metrics = append(metrics, metric)
 	}
 	return metrics, rows.Err()
@@ -112,8 +127,8 @@ func recentMetricsSQL(table string, latestOnly bool) string {
 		return `SELECT m.instance_id, m.bucket_time, m.dimension_type, m.dimension_key,
   m.request_count, m.success_count, m.error_count, m.success_rate, m.error_rate,
   m.tpm, m.prompt_tokens, m.completion_tokens, m.quota,
-  m.avg_use_time, m.p95_use_time, m.stream_rate, m.cache_token_rate,
-  m.use_time_sum, m.stream_count, m.cache_tokens_total, m.cache_prompt_tokens, ` + prefixedLatencyBucketColumnSQL("m") + `
+  m.avg_use_time, m.p50_use_time, m.p95_use_time, m.p99_use_time, m.stream_rate, m.cache_token_rate,
+  m.use_time_sum, m.stream_count, m.cache_tokens_total, m.cache_prompt_tokens, m.big_input_count, m.big_input_cache_hits, m.ttft_count, m.ttft_sum_ms, m.ttft_p95_ms, ` + prefixedLatencyBucketColumnSQL("m") + `
 FROM ` + table + ` m JOIN (
   SELECT instance_id, dimension_type, dimension_key, MAX(bucket_time) AS mb
   FROM ` + table + `
@@ -127,8 +142,8 @@ LIMIT ?`
 	return `SELECT instance_id, bucket_time, dimension_type, dimension_key,
   request_count, success_count, error_count, success_rate, error_rate,
   tpm, prompt_tokens, completion_tokens, quota,
-  avg_use_time, p95_use_time, stream_rate, cache_token_rate,
-  use_time_sum, stream_count, cache_tokens_total, cache_prompt_tokens, ` + latencyBucketColumnSQL() + `
+  avg_use_time, p50_use_time, p95_use_time, p99_use_time, stream_rate, cache_token_rate,
+  use_time_sum, stream_count, cache_tokens_total, cache_prompt_tokens, big_input_count, big_input_cache_hits, ttft_count, ttft_sum_ms, ttft_p95_ms, ` + latencyBucketColumnSQL() + `
 FROM ` + table + `
 ORDER BY bucket_time DESC, dimension_type ASC, dimension_key ASC
 LIMIT ?`
@@ -147,8 +162,8 @@ func metricHistorySQL(table string) string {
 	return `SELECT instance_id, bucket_time, dimension_type, dimension_key,
   request_count, success_count, error_count, success_rate, error_rate,
   tpm, prompt_tokens, completion_tokens, quota,
-  avg_use_time, p95_use_time, stream_rate, cache_token_rate,
-  use_time_sum, stream_count, cache_tokens_total, cache_prompt_tokens, ` + latencyBucketColumnSQL() + `
+  avg_use_time, p50_use_time, p95_use_time, p99_use_time, stream_rate, cache_token_rate,
+  use_time_sum, stream_count, cache_tokens_total, cache_prompt_tokens, big_input_count, big_input_cache_hits, ttft_count, ttft_sum_ms, ttft_p95_ms, ` + latencyBucketColumnSQL() + `
 FROM ` + table + `
 WHERE dimension_type = ? AND dimension_key = ? AND bucket_time >= ?
 ORDER BY bucket_time ASC`
@@ -170,4 +185,18 @@ func floatPointer(value sql.NullFloat64) *float64 {
 		return nil
 	}
 	return &value.Float64
+}
+
+func int64Pointer(value sql.NullInt64) *int64 {
+	if !value.Valid {
+		return nil
+	}
+	return &value.Int64
+}
+
+func exactOrHistogram(value sql.NullFloat64, buckets latencyhist.Buckets, quantile float64) *float64 {
+	if value.Valid {
+		return &value.Float64
+	}
+	return latencyhist.Quantile(buckets, quantile)
 }

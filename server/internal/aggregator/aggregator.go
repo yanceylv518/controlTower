@@ -24,13 +24,20 @@ type Metric struct {
 	CompletionTokens  int64
 	Quota             int64
 	AvgUseTime        *float64
+	P50UseTime        *float64
 	P95UseTime        *float64
+	P99UseTime        *float64
 	StreamRate        *float64
 	CacheTokenRate    *float64
 	UseTimeSum        float64
 	StreamCount       int64
 	CacheTokensTotal  int64
 	CachePromptTokens int64
+	BigInputCount     *int64
+	BigInputCacheHits *int64
+	TTFTCount         *int64
+	TTFTSumMS         *int64
+	TTFTP95MS         *float64
 	LatencyBuckets    latencyhist.Buckets
 }
 
@@ -189,6 +196,10 @@ func MergeMetric(current Metric, incoming Metric) Metric {
 	merged.StreamCount += incoming.StreamCount
 	merged.CacheTokensTotal += incoming.CacheTokensTotal
 	merged.CachePromptTokens += incoming.CachePromptTokens
+	merged.BigInputCount = addNullableInt64(merged.BigInputCount, incoming.BigInputCount)
+	merged.BigInputCacheHits = addNullableInt64(merged.BigInputCacheHits, incoming.BigInputCacheHits)
+	merged.TTFTCount = addNullableInt64(merged.TTFTCount, incoming.TTFTCount)
+	merged.TTFTSumMS = addNullableInt64(merged.TTFTSumMS, incoming.TTFTSumMS)
 	merged.LatencyBuckets = latencyhist.Add(merged.LatencyBuckets, incoming.LatencyBuckets)
 	merged.SuccessRate = ratio(merged.SuccessCount, merged.RequestCount)
 	merged.ErrorRate = ratio(merged.ErrorCount, merged.RequestCount)
@@ -200,7 +211,24 @@ func MergeMetric(current Metric, incoming Metric) Metric {
 		merged.CacheTokenRate = floatPtr(float64(merged.CacheTokensTotal) / float64(merged.CachePromptTokens))
 	}
 	merged.P95UseTime = latencyhist.Quantile(merged.LatencyBuckets, 0.95)
+	merged.P50UseTime = latencyhist.Quantile(merged.LatencyBuckets, 0.50)
+	merged.P99UseTime = latencyhist.Quantile(merged.LatencyBuckets, 0.99)
+	merged.TTFTP95MS = nil
 	return merged
+}
+
+func addNullableInt64(left, right *int64) *int64 {
+	if left == nil && right == nil {
+		return nil
+	}
+	var value int64
+	if left != nil {
+		value += *left
+	}
+	if right != nil {
+		value += *right
+	}
+	return &value
 }
 
 func ratio(numerator int64, denominator int64) *float64 {

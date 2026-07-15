@@ -197,13 +197,15 @@ ON DUPLICATE KEY UPDATE
 func (s Store) InsertChannelSnapshot(snapshot storage.ChannelSnapshot) error {
 	_, err := s.db.ExecContext(context.Background(), `
 INSERT INTO channel_snapshots (
-  id, instance_id, channel_id, channel_name, status, weight, models_text, captured_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  id, instance_id, channel_id, channel_name, status, weight, models_text, group_name, priority, captured_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON DUPLICATE KEY UPDATE
   channel_name = VALUES(channel_name),
   status = VALUES(status),
   weight = VALUES(weight),
   models_text = VALUES(models_text),
+  group_name = VALUES(group_name),
+  priority = VALUES(priority),
   captured_at = VALUES(captured_at)`,
 		snapshot.ID,
 		snapshot.InstanceID,
@@ -212,6 +214,8 @@ ON DUPLICATE KEY UPDATE
 		snapshot.Status,
 		snapshot.Weight,
 		snapshot.ModelsText,
+		nullString(snapshot.GroupName),
+		nullInt64(snapshot.Priority),
 		snapshot.CapturedAt,
 	)
 	return err
@@ -602,8 +606,8 @@ func metricBatchUpsertSQL(table string, rows int) string {
 	return `INSERT INTO ` + table + ` (
   instance_id, bucket_time, dimension_type, dimension_key, request_count, success_count, error_count,
   success_rate, error_rate, tpm, prompt_tokens, completion_tokens, quota,
-  avg_use_time, p95_use_time, stream_rate, cache_token_rate,
-  use_time_sum, stream_count, cache_tokens_total, cache_prompt_tokens, ` + latencyBucketColumnSQL() + `, updated_at
+  avg_use_time, p50_use_time, p95_use_time, p99_use_time, stream_rate, cache_token_rate,
+  use_time_sum, stream_count, cache_tokens_total, cache_prompt_tokens, big_input_count, big_input_cache_hits, ttft_count, ttft_sum_ms, ttft_p95_ms, ` + latencyBucketColumnSQL() + `, updated_at
 ) VALUES ` + strings.Join(values, ", ") + `
 ON DUPLICATE KEY UPDATE
   request_count = VALUES(request_count),
@@ -616,13 +620,20 @@ ON DUPLICATE KEY UPDATE
   completion_tokens = VALUES(completion_tokens),
   quota = VALUES(quota),
   avg_use_time = VALUES(avg_use_time),
+  p50_use_time = VALUES(p50_use_time),
   p95_use_time = VALUES(p95_use_time),
+  p99_use_time = VALUES(p99_use_time),
   stream_rate = VALUES(stream_rate),
   cache_token_rate = VALUES(cache_token_rate),
   use_time_sum = VALUES(use_time_sum),
   stream_count = VALUES(stream_count),
   cache_tokens_total = VALUES(cache_tokens_total),
   cache_prompt_tokens = VALUES(cache_prompt_tokens),
+  big_input_count = VALUES(big_input_count),
+  big_input_cache_hits = VALUES(big_input_cache_hits),
+  ttft_count = VALUES(ttft_count),
+  ttft_sum_ms = VALUES(ttft_sum_ms),
+  ttft_p95_ms = VALUES(ttft_p95_ms),
   ` + latencyBucketReplaceAssignmentsSQL() + `,
   updated_at = VALUES(updated_at)`
 }
@@ -633,13 +644,17 @@ func metricBatchMergeSQL(table string, rows int) string {
 	if updateAt < 0 {
 		return sqlText
 	}
+	percentileAssignments := "p50_use_time = NULL,\n  p95_use_time = " + latencyP95MergeSQL() + ",\n  p99_use_time = NULL,\n  ttft_p95_ms = NULL,"
+	if table == "metric_1m" {
+		percentileAssignments = "p50_use_time = VALUES(p50_use_time),\n  p95_use_time = VALUES(p95_use_time),\n  p99_use_time = VALUES(p99_use_time),\n  ttft_p95_ms = VALUES(ttft_p95_ms),"
+	}
 	return sqlText[:updateAt] + `ON DUPLICATE KEY UPDATE
   success_rate = (success_count + VALUES(success_count)) / NULLIF(request_count + VALUES(request_count), 0),
   error_rate = (error_count + VALUES(error_count)) / NULLIF(request_count + VALUES(request_count), 0),
   avg_use_time = (use_time_sum + VALUES(use_time_sum)) / NULLIF(request_count + VALUES(request_count), 0),
   stream_rate = (stream_count + VALUES(stream_count)) / NULLIF(request_count + VALUES(request_count), 0),
   cache_token_rate = (cache_tokens_total + VALUES(cache_tokens_total)) / NULLIF(cache_prompt_tokens + VALUES(cache_prompt_tokens), 0),
-  p95_use_time = ` + latencyP95MergeSQL() + `,
+  ` + percentileAssignments + `
   request_count = request_count + VALUES(request_count),
   success_count = success_count + VALUES(success_count),
   error_count = error_count + VALUES(error_count),
@@ -651,6 +666,10 @@ func metricBatchMergeSQL(table string, rows int) string {
   stream_count = stream_count + VALUES(stream_count),
   cache_tokens_total = cache_tokens_total + VALUES(cache_tokens_total),
   cache_prompt_tokens = cache_prompt_tokens + VALUES(cache_prompt_tokens),
+  big_input_count = IF(big_input_count IS NULL AND VALUES(big_input_count) IS NULL, NULL, COALESCE(big_input_count, 0) + COALESCE(VALUES(big_input_count), 0)),
+  big_input_cache_hits = IF(big_input_cache_hits IS NULL AND VALUES(big_input_cache_hits) IS NULL, NULL, COALESCE(big_input_cache_hits, 0) + COALESCE(VALUES(big_input_cache_hits), 0)),
+  ttft_count = IF(ttft_count IS NULL AND VALUES(ttft_count) IS NULL, NULL, COALESCE(ttft_count, 0) + COALESCE(VALUES(ttft_count), 0)),
+  ttft_sum_ms = IF(ttft_sum_ms IS NULL AND VALUES(ttft_sum_ms) IS NULL, NULL, COALESCE(ttft_sum_ms, 0) + COALESCE(VALUES(ttft_sum_ms), 0)),
   ` + latencyBucketMergeAssignmentsSQL() + `,
   updated_at = VALUES(updated_at)`
 }
@@ -666,8 +685,8 @@ func metricUpsertSQL(table string) string {
 	return `INSERT INTO ` + table + ` (
   instance_id, bucket_time, dimension_type, dimension_key, request_count, success_count, error_count,
   success_rate, error_rate, tpm, prompt_tokens, completion_tokens, quota,
-  avg_use_time, p95_use_time, stream_rate, cache_token_rate,
-  use_time_sum, stream_count, cache_tokens_total, cache_prompt_tokens, ` + latencyBucketColumnSQL() + `, updated_at
+  avg_use_time, p50_use_time, p95_use_time, p99_use_time, stream_rate, cache_token_rate,
+  use_time_sum, stream_count, cache_tokens_total, cache_prompt_tokens, big_input_count, big_input_cache_hits, ttft_count, ttft_sum_ms, ttft_p95_ms, ` + latencyBucketColumnSQL() + `, updated_at
 ) VALUES ` + metricValuePlaceholders() + `
 ON DUPLICATE KEY UPDATE
   request_count = VALUES(request_count),
@@ -680,13 +699,20 @@ ON DUPLICATE KEY UPDATE
   completion_tokens = VALUES(completion_tokens),
   quota = VALUES(quota),
   avg_use_time = VALUES(avg_use_time),
+  p50_use_time = VALUES(p50_use_time),
   p95_use_time = VALUES(p95_use_time),
+  p99_use_time = VALUES(p99_use_time),
   stream_rate = VALUES(stream_rate),
   cache_token_rate = VALUES(cache_token_rate),
   use_time_sum = VALUES(use_time_sum),
   stream_count = VALUES(stream_count),
   cache_tokens_total = VALUES(cache_tokens_total),
   cache_prompt_tokens = VALUES(cache_prompt_tokens),
+  big_input_count = VALUES(big_input_count),
+  big_input_cache_hits = VALUES(big_input_cache_hits),
+  ttft_count = VALUES(ttft_count),
+  ttft_sum_ms = VALUES(ttft_sum_ms),
+  ttft_p95_ms = VALUES(ttft_p95_ms),
   ` + latencyBucketReplaceAssignmentsSQL() + `,
   updated_at = VALUES(updated_at)`
 }
@@ -707,13 +733,20 @@ func metricArgs(metric aggregator.Metric) []any {
 		metric.CompletionTokens,
 		metric.Quota,
 		nullFloat(metric.AvgUseTime),
+		nullFloat(metric.P50UseTime),
 		nullFloat(metric.P95UseTime),
+		nullFloat(metric.P99UseTime),
 		nullFloat(metric.StreamRate),
 		nullFloat(metric.CacheTokenRate),
 		metric.UseTimeSum,
 		metric.StreamCount,
 		metric.CacheTokensTotal,
 		metric.CachePromptTokens,
+		nullInt64(metric.BigInputCount),
+		nullInt64(metric.BigInputCacheHits),
+		nullInt64(metric.TTFTCount),
+		nullInt64(metric.TTFTSumMS),
+		nullFloat(metric.TTFTP95MS),
 	}
 	for _, bucket := range metric.LatencyBuckets {
 		args = append(args, bucket)
@@ -739,4 +772,10 @@ func nullFloat(value *float64) sql.NullFloat64 {
 		return sql.NullFloat64{}
 	}
 	return sql.NullFloat64{Float64: *value, Valid: true}
+}
+func nullString(value *string) sql.NullString {
+	if value == nil {
+		return sql.NullString{}
+	}
+	return sql.NullString{String: *value, Valid: true}
 }

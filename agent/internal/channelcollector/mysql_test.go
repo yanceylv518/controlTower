@@ -14,4 +14,9 @@ func TestSnapshotHashIsStableAndDetectsChanges(t *testing.T) {
 	if snapshotHash(changed) == first {
 		t.Fatal("snapshot hash should change when channel content changes")
 	}
+	changed = append([]Snapshot(nil), items...)
+	changed[0].Priority = 9
+	if snapshotHash(changed) == first {
+		t.Fatal("snapshot hash should include priority")
+	}
 }

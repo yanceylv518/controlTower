@@ -447,7 +447,7 @@ func buildReport(ctx context.Context, cfg config.Config, reportedAt time.Time, s
 		MetricBatchID:     metricBatchID(cfg.AgentID, events),
 		LogEvents:         toPayloads(selectLogEventsForReport(cfg, events)),
 		LogSamples:        selectLogSamplesForReport(cfg, events),
-		AggregatedMetrics: metricaggregator.Aggregate(cfg.InstanceID, events),
+		AggregatedMetrics: metricaggregator.Aggregate(cfg.InstanceID, events, cfg.CacheHitMinPromptTokens),
 		ServerMetrics:     serverMetrics,
 		DockerStatuses:    dockerStatuses,
 		HealthChecks:      healthChecks,
@@ -545,11 +545,15 @@ func toChannelSnapshotPayloads(snapshots []channelcollector.Snapshot) []reporter
 			Status:      snapshot.Status,
 			Weight:      snapshot.Weight,
 			ModelsText:  snapshot.ModelsText,
+			GroupName:   stringPtr(snapshot.GroupName),
+			Priority:    int64Ptr(snapshot.Priority),
 			CapturedAt:  snapshot.CapturedAt,
 		})
 	}
 	return payloads
 }
+func stringPtr(value string) *string { return &value }
+func int64Ptr(value int64) *int64    { return &value }
 func sendFakeReport(ctx context.Context, client controlTowerReporter, cfg config.Config) error {
 	now := time.Now().UTC()
 	sequence := now.Unix()
