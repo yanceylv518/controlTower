@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-15",
+    type: "decision",
+    version: "v2.0.0-rc4",
+    title: "生产端到端部署与数据呈现手册",
+    summary: "新增从 Compose 初始化 MySQL、Server/Web 首启、实例 Token 签发、new-api 只读账号、Agent 双模式接入，到总览、维度、样本、用量、运行态、告警、延时分诊和渠道命令完整验收的逐步手册，并补充首次游标、持久化、备份、升级、回滚与故障排查。",
+    docs: ["docs/control-tower-end-to-end-deployment.md"],
+    commits: []
+  },
+  {
+    date: "2026-07-15",
     type: "bugfix",
     version: "v2.0.0-rc4",
     title: "渠道命令按钮文字对比度修复",
