@@ -3,6 +3,7 @@ package dashboard
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"controltower/server/internal/aggregator"
 	"controltower/server/internal/storage"
@@ -24,12 +25,18 @@ type Handler struct {
 	nginxTimingStore        NginxTimingStore
 	tuningStore             TuningStore
 	notificationMaxAttempts int
+	names                   *nameResolver
 }
 
 func (h Handler) WithNotificationMaxAttempts(v int) Handler { h.notificationMaxAttempts = v; return h }
 
 func NewHandler(source OverviewSource) Handler {
 	return Handler{source: source}
+}
+
+func (h Handler) WithNameSource(source NameSource) Handler {
+	h.names = newNameResolver(source, time.Minute)
+	return h
 }
 
 func (h Handler) HandleOverview(w http.ResponseWriter, r *http.Request) {

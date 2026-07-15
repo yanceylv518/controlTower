@@ -20,11 +20,18 @@ type CommandStore interface {
 type CommandHandler struct {
 	Store     CommandStore
 	Instances InstanceStore
+	names     *nameResolver
+}
+
+func (h CommandHandler) WithNameSource(source NameSource) CommandHandler {
+	h.names = newNameResolver(source, time.Minute)
+	return h
 }
 
 type channelCommandItem struct {
 	ID           string         `json:"id"`
 	InstanceID   string         `json:"instance_id"`
+	InstanceName string         `json:"instance_name"`
 	ChannelID    int64          `json:"channel_id"`
 	Status       string         `json:"status"`
 	Payload      map[string]any `json:"payload"`
@@ -33,10 +40,14 @@ type channelCommandItem struct {
 	CreatedAt    time.Time      `json:"created_at"`
 }
 
-func commandItem(v storage.ChannelCommand) channelCommandItem {
+func (h CommandHandler) commandItem(v storage.ChannelCommand) channelCommandItem {
 	p := map[string]any{}
 	_ = json.Unmarshal([]byte(v.PayloadJSON), &p)
-	return channelCommandItem{v.ID, v.InstanceID, v.ChannelID, v.Status, p, v.CreatedBy, v.ErrorSummary, v.CreatedAt}
+	name := v.InstanceID
+	if h.names != nil {
+		name = h.names.InstanceName(v.InstanceID)
+	}
+	return channelCommandItem{ID: v.ID, InstanceID: v.InstanceID, InstanceName: name, ChannelID: v.ChannelID, Status: v.Status, Payload: p, CreatedBy: v.CreatedBy, ErrorSummary: v.ErrorSummary, CreatedAt: v.CreatedAt}
 }
 
 func (h CommandHandler) Create(w http.ResponseWriter, r *http.Request) {
@@ -93,7 +104,7 @@ func (h CommandHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeDashboardError(w, 500, "create_failed")
 		return
 	}
-	writeDashboardJSON(w, 201, commandItem(v))
+	writeDashboardJSON(w, 201, h.commandItem(v))
 }
 func (h CommandHandler) List(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
@@ -106,12 +117,14 @@ func (h CommandHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]channelCommandItem, 0, len(items))
 	for _, v := range items {
-		out = append(out, commandItem(v))
+		out = append(out, h.commandItem(v))
 	}
 	writeDashboardJSON(w, 200, map[string]any{"items": out})
 }
 
 type operationAuditItem struct {
+	InstanceID    string    `json:"instance_id"`
+	InstanceName  string    `json:"instance_name"`
 	OperationType string    `json:"operation_type"`
 	TargetType    string    `json:"target_type"`
 	TargetID      string    `json:"target_id"`
@@ -131,7 +144,11 @@ func (h CommandHandler) Audits(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]operationAuditItem, 0, len(items))
 	for _, v := range items {
-		out = append(out, operationAuditItem{v.OperationType, v.TargetType, v.TargetID, v.ActorID, v.AfterSummary, v.CreatedAt})
+		name := v.InstanceID
+		if h.names != nil {
+			name = h.names.InstanceName(v.InstanceID)
+		}
+		out = append(out, operationAuditItem{InstanceID: v.InstanceID, InstanceName: name, OperationType: v.OperationType, TargetType: v.TargetType, TargetID: v.TargetID, ActorID: v.ActorID, AfterSummary: v.AfterSummary, CreatedAt: v.CreatedAt})
 	}
 	writeDashboardJSON(w, 200, map[string]any{"items": out})
 }

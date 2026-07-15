@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-15",
+    type: "release",
+    version: "v2.3-B1",
+    title: "Web 名称化、图标与指标视觉打磨",
+    summary: "新增 60 秒缓存的实例/渠道/用户名称解析，Dashboard API 以附加字段保持兼容；侧栏 13 个入口加入图标，维度页加入状态点、排序和指标标签，总览 KPI 增加颜色语义与千分位，并统一前端格式化工具和 b7 样式。",
+    docs: ["docs/codex-task-v2.3-b1-web-polish.md", "docs/v2.3-b1-delivery.md"],
+    commits: []
+  },
+  {
+    date: "2026-07-15",
     type: "decision",
     version: "v2.0.0-rc4",
     title: "生产端到端部署与数据呈现手册",

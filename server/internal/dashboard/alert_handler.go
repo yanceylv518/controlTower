@@ -31,6 +31,8 @@ type AlertListResponse struct {
 type AlertItem struct {
 	ID           string     `json:"id"`
 	InstanceID   string     `json:"instance_id"`
+	InstanceName string     `json:"instance_name"`
+	DisplayKey   string     `json:"display_key"`
 	RuleKey      string     `json:"rule_key"`
 	Severity     string     `json:"severity"`
 	Status       string     `json:"status"`
@@ -91,7 +93,12 @@ func (h Handler) HandleAlerts(w http.ResponseWriter, r *http.Request) {
 		writeDashboardError(w, http.StatusInternalServerError, "query_failed")
 		return
 	}
-	writeDashboardJSON(w, http.StatusOK, AlertListResponse{Items: storageAlertsToItems(alerts)})
+	items := storageAlertsToItems(alerts)
+	for i := range items {
+		items[i].InstanceName = h.instanceName(items[i].InstanceID)
+		items[i].DisplayKey = items[i].Title
+	}
+	writeDashboardJSON(w, http.StatusOK, AlertListResponse{Items: items})
 }
 
 func (h Handler) HandleAlertAction(w http.ResponseWriter, r *http.Request) {

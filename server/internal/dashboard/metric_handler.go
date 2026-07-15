@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
@@ -27,6 +28,7 @@ type MetricListResponse struct {
 
 type MetricItem struct {
 	InstanceID       string    `json:"instance_id"`
+	InstanceName     string    `json:"instance_name"`
 	BucketTime       time.Time `json:"bucket_time"`
 	DimensionType    string    `json:"dimension_type"`
 	DimensionKey     string    `json:"dimension_key"`
@@ -80,7 +82,7 @@ func (h Handler) HandleMetrics(w http.ResponseWriter, r *http.Request) {
 		writeDashboardError(w, http.StatusInternalServerError, "query_failed")
 		return
 	}
-	items := filterMetricItems(metrics, query.Get("dimension_type"), query.Get("dimension_key"), query.Get("instance_id"))
+	items := h.filterMetricItems(metrics, query.Get("dimension_type"), query.Get("dimension_key"), query.Get("instance_id"))
 	writeDashboardJSON(w, http.StatusOK, MetricListResponse{Items: items})
 }
 
@@ -115,12 +117,16 @@ func (h Handler) HandleMetricHistory(w http.ResponseWriter, r *http.Request) {
 		writeDashboardError(w, http.StatusInternalServerError, "query_failed")
 		return
 	}
-	items := filterMetricItems(metrics, "", "", query.Get("instance_id"))
+	items := h.filterMetricItems(metrics, "", "", query.Get("instance_id"))
 	sort.Slice(items, func(i, j int) bool { return items[i].BucketTime.Before(items[j].BucketTime) })
 	writeDashboardJSON(w, http.StatusOK, MetricListResponse{Items: items})
 }
 
 func filterMetricItems(metrics []aggregator.Metric, dimensionType string, dimensionKey string, instanceID ...string) []MetricItem {
+	return Handler{}.filterMetricItems(metrics, dimensionType, dimensionKey, instanceID...)
+}
+
+func (h Handler) filterMetricItems(metrics []aggregator.Metric, dimensionType string, dimensionKey string, instanceID ...string) []MetricItem {
 	items := make([]MetricItem, 0, len(metrics))
 	for _, metric := range metrics {
 		if len(instanceID) > 0 && instanceID[0] != "" && metric.InstanceID != instanceID[0] {
@@ -134,10 +140,11 @@ func filterMetricItems(metrics []aggregator.Metric, dimensionType string, dimens
 		}
 		items = append(items, MetricItem{
 			InstanceID:       metric.InstanceID,
+			InstanceName:     h.instanceName(metric.InstanceID),
 			BucketTime:       metric.BucketTime,
 			DimensionType:    metric.DimensionType,
 			DimensionKey:     metric.DimensionKey,
-			DisplayKey:       displayDimensionKey(metric.DimensionType, metric.DimensionKey),
+			DisplayKey:       h.displayDimensionKey(metric.DimensionType, metric.DimensionKey),
 			RequestCount:     metric.RequestCount,
 			SuccessCount:     metric.SuccessCount,
 			ErrorCount:       metric.ErrorCount,
@@ -164,21 +171,45 @@ func filterMetricItems(metrics []aggregator.Metric, dimensionType string, dimens
 	return items
 }
 
-func displayDimensionKey(dimensionType string, dimensionKey string) string {
+func (h Handler) instanceName(instanceID string) string {
+	if h.names == nil {
+		return instanceID
+	}
+	return h.names.InstanceName(instanceID)
+}
+
+func (h Handler) displayDimensionKey(dimensionType string, dimensionKey string) string {
 	parts := strings.Split(dimensionKey, ":")
+	if len(parts) < 3 {
+		return dimensionKey
+	}
+	instanceID := strings.Join(parts[:len(parts)-2], ":")
+	id, _ := strconv.ParseInt(parts[len(parts)-1], 10, 64)
 	switch dimensionType {
-	case "instance_model":
-		if len(parts) >= 3 {
-			return strings.Join(parts[2:], ":")
-		}
 	case "instance_channel":
-		if len(parts) >= 3 {
-			return "\u6e20\u9053 " + parts[2]
+		name := "渠道 " + parts[len(parts)-1]
+		if h.names != nil {
+			name = h.names.ChannelName(instanceID, id)
 		}
+		if name == "渠道 "+parts[len(parts)-1] {
+			return name
+		}
+		return fmt.Sprintf("%s (ID %d)", name, id)
 	case "instance_user":
-		if len(parts) >= 3 {
-			return "\u7528\u6237 " + parts[2]
+		name := "用户 " + parts[len(parts)-1]
+		if h.names != nil {
+			name = h.names.UserName(instanceID, id)
 		}
+		if name == "用户 "+parts[len(parts)-1] {
+			return name
+		}
+		return fmt.Sprintf("%s (ID %d)", name, id)
+	case "instance_model":
+		return strings.Join(parts[2:], ":")
 	}
 	return dimensionKey
+}
+
+func displayDimensionKey(dimensionType string, dimensionKey string) string {
+	return Handler{}.displayDimensionKey(dimensionType, dimensionKey)
 }

@@ -18,14 +18,15 @@ type ChannelSnapshotListResponse struct {
 }
 
 type ChannelSnapshotSummary struct {
-	ID          string    `json:"id"`
-	InstanceID  string    `json:"instance_id"`
-	ChannelID   int64     `json:"channel_id"`
-	ChannelName string    `json:"channel_name"`
-	Status      string    `json:"status"`
-	Weight      int64     `json:"weight"`
-	ModelsText  string    `json:"models_text"`
-	CapturedAt  time.Time `json:"captured_at"`
+	ID           string    `json:"id"`
+	InstanceID   string    `json:"instance_id"`
+	InstanceName string    `json:"instance_name"`
+	ChannelID    int64     `json:"channel_id"`
+	ChannelName  string    `json:"channel_name"`
+	Status       string    `json:"status"`
+	Weight       int64     `json:"weight"`
+	ModelsText   string    `json:"models_text"`
+	CapturedAt   time.Time `json:"captured_at"`
 }
 
 func (h Handler) WithChannelSnapshotStore(store ChannelSnapshotStore) Handler {
@@ -51,7 +52,11 @@ func (h Handler) HandleChannelSnapshots(w http.ResponseWriter, r *http.Request) 
 	if query.LatestOnly {
 		items = latestChannelSnapshots(items)
 	}
-	writeDashboardJSON(w, http.StatusOK, ChannelSnapshotListResponse{Items: summarizeChannelSnapshots(items)})
+	summaries := summarizeChannelSnapshots(items)
+	for i := range summaries {
+		summaries[i].InstanceName = h.instanceName(summaries[i].InstanceID)
+	}
+	writeDashboardJSON(w, http.StatusOK, ChannelSnapshotListResponse{Items: summaries})
 }
 
 func parseChannelSnapshotQuery(r *http.Request) storage.ChannelSnapshotQuery {

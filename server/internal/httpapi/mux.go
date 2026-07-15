@@ -41,6 +41,7 @@ type Store interface {
 	dashboard.NginxTimingStore
 	dashboard.InstanceStore
 	dashboard.CommandStore
+	dashboard.NameSource
 	agentgateway.TokenLookup
 }
 
@@ -53,7 +54,7 @@ func NewMux(options Options) *http.ServeMux {
 	mux.HandleFunc("/api/agent/heartbeat", agentHandler.HandleHeartbeat)
 	mux.HandleFunc("/api/agent/report", agentHandler.HandleReport)
 
-	dashboardHandler := dashboard.NewHandler(options.Store).WithLogStore(options.Store).WithLogSampleStore(options.Store).WithRuntimeStore(options.Store).WithMetricSource(options.Store).WithAlertStore(options.Store).WithNotificationStore(options.Store).WithChannelSnapshotStore(options.Store).WithNginxTimingStore(options.Store).WithNotificationMaxAttempts(options.NotificationMaxAttempts)
+	dashboardHandler := dashboard.NewHandler(options.Store).WithNameSource(options.Store).WithLogStore(options.Store).WithLogSampleStore(options.Store).WithRuntimeStore(options.Store).WithMetricSource(options.Store).WithAlertStore(options.Store).WithNotificationStore(options.Store).WithChannelSnapshotStore(options.Store).WithNginxTimingStore(options.Store).WithNotificationMaxAttempts(options.NotificationMaxAttempts)
 	tuningStore := options.TuningStore
 	if tuningStore == nil {
 		tuningStore, _ = any(options.Store).(tuning.Store)
@@ -97,7 +98,7 @@ func NewMux(options Options) *http.ServeMux {
 		mux.Handle("GET /api/dashboard/tuning/report", protect(http.HandlerFunc(dashboardHandler.HandleTuningReport)))
 	}
 	instances := dashboard.InstanceHandler{Store: options.Store, Runtime: options.Store, Pepper: options.AgentTokenPepper}
-	commands := dashboard.CommandHandler{Store: options.Store, Instances: options.Store}
+	commands := (dashboard.CommandHandler{Store: options.Store, Instances: options.Store}).WithNameSource(options.Store)
 	mux.Handle("POST /api/dashboard/channels/{channelID}/commands", protect(http.HandlerFunc(commands.Create)))
 	mux.Handle("GET /api/dashboard/channel-commands", protect(http.HandlerFunc(commands.List)))
 	mux.Handle("GET /api/dashboard/operation-audits", protect(http.HandlerFunc(commands.Audits)))
