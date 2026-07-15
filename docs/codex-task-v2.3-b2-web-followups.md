@@ -21,7 +21,7 @@
 
 `SamplesView.vue`：created_at 列走 `formatTime`;total_tokens 千分位（formatNumber）;use_time 保留两位小数带 s 后缀（≥10s 红色,与延时分诊页 hot 样式一致）;error_summary 列 show-overflow-tooltip。顺手检查 UsageView/NotificationsView/InstancesView/LatencyView 的时间与数字列,未走 format.ts 的一并接上（改动点逐页列进交付说明）。
 
-### 任务 3：系统状态页图表化（替代 B1 文件中追加的任务 6,内容一致）
+### 任务 3：系统状态页图表化（**已由 ac14fad 交付,本批只做核对**：对照下述要求逐条检查,达标则跳过,缺项补齐）
 
 1. **当前值卡片区**（每实例一组）：CPU%、内存%、磁盘%、负载、网络收发——取最新采样,MetricMini + 阈值配色（≥90% 红、≥70% 橙、否则绿）,带采集时间戳,超过 2 分钟未更新显示"数据陈旧"标记;
 2. **趋势图**（TrendChart + HoursSelect,1h/6h/24h）：图① CPU%+内存%（percent 轴）;图② 磁盘使用率;图③ 网络收/发速率。`/api/dashboard/server-metrics` 若未透出 start/end 查询参数则补上（additive,存储层已支持）;多实例按当前实例选择器过滤,未选实例时提示选择;
