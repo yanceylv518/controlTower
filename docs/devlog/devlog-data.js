@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-15",
+    type: "release",
+    version: "",
+    title: "v2.3-B3 批次下发：维度页加载性能优化",
+    summary: "用户反馈三个维度页打开很慢。定位：latest 指标查询用相关子查询逐行 MAX 扫 metric_1m 全表,且现有索引 bucket_time 打头对子查询完全不可用,随表增长线性恶化;次因:前端首屏等三个请求串完、B1 名称解析未命中时逐渠道单查。批次内容:008 索引迁移(dimension_type,instance_id,dimension_key,bucket_time)、latest 改写为分组自联结+dimension_type/24h 活跃视野下推(超24h无流量维度不再出现在最新列表,语义变化已声明)、nameResolver 整批预载、维度页首屏与趋势图加载拆分;要求 120 万行造数验证+EXPLAIN 前后对比,目标 <100ms。",
+    docs: ["docs/codex-task-v2.3-b3-perf.md"],
+    commits: []
+  },
+  {
+    date: "2026-07-15",
     type: "review",
     version: "",
     title: "v2.3-B1 验收：名称解析/图标/维度页通过,三处收尾移交 B2",
