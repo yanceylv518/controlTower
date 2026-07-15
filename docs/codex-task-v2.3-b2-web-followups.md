@@ -13,9 +13,13 @@
 
 ## 工作项
 
-### 任务 1：告警中心接名称字段
+### 任务 1：告警中心可读化（用户点名：告警太笼统,不知道是哪个渠道/模型、啥情况）
 
-`AlertsView.vue`：维度列改用 `display_key`（无值回退旧显示）;实例列改 `instance_name`（悬停 tooltip 露 instance_id）;时间列走 `formatTime`。时间线弹层里同样处理。
+分三层,前两层动 Server 告警生成（`alert_handler.go` 的 appendMetricAlerts 等）,第三层动前端：
+
+1. **维度名进标题与摘要**：内置指标告警（high_p95_latency / high_error_rate / 资源类）的 Title/Summary 必须带 display_key（走 nameResolver）,如 `渠道 openai-主力(ID 5) P95 耗时偏高`;AlertItem 若未单独暴露 dimension_key/display_key 字段则补（additive）;
+2. **摘要带行动上下文**：P95 告警摘要格式改为 `最近 1 分钟 P95 {值}, 共 {request_count} 条请求`;**P95 等于直方图最高桶上界（120s）时,禁止显示 "120.00s" 这种伪精确值,改为 "≥60s（超出直方图量程）"**——当前文案会误导排障;错误率告警同理带上 `{error_count}/{request_count}`（已有,核对格式统一）;
+3. **一键到现场**（前端）：`AlertsView.vue` 维度列改 `display_key`、实例列改 `instance_name`（tooltip 露原 id）、时间走 formatTime;告警行加"查看维度"跳转——按 dimension_type 跳对应维度页并选中该维度（维度页支持 `?key=` 查询参数定位选中项,没有则补,顺带总览页告警列表同款跳转）。时间线弹层同样处理。
 
 ### 任务 2：样本分析页格式收尾
 
