@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-15",
+    type: "review",
+    version: "",
+    title: "v2.3-B2 验收通过（附一处 CSS 文案 hack 修正 + 流程提醒）",
+    summary: "五项全部落地并核实：①告警可读化——AlertItem 增 dimension_type/dimension_key,标题摘要带维度名,P95 顶格改『≥60s（超出直方图量程）』,告警中心与总览一键跳维度页并 ?key= 选中;②静默刷新——useAsyncData 区分首次/后台,后台失败保留旧数据,历史图原地更新;③渠道清晰化——搜索/五状态签/异常置顶/无流量禁用折叠/健康墙(localStorage 记忆,窄屏回退);④样本/用量/通知格式统一;⑤详情卡升级为区间聚合(新增 aggregate=true,复用 MergeMetric)。Linux 全量测试绿。验收修正:详情卡标题被 CSS font-size:0 + ::after 硬改文案(模板就在手边却用 CSS 注入文字)——已改回模板文本并删除 hack。流程提醒:本批 commit message 未贴自查清单,内容在交付说明里——清单进 commit 的纪律不能丢。",
+    docs: ["docs/v2.3-b2-delivery.md"],
+    commits: ["5056a2d"]
+  },
+  {
+    date: "2026-07-15",
     type: "release",
     version: "v2.3-B2",
     title: "Web 告警可读化与渠道健康墙收尾",
