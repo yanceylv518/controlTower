@@ -17,6 +17,14 @@ window.DEVLOG = [
     title: "渠道命令按钮文字对比度修复",
     summary: "修正 panel-title 通用 span 规则对 Element Plus 按钮内部文字节点的覆盖，并为渠道危险操作按钮约束默认、悬停和按下状态的白色文字，解决红底灰蓝字、文字难以辨认的问题。",
     docs: [],
+  },
+  {
+    date: "2026-07-15",
+type: "release",
+    version: "",
+    title: "v2.3-B1 批次下发：Web 体验打磨",
+    summary: "用户反馈页面粗糙：菜单无图标、裸 ID 遍布、指标缺视觉语义。批次要点：①Server 集中名称解析（nameResolver + 60s 缓存：渠道名取快照、用户名取 log_events、实例名取 instances），display_key 升级为『名称 (ID)』且找不到回退旧文案，API 只增不改；②菜单 13 项全部配官方图标（唯一新增依赖 @element-plus/icons-vue）；③维度页左列加请求量+错误率色条+红橙绿状态点；④Overview 卡片颜色语义化；⑤全站逐页 sweep 清单（时间格式/千分位/RateBar/StatusTag/空态引导），格式化函数集中 utils/format.ts。最终判定靠用户浏览器走查。",
+    docs: ["docs/codex-task-v2.3-b1-web-polish.md"],
     commits: []
   },
   {
