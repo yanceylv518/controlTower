@@ -2,6 +2,15 @@
 // type: release(发版) | bugfix(缺陷修复) | incident(生产事故) | review(代码评审) | decision(方案决策)
 window.DEVLOG = [
   {
+    date: "2026-07-15",
+    type: "bugfix",
+    version: "v2.0.0-rc4",
+    title: "渠道命令按钮文字对比度修复",
+    summary: "为渠道操作区的危险操作按钮增加局部文字颜色约束，确保默认、悬停和按下状态均使用白色文字，避免主题样式覆盖后出现红底蓝字、文字难以辨认的问题。",
+    docs: [],
+    commits: []
+  },
+  {
     date: "2026-07-14",
     type: "review",
     version: "v1.1.2",
