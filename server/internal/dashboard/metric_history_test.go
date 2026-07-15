@@ -59,6 +59,23 @@ func TestMetricHistoryReturnsItemsWithQuantiles(t *testing.T) {
 	}
 }
 
+func TestMetricHistoryAggregateReturnsRangeTotal(t *testing.T) {
+	now := time.Now().UTC()
+	source := &metricSourceStub{metrics: []aggregator.Metric{
+		{InstanceID: "inst", BucketTime: now.Add(-time.Minute), DimensionType: "channel", DimensionKey: "inst:channel:1", RequestCount: 7, ErrorCount: 1, PromptTokens: 10},
+		{InstanceID: "inst", BucketTime: now, DimensionType: "channel", DimensionKey: "inst:channel:1", RequestCount: 5, ErrorCount: 2, PromptTokens: 20},
+	}}
+	h := NewHandler(nil).WithMetricSource(source)
+	response := httptest.NewRecorder()
+	h.HandleMetricHistory(response, httptest.NewRequest(http.MethodGet, "/api/dashboard/metric-history?dimension_type=channel&dimension_key=inst:channel:1&hours=1&aggregate=true", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"request_count":12`) || !strings.Contains(response.Body.String(), `"error_count":3`) || !strings.Contains(response.Body.String(), `"prompt_tokens":30`) {
+		t.Fatalf("unexpected aggregate response: %s", response.Body.String())
+	}
+}
+
 func TestUsageValidatesHoursAndReturnsTotals(t *testing.T) {
 	source := &metricSourceStub{usage: []storage.UsageRow{{DimensionType: "instance_user", DimensionKey: "inst:user:7", RequestCount: 2, PromptTokens: 3, CompletionTokens: 4, Quota: 5}}}
 	h := NewHandler(nil).WithMetricSource(source)

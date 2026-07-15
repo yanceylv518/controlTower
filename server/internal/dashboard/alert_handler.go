@@ -29,20 +29,22 @@ type AlertListResponse struct {
 }
 
 type AlertItem struct {
-	ID           string     `json:"id"`
-	InstanceID   string     `json:"instance_id"`
-	InstanceName string     `json:"instance_name"`
-	DisplayKey   string     `json:"display_key"`
-	RuleKey      string     `json:"rule_key"`
-	Severity     string     `json:"severity"`
-	Status       string     `json:"status"`
-	Title        string     `json:"title"`
-	Summary      string     `json:"summary"`
-	SeenAt       time.Time  `json:"seen_at"`
-	FirstSeenAt  time.Time  `json:"first_seen_at"`
-	LastSeenAt   time.Time  `json:"last_seen_at"`
-	ResolvedAt   *time.Time `json:"resolved_at,omitempty"`
-	SilenceUntil *time.Time `json:"silence_until,omitempty"`
+	ID            string     `json:"id"`
+	InstanceID    string     `json:"instance_id"`
+	InstanceName  string     `json:"instance_name"`
+	DisplayKey    string     `json:"display_key"`
+	DimensionType string     `json:"dimension_type"`
+	DimensionKey  string     `json:"dimension_key"`
+	RuleKey       string     `json:"rule_key"`
+	Severity      string     `json:"severity"`
+	Status        string     `json:"status"`
+	Title         string     `json:"title"`
+	Summary       string     `json:"summary"`
+	SeenAt        time.Time  `json:"seen_at"`
+	FirstSeenAt   time.Time  `json:"first_seen_at"`
+	LastSeenAt    time.Time  `json:"last_seen_at"`
+	ResolvedAt    *time.Time `json:"resolved_at,omitempty"`
+	SilenceUntil  *time.Time `json:"silence_until,omitempty"`
 }
 
 type AlertActionRequest struct {
@@ -94,9 +96,20 @@ func (h Handler) HandleAlerts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	items := storageAlertsToItems(alerts)
+	computedByID := make(map[string]AlertItem, len(computed))
+	for _, item := range computed {
+		computedByID[item.ID] = item
+	}
 	for i := range items {
 		items[i].InstanceName = h.instanceName(items[i].InstanceID)
-		items[i].DisplayKey = items[i].Title
+		if current, ok := computedByID[items[i].ID]; ok {
+			items[i].DisplayKey = current.DisplayKey
+			items[i].DimensionType = current.DimensionType
+			items[i].DimensionKey = current.DimensionKey
+		}
+		if items[i].DisplayKey == "" {
+			items[i].DisplayKey = items[i].InstanceName
+		}
 	}
 	writeDashboardJSON(w, http.StatusOK, AlertListResponse{Items: items})
 }
@@ -159,6 +172,9 @@ func (h Handler) HandleAlertEvents(w http.ResponseWriter, r *http.Request) {
 
 func (h Handler) currentAlerts() ([]AlertItem, error) {
 	metrics, err := latestOverviewMetrics(h.source)
+	if h.metricSource != nil {
+		metrics, err = h.metricSource.Latest1mMetrics("")
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -192,7 +208,17 @@ func (h Handler) currentAlerts() ([]AlertItem, error) {
 		}
 		items = appendRecentErrorAlerts(items, events)
 	}
-	return appendAgentBacklogAlerts(items, agents, time.Now().UTC()), nil
+	items = appendAgentBacklogAlerts(items, agents, time.Now().UTC())
+	for i := range items {
+		items[i].InstanceName = h.instanceName(items[i].InstanceID)
+		if items[i].DimensionKey != "" {
+			items[i].DisplayKey = h.displayDimensionKey(items[i].DimensionType, items[i].DimensionKey)
+		} else {
+			items[i].DisplayKey = items[i].InstanceName
+		}
+		items[i].Title = items[i].DisplayKey + " " + items[i].Title
+	}
+	return items, nil
 }
 
 func appendAgentBacklogAlerts(items []AlertItem, agents []storage.Agent, now time.Time) []AlertItem {
@@ -217,7 +243,7 @@ func appendAgentBacklogAlerts(items []AlertItem, agents []storage.Agent, now tim
 
 func BuildCurrentAlerts(metrics []aggregator.Metric, serverMetrics []storage.ServerMetric, healthChecks []storage.HealthCheck, dockerStatuses []storage.DockerStatus) []AlertItem {
 	items := make([]AlertItem, 0)
-	for _, metric := range latestInstanceMetrics(metrics) {
+	for _, metric := range latestDimensionMetrics(metrics) {
 		items = appendMetricAlerts(items, metric)
 	}
 	for _, metric := range latestServerMetricsByInstance(serverMetrics) {
@@ -243,14 +269,18 @@ func appendMetricAlerts(items []AlertItem, metric aggregator.Metric) []AlertItem
 		if *metric.ErrorRate >= 0.5 {
 			severity = "critical"
 		}
-		items = append(items, AlertItem{ID: alertID(metric.InstanceID, "high_error_rate", metric.DimensionKey), InstanceID: metric.InstanceID, RuleKey: "high_error_rate", Severity: severity, Status: "firing", Title: "\u9519\u8bef\u7387\u5347\u9ad8", Summary: fmt.Sprintf("\u6700\u8fd1 1 \u5206\u949f\u9519\u8bef\u7387 %.1f%%\uff0c%d/%d \u8bf7\u6c42\u5931\u8d25", *metric.ErrorRate*100, metric.ErrorCount, metric.RequestCount), SeenAt: metric.BucketTime, FirstSeenAt: metric.BucketTime, LastSeenAt: metric.BucketTime})
+		items = append(items, AlertItem{ID: alertID(metric.InstanceID, "high_error_rate", metric.DimensionKey), InstanceID: metric.InstanceID, DimensionType: metric.DimensionType, DimensionKey: metric.DimensionKey, RuleKey: "high_error_rate", Severity: severity, Status: "firing", Title: "\u9519\u8bef\u7387\u5347\u9ad8", Summary: fmt.Sprintf("\u6700\u8fd1 1 \u5206\u949f\u9519\u8bef\u7387 %.1f%%\uff0c%d/%d \u8bf7\u6c42\u5931\u8d25", *metric.ErrorRate*100, metric.ErrorCount, metric.RequestCount), SeenAt: metric.BucketTime, FirstSeenAt: metric.BucketTime, LastSeenAt: metric.BucketTime})
 	}
 	if metric.P95UseTime != nil && *metric.P95UseTime >= 5 {
 		severity := "warning"
 		if *metric.P95UseTime >= 10 {
 			severity = "critical"
 		}
-		items = append(items, AlertItem{ID: alertID(metric.InstanceID, "high_p95_latency", metric.DimensionKey), InstanceID: metric.InstanceID, RuleKey: "high_p95_latency", Severity: severity, Status: "firing", Title: "P95 \u8017\u65f6\u504f\u9ad8", Summary: fmt.Sprintf("\u6700\u8fd1 1 \u5206\u949f P95 %.2fs", *metric.P95UseTime), SeenAt: metric.BucketTime, FirstSeenAt: metric.BucketTime, LastSeenAt: metric.BucketTime})
+		summary := fmt.Sprintf("\u6700\u8fd1 1 \u5206\u949f P95 %.2fs\uff0c\u5171 %d \u6761\u8bf7\u6c42", *metric.P95UseTime, metric.RequestCount)
+		if *metric.P95UseTime >= 60 {
+			summary = fmt.Sprintf("\u6700\u8fd1 1 \u5206\u949f P95 \u226560s\uff08\u8d85\u51fa\u76f4\u65b9\u56fe\u91cf\u7a0b\uff09\uff0c\u5171 %d \u6761\u8bf7\u6c42", metric.RequestCount)
+		}
+		items = append(items, AlertItem{ID: alertID(metric.InstanceID, "high_p95_latency", metric.DimensionKey), InstanceID: metric.InstanceID, DimensionType: metric.DimensionType, DimensionKey: metric.DimensionKey, RuleKey: "high_p95_latency", Severity: severity, Status: "firing", Title: "P95 \u8017\u65f6\u504f\u9ad8", Summary: summary, SeenAt: metric.BucketTime, FirstSeenAt: metric.BucketTime, LastSeenAt: metric.BucketTime})
 	}
 	return items
 }
@@ -279,15 +309,13 @@ func appendServerMetricAlerts(items []AlertItem, metric storage.ServerMetric) []
 	}
 	return items
 }
-func latestInstanceMetrics(metrics []aggregator.Metric) []aggregator.Metric {
+func latestDimensionMetrics(metrics []aggregator.Metric) []aggregator.Metric {
 	latest := make(map[string]aggregator.Metric)
 	for _, metric := range metrics {
-		if metric.DimensionType != "instance" {
-			continue
-		}
-		current, ok := latest[metric.InstanceID]
+		key := metric.InstanceID + "\x00" + metric.DimensionType + "\x00" + metric.DimensionKey
+		current, ok := latest[key]
 		if !ok || metric.BucketTime.After(current.BucketTime) {
-			latest[metric.InstanceID] = metric
+			latest[key] = metric
 		}
 	}
 	result := make([]aggregator.Metric, 0, len(latest))

@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-15",
+    type: "release",
+    version: "v2.3-B2",
+    title: "Web 告警可读化与渠道健康墙收尾",
+    summary: "告警补齐可读维度名称、现场跳转和 P95 量程说明；维度卡片按 1h/6h/24h 展示区间聚合总数；渠道页新增搜索、五类状态过滤、无流量/禁用折叠和可记忆健康墙；全站后台刷新静默化，失败时保留旧数据。",
+    docs: ["docs/v2.3-b2-delivery.md", "docs/codex-task-v2.3-b2-web-followups.md"],
+    commits: []
+  },
+  {
+    date: "2026-07-15",
     type: "review",
     version: "",
     title: "v2.3-B3 验收通过：维度页性能优化",

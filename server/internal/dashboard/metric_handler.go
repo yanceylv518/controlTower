@@ -118,6 +118,19 @@ func (h Handler) HandleMetricHistory(w http.ResponseWriter, r *http.Request) {
 		writeDashboardError(w, http.StatusInternalServerError, "query_failed")
 		return
 	}
+	if query.Get("aggregate") == "true" {
+		if len(metrics) == 0 {
+			writeDashboardJSON(w, http.StatusOK, MetricListResponse{Items: []MetricItem{}})
+			return
+		}
+		merged := metrics[0]
+		for _, metric := range metrics[1:] {
+			merged = aggregator.MergeMetric(merged, metric)
+		}
+		merged.BucketTime = time.Now().UTC()
+		writeDashboardJSON(w, http.StatusOK, MetricListResponse{Items: h.filterMetricItems([]aggregator.Metric{merged}, dimensionType, dimensionKey, query.Get("instance_id"))})
+		return
+	}
 	items := h.filterMetricItems(metrics, "", "", query.Get("instance_id"))
 	sort.Slice(items, func(i, j int) bool { return items[i].BucketTime.Before(items[j].BucketTime) })
 	writeDashboardJSON(w, http.StatusOK, MetricListResponse{Items: items})

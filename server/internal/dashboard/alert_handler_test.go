@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -28,6 +29,24 @@ func TestBuildCurrentAlertsDetectsMetricAndRuntimeIssues(t *testing.T) {
 	}
 	if alerts[0].Severity != "critical" || alerts[0].Status != "firing" {
 		t.Fatalf("critical firing alert should sort first: %#v", alerts[0])
+	}
+}
+
+func TestBuildCurrentAlertsIncludesDimensionContextAndHistogramOverflow(t *testing.T) {
+	p95 := 60.0
+	base := time.Date(2026, 7, 15, 10, 0, 0, 0, time.UTC)
+	alerts := BuildCurrentAlerts([]aggregator.Metric{{
+		InstanceID: "inst-1", BucketTime: base, DimensionType: "channel", DimensionKey: "inst-1:channel:98", RequestCount: 14, P95UseTime: &p95,
+	}}, nil, nil, nil)
+	if len(alerts) != 1 {
+		t.Fatalf("alerts len = %d, want 1: %#v", len(alerts), alerts)
+	}
+	item := alerts[0]
+	if item.DimensionType != "channel" || item.DimensionKey != "inst-1:channel:98" {
+		t.Fatalf("missing dimension context: %#v", item)
+	}
+	if !strings.Contains(item.Summary, "≥60s") || !strings.Contains(item.Summary, "14") {
+		t.Fatalf("overflow summary should include range and request count: %q", item.Summary)
 	}
 }
 
