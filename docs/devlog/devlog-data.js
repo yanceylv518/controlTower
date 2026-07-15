@@ -5,6 +5,15 @@ window.DEVLOG = [
     date: "2026-07-16",
     type: "release",
     version: "",
+    title: "v2.5-B1 批次下发：Agent 数据面升级（那趟攒货的车发了）",
+    summary: "生产实测确认 logs.other 含 frt（毫秒,流式首响应）,TTFT 维度级可做。批次四合一：①精确 P50/P95/P99（1m 桶存精确列,5m 保持 NULL 读侧回退插值）;②大输入缓存命中率（仅 prompt>512,阈值与缓存失效告警对齐）;③流式 TTFT（仅 IsStream 且 frt 有效,防御 ≤0/>1h）;④渠道快照补采 group/priority（解锁供应商分组与调权 severe）。010 迁移;先升 Server 后升 Agent,新旧混布双向无害。记档待议：admin_info.use_channel 多元素可暴露内部重试链路——重试掩盖问题的潜在数据源。",
+    docs: ["docs/codex-task-v2.5-b1-agent-data-plane.md"],
+    commits: []
+  },
+  {
+    date: "2026-07-16",
+    type: "release",
+    version: "",
     title: "v2.4-B2 批次下发：延迟分位数桶内插值",
     summary: "用户反馈维度页延迟图不合理。根因：latencyhist.Quantile 返回桶上界,P50/P95/P99 只取 10 个离散值——曲线方波阶梯、8s→11s 显示成 10→30、超 60s 顶格 120 拉飞纵轴压扁其余曲线。批次：分位数改桶内线性插值（histogram_quantile 标准做法）,纯读侧、历史数据即刻受益;要求核对全部调用点（生产 p95 列需换 Agent 二进制才精细,交付说明须声明）+ 改造前后曲线对比。精确分位数直报（Agent 新列）与渠道 group/priority 补采同批,留待下次 Agent 升级。",
     docs: ["docs/codex-task-v2.4-b2-latency-quantiles.md"],
