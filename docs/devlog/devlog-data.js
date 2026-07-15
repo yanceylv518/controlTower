@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-15",
+    type: "release",
+    version: "v2.0.0-rc5",
+    title: "重新打包发布 rc5",
+    summary: "基于最新 main 重新发布 Agent 双架构包与包含完整 Control Tower Web 的 Server 包。相较 rc4，包含 Nginx 延时分诊、维度查询性能优化、告警可读化与现场跳转、渠道健康墙、区间汇总指标及全站静默刷新。",
+    docs: ["docs/iteration-log.md", "docs/v2.3-b2-delivery.md", "docs/v2.3-b3-delivery.md"],
+    commits: ["5056a2d", "e5704f8"]
+  },
+  {
+    date: "2026-07-15",
     type: "review",
     version: "",
     title: "v2.3-B2 验收通过（附一处 CSS 文案 hack 修正 + 流程提醒）",
