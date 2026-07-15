@@ -2,6 +2,15 @@
 // type: release(发版) | bugfix(缺陷修复) | incident(生产事故) | review(代码评审) | decision(方案决策)
 window.DEVLOG = [
   {
+    date: "2026-07-16",
+    type: "review",
+    version: "",
+    title: "v2.4-B1 计划验收：通过,修正一处会导致零命中的关联源",
+    summary: "计划质量高：生产先行验证（X-Oneapi-Request-Id 与使用日志一致、排除通用 X-Request-Id、request_id=- 归为未关联）、只按 instance_id+request_id 精确关联禁止时间猜测、multiple 状态诚实处理内部重试、uht 不冒充精确 TTFT、只加不改+失效安全齐全。验收修正一处关键错误：任务 3 原以 log_events 为关联源——生产 aggregate_with_samples 模式下该表为空,命中率会趋零;已改为 log_samples 主源（字段全齐+现成索引,慢阈值 10s 与 nginx 慢样本对齐）、log_events 次源,并写明采样截断导致的 unmatched 属设计内行为。rc5 产物核verified（release 绿,四产物齐）。",
+    docs: ["docs/codex-task-v2.4-b1-request-linked-latency.md"],
+    commits: ["68c4b56", "b3a2fdc"]
+  },
+  {
     date: "2026-07-15",
     type: "release",
     version: "v2.0.0-rc5",
