@@ -82,12 +82,12 @@ func (h Handler) HandleOverview(w http.ResponseWriter, r *http.Request) {
 }
 
 type latest1mOverviewSource interface {
-	Latest1mMetrics() ([]aggregator.Metric, error)
+	Latest1mMetrics(dimensionType string) ([]aggregator.Metric, error)
 }
 
 func latestOverviewMetrics(source OverviewSource) ([]aggregator.Metric, error) {
 	if latest, ok := source.(latest1mOverviewSource); ok {
-		return latest.Latest1mMetrics()
+		return latest.Latest1mMetrics("instance")
 	}
 	return source.Recent1mMetrics()
 }

@@ -63,6 +63,7 @@ func NewMux(options Options) *http.ServeMux {
 		dashboardHandler = dashboardHandler.WithTuningStore(tuningStore)
 	}
 	protect := func(h http.Handler) http.Handler {
+		h = gzipJSON(h)
 		if options.AuthManager != nil {
 			return ctauth.RequireSessionOrToken(options.AuthManager, options.DashboardToken, h)
 		}

@@ -21,7 +21,7 @@ func TestRecentMetricsSQLReadsLatestMetrics(t *testing.T) {
 
 func TestLatestMetricsSQLRestrictsToNewestBucket(t *testing.T) {
 	sqlText := recentMetricsSQL("metric_1m", true)
-	for _, fragment := range []string{"MAX(candidate.bucket_time)", "candidate.dimension_type = current.dimension_type", "candidate.dimension_key = current.dimension_key"} {
+	for _, fragment := range []string{"JOIN (", "MAX(bucket_time) AS mb", "bucket_time >= ?", "(? = '' OR dimension_type = ?)", "GROUP BY instance_id, dimension_type, dimension_key", "m.bucket_time=t.mb"} {
 		if !strings.Contains(sqlText, fragment) {
 			t.Fatalf("latest metrics query missing %q: %s", fragment, sqlText)
 		}

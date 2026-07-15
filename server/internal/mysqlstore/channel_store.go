@@ -2,11 +2,32 @@ package mysqlstore
 
 import (
 	"context"
+	"database/sql"
 	"strings"
 	"time"
 
 	"controltower/server/internal/storage"
 )
+
+func (s Store) ChannelNames(instanceID string) (map[int64]string, error) {
+	rows, err := s.db.QueryContext(context.Background(), `SELECT channel_id, SUBSTRING_INDEX(GROUP_CONCAT(channel_name ORDER BY captured_at DESC), ',', 1) FROM channel_snapshots WHERE instance_id = ? GROUP BY channel_id`, instanceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make(map[int64]string)
+	for rows.Next() {
+		var id int64
+		var name sql.NullString
+		if err := rows.Scan(&id, &name); err != nil {
+			return nil, err
+		}
+		if name.Valid {
+			result[id] = name.String
+		}
+	}
+	return result, rows.Err()
+}
 
 func (s Store) QueryChannelSnapshots(query storage.ChannelSnapshotQuery) ([]storage.ChannelSnapshot, error) {
 	sqlText, args := buildChannelSnapshotQuery(query)

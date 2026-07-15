@@ -18,7 +18,7 @@ func TestMemoryMetricHistoryFiltersSortsAndLatestKeepsQuietDimensions(t *testing
 	if err := store.Upsert1m(metrics); err != nil {
 		t.Fatal(err)
 	}
-	latest, err := store.Latest1mMetrics()
+	latest, err := store.Latest1mMetrics("instance_user")
 	if err != nil {
 		t.Fatal(err)
 	}

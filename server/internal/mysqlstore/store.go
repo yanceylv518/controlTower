@@ -285,6 +285,24 @@ func (s Store) QueryLogEvents(query storage.LogQuery) ([]storage.LogEvent, error
 	return events, nil
 }
 
+func (s Store) UserNames(instanceID string, since time.Time) (map[int64]string, error) {
+	rows, err := s.db.QueryContext(context.Background(), `SELECT user_id, SUBSTRING_INDEX(GROUP_CONCAT(username ORDER BY created_at DESC), ',', 1) FROM log_events WHERE instance_id = ? AND created_at >= ? AND username <> '' GROUP BY user_id`, instanceID, since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make(map[int64]string)
+	for rows.Next() {
+		var id int64
+		var name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return nil, err
+		}
+		result[id] = name
+	}
+	return result, rows.Err()
+}
+
 func (s Store) QueryLogSamples(query storage.LogSampleQuery) ([]storage.LogSample, error) {
 	sqlText, args := buildLogSampleQuery(query)
 	rows, err := s.db.QueryContext(context.Background(), sqlText, args...)

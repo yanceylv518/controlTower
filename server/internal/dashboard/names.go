@@ -14,6 +14,11 @@ type NameSource interface {
 	QueryLogEvents(storage.LogQuery) ([]storage.LogEvent, error)
 }
 
+type bulkNameSource interface {
+	ChannelNames(instanceID string) (map[int64]string, error)
+	UserNames(instanceID string, since time.Time) (map[int64]string, error)
+}
+
 type nameEntry struct {
 	value     string
 	expiresAt time.Time
@@ -66,6 +71,10 @@ func (r *nameResolver) InstanceName(instanceID string) string {
 
 func (r *nameResolver) ChannelName(instanceID string, channelID int64) string {
 	fallback := fmt.Sprintf("渠道 %d", channelID)
+	if bulk, ok := r.source.(bulkNameSource); ok {
+		r.preloadChannels(instanceID, bulk)
+		return r.cachedValue(fmt.Sprintf("channel:%s:%d", instanceID, channelID), fallback)
+	}
 	return r.resolve(fmt.Sprintf("channel:%s:%d", instanceID, channelID), fallback, func() (string, error) {
 		items, err := r.source.QueryChannelSnapshots(storage.ChannelSnapshotQuery{InstanceID: instanceID, ChannelID: channelID, LatestOnly: true, Limit: 1})
 		if err != nil || len(items) == 0 {
@@ -77,6 +86,10 @@ func (r *nameResolver) ChannelName(instanceID string, channelID int64) string {
 
 func (r *nameResolver) UserName(instanceID string, userID int64) string {
 	fallback := fmt.Sprintf("用户 %d", userID)
+	if bulk, ok := r.source.(bulkNameSource); ok {
+		r.preloadUsers(instanceID, bulk)
+		return r.cachedValue(fmt.Sprintf("user:%s:%d", instanceID, userID), fallback)
+	}
 	return r.resolve(fmt.Sprintf("user:%s:%d", instanceID, userID), fallback, func() (string, error) {
 		items, err := r.source.QueryLogEvents(storage.LogQuery{InstanceID: instanceID, UserID: userID, Limit: 1})
 		if err != nil || len(items) == 0 {
@@ -84,4 +97,56 @@ func (r *nameResolver) UserName(instanceID string, userID int64) string {
 		}
 		return items[0].Username, nil
 	})
+}
+
+func (r *nameResolver) cachedValue(key, fallback string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if entry, ok := r.cache[key]; ok && r.now().Before(entry.expiresAt) {
+		return entry.value
+	}
+	return fallback
+}
+
+func (r *nameResolver) preloadChannels(instanceID string, source bulkNameSource) {
+	r.preload("channels:"+instanceID, func() (map[string]string, error) {
+		items, err := source.ChannelNames(instanceID)
+		values := make(map[string]string, len(items))
+		for id, name := range items {
+			values[fmt.Sprintf("channel:%s:%d", instanceID, id)] = name
+		}
+		return values, err
+	})
+}
+
+func (r *nameResolver) preloadUsers(instanceID string, source bulkNameSource) {
+	r.preload("users:"+instanceID, func() (map[string]string, error) {
+		items, err := source.UserNames(instanceID, r.now().Add(-24*time.Hour))
+		values := make(map[string]string, len(items))
+		for id, name := range items {
+			values[fmt.Sprintf("user:%s:%d", instanceID, id)] = name
+		}
+		return values, err
+	})
+}
+
+func (r *nameResolver) preload(marker string, load func() (map[string]string, error)) {
+	if r == nil || r.source == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if entry, ok := r.cache[marker]; ok && r.now().Before(entry.expiresAt) {
+		return
+	}
+	values, err := load()
+	expires := r.now().Add(r.ttl)
+	if err == nil {
+		for key, value := range values {
+			if value != "" {
+				r.cache[key] = nameEntry{value: value, expiresAt: expires}
+			}
+		}
+	}
+	r.cache[marker] = nameEntry{value: "loaded", expiresAt: expires}
 }

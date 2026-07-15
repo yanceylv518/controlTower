@@ -9,6 +9,15 @@ import (
 
 type nameSourceFake struct{ calls map[string]int }
 
+func (f *nameSourceFake) ChannelNames(instanceID string) (map[int64]string, error) {
+	f.calls["channel_batch"]++
+	return map[int64]string{5: "主渠道"}, nil
+}
+func (f *nameSourceFake) UserNames(instanceID string, since time.Time) (map[int64]string, error) {
+	f.calls["user_batch"]++
+	return map[int64]string{12: "张三"}, nil
+}
+
 func (f *nameSourceFake) InstanceByID(id string) (storage.Instance, bool, error) {
 	f.calls["instance"]++
 	if id == "inst" {
@@ -49,8 +58,20 @@ func TestNameResolverMapsFallsBackAndCaches(t *testing.T) {
 	_ = r.ChannelName("inst", 5)
 	_ = r.UserName("inst", 12)
 	_ = r.InstanceName("inst")
-	if f.calls["channel"] != 2 || f.calls["user"] != 1 || f.calls["instance"] != 1 {
+	if f.calls["channel_batch"] != 1 || f.calls["user_batch"] != 1 || f.calls["channel"] != 0 || f.calls["user"] != 0 || f.calls["instance"] != 1 {
 		t.Fatalf("cache calls=%v", f.calls)
+	}
+}
+
+func TestNameResolverBulkPreloadAvoidsPerKeyQueries(t *testing.T) {
+	f := &nameSourceFake{calls: map[string]int{}}
+	r := newNameResolver(f, time.Minute)
+	for id := int64(1); id <= 100; id++ {
+		_ = r.ChannelName("inst", id)
+		_ = r.UserName("inst", id)
+	}
+	if f.calls["channel_batch"] != 1 || f.calls["user_batch"] != 1 || f.calls["channel"] != 0 || f.calls["user"] != 0 {
+		t.Fatalf("bulk calls=%v", f.calls)
 	}
 }
 

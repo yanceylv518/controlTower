@@ -286,10 +286,10 @@ func (s *MemoryStore) Recent1mMetrics() ([]aggregator.Metric, error) {
 	return items, nil
 }
 
-func (s *MemoryStore) Latest1mMetrics() ([]aggregator.Metric, error) {
+func (s *MemoryStore) Latest1mMetrics(dimensionType string) ([]aggregator.Metric, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return latestMetrics(s.metrics1m), nil
+	return latestMetrics(s.metrics1m, dimensionType, time.Now().UTC().Add(-24*time.Hour)), nil
 }
 
 func (s *MemoryStore) Recent5mMetrics() ([]aggregator.Metric, error) {
@@ -302,10 +302,10 @@ func (s *MemoryStore) Recent5mMetrics() ([]aggregator.Metric, error) {
 	return items, nil
 }
 
-func (s *MemoryStore) Latest5mMetrics() ([]aggregator.Metric, error) {
+func (s *MemoryStore) Latest5mMetrics(dimensionType string) ([]aggregator.Metric, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return latestMetrics(s.metrics5m), nil
+	return latestMetrics(s.metrics5m, dimensionType, time.Now().UTC().Add(-24*time.Hour)), nil
 }
 
 func (s *MemoryStore) QueryMetricHistory(window, dimensionType, dimensionKey string, since time.Time) ([]aggregator.Metric, error) {
@@ -325,9 +325,12 @@ func (s *MemoryStore) QueryMetricHistory(window, dimensionType, dimensionKey str
 	return items, nil
 }
 
-func latestMetrics(source map[string]aggregator.Metric) []aggregator.Metric {
+func latestMetrics(source map[string]aggregator.Metric, dimensionType string, cutoff time.Time) []aggregator.Metric {
 	latest := make(map[string]aggregator.Metric)
 	for _, metric := range source {
+		if metric.BucketTime.Before(cutoff) || (dimensionType != "" && metric.DimensionType != dimensionType) {
+			continue
+		}
 		key := metric.InstanceID + ":" + metric.DimensionType + ":" + metric.DimensionKey
 		if current, ok := latest[key]; !ok || metric.BucketTime.After(current.BucketTime) {
 			latest[key] = metric
@@ -423,6 +426,28 @@ func (s *MemoryStore) QueryLogEvents(query storage.LogQuery) ([]storage.LogEvent
 		events = append(events, event)
 	}
 	return storage.FilterLogEvents(events, query), nil
+}
+
+func (s *MemoryStore) ChannelNames(instanceID string) (map[int64]string, error) {
+	items, err := s.QueryChannelSnapshots(storage.ChannelSnapshotQuery{InstanceID: instanceID, LatestOnly: true, Limit: 5000})
+	result := make(map[int64]string)
+	for _, item := range items {
+		if _, ok := result[item.ChannelID]; !ok {
+			result[item.ChannelID] = item.ChannelName
+		}
+	}
+	return result, err
+}
+
+func (s *MemoryStore) UserNames(instanceID string, since time.Time) (map[int64]string, error) {
+	items, err := s.QueryLogEvents(storage.LogQuery{InstanceID: instanceID, StartTime: since, Limit: storage.MaxLogQueryLimit})
+	result := make(map[int64]string)
+	for _, item := range items {
+		if _, ok := result[item.UserID]; !ok && item.Username != "" {
+			result[item.UserID] = item.Username
+		}
+	}
+	return result, err
 }
 
 func (s *MemoryStore) InsertServerMetric(metric storage.ServerMetric) error {

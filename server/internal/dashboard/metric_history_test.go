@@ -20,8 +20,12 @@ type metricSourceStub struct {
 
 func (s *metricSourceStub) Recent1mMetrics() ([]aggregator.Metric, error) { return s.metrics, nil }
 func (s *metricSourceStub) Recent5mMetrics() ([]aggregator.Metric, error) { return s.metrics, nil }
-func (s *metricSourceStub) Latest1mMetrics() ([]aggregator.Metric, error) { return s.metrics, nil }
-func (s *metricSourceStub) Latest5mMetrics() ([]aggregator.Metric, error) { return s.metrics, nil }
+func (s *metricSourceStub) Latest1mMetrics(_ string) ([]aggregator.Metric, error) {
+	return s.metrics, nil
+}
+func (s *metricSourceStub) Latest5mMetrics(_ string) ([]aggregator.Metric, error) {
+	return s.metrics, nil
+}
 func (s *metricSourceStub) QueryMetricHistory(_ string, _ string, _ string, since time.Time) ([]aggregator.Metric, error) {
 	s.since = since
 	return s.metrics, nil

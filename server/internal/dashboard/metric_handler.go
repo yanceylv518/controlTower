@@ -16,8 +16,8 @@ import (
 type MetricSource interface {
 	Recent1mMetrics() ([]aggregator.Metric, error)
 	Recent5mMetrics() ([]aggregator.Metric, error)
-	Latest1mMetrics() ([]aggregator.Metric, error)
-	Latest5mMetrics() ([]aggregator.Metric, error)
+	Latest1mMetrics(dimensionType string) ([]aggregator.Metric, error)
+	Latest5mMetrics(dimensionType string) ([]aggregator.Metric, error)
 	QueryMetricHistory(window, dimensionType, dimensionKey string, since time.Time) ([]aggregator.Metric, error)
 	UsageSummary(since time.Time) ([]storage.UsageRow, error)
 }
@@ -69,12 +69,13 @@ func (h Handler) HandleMetrics(w http.ResponseWriter, r *http.Request) {
 	var metrics []aggregator.Metric
 	var err error
 	latest := query.Get("latest") == "true"
+	dimensionType := query.Get("dimension_type")
 	if window == "5m" && latest {
-		metrics, err = h.metricSource.Latest5mMetrics()
+		metrics, err = h.metricSource.Latest5mMetrics(dimensionType)
 	} else if window == "5m" {
 		metrics, err = h.metricSource.Recent5mMetrics()
 	} else if latest {
-		metrics, err = h.metricSource.Latest1mMetrics()
+		metrics, err = h.metricSource.Latest1mMetrics(dimensionType)
 	} else {
 		metrics, err = h.metricSource.Recent1mMetrics()
 	}
