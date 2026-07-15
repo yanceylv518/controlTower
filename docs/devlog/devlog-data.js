@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-15",
+    type: "review",
+    version: "",
+    title: "v2.3-B3 验收通过：维度页性能优化",
+    summary: "核实：008 索引迁移钉名（与生产手工止血索引同名兼容）;latest 查询改写为 24h 活跃集合分组自联结,dimension_type 下推,API 字段零变化,语义变化（超 24h 无流量维度不出现在 latest）已声明并有内存店同步;nameResolver 批量预载有 100 键单批查询测试;维度页首屏不再等历史曲线;gzip 中间件只包 dashboard JSON（Vary/协商/池化,Agent 网关未接入）。Linux 全量测试绿。诚实留白:120 万行实测因 codex 机器无测试库凭据未做,perf-seed.sql 已交付——分析层面 EXPLAIN 推理成立,最终以部署后生产 API 实测收尾（验收条件:latest 接口 <100ms）。",
+    docs: ["docs/v2.3-b3-delivery.md"],
+    commits: ["0acb7d5"]
+  },
+  {
+    date: "2026-07-15",
     type: "release",
     version: "v2.3-B3",
     title: "维度页 latest 查询与首屏性能优化",
