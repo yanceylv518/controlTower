@@ -5,6 +5,15 @@ window.DEVLOG = [
     date: "2026-07-16",
     type: "release",
     version: "",
+    title: "v2.7-B3 批次下发：TTFT 稀疏曲线断裂修正",
+    summary: "机制：TTFT 仅流式分钟有值(无流量分钟 NULL 是正确语义,不画 0);断裂被两点放大——①connectNulls:false+showSymbol:false 让孤立数据点完全隐形;②5m 桶 ttft_p95 为 NULL,≥6h 视图 P95 线整条消失。修法：TrendChart 加 sparse 序列模式(连线+显示符号,TTFT/缓存命中率启用);5m rollup 以 MAX(1m p95) 合成——数学上是合并集 P95 的保守上界,比线消失诚实;use_time 的 p50/p99 有插值回退不动。",
+    docs: ["docs/codex-task-v2.7-b3-sparse-series.md"],
+    commits: []
+  },
+  {
+    date: "2026-07-16",
+    type: "release",
+    version: "",
     title: "v2.7-B1/B2 批次下发：七项走查反馈",
     summary: "用户走查提出七项：①客户监控不应直显用户 ID（新增 display_name 纯名称字段,ID 退居 tooltip）;②指标按重要性重排（请求数/错误率/成功率/P95 第一排）;③⑥全站列表分页（prev/next+每页20,零 Server 改动,7 个页面）;④延时分诊自动选实例不再默认空白;⑤维度页左列独立滚动+吸顶+默认50项,禁双滚动条——以上并入 v2.7-B1。⑦设置中心（v2.7-B2）：system_settings 表(011)+三级回退(库>env>默认)+60s provider 改配置免重启,第一期覆盖数据保留三档/离线秒数/资源与错误率与 P95 阈值(顺手解决 5s/10s 偏敏感)/通知总开关,修改写审计,API 带 source 标签。",
     docs: ["docs/codex-task-v2.7-b1-ux-fixes.md", "docs/codex-task-v2.7-b2-settings-center.md"],
