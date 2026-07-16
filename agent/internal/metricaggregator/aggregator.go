@@ -21,6 +21,8 @@ type accumulator struct {
 	ttftValues        []float64
 	ttftCount         int64
 	ttftSumMS         int64
+	latencyV2         latencyhist.BucketsV2
+	ttftV2            latencyhist.BucketsV2
 }
 
 const maxRawValuesPerBucket = 10_000
@@ -78,6 +80,7 @@ func (a *accumulator) add(event logcollector.Event, cacheHitMinPromptTokens int6
 	}
 	a.metric.UseTimeSum += event.UseTime
 	a.metric.LatencyBuckets[latencyhist.Index(event.UseTime)]++
+	a.latencyV2[latencyhist.IndexV2(event.UseTime)]++
 	if event.IsStream {
 		a.streamCount++
 		a.metric.StreamCount++
@@ -100,6 +103,7 @@ func (a *accumulator) add(event logcollector.Event, cacheHitMinPromptTokens int6
 		if len(a.ttftValues) < maxRawValuesPerBucket {
 			a.ttftValues = append(a.ttftValues, float64(*event.FirstResponseMs))
 		}
+		a.ttftV2[latencyhist.IndexV2(float64(*event.FirstResponseMs)/1000)]++
 	}
 }
 
@@ -124,7 +128,13 @@ func (a *accumulator) finalize() reporter.AggregatedMetricPayload {
 	metric.TTFTCount = int64Ptr(a.ttftCount)
 	metric.TTFTSumMS = int64Ptr(a.ttftSumMS)
 	if len(a.ttftValues) > 0 {
+		metric.TTFTP50MS = floatPtr(quantile(a.ttftValues, 0.50))
+		metric.TTFTP90MS = floatPtr(quantile(a.ttftValues, 0.90))
 		metric.TTFTP95MS = floatPtr(quantile(a.ttftValues, 0.95))
+	}
+	metric.LatencyBucketsV2 = a.latencyV2[:]
+	if a.ttftCount > 0 {
+		metric.TTFTBuckets = a.ttftV2[:]
 	}
 	return metric
 }

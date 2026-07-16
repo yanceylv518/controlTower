@@ -37,8 +37,12 @@ type Metric struct {
 	BigInputCacheHits *int64
 	TTFTCount         *int64
 	TTFTSumMS         *int64
+	TTFTP50MS         *float64
+	TTFTP90MS         *float64
 	TTFTP95MS         *float64
 	LatencyBuckets    latencyhist.Buckets
+	LatencyBucketsV2  *latencyhist.BucketsV2
+	TTFTBuckets       *latencyhist.BucketsV2
 }
 
 type accumulator struct {
@@ -201,6 +205,8 @@ func MergeMetric(current Metric, incoming Metric) Metric {
 	merged.TTFTCount = addNullableInt64(merged.TTFTCount, incoming.TTFTCount)
 	merged.TTFTSumMS = addNullableInt64(merged.TTFTSumMS, incoming.TTFTSumMS)
 	merged.LatencyBuckets = latencyhist.Add(merged.LatencyBuckets, incoming.LatencyBuckets)
+	merged.LatencyBucketsV2 = addNullableV2(merged.LatencyBucketsV2, incoming.LatencyBucketsV2)
+	merged.TTFTBuckets = addNullableV2(merged.TTFTBuckets, incoming.TTFTBuckets)
 	merged.SuccessRate = ratio(merged.SuccessCount, merged.RequestCount)
 	merged.ErrorRate = ratio(merged.ErrorCount, merged.RequestCount)
 	merged.StreamRate = ratio(merged.StreamCount, merged.RequestCount)
@@ -210,10 +216,28 @@ func MergeMetric(current Metric, incoming Metric) Metric {
 	if merged.CachePromptTokens > 0 {
 		merged.CacheTokenRate = floatPtr(float64(merged.CacheTokensTotal) / float64(merged.CachePromptTokens))
 	}
-	merged.P95UseTime = latencyhist.Quantile(merged.LatencyBuckets, 0.95)
-	merged.P50UseTime = latencyhist.Quantile(merged.LatencyBuckets, 0.50)
-	merged.P99UseTime = latencyhist.Quantile(merged.LatencyBuckets, 0.99)
-	merged.TTFTP95MS = maxNullableFloat64(current.TTFTP95MS, incoming.TTFTP95MS)
+	// Prefer the densified V2 histogram when both sides carry it; fall back to
+	// the legacy V1 buckets otherwise. Quantiles stay interpolation-based.
+	if merged.LatencyBucketsV2 != nil {
+		merged.P95UseTime = latencyhist.QuantileV2(*merged.LatencyBucketsV2, 0.95)
+		merged.P50UseTime = latencyhist.QuantileV2(*merged.LatencyBucketsV2, 0.50)
+		merged.P99UseTime = latencyhist.QuantileV2(*merged.LatencyBucketsV2, 0.99)
+	} else {
+		merged.P95UseTime = latencyhist.Quantile(merged.LatencyBuckets, 0.95)
+		merged.P50UseTime = latencyhist.Quantile(merged.LatencyBuckets, 0.50)
+		merged.P99UseTime = latencyhist.Quantile(merged.LatencyBuckets, 0.99)
+	}
+	// TTFT quantiles: recompute from the merged TTFT histogram when present;
+	// otherwise keep the conservative MAX upper bound of the two sides.
+	if merged.TTFTBuckets != nil {
+		merged.TTFTP50MS = scaleMS(latencyhist.QuantileV2(*merged.TTFTBuckets, 0.50))
+		merged.TTFTP90MS = scaleMS(latencyhist.QuantileV2(*merged.TTFTBuckets, 0.90))
+		merged.TTFTP95MS = scaleMS(latencyhist.QuantileV2(*merged.TTFTBuckets, 0.95))
+	} else {
+		merged.TTFTP50MS = maxNullableFloat64(current.TTFTP50MS, incoming.TTFTP50MS)
+		merged.TTFTP90MS = maxNullableFloat64(current.TTFTP90MS, incoming.TTFTP90MS)
+		merged.TTFTP95MS = maxNullableFloat64(current.TTFTP95MS, incoming.TTFTP95MS)
+	}
 	return merged
 }
 
@@ -260,5 +284,23 @@ func p95(values []float64) float64 {
 }
 
 func floatPtr(value float64) *float64 {
+	return &value
+}
+
+func addNullableV2(left, right *latencyhist.BucketsV2) *latencyhist.BucketsV2 {
+	if left == nil || right == nil {
+		return nil
+	}
+	sum := latencyhist.AddV2(*left, *right)
+	return &sum
+}
+
+// scaleMS converts an interpolated TTFT quantile from seconds (histogram
+// bounds) back to milliseconds (column unit).
+func scaleMS(seconds *float64) *float64 {
+	if seconds == nil {
+		return nil
+	}
+	value := *seconds * 1000
 	return &value
 }

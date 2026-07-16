@@ -54,6 +54,8 @@ type MetricItem struct {
 	CacheHitRate      *float64  `json:"cache_hit_rate"`
 	TTFTCount         *int64    `json:"ttft_count"`
 	TTFTAvgMS         *float64  `json:"ttft_avg_ms"`
+	TTFTP50MS         *float64  `json:"ttft_p50_ms"`
+	TTFTP90MS         *float64  `json:"ttft_p90_ms"`
 	TTFTP95MS         *float64  `json:"ttft_p95_ms"`
 }
 
@@ -195,6 +197,8 @@ func (h Handler) filterMetricItems(metrics []aggregator.Metric, dimensionType st
 			CacheHitRate:      nullableRatio(metric.BigInputCacheHits, metric.BigInputCount),
 			TTFTCount:         metric.TTFTCount,
 			TTFTAvgMS:         nullableAverage(metric.TTFTSumMS, metric.TTFTCount),
+			TTFTP50MS:         metric.TTFTP50MS,
+			TTFTP90MS:         metric.TTFTP90MS,
 			TTFTP95MS:         metric.TTFTP95MS,
 		})
 	}

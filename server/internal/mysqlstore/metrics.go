@@ -64,9 +64,11 @@ func scanMetrics(rows *sql.Rows) ([]aggregator.Metric, error) {
 	var metrics []aggregator.Metric
 	for rows.Next() {
 		var metric aggregator.Metric
-		var successRate, errorRate, avgUseTime, p50UseTime, p95UseTime, p99UseTime, streamRate, cacheTokenRate, ttftP95MS sql.NullFloat64
+		var successRate, errorRate, avgUseTime, p50UseTime, p95UseTime, p99UseTime, streamRate, cacheTokenRate, ttftP50MS, ttftP90MS, ttftP95MS sql.NullFloat64
 		var bigInputCount, bigInputCacheHits, ttftCount, ttftSumMS sql.NullInt64
 		var buckets latencyhist.Buckets
+		var latencyV2 [latencyhist.BucketCountV2]sql.NullInt64
+		var ttftV2 [latencyhist.BucketCountV2]sql.NullInt64
 		dest := []any{
 			&metric.InstanceID,
 			&metric.BucketTime,
@@ -95,31 +97,81 @@ func scanMetrics(rows *sql.Rows) ([]aggregator.Metric, error) {
 			&bigInputCacheHits,
 			&ttftCount,
 			&ttftSumMS,
+			&ttftP50MS,
+			&ttftP90MS,
 			&ttftP95MS,
 		}
 		for i := range buckets {
 			dest = append(dest, &buckets[i])
 		}
+		for i := range latencyV2 {
+			dest = append(dest, &latencyV2[i])
+		}
+		for i := range ttftV2 {
+			dest = append(dest, &ttftV2[i])
+		}
 		if err := rows.Scan(dest...); err != nil {
 			return nil, err
 		}
 		metric.LatencyBuckets = buckets
+		metric.LatencyBucketsV2 = nullableV2(latencyV2)
+		metric.TTFTBuckets = nullableV2(ttftV2)
 		metric.SuccessRate = floatPointer(successRate)
 		metric.ErrorRate = floatPointer(errorRate)
 		metric.AvgUseTime = floatPointer(avgUseTime)
-		metric.P50UseTime = exactOrHistogram(p50UseTime, buckets, 0.50)
-		metric.P95UseTime = exactOrHistogram(p95UseTime, buckets, 0.95)
-		metric.P99UseTime = exactOrHistogram(p99UseTime, buckets, 0.99)
+		metric.P50UseTime = quantilePreferV2(metric.LatencyBucketsV2, p50UseTime, buckets, 0.50)
+		metric.P95UseTime = quantilePreferV2(metric.LatencyBucketsV2, p95UseTime, buckets, 0.95)
+		metric.P99UseTime = quantilePreferV2(metric.LatencyBucketsV2, p99UseTime, buckets, 0.99)
 		metric.StreamRate = floatPointer(streamRate)
 		metric.CacheTokenRate = floatPointer(cacheTokenRate)
 		metric.BigInputCount = int64Pointer(bigInputCount)
 		metric.BigInputCacheHits = int64Pointer(bigInputCacheHits)
 		metric.TTFTCount = int64Pointer(ttftCount)
 		metric.TTFTSumMS = int64Pointer(ttftSumMS)
-		metric.TTFTP95MS = floatPointer(ttftP95MS)
+		metric.TTFTP50MS = ttftQuantile(metric.TTFTBuckets, ttftP50MS, 0.50)
+		metric.TTFTP90MS = ttftQuantile(metric.TTFTBuckets, ttftP90MS, 0.90)
+		metric.TTFTP95MS = ttftQuantile(metric.TTFTBuckets, ttftP95MS, 0.95)
 		metrics = append(metrics, metric)
 	}
 	return metrics, rows.Err()
+}
+
+func nullableV2(values [latencyhist.BucketCountV2]sql.NullInt64) *latencyhist.BucketsV2 {
+	var buckets latencyhist.BucketsV2
+	for i, value := range values {
+		if !value.Valid {
+			return nil
+		}
+		buckets[i] = value.Int64
+	}
+	return &buckets
+}
+
+// quantilePreferV2 keeps the stored exact value when present (unmerged 1m
+// rows), then interpolates from the densified V2 histogram, then from V1.
+func quantilePreferV2(v2 *latencyhist.BucketsV2, exact sql.NullFloat64, v1 latencyhist.Buckets, q float64) *float64 {
+	if exact.Valid {
+		return &exact.Float64
+	}
+	if v2 != nil {
+		if value := latencyhist.QuantileV2(*v2, q); value != nil {
+			return value
+		}
+	}
+	return latencyhist.Quantile(v1, q)
+}
+
+func ttftQuantile(hist *latencyhist.BucketsV2, exact sql.NullFloat64, q float64) *float64 {
+	if exact.Valid {
+		return &exact.Float64
+	}
+	if hist != nil {
+		if seconds := latencyhist.QuantileV2(*hist, q); seconds != nil {
+			value := *seconds * 1000
+			return &value
+		}
+	}
+	return nil
 }
 
 func recentMetricsSQL(table string, latestOnly bool) string {
@@ -128,7 +180,7 @@ func recentMetricsSQL(table string, latestOnly bool) string {
   m.request_count, m.success_count, m.error_count, m.success_rate, m.error_rate,
   m.tpm, m.prompt_tokens, m.completion_tokens, m.quota,
   m.avg_use_time, m.p50_use_time, m.p95_use_time, m.p99_use_time, m.stream_rate, m.cache_token_rate,
-  m.use_time_sum, m.stream_count, m.cache_tokens_total, m.cache_prompt_tokens, m.big_input_count, m.big_input_cache_hits, m.ttft_count, m.ttft_sum_ms, m.ttft_p95_ms, ` + prefixedLatencyBucketColumnSQL("m") + `
+  m.use_time_sum, m.stream_count, m.cache_tokens_total, m.cache_prompt_tokens, m.big_input_count, m.big_input_cache_hits, m.ttft_count, m.ttft_sum_ms, m.ttft_p50_ms, m.ttft_p90_ms, m.ttft_p95_ms, ` + prefixedLatencyBucketColumnSQL("m") + `, ` + prefixedV2BucketColumnSQL("m") + `
 FROM ` + table + ` m JOIN (
   SELECT instance_id, dimension_type, dimension_key, MAX(bucket_time) AS mb
   FROM ` + table + `
@@ -143,7 +195,7 @@ LIMIT ?`
   request_count, success_count, error_count, success_rate, error_rate,
   tpm, prompt_tokens, completion_tokens, quota,
   avg_use_time, p50_use_time, p95_use_time, p99_use_time, stream_rate, cache_token_rate,
-  use_time_sum, stream_count, cache_tokens_total, cache_prompt_tokens, big_input_count, big_input_cache_hits, ttft_count, ttft_sum_ms, ttft_p95_ms, ` + latencyBucketColumnSQL() + `
+  use_time_sum, stream_count, cache_tokens_total, cache_prompt_tokens, big_input_count, big_input_cache_hits, ttft_count, ttft_sum_ms, ttft_p50_ms, ttft_p90_ms, ttft_p95_ms, ` + latencyBucketColumnSQL() + `, ` + v2BucketColumnSQL() + `
 FROM ` + table + `
 ORDER BY bucket_time DESC, dimension_type ASC, dimension_key ASC
 LIMIT ?`
@@ -158,12 +210,20 @@ func prefixedLatencyBucketColumnSQL(prefix string) string {
 	return strings.Join(parts, ", ")
 }
 
+func prefixedV2BucketColumnSQL(prefix string) string {
+	parts := strings.Split(v2BucketColumnSQL(), ", ")
+	for i := range parts {
+		parts[i] = prefix + "." + parts[i]
+	}
+	return strings.Join(parts, ", ")
+}
+
 func metricHistorySQL(table string) string {
 	return `SELECT instance_id, bucket_time, dimension_type, dimension_key,
   request_count, success_count, error_count, success_rate, error_rate,
   tpm, prompt_tokens, completion_tokens, quota,
   avg_use_time, p50_use_time, p95_use_time, p99_use_time, stream_rate, cache_token_rate,
-  use_time_sum, stream_count, cache_tokens_total, cache_prompt_tokens, big_input_count, big_input_cache_hits, ttft_count, ttft_sum_ms, ttft_p95_ms, ` + latencyBucketColumnSQL() + `
+  use_time_sum, stream_count, cache_tokens_total, cache_prompt_tokens, big_input_count, big_input_cache_hits, ttft_count, ttft_sum_ms, ttft_p50_ms, ttft_p90_ms, ttft_p95_ms, ` + latencyBucketColumnSQL() + `, ` + v2BucketColumnSQL() + `
 FROM ` + table + `
 WHERE dimension_type = ? AND dimension_key = ? AND bucket_time >= ?
 ORDER BY bucket_time ASC`

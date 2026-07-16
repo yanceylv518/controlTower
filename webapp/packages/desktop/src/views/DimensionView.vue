@@ -263,14 +263,21 @@ const cacheHitSeries = computed<TrendSeries[]>(() => [
 ]);
 const ttftSeries = computed<TrendSeries[]>(() => [
   {
-    name: "TTFT 平均",
+    name: "P50",
     color: "#2f5fe0",
-    data: points("ttft_avg_ms", 0.001),
+    data: points("ttft_p50_ms", 0.001),
     unit: "s",
     sparse: true,
   },
   {
-    name: "TTFT P95",
+    name: "P90",
+    color: "#1391a5",
+    data: points("ttft_p90_ms", 0.001),
+    unit: "s",
+    sparse: true,
+  },
+  {
+    name: "P95",
     color: "#b96e0c",
     data: points("ttft_p95_ms", 0.001),
     unit: "s",
@@ -461,8 +468,8 @@ function rowClass({ row }: { row: DimRow }) {
             :value="`${fmt(selected.p95_use_time, 's')}（${fmt(selected.p50_use_time, 's')} / ${fmt(selected.p99_use_time, 's')}）`"
           />
           <MetricMini
-            label="TTFT 平均 / P95"
-            :value="`${ms(selected.ttft_avg_ms)} / ${ms(selected.ttft_p95_ms)}`"
+            label="TTFT P50 / P90 / P95"
+            :value="`${ms(selected.ttft_p50_ms)} / ${ms(selected.ttft_p90_ms)} / ${ms(selected.ttft_p95_ms)}`"
           />
         </div>
         <div class="quality-bars">

@@ -48,6 +48,8 @@ export interface MetricItem {
   cache_hit_rate: number | null;
   ttft_count: number | null;
   ttft_avg_ms: number | null;
+  ttft_p50_ms: number | null;
+  ttft_p90_ms: number | null;
   ttft_p95_ms: number | null;
 }
 export interface AlertItem {

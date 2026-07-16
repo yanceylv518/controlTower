@@ -1,6 +1,7 @@
 package mysqlstore
 
 import (
+	"controltower/internal/latencyhist"
 	"context"
 	"database/sql"
 	"strings"
@@ -607,7 +608,7 @@ func metricBatchUpsertSQL(table string, rows int) string {
   instance_id, bucket_time, dimension_type, dimension_key, request_count, success_count, error_count,
   success_rate, error_rate, tpm, prompt_tokens, completion_tokens, quota,
   avg_use_time, p50_use_time, p95_use_time, p99_use_time, stream_rate, cache_token_rate,
-  use_time_sum, stream_count, cache_tokens_total, cache_prompt_tokens, big_input_count, big_input_cache_hits, ttft_count, ttft_sum_ms, ttft_p95_ms, ` + latencyBucketColumnSQL() + `, updated_at
+  use_time_sum, stream_count, cache_tokens_total, cache_prompt_tokens, big_input_count, big_input_cache_hits, ttft_count, ttft_sum_ms, ttft_p50_ms, ttft_p90_ms, ttft_p95_ms, ` + latencyBucketColumnSQL() + `, ` + v2BucketColumnSQL() + `, updated_at
 ) VALUES ` + strings.Join(values, ", ") + `
 ON DUPLICATE KEY UPDATE
   request_count = VALUES(request_count),
@@ -633,8 +634,11 @@ ON DUPLICATE KEY UPDATE
   big_input_cache_hits = VALUES(big_input_cache_hits),
   ttft_count = VALUES(ttft_count),
   ttft_sum_ms = VALUES(ttft_sum_ms),
+  ttft_p50_ms = VALUES(ttft_p50_ms),
+  ttft_p90_ms = VALUES(ttft_p90_ms),
   ttft_p95_ms = VALUES(ttft_p95_ms),
   ` + latencyBucketReplaceAssignmentsSQL() + `,
+  ` + v2BucketReplaceAssignmentsSQL() + `,
   updated_at = VALUES(updated_at)`
 }
 
@@ -644,9 +648,12 @@ func metricBatchMergeSQL(table string, rows int) string {
 	if updateAt < 0 {
 		return sqlText
 	}
-	percentileAssignments := "p50_use_time = NULL,\n  p95_use_time = " + latencyP95MergeSQL() + ",\n  p99_use_time = NULL,\n  ttft_p95_ms = CASE\n    WHEN ttft_p95_ms IS NULL THEN VALUES(ttft_p95_ms)\n    WHEN VALUES(ttft_p95_ms) IS NULL THEN ttft_p95_ms\n    ELSE GREATEST(ttft_p95_ms, VALUES(ttft_p95_ms))\n  END,"
+	ttftMax := func(column string) string {
+		return column + " = CASE\n    WHEN " + column + " IS NULL THEN VALUES(" + column + ")\n    WHEN VALUES(" + column + ") IS NULL THEN " + column + "\n    ELSE GREATEST(" + column + ", VALUES(" + column + "))\n  END,"
+	}
+	percentileAssignments := "p50_use_time = NULL,\n  p95_use_time = " + latencyP95MergeSQL() + ",\n  p99_use_time = NULL,\n  " + ttftMax("ttft_p50_ms") + "\n  " + ttftMax("ttft_p90_ms") + "\n  " + ttftMax("ttft_p95_ms")
 	if table == "metric_1m" {
-		percentileAssignments = "p50_use_time = VALUES(p50_use_time),\n  p95_use_time = VALUES(p95_use_time),\n  p99_use_time = VALUES(p99_use_time),\n  ttft_p95_ms = VALUES(ttft_p95_ms),"
+		percentileAssignments = "p50_use_time = NULL,\n  p95_use_time = " + latencyP95MergeSQL() + ",\n  p99_use_time = NULL,\n  " + ttftMax("ttft_p50_ms") + "\n  " + ttftMax("ttft_p90_ms") + "\n  " + ttftMax("ttft_p95_ms")
 	}
 	return sqlText[:updateAt] + `ON DUPLICATE KEY UPDATE
   success_rate = (success_count + VALUES(success_count)) / NULLIF(request_count + VALUES(request_count), 0),
@@ -671,6 +678,7 @@ func metricBatchMergeSQL(table string, rows int) string {
   ttft_count = IF(ttft_count IS NULL AND VALUES(ttft_count) IS NULL, NULL, COALESCE(ttft_count, 0) + COALESCE(VALUES(ttft_count), 0)),
   ttft_sum_ms = IF(ttft_sum_ms IS NULL AND VALUES(ttft_sum_ms) IS NULL, NULL, COALESCE(ttft_sum_ms, 0) + COALESCE(VALUES(ttft_sum_ms), 0)),
   ` + latencyBucketMergeAssignmentsSQL() + `,
+  ` + v2BucketMergeAssignmentsSQL() + `,
   updated_at = VALUES(updated_at)`
 }
 
@@ -686,7 +694,7 @@ func metricUpsertSQL(table string) string {
   instance_id, bucket_time, dimension_type, dimension_key, request_count, success_count, error_count,
   success_rate, error_rate, tpm, prompt_tokens, completion_tokens, quota,
   avg_use_time, p50_use_time, p95_use_time, p99_use_time, stream_rate, cache_token_rate,
-  use_time_sum, stream_count, cache_tokens_total, cache_prompt_tokens, big_input_count, big_input_cache_hits, ttft_count, ttft_sum_ms, ttft_p95_ms, ` + latencyBucketColumnSQL() + `, updated_at
+  use_time_sum, stream_count, cache_tokens_total, cache_prompt_tokens, big_input_count, big_input_cache_hits, ttft_count, ttft_sum_ms, ttft_p50_ms, ttft_p90_ms, ttft_p95_ms, ` + latencyBucketColumnSQL() + `, ` + v2BucketColumnSQL() + `, updated_at
 ) VALUES ` + metricValuePlaceholders() + `
 ON DUPLICATE KEY UPDATE
   request_count = VALUES(request_count),
@@ -712,8 +720,11 @@ ON DUPLICATE KEY UPDATE
   big_input_cache_hits = VALUES(big_input_cache_hits),
   ttft_count = VALUES(ttft_count),
   ttft_sum_ms = VALUES(ttft_sum_ms),
+  ttft_p50_ms = VALUES(ttft_p50_ms),
+  ttft_p90_ms = VALUES(ttft_p90_ms),
   ttft_p95_ms = VALUES(ttft_p95_ms),
   ` + latencyBucketReplaceAssignmentsSQL() + `,
+  ` + v2BucketReplaceAssignmentsSQL() + `,
   updated_at = VALUES(updated_at)`
 }
 
@@ -746,12 +757,27 @@ func metricArgs(metric aggregator.Metric) []any {
 		nullInt64(metric.BigInputCacheHits),
 		nullInt64(metric.TTFTCount),
 		nullInt64(metric.TTFTSumMS),
+		nullFloat(metric.TTFTP50MS),
+		nullFloat(metric.TTFTP90MS),
 		nullFloat(metric.TTFTP95MS),
 	}
 	for _, bucket := range metric.LatencyBuckets {
 		args = append(args, bucket)
 	}
+	args = appendV2Args(args, metric.LatencyBucketsV2)
+	args = appendV2Args(args, metric.TTFTBuckets)
 	return append(args, time.Now().UTC())
+}
+
+func appendV2Args(args []any, buckets *latencyhist.BucketsV2) []any {
+	for i := 0; i < latencyhist.BucketCountV2; i++ {
+		if buckets == nil {
+			args = append(args, sql.NullInt64{})
+		} else {
+			args = append(args, buckets[i])
+		}
+	}
+	return args
 }
 
 func nullTime(value *time.Time) sql.NullTime {

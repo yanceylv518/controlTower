@@ -8,6 +8,7 @@ import (
 )
 
 type rollupAccumulator struct {
+	seeded bool
 	metric Metric
 }
 
@@ -74,9 +75,26 @@ func (a *rollupAccumulator) add(metric Metric) {
 	// The P95 of a union is at most the maximum P95 of its subsets: at most
 	// 5% of every subset exceeds that maximum, so the same bound holds after
 	// merging. MAX is therefore a conservative 5m approximation.
+	a.metric.TTFTP50MS = maxNullableFloat64(a.metric.TTFTP50MS, metric.TTFTP50MS)
+	a.metric.TTFTP90MS = maxNullableFloat64(a.metric.TTFTP90MS, metric.TTFTP90MS)
 	a.metric.TTFTP95MS = maxNullableFloat64(a.metric.TTFTP95MS, metric.TTFTP95MS)
 	a.metric.LatencyBuckets = latencyhist.Add(a.metric.LatencyBuckets, metric.LatencyBuckets)
+	if !a.seeded {
+		a.metric.LatencyBucketsV2 = cloneV2(metric.LatencyBucketsV2)
+		a.metric.TTFTBuckets = cloneV2(metric.TTFTBuckets)
+		a.seeded = true
+	} else {
+		a.metric.LatencyBucketsV2 = addNullableV2(a.metric.LatencyBucketsV2, metric.LatencyBucketsV2)
+		a.metric.TTFTBuckets = addNullableV2(a.metric.TTFTBuckets, metric.TTFTBuckets)
+	}
+}
 
+func cloneV2(value *latencyhist.BucketsV2) *latencyhist.BucketsV2 {
+	if value == nil {
+		return nil
+	}
+	copied := *value
+	return &copied
 }
 
 func maxNullableFloat64(left, right *float64) *float64 {
@@ -97,7 +115,18 @@ func (a *rollupAccumulator) finalize() Metric {
 	if metric.RequestCount > 0 {
 		metric.AvgUseTime = floatPtr(metric.UseTimeSum / float64(metric.RequestCount))
 	}
-	metric.P95UseTime = latencyhist.Quantile(metric.LatencyBuckets, 0.95)
+	if metric.LatencyBucketsV2 != nil {
+		metric.P95UseTime = latencyhist.QuantileV2(*metric.LatencyBucketsV2, 0.95)
+		metric.P50UseTime = latencyhist.QuantileV2(*metric.LatencyBucketsV2, 0.50)
+		metric.P99UseTime = latencyhist.QuantileV2(*metric.LatencyBucketsV2, 0.99)
+	} else {
+		metric.P95UseTime = latencyhist.Quantile(metric.LatencyBuckets, 0.95)
+	}
+	if metric.TTFTBuckets != nil {
+		metric.TTFTP50MS = scaleMS(latencyhist.QuantileV2(*metric.TTFTBuckets, 0.50))
+		metric.TTFTP90MS = scaleMS(latencyhist.QuantileV2(*metric.TTFTBuckets, 0.90))
+		metric.TTFTP95MS = scaleMS(latencyhist.QuantileV2(*metric.TTFTBuckets, 0.95))
+	}
 	if metric.CachePromptTokens > 0 {
 		metric.CacheTokenRate = floatPtr(float64(metric.CacheTokensTotal) / float64(metric.CachePromptTokens))
 	}

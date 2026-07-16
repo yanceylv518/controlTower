@@ -74,3 +74,46 @@ func TestQuantileMonotonicAndBounded(t *testing.T) {
 		t.Fatal("empty buckets must return nil")
 	}
 }
+
+func TestV2BoundsSupersetAndDeriveV1(t *testing.T) {
+	v1set := map[float64]bool{}
+	for _, b := range UpperBoundsV2 {
+		v1set[b] = true
+	}
+	for _, b := range UpperBounds {
+		if !v1set[b] {
+			t.Fatalf("V1 bound %v missing from V2", b)
+		}
+	}
+	var v2 BucketsV2
+	for i := range v2 {
+		v2[i] = int64(i + 1)
+	}
+	v1 := DeriveV1(v2)
+	var totalV1, totalV2 int64
+	for _, c := range v1 {
+		totalV1 += c
+	}
+	for _, c := range v2 {
+		totalV2 += c
+	}
+	if totalV1 != totalV2 {
+		t.Fatalf("derive lost counts: %d != %d", totalV1, totalV2)
+	}
+	// bucket (5,10] in V1 must absorb V2 buckets (5,8] and (8,10]
+	if v1[6] != v2[6]+v2[7] {
+		t.Fatalf("coarsening mapping wrong: %d != %d+%d", v1[6], v2[6], v2[7])
+	}
+}
+
+func TestQuantileV2Interpolates(t *testing.T) {
+	var b BucketsV2
+	b[IndexV2(9)] = 100 // bucket (8,10]
+	if v := QuantileV2(b, 0.5); v == nil || *v != 9 {
+		t.Fatalf("expected 9.0, got %v", v)
+	}
+	var empty BucketsV2
+	if QuantileV2(empty, 0.9) != nil {
+		t.Fatal("empty must be nil")
+	}
+}

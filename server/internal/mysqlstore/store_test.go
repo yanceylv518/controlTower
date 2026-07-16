@@ -94,8 +94,8 @@ func TestMetricArgsConvertsNilRatesToSQLNulls(t *testing.T) {
 		DimensionKey:  "inst-1",
 		RequestCount:  5,
 	})
-	if len(args) != 39 {
-		t.Fatalf("metric args len = %d, want 39", len(args))
+	if len(args) != 71 {
+		t.Fatalf("metric args len = %d, want 71", len(args))
 	}
 	for _, idx := range []int{7, 8, 13, 14, 15, 16} {
 		value, ok := args[idx].(interface{ IsZero() bool })
@@ -167,9 +167,11 @@ func TestMetricBatchMergeSQLAccumulatesCountsAndDerivedRates(t *testing.T) {
 		}
 	}
 	oneMinuteSQL := metricBatchMergeSQL("metric_1m", 1)
-	for _, fragment := range []string{"p50_use_time = VALUES(p50_use_time)", "p95_use_time = VALUES(p95_use_time)", "p99_use_time = VALUES(p99_use_time)", "ttft_p95_ms = VALUES(ttft_p95_ms)"} {
+	// Merged 1m rows null the exact percentiles so the read side falls back
+	// to histogram interpolation (V2 preferred); TTFT keeps a MAX upper bound.
+	for _, fragment := range []string{"p50_use_time = NULL", "p99_use_time = NULL", "GREATEST(ttft_p95_ms, VALUES(ttft_p95_ms))", "GREATEST(ttft_p50_ms, VALUES(ttft_p50_ms))", "latency2_le_250ms = latency2_le_250ms + VALUES(latency2_le_250ms)", "ttft2_gt_90s = ttft2_gt_90s + VALUES(ttft2_gt_90s)"} {
 		if !strings.Contains(oneMinuteSQL, fragment) {
-			t.Fatalf("1m merge missing exact percentile assignment %q", fragment)
+			t.Fatalf("1m merge missing %q", fragment)
 		}
 	}
 }
@@ -181,7 +183,7 @@ func TestMetricBatchUpsertSQLAndArgs(t *testing.T) {
 	}
 	now := time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC)
 	args := metricBatchArgs([]aggregator.Metric{{InstanceID: "inst-1", BucketTime: now}, {InstanceID: "inst-2", BucketTime: now}})
-	if len(args) != 78 {
-		t.Fatalf("args len = %d, want 78", len(args))
+	if len(args) != 142 {
+		t.Fatalf("args len = %d, want 142", len(args))
 	}
 }

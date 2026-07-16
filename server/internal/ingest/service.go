@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"controltower/internal/latencyhist"
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
@@ -339,12 +340,25 @@ func toAggregatorMetrics(instanceID string, payloads []agentgateway.AggregatedMe
 			BigInputCacheHits: payload.BigInputCacheHits,
 			TTFTCount:         payload.TTFTCount,
 			TTFTSumMS:         payload.TTFTSumMS,
+			TTFTP50MS:         payload.TTFTP50MS,
+			TTFTP90MS:         payload.TTFTP90MS,
 			TTFTP95MS:         payload.TTFTP95MS,
 			LatencyBuckets:    payload.LatencyBuckets,
+			LatencyBucketsV2:  bucketsV2FromSlice(payload.LatencyBucketsV2),
+			TTFTBuckets:       bucketsV2FromSlice(payload.TTFTBuckets),
 		})
 	}
 	return metrics
 }
+func bucketsV2FromSlice(values []int64) *latencyhist.BucketsV2 {
+	if len(values) != latencyhist.BucketCountV2 {
+		return nil
+	}
+	var buckets latencyhist.BucketsV2
+	copy(buckets[:], values)
+	return &buckets
+}
+
 func channelSnapshotID(instanceID string, channelID int64, capturedAt time.Time) string {
 	sum := sha1.Sum([]byte(fmt.Sprintf("%s:%d:%d", instanceID, channelID, capturedAt.UnixNano())))
 	return hex.EncodeToString(sum[:])

@@ -119,8 +119,12 @@ type AggregatedMetricPayload struct {
 	BigInputCacheHits *int64              `json:"big_input_cache_hits,omitempty"`
 	TTFTCount         *int64              `json:"ttft_count,omitempty"`
 	TTFTSumMS         *int64              `json:"ttft_sum_ms,omitempty"`
+	TTFTP50MS         *float64            `json:"ttft_p50_ms,omitempty"`
+	TTFTP90MS         *float64            `json:"ttft_p90_ms,omitempty"`
 	TTFTP95MS         *float64            `json:"ttft_p95_ms,omitempty"`
 	LatencyBuckets    latencyhist.Buckets `json:"latency_buckets"`
+	LatencyBucketsV2  []int64             `json:"latency_buckets_v2,omitempty"`
+	TTFTBuckets       []int64             `json:"ttft_buckets,omitempty"`
 }
 
 type LogSamplePayload struct {
