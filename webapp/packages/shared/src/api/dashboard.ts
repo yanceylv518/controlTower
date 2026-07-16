@@ -370,6 +370,11 @@ export const dashboardApi = (client: ApiClient) => ({
     client.request<ListResponse<AlertEvent>>(
       `/api/dashboard/alerts/${encodeURIComponent(id)}/events${query({ limit })}`,
     ),
+  cleanupAlerts: (statuses: string[]) =>
+    client.request<{ deleted: number }>("/api/dashboard/alerts/cleanup", {
+      method: "POST",
+      body: JSON.stringify({ statuses }),
+    }),
   alertAction: (input: AlertActionInput) =>
     client.request<DashboardOKResponse>("/api/dashboard/alerts/action", {
       method: "POST",

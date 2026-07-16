@@ -14,7 +14,7 @@ import { formatTime } from "../utils/format";
 const filters = useFiltersStore();
 const status = ref("");
 const severity = ref("");
-const activeOnly = ref(false);
+const activeOnly = ref(true);
 const page = ref(1);
 const pageSize = ref(20);
 const drawer = ref(false);
@@ -94,6 +94,32 @@ async function action(item: AlertItem, kind: "acknowledge" | "silence") {
     );
   }
 }
+async function cleanup(command: string) {
+  const statuses =
+    command === "all" ? ["acknowledged", "silenced", "resolved"] : [command];
+  const labels: Record<string, string> = {
+    acknowledged: "已确认",
+    silenced: "已静默",
+    resolved: "已解决",
+    all: "全部非活动",
+  };
+  try {
+    await ElMessageBox.confirm(
+      `将删除「${labels[command]}」状态的告警及其时间线记录，不可恢复`,
+      "清理告警",
+      { type: "warning", confirmButtonText: "清理" },
+    );
+  } catch {
+    return;
+  }
+  try {
+    const result = await dashboard.cleanupAlerts(statuses);
+    ElMessage.success(`已清理 ${result.deleted} 条告警`);
+    await state.reload();
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : "清理失败");
+  }
+}
 watch([() => filters.instance_id, status, severity, activeOnly], () => {
   page.value = 1;
   void state.reload();
@@ -117,6 +143,19 @@ useAutoRefresh(state.reload);
           :label="v"
           :value="v" /></el-select
       ><el-checkbox v-model="activeOnly">仅活动告警</el-checkbox>
+      <el-dropdown @command="cleanup">
+        <el-button size="small">清理告警 ▾</el-button>
+        <template #dropdown>
+          <el-dropdown-menu>
+            <el-dropdown-item command="acknowledged">清理已确认</el-dropdown-item>
+            <el-dropdown-item command="silenced">清理已静默</el-dropdown-item>
+            <el-dropdown-item command="resolved">清理已解决</el-dropdown-item>
+            <el-dropdown-item command="all" divided
+              >清理全部非活动</el-dropdown-item
+            >
+          </el-dropdown-menu>
+        </template>
+      </el-dropdown>
     </template>
     <AsyncPanel
       :loading="state.loading.value"

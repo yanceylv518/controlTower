@@ -756,3 +756,29 @@ func (s *MemoryStore) QueryChannelSnapshots(query storage.ChannelSnapshotQuery) 
 	}
 	return items, nil
 }
+
+func (s *MemoryStore) DeleteAlertsByStatus(statuses []string) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	match := map[string]bool{}
+	for _, status := range statuses {
+		match[status] = true
+	}
+	var deleted int64
+	removed := map[string]bool{}
+	for id, alert := range s.alerts {
+		if match[alert.Status] {
+			delete(s.alerts, id)
+			removed[id] = true
+			deleted++
+		}
+	}
+	kept := s.alertEvents[:0]
+	for _, event := range s.alertEvents {
+		if !removed[event.AlertID] {
+			kept = append(kept, event)
+		}
+	}
+	s.alertEvents = kept
+	return deleted, nil
+}

@@ -168,7 +168,16 @@ func (s Store) QueryOperationAudits(q storage.OperationAuditQuery) ([]storage.Op
 }
 
 func (s Store) PruneBefore(kind string, cutoff time.Time) (int64, error) {
-	tables := map[string][2]string{"log_events": {"log_events", "created_at"}, "log_samples": {"log_samples", "created_at"}, "metric_1m": {"metric_1m", "bucket_time"}, "metric_5m": {"metric_5m", "bucket_time"}, "server_metrics": {"server_metrics_10s", "collected_at"}, "health_checks": {"health_checks", "checked_at"}, "docker_statuses": {"docker_statuses", "collected_at"}, "nginx_timing_1m": {"nginx_timing_1m", "bucket_at"}, "nginx_slow_samples": {"nginx_slow_samples", "occurred_at"}}
+	if kind == "alerts_resolved" {
+		// Only resolved alerts age out; firing/acknowledged/silenced stay
+		// visible regardless of age.
+		result, err := s.db.ExecContext(context.Background(), `DELETE FROM alerts WHERE status = 'resolved' AND last_seen_at < ?`, cutoff)
+		if err != nil {
+			return 0, err
+		}
+		return result.RowsAffected()
+	}
+	tables := map[string][2]string{"log_events": {"log_events", "created_at"}, "log_samples": {"log_samples", "created_at"}, "metric_1m": {"metric_1m", "bucket_time"}, "metric_5m": {"metric_5m", "bucket_time"}, "server_metrics": {"server_metrics_10s", "collected_at"}, "health_checks": {"health_checks", "checked_at"}, "docker_statuses": {"docker_statuses", "collected_at"}, "nginx_timing_1m": {"nginx_timing_1m", "bucket_at"}, "nginx_slow_samples": {"nginx_slow_samples", "occurred_at"}, "alert_events": {"alert_events", "created_at"}, "notification_deliveries": {"notification_deliveries", "attempted_at"}}
 	v, ok := tables[kind]
 	if !ok {
 		return 0, sql.ErrNoRows

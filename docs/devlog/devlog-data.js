@@ -2,6 +2,15 @@
 // type: release(发版) | bugfix(缺陷修复) | incident(生产事故) | review(代码评审) | decision(方案决策)
 window.DEVLOG = [
   {
+    date: "2026-07-17",
+    type: "release",
+    version: "",
+    title: "告警保留清理 + 一键清理按钮（Claude 直接实现）",
+    summary: "用户发现真实缺口：alerts/alert_events/notification_deliveries 三表不在保留清理范围,告警无限累积。①设置中心新增『已解决告警保留天数』(默认30):清理器只删已解决且超期的告警(firing/已确认/已静默不受年龄影响),时间线与投递记录随删;②告警中心新增『清理告警』下拉:按已确认/已静默/已解决/全部非活动一键删除(确认框+审计友好);③告警中心默认只显示活动告警。顺手修一个真 bug:defaultAlertSettings 手抄默认值 map,新增设置键后 Parse 半途失败致阈值归零(内存70%也触发 critical)——改为 settings.DefaultValue() 权威来源,根除手抄。全部测试与构建绿。",
+    docs: [],
+    commits: []
+  },
+  {
     date: "2026-07-16",
     type: "release",
     version: "",

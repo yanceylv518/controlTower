@@ -23,6 +23,7 @@ type AlertStore interface {
 	ExpireSilencedAlerts(now time.Time) error
 	InsertAlertEvents([]storage.AlertEvent) error
 	QueryAlertEvents(string, int) ([]storage.AlertEvent, error)
+	DeleteAlertsByStatus(statuses []string) (int64, error)
 }
 
 type AlertListResponse struct {
@@ -284,16 +285,47 @@ func appendAgentBacklogAlertsWithOffline(items []AlertItem, agents []storage.Age
 	return items
 }
 
+var cleanableAlertStatuses = map[string]bool{"acknowledged": true, "silenced": true, "resolved": true}
+
+func (h Handler) HandleAlertCleanup(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeDashboardError(w, http.StatusMethodNotAllowed, "method_not_allowed")
+		return
+	}
+	var req struct {
+		Statuses []string `json:"statuses"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || len(req.Statuses) == 0 {
+		writeDashboardError(w, 400, "invalid_json")
+		return
+	}
+	for _, status := range req.Statuses {
+		if !cleanableAlertStatuses[status] {
+			writeDashboardError(w, 400, "invalid_status")
+			return
+		}
+	}
+	deleted, err := h.alertStore.DeleteAlertsByStatus(req.Statuses)
+	if err != nil {
+		writeDashboardError(w, 500, "cleanup_failed")
+		return
+	}
+	writeDashboardJSON(w, 200, map[string]any{"deleted": deleted})
+}
+
 func BuildCurrentAlerts(metrics []aggregator.Metric, serverMetrics []storage.ServerMetric, healthChecks []storage.HealthCheck, dockerStatuses []storage.DockerStatus) []AlertItem {
 	return BuildCurrentAlertsWithSettings(metrics, serverMetrics, healthChecks, dockerStatuses, defaultAlertSettings())
 }
 func defaultAlertSettings() settings.Values {
 	items := map[string]settings.Item{}
 	for _, k := range settings.Keys() {
-		items[k] = settings.Item{Value: map[string]string{settings.RetentionDetail: "30", settings.RetentionMetric5m: "90", settings.RetentionRuntime: "7", settings.OfflineSeconds: "120", settings.CPUWarn: "80", settings.CPUCrit: "90", settings.MemoryWarn: "80", settings.MemoryCrit: "90", settings.DiskWarn: "85", settings.DiskCrit: "95", settings.ErrorRateWarn: "20", settings.ErrorRateCrit: "50", settings.P95Warn: "5", settings.P95Crit: "10", settings.NotificationsEnabled: "true"}[k]}
+		items[k] = settings.Item{Value: settings.DefaultValue(k)}
 	}
-	v, _ := settings.Parse(items)
-	return v
+	values, err := settings.Parse(items)
+	if err != nil {
+		panic(err) // built-in defaults must always parse
+	}
+	return values
 }
 func BuildCurrentAlertsWithSettings(metrics []aggregator.Metric, serverMetrics []storage.ServerMetric, healthChecks []storage.HealthCheck, dockerStatuses []storage.DockerStatus, values settings.Values) []AlertItem {
 	items := make([]AlertItem, 0)

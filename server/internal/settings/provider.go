@@ -15,6 +15,7 @@ const (
 	RetentionDetail      = "CT_RETENTION_DETAIL_DAYS"
 	RetentionMetric5m    = "CT_RETENTION_METRIC5M_DAYS"
 	RetentionRuntime     = "CT_RETENTION_RUNTIME_DAYS"
+	RetentionAlerts      = "CT_RETENTION_ALERTS_DAYS"
 	OfflineSeconds       = "CT_OFFLINE_ALERT_SECONDS"
 	CPUWarn              = "CT_CPU_WARN_PERCENT"
 	CPUCrit              = "CT_CPU_CRIT_PERCENT"
@@ -32,7 +33,7 @@ const (
 )
 
 var defaults = map[string]string{
-	RetentionDetail: "30", RetentionMetric5m: "90", RetentionRuntime: "7", OfflineSeconds: "120",
+	RetentionDetail: "30", RetentionMetric5m: "90", RetentionRuntime: "7", RetentionAlerts: "30", OfflineSeconds: "120",
 	CPUWarn: "80", CPUCrit: "90", MemoryWarn: "80", MemoryCrit: "90", DiskWarn: "85", DiskCrit: "95",
 	ErrorRateWarn: "20", ErrorRateCrit: "50", P95Warn: "5", P95Crit: "10", NotificationsEnabled: "true",
 	QuotaPerUnit: "500000", CurrencySymbol: "¥",
@@ -44,7 +45,7 @@ type Item struct {
 	Default string `json:"default"`
 }
 type Values struct {
-	RetentionDetailDays, RetentionMetric5mDays, RetentionRuntimeDays, OfflineSeconds                             int
+	RetentionDetailDays, RetentionMetric5mDays, RetentionRuntimeDays, RetentionAlertsDays, OfflineSeconds              int
 	CPUWarn, CPUCrit, MemoryWarn, MemoryCrit, DiskWarn, DiskCrit, ErrorRateWarn, ErrorRateCrit, P95Warn, P95Crit float64
 	NotificationsEnabled                                                                                         bool
 }
@@ -59,8 +60,12 @@ type Provider struct {
 func NewProvider(store storage.SystemSettingStore, ttl time.Duration) *Provider {
 	return &Provider{store: store, ttl: ttl}
 }
+// DefaultValue exposes the authoritative built-in default for a key so other
+// packages never hand-copy the defaults map.
+func DefaultValue(key string) string { return defaults[key] }
+
 func Keys() []string {
-	return []string{RetentionDetail, RetentionMetric5m, RetentionRuntime, OfflineSeconds, CPUWarn, CPUCrit, MemoryWarn, MemoryCrit, DiskWarn, DiskCrit, ErrorRateWarn, ErrorRateCrit, P95Warn, P95Crit, NotificationsEnabled, QuotaPerUnit, CurrencySymbol}
+	return []string{RetentionDetail, RetentionMetric5m, RetentionRuntime, RetentionAlerts, OfflineSeconds, CPUWarn, CPUCrit, MemoryWarn, MemoryCrit, DiskWarn, DiskCrit, ErrorRateWarn, ErrorRateCrit, P95Warn, P95Crit, NotificationsEnabled, QuotaPerUnit, CurrencySymbol}
 }
 func (p *Provider) Invalidate() { p.mu.Lock(); p.loaded = time.Time{}; p.mu.Unlock() }
 func (p *Provider) Items() (map[string]Item, error) {
@@ -120,6 +125,9 @@ func Parse(items map[string]Item) (Values, error) {
 	if v.RetentionRuntimeDays, err = i(RetentionRuntime); err != nil {
 		return v, err
 	}
+	if v.RetentionAlertsDays, err = i(RetentionAlerts); err != nil {
+		return v, err
+	}
 	if v.OfflineSeconds, err = i(OfflineSeconds); err != nil {
 		return v, err
 	}
@@ -159,7 +167,7 @@ func Validate(values map[string]string) map[string]string {
 		}
 		return v, true
 	}
-	for _, k := range []string{RetentionDetail, RetentionMetric5m, RetentionRuntime} {
+	for _, k := range []string{RetentionDetail, RetentionMetric5m, RetentionRuntime, RetentionAlerts} {
 		if v, ok := get(k); ok && (v < 1 || v > 365 || v != float64(int(v))) {
 			errs[k] = "must be an integer between 1 and 365"
 		}

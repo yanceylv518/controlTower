@@ -268,3 +268,28 @@ func alertStatusOrFiring(status string) string {
 	}
 	return status
 }
+
+// DeleteAlertsByStatus removes non-firing alerts in the given statuses along
+// with their timeline events and notification deliveries.
+func (s Store) DeleteAlertsByStatus(statuses []string) (int64, error) {
+	if len(statuses) == 0 {
+		return 0, nil
+	}
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(statuses)), ",")
+	args := make([]any, 0, len(statuses))
+	for _, status := range statuses {
+		args = append(args, status)
+	}
+	ctx := context.Background()
+	if _, err := s.db.ExecContext(ctx, `DELETE ae FROM alert_events ae JOIN alerts a ON ae.alert_id = a.id WHERE a.status IN (`+placeholders+`)`, args...); err != nil {
+		return 0, err
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE nd FROM notification_deliveries nd JOIN alerts a ON nd.alert_id = a.id WHERE a.status IN (`+placeholders+`)`, args...); err != nil {
+		return 0, err
+	}
+	result, err := s.db.ExecContext(ctx, `DELETE FROM alerts WHERE status IN (`+placeholders+`)`, args...)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}

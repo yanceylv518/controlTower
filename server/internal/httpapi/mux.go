@@ -85,6 +85,7 @@ func NewMux(options Options) *http.ServeMux {
 	mux.Handle("/api/dashboard/channel-snapshots", protect(http.HandlerFunc(dashboardHandler.HandleChannelSnapshots)))
 	mux.Handle("/api/dashboard/alerts", protect(http.HandlerFunc(dashboardHandler.HandleAlerts)))
 	mux.Handle("/api/dashboard/alerts/action", protect(http.HandlerFunc(dashboardHandler.HandleAlertAction)))
+	mux.Handle("POST /api/dashboard/alerts/cleanup", protect(http.HandlerFunc(dashboardHandler.HandleAlertCleanup)))
 	mux.Handle("GET /api/dashboard/alerts/{id}/events", protect(http.HandlerFunc(dashboardHandler.HandleAlertEvents)))
 	mux.Handle("/api/dashboard/notification-channels", protect(http.HandlerFunc(dashboardHandler.HandleNotificationChannels)))
 	mux.Handle("/api/dashboard/notification-deliveries", protect(http.HandlerFunc(dashboardHandler.HandleNotificationDeliveries)))

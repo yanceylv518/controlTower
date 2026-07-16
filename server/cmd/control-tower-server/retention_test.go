@@ -14,8 +14,8 @@ func (r *retentionRecorder) PruneBefore(k string, t time.Time) (int64, error) {
 func TestPruneRetentionGroupsAndZeroDisabled(t *testing.T) {
 	now := time.Now().UTC()
 	r := &retentionRecorder{calls: map[string]time.Time{}}
-	pruneRetention(r, 0, 90, 7, now)
-	if len(r.calls) != 4 {
+	pruneRetention(r, 0, 90, 7, 30, now)
+	if len(r.calls) != 7 {
 		t.Fatalf("calls=%v", r.calls)
 	}
 	if _, ok := r.calls["log_events"]; ok {
@@ -26,5 +26,11 @@ func TestPruneRetentionGroupsAndZeroDisabled(t *testing.T) {
 	}
 	if !r.calls["server_metrics"].Equal(now.Add(-7 * 24 * time.Hour)) {
 		t.Fatalf("runtime cutoff=%v", r.calls["server_metrics"])
+	}
+	if !r.calls["alerts_resolved"].Equal(now.Add(-30 * 24 * time.Hour)) {
+		t.Fatalf("alerts cutoff=%v", r.calls["alerts_resolved"])
+	}
+	if _, ok := r.calls["notification_deliveries"]; !ok {
+		t.Fatal("deliveries not pruned")
 	}
 }
