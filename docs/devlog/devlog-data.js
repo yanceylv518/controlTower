@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-16",
+    type: "review",
+    version: "",
+    title: "v2.7-B2 验收通过：设置中心",
+    summary: "核实：011 迁移干净（无重建语句）;provider 三级回退（db>env>默认）代码逐层确认,60s 缓存+保存即失效,改配置不重启生效;15 个可配项含数据保留三档/离线秒数/资源与错误率与 P95 阈值/通知总开关;校验带字段错误,修改写 operation_audits;API 响应带 source/default;.prettierrc.json 按验收要求落地锁定前端风格;清单进 commit、无 force push——上两次流程问题都改了。Linux 全量测试绿。协调项：离线阈值默认统一为 120s（B2 已落地）,v2.6-B1 任务书已更新为从 provider 取值、资源阈值 env 化任务改为复核接线。",
+    docs: ["docs/v2.7-b2-delivery.md", "docs/codex-task-v2.6-b1-reliability.md"],
+    commits: ["70a5917"]
+  },
+  {
+    date: "2026-07-16",
     type: "feature",
     version: "v2.7-B2",
     title: "系统设置中心支持运行时动态配置",

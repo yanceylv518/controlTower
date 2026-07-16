@@ -31,10 +31,10 @@
 
 `currentAlerts()` 增加规则 `instance_offline`：
 
-- 触发：实例启用且**曾经有过心跳**,`seconds_since_seen > CT_OFFLINE_ALERT_SECONDS`（新 env,默认 300）→ critical,Title"实例离线",Summary 带"最后心跳于 X 分钟前";
+- 触发：实例启用且**曾经有过心跳**,`seconds_since_seen > 离线阈值` → critical,Title"实例离线",Summary 带"最后心跳于 X 分钟前"。**阈值必须从 settings provider 取 `settings.OfflineSeconds`（v2.7-B2 已落地,默认 120,Web 可配）,不得自行读 env**;
 - 防噪：从未接入过的实例不告警;最后心跳早于 7 天的不再重复出现在 firing（视为退役,自然 resolve）;
 - 恢复：心跳恢复后规则不再产出 → 既有 ResolveMissingAlerts 自动闭环并可通知恢复（沿用现状语义）;
-- 顺手：CPU/内存/磁盘阈值（现硬编码 80/90、80/90、85/95）改为 env 可配（`CT_ALERT_CPU_WARN/CRIT` 等六个,默认值不变）;
+- ~~顺手：CPU/内存/磁盘阈值 env 化~~ **已由 v2.7-B2 settings provider 完成,本批不做,复核接线即可**;
 - 单测：离线触发/从未接入不触发/恢复闭环/退役不刷屏/阈值 env 覆盖。
 
 ### 任务 3：企微通知渠道类型（Server + Web）
