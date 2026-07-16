@@ -4,6 +4,15 @@ window.DEVLOG = [
   {
     date: "2026-07-16",
     type: "release",
+    version: "",
+    title: "v2.7-B1/B2 批次下发：七项走查反馈",
+    summary: "用户走查提出七项：①客户监控不应直显用户 ID（新增 display_name 纯名称字段,ID 退居 tooltip）;②指标按重要性重排（请求数/错误率/成功率/P95 第一排）;③⑥全站列表分页（prev/next+每页20,零 Server 改动,7 个页面）;④延时分诊自动选实例不再默认空白;⑤维度页左列独立滚动+吸顶+默认50项,禁双滚动条——以上并入 v2.7-B1。⑦设置中心（v2.7-B2）：system_settings 表(011)+三级回退(库>env>默认)+60s provider 改配置免重启,第一期覆盖数据保留三档/离线秒数/资源与错误率与 P95 阈值(顺手解决 5s/10s 偏敏感)/通知总开关,修改写审计,API 带 source 标签。",
+    docs: ["docs/codex-task-v2.7-b1-ux-fixes.md", "docs/codex-task-v2.7-b2-settings-center.md"],
+    commits: []
+  },
+  {
+    date: "2026-07-16",
+    type: "release",
     version: "v2.0.0-rc6",
     title: "rc6 出产物 + v2.6-B1 可靠性批次下发",
     summary: "rc6 一次带上 v2.3 系列（名称/图标/健康墙/性能/静默刷新）、v2.4-B1（request_id 关联）、v2.5-B1（精确分位数/缓存命中率/TTFT/快照 group+priority）,部署顺序先 Server（009/010 迁移）后 Agent。同时下发 v2.6-B1 可靠性三件套：①心跳解耦——pass 重排为『先本地采集告警、后 Server RPC』,CT Server 故障不再阻断企微告警（账本 P1 清账）;②instance_offline 合成规则（默认 300s,曾接入才告警,7 天退役不刷屏,资源阈值顺手 env 化）;③Server 通知中心补 wecom 渠道类型（v1.1.2 遗留清账,离线/资源告警自此可推企微群）。",
