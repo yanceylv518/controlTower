@@ -20,6 +20,6 @@ ALTER TABLE channel_snapshots
   ADD COLUMN group_name VARCHAR(128) NULL AFTER models_text,
   ADD COLUMN priority BIGINT NULL AFTER group_name;
 
-ALTER TABLE metric_1m ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-ALTER TABLE metric_5m ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-ALTER TABLE channel_snapshots ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+-- 注意：不要在此追加对表引擎/字符集的"重钉" ALTER 语句——
+-- ApplyDir 每次启动重放所有迁移文件,该类语句每次都会成功执行并强制全表重建。
+-- 三张表的引擎与排序规则已在 001_init.sql 建表时钉定。

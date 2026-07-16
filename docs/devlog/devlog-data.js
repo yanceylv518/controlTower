@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-16",
+    type: "review",
+    version: "",
+    title: "v2.5-B1 验收通过（吸收 v2.4-B2;修正一处每次启动全表重建的迁移缺陷）",
+    summary: "核实：frt 解析防御（≤0/>1h 视为缺失）、512 严格边界、TTFT 仅流式、原始值数组 10000 上限、精确 P50/95/99（1m 精确,5m NULL 回退插值——插值实现一并交付,等于吸收 v2.4-B2,验收补了单调性/边界测试）、快照 group/priority 反引号+COALESCE、契约/API 只增不改、前端两卡两图,Linux 全量测试绿。验收修正 P1：010 迁移末尾三条 ALTER TABLE ...(引擎/排序规则重钉)——ApplyDir 每次启动重放全部迁移,该语句每次成功执行并强制全表重建,表越大启动越慢还带锁;已删除并把『迁移文件不得含重建语句』写成反向断言测试（codex 原测试反而把有害语句断言为必需项,一并修正）。部署顺序：先 Server 后 Agent。",
+    docs: ["docs/codex-delivery-v2.5-b1-agent-data-plane.md"],
+    commits: ["f62e0cc"]
+  },
+  {
+    date: "2026-07-16",
     type: "release",
     version: "",
     title: "v2.5-B1 完成：Agent 精确分位数、缓存命中率与 TTFT 全链路",
