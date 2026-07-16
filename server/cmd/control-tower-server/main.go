@@ -16,6 +16,7 @@ import (
 	"controltower/server/internal/dashboard"
 	"controltower/server/internal/httpapi"
 	"controltower/server/internal/mysqlstore"
+	"controltower/server/internal/settings"
 	"controltower/server/internal/storage"
 	"controltower/server/internal/tuning"
 )
@@ -49,6 +50,7 @@ func run() error {
 	}
 
 	store := mysqlstore.New(db)
+	settingsProvider := settings.NewProvider(store, 60*time.Second)
 	authManager := ctauth.NewManager(store, time.Duration(cfg.SessionTTLHours)*time.Hour)
 	count, err := store.CountUsers()
 	if err != nil {
@@ -76,14 +78,14 @@ func run() error {
 		}
 	}()
 	startAggregationRunner(store, time.Duration(cfg.AggregationIntervalSeconds)*time.Second)
-	startNotificationRunner(store, time.Duration(cfg.NotificationIntervalSeconds)*time.Second)
+	startNotificationRunner(store, settingsProvider, time.Duration(cfg.NotificationIntervalSeconds)*time.Second)
 	startChannelSnapshotRetentionRunner(store, cfg.ChannelSnapshotRetentionDays)
-	startRetentionRunner(store, cfg.RetentionDetailDays, cfg.RetentionMetric5mDays, cfg.RetentionRuntimeDays)
+	startRetentionRunner(store, settingsProvider)
 	startTuningRunner(store)
 
 	server := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           httpapi.NewMux(httpapi.Options{AgentToken: cfg.AgentToken, DashboardToken: cfg.DashboardToken, Store: store, TuningStore: store, AuthManager: authManager, AgentTokenPepper: cfg.AgentTokenPepper, NotificationMaxAttempts: cfg.NotificationMaxAttempts, CommandExpiry: time.Duration(cfg.CommandExpiryMinutes) * time.Minute}),
+		Handler:           httpapi.NewMux(httpapi.Options{AgentToken: cfg.AgentToken, DashboardToken: cfg.DashboardToken, Store: store, TuningStore: store, AuthManager: authManager, AgentTokenPepper: cfg.AgentTokenPepper, NotificationMaxAttempts: cfg.NotificationMaxAttempts, CommandExpiry: time.Duration(cfg.CommandExpiryMinutes) * time.Minute, SettingsProvider: settingsProvider}),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	log.Printf("control tower server listening on %s", cfg.ListenAddr)
@@ -103,8 +105,15 @@ type retentionStore interface {
 	PruneBefore(string, time.Time) (int64, error)
 }
 
-func startRetentionRunner(store retentionStore, detailDays, metric5mDays, runtimeDays int) {
-	prune := func() { pruneRetention(store, detailDays, metric5mDays, runtimeDays, time.Now().UTC()) }
+func startRetentionRunner(store retentionStore, provider *settings.Provider) {
+	prune := func() {
+		values, err := provider.Current()
+		if err != nil {
+			log.Printf("retention settings failed: %v", err)
+			return
+		}
+		pruneRetention(store, values.RetentionDetailDays, values.RetentionMetric5mDays, values.RetentionRuntimeDays, time.Now().UTC())
+	}
 	go func() {
 		timer := time.NewTimer(time.Minute)
 		defer timer.Stop()
@@ -152,8 +161,8 @@ func startAggregationRunner(store mysqlstore.Store, interval time.Duration) {
 	}()
 }
 
-func startNotificationRunner(store mysqlstore.Store, interval time.Duration) {
-	runner := dashboard.NewAlertNotificationRunner(store, store, store, store, store, interval)
+func startNotificationRunner(store mysqlstore.Store, provider *settings.Provider, interval time.Duration) {
+	runner := dashboard.NewAlertNotificationRunner(store, store, store, store, store, interval).WithSettingsProvider(provider)
 	go func() {
 		if err := runner.Run(context.Background()); err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("notification runner stopped: %v", err)

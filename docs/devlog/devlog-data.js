@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-16",
+    type: "feature",
+    version: "v2.7-B2",
+    title: "系统设置中心支持运行时动态配置",
+    summary: "新增 system_settings 存储、DB > env > default 三级回退与 60 秒缓存；设置页可调整数据保留、离线时间、资源/错误率/P95 阈值及通知总开关，并展示配置来源。保留清理、离线判定、资源告警、业务指标告警和通知派发均在每轮读取生效值，保存无需重启；修改会写入操作审计。",
+    docs: ["docs/codex-task-v2.7-b2-settings-center.md", "docs/v2.7-b2-delivery.md"],
+    commits: []
+  },
+  {
+    date: "2026-07-16",
     type: "review",
     version: "",
     title: "v2.7-B1 与 B3 验收通过（附一项流程违规记录）",

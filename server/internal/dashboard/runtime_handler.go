@@ -93,7 +93,13 @@ func (h Handler) HandleAgents(w http.ResponseWriter, r *http.Request) {
 		writeDashboardError(w, http.StatusInternalServerError, "query_failed")
 		return
 	}
-	writeDashboardJSON(w, http.StatusOK, AgentListResponse{Items: summarizeAgents(items, time.Now().UTC())})
+	offlineSeconds := 120
+	if h.settings != nil {
+		if current, e := h.settings.Current(); e == nil {
+			offlineSeconds = current.OfflineSeconds
+		}
+	}
+	writeDashboardJSON(w, http.StatusOK, AgentListResponse{Items: summarizeAgentsWithThreshold(items, time.Now().UTC(), offlineSeconds)})
 }
 
 func (h Handler) HandleServerMetrics(w http.ResponseWriter, r *http.Request) {
@@ -202,6 +208,9 @@ func parseDockerStatusQuery(r *http.Request) storage.DockerStatusQuery {
 }
 
 func summarizeAgents(items []storage.Agent, now time.Time) []AgentSummary {
+	return summarizeAgentsWithThreshold(items, now, 120)
+}
+func summarizeAgentsWithThreshold(items []storage.Agent, now time.Time, offlineSeconds int) []AgentSummary {
 	summaries := make([]AgentSummary, 0, len(items))
 	for _, item := range items {
 		secondsSinceSeen := int64(0)
@@ -211,7 +220,7 @@ func summarizeAgents(items []storage.Agent, now time.Time) []AgentSummary {
 				secondsSinceSeen = 0
 			}
 		}
-		summaries = append(summaries, AgentSummary{ID: item.ID, InstanceID: item.InstanceID, Version: item.Version, LastSeenAt: item.LastSeenAt, LastSequence: item.LastSequence, LastLogID: item.LastLogID, SourceLatestLogID: item.SourceLatestLogID, BacklogEstimate: item.BacklogEstimate, Status: item.Status, ReportDelayMS: item.ReportDelayMS, Online: secondsSinceSeen <= 120, SecondsSinceSeen: secondsSinceSeen})
+		summaries = append(summaries, AgentSummary{ID: item.ID, InstanceID: item.InstanceID, Version: item.Version, LastSeenAt: item.LastSeenAt, LastSequence: item.LastSequence, LastLogID: item.LastLogID, SourceLatestLogID: item.SourceLatestLogID, BacklogEstimate: item.BacklogEstimate, Status: item.Status, ReportDelayMS: item.ReportDelayMS, Online: secondsSinceSeen <= int64(offlineSeconds), SecondsSinceSeen: secondsSinceSeen})
 	}
 	return summaries
 }

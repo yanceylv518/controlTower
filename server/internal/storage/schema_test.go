@@ -84,3 +84,19 @@ func TestInitialMigrationDoesNotUseUnsupportedMySQLFragments(t *testing.T) {
 		}
 	}
 }
+
+func TestSystemSettingsMigrationIsAdditive(t *testing.T) {
+	data, err := os.ReadFile("../../migrations/011_system_settings.sql")
+	if err != nil {
+		t.Fatalf("read migration: %v", err)
+	}
+	sql := strings.ToLower(string(data))
+	for _, required := range []string{"create table if not exists system_settings", "primary key (setting_key)", "engine=innodb", "default charset=utf8mb4", "collate=utf8mb4_unicode_ci"} {
+		if !strings.Contains(sql, required) {
+			t.Fatalf("missing fragment %q", required)
+		}
+	}
+	if strings.Contains(sql, "alter table") {
+		t.Fatal("011 must not rebuild or alter existing tables")
+	}
+}

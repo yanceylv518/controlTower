@@ -11,6 +11,7 @@ import (
 	ctauth "controltower/server/internal/auth"
 	"controltower/server/internal/dashboard"
 	"controltower/server/internal/ingest"
+	"controltower/server/internal/settings"
 	"controltower/server/internal/tuning"
 )
 
@@ -26,6 +27,7 @@ type Options struct {
 	NotificationMaxAttempts int
 	CommandExpiry           time.Duration
 	TuningStore             tuning.Store
+	SettingsProvider        *settings.Provider
 }
 
 type Store interface {
@@ -54,7 +56,7 @@ func NewMux(options Options) *http.ServeMux {
 	mux.HandleFunc("/api/agent/heartbeat", agentHandler.HandleHeartbeat)
 	mux.HandleFunc("/api/agent/report", agentHandler.HandleReport)
 
-	dashboardHandler := dashboard.NewHandler(options.Store).WithNameSource(options.Store).WithLogStore(options.Store).WithLogSampleStore(options.Store).WithRuntimeStore(options.Store).WithMetricSource(options.Store).WithAlertStore(options.Store).WithNotificationStore(options.Store).WithChannelSnapshotStore(options.Store).WithNginxTimingStore(options.Store).WithNotificationMaxAttempts(options.NotificationMaxAttempts)
+	dashboardHandler := dashboard.NewHandler(options.Store).WithNameSource(options.Store).WithLogStore(options.Store).WithLogSampleStore(options.Store).WithRuntimeStore(options.Store).WithMetricSource(options.Store).WithAlertStore(options.Store).WithNotificationStore(options.Store).WithChannelSnapshotStore(options.Store).WithNginxTimingStore(options.Store).WithNotificationMaxAttempts(options.NotificationMaxAttempts).WithSettingsProvider(options.SettingsProvider)
 	tuningStore := options.TuningStore
 	if tuningStore == nil {
 		tuningStore, _ = any(options.Store).(tuning.Store)
@@ -98,11 +100,14 @@ func NewMux(options Options) *http.ServeMux {
 		mux.Handle("GET /api/dashboard/tuning/recommendations", protect(http.HandlerFunc(dashboardHandler.HandleTuningRecommendations)))
 		mux.Handle("GET /api/dashboard/tuning/report", protect(http.HandlerFunc(dashboardHandler.HandleTuningReport)))
 	}
-	instances := dashboard.InstanceHandler{Store: options.Store, Runtime: options.Store, Pepper: options.AgentTokenPepper}
+	instances := dashboard.InstanceHandler{Store: options.Store, Runtime: options.Store, Pepper: options.AgentTokenPepper, Settings: options.SettingsProvider}
 	commands := (dashboard.CommandHandler{Store: options.Store, Instances: options.Store}).WithNameSource(options.Store)
 	mux.Handle("POST /api/dashboard/channels/{channelID}/commands", protect(http.HandlerFunc(commands.Create)))
 	mux.Handle("GET /api/dashboard/channel-commands", protect(http.HandlerFunc(commands.List)))
 	mux.Handle("GET /api/dashboard/operation-audits", protect(http.HandlerFunc(commands.Audits)))
+	if settingsStore, ok := any(options.Store).(dashboard.SettingsStore); ok && options.SettingsProvider != nil {
+		mux.Handle("/api/dashboard/settings", protect(dashboard.SettingsHandler{Store: settingsStore, Provider: options.SettingsProvider}))
+	}
 	mux.Handle("GET /api/dashboard/instances", protect(http.HandlerFunc(instances.List)))
 	mux.Handle("POST /api/dashboard/instances", protect(http.HandlerFunc(instances.Create)))
 	mux.Handle("PUT /api/dashboard/instances/{id}", protect(http.HandlerFunc(instances.Update)))

@@ -11,6 +11,7 @@ import (
 
 	"controltower/server/internal/aggregator"
 	ctauth "controltower/server/internal/auth"
+	"controltower/server/internal/settings"
 	"controltower/server/internal/storage"
 )
 
@@ -200,7 +201,13 @@ func (h Handler) currentAlerts() ([]AlertItem, error) {
 			return nil, err
 		}
 	}
-	items := BuildCurrentAlerts(metrics, serverMetrics, healthChecks, dockerStatuses)
+	values := defaultAlertSettings()
+	if h.settings != nil {
+		if current, e := h.settings.Current(); e == nil {
+			values = current
+		}
+	}
+	items := BuildCurrentAlertsWithSettings(metrics, serverMetrics, healthChecks, dockerStatuses, values)
 	if h.logStore != nil {
 		events, err := h.logStore.QueryLogEvents(storage.LogQuery{Limit: storage.MaxLogQueryLimit})
 		if err != nil {
@@ -208,7 +215,7 @@ func (h Handler) currentAlerts() ([]AlertItem, error) {
 		}
 		items = appendRecentErrorAlerts(items, events)
 	}
-	items = appendAgentBacklogAlerts(items, agents, time.Now().UTC())
+	items = appendAgentBacklogAlertsWithOffline(items, agents, time.Now().UTC(), values.OfflineSeconds)
 	for i := range items {
 		items[i].InstanceName = h.instanceName(items[i].InstanceID)
 		if items[i].DimensionKey != "" {
@@ -222,8 +229,11 @@ func (h Handler) currentAlerts() ([]AlertItem, error) {
 }
 
 func appendAgentBacklogAlerts(items []AlertItem, agents []storage.Agent, now time.Time) []AlertItem {
+	return appendAgentBacklogAlertsWithOffline(items, agents, now, 120)
+}
+func appendAgentBacklogAlertsWithOffline(items []AlertItem, agents []storage.Agent, now time.Time, offlineSeconds int) []AlertItem {
 	for _, agent := range agents {
-		if agent.BacklogEstimate < 3000 || agent.LastSeenAt.IsZero() || now.Sub(agent.LastSeenAt) > 120*time.Second {
+		if agent.BacklogEstimate < 3000 || agent.LastSeenAt.IsZero() || now.Sub(agent.LastSeenAt) > time.Duration(offlineSeconds)*time.Second {
 			continue
 		}
 		severity := "warning"
@@ -242,12 +252,23 @@ func appendAgentBacklogAlerts(items []AlertItem, agents []storage.Agent, now tim
 }
 
 func BuildCurrentAlerts(metrics []aggregator.Metric, serverMetrics []storage.ServerMetric, healthChecks []storage.HealthCheck, dockerStatuses []storage.DockerStatus) []AlertItem {
+	return BuildCurrentAlertsWithSettings(metrics, serverMetrics, healthChecks, dockerStatuses, defaultAlertSettings())
+}
+func defaultAlertSettings() settings.Values {
+	items := map[string]settings.Item{}
+	for _, k := range settings.Keys() {
+		items[k] = settings.Item{Value: map[string]string{settings.RetentionDetail: "30", settings.RetentionMetric5m: "90", settings.RetentionRuntime: "7", settings.OfflineSeconds: "120", settings.CPUWarn: "80", settings.CPUCrit: "90", settings.MemoryWarn: "80", settings.MemoryCrit: "90", settings.DiskWarn: "85", settings.DiskCrit: "95", settings.ErrorRateWarn: "20", settings.ErrorRateCrit: "50", settings.P95Warn: "5", settings.P95Crit: "10", settings.NotificationsEnabled: "true"}[k]}
+	}
+	v, _ := settings.Parse(items)
+	return v
+}
+func BuildCurrentAlertsWithSettings(metrics []aggregator.Metric, serverMetrics []storage.ServerMetric, healthChecks []storage.HealthCheck, dockerStatuses []storage.DockerStatus, values settings.Values) []AlertItem {
 	items := make([]AlertItem, 0)
 	for _, metric := range latestDimensionMetrics(metrics) {
-		items = appendMetricAlerts(items, metric)
+		items = appendMetricAlertsWithSettings(items, metric, values)
 	}
 	for _, metric := range latestServerMetricsByInstance(serverMetrics) {
-		items = appendServerMetricAlerts(items, metric)
+		items = appendServerMetricAlertsWithSettings(items, metric, values)
 	}
 	for _, item := range latestHealthChecksByTarget(healthChecks) {
 		if item.Status != "up" {
@@ -264,16 +285,19 @@ func BuildCurrentAlerts(metrics []aggregator.Metric, serverMetrics []storage.Ser
 }
 
 func appendMetricAlerts(items []AlertItem, metric aggregator.Metric) []AlertItem {
-	if metric.ErrorRate != nil && metric.RequestCount >= 5 && *metric.ErrorRate >= 0.2 {
+	return appendMetricAlertsWithSettings(items, metric, defaultAlertSettings())
+}
+func appendMetricAlertsWithSettings(items []AlertItem, metric aggregator.Metric, values settings.Values) []AlertItem {
+	if metric.ErrorRate != nil && metric.RequestCount >= 5 && *metric.ErrorRate >= values.ErrorRateWarn/100 {
 		severity := "warning"
-		if *metric.ErrorRate >= 0.5 {
+		if *metric.ErrorRate >= values.ErrorRateCrit/100 {
 			severity = "critical"
 		}
 		items = append(items, AlertItem{ID: alertID(metric.InstanceID, "high_error_rate", metric.DimensionKey), InstanceID: metric.InstanceID, DimensionType: metric.DimensionType, DimensionKey: metric.DimensionKey, RuleKey: "high_error_rate", Severity: severity, Status: "firing", Title: "\u9519\u8bef\u7387\u5347\u9ad8", Summary: fmt.Sprintf("\u6700\u8fd1 1 \u5206\u949f\u9519\u8bef\u7387 %.1f%%\uff0c%d/%d \u8bf7\u6c42\u5931\u8d25", *metric.ErrorRate*100, metric.ErrorCount, metric.RequestCount), SeenAt: metric.BucketTime, FirstSeenAt: metric.BucketTime, LastSeenAt: metric.BucketTime})
 	}
-	if metric.P95UseTime != nil && *metric.P95UseTime >= 5 {
+	if metric.P95UseTime != nil && *metric.P95UseTime >= values.P95Warn {
 		severity := "warning"
-		if *metric.P95UseTime >= 10 {
+		if *metric.P95UseTime >= values.P95Crit {
 			severity = "critical"
 		}
 		summary := fmt.Sprintf("\u6700\u8fd1 1 \u5206\u949f P95 %.2fs\uff0c\u5171 %d \u6761\u8bf7\u6c42", *metric.P95UseTime, metric.RequestCount)
@@ -286,6 +310,9 @@ func appendMetricAlerts(items []AlertItem, metric aggregator.Metric) []AlertItem
 }
 
 func appendServerMetricAlerts(items []AlertItem, metric storage.ServerMetric) []AlertItem {
+	return appendServerMetricAlertsWithSettings(items, metric, defaultAlertSettings())
+}
+func appendServerMetricAlertsWithSettings(items []AlertItem, metric storage.ServerMetric, values settings.Values) []AlertItem {
 	thresholds := []struct {
 		key      string
 		title    string
@@ -293,9 +320,9 @@ func appendServerMetricAlerts(items []AlertItem, metric storage.ServerMetric) []
 		warning  float64
 		critical float64
 	}{
-		{key: "high_cpu", title: "CPU \u4f7f\u7528\u7387\u504f\u9ad8", value: metric.CPUPercent, warning: 80, critical: 90},
-		{key: "high_memory", title: "\u5185\u5b58\u4f7f\u7528\u7387\u504f\u9ad8", value: metric.MemoryUsedPercent, warning: 80, critical: 90},
-		{key: "high_disk", title: "\u78c1\u76d8\u4f7f\u7528\u7387\u504f\u9ad8", value: metric.DiskUsedPercent, warning: 85, critical: 95},
+		{key: "high_cpu", title: "CPU \u4f7f\u7528\u7387\u504f\u9ad8", value: metric.CPUPercent, warning: values.CPUWarn, critical: values.CPUCrit},
+		{key: "high_memory", title: "\u5185\u5b58\u4f7f\u7528\u7387\u504f\u9ad8", value: metric.MemoryUsedPercent, warning: values.MemoryWarn, critical: values.MemoryCrit},
+		{key: "high_disk", title: "\u78c1\u76d8\u4f7f\u7528\u7387\u504f\u9ad8", value: metric.DiskUsedPercent, warning: values.DiskWarn, critical: values.DiskCrit},
 	}
 	for _, threshold := range thresholds {
 		if threshold.value < threshold.warning {

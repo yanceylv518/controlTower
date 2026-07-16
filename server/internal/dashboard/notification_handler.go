@@ -141,6 +141,13 @@ func (h Handler) dispatchAlertNotifications(alerts []storage.Alert) error {
 	if h.notificationStore == nil {
 		return nil
 	}
+	if h.settings != nil {
+		if current, err := h.settings.Current(); err != nil {
+			return err
+		} else if !current.NotificationsEnabled {
+			return nil
+		}
+	}
 	// Release "sent" deliveries of resolved alerts so a later firing episode
 	// of the same alert notifies again instead of being deduplicated forever.
 	if err := h.notificationStore.ExpireDeliveriesForResolvedAlerts(time.Now().UTC()); err != nil {

@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"controltower/server/internal/settings"
 	"controltower/server/internal/storage"
 	"crypto/rand"
 	"crypto/sha256"
@@ -20,9 +21,10 @@ type InstanceStore interface {
 	ExpireInstanceTokens(string, time.Time, time.Time) error
 }
 type InstanceHandler struct {
-	Store   InstanceStore
-	Runtime RuntimeStore
-	Pepper  string
+	Store    InstanceStore
+	Runtime  RuntimeStore
+	Pepper   string
+	Settings *settings.Provider
 }
 type InstanceItem struct {
 	InstanceID string          `json:"instance_id"`
@@ -48,8 +50,14 @@ func (i InstanceHandler) item(v storage.Instance) (InstanceItem, error) {
 			return out, e
 		}
 		now := time.Now()
+		offlineSeconds := 120
+		if i.Settings != nil {
+			if current, e := i.Settings.Current(); e == nil {
+				offlineSeconds = current.OfflineSeconds
+			}
+		}
 		for _, a := range agents {
-			out.Agents = append(out.Agents, InstanceAgent{ID: a.ID, Version: a.Version, LastSeenAt: a.LastSeenAt, BacklogEstimate: a.BacklogEstimate, Online: now.Sub(a.LastSeenAt) <= 2*time.Minute})
+			out.Agents = append(out.Agents, InstanceAgent{ID: a.ID, Version: a.Version, LastSeenAt: a.LastSeenAt, BacklogEstimate: a.BacklogEstimate, Online: now.Sub(a.LastSeenAt) <= time.Duration(offlineSeconds)*time.Second})
 		}
 	}
 	return out, nil

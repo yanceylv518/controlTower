@@ -6,12 +6,18 @@ import (
 	"log"
 	"time"
 
+	"controltower/server/internal/settings"
 	"controltower/server/internal/storage"
 )
 
 type AlertNotificationRunner struct {
 	handler  Handler
 	interval time.Duration
+}
+
+func (r AlertNotificationRunner) WithSettingsProvider(v *settings.Provider) AlertNotificationRunner {
+	r.handler = r.handler.WithSettingsProvider(v)
+	return r
 }
 
 func NewAlertNotificationRunner(source OverviewSource, logStore LogStore, runtimeStore RuntimeStore, alertStore AlertStore, notificationStore NotificationStore, interval time.Duration) AlertNotificationRunner {

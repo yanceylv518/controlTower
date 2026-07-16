@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"controltower/server/internal/aggregator"
+	"controltower/server/internal/settings"
 	"controltower/server/internal/storage"
 )
 
@@ -26,9 +27,11 @@ type Handler struct {
 	tuningStore             TuningStore
 	notificationMaxAttempts int
 	names                   *nameResolver
+	settings                *settings.Provider
 }
 
-func (h Handler) WithNotificationMaxAttempts(v int) Handler { h.notificationMaxAttempts = v; return h }
+func (h Handler) WithNotificationMaxAttempts(v int) Handler         { h.notificationMaxAttempts = v; return h }
+func (h Handler) WithSettingsProvider(v *settings.Provider) Handler { h.settings = v; return h }
 
 func NewHandler(source OverviewSource) Handler {
 	return Handler{source: source}

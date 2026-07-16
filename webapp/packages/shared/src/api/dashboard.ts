@@ -79,6 +79,8 @@ export interface AlertEvent {
 export interface DashboardOKResponse {
   ok: boolean;
 }
+export interface SystemSettingItem { value: string; source: "db" | "env" | "default"; default: string }
+export interface SystemSettingsResponse { items: Record<string, SystemSettingItem> }
 export interface AlertActionInput {
   id: string;
   action: string;
@@ -485,6 +487,8 @@ export const dashboardApi = (client: ApiClient) => ({
     client.request<ListResponse<OperationAuditItem>>(
       `/api/dashboard/operation-audits${query(params)}`,
     ),
+  settings: () => client.request<SystemSettingsResponse>("/api/dashboard/settings"),
+  saveSettings: (values: Record<string, string>) => client.request<SystemSettingsResponse>("/api/dashboard/settings", { method: "PUT", body: JSON.stringify({ values }) }),
   nginxTiming: (params: { instance_id: string; hours: number }) =>
     client.request<NginxTimingResponse>(
       `/api/dashboard/nginx-timing${query(params)}`,
