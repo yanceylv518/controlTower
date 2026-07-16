@@ -459,7 +459,7 @@ func buildReport(ctx context.Context, cfg config.Config, reportedAt time.Time, s
 			report.NginxTimingBuckets = append(report.NginxTimingBuckets, reporter.NginxTimingBucketPayload{BucketAt: bucket.BucketAt, RequestCount: bucket.RequestCount, UpstreamCount: bucket.UpstreamCount, Status4xx: bucket.Status4xx, Status5xx: bucket.Status5xx, Status504: bucket.Status504, RTP50: bucket.RTP50, RTP95: bucket.RTP95, RTMax: bucket.RTMax, UHTP50: bucket.UHTP50, UHTP95: bucket.UHTP95, UHTMax: bucket.UHTMax, TransferP50: bucket.TransferP50, TransferP95: bucket.TransferP95, TransferMax: bucket.TransferMax, BytesTotal: bucket.BytesTotal, SlowCount: bucket.SlowCount, SlowTTFTCount: bucket.SlowTTFTCount, SlowTransferCount: bucket.SlowTransferCount})
 		}
 		for _, sample := range slowSamples {
-			report.NginxSlowSamples = append(report.NginxSlowSamples, reporter.NginxSlowSamplePayload{OccurredAt: sample.OccurredAt, Path: sample.Path, Status: sample.Status, RT: sample.RT, UHT: sample.UHT, URT: sample.URT, Bytes: sample.Bytes})
+			report.NginxSlowSamples = append(report.NginxSlowSamples, reporter.NginxSlowSamplePayload{OccurredAt: sample.OccurredAt, Path: sample.Path, Status: sample.Status, RT: sample.RT, UHT: sample.UHT, URT: sample.URT, Bytes: sample.Bytes, RequestID: sample.RequestID})
 		}
 	}
 	return report

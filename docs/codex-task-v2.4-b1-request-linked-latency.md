@@ -149,8 +149,8 @@ feat(latency): correlate nginx samples with request dimensions (v2.4-B1)
 
 ## 开发前置检查
 
-- [ ] 每次修改前 `git pull --ff-only origin main`
-- [ ] 工作区无无关改动；若有，提交前先向用户确认
-- [ ] 真实 Token、Webhook、DSN、Request 内容不入库
-- [ ] 最新生产日志格式仍包含 `request_id=$upstream_http_x_oneapi_request_id`
+- [x] 每次修改前 `git pull --ff-only origin main`
+- [x] 工作区无无关改动；若有，提交前先向用户确认
+- [x] 真实 Token、Webhook、DSN、Request 内容不入库
+- [x] 最新生产日志格式仍包含 `request_id=$upstream_http_x_oneapi_request_id`
 

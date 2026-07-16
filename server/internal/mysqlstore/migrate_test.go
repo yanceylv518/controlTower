@@ -2,10 +2,28 @@ package mysqlstore
 
 import (
 	"errors"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/go-sql-driver/mysql"
 )
+
+func TestNginxRequestIDMigrationContract(t *testing.T) {
+	data, err := os.ReadFile("../../migrations/009_nginx_sample_request_id.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlText := strings.ToLower(string(data))
+	for _, required := range []string{"alter table nginx_slow_samples add column request_id varchar(255) null", "create index idx_nginx_slow_samples_instance_request", "(instance_id, request_id)"} {
+		if !strings.Contains(sqlText, required) {
+			t.Fatalf("migration missing %q", required)
+		}
+	}
+	if strings.Contains(sqlText, "engine=") {
+		t.Fatal("incremental migration must not rebuild the table on startup")
+	}
+}
 
 func TestSplitSQLStatements(t *testing.T) {
 	statements := splitSQLStatements("CREATE TABLE a (id BIGINT);\n\nCREATE INDEX idx_a_id ON a (id);\n")

@@ -9,7 +9,9 @@ import (
 
 var requestPattern = regexp.MustCompile(`"([A-Z]+)\s+([^\s]+)\s+HTTP/[^"]+"`)
 var timePattern = regexp.MustCompile(`\[([^\]]+)\]`)
-var fieldPattern = regexp.MustCompile(`(?:^|\s)(status|rt|uct|uht|urt|bytes)=([^\s,]+(?:,\s*[^\s,]+)*)`)
+var fieldPattern = regexp.MustCompile(`(?:^|\s)(status|request_id|rt|uct|uht|urt|bytes)=([^\s,]+(?:,\s*[^\s,]+)*)`)
+
+const maxRequestIDLength = 255
 
 type Entry struct {
 	OccurredAt  time.Time
@@ -21,6 +23,7 @@ type Entry struct {
 	UHT         float64
 	URT         float64
 	Bytes       int64
+	RequestID   string
 	HasUpstream bool
 }
 
@@ -38,6 +41,7 @@ func ParseLine(line string) (Entry, bool) {
 		return Entry{}, false
 	}
 	entry := Entry{Status: status, RT: rt}
+	entry.RequestID = normalizeRequestID(values["request_id"])
 	entry.UCT, _ = sumTiming(values["uct"])
 	uht, hasUHT := sumTiming(values["uht"])
 	urt, hasURT := sumTiming(values["urt"])
@@ -54,6 +58,14 @@ func ParseLine(line string) (Entry, bool) {
 		entry.OccurredAt = time.Now().UTC()
 	}
 	return entry, true
+}
+
+func normalizeRequestID(value string) string {
+	value = strings.TrimSpace(strings.Trim(value, `"`))
+	if value == "" || value == "-" || len(value) > maxRequestIDLength {
+		return ""
+	}
+	return value
 }
 
 func sumTiming(value string) (float64, bool) {

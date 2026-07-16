@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-16",
+    type: "release",
+    version: "",
+    title: "v2.4-B1 完成：Request ID 精确关联延时诊断",
+    summary: "Agent 从 Nginx timing 日志解析并上报慢样本 request_id；Server 新增可空字段与组合索引，批量合并 log_samples 和 log_events 并去重，明确返回 matched、unmatched、multiple；延时分诊页新增用户、渠道、模型、令牌、Request ID、筛选、复制和维度跳转，同时澄清 RT/UHT/URT 语义。旧 Agent 和采样截断安全降级，不影响企业微信错误提醒。Go 全量测试、vet、前端类型检查与生产构建通过。",
+    docs: ["docs/codex-task-v2.4-b1-request-linked-latency.md", "docs/v2.4-b1-delivery.md"],
+    commits: []
+  },
+  {
+    date: "2026-07-16",
     type: "review",
     version: "",
     title: "v2.5-B1 验收通过（吸收 v2.4-B2;修正一处每次启动全表重建的迁移缺陷）",

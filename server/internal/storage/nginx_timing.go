@@ -19,6 +19,7 @@ type NginxSlowSample struct {
 	Status       int
 	RT, UHT, URT float64
 	Bytes        int64
+	RequestID    string
 }
 
 type NginxTimingQuery struct {
@@ -29,4 +30,9 @@ type NginxSlowSampleQuery struct {
 	InstanceID string
 	Since      time.Time
 	Limit      int
+}
+
+type RequestDimension struct {
+	Source, InstanceID, RequestID, Username, ModelName, TokenName string
+	SourceLogID, UserID, ChannelID                                int64
 }

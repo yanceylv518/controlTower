@@ -89,6 +89,7 @@ type NginxSlowSamplePayload struct {
 	UHT        float64   `json:"uht"`
 	URT        float64   `json:"urt"`
 	Bytes      int64     `json:"bytes"`
+	RequestID  string    `json:"request_id,omitempty"`
 }
 
 type AggregatedMetricPayload struct {

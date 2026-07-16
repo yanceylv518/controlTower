@@ -58,6 +58,31 @@ func (s *MemoryStore) QueryNginxSlowSamples(q storage.NginxSlowSampleQuery) ([]s
 	}
 	return out, nil
 }
+
+func (s *MemoryStore) QueryRequestDimensions(instanceID string, requestIDs []string) ([]storage.RequestDimension, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	wanted := make(map[string]struct{}, len(requestIDs))
+	for _, id := range requestIDs {
+		wanted[id] = struct{}{}
+	}
+	var out []storage.RequestDimension
+	for _, v := range s.logSamples {
+		if v.InstanceID == instanceID {
+			if _, ok := wanted[v.RequestID]; ok {
+				out = append(out, storage.RequestDimension{Source: "sample", InstanceID: instanceID, RequestID: v.RequestID, SourceLogID: v.SourceLogID, UserID: v.UserID, Username: v.Username, ChannelID: v.ChannelID, ModelName: v.ModelName, TokenName: v.TokenName})
+			}
+		}
+	}
+	for _, v := range s.logEvents {
+		if v.InstanceID == instanceID {
+			if _, ok := wanted[v.RequestID]; ok {
+				out = append(out, storage.RequestDimension{Source: "event", InstanceID: instanceID, RequestID: v.RequestID, SourceLogID: v.SourceLogID, UserID: v.UserID, Username: v.Username, ChannelID: v.ChannelID, ModelName: v.ModelName, TokenName: v.TokenName})
+			}
+		}
+	}
+	return out, nil
+}
 func (s *MemoryStore) pruneNginx(kind string, cutoff time.Time) (int64, bool) {
 	var n int64
 	if kind == "nginx_timing_1m" {

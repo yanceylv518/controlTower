@@ -19,6 +19,12 @@
 
 ---
 
+## v2.4-B1 Request ID 关联延时诊断（完成，2026-07-16）
+
+Agent、Server、Dashboard API 与延时分诊页面的精确关联链路已完成。Nginx 慢样本携带 `$upstream_http_x_oneapi_request_id`，Server 只按 `instance_id + request_id` 批量关联 Control Tower 自有 `log_samples`/`log_events`，并明确区分 `matched`、`unmatched`、`multiple`。旧样本与采样截断安全降级为未关联，不影响错误告警和企业微信提醒。完整实现、限制及验证见 `docs/v2.4-b1-delivery.md`。
+
+---
+
 ## v2.4-B1 Request ID 关联延时分诊（规划，2026-07-16）
 
 ### 1. 版本定位与迭代思路

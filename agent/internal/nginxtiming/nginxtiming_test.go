@@ -8,18 +8,22 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
 
 func TestParseLineVariants(t *testing.T) {
-	line := `1.2.3.4 - "POST /v1/chat/completions?token=secret HTTP/1.1" [13/Jul/2026:10:00:00 +0800] status=504 rt=12.345 uct=0.001, 0.002 uht=1.234, 0.500 urt=12.344, 1.000 bytes=45678 req_len=890`
+	line := `1.2.3.4 - "POST /v1/chat/completions?token=secret HTTP/1.1" [13/Jul/2026:10:00:00 +0800] status=504 request_id=req-123 rt=12.345 uct=0.001, 0.002 uht=1.234, 0.500 urt=12.344, 1.000 bytes=45678 req_len=890`
 	entry, ok := ParseLine(line)
 	if !ok || entry.Path != "/v1/chat/completions" || entry.Method != "POST" || entry.Status != 504 {
 		t.Fatalf("unexpected parse: %#v ok=%v", entry, ok)
 	}
 	if entry.UCT != .003 || entry.UHT != 1.734 || entry.URT != 13.344 || !entry.HasUpstream {
 		t.Fatalf("multi value sum failed: %#v", entry)
+	}
+	if entry.RequestID != "req-123" {
+		t.Fatalf("request id = %q", entry.RequestID)
 	}
 	entry, ok = ParseLine(`x "GET /health HTTP/1.1" [13/Jul/2026:10:00:00 +0800] status=200 rt=0.1 uct=- uht=- urt=- bytes=2`)
 	if !ok || entry.HasUpstream {
@@ -30,12 +34,31 @@ func TestParseLineVariants(t *testing.T) {
 	}
 }
 
+func TestParseLineRequestIDCompatibility(t *testing.T) {
+	base := `x "GET /v1/chat HTTP/1.1" [13/Jul/2026:10:00:00 +0800] status=200 rt=12 uct=0 uht=1 urt=12 bytes=2`
+	for name, line := range map[string]string{"missing": base, "dash": base + ` request_id=-`, "reordered": `request_id=req-reordered ` + base, "too_long": base + ` request_id=` + strings.Repeat("x", maxRequestIDLength+1)} {
+		t.Run(name, func(t *testing.T) {
+			entry, ok := ParseLine(line)
+			if !ok {
+				t.Fatal("line rejected")
+			}
+			want := ""
+			if name == "reordered" {
+				want = "req-reordered"
+			}
+			if entry.RequestID != want {
+				t.Fatalf("request id=%q want=%q", entry.RequestID, want)
+			}
+		})
+	}
+}
+
 func TestAggregatorStatsClassificationAndSamples(t *testing.T) {
 	a := NewAggregator(10)
 	base := time.Date(2026, 7, 13, 2, 0, 0, 0, time.UTC)
 	entries := []Entry{
 		{OccurredAt: base, Path: "/fast", Status: 200, RT: 1, UHT: .2, URT: .8, HasUpstream: true},
-		{OccurredAt: base.Add(time.Second), Path: "/ttft", Status: 500, RT: 12, UHT: 8, URT: 11, HasUpstream: true},
+		{OccurredAt: base.Add(time.Second), Path: "/ttft", Status: 500, RT: 12, UHT: 8, URT: 11, HasUpstream: true, RequestID: "req-slow"},
 		{OccurredAt: base.Add(2 * time.Second), Path: "/transfer", Status: 504, RT: 20, UHT: 2, URT: 19, HasUpstream: true},
 	}
 	for _, entry := range entries {
@@ -52,6 +75,9 @@ func TestAggregatorStatsClassificationAndSamples(t *testing.T) {
 	}
 	if b.RTP50 != 12 || b.RTP95 != 20 || samples[0].Path != "/transfer" {
 		t.Fatalf("stats/samples: %#v %#v", b, samples)
+	}
+	if samples[1].RequestID != "req-slow" {
+		t.Fatalf("request id passthrough: %#v", samples)
 	}
 	a.Ack(1)
 	if pending, _ := a.Snapshot(); len(pending) != 0 {

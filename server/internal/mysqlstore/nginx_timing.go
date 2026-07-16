@@ -15,7 +15,7 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE request
 }
 
 func (s Store) InsertNginxSlowSample(v storage.NginxSlowSample) error {
-	_, err := s.db.ExecContext(context.Background(), `INSERT INTO nginx_slow_samples (instance_id,occurred_at,path,status,rt,uht,urt,bytes) VALUES (?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE rt=VALUES(rt),uht=VALUES(uht),urt=VALUES(urt),bytes=VALUES(bytes)`, v.InstanceID, v.OccurredAt, v.Path, v.Status, v.RT, v.UHT, v.URT, v.Bytes)
+	_, err := s.db.ExecContext(context.Background(), `INSERT INTO nginx_slow_samples (instance_id,occurred_at,path,status,rt,uht,urt,bytes,request_id) VALUES (?,?,?,?,?,?,?,?,NULLIF(?,'')) ON DUPLICATE KEY UPDATE rt=VALUES(rt),uht=VALUES(uht),urt=VALUES(urt),bytes=VALUES(bytes),request_id=VALUES(request_id)`, v.InstanceID, v.OccurredAt, v.Path, v.Status, v.RT, v.UHT, v.URT, v.Bytes, v.RequestID)
 	return err
 }
 
@@ -40,7 +40,7 @@ func (s Store) QueryNginxSlowSamples(q storage.NginxSlowSampleQuery) ([]storage.
 	if q.Limit <= 0 {
 		q.Limit = 50
 	}
-	rows, err := s.db.QueryContext(context.Background(), `SELECT id,instance_id,occurred_at,path,status,rt,uht,urt,bytes FROM nginx_slow_samples WHERE instance_id=? AND occurred_at>=? ORDER BY occurred_at DESC LIMIT ?`, q.InstanceID, q.Since, q.Limit)
+	rows, err := s.db.QueryContext(context.Background(), `SELECT id,instance_id,occurred_at,path,status,rt,uht,urt,bytes,COALESCE(request_id,'') FROM nginx_slow_samples WHERE instance_id=? AND occurred_at>=? ORDER BY occurred_at DESC LIMIT ?`, q.InstanceID, q.Since, q.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -48,7 +48,7 @@ func (s Store) QueryNginxSlowSamples(q storage.NginxSlowSampleQuery) ([]storage.
 	var out []storage.NginxSlowSample
 	for rows.Next() {
 		var v storage.NginxSlowSample
-		if err = rows.Scan(&v.ID, &v.InstanceID, &v.OccurredAt, &v.Path, &v.Status, &v.RT, &v.UHT, &v.URT, &v.Bytes); err != nil {
+		if err = rows.Scan(&v.ID, &v.InstanceID, &v.OccurredAt, &v.Path, &v.Status, &v.RT, &v.UHT, &v.URT, &v.Bytes, &v.RequestID); err != nil {
 			return nil, err
 		}
 		out = append(out, v)

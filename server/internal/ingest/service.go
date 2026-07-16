@@ -275,7 +275,7 @@ func (s Service) SaveReport(req agentgateway.AgentReportRequest) error {
 		}
 	}
 	for _, payload := range req.NginxSlowSamples {
-		if err := s.store.InsertNginxSlowSample(storage.NginxSlowSample{InstanceID: req.InstanceID, OccurredAt: payload.OccurredAt, Path: payload.Path, Status: payload.Status, RT: payload.RT, UHT: payload.UHT, URT: payload.URT, Bytes: payload.Bytes}); err != nil {
+		if err := s.store.InsertNginxSlowSample(storage.NginxSlowSample{InstanceID: req.InstanceID, OccurredAt: payload.OccurredAt, Path: payload.Path, Status: payload.Status, RT: payload.RT, UHT: payload.UHT, URT: payload.URT, Bytes: payload.Bytes, RequestID: payload.RequestID}); err != nil {
 			return err
 		}
 	}

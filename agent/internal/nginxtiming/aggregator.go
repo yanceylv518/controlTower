@@ -44,6 +44,7 @@ type SlowSample struct {
 	UHT        float64   `json:"uht"`
 	URT        float64   `json:"urt"`
 	Bytes      int64     `json:"bytes"`
+	RequestID  string    `json:"request_id,omitempty"`
 }
 
 type pendingBucket struct {
@@ -123,7 +124,7 @@ func (a *Aggregator) Add(entry Entry) {
 		} else {
 			s.bucket.SlowTransferCount++
 		}
-		s.samples = append(s.samples, SlowSample{OccurredAt: entry.OccurredAt.UTC(), Path: entry.Path, Status: entry.Status, RT: entry.RT, UHT: entry.UHT, URT: entry.URT, Bytes: entry.Bytes})
+		s.samples = append(s.samples, SlowSample{OccurredAt: entry.OccurredAt.UTC(), Path: entry.Path, Status: entry.Status, RT: entry.RT, UHT: entry.UHT, URT: entry.URT, Bytes: entry.Bytes, RequestID: entry.RequestID})
 		sort.Slice(s.samples, func(i, j int) bool { return s.samples[i].RT > s.samples[j].RT })
 		if len(s.samples) > maxSamplesPerBucket {
 			s.samples = s.samples[:maxSamplesPerBucket]

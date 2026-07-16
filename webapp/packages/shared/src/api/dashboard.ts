@@ -29,7 +29,7 @@ export interface OperationAuditItem { instance_id: string; instance_name: string
 export interface NginxTimingBucket { bucket_at: string; request_count: number; upstream_count: number; status_4xx: number; status_5xx: number; status_504: number; rt_p50: number; rt_p95: number; rt_max: number; uht_p50: number; uht_p95: number; uht_max: number; transfer_p50: number; transfer_p95: number; transfer_max: number; bytes_total: number; slow_count: number; slow_ttft_count: number; slow_transfer_count: number }
 export interface NginxTimingSummary { total_requests: number; status_5xx: number; status_504: number; slow_count: number; slow_ttft_count: number; slow_transfer_count: number; slow_ttft_percent: number; slow_transfer_percent: number }
 export interface NginxTimingResponse { items: NginxTimingBucket[]; summary: NginxTimingSummary }
-export interface NginxSlowSample { id: number; occurred_at: string; path: string; status: number; rt: number; uht: number; urt: number; bytes: number }
+export interface NginxSlowSample { id: number; occurred_at: string; path: string; status: number; rt: number; uht: number; urt: number; bytes: number; request_id: string; match_status: 'matched' | 'unmatched' | 'multiple'; match_count: number; user_id: number; user_name: string; channel_id: number; channel_name: string; model_name: string; token_name: string }
 
 const query = (values: Record<string, string | number | boolean | undefined>) => {
   const params = new URLSearchParams()
@@ -64,5 +64,5 @@ export const dashboardApi = (client: ApiClient) => ({
   channelCommands: (params: { instance_id?: string; status?: string; limit?: number; offset?: number } = {}) => client.request<ListResponse<ChannelCommandItem>>(`/api/dashboard/channel-commands${query(params)}`),
   operationAudits: (params: { instance_id?: string; limit?: number; offset?: number } = {}) => client.request<ListResponse<OperationAuditItem>>(`/api/dashboard/operation-audits${query(params)}`),
   nginxTiming: (params: { instance_id: string; hours: number }) => client.request<NginxTimingResponse>(`/api/dashboard/nginx-timing${query(params)}`),
-  nginxSlowSamples: (params: { instance_id: string; hours: number; limit?: number }) => client.request<ListResponse<NginxSlowSample>>(`/api/dashboard/nginx-timing/slow-samples${query(params)}`),
+  nginxSlowSamples: (params: { instance_id: string; hours: number; limit?: number; user_id?: string; channel_id?: string; model_name?: string; match_status?: string }) => client.request<ListResponse<NginxSlowSample>>(`/api/dashboard/nginx-timing/slow-samples${query(params)}`),
 })
