@@ -4,6 +4,15 @@ window.DEVLOG = [
   {
     date: "2026-07-16",
     type: "release",
+    version: "v2.0.0-rc6",
+    title: "rc6 出产物 + v2.6-B1 可靠性批次下发",
+    summary: "rc6 一次带上 v2.3 系列（名称/图标/健康墙/性能/静默刷新）、v2.4-B1（request_id 关联）、v2.5-B1（精确分位数/缓存命中率/TTFT/快照 group+priority）,部署顺序先 Server（009/010 迁移）后 Agent。同时下发 v2.6-B1 可靠性三件套：①心跳解耦——pass 重排为『先本地采集告警、后 Server RPC』,CT Server 故障不再阻断企微告警（账本 P1 清账）;②instance_offline 合成规则（默认 300s,曾接入才告警,7 天退役不刷屏,资源阈值顺手 env 化）;③Server 通知中心补 wecom 渠道类型（v1.1.2 遗留清账,离线/资源告警自此可推企微群）。",
+    docs: ["docs/codex-task-v2.6-b1-reliability.md"],
+    commits: []
+  },
+  {
+    date: "2026-07-16",
+    type: "release",
     version: "",
     title: "v2.4-B1 完成：Request ID 精确关联延时诊断",
     summary: "Agent 从 Nginx timing 日志解析并上报慢样本 request_id；Server 新增可空字段与组合索引，批量合并 log_samples 和 log_events 并去重，明确返回 matched、unmatched、multiple；延时分诊页新增用户、渠道、模型、令牌、Request ID、筛选、复制和维度跳转，同时澄清 RT/UHT/URT 语义。旧 Agent 和采样截断安全降级，不影响企业微信错误提醒。Go 全量测试、vet、前端类型检查与生产构建通过。",
