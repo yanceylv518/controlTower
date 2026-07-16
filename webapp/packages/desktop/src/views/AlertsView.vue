@@ -34,17 +34,19 @@ const state = useAsyncData(
       })
     ).items,
 );
-const dimensionRoute = (item: AlertItem) => ({
-  path:
+const dimensionRoute = (item: AlertItem) => {
+  const base =
     item.dimension_type === "instance_user"
       ? "/customers"
       : item.dimension_type === "instance_channel"
         ? "/channels"
         : item.dimension_type === "instance_model"
           ? "/models"
-          : "/",
-  query: item.dimension_key ? { key: item.dimension_key } : {},
-});
+          : "";
+  return base && item.dimension_key
+    ? `${base}/${encodeURIComponent(item.dimension_key)}`
+    : "/";
+};
 function code(e: unknown) {
   return e instanceof ApiError ? e.code : "操作失败";
 }

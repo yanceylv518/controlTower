@@ -10,3 +10,13 @@ export function formatTime(value: string | null | undefined) {
   if (!value) return '—'; const date = new Date(value)
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN', { hour12: false })
 }
+export function formatTokens(value: number | null | undefined) {
+  if (value == null) return '—'
+  if (Math.abs(value) >= 1_000_000) return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1)}M`
+  return new Intl.NumberFormat('zh-CN').format(value)
+}
+export function formatQuota(value: number | null | undefined, perUnit: number, symbol: string) {
+  if (value == null) return '—'
+  const amount = value / (perUnit || 500000)
+  return `${symbol}${amount >= 100 ? amount.toFixed(0) : amount.toFixed(2)}`
+}

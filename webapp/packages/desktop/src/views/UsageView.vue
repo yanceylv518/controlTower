@@ -7,8 +7,13 @@ import AppShell from "../components/AppShell.vue";
 import AsyncPanel from "../components/AsyncPanel.vue";
 import HoursSelect from "../components/HoursSelect.vue";
 import ListPager from "../components/ListPager.vue";
-import { formatNumber } from "../utils/format";
+import { formatNumber, formatQuota, formatTokens } from "../utils/format";
+import { usePrefsStore } from "../stores/prefs";
 const hours = ref(24);
+const prefs = usePrefsStore();
+void prefs.load();
+const quotaFmt = (v: number | null | undefined) =>
+  formatQuota(v, prefs.quotaPerUnit, prefs.currencySymbol);
 const page = ref(1);
 const pageSize = ref(20);
 const state = useAsyncData(
@@ -52,15 +57,15 @@ useAutoRefresh(state.reload);
               }}</template></el-table-column
             ><el-table-column label="Token In"
               ><template #default="s">{{
-                formatNumber(s.row.prompt_tokens)
+                formatTokens(s.row.prompt_tokens)
               }}</template></el-table-column
             ><el-table-column label="Token Out"
               ><template #default="s">{{
-                formatNumber(s.row.completion_tokens)
+                formatTokens(s.row.completion_tokens)
               }}</template></el-table-column
             ><el-table-column label="Quota"
               ><template #default="s">{{
-                formatNumber(s.row.quota)
+                quotaFmt(s.row.quota)
               }}</template></el-table-column
             ></el-table
           >

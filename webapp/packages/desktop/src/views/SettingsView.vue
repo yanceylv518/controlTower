@@ -60,7 +60,9 @@ async function load() {
     Object.entries(response.items).forEach(
       ([key, item]) =>
         (values[key] =
-          key === "CT_NOTIFICATIONS_ENABLED" ? item.value : Number(item.value)),
+          key === "CT_NOTIFICATIONS_ENABLED" || key === "CT_CURRENCY_SYMBOL"
+            ? item.value
+            : Number(item.value)),
     );
   } finally {
     loading.value = false;
@@ -158,6 +160,54 @@ onMounted(load);
                   sourceLabels[items.CT_NOTIFICATIONS_ENABLED?.source] || "—"
                 }}</span
               >
+            </span>
+          </div>
+        </div>
+      </section>
+      <section class="panel sub-panel">
+        <h2>显示</h2>
+        <p class="sub-note">
+          Quota 将按「金额 = quota ÷ 换算率」显示为货币；符号跟随 new-api 站点定价（不做汇率换算）
+        </p>
+        <div class="field-grid">
+          <div class="field-item">
+            <label>Quota 换算率（每 1 货币单位）</label>
+            <el-input-number
+              v-model="values.CT_QUOTA_PER_UNIT as number"
+              :min="1"
+              :max="1000000000"
+              :step="1000"
+              controls-position="right"
+              size="small"
+            />
+            <span class="field-meta">
+              <span
+                :class="[
+                  'source-pill',
+                  items.CT_QUOTA_PER_UNIT?.source === 'db' ? 'db' : '',
+                ]"
+                >{{ sourceLabels[items.CT_QUOTA_PER_UNIT?.source] || "—" }}</span
+              >
+              默认 {{ items.CT_QUOTA_PER_UNIT?.default }}
+            </span>
+          </div>
+          <div class="field-item">
+            <label>货币符号</label>
+            <el-input
+              v-model="values.CT_CURRENCY_SYMBOL as string"
+              size="small"
+              maxlength="4"
+              style="width: 90px"
+            />
+            <span class="field-meta">
+              <span
+                :class="[
+                  'source-pill',
+                  items.CT_CURRENCY_SYMBOL?.source === 'db' ? 'db' : '',
+                ]"
+                >{{ sourceLabels[items.CT_CURRENCY_SYMBOL?.source] || "—" }}</span
+              >
+              默认 {{ items.CT_CURRENCY_SYMBOL?.default }}
             </span>
           </div>
         </div>

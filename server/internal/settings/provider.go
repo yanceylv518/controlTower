@@ -1,6 +1,7 @@
 package settings
 
 import (
+	"strings"
 	"fmt"
 	"os"
 	"strconv"
@@ -26,12 +27,15 @@ const (
 	P95Warn              = "CT_P95_WARN_SECONDS"
 	P95Crit              = "CT_P95_CRIT_SECONDS"
 	NotificationsEnabled = "CT_NOTIFICATIONS_ENABLED"
+	QuotaPerUnit         = "CT_QUOTA_PER_UNIT"
+	CurrencySymbol       = "CT_CURRENCY_SYMBOL"
 )
 
 var defaults = map[string]string{
 	RetentionDetail: "30", RetentionMetric5m: "90", RetentionRuntime: "7", OfflineSeconds: "120",
 	CPUWarn: "80", CPUCrit: "90", MemoryWarn: "80", MemoryCrit: "90", DiskWarn: "85", DiskCrit: "95",
 	ErrorRateWarn: "20", ErrorRateCrit: "50", P95Warn: "5", P95Crit: "10", NotificationsEnabled: "true",
+	QuotaPerUnit: "500000", CurrencySymbol: "¥",
 }
 
 type Item struct {
@@ -56,7 +60,7 @@ func NewProvider(store storage.SystemSettingStore, ttl time.Duration) *Provider 
 	return &Provider{store: store, ttl: ttl}
 }
 func Keys() []string {
-	return []string{RetentionDetail, RetentionMetric5m, RetentionRuntime, OfflineSeconds, CPUWarn, CPUCrit, MemoryWarn, MemoryCrit, DiskWarn, DiskCrit, ErrorRateWarn, ErrorRateCrit, P95Warn, P95Crit, NotificationsEnabled}
+	return []string{RetentionDetail, RetentionMetric5m, RetentionRuntime, OfflineSeconds, CPUWarn, CPUCrit, MemoryWarn, MemoryCrit, DiskWarn, DiskCrit, ErrorRateWarn, ErrorRateCrit, P95Warn, P95Crit, NotificationsEnabled, QuotaPerUnit, CurrencySymbol}
 }
 func (p *Provider) Invalidate() { p.mu.Lock(); p.loaded = time.Time{}; p.mu.Unlock() }
 func (p *Provider) Items() (map[string]Item, error) {
@@ -162,6 +166,15 @@ func Validate(values map[string]string) map[string]string {
 	}
 	if v, ok := get(OfflineSeconds); ok && (v < 1 || v != float64(int(v))) {
 		errs[OfflineSeconds] = "must be a positive integer"
+	}
+	if v, ok := get(QuotaPerUnit); ok && (v < 1 || v > 1e9 || v != float64(int(v))) {
+		errs[QuotaPerUnit] = "must be an integer between 1 and 1000000000"
+	}
+	if symbol, ok := values[CurrencySymbol]; ok {
+		trimmed := strings.TrimSpace(symbol)
+		if trimmed == "" || len([]rune(trimmed)) > 4 {
+			errs[CurrencySymbol] = "must be 1-4 characters"
+		}
 	}
 	for _, pair := range [][2]string{{CPUWarn, CPUCrit}, {MemoryWarn, MemoryCrit}, {DiskWarn, DiskCrit}, {ErrorRateWarn, ErrorRateCrit}} {
 		w, wok := get(pair[0])

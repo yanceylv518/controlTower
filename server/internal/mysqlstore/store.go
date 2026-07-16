@@ -291,7 +291,14 @@ func (s Store) QueryLogEvents(query storage.LogQuery) ([]storage.LogEvent, error
 }
 
 func (s Store) UserNames(instanceID string, since time.Time) (map[int64]string, error) {
-	rows, err := s.db.QueryContext(context.Background(), `SELECT user_id, SUBSTRING_INDEX(GROUP_CONCAT(username ORDER BY created_at DESC), ',', 1) FROM log_events WHERE instance_id = ? AND created_at >= ? AND username <> '' GROUP BY user_id`, instanceID, since)
+	// log_samples is the primary source: in the production
+	// aggregate_with_samples mode log_events stays empty, so relying on it
+	// alone left every customer displayed as a bare ID.
+	rows, err := s.db.QueryContext(context.Background(), `SELECT user_id, SUBSTRING_INDEX(GROUP_CONCAT(username ORDER BY created_at DESC), ',', 1) FROM (
+  SELECT user_id, username, created_at FROM log_samples WHERE instance_id = ? AND created_at >= ? AND username <> ''
+  UNION ALL
+  SELECT user_id, username, created_at FROM log_events WHERE instance_id = ? AND created_at >= ? AND username <> ''
+) AS names GROUP BY user_id`, instanceID, since, instanceID, since)
 	if err != nil {
 		return nil, err
 	}

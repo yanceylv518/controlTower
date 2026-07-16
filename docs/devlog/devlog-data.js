@@ -5,6 +5,15 @@ window.DEVLOG = [
     date: "2026-07-16",
     type: "release",
     version: "",
+    title: "维度页拆分为子页面 + Quota 货币化 + 用户名根因修复（Claude 直接实现）",
+    summary: "①维度页按方案 C 拆分:列表页纯分诊表格(720px 内滚,行点击进详情);详情子页 /channels|customers|models/:key——面包屑返回、‹上一个/下一个›巡检、四卡常驻、五 Tab(趋势/模型或客户交叉表/慢样本/告警带角标/操作),旧 ?key= 链接自动跳转;告警中心跳转改子路由。②「模型」Tab 用上一直在采集的 user×model/channel×model/model×user 交叉维度,零采集改动。③Quota 货币化:CT_QUOTA_PER_UNIT(默认50万)+CT_CURRENCY_SYMBOL(默认¥)进设置中心,按站点符号直显不做汇率换算;交叉表与用量页生效。④Token 超百万显示 M 单位。⑤用户名不显示的根因修复:UserNames 批量解析原来只查 log_events——生产聚合模式该表为空,与 v2.4-B1 同坑;改为 log_samples UNION log_events。全部构建与测试绿。",
+    docs: [],
+    commits: []
+  },
+  {
+    date: "2026-07-16",
+    type: "release",
+    version: "",
     title: "布局重构第二阶段 + 直方图工程交付（Claude 直接实现）",
     summary: "①分页器重做：紧凑 上/下页 + 诚实页码指示,弃用伪总数分页条;②系统状态页：每实例机器卡(状态行+六格资源仪表带色条+趋势行+折叠原始表),支撑表三列网格;③通知设置：表单收进弹窗,修复多余 '>' 文本节点;④设置页：分区卡片+紧凑字段网格+来源标签,保存收进顶栏。⑤直方图工程全栈：统一 15 桶 V2 桶界(V1 严格超集,尾部加密 8/12/20/45/90s),use_time 与 TTFT 共用;Agent 逐事件累积双 V2 直方图+TTFT P50/P90/P95 精确值,V1 桶继续填充保混布兼容;012 迁移(可空,无重建);SQL 合并 V2 相加(NULL 毒化=双方都有才合并)、TTFT 保守 GREATEST;读侧 精确值>V2 插值>V1 插值 三级回退;维度页 TTFT 图改 P50/P90/P95 三线。部署顺序:先 Server(012)后 Agent。全部 Go 测试与 web 构建绿。",
     docs: [],

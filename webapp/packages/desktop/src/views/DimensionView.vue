@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { useRoute } from "vue-router";
 import { computed, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import type { ChannelSnapshot, MetricItem } from "@ct/shared";
 import { dashboard } from "../api";
 import { useFiltersStore } from "../stores/filters";
@@ -8,23 +8,15 @@ import { useAsyncData } from "../composables/useAsyncData";
 import { useAutoRefresh } from "../composables/useAutoRefresh";
 import AppShell from "../components/AppShell.vue";
 import AsyncPanel from "../components/AsyncPanel.vue";
-import MetricMini from "../components/MetricMini.vue";
-import RateBar from "../components/RateBar.vue";
 import StatusTag from "../components/StatusTag.vue";
-import HoursSelect from "../components/HoursSelect.vue";
-import ChannelOperations from "../components/ChannelOperations.vue";
-import TrendChart, { type TrendSeries } from "../components/TrendChart.vue";
+import { formatTokens } from "../utils/format";
 
 const props = defineProps<{ kind: "customers" | "channels" | "models" }>();
 const filters = useFiltersStore();
 const route = useRoute();
-const selectedKey = ref("");
-const hours = ref(1);
+const router = useRouter();
 const search = ref("");
 const activeKinds = ref<string[]>([]);
-const history = ref<MetricItem[]>([]);
-const rangeSummary = ref<MetricItem>();
-const historyLoading = ref(false);
 const snapshots = ref<ChannelSnapshot[]>([]);
 const dimensionType = computed(() =>
   props.kind === "customers"
@@ -39,8 +31,16 @@ const title = computed(
       props.kind
     ],
 );
-const historyWindow = computed(() => (hours.value >= 6 ? "5m" : "1m"));
-let historyRequest = 0;
+
+// 旧链接兼容：/channels?key=... 一律跳到详情子页
+watch(
+  () => route.query.key,
+  (key) => {
+    if (typeof key === "string" && key)
+      void router.replace(`/${props.kind}/${encodeURIComponent(key)}`);
+  },
+  { immediate: true },
+);
 
 const state = useAsyncData(async () => {
   const [metrics, channelData] = await Promise.all([
@@ -58,17 +58,15 @@ const state = useAsyncData(async () => {
       : Promise.resolve({ items: [] as ChannelSnapshot[] }),
   ]);
   snapshots.value = channelData.items;
-  const items = metrics.items.filter(
+  return metrics.items.filter(
     (x) => !filters.instance_id || x.instance_id === filters.instance_id,
   );
-  const requested = typeof route.query.key === "string" ? route.query.key : "";
-  if (requested && items.some((x) => x.dimension_key === requested))
-    selectedKey.value = requested;
-  else if (!items.some((x) => x.dimension_key === selectedKey.value))
-    selectedKey.value = items[0]?.dimension_key || "";
-  void loadHistory(state.data.value !== undefined);
-  return items;
 });
+watch(
+  () => [props.kind, filters.instance_id],
+  () => void state.reload(),
+);
+useAutoRefresh(state.reload);
 
 type DimRow = MetricItem & { channelStatus?: string };
 const rows = computed<DimRow[]>(() =>
@@ -84,8 +82,6 @@ const rows = computed<DimRow[]>(() =>
         : undefined,
   })),
 );
-
-// 状态分类：异常/注意/正常/无流量/已禁用（与告警阈值同口径）
 function rowKind(item: DimRow): string {
   if (item.channelStatus && item.channelStatus !== "enabled") return "disabled";
   if (item.request_count === 0) return "idle";
@@ -115,7 +111,6 @@ const counts = computed(() =>
     ]),
   ),
 );
-// 默认视图隐藏无流量/已禁用；点签可任意组合；异常/注意永远置顶
 const kindWeight: Record<string, number> = {
   crit: 0,
   warn: 1,
@@ -141,165 +136,17 @@ function toggleKind(key: string) {
     ? activeKinds.value.filter((x) => x !== key)
     : [...activeKinds.value, key];
 }
-
-const latestSelected = computed(() =>
-  state.data.value?.find((x) => x.dimension_key === selectedKey.value),
-);
-const selected = computed(() => rangeSummary.value || latestSelected.value);
-const snapshot = computed(() => {
-  const id = Number(selectedKey.value.split(":").pop());
-  return snapshots.value.find(
-    (x) =>
-      x.channel_id === id &&
-      (!filters.instance_id || x.instance_id === filters.instance_id),
-  );
-});
-const models = computed(
-  () =>
-    snapshot.value?.models_text
-      .split(",")
-      .map((x) => x.trim())
-      .filter(Boolean) || [],
-);
-
-async function loadHistory(silent = false) {
-  if (!selectedKey.value) {
-    history.value = [];
-    rangeSummary.value = undefined;
-    return;
-  }
-  const request = ++historyRequest;
-  const background = silent && history.value.length > 0;
-  if (!background) historyLoading.value = true;
-  try {
-    const [response, aggregate] = await Promise.all([
-      dashboard.metricHistory({
-        window: historyWindow.value,
-        dimension_type: dimensionType.value,
-        dimension_key: selectedKey.value,
-        hours: hours.value,
-      }),
-      dashboard.metricHistory({
-        window: historyWindow.value,
-        dimension_type: dimensionType.value,
-        dimension_key: selectedKey.value,
-        hours: hours.value,
-        aggregate: true,
-      }),
-    ]);
-    if (request === historyRequest) {
-      history.value = response.items;
-      rangeSummary.value = aggregate.items[0];
-    }
-  } catch {
-    if (request === historyRequest && !background) {
-      history.value = [];
-      rangeSummary.value = undefined;
-    }
-  } finally {
-    if (request === historyRequest && !background) historyLoading.value = false;
-  }
+function openDetail(row: DimRow) {
+  void router.push(`/${props.kind}/${encodeURIComponent(row.dimension_key)}`);
 }
-watch(
-  () => [props.kind, filters.instance_id],
-  () => void state.reload(),
-);
-watch([selectedKey, hours], () => void loadHistory());
-useAutoRefresh(state.reload);
-
-const points = (field: keyof MetricItem, multiply = 1) =>
-  history.value.map(
-    (item) =>
-      [
-        item.bucket_time,
-        item[field] == null ? null : Number(item[field]) * multiply,
-      ] as [string, number | null],
-  );
-const requestSeries = computed<TrendSeries[]>(() => [
-  {
-    name: "请求量",
-    color: "#2f5fe0",
-    data: points("request_count"),
-    unit: " 次",
-  },
-  {
-    name: "错误数",
-    color: "#ce3b44",
-    data: points("error_count"),
-    unit: " 次",
-  },
-]);
-const rateSeries = computed<TrendSeries[]>(() => [
-  {
-    name: "成功率",
-    color: "#178a5e",
-    data: points("success_rate", 100),
-    unit: "%",
-  },
-  {
-    name: "错误率",
-    color: "#ce3b44",
-    data: points("error_rate", 100),
-    unit: "%",
-  },
-]);
-const latencySeries = computed<TrendSeries[]>(() => [
-  { name: "P50", color: "#2f5fe0", data: points("p50_use_time"), unit: "s" },
-  { name: "P95", color: "#b96e0c", data: points("p95_use_time"), unit: "s" },
-  { name: "P99", color: "#1391a5", data: points("p99_use_time"), unit: "s" },
-]);
-const tokenSeries = computed<TrendSeries[]>(() => [
-  { name: "Token 入", color: "#2f5fe0", data: points("prompt_tokens") },
-  { name: "Token 出", color: "#1391a5", data: points("completion_tokens") },
-]);
-const cacheHitSeries = computed<TrendSeries[]>(() => [
-  {
-    name: "缓存命中率",
-    color: "#1391a5",
-    data: points("cache_hit_rate", 100),
-    unit: "%",
-    sparse: true,
-  },
-]);
-const ttftSeries = computed<TrendSeries[]>(() => [
-  {
-    name: "P50",
-    color: "#2f5fe0",
-    data: points("ttft_p50_ms", 0.001),
-    unit: "s",
-    sparse: true,
-  },
-  {
-    name: "P90",
-    color: "#1391a5",
-    data: points("ttft_p90_ms", 0.001),
-    unit: "s",
-    sparse: true,
-  },
-  {
-    name: "P95",
-    color: "#b96e0c",
-    data: points("ttft_p95_ms", 0.001),
-    unit: "s",
-    sparse: true,
-  },
-]);
-const bucketLabel = computed(() =>
-  historyWindow.value === "5m" ? "5m 桶（延迟为近似值）" : "1m 桶",
-);
-const fmt = (v: number | null | undefined, s = "") =>
-  v == null ? "—" : `${v.toFixed(2)}${s}`;
 const pct = (v: number | null | undefined) =>
   v == null ? "—" : `${(v * 100).toFixed(1)}%`;
-const seconds = (v: number | null | undefined) =>
+const secondsFmt = (v: number | null | undefined) =>
   v == null ? "—" : `${v.toFixed(2)}s`;
-const ms = (v: number | null | undefined) =>
+const msFmt = (v: number | null | undefined) =>
   v == null ? "—" : `${(v / 1000).toFixed(2)}s`;
 function rowClass({ row }: { row: DimRow }) {
-  const classes: string[] = [];
-  if (row.dimension_key === selectedKey.value) classes.push("row-selected");
-  if (rowKind(row) === "crit") classes.push("row-crit");
-  return classes.join(" ");
+  return rowKind(row) === "crit" ? "row-crit" : "";
 }
 </script>
 <template>
@@ -326,7 +173,6 @@ function rowClass({ row }: { row: DimRow }) {
           >{{ label }} {{ counts[key] || 0 }}</span
         >
       </span>
-      <HoursSelect v-model="hours" />
     </template>
     <AsyncPanel
       :loading="state.loading.value"
@@ -334,13 +180,12 @@ function rowClass({ row }: { row: DimRow }) {
       :empty="!state.data.value?.length"
       @retry="state.reload"
     >
-      <!-- 列表即表格：全宽、多指标并排、异常置顶 -->
       <div class="dim-table">
         <el-table
           :data="visibleRows"
           :row-class-name="rowClass"
-          :max-height="Math.min(64 + visibleRows.length * 34, 420)"
-          @row-click="(row: DimRow) => (selectedKey = row.dimension_key)"
+          :max-height="720"
+          @row-click="openDetail"
         >
           <el-table-column label="名称" min-width="220">
             <template #default="{ row }">
@@ -348,9 +193,7 @@ function rowClass({ row }: { row: DimRow }) {
                 <i :class="['dim-dot', rowKind(row)]" />
                 <b>{{ row.display_name || row.display_key }}</b>
                 <el-tooltip :content="row.dimension_key" placement="top">
-                  <i class="dim-id">{{
-                    row.dimension_key.split(":").pop()
-                  }}</i>
+                  <i class="dim-id">{{ row.dimension_key.split(":").pop() }}</i>
                 </el-tooltip>
                 <StatusTag
                   v-if="row.channelStatus && row.channelStatus !== 'enabled'"
@@ -401,13 +244,13 @@ function rowClass({ row }: { row: DimRow }) {
           </el-table-column>
           <el-table-column label="P95" width="90" align="right" sortable :sort-method="(a: DimRow, b: DimRow) => (a.p95_use_time || 0) - (b.p95_use_time || 0)">
             <template #default="{ row }">{{
-              seconds(row.p95_use_time)
+              secondsFmt(row.p95_use_time)
             }}</template>
           </el-table-column>
-          <el-table-column label="TTFT" width="90" align="right">
+          <el-table-column label="TTFT P95" width="100" align="right">
             <template #default="{ row }">
-              <span :class="{ 'dim-muted': row.ttft_avg_ms == null }">{{
-                ms(row.ttft_avg_ms)
+              <span :class="{ 'dim-muted': row.ttft_p95_ms == null }">{{
+                msFmt(row.ttft_p95_ms)
               }}</span>
             </template>
           </el-table-column>
@@ -418,106 +261,19 @@ function rowClass({ row }: { row: DimRow }) {
               }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="Token 入/出" width="140" align="right">
+          <el-table-column label="Token 入/出" width="130" align="right">
             <template #default="{ row }"
-              >{{ row.prompt_tokens.toLocaleString() }} /
-              {{ row.completion_tokens.toLocaleString() }}</template
+              >{{ formatTokens(row.prompt_tokens) }} /
+              {{ formatTokens(row.completion_tokens) }}</template
             >
+          </el-table-column>
+          <el-table-column label="" width="80" align="right">
+            <template #default>
+              <span class="rowlink">详情 ›</span>
+            </template>
           </el-table-column>
         </el-table>
       </div>
-
-      <!-- 详情：紧跟表格，无空转区 -->
-      <template v-if="selected">
-        <div class="detail-head">
-          <h2>
-            {{
-              snapshot
-                ? snapshot.channel_name
-                : selected.display_name || selected.display_key
-            }}
-          </h2>
-          <span class="detail-sub">
-            {{ selected.display_key
-            }}<template v-if="models.length">
-              · {{ models.slice(0, 4).join(" · ")
-              }}<template v-if="models.length > 4">
-                · +{{ models.length - 4 }}</template
-              ></template
-            >
-          </span>
-          <div class="detail-chips">
-            <StatusTag v-if="snapshot" :value="snapshot.status" />
-            <span v-if="snapshot" class="pill plain"
-              >权重 {{ snapshot.weight }}</span
-            >
-            <span v-if="snapshot" class="pill plain"
-              >优先级 {{ snapshot.priority ?? "—" }}</span
-            >
-            <span v-if="snapshot" class="pill plain"
-              >分组 {{ snapshot.group_name ?? "—" }}</span
-            >
-          </div>
-        </div>
-        <h3 class="latest-title">所选时间范围汇总</h3>
-        <div class="mini-grid">
-          <MetricMini label="请求数" :value="selected.request_count" />
-          <MetricMini label="错误率" :value="pct(selected.error_rate)" />
-          <MetricMini
-            label="P95（P50 / P99）"
-            :value="`${fmt(selected.p95_use_time, 's')}（${fmt(selected.p50_use_time, 's')} / ${fmt(selected.p99_use_time, 's')}）`"
-          />
-          <MetricMini
-            label="TTFT P50 / P90 / P95"
-            :value="`${ms(selected.ttft_p50_ms)} / ${ms(selected.ttft_p90_ms)} / ${ms(selected.ttft_p95_ms)}`"
-          />
-        </div>
-        <div class="quality-bars">
-          <RateBar label="错误率" :value="selected.error_rate" tone="danger" />
-          <RateBar
-            label="成功率"
-            :value="selected.success_rate"
-            tone="success"
-          />
-          <RateBar
-            label="缓存命中率（>512）"
-            :value="selected.cache_hit_rate"
-          />
-          <RateBar label="流式请求占比" :value="selected.stream_rate" />
-        </div>
-        <div v-loading="historyLoading" class="trend-grid">
-          <TrendChart
-            :title="`请求与错误（${bucketLabel}）`"
-            :series="requestSeries"
-          />
-          <TrendChart
-            :title="`延迟（秒，${bucketLabel}）`"
-            :series="latencySeries"
-          />
-          <TrendChart
-            :title="`成功率 / 错误率（${bucketLabel}）`"
-            :series="rateSeries"
-            percent
-          />
-          <TrendChart
-            :title="`TTFT（${bucketLabel}）`"
-            :series="ttftSeries"
-          />
-          <TrendChart
-            :title="`缓存命中率（${bucketLabel}）`"
-            :series="cacheHitSeries"
-            percent
-          />
-          <TrendChart
-            :title="`Token 消耗（${bucketLabel}）`"
-            :series="tokenSeries"
-          />
-        </div>
-        <ChannelOperations
-          v-if="kind === 'channels'"
-          :channel-id="Number(selectedKey.split(':').pop())"
-        />
-      </template>
     </AsyncPanel>
   </AppShell>
 </template>
