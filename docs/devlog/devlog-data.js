@@ -4,6 +4,15 @@ window.DEVLOG = [
   {
     date: "2026-07-16",
     type: "release",
+    version: "v2.7-B1",
+    title: "Web 体验修正完成：纯名称、指标排序、七处分页与维度布局",
+    summary: "指标 API 增量提供 display_name，客户/渠道/模型、健康墙及告警以纯名称为主，原始 ID 退居 tooltip；维度指标、总览 KPI 与趋势图按业务优先级重排；告警、样本、用量、审计、通知、渠道命令和慢样本统一默认 20 条分页；延时分诊自动选择在线优先实例；维度页完成 300px 左列独立滚动、筛选吸顶、前 50 项渐进展开和窄屏布局。既有 display_key 未变，不涉及 Agent 或数据库迁移。",
+    docs: ["docs/codex-task-v2.7-b1-ux-fixes.md", "docs/v2.7-b1-delivery.md"],
+    commits: []
+  },
+  {
+    date: "2026-07-16",
+    type: "release",
     version: "",
     title: "v2.7-B3 批次下发：TTFT 稀疏曲线断裂修正",
     summary: "机制：TTFT 仅流式分钟有值(无流量分钟 NULL 是正确语义,不画 0);断裂被两点放大——①connectNulls:false+showSymbol:false 让孤立数据点完全隐形;②5m 桶 ttft_p95 为 NULL,≥6h 视图 P95 线整条消失。修法：TrendChart 加 sparse 序列模式(连线+显示符号,TTFT/缓存命中率启用);5m rollup 以 MAX(1m p95) 合成——数学上是合并集 P95 的保守上界,比线消失诚实;use_time 的 p50/p99 有插值回退不动。",

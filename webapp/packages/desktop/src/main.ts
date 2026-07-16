@@ -12,4 +12,5 @@ import './b5.css'
 import './b6.css'
 import './b7.css'
 import './b8.css'
+import './b9.css'
 createApp(App).use(createPinia()).use(router).use(ElementPlus).mount('#app')

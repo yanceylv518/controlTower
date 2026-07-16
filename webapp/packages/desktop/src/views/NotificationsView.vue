@@ -1,2 +1,163 @@
-<script setup lang="ts">import { reactive, ref } from 'vue'; import { ElMessage } from 'element-plus'; import type { NotificationChannelInput } from '@ct/shared'; import { dashboard } from '../api'; import AppShell from '../components/AppShell.vue'; import AsyncPanel from '../components/AsyncPanel.vue'; import StatusTag from '../components/StatusTag.vue'; import { useAsyncData } from '../composables/useAsyncData'; import { useAutoRefresh } from '../composables/useAutoRefresh'; import { formatTime } from '../utils/format'; const form=reactive<NotificationChannelInput>({id:'',name:'',channel_type:'webhook',webhook_url:'',enabled:true,secret:''});const saving=ref(false);const channels=useAsyncData(async()=>(await dashboard.notificationChannels()).items);const deliveries=useAsyncData(async()=>(await dashboard.notificationDeliveries({limit:100})).items);async function save(){saving.value=true;try{await dashboard.saveNotificationChannel({...form,secret:form.channel_type==='dingtalk'?form.secret:undefined});form.secret='';ElMessage.success('通知渠道已保存');await channels.reload()}catch(e){ElMessage.error(e instanceof Error?e.message:'保存失败')}finally{saving.value=false}}async function resend(id:string){try{await dashboard.resendDelivery(id);ElMessage.success('已安排重发');await deliveries.reload()}catch(e){ElMessage.error(e instanceof Error?e.message:'重发失败')}}useAutoRefresh(deliveries.reload);</script>
-<template><AppShell title="通知设置"><section class="panel form-panel"><h2>通知渠道</h2><el-form :model="form" label-width="90px"><el-form-item label="ID"><el-input v-model="form.id"/></el-form-item><el-form-item label="名称"><el-input v-model="form.name"/></el-form-item><el-form-item label="类型"><el-select v-model="form.channel_type"><el-option label="通用 Webhook" value="webhook"/><el-option label="钉钉机器人" value="dingtalk"/></el-select></el-form-item><el-form-item label="URL"><el-input v-model="form.webhook_url"/></el-form-item><el-form-item v-if="form.channel_type==='dingtalk'" label="Secret"><el-input v-model="form.secret" type="password" show-password placeholder="加签密钥，留空为关键词模式" autocomplete="new-password"/></el-form-item><el-form-item label="启用"><el-switch v-model="form.enabled"/></el-form-item><el-form-item><el-button type="primary" :loading="saving" @click="save">保存</el-button></el-form-item></el-form><AsyncPanel :loading="channels.loading.value" :error="channels.error.value" :empty="!channels.data.value?.length" @retry="channels.reload"><el-table :data="channels.data.value"><el-table-column prop="name" label="名称"/><el-table-column label="类型"><template #default="s"><el-tag>{{s.row.channel_type}}</el-tag></template></el-table-column><el-table-column prop="webhook_url_masked" label="URL"/><el-table-column label="加签"><template #default="s">{{s.row.has_secret?'已加签':'未加签'}}</template></el-table-column><el-table-column label="状态"><template #default="s"><StatusTag :value="s.row.enabled?'enabled':'disabled'"/></template></el-table-column></el-table></AsyncPanel></section><section class="panel"><h2>投递记录</h2><AsyncPanel :loading="deliveries.loading.value" :error="deliveries.error.value" :empty="!deliveries.data.value?.length" @retry="deliveries.reload"><el-table :data="deliveries.data.value"><el-table-column label="时间"><template #default="s">{{formatTime(s.row.attempted_at)}}</template></el-table-column><el-table-column label="状态"><template #default="s"><StatusTag :value="s.row.status"/></template></el-table-column><el-table-column prop="status_code" label="HTTP"/><el-table-column prop="attempts" label="次数"/><el-table-column label="下次重试"><template #default="s">{{formatTime(s.row.next_attempt_at)}}</template></el-table-column><el-table-column prop="alert_id" label="告警 ID"/><el-table-column prop="error_summary" label="错误摘要" show-overflow-tooltip/><el-table-column label="操作"><template #default="s"><el-button v-if="['failed','exhausted'].includes(s.row.status)" size="small" @click="resend(s.row.id)">重发</el-button></template></el-table-column></el-table></AsyncPanel></section></AppShell></template>
+<script setup lang="ts">
+import { reactive, ref, watch } from "vue";
+import { ElMessage } from "element-plus";
+import type { NotificationChannelInput } from "@ct/shared";
+import { dashboard } from "../api";
+import AppShell from "../components/AppShell.vue";
+import AsyncPanel from "../components/AsyncPanel.vue";
+import ListPager from "../components/ListPager.vue";
+import StatusTag from "../components/StatusTag.vue";
+import { useAsyncData } from "../composables/useAsyncData";
+import { useAutoRefresh } from "../composables/useAutoRefresh";
+import { formatTime } from "../utils/format";
+const form = reactive<NotificationChannelInput>({
+  id: "",
+  name: "",
+  channel_type: "webhook",
+  webhook_url: "",
+  enabled: true,
+  secret: "",
+});
+const saving = ref(false);
+const deliveryPage = ref(1);
+const deliveryPageSize = ref(20);
+const channels = useAsyncData(
+  async () => (await dashboard.notificationChannels()).items,
+);
+const deliveries = useAsyncData(
+  async () =>
+    (
+      await dashboard.notificationDeliveries({
+        limit: deliveryPageSize.value,
+        offset: (deliveryPage.value - 1) * deliveryPageSize.value,
+      })
+    ).items,
+);
+watch([deliveryPage, deliveryPageSize], () => void deliveries.reload());
+async function save() {
+  saving.value = true;
+  try {
+    await dashboard.saveNotificationChannel({
+      ...form,
+      secret: form.channel_type === "dingtalk" ? form.secret : undefined,
+    });
+    form.secret = "";
+    ElMessage.success("通知渠道已保存");
+    await channels.reload();
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : "保存失败");
+  } finally {
+    saving.value = false;
+  }
+}
+async function resend(id: string) {
+  try {
+    await dashboard.resendDelivery(id);
+    ElMessage.success("已安排重发");
+    await deliveries.reload();
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : "重发失败");
+  }
+}
+useAutoRefresh(deliveries.reload);
+</script>
+<template>
+  <AppShell title="通知设置"
+    ><section class="panel form-panel">
+      <h2>通知渠道</h2>
+      <el-form :model="form" label-width="90px"
+        ><el-form-item label="ID"><el-input v-model="form.id" /></el-form-item
+        ><el-form-item label="名称"
+          ><el-input v-model="form.name" /></el-form-item
+        ><el-form-item label="类型"
+          ><el-select v-model="form.channel_type"
+            ><el-option label="通用 Webhook" value="webhook" /><el-option
+              label="钉钉机器人"
+              value="dingtalk" /></el-select></el-form-item
+        ><el-form-item label="URL"
+          ><el-input v-model="form.webhook_url" /></el-form-item
+        ><el-form-item v-if="form.channel_type === 'dingtalk'" label="Secret"
+          ><el-input
+            v-model="form.secret"
+            type="password"
+            show-password
+            placeholder="加签密钥，留空为关键词模式"
+            autocomplete="new-password" /></el-form-item
+        ><el-form-item label="启用"
+          ><el-switch v-model="form.enabled" /></el-form-item
+        ><el-form-item
+          ><el-button type="primary" :loading="saving" @click="save"
+            >保存</el-button
+          ></el-form-item
+        ></el-form
+      ><AsyncPanel
+        :loading="channels.loading.value"
+        :error="channels.error.value"
+        :empty="!channels.data.value?.length"
+        @retry="channels.reload"
+        ><el-table :data="channels.data.value"
+          ><el-table-column prop="name" label="名称" /><el-table-column
+            label="类型"
+            ><template #default="s"
+              ><el-tag>{{ s.row.channel_type }}</el-tag></template
+            ></el-table-column
+          ><el-table-column
+            prop="webhook_url_masked"
+            label="URL" /><el-table-column label="加签"
+            ><template #default="s">{{
+              s.row.has_secret ? "已加签" : "未加签"
+            }}</template></el-table-column
+          ><el-table-column label="状态"
+            ><template #default="s"
+              ><StatusTag
+                :value="
+                  s.row.enabled ? 'enabled' : 'disabled'
+                " /></template></el-table-column></el-table
+      ></AsyncPanel>
+    </section>
+    <section class="panel">
+      <h2>投递记录</h2>
+      <AsyncPanel
+        :loading="deliveries.loading.value"
+        :error="deliveries.error.value"
+        :empty="!deliveries.data.value?.length"
+        @retry="deliveries.reload"
+        ><el-table :data="deliveries.data.value"
+          ><el-table-column label="时间"
+            ><template #default="s">{{
+              formatTime(s.row.attempted_at)
+            }}</template></el-table-column
+          ><el-table-column label="状态"
+            ><template #default="s"
+              ><StatusTag :value="s.row.status" /></template></el-table-column
+          ><el-table-column prop="status_code" label="HTTP" /><el-table-column
+            prop="attempts"
+            label="次数"
+          /><el-table-column label="下次重试"
+            ><template #default="s">{{
+              formatTime(s.row.next_attempt_at)
+            }}</template></el-table-column
+          ><el-table-column prop="alert_id" label="告警 ID" /><el-table-column
+            prop="error_summary"
+            label="错误摘要"
+            show-overflow-tooltip
+          /><el-table-column label="操作"
+            ><template #default="s"
+              ><el-button
+                v-if="['failed', 'exhausted'].includes(s.row.status)"
+                size="small"
+                @click="resend(s.row.id)"
+                >重发</el-button
+              ></template
+            ></el-table-column
+          ></el-table
+        ><ListPager
+          v-model:page="deliveryPage"
+          v-model:page-size="deliveryPageSize"
+          :item-count="deliveries.data.value?.length || 0"
+        />
+        ></AsyncPanel
+      >
+    </section></AppShell
+  >
+</template>

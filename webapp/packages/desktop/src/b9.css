@@ -1,0 +1,59 @@
+.dimension-workspace {
+  height: calc(100vh - 150px);
+  min-height: 560px;
+  overflow: hidden;
+}
+.dimension-list,
+.dimension-detail {
+  min-height: 0;
+  overflow-y: auto;
+}
+.dimension-list-sticky {
+  position: sticky;
+  top: -14px;
+  z-index: 3;
+  background: #fff;
+  padding: 14px 0 4px;
+}
+.dimension-list > button {
+  padding: 9px 12px;
+}
+.dimension-list .show-all {
+  border: 0;
+  margin: 8px auto;
+}
+.health-wall {
+  max-height: calc(100vh - 300px);
+  overflow-y: auto;
+}
+.dimension-raw-id {
+  display: block;
+  color: #8993a4;
+  margin: -4px 0 8px;
+}
+.metric-priority-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.pager {
+  display: flex;
+  justify-content: center;
+  margin: 18px 0 4px;
+}
+@media (max-width: 900px) {
+  .dimension-workspace {
+    display: block;
+    height: auto;
+    overflow: visible;
+  }
+  .dimension-list,
+  .dimension-detail {
+    overflow: visible;
+    max-height: none;
+  }
+  .dimension-list {
+    margin-bottom: 16px;
+  }
+  .metric-priority-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

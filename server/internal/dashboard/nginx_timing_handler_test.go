@@ -14,6 +14,7 @@ type nginxStoreStub struct {
 	s              []storage.NginxSlowSample
 	d              []storage.RequestDimension
 	q              storage.NginxTimingQuery
+	slowQ          storage.NginxSlowSampleQuery
 	dimensionCalls int
 }
 
@@ -22,6 +23,7 @@ func (n *nginxStoreStub) QueryNginxTiming(q storage.NginxTimingQuery) ([]storage
 	return n.b, nil
 }
 func (n *nginxStoreStub) QueryNginxSlowSamples(q storage.NginxSlowSampleQuery) ([]storage.NginxSlowSample, error) {
+	n.slowQ = q
 	return n.s, nil
 }
 func (n *nginxStoreStub) QueryRequestDimensions(string, []string) ([]storage.RequestDimension, error) {
@@ -51,6 +53,26 @@ func TestNginxSlowSamplesRejectsInvalidFilters(t *testing.T) {
 		if rr.Code != 400 {
 			t.Fatalf("query=%s status=%d", q, rr.Code)
 		}
+	}
+}
+
+func TestNginxSlowSamplesAppliesOffsetAfterCorrelation(t *testing.T) {
+	now := time.Now().UTC()
+	s := &nginxStoreStub{s: []storage.NginxSlowSample{
+		{ID: 1, InstanceID: "i", OccurredAt: now, RequestID: "req-1"},
+		{ID: 2, InstanceID: "i", OccurredAt: now, RequestID: "req-2"},
+	}, d: []storage.RequestDimension{
+		{Source: "sample", InstanceID: "i", RequestID: "req-1", UserID: 7},
+		{Source: "sample", InstanceID: "i", RequestID: "req-2", UserID: 7},
+	}}
+	h := NewHandler(nil).WithNginxTimingStore(s)
+	rr := httptest.NewRecorder()
+	h.HandleNginxSlowSamples(rr, httptest.NewRequest(http.MethodGet, "/api/dashboard/nginx-timing/slow-samples?instance_id=i&user_id=7&limit=1&offset=1", nil))
+	if rr.Code != 200 || strings.Contains(rr.Body.String(), `req-1`) || !strings.Contains(rr.Body.String(), `req-2`) {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if s.slowQ.Limit != 200 {
+		t.Fatalf("raw limit=%d", s.slowQ.Limit)
 	}
 }
 func TestNginxTimingSummaryAndFiltering(t *testing.T) {

@@ -87,3 +87,16 @@ func TestDisplayDimensionKeyUsesNames(t *testing.T) {
 		t.Fatalf("fallback=%q", got)
 	}
 }
+
+func TestDisplayDimensionNameKeepsIDsOutOfPresentation(t *testing.T) {
+	h := NewHandler(nil).WithNameSource(&nameSourceFake{calls: map[string]int{}})
+	if got := h.displayDimensionName("instance_channel", "inst:channel:5"); got != "主渠道" {
+		t.Fatalf("channel=%q", got)
+	}
+	if got := h.displayDimensionName("instance_user", "inst:user:12"); got != "张三" {
+		t.Fatalf("user=%q", got)
+	}
+	if got := h.displayDimensionName("instance_user", "inst:user:99"); got != "用户 99" {
+		t.Fatalf("fallback=%q", got)
+	}
+}

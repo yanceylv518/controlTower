@@ -121,7 +121,14 @@ func (h Handler) HandleNginxSlowSamples(w http.ResponseWriter, r *http.Request) 
 		writeDashboardError(w, 400, "invalid_query")
 		return
 	}
-	items, err := h.nginxTimingStore.QueryNginxSlowSamples(storage.NginxSlowSampleQuery{InstanceID: instanceID, Since: time.Now().UTC().Add(-time.Duration(hours) * time.Hour), Limit: limit})
+	offset, ok := boundedInt(r.URL.Query().Get("offset"), 0, 0, 1000000)
+	if !ok {
+		writeDashboardError(w, 400, "invalid_query")
+		return
+	}
+	// Correlation filters are applied after loading request dimensions, so page
+	// after enrichment instead of skipping raw rows before the filters run.
+	items, err := h.nginxTimingStore.QueryNginxSlowSamples(storage.NginxSlowSampleQuery{InstanceID: instanceID, Since: time.Now().UTC().Add(-time.Duration(hours) * time.Hour), Limit: 200})
 	if err != nil {
 		writeDashboardError(w, 500, "query_failed")
 		return
@@ -193,6 +200,15 @@ func (h Handler) HandleNginxSlowSamples(w http.ResponseWriter, r *http.Request) 
 			continue
 		}
 		out = append(out, summary)
+	}
+	if offset >= len(out) {
+		out = []NginxSlowSampleSummary{}
+	} else {
+		end := offset + limit
+		if end > len(out) {
+			end = len(out)
+		}
+		out = out[offset:end]
 	}
 	writeDashboardJSON(w, 200, map[string]any{"items": out})
 }

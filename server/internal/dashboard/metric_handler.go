@@ -33,6 +33,7 @@ type MetricItem struct {
 	DimensionType     string    `json:"dimension_type"`
 	DimensionKey      string    `json:"dimension_key"`
 	DisplayKey        string    `json:"display_key"`
+	DisplayName       string    `json:"display_name"`
 	RequestCount      int64     `json:"request_count"`
 	SuccessCount      int64     `json:"success_count"`
 	ErrorCount        int64     `json:"error_count"`
@@ -173,6 +174,7 @@ func (h Handler) filterMetricItems(metrics []aggregator.Metric, dimensionType st
 			DimensionType:     metric.DimensionType,
 			DimensionKey:      metric.DimensionKey,
 			DisplayKey:        h.displayDimensionKey(metric.DimensionType, metric.DimensionKey),
+			DisplayName:       h.displayDimensionName(metric.DimensionType, metric.DimensionKey),
 			RequestCount:      metric.RequestCount,
 			SuccessCount:      metric.SuccessCount,
 			ErrorCount:        metric.ErrorCount,
@@ -261,4 +263,32 @@ func (h Handler) displayDimensionKey(dimensionType string, dimensionKey string) 
 
 func displayDimensionKey(dimensionType string, dimensionKey string) string {
 	return Handler{}.displayDimensionKey(dimensionType, dimensionKey)
+}
+
+// displayDimensionName is presentation-only. DisplayKey remains backward
+// compatible because alert links and older clients still consume it.
+func (h Handler) displayDimensionName(dimensionType string, dimensionKey string) string {
+	parts := strings.Split(dimensionKey, ":")
+	if len(parts) < 3 {
+		return dimensionKey
+	}
+	instanceID := strings.Join(parts[:len(parts)-2], ":")
+	idText := parts[len(parts)-1]
+	id, _ := strconv.ParseInt(idText, 10, 64)
+	switch dimensionType {
+	case "instance_channel":
+		if h.names != nil {
+			return h.names.ChannelName(instanceID, id)
+		}
+		return "渠道 " + idText
+	case "instance_user":
+		if h.names != nil {
+			return h.names.UserName(instanceID, id)
+		}
+		return "用户 " + idText
+	case "instance_model":
+		return strings.Join(parts[2:], ":")
+	default:
+		return dimensionKey
+	}
 }

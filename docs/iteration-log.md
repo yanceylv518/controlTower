@@ -19,6 +19,12 @@
 
 ---
 
+## v2.7-B1 Web 体验修正（完成，2026-07-16）
+
+用户走查反馈的名称、指标顺序、分页、延时默认态和维度页滚动问题已集中修正。API 只新增 `display_name` 与慢样本 `offset`，不修改既有字段；七处列表统一默认每页 20 条；维度页左列独立滚动并默认渲染前 50 项。实现详情、兼容性与验证命令见 `docs/v2.7-b1-delivery.md`。
+
+---
+
 ## v2.4-B1 Request ID 关联延时诊断（完成，2026-07-16）
 
 Agent、Server、Dashboard API 与延时分诊页面的精确关联链路已完成。Nginx 慢样本携带 `$upstream_http_x_oneapi_request_id`，Server 只按 `instance_id + request_id` 批量关联 Control Tower 自有 `log_samples`/`log_events`，并明确区分 `matched`、`unmatched`、`multiple`。旧样本与采样截断安全降级为未关联，不影响错误告警和企业微信提醒。完整实现、限制及验证见 `docs/v2.4-b1-delivery.md`。
