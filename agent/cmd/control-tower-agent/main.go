@@ -277,47 +277,12 @@ func collectAndReportFullPass(ctx context.Context, client controlTowerReporter, 
 	if err != nil {
 		return err
 	}
-
-	flushedLastLogID, flushed, err := flushBufferedReports(ctx, client, bufferStore)
-	if err != nil {
-		current.ConsecutiveReportFailures++
-		_ = stateStore.Save(current)
-		return err
-	}
-	if flushed {
-		if flushedLastLogID > current.LastLogID {
-			current.LastLogID = flushedLastLogID
-		}
-		current.LastSuccessReportAt = time.Now().UTC()
-		current.ConsecutiveReportFailures = 0
-		if err := stateStore.Save(current); err != nil {
-			return err
-		}
-	}
-
 	now := time.Now().UTC()
 	sequence := now.Unix()
-	heartbeat, err := client.Heartbeat(ctx, reporter.AgentHeartbeatRequest{
-		InstanceID:   cfg.InstanceID,
-		AgentID:      cfg.AgentID,
-		AgentVersion: agentVersion,
-		ReportedAt:   now,
-		Sequence:     sequence,
-		LastLogID:    current.LastLogID,
-	})
-	if err != nil {
-		current.ConsecutiveReportFailures++
-		_ = stateStore.Save(current)
-		return err
-	}
-	commandResults := executeCommands(ctx, controller, heartbeat.Commands)
-	if heartbeat.ServerLastLogID > current.LastLogID {
-		current.LastLogID = heartbeat.ServerLastLogID
-		if err := stateStore.Save(current); err != nil {
-			return err
-		}
-	}
 
+	// The local segment deliberately runs before every Server RPC. A sick or
+	// unreachable Control Tower must never stop new-api log collection or the
+	// independent local WeCom alert path.
 	db, err := logcollector.OpenMySQL(cfg.LogDSN)
 	if err != nil {
 		return err
@@ -353,38 +318,64 @@ func collectAndReportFullPass(ctx context.Context, client controlTowerReporter, 
 	}
 
 	report := buildReport(ctx, cfg, now, sequence+1, lastLogID, backlog, events, metricCollector, checker, dockerCollector, channelCollector)
-	report.CommandResults = commandResults
+
+	// Server segment. ServerLastLogID can only affect the next collection pass
+	// now: this intentional one-pass delay is the trade-off that keeps local
+	// collection and alerting independent from heartbeat availability.
+	flushedLastLogID, flushed, err := flushBufferedReports(ctx, client, bufferStore)
+	if err != nil {
+		return bufferFailedPass(bufferStore, stateStore, &current, report, lastLogID, now, cfg.MaxLocalBufferEvents, err)
+	}
+	if flushed && flushedLastLogID > current.LastLogID {
+		current.LastLogID = flushedLastLogID
+	}
+	heartbeat, err := client.Heartbeat(ctx, reporter.AgentHeartbeatRequest{InstanceID: cfg.InstanceID, AgentID: cfg.AgentID, AgentVersion: agentVersion, ReportedAt: now, Sequence: sequence, LastLogID: current.LastLogID})
+	if err != nil {
+		return bufferFailedPass(bufferStore, stateStore, &current, report, lastLogID, now, cfg.MaxLocalBufferEvents, err)
+	}
+	report.CommandResults = executeCommands(ctx, controller, heartbeat.Commands)
+	if heartbeat.ServerLastLogID > current.LastLogID {
+		current.LastLogID = heartbeat.ServerLastLogID
+	}
 	if reportIsEmpty(report) {
-		current.LastLogID = lastLogID
+		if lastLogID > current.LastLogID {
+			current.LastLogID = lastLogID
+		}
 		current.LastSuccessReportAt = now
 		current.ConsecutiveReportFailures = 0
 		return stateStore.Save(current)
 	}
 
 	if err := client.Report(ctx, report); err != nil {
-		current.ConsecutiveReportFailures++
-		if reportShouldAdvanceFromBuffer(report) {
-			bufferedReport := report
-			bufferedReport.NginxTimingBuckets = nil
-			bufferedReport.NginxSlowSamples = nil
-			bufferErr := bufferStore.Append(localbuffer.Entry{CreatedAt: now, LastLogID: lastLogID, Report: bufferedReport}, cfg.MaxLocalBufferEvents)
-			if bufferErr != nil {
-				_ = stateStore.Save(current)
-				return bufferErr
-			}
-			current.LastLogID = lastLogID
-		}
-		_ = stateStore.Save(current)
-		return err
+		return bufferFailedPass(bufferStore, stateStore, &current, report, lastLogID, now, cfg.MaxLocalBufferEvents, err)
 	}
 	if activeNginxTiming != nil {
 		activeNginxTiming.Ack(len(report.NginxTimingBuckets))
 	}
 
-	current.LastLogID = lastLogID
+	if lastLogID > current.LastLogID {
+		current.LastLogID = lastLogID
+	}
 	current.LastSuccessReportAt = now
 	current.ConsecutiveReportFailures = 0
 	return stateStore.Save(current)
+}
+
+func bufferFailedPass(bufferStore localbuffer.FileStore, stateStore state.FileStore, current *state.State, report reporter.AgentReportRequest, lastLogID int64, now time.Time, maxEvents int, cause error) error {
+	current.ConsecutiveReportFailures++
+	if reportShouldAdvanceFromBuffer(report) {
+		report.NginxTimingBuckets = nil
+		report.NginxSlowSamples = nil
+		if err := bufferStore.Append(localbuffer.Entry{CreatedAt: now, LastLogID: lastLogID, Report: report}, maxEvents); err != nil {
+			_ = stateStore.Save(*current)
+			return err
+		}
+		if lastLogID > current.LastLogID {
+			current.LastLogID = lastLogID
+		}
+	}
+	_ = stateStore.Save(*current)
+	return cause
 }
 
 func flushBufferedReports(ctx context.Context, client controlTowerReporter, store localbuffer.FileStore) (int64, bool, error) {

@@ -73,7 +73,7 @@ useAutoRefresh(deliveries.reload);
           ><el-select v-model="form.channel_type"
             ><el-option label="通用 Webhook" value="webhook" /><el-option
               label="钉钉机器人"
-              value="dingtalk" /></el-select></el-form-item
+              value="dingtalk" /><el-option label="企业微信机器人" value="wecom" /></el-select></el-form-item
         ><el-form-item label="URL"
           ><el-input v-model="form.webhook_url" /></el-form-item
         ><el-form-item v-if="form.channel_type === 'dingtalk'" label="Secret"

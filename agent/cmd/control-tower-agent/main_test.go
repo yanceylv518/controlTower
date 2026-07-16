@@ -11,6 +11,7 @@ import (
 	"controltower/agent/internal/localbuffer"
 	"controltower/agent/internal/logcollector"
 	"controltower/agent/internal/reporter"
+	"controltower/agent/internal/state"
 )
 
 func TestRunCollectorLoopRunOnceReturnsCollectError(t *testing.T) {
@@ -123,7 +124,16 @@ func TestBuildReportIncludesBacklogTelemetry(t *testing.T) {
 	}
 }
 
-func TestStartNginxTimingDisabledAndStandalone(t *testing.T){ctx,cancel:=context.WithCancel(context.Background());defer cancel();if got:=startNginxTiming(ctx,config.Config{});got!=nil{t.Fatal("empty path must disable")};if got:=startNginxTiming(ctx,config.Config{NginxAccessLog:"missing",NginxSlowRTSeconds:10});got!=nil{t.Fatal("standalone must disable")}}
+func TestStartNginxTimingDisabledAndStandalone(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if got := startNginxTiming(ctx, config.Config{}); got != nil {
+		t.Fatal("empty path must disable")
+	}
+	if got := startNginxTiming(ctx, config.Config{NginxAccessLog: "missing", NginxSlowRTSeconds: 10}); got != nil {
+		t.Fatal("standalone must disable")
+	}
+}
 
 func TestToPayloadsPreservesLogEventFields(t *testing.T) {
 	cacheTokens := int64(128)
@@ -209,12 +219,43 @@ func bufferEntry(lastLogID int64) localbuffer.Entry {
 
 type fakeReporter struct {
 	reportErr         error
+	heartbeatErr      error
 	heartbeatResponse reporter.AgentHeartbeatResponse
 	reports           []reporter.AgentReportRequest
 }
 
 func (f *fakeReporter) Heartbeat(context.Context, reporter.AgentHeartbeatRequest) (reporter.AgentHeartbeatResponse, error) {
-	return f.heartbeatResponse, nil
+	return f.heartbeatResponse, f.heartbeatErr
+}
+
+func TestServerFailuresBufferCollectedPassAndAdvanceCursor(t *testing.T) {
+	for _, failure := range []string{"flush", "heartbeat", "report"} {
+		t.Run(failure, func(t *testing.T) {
+			dir := t.TempDir()
+			stateStore := state.NewFileStore(filepath.Join(dir, "state.json"))
+			bufferStore := localbuffer.NewFileStore(filepath.Join(dir, "report-buffer.json"))
+			current := state.State{}
+			report := reporter.AgentReportRequest{InstanceID: "i", AgentID: "a", LogEvents: []reporter.LogEventPayload{{SourceLogID: 42}}}
+			cause := errors.New(failure + " failed")
+			if got := bufferFailedPass(bufferStore, stateStore, &current, report, 42, time.Now().UTC(), 100, cause); !errors.Is(got, cause) {
+				t.Fatalf("cause=%v", got)
+			}
+			entries, err := bufferStore.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(entries) != 1 || entries[0].LastLogID != 42 {
+				t.Fatalf("buffer=%#v", entries)
+			}
+			saved, err := stateStore.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if saved.LastLogID != 42 || saved.ConsecutiveReportFailures != 1 {
+				t.Fatalf("state=%#v", saved)
+			}
+		})
+	}
 }
 
 func (f *fakeReporter) Report(_ context.Context, report reporter.AgentReportRequest) error {

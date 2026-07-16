@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-16",
+    type: "feature",
+    version: "v2.6-B1",
+    title: "可靠性三件套：Agent 心跳解耦、实例离线告警与企业微信渠道",
+    summary: "Agent 先执行日志采集和本地企业微信告警，再进入 Server 补传、心跳与上报，Server 故障不再让本地预警停摆；Server 新增基于动态离线阈值的 instance_offline 告警，并过滤从未接入和超过 7 天的退役实例；通知中心新增 wecom 类型，校验机器人 errcode 并沿用退避重试。",
+    docs: ["docs/codex-task-v2.6-b1-reliability.md", "docs/v2.6-b1-delivery.md"],
+    commits: []
+  },
+  {
+    date: "2026-07-16",
     type: "review",
     version: "",
     title: "v2.7-B2 验收通过：设置中心",

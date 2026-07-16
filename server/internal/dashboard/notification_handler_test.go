@@ -92,6 +92,40 @@ func TestSendGenericWebhookNotificationKeepsJSONPayload(t *testing.T) {
 	}
 }
 
+func TestSendWeComNotificationValidatesErrcodeAndAttempt(t *testing.T) {
+	var content string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Text struct {
+				Content string `json:"content"`
+			} `json:"text"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		content = payload.Text.Content
+		_, _ = w.Write([]byte(`{"errcode":0,"errmsg":"ok"}`))
+	}))
+	defer server.Close()
+	channel := storage.NotificationChannel{ID: "wecom", ChannelType: "wecom", WebhookURL: server.URL}
+	delivery := sendWebhookNotificationAttempt(http.Client{Timeout: time.Second}, testAlert(), channel, time.Now().UTC(), 2, 8)
+	if delivery.Status != "sent" || delivery.Attempts != 2 {
+		t.Fatalf("unexpected delivery: %#v", delivery)
+	}
+	if !strings.Contains(content, "[告警]") || !strings.Contains(content, "inst-a") {
+		t.Fatalf("unexpected content: %s", content)
+	}
+}
+
+func TestSendWeComNotificationFailsOnErrcode(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"errcode":93000,"errmsg":"invalid webhook"}`))
+	}))
+	defer server.Close()
+	delivery := sendWebhookNotification(http.Client{Timeout: time.Second}, testAlert(), storage.NotificationChannel{ID: "wecom", ChannelType: "wecom", WebhookURL: server.URL}, time.Now().UTC())
+	if delivery.Status != "failed" || !strings.Contains(delivery.ErrorSummary, "93000") {
+		t.Fatalf("unexpected delivery: %#v", delivery)
+	}
+}
+
 func TestNotificationChannelFromRequestChannelTypes(t *testing.T) {
 	now := time.Now().UTC()
 	base := NotificationChannelRequest{Name: "ops", WebhookURL: "https://example.com/hook", Enabled: true}
@@ -105,6 +139,11 @@ func TestNotificationChannelFromRequestChannelTypes(t *testing.T) {
 	channel, ok = notificationChannelFromRequest(base, now)
 	if !ok || channel.ChannelType != "dingtalk" {
 		t.Fatalf("expected dingtalk type, got %+v ok=%v", channel, ok)
+	}
+	base.ChannelType = "wecom"
+	channel, ok = notificationChannelFromRequest(base, now)
+	if !ok || channel.ChannelType != "wecom" {
+		t.Fatalf("expected wecom type, got %+v ok=%v", channel, ok)
 	}
 
 	base.ChannelType = "carrier-pigeon"

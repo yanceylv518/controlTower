@@ -25,7 +25,7 @@ printf '%s' "{\"instance_id\":\"$id\",\"agent_id\":\"e2e\",\"agent_version\":\"e
 commands=$(curl -fsS -b "$jar" "$base/api/dashboard/channel-commands?instance_id=$id&status=succeeded"); printf '%s' "$commands" | grep -q "\"id\":\"$command_id\""
 audits=$(curl -fsS -b "$jar" "$base/api/dashboard/operation-audits?instance_id=$id"); printf '%s' "$audits" | grep -q '"actor_id":"'"$CT_ADMIN_USER"'"'; printf '%s' "$audits" | grep -q '"target_id":"77"'
 step notification-channel
-curl -fsS -b "$jar" -H 'X-Requested-With: XMLHttpRequest' -H 'Content-Type: application/json' -d '{"id":"e2e-failing","channel_type":"dingtalk","name":"e2e-failing","webhook_url":"http://127.0.0.1:1","enabled":true,"secret":"e2e"}' "$base/api/dashboard/notification-channels" >/dev/null
+curl -fsS -b "$jar" -H 'X-Requested-With: XMLHttpRequest' -H 'Content-Type: application/json' -d '{"id":"e2e-failing","channel_type":"wecom","name":"e2e-failing","webhook_url":"http://127.0.0.1:1","enabled":true}' "$base/api/dashboard/notification-channels" >/dev/null
 step error-report
 now="$(date -u +%FT%TZ)"
 events=''

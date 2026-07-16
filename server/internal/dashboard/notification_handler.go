@@ -231,10 +231,10 @@ func sendWebhookNotificationAttempt(client http.Client, alert storage.Alert, cha
 	defer resp.Body.Close()
 	delivery.StatusCode = resp.StatusCode
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		if channel.ChannelType == "dingtalk" {
+		if channel.ChannelType == "dingtalk" || channel.ChannelType == "wecom" {
 			// DingTalk robots answer HTTP 200 even on rejection; the real
 			// outcome is in the errcode field of the response body.
-			if err := checkDingTalkResponse(resp.Body); err != nil {
+			if err := checkRobotResponse(resp.Body, channel.ChannelType); err != nil {
 				delivery.ErrorSummary = truncateSummary(err.Error())
 				return delivery
 			}
@@ -269,6 +269,10 @@ func dingTalkSignedURL(raw, secret string, now time.Time) string {
 }
 
 func notificationPayload(alert storage.Alert, channel storage.NotificationChannel) map[string]any {
+	if channel.ChannelType == "wecom" {
+		content := fmt.Sprintf("[告警] %s\n级别: %s\n实例: %s\n详情: %s\n时间: %s", alert.Title, alert.Severity, alert.InstanceID, alert.Summary, alert.LastSeenAt.Local().Format("2006-01-02 15:04:05"))
+		return map[string]any{"msgtype": "text", "text": map[string]string{"content": content}}
+	}
 	if channel.ChannelType == "dingtalk" {
 		content := fmt.Sprintf("【Control Tower 告警】%s\n级别: %s\n实例: %s\n详情: %s\n时间: %s",
 			alert.Title, alert.Severity, alert.InstanceID, alert.Summary, alert.LastSeenAt.Local().Format("2006-01-02 15:04:05"))
@@ -277,10 +281,11 @@ func notificationPayload(alert storage.Alert, channel storage.NotificationChanne
 	return map[string]any{"alert_id": alert.ID, "instance_id": alert.InstanceID, "rule_key": alert.RuleKey, "severity": alert.Severity, "status": alert.Status, "title": alert.Title, "summary": alert.Summary, "last_seen_at": alert.LastSeenAt}
 }
 
-func checkDingTalkResponse(body io.Reader) error {
+func checkDingTalkResponse(body io.Reader) error { return checkRobotResponse(body, "dingtalk") }
+func checkRobotResponse(body io.Reader, channelType string) error {
 	data, err := io.ReadAll(io.LimitReader(body, 4096))
 	if err != nil {
-		return fmt.Errorf("read dingtalk response: %w", err)
+		return fmt.Errorf("read %s response: %w", channelType, err)
 	}
 	var result struct {
 		ErrCode int    `json:"errcode"`
@@ -290,7 +295,7 @@ func checkDingTalkResponse(body io.Reader) error {
 		return nil
 	}
 	if result.ErrCode != 0 {
-		return fmt.Errorf("dingtalk errcode %d: %s", result.ErrCode, result.ErrMsg)
+		return fmt.Errorf("%s errcode %d: %s", channelType, result.ErrCode, result.ErrMsg)
 	}
 	return nil
 }
@@ -305,7 +310,7 @@ func notificationChannelFromRequest(request NotificationChannelRequest, now time
 	if channelType == "" {
 		channelType = "webhook"
 	}
-	if channelType != "webhook" && channelType != "dingtalk" {
+	if channelType != "webhook" && channelType != "dingtalk" && channelType != "wecom" {
 		return storage.NotificationChannel{}, false
 	}
 	id := strings.TrimSpace(request.ID)

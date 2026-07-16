@@ -52,6 +52,16 @@ func TestOfflineThresholdWiring(t *testing.T) {
 	}
 }
 
+func TestInstanceOfflineAlertBranches(t *testing.T) {
+	now := time.Now().UTC()
+	instances := []storage.Instance{{ID: "offline", Enabled: true}, {ID: "never", Enabled: true}, {ID: "recovered", Enabled: true}, {ID: "retired", Enabled: true}, {ID: "disabled", Enabled: false}}
+	agents := []storage.Agent{{InstanceID: "offline", LastSeenAt: now.Add(-3 * time.Minute)}, {InstanceID: "recovered", LastSeenAt: now.Add(-30 * time.Second)}, {InstanceID: "retired", LastSeenAt: now.Add(-8 * 24 * time.Hour)}, {InstanceID: "disabled", LastSeenAt: now.Add(-3 * time.Minute)}}
+	items := appendInstanceOfflineAlerts(nil, instances, agents, now, 120)
+	if len(items) != 1 || items[0].InstanceID != "offline" || items[0].Severity != "critical" || items[0].Title != "实例离线" {
+		t.Fatalf("unexpected offline alerts: %#v", items)
+	}
+}
+
 func TestNotificationMasterSwitchWiring(t *testing.T) {
 	store := &dashboardSettingsStore{values: map[string]string{settings.NotificationsEnabled: "false"}}
 	provider := settings.NewProvider(store, time.Hour)

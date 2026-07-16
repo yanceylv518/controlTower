@@ -216,6 +216,13 @@ func (h Handler) currentAlerts() ([]AlertItem, error) {
 		items = appendRecentErrorAlerts(items, events)
 	}
 	items = appendAgentBacklogAlertsWithOffline(items, agents, time.Now().UTC(), values.OfflineSeconds)
+	if h.instanceStore != nil {
+		instances, e := h.instanceStore.ListInstances()
+		if e != nil {
+			return nil, e
+		}
+		items = appendInstanceOfflineAlerts(items, instances, agents, time.Now().UTC(), values.OfflineSeconds)
+	}
 	for i := range items {
 		items[i].InstanceName = h.instanceName(items[i].InstanceID)
 		if items[i].DimensionKey != "" {
@@ -226,6 +233,32 @@ func (h Handler) currentAlerts() ([]AlertItem, error) {
 		items[i].Title = items[i].DisplayKey + " " + items[i].Title
 	}
 	return items, nil
+}
+
+func appendInstanceOfflineAlerts(items []AlertItem, instances []storage.Instance, agents []storage.Agent, now time.Time, offlineSeconds int) []AlertItem {
+	latest := map[string]storage.Agent{}
+	for _, agent := range agents {
+		current, ok := latest[agent.InstanceID]
+		if !ok || agent.LastSeenAt.After(current.LastSeenAt) {
+			latest[agent.InstanceID] = agent
+		}
+	}
+	for _, instance := range instances {
+		agent, seen := latest[instance.ID]
+		if !instance.Enabled || !seen || agent.LastSeenAt.IsZero() {
+			continue
+		}
+		age := now.Sub(agent.LastSeenAt)
+		if age <= time.Duration(offlineSeconds)*time.Second || age > 7*24*time.Hour {
+			continue
+		}
+		minutes := int(age.Minutes())
+		if minutes < 1 {
+			minutes = 1
+		}
+		items = append(items, AlertItem{ID: alertID(instance.ID, "instance_offline", instance.ID), InstanceID: instance.ID, RuleKey: "instance_offline", Severity: "critical", Status: "firing", Title: "实例离线", Summary: fmt.Sprintf("最后心跳于 %d 分钟前", minutes), SeenAt: agent.LastSeenAt, FirstSeenAt: agent.LastSeenAt, LastSeenAt: agent.LastSeenAt})
+	}
+	return items
 }
 
 func appendAgentBacklogAlerts(items []AlertItem, agents []storage.Agent, now time.Time) []AlertItem {

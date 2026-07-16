@@ -198,7 +198,7 @@ export interface NotificationChannelItem {
 }
 export interface NotificationChannelInput {
   id: string;
-  channel_type: "webhook" | "dingtalk";
+  channel_type: "webhook" | "dingtalk" | "wecom";
   name: string;
   webhook_url: string;
   enabled: boolean;
