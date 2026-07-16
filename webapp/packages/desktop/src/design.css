@@ -450,3 +450,180 @@ body {
   border-bottom: 1px dotted var(--ct-line-strong);
   cursor: help;
 }
+
+/* ============ 分页器 ============ */
+.ct-pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 8px 4px 0;
+}
+.ct-pager-info {
+  font-size: 11px;
+  color: var(--ct-ink-3);
+  font-variant-numeric: tabular-nums;
+}
+.ct-pager-size {
+  width: 92px;
+}
+
+/* ============ 系统状态：机器卡 ============ */
+.machine-card {
+  padding: 14px 16px;
+  margin: 0 0 12px;
+}
+.machine-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0 0 10px;
+}
+.machine-head h2 {
+  font-size: 14px;
+  font-weight: 700;
+  margin: 0;
+}
+.machine-id {
+  font-size: 11px;
+  color: var(--ct-ink-3);
+  cursor: help;
+}
+.machine-time {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--ct-ink-3);
+}
+.res-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 10px;
+  margin: 0 0 12px;
+}
+.res-stat {
+  border: 1px solid var(--ct-line);
+  border-radius: var(--ct-r-ctl);
+  background: var(--ct-surface-2);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.res-label {
+  font-size: 11px;
+  color: var(--ct-ink-3);
+  letter-spacing: 0.04em;
+}
+.res-value {
+  font-size: 17px;
+  font-weight: 650;
+}
+.res-value.warn {
+  color: var(--ct-warn);
+}
+.res-value.crit {
+  color: var(--ct-crit);
+}
+.res-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--ct-line);
+  overflow: hidden;
+  margin-top: 4px;
+}
+.res-fill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--ct-ok);
+}
+.res-fill.warn {
+  background: var(--ct-warn);
+}
+.res-fill.crit {
+  background: var(--ct-crit);
+}
+.machine-trends {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+.raw-metrics {
+  margin-top: 10px;
+  border: 0;
+}
+.support-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+/* ============ 面板与设置 ============ */
+.sub-panel {
+  padding: 14px 16px;
+  min-height: 0;
+}
+.sub-panel h2 {
+  font-size: 14px;
+  font-weight: 700;
+  margin: 0 0 2px;
+}
+.sub-note {
+  font-size: 12px;
+  color: var(--ct-ink-3);
+  margin: 0 0 12px;
+}
+.settings-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 980px;
+}
+.field-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px 16px;
+}
+.field-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.field-item label {
+  font-size: 12px;
+  color: var(--ct-ink-2);
+}
+.field-meta {
+  font-size: 11px;
+  color: var(--ct-ink-3);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.source-pill {
+  font-size: 10px;
+  border-radius: 999px;
+  padding: 1px 7px;
+  background: var(--ct-surface-2);
+  border: 1px solid var(--ct-line);
+  color: var(--ct-ink-3);
+}
+.source-pill.db {
+  background: var(--ct-warn-weak);
+  color: var(--ct-warn);
+  border-color: transparent;
+}
+.field-action {
+  justify-content: flex-end;
+}
+@media (max-width: 1100px) {
+  .field-grid,
+  .res-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  .support-grid,
+  .machine-trends {
+    grid-template-columns: 1fr;
+  }
+}

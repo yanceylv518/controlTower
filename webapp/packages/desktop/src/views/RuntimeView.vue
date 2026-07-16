@@ -1,14 +1,265 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'; import type { ServerMetricItem } from '@ct/shared'; import { dashboard } from '../api'; import { useFiltersStore } from '../stores/filters'; import { useAsyncData } from '../composables/useAsyncData'; import { useAutoRefresh } from '../composables/useAutoRefresh'; import AppShell from '../components/AppShell.vue'; import AsyncPanel from '../components/AsyncPanel.vue'; import HoursSelect from '../components/HoursSelect.vue'; import MetricMini from '../components/MetricMini.vue'; import StatusTag from '../components/StatusTag.vue'; import TrendChart, { type TrendSeries } from '../components/TrendChart.vue'; import { formatBytes, formatNumber, formatPercent, formatTime } from '../utils/format'
-const filters=useFiltersStore(); const hours=ref(1); const startTime=()=>new Date(Date.now()-hours.value*3600000).toISOString()
-const state=useAsyncData(async()=>{const common={instance_id:filters.instance_id||undefined,limit:200}; const [agents,metrics,health,docker]=await Promise.all([dashboard.agents(common),dashboard.serverMetrics({...common,start_time:startTime(),end_time:new Date().toISOString()}),dashboard.healthChecks(common),dashboard.dockerStatuses(common)]); return {agents:agents.items,metrics:metrics.items,health:health.items,docker:docker.items}})
-watch(()=>[filters.instance_id,hours.value],()=>void state.reload()); useAutoRefresh(state.reload)
-const instanceName=(id:string)=>filters.instances.find(item=>item.instance_id===id)?.name||id
-const grouped=computed(()=>{const groups=new Map<string,ServerMetricItem[]>(); for(const item of state.data.value?.metrics||[]){const list=groups.get(item.instance_id)||[];list.push(item);groups.set(item.instance_id,list)} return [...groups].map(([id,items])=>({id,name:instanceName(id),items:items.sort((a,b)=>a.collected_at.localeCompare(b.collected_at)),latest:items[items.length-1]}))})
-const stale=(time:string)=>Date.now()-new Date(time).getTime()>120000; const tone=(value:number)=>value>=90?'danger':value>=70?'warning':'success'; const percent=(value:number)=>formatPercent(value/100)
-const points=(items:ServerMetricItem[],field:keyof ServerMetricItem,scale=1)=>items.map(item=>[item.collected_at,Number(item[field])*scale] as [string,number])
-const percentSeries=(group:typeof grouped.value[number]):TrendSeries[]=>[{name:'CPU',color:'#246bfe',data:points(group.items,'cpu_percent'),unit:'%'},{name:'内存',color:'#f59e0b',data:points(group.items,'memory_used_percent'),unit:'%'}]
-const diskSeries=(group:typeof grouped.value[number]):TrendSeries[]=>[{name:'磁盘',color:'#8b5cf6',data:points(group.items,'disk_used_percent'),unit:'%'}]
-const networkSeries=(group:typeof grouped.value[number]):TrendSeries[]=>[{name:'接收',color:'#17a2b8',data:points(group.items,'network_rx_bytes_per_second',1/1024),unit:' KB/s'},{name:'发送',color:'#2fb344',data:points(group.items,'network_tx_bytes_per_second',1/1024),unit:' KB/s'}]
+import { computed, ref, watch } from "vue";
+import type { ServerMetricItem } from "@ct/shared";
+import { dashboard } from "../api";
+import { useFiltersStore } from "../stores/filters";
+import { useAsyncData } from "../composables/useAsyncData";
+import { useAutoRefresh } from "../composables/useAutoRefresh";
+import AppShell from "../components/AppShell.vue";
+import AsyncPanel from "../components/AsyncPanel.vue";
+import HoursSelect from "../components/HoursSelect.vue";
+import StatusTag from "../components/StatusTag.vue";
+import TrendChart, { type TrendSeries } from "../components/TrendChart.vue";
+import {
+  formatBytes,
+  formatNumber,
+  formatPercent,
+  formatTime,
+} from "../utils/format";
+
+const filters = useFiltersStore();
+const hours = ref(1);
+const startTime = () =>
+  new Date(Date.now() - hours.value * 3600000).toISOString();
+const state = useAsyncData(async () => {
+  const common = { instance_id: filters.instance_id || undefined, limit: 200 };
+  const [agents, metrics, health, docker] = await Promise.all([
+    dashboard.agents(common),
+    dashboard.serverMetrics({
+      ...common,
+      start_time: startTime(),
+      end_time: new Date().toISOString(),
+    }),
+    dashboard.healthChecks(common),
+    dashboard.dockerStatuses(common),
+  ]);
+  return {
+    agents: agents.items,
+    metrics: metrics.items,
+    health: health.items,
+    docker: docker.items,
+  };
+});
+watch(
+  () => [filters.instance_id, hours.value],
+  () => void state.reload(),
+);
+useAutoRefresh(state.reload);
+const instanceName = (id: string) =>
+  filters.instances.find((item) => item.instance_id === id)?.name || id;
+const grouped = computed(() => {
+  const groups = new Map<string, ServerMetricItem[]>();
+  for (const item of state.data.value?.metrics || []) {
+    const list = groups.get(item.instance_id) || [];
+    list.push(item);
+    groups.set(item.instance_id, list);
+  }
+  return [...groups].map(([id, items]) => ({
+    id,
+    name: instanceName(id),
+    items: items.sort((a, b) => a.collected_at.localeCompare(b.collected_at)),
+    latest: items[items.length - 1],
+  }));
+});
+const stale = (time: string) => Date.now() - new Date(time).getTime() > 120000;
+const tone = (value: number) =>
+  value >= 90 ? "crit" : value >= 70 ? "warn" : "ok";
+const percent = (value: number) => formatPercent(value / 100);
+const points = (
+  items: ServerMetricItem[],
+  field: keyof ServerMetricItem,
+  scale = 1,
+) =>
+  items.map(
+    (item) => [item.collected_at, Number(item[field]) * scale] as [
+      string,
+      number,
+    ],
+  );
+const percentSeries = (group: (typeof grouped.value)[number]): TrendSeries[] => [
+  { name: "CPU", color: "#2f5fe0", data: points(group.items, "cpu_percent"), unit: "%" },
+  { name: "内存", color: "#b96e0c", data: points(group.items, "memory_used_percent"), unit: "%" },
+];
+const diskSeries = (group: (typeof grouped.value)[number]): TrendSeries[] => [
+  { name: "磁盘", color: "#1391a5", data: points(group.items, "disk_used_percent"), unit: "%" },
+];
+const networkSeries = (group: (typeof grouped.value)[number]): TrendSeries[] => [
+  { name: "接收", color: "#2f5fe0", data: points(group.items, "network_rx_bytes_per_second", 1 / 1024), unit: " KB/s" },
+  { name: "发送", color: "#178a5e", data: points(group.items, "network_tx_bytes_per_second", 1 / 1024), unit: " KB/s" },
+];
 </script>
-<template><AppShell title="系统状态"><template #tools><HoursSelect v-model="hours"/></template><AsyncPanel :loading="state.loading.value" :error="state.error.value" :empty="!grouped.length" @retry="state.reload"><template #empty><el-empty description="Agent 上报系统指标后，这里会显示当前状态和趋势"/></template><div v-for="group in grouped" :key="group.id" class="runtime-instance"><div class="panel-title"><div><h2>{{group.name}}</h2><el-tooltip :content="group.id"><span class="readable-id">{{group.id}}</span></el-tooltip></div><div><StatusTag v-if="stale(group.latest.collected_at)" value="stale"/><span class="updated">采集于 {{formatTime(group.latest.collected_at)}}</span></div></div><div class="runtime-metrics"><div :class="`metric-tone tone-${tone(group.latest.cpu_percent)}`"><MetricMini label="CPU" :value="percent(group.latest.cpu_percent)"/></div><div :class="`metric-tone tone-${tone(group.latest.memory_used_percent)}`"><MetricMini label="内存" :value="percent(group.latest.memory_used_percent)"/></div><div :class="`metric-tone tone-${tone(group.latest.disk_used_percent)}`"><MetricMini label="磁盘" :value="percent(group.latest.disk_used_percent)"/></div><MetricMini label="1m 负载" :value="group.latest.load_1m.toFixed(2)"/><MetricMini label="网络接收" :value="`${formatBytes(group.latest.network_rx_bytes_per_second)}/s`"/><MetricMini label="网络发送" :value="`${formatBytes(group.latest.network_tx_bytes_per_second)}/s`"/></div><div class="runtime-trends"><TrendChart title="CPU / 内存" :series="percentSeries(group)" percent/><TrendChart title="磁盘使用率" :series="diskSeries(group)" percent/><TrendChart title="网络收发速率" :series="networkSeries(group)"/></div><el-collapse class="raw-metrics"><el-collapse-item title="原始采样（排障使用）" name="raw"><el-table :data="[...group.items].reverse()"><el-table-column label="时间" width="180"><template #default="s">{{formatTime(s.row.collected_at)}}</template></el-table-column><el-table-column prop="cpu_percent" label="CPU %"/><el-table-column prop="memory_used_percent" label="内存 %"/><el-table-column prop="disk_used_percent" label="磁盘 %"/><el-table-column label="RX"><template #default="s">{{formatBytes(s.row.network_rx_bytes_per_second)}}/s</template></el-table-column><el-table-column label="TX"><template #default="s">{{formatBytes(s.row.network_tx_bytes_per_second)}}/s</template></el-table-column></el-table></el-collapse-item></el-collapse></div></AsyncPanel><div v-if="state.data.value" class="runtime-grid runtime-support"><section class="panel"><h2>Agent</h2><el-table :data="state.data.value.agents"><el-table-column prop="id" label="Agent"/><el-table-column label="状态"><template #default="s"><StatusTag :value="s.row.online?'online':'offline'"/></template></el-table-column><el-table-column label="积压"><template #default="s">{{formatNumber(s.row.backlog_estimate)}}</template></el-table-column><el-table-column prop="report_delay_ms" label="上报延迟 ms"/></el-table></section><section class="panel"><h2>健康检查</h2><el-table :data="state.data.value.health"><el-table-column prop="target" label="目标"/><el-table-column label="状态"><template #default="s"><StatusTag :value="s.row.status"/></template></el-table-column><el-table-column prop="latency_ms" label="延迟 ms"/></el-table></section><section class="panel"><h2>容器</h2><el-table :data="state.data.value.docker"><el-table-column prop="container_name" label="容器"/><el-table-column label="状态"><template #default="s"><StatusTag :value="s.row.running?'running':'stopped'"/></template></el-table-column><el-table-column prop="status" label="详情"/></el-table></section></div></AppShell></template>
+<template>
+  <AppShell title="系统状态">
+    <template #tools><HoursSelect v-model="hours" /></template>
+    <AsyncPanel
+      :loading="state.loading.value"
+      :error="state.error.value"
+      :empty="!grouped.length"
+      @retry="state.reload"
+    >
+      <template #empty>
+        <el-empty
+          description="Agent 上报系统指标后，这里会显示当前状态和趋势"
+        />
+      </template>
+      <!-- 每实例一张机器卡：状态行 + 资源仪表 + 趋势 -->
+      <section
+        v-for="group in grouped"
+        :key="group.id"
+        class="panel machine-card"
+      >
+        <div class="machine-head">
+          <h2>{{ group.name }}</h2>
+          <el-tooltip :content="group.id"
+            ><span class="machine-id">{{ group.id }}</span></el-tooltip
+          >
+          <StatusTag v-if="stale(group.latest.collected_at)" value="stale" />
+          <span class="machine-time"
+            >采集于 {{ formatTime(group.latest.collected_at) }}</span
+          >
+        </div>
+        <div class="res-grid num">
+          <div class="res-stat">
+            <span class="res-label">CPU</span>
+            <span :class="['res-value', tone(group.latest.cpu_percent)]">{{
+              percent(group.latest.cpu_percent)
+            }}</span>
+            <span class="res-track"
+              ><span
+                :class="['res-fill', tone(group.latest.cpu_percent)]"
+                :style="{ width: `${Math.min(group.latest.cpu_percent, 100)}%` }"
+              ></span
+            ></span>
+          </div>
+          <div class="res-stat">
+            <span class="res-label">内存</span>
+            <span
+              :class="['res-value', tone(group.latest.memory_used_percent)]"
+              >{{ percent(group.latest.memory_used_percent) }}</span
+            >
+            <span class="res-track"
+              ><span
+                :class="['res-fill', tone(group.latest.memory_used_percent)]"
+                :style="{
+                  width: `${Math.min(group.latest.memory_used_percent, 100)}%`,
+                }"
+              ></span
+            ></span>
+          </div>
+          <div class="res-stat">
+            <span class="res-label">磁盘</span>
+            <span :class="['res-value', tone(group.latest.disk_used_percent)]">{{
+              percent(group.latest.disk_used_percent)
+            }}</span>
+            <span class="res-track"
+              ><span
+                :class="['res-fill', tone(group.latest.disk_used_percent)]"
+                :style="{
+                  width: `${Math.min(group.latest.disk_used_percent, 100)}%`,
+                }"
+              ></span
+            ></span>
+          </div>
+          <div class="res-stat">
+            <span class="res-label">1m 负载</span>
+            <span class="res-value">{{ group.latest.load_1m.toFixed(2) }}</span>
+          </div>
+          <div class="res-stat">
+            <span class="res-label">网络接收</span>
+            <span class="res-value"
+              >{{ formatBytes(group.latest.network_rx_bytes_per_second) }}/s</span
+            >
+          </div>
+          <div class="res-stat">
+            <span class="res-label">网络发送</span>
+            <span class="res-value"
+              >{{ formatBytes(group.latest.network_tx_bytes_per_second) }}/s</span
+            >
+          </div>
+        </div>
+        <div class="machine-trends">
+          <TrendChart title="CPU / 内存" :series="percentSeries(group)" percent />
+          <TrendChart title="磁盘使用率" :series="diskSeries(group)" percent />
+          <TrendChart title="网络收发速率" :series="networkSeries(group)" />
+        </div>
+        <el-collapse class="raw-metrics">
+          <el-collapse-item title="原始采样（排障使用）" name="raw">
+            <el-table :data="[...group.items].reverse()">
+              <el-table-column label="时间" width="180">
+                <template #default="s">{{
+                  formatTime(s.row.collected_at)
+                }}</template>
+              </el-table-column>
+              <el-table-column prop="cpu_percent" label="CPU %" align="right" />
+              <el-table-column
+                prop="memory_used_percent"
+                label="内存 %"
+                align="right"
+              />
+              <el-table-column
+                prop="disk_used_percent"
+                label="磁盘 %"
+                align="right"
+              />
+              <el-table-column label="RX" align="right">
+                <template #default="s"
+                  >{{ formatBytes(s.row.network_rx_bytes_per_second) }}/s</template
+                >
+              </el-table-column>
+              <el-table-column label="TX" align="right">
+                <template #default="s"
+                  >{{ formatBytes(s.row.network_tx_bytes_per_second) }}/s</template
+                >
+              </el-table-column>
+            </el-table>
+          </el-collapse-item>
+        </el-collapse>
+      </section>
+    </AsyncPanel>
+    <div v-if="state.data.value" class="support-grid">
+      <section class="panel sub-panel">
+        <h2>Agent</h2>
+        <el-table :data="state.data.value.agents">
+          <el-table-column prop="id" label="Agent" />
+          <el-table-column label="状态" width="90">
+            <template #default="s"
+              ><StatusTag :value="s.row.online ? 'online' : 'offline'"
+            /></template>
+          </el-table-column>
+          <el-table-column label="积压" align="right">
+            <template #default="s">{{
+              formatNumber(s.row.backlog_estimate)
+            }}</template>
+          </el-table-column>
+          <el-table-column
+            prop="report_delay_ms"
+            label="上报延迟 ms"
+            align="right"
+          />
+        </el-table>
+      </section>
+      <section class="panel sub-panel">
+        <h2>健康检查</h2>
+        <el-table :data="state.data.value.health">
+          <el-table-column prop="target" label="目标" />
+          <el-table-column label="状态" width="90">
+            <template #default="s"><StatusTag :value="s.row.status" /></template>
+          </el-table-column>
+          <el-table-column prop="latency_ms" label="延迟 ms" align="right" />
+        </el-table>
+      </section>
+      <section class="panel sub-panel">
+        <h2>容器</h2>
+        <el-table :data="state.data.value.docker">
+          <el-table-column prop="container_name" label="容器" />
+          <el-table-column label="状态" width="90">
+            <template #default="s"
+              ><StatusTag :value="s.row.running ? 'running' : 'stopped'"
+            /></template>
+          </el-table-column>
+          <el-table-column prop="status" label="详情" show-overflow-tooltip />
+        </el-table>
+      </section>
+    </div>
+  </AppShell>
+</template>

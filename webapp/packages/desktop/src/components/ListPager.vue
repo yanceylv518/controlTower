@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { ArrowLeft, ArrowRight } from "@element-plus/icons-vue";
 const props = withDefaults(
   defineProps<{ page: number; pageSize: number; itemCount: number }>(),
   { page: 1, pageSize: 20, itemCount: 0 },
@@ -8,28 +8,40 @@ const emit = defineEmits<{
   "update:page": [number];
   "update:pageSize": [number];
 }>();
-const total = computed(
-  () =>
-    (props.page - 1) * props.pageSize +
-    props.itemCount +
-    (props.itemCount === props.pageSize ? 1 : 0),
-);
 function size(value: number) {
   emit("update:pageSize", value);
   emit("update:page", 1);
 }
 </script>
 <template>
-  <div class="pager">
-    <el-pagination
-      :current-page="props.page"
-      :page-size="props.pageSize"
-      :page-sizes="[20, 50, 100]"
-      layout="sizes, prev, pager, next"
-      :total="total"
-      :disabled="props.itemCount === 0"
-      @update:current-page="emit('update:page', $event)"
-      @update:page-size="size"
+  <div class="ct-pager">
+    <span class="ct-pager-info"
+      >第 {{ props.page }} 页 · 本页 {{ props.itemCount }} 条</span
+    >
+    <el-select
+      :model-value="props.pageSize"
+      size="small"
+      class="ct-pager-size"
+      @update:model-value="size"
+    >
+      <el-option
+        v-for="n in [20, 50, 100]"
+        :key="n"
+        :label="`${n} 条/页`"
+        :value="n"
+      />
+    </el-select>
+    <el-button
+      size="small"
+      :icon="ArrowLeft"
+      :disabled="props.page <= 1"
+      @click="emit('update:page', props.page - 1)"
+    />
+    <el-button
+      size="small"
+      :icon="ArrowRight"
+      :disabled="props.itemCount < props.pageSize"
+      @click="emit('update:page', props.page + 1)"
     />
   </div>
 </template>
