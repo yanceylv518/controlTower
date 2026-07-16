@@ -29,11 +29,13 @@ watch(hours, () => {
 useAutoRefresh(state.reload);
 </script>
 <template>
-  <AppShell title="用量统计"
-    ><div class="panel-title">
-      <p class="hint">用量契约不支持 instance_id，本页展示全部实例聚合。</p>
+  <AppShell title="用量统计">
+    <template #tools>
       <HoursSelect v-model="hours" :options="[24, 72, 168]" />
-    </div>
+      <el-tooltip content="用量契约不支持 instance_id，本页展示全部实例聚合"
+        ><span class="tools-hint">全部实例聚合</span></el-tooltip
+      >
+    </template>
     <AsyncPanel
       :loading="state.loading.value"
       :error="state.error.value"

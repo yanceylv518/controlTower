@@ -44,20 +44,22 @@ function search() {
 watch([page, pageSize], () => void state.reload());
 </script>
 <template>
-  <AppShell title="样本分析"
-    ><div class="filter-row">
-      <el-select v-model="form.sample_kind" clearable placeholder="样本类型"
+  <AppShell title="样本分析">
+    <template #tools>
+      <el-select v-model="form.sample_kind" clearable placeholder="样本类型" style="width: 110px"
         ><el-option label="错误" value="error" /><el-option
           label="慢请求"
           value="slow" /></el-select
-      ><el-input v-model="form.model_name" placeholder="模型" /><el-input
+      ><el-input v-model="form.model_name" placeholder="模型" style="width: 130px" /><el-input
         v-model="form.user_id"
         placeholder="用户 ID"
+        style="width: 100px"
       /><el-input
         v-model="form.request_id"
         placeholder="Request ID"
+        style="width: 150px"
       /><el-button type="primary" @click="search">查询</el-button>
-    </div>
+    </template>
     <AsyncPanel
       :loading="state.loading.value"
       :error="state.error.value"

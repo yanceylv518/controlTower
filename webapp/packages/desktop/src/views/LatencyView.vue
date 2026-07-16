@@ -147,8 +147,7 @@ async function copyRequestID(value: string) {
 
 <template>
   <AppShell title="延时分诊">
-    <div class="latency-toolbar">
-      <span>实例：{{ filters.instance_id || "请选择实例" }}</span>
+    <template #tools>
       <el-input
         v-model="userID"
         placeholder="用户 ID"
@@ -177,7 +176,7 @@ async function copyRequestID(value: string) {
           value="unmatched" /><el-option label="多条匹配" value="multiple"
       /></el-select>
       <HoursSelect v-model="hours" />
-    </div>
+    </template>
     <AsyncPanel
       :loading="state.loading.value"
       :error="state.error.value"

@@ -100,22 +100,22 @@ watch([page, pageSize], () => void state.reload());
 useAutoRefresh(state.reload);
 </script>
 <template>
-  <AppShell title="告警中心"
-    ><div class="filter-row">
-      <el-select v-model="status" placeholder="全部状态" clearable
+  <AppShell title="告警中心">
+    <template #tools>
+      <el-select v-model="status" placeholder="全部状态" clearable style="width: 130px"
         ><el-option
           v-for="v in ['firing', 'acknowledged', 'silenced', 'resolved']"
           :key="v"
           :label="v"
           :value="v" /></el-select
-      ><el-select v-model="severity" placeholder="全部级别" clearable
+      ><el-select v-model="severity" placeholder="全部级别" clearable style="width: 130px"
         ><el-option
           v-for="v in ['critical', 'warning', 'info']"
           :key="v"
           :label="v"
           :value="v" /></el-select
       ><el-checkbox v-model="activeOnly">仅活动告警</el-checkbox>
-    </div>
+    </template>
     <AsyncPanel
       :loading="state.loading.value"
       :error="state.error.value"

@@ -192,11 +192,13 @@ onBeforeUnmount(() => {
 });
 </script>
 <template>
-  <AppShell title="运行总览"
-    ><section v-loading="loading">
-      <div class="updated">
-        最后刷新：{{ lastUpdated ? lastUpdated.toLocaleTimeString() : "—" }}
-      </div>
+  <AppShell title="运行总览">
+    <template #tools>
+      <span class="tools-hint"
+        >最后刷新：{{ lastUpdated ? lastUpdated.toLocaleTimeString() : "—" }}</span
+      >
+    </template>
+    <section v-loading="loading">
       <el-alert
         v-if="error"
         :title="error"
