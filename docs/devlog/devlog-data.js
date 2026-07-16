@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-16",
+    type: "bugfix",
+    version: "",
+    title: "v2.7-B4 批次下发：稀疏曲线珠串问题",
+    summary: "rc7 部署后用户反馈 TTFT/缓存命中率曲线变成一串点。诊断：本地 SSR 实证 ECharts 6.0.0 connectNulls 正常画线,排除库与配置;真因是 B3 sparse 模式给所有点开符号,而繁忙维度这两条序列每分钟有值——密集符号连成珠串盖住线。B3 的设计盲区:救孤立点的符号不该套在密集段上。修法:逐点符号——仅左右邻居均为空的孤立点画圆点,连续段纯线;connectNulls 保持。",
+    docs: ["docs/codex-task-v2.7-b4-sparse-symbols.md"],
+    commits: []
+  },
+  {
+    date: "2026-07-16",
     type: "release",
     version: "v2.0.0-rc7",
     title: "rc7 发布：可靠性 + 设置中心 + 体验修正全量集",
