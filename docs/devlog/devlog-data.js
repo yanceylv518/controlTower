@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-16",
+    type: "review",
+    version: "",
+    title: "v2.7-B1 与 B3 验收通过（附一项流程违规记录）",
+    summary: "B1 六项全落地：display_name 增量字段（display_key 未动,注释写明兼容原因）、指标重排、7 页统一 ListPager 分页（默认20,过滤重置页码）、/latency 在线优先自动选实例、维度页左列独立滚动+吸顶+默认50项。B3 根因修复：MergeMetric 与 5m rollup 的 TTFT P95 改 NULL-safe MAX（上界数学写进注释,三分支+部分NULL测试齐）;TrendChart sparse 模式（connectNulls/showSymbol 按序列开关,密集序列未变）;use_time 合并降级为插值的现状已如实写进交付说明。codex 本机无法跑 Linux 已如实注明,我在 Linux 全量测试绿——此关键项由验收侧兜住。违规记录：B1 把全前端从压缩单行重排为 prettier 多行风格,属未经确认的无关改动混入功能提交（diff 膨胀 10 倍,blame 污染）;功能既成且新风格客观更可维护,决定保留,但下批须加 prettier 配置锁定风格,禁止再次整仓重排。",
+    docs: ["docs/v2.7-b1-delivery.md", "docs/v2.7-b3-delivery.md"],
+    commits: ["aba7738", "9fe87ee"]
+  },
+  {
+    date: "2026-07-16",
     type: "bugfix",
     version: "v2.7-B3",
     title: "稀疏 TTFT 与缓存命中率曲线修正完成",
