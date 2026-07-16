@@ -570,17 +570,30 @@ sudo find /var/backups/control-tower -name 'control-tower-*.sql.gz' -mtime +7 -d
 
 ### 9.2 Server 升级
 
+升级顺序铁律：**先升 Server，再升 Agent**（新 Agent 的上报字段会被旧 Server 丢弃）。
+
 ```bash
 cd /opt/controlTower
 git fetch --tags
+git rev-parse --short HEAD > /tmp/ct-rollback-point   # 记下回滚点
 git checkout <新版本 Tag>
 cd deploy/compose
 docker compose up -d --build
 docker compose ps
 curl -f http://127.0.0.1:8080/healthz
+docker compose logs --since 2m server | grep -i "migrat\|error" | head   # 迁移无报错
 ```
 
-该过程不会覆盖 `.env`，也不会删除 MySQL 数据卷。
+该过程不会覆盖 `.env`，也不会删除 MySQL 数据卷；数据库迁移在 Server 启动时自动重放（幂等）。升级后浏览器需强制刷新（Ctrl+Shift+R）。
+
+### 9.2b Server 回滚
+
+```bash
+cd /opt/controlTower && git checkout $(cat /tmp/ct-rollback-point)
+cd deploy/compose && docker compose up -d --build
+```
+
+迁移全部为"只增列"设计，回滚代码不需要回滚数据库——旧版本代码会无视新列照常运行。
 
 ### 9.3 Agent 回滚
 

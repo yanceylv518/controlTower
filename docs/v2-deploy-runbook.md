@@ -130,6 +130,38 @@ curl -s http://127.0.0.1:8080/healthz
 
 ---
 
+## 阶段 1b：CT Server 升级（已部署过的服务器走这条,~5 分钟）
+
+> 升级顺序铁律：**先升 Server（迁移自动执行）,再升 Agent**。反过来新 Agent 的上报字段会被旧 Server 丢弃。
+
+```bash
+cd /opt/controlTower
+git fetch --tags
+git rev-parse --short HEAD > /tmp/ct-rollback-point   # 记下回滚点
+git checkout v2.0.0-rc8
+cd deploy/compose
+docker compose up -d --build     # .env 不动;迁移在 Server 启动时自动重放（幂等）
+```
+
+**升级后验证（一分钟）**：
+
+```bash
+docker compose ps                                  # 三个服务 healthy/running
+curl -f http://127.0.0.1:8080/healthz              # 200
+docker compose logs --since 2m server | grep -i "migrat\|error" | head   # 无迁移报错
+```
+
+浏览器强制刷新（Ctrl+Shift+R,前端资源有缓存）,确认页面正常、告警中心/维度页数据连续。
+
+**回滚（30 秒,任何异常时）**：
+
+```bash
+cd /opt/controlTower && git checkout $(cat /tmp/ct-rollback-point)
+cd deploy/compose && docker compose up -d --build
+```
+
+迁移全部是"只增列"设计,**回滚代码不需要回滚数据库**——旧版本代码会无视新列照常运行。
+
 ## 阶段 2：创建实例（Web，~5 分钟）
 
 实例管理页 → 创建实例，共两个：
