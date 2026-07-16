@@ -213,7 +213,7 @@ func MergeMetric(current Metric, incoming Metric) Metric {
 	merged.P95UseTime = latencyhist.Quantile(merged.LatencyBuckets, 0.95)
 	merged.P50UseTime = latencyhist.Quantile(merged.LatencyBuckets, 0.50)
 	merged.P99UseTime = latencyhist.Quantile(merged.LatencyBuckets, 0.99)
-	merged.TTFTP95MS = nil
+	merged.TTFTP95MS = maxNullableFloat64(current.TTFTP95MS, incoming.TTFTP95MS)
 	return merged
 }
 

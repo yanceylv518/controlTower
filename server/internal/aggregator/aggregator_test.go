@@ -117,6 +117,36 @@ func TestAggregate1mMissingCacheFieldsDoNotProduceZeroRate(t *testing.T) {
 	}
 }
 
+func TestMergeMetricKeepsConservativeTTFTP95(t *testing.T) {
+	low, high := 1200.0, 2400.0
+	tests := []struct {
+		name        string
+		left, right *float64
+		want        *float64
+	}{
+		{name: "both values use maximum", left: &low, right: &high, want: &high},
+		{name: "one null keeps value", left: nil, right: &low, want: &low},
+		{name: "both null stay null", left: nil, right: nil, want: nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			merged := MergeMetric(
+				Metric{InstanceID: "i", DimensionType: "instance", DimensionKey: "i", TTFTP95MS: tt.left},
+				Metric{InstanceID: "i", DimensionType: "instance", DimensionKey: "i", TTFTP95MS: tt.right},
+			)
+			if tt.want == nil {
+				if merged.TTFTP95MS != nil {
+					t.Fatalf("got %v, want nil", *merged.TTFTP95MS)
+				}
+				return
+			}
+			if merged.TTFTP95MS == nil || *merged.TTFTP95MS != *tt.want {
+				t.Fatalf("got %v, want %v", merged.TTFTP95MS, *tt.want)
+			}
+		})
+	}
+}
+
 func findMetric(metrics []Metric, dimensionType string, dimensionKey string) (Metric, bool) {
 	for _, metric := range metrics {
 		if metric.DimensionType == dimensionType && metric.DimensionKey == dimensionKey {

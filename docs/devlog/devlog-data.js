@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-16",
+    type: "bugfix",
+    version: "v2.7-B3",
+    title: "稀疏 TTFT 与缓存命中率曲线修正完成",
+    summary: "TrendChart 增加 sparse 序列模式，TTFT 平均/P95 与缓存命中率启用跨空值连线和孤立点符号，密集序列保持原样；修复同一 1m 桶多次部分聚合把 TTFT P95 清空的根因，1m 合并与 5m 汇总均用非空 P95 的 MAX 作为保守上界，NULL 三分支及 MySQL 增量合并均有测试；核对确认 big_input_count/hits 在 5m 正确相加并由读侧计算命中率。",
+    docs: ["docs/codex-task-v2.7-b3-sparse-series.md", "docs/v2.7-b3-delivery.md"],
+    commits: []
+  },
+  {
+    date: "2026-07-16",
     type: "release",
     version: "v2.7-B1",
     title: "Web 体验修正完成：纯名称、指标排序、七处分页与维度布局",

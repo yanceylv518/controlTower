@@ -644,7 +644,7 @@ func metricBatchMergeSQL(table string, rows int) string {
 	if updateAt < 0 {
 		return sqlText
 	}
-	percentileAssignments := "p50_use_time = NULL,\n  p95_use_time = " + latencyP95MergeSQL() + ",\n  p99_use_time = NULL,\n  ttft_p95_ms = NULL,"
+	percentileAssignments := "p50_use_time = NULL,\n  p95_use_time = " + latencyP95MergeSQL() + ",\n  p99_use_time = NULL,\n  ttft_p95_ms = CASE\n    WHEN ttft_p95_ms IS NULL THEN VALUES(ttft_p95_ms)\n    WHEN VALUES(ttft_p95_ms) IS NULL THEN ttft_p95_ms\n    ELSE GREATEST(ttft_p95_ms, VALUES(ttft_p95_ms))\n  END,"
 	if table == "metric_1m" {
 		percentileAssignments = "p50_use_time = VALUES(p50_use_time),\n  p95_use_time = VALUES(p95_use_time),\n  p99_use_time = VALUES(p99_use_time),\n  ttft_p95_ms = VALUES(ttft_p95_ms),"
 	}

@@ -205,6 +205,7 @@ const cacheHitSeries = computed<TrendSeries[]>(() => [
     color: "#246bfe",
     data: points("cache_hit_rate", 100),
     unit: "%",
+    sparse: true,
   },
 ]);
 const ttftSeries = computed<TrendSeries[]>(() => [
@@ -213,12 +214,14 @@ const ttftSeries = computed<TrendSeries[]>(() => [
     color: "#36a2eb",
     data: points("ttft_avg_ms", 0.001),
     unit: "s",
+    sparse: true,
   },
   {
     name: "TTFT P95",
     color: "#ff9f43",
     data: points("ttft_p95_ms", 0.001),
     unit: "s",
+    sparse: true,
   },
 ]);
 </script>
@@ -374,7 +377,7 @@ const ttftSeries = computed<TrendSeries[]>(() => [
                 :series="rateSeries"
                 percent
               /><TrendChart
-                :title="`TTFT（${bucketLabel}）`"
+                :title="`TTFT（${bucketLabel}，无流式流量的时段无数据）`"
                 :series="ttftSeries"
               /><TrendChart
                 :title="`缓存命中率（${bucketLabel}）`"

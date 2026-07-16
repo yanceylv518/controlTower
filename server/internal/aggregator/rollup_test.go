@@ -96,3 +96,31 @@ func TestRollup5mKeepsSeparateDimensions(t *testing.T) {
 		t.Fatalf("expected separate dimension metrics, got %#v", metrics)
 	}
 }
+
+func TestRollup5mUsesMaximumTTFTP95AndIgnoresNull(t *testing.T) {
+	bucket := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
+	p95Low, p95High := 1200.0, 2400.0
+	big1, hits1, big2, hits2 := int64(3), int64(1), int64(5), int64(4)
+	metrics := Rollup5m([]Metric{
+		{InstanceID: "i", BucketTime: bucket, DimensionType: "instance", DimensionKey: "i", TTFTP95MS: &p95Low, BigInputCount: &big1, BigInputCacheHits: &hits1},
+		{InstanceID: "i", BucketTime: bucket.Add(time.Minute), DimensionType: "instance", DimensionKey: "i"},
+		{InstanceID: "i", BucketTime: bucket.Add(2 * time.Minute), DimensionType: "instance", DimensionKey: "i", TTFTP95MS: &p95High, BigInputCount: &big2, BigInputCacheHits: &hits2},
+	})
+	if len(metrics) != 1 || metrics[0].TTFTP95MS == nil || *metrics[0].TTFTP95MS != p95High {
+		t.Fatalf("unexpected ttft p95: %#v", metrics)
+	}
+	if metrics[0].BigInputCount == nil || *metrics[0].BigInputCount != 8 || metrics[0].BigInputCacheHits == nil || *metrics[0].BigInputCacheHits != 5 {
+		t.Fatalf("unexpected cache counters: %#v", metrics[0])
+	}
+}
+
+func TestRollup5mKeepsTTFTP95NullWhenAllInputsAreNull(t *testing.T) {
+	bucket := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
+	metrics := Rollup5m([]Metric{
+		{InstanceID: "i", BucketTime: bucket, DimensionType: "instance", DimensionKey: "i"},
+		{InstanceID: "i", BucketTime: bucket.Add(time.Minute), DimensionType: "instance", DimensionKey: "i"},
+	})
+	if len(metrics) != 1 || metrics[0].TTFTP95MS != nil {
+		t.Fatalf("expected nil ttft p95: %#v", metrics)
+	}
+}
