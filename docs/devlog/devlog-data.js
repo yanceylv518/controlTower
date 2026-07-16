@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-16",
+    type: "review",
+    version: "",
+    title: "v2.6-B1 验收通过：可靠性三件套,P1 心跳解耦清账",
+    summary: "核实：①pass 重排——本地段（读日志+企微告警）先行,Server 段任何失败走 bufferFailedPass（nginx 字段不入缓冲的既有语义保留、游标按既有规则推进、状态落盘）,不再提前 return;游标晚一轮对齐的取舍写进注释;三种故障模式有单测。②instance_offline:启用+曾接入+7天退役窗+阈值走 settings provider,多 Agent 取最新心跳;离线 Agent 的积压告警抑制联动。③wecom 渠道:与 dingtalk 共用 errcode 校验分支,类型白名单扩展,复用既有退避重试;交付说明含双链路分群建议。清单进 commit、无 force push,Linux 全量测试绿。零返工。至此:账本 P1 心跳解耦、v1.1.2 企微遗留、离线无人喊三项全部清账;v2.6/v2.7 全系列完成,待打 rc7。",
+    docs: ["docs/v2.6-b1-delivery.md"],
+    commits: ["de37f8d"]
+  },
+  {
+    date: "2026-07-16",
     type: "feature",
     version: "v2.6-B1",
     title: "可靠性三件套：Agent 心跳解耦、实例离线告警与企业微信渠道",
