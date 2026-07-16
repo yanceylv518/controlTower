@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-16",
+    type: "release",
+    version: "v2.0.0-rc7",
+    title: "rc7 发布：可靠性 + 设置中心 + 体验修正全量集",
+    summary: "自 rc6 后新增：v2.6-B1（心跳解耦——CT Server 故障不再阻断 Agent 本地企微告警;instance_offline 规则;Server 通知中心 wecom 渠道）、v2.7-B1（display_name/指标重排/7 页分页/latency 自动选实例/维度页布局）、v2.7-B2（设置中心:011 迁移,库>env>默认,免重启生效,15 可配项）、v2.7-B3（稀疏曲线渲染+TTFT P95 合并 MAX 兜底）。部署:先 Server(011 迁移)后 Agent;部署后需在通知设置页创建 wecom 渠道以打通 Server 侧告警推送,建议与 Agent 直发分群。",
+    docs: [],
+    commits: ["de37f8d", "70a5917", "aba7738", "9fe87ee"]
+  },
+  {
+    date: "2026-07-16",
     type: "review",
     version: "",
     title: "v2.6-B1 验收通过：可靠性三件套,P1 心跳解耦清账",
