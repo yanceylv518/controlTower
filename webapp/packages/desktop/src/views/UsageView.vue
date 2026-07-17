@@ -9,15 +9,18 @@ import HoursSelect from "../components/HoursSelect.vue";
 import ListPager from "../components/ListPager.vue";
 import { formatNumber, formatQuota, formatTokens } from "../utils/format";
 import { usePrefsStore } from "../stores/prefs";
+import { useFiltersStore } from "../stores/filters";
 const hours = ref(24);
 const prefs = usePrefsStore();
+const filters = useFiltersStore();
 void prefs.load();
 const quotaFmt = (v: number | null | undefined) =>
   formatQuota(v, prefs.quotaPerUnit, prefs.currencySymbol);
 const page = ref(1);
 const pageSize = ref(20);
 const state = useAsyncData(
-  async () => (await dashboard.usage(hours.value)).items,
+  async () =>
+    (await dashboard.usage(hours.value, filters.instance_id || undefined)).items,
 );
 const groups = computed(() =>
   ["instance_user", "instance_channel", "instance_model"].map((type, i) => ({
@@ -27,7 +30,7 @@ const groups = computed(() =>
       .slice((page.value - 1) * pageSize.value, page.value * pageSize.value),
   })),
 );
-watch(hours, () => {
+watch([hours, () => filters.instance_id], () => {
   page.value = 1;
   void state.reload();
 });
@@ -37,9 +40,6 @@ useAutoRefresh(state.reload);
   <AppShell title="用量统计">
     <template #tools>
       <HoursSelect v-model="hours" :options="[24, 72, 168]" />
-      <el-tooltip content="用量契约不支持 instance_id，本页展示全部实例聚合"
-        ><span class="tools-hint">全部实例聚合</span></el-tooltip
-      >
     </template>
     <AsyncPanel
       :loading="state.loading.value"

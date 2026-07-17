@@ -2,6 +2,7 @@ package settings
 
 import (
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -53,5 +54,14 @@ func TestValidateSettings(t *testing.T) {
 		if bad[key] == "" {
 			t.Fatalf("missing validation for %s", key)
 		}
+	}
+}
+
+func TestValidateDefaultInstanceID(t *testing.T) {
+	if got := Validate(map[string]string{DefaultInstanceID: "inst-prod"}); len(got) != 0 {
+		t.Fatalf("valid default instance rejected: %#v", got)
+	}
+	if got := Validate(map[string]string{DefaultInstanceID: strings.Repeat("x", 129)}); got[DefaultInstanceID] == "" {
+		t.Fatal("missing default instance length validation")
 	}
 }

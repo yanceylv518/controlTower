@@ -30,13 +30,14 @@ const (
 	NotificationsEnabled = "CT_NOTIFICATIONS_ENABLED"
 	QuotaPerUnit         = "CT_QUOTA_PER_UNIT"
 	CurrencySymbol       = "CT_CURRENCY_SYMBOL"
+	DefaultInstanceID    = "CT_DEFAULT_INSTANCE_ID"
 )
 
 var defaults = map[string]string{
 	RetentionDetail: "30", RetentionMetric5m: "90", RetentionRuntime: "7", RetentionAlerts: "30", OfflineSeconds: "120",
 	CPUWarn: "80", CPUCrit: "90", MemoryWarn: "80", MemoryCrit: "90", DiskWarn: "85", DiskCrit: "95",
 	ErrorRateWarn: "20", ErrorRateCrit: "50", P95Warn: "5", P95Crit: "10", NotificationsEnabled: "true",
-	QuotaPerUnit: "500000", CurrencySymbol: "¥",
+	QuotaPerUnit: "500000", CurrencySymbol: "¥", DefaultInstanceID: "",
 }
 
 type Item struct {
@@ -65,7 +66,7 @@ func NewProvider(store storage.SystemSettingStore, ttl time.Duration) *Provider 
 func DefaultValue(key string) string { return defaults[key] }
 
 func Keys() []string {
-	return []string{RetentionDetail, RetentionMetric5m, RetentionRuntime, RetentionAlerts, OfflineSeconds, CPUWarn, CPUCrit, MemoryWarn, MemoryCrit, DiskWarn, DiskCrit, ErrorRateWarn, ErrorRateCrit, P95Warn, P95Crit, NotificationsEnabled, QuotaPerUnit, CurrencySymbol}
+	return []string{RetentionDetail, RetentionMetric5m, RetentionRuntime, RetentionAlerts, OfflineSeconds, CPUWarn, CPUCrit, MemoryWarn, MemoryCrit, DiskWarn, DiskCrit, ErrorRateWarn, ErrorRateCrit, P95Warn, P95Crit, NotificationsEnabled, QuotaPerUnit, CurrencySymbol, DefaultInstanceID}
 }
 func (p *Provider) Invalidate() { p.mu.Lock(); p.loaded = time.Time{}; p.mu.Unlock() }
 func (p *Provider) Items() (map[string]Item, error) {
@@ -183,6 +184,9 @@ func Validate(values map[string]string) map[string]string {
 		if trimmed == "" || len([]rune(trimmed)) > 4 {
 			errs[CurrencySymbol] = "must be 1-4 characters"
 		}
+	}
+	if instanceID, ok := values[DefaultInstanceID]; ok && len([]rune(strings.TrimSpace(instanceID))) > 128 {
+		errs[DefaultInstanceID] = "must be at most 128 characters"
 	}
 	for _, pair := range [][2]string{{CPUWarn, CPUCrit}, {MemoryWarn, MemoryCrit}, {DiskWarn, DiskCrit}, {ErrorRateWarn, ErrorRateCrit}} {
 		w, wok := get(pair[0])

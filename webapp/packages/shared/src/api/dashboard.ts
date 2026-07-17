@@ -427,9 +427,9 @@ export const dashboardApi = (client: ApiClient) => ({
     client.request<ListResponse<DockerStatusItem>>(
       `/api/dashboard/docker-statuses${query(params)}`,
     ),
-  usage: (hours: number) =>
+  usage: (hours: number, instance_id?: string) =>
     client.request<ListResponse<UsageItem>>(
-      `/api/dashboard/usage${query({ hours })}`,
+      `/api/dashboard/usage${query({ hours, instance_id })}`,
     ),
   notificationChannels: () =>
     client.request<ListResponse<NotificationChannelItem>>(
