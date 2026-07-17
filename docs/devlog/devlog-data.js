@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-17",
+    type: "decision",
+    version: "",
+    title: "新增 Control Tower 整机迁移操作手册",
+    summary: "补充从旧 Control Tower 服务器迁移到新服务器的完整生产流程：保持同版本、原样迁移 .env 与 Token Pepper、停止 Agent 和旧 Server 后生成最终一致性备份、在新 Compose MySQL 恢复、验证数据并按复用公网 IP或更换公网 IP 两种方式切换 Agent；同时记录验收、回滚和旧服务器保留要求，避免双写、Token 失效和历史数据丢失。",
+    docs: ["docs/control-tower-server-migration.md"],
+    commits: []
+  },
+  {
+    date: "2026-07-17",
     type: "bugfix",
     version: "",
     title: "统一详情页汇总与关联维度列表的请求数口径",

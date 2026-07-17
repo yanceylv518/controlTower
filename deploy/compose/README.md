@@ -1,5 +1,7 @@
 # Control Tower Docker Compose 部署
 
+需要更换整台 Control Tower 服务器并保留现有数据时，请使用 [Control Tower 服务器迁移操作手册](../../docs/control-tower-server-migration.md)。
+
 生产环境默认使用 GitHub Actions 已构建的 GHCR Server 镜像。服务器只负责拉取镜像和启动容器，不再现场执行 Go、Node、pnpm 或 Docker Build。
 
 ## 首次部署
