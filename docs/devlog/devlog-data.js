@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-17",
+    type: "review",
+    version: "",
+    title: "codex 七提交验收通过：默认实例/健康检查保留/维度切换器等",
+    summary: "核实：①CT_DEFAULT_INSTANCE_ID 设置项+filters store 启动时应用(仅首次加载生效,不覆盖会话内手动切换,settings 接口失败时优雅降级);②健康检查保留从『运行状态天数』拆出为小时级(CT_RETENTION_HEALTH_HOURS 默认6,校验1~168),清理器改为每小时执行(小步快删更平滑);③详情页头部新增可搜索的维度下拉,与‹›巡检互补;④设置页响应式、维度表列宽/行密度、系统状态健康检查简化等四个 UI 修正。全部提交带自查清单;新增三个设置键未引发阈值归零——上周的 DefaultValue 权威来源修复正好防住该事故类。Linux 全量测试+构建绿。零返工。",
+    docs: [],
+    commits: ["7588e85"]
+  },
+  {
+    date: "2026-07-17",
     type: "bugfix",
     version: "",
     title: "健康检查历史默认仅保留 6 小时",
