@@ -192,7 +192,7 @@ function rowClass({ row }: { row: DimRow }) {
           :max-height="720"
           @row-click="openDetail"
         >
-          <el-table-column label="名称" min-width="220">
+          <el-table-column label="名称" min-width="280">
             <template #default="{ row }">
               <span class="dim-name">
                 <i :class="['dim-dot', rowKind(row)]" />
@@ -207,12 +207,12 @@ function rowClass({ row }: { row: DimRow }) {
               </span>
             </template>
           </el-table-column>
-          <el-table-column label="请求数" width="100" align="right" sortable :sort-method="(a: DimRow, b: DimRow) => a.request_count - b.request_count">
+          <el-table-column label="请求数" min-width="100" align="right" sortable :sort-method="(a: DimRow, b: DimRow) => a.request_count - b.request_count">
             <template #default="{ row }">{{
               row.request_count.toLocaleString()
             }}</template>
           </el-table-column>
-          <el-table-column label="错误率" width="130" align="right" sortable :sort-method="(a: DimRow, b: DimRow) => (a.error_rate || 0) - (b.error_rate || 0)">
+          <el-table-column label="错误率" min-width="130" align="right" sortable :sort-method="(a: DimRow, b: DimRow) => (a.error_rate || 0) - (b.error_rate || 0)">
             <template #default="{ row }">
               <span class="err-cell">
                 <span class="track"
@@ -244,29 +244,29 @@ function rowClass({ row }: { row: DimRow }) {
               </span>
             </template>
           </el-table-column>
-          <el-table-column label="成功率" width="90" align="right">
+          <el-table-column label="成功率" min-width="90" align="right">
             <template #default="{ row }">{{ pct(row.success_rate) }}</template>
           </el-table-column>
-          <el-table-column label="P95" width="90" align="right" sortable :sort-method="(a: DimRow, b: DimRow) => (a.p95_use_time || 0) - (b.p95_use_time || 0)">
+          <el-table-column label="P95" min-width="90" align="right" sortable :sort-method="(a: DimRow, b: DimRow) => (a.p95_use_time || 0) - (b.p95_use_time || 0)">
             <template #default="{ row }">{{
               secondsFmt(row.p95_use_time)
             }}</template>
           </el-table-column>
-          <el-table-column label="TTFT P95" width="100" align="right">
+          <el-table-column label="TTFT P95" min-width="100" align="right">
             <template #default="{ row }">
               <span :class="{ 'dim-muted': row.ttft_p95_ms == null }">{{
                 msFmt(row.ttft_p95_ms)
               }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="缓存命中" width="100" align="right">
+          <el-table-column label="缓存命中" min-width="100" align="right">
             <template #default="{ row }">
               <span :class="{ 'dim-muted': row.cache_hit_rate == null }">{{
                 pct(row.cache_hit_rate)
               }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="Token 入/出" width="130" align="right">
+          <el-table-column label="Token 入/出" min-width="150" align="right">
             <template #default="{ row }"
               >{{ formatTokens(row.prompt_tokens) }} /
               {{ formatTokens(row.completion_tokens) }}</template
@@ -274,7 +274,8 @@ function rowClass({ row }: { row: DimRow }) {
           </el-table-column>
           <el-table-column
             label=""
-            :width="kind === 'channels' ? 168 : 92"
+            :width="kind === 'channels' ? 184 : 112"
+            fixed="right"
             align="right"
           >
             <template #default="{ row }">
