@@ -191,19 +191,21 @@ body {
   --el-table-header-bg-color: var(--ct-surface-2);
   --el-table-header-text-color: var(--ct-ink-3);
   --el-table-row-hover-bg-color: var(--ct-surface-2);
-  font-size: 12.5px;
+  font-size: 13px;
 }
 .dim-table .el-table th.el-table__cell {
-  font-size: 11px;
+  font-size: 11.5px;
   letter-spacing: 0.04em;
   font-weight: 600;
-  padding: 6px 0;
+  padding: 9px 0;
 }
 .dim-table .el-table td.el-table__cell {
-  padding: 5px 0;
+  padding: 9px 0;
 }
 .dim-table .el-table .cell {
   white-space: nowrap;
+  padding-left: 12px;
+  padding-right: 12px;
 }
 .dim-name {
   display: inline-flex;
@@ -289,6 +291,17 @@ body {
 }
 .dim-table .el-table__row {
   cursor: pointer;
+}
+.dim-row-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+}
+.dim-row-actions .rowlink {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
 }
 .dim-muted {
   color: var(--ct-ink-3);

@@ -274,17 +274,19 @@ function rowClass({ row }: { row: DimRow }) {
           </el-table-column>
           <el-table-column
             label=""
-            :width="kind === 'channels' ? 140 : 80"
+            :width="kind === 'channels' ? 168 : 92"
             align="right"
           >
             <template #default="{ row }">
-              <el-button
-                v-if="kind === 'channels'"
-                size="small"
-                @click.stop="openOps(row)"
-                >操作</el-button
-              >
-              <span class="rowlink">详情 ›</span>
+              <span class="dim-row-actions">
+                <el-button
+                  v-if="kind === 'channels'"
+                  size="small"
+                  @click.stop="openOps(row)"
+                  >操作</el-button
+                >
+                <span class="rowlink">详情 ›</span>
+              </span>
             </template>
           </el-table-column>
         </el-table>
