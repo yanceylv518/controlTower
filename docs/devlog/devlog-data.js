@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-17",
+    type: "decision",
+    version: "v2.0.0-rc11",
+    title: "生产 Compose 切换为版本化 GHCR 镜像部署",
+    summary: "生产 Compose 默认使用 CT_SERVER_IMAGE 指定的 GHCR Server 镜像，移除服务器现场 build；首次部署、升级和回滚统一使用 pull + up --no-build，避免 2 核生产机在 Go/Node/pnpm 构建期间长时间满 CPU。部署手册补充镜像登录、数据库备份、版本固定、健康验证和数据卷保护说明。",
+    docs: ["deploy/compose/README.md", "docs/v2-deploy-runbook.md", "docs/control-tower-end-to-end-deployment.md"],
+    commits: []
+  },
+  {
+    date: "2026-07-17",
     type: "review",
     version: "",
     title: "codex 七提交验收通过：默认实例/健康检查保留/维度切换器等",

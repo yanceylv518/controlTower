@@ -24,11 +24,7 @@ services:
         max-file: "3"
 
   server:
-    build:
-      context: ../..
-      dockerfile: Dockerfile
-    # 使用已发布镜像时，注释上方 build 并启用下一行：
-    # image: ghcr.io/yanceylv518/controltower-server:latest
+    image: ${CT_SERVER_IMAGE:-ghcr.io/yanceylv518/controltower-server:v2.0.0-rc11}
     restart: unless-stopped
     depends_on:
       mysql:

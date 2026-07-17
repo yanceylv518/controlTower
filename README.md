@@ -40,7 +40,7 @@ Web/H5, alerts, notification sending, controlled operations, and deployment hard
 
 ## Deployment
 
-Docker Compose can build and start the Server, Web, and a persistent MySQL 8 database. Follow the zero-to-running, upgrade, rebuild, optional backup, and troubleshooting instructions in [`deploy/compose/README.md`](deploy/compose/README.md).
+Docker Compose pulls the version-pinned GHCR Server image and starts it with a persistent MySQL 8 database, avoiding production-host builds. Follow the zero-to-running, upgrade, rollback, backup, and troubleshooting instructions in [`deploy/compose/README.md`](deploy/compose/README.md).
 
 For the complete production path from MySQL initialization through Agent dual-mode reporting to full Web data verification, see [`docs/control-tower-end-to-end-deployment.md`](docs/control-tower-end-to-end-deployment.md).
 
