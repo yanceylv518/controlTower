@@ -21,7 +21,7 @@
    必须替换全部 `REPLACE_WITH_*`。`CT_DATABASE_DSN` 中的账号和密码必须与 `MYSQL_USER`、`MYSQL_PASSWORD` 一致。生产环境应把 `CT_SERVER_IMAGE` 固定到实际发布标签，例如：
 
    ```dotenv
-   CT_SERVER_IMAGE=ghcr.io/yanceylv518/controltower-server:v2.0.0-rc11
+   CT_SERVER_IMAGE=ghcr.io/yanceylv518/controltower-server:v2.0.0-rc12
    ```
 
 3. 校验、拉取并启动：
@@ -67,14 +67,14 @@ docker compose exec -T mysql sh -c \
 ```bash
 cd /opt/controlTower
 git fetch --tags
-git checkout v2.0.0-rc11
+git checkout v2.0.0-rc12
 cd deploy/compose
 ```
 
 将 `.env` 中的镜像改为同一版本：
 
 ```dotenv
-CT_SERVER_IMAGE=ghcr.io/yanceylv518/controltower-server:v2.0.0-rc11
+CT_SERVER_IMAGE=ghcr.io/yanceylv518/controltower-server:v2.0.0-rc12
 ```
 
 拉取并快速替换 Server：

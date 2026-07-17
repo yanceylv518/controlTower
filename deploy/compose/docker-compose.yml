@@ -24,7 +24,7 @@ services:
         max-file: "3"
 
   server:
-    image: ${CT_SERVER_IMAGE:-ghcr.io/yanceylv518/controltower-server:v2.0.0-rc11}
+    image: ${CT_SERVER_IMAGE:-ghcr.io/yanceylv518/controltower-server:v2.0.0-rc12}
     restart: unless-stopped
     depends_on:
       mysql:
