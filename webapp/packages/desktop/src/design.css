@@ -577,6 +577,25 @@ body {
   gap: 12px;
   margin-top: 12px;
 }
+.support-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+.support-panel-head h2 {
+  margin: 0;
+}
+.support-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.health-history {
+  margin-top: 8px;
+  border-bottom: 0;
+}
 
 /* ============ 面板与设置 ============ */
 .sub-panel {

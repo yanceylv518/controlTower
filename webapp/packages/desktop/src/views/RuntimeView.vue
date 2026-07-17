@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import type { ServerMetricItem } from "@ct/shared";
+import type { HealthCheckItem, ServerMetricItem } from "@ct/shared";
 import { dashboard } from "../api";
 import { useFiltersStore } from "../stores/filters";
 import { useAsyncData } from "../composables/useAsyncData";
@@ -60,6 +60,25 @@ const grouped = computed(() => {
     items: items.sort((a, b) => a.collected_at.localeCompare(b.collected_at)),
     latest: items[items.length - 1],
   }));
+});
+const latestHealth = computed(() => {
+  const latest = new Map<string, HealthCheckItem>();
+  for (const item of state.data.value?.health || []) {
+    const key = `${item.instance_id}\u0000${item.target}`;
+    const current = latest.get(key);
+    if (!current || item.checked_at > current.checked_at) latest.set(key, item);
+  }
+  return [...latest.values()].sort((a, b) => {
+    const aDown = a.status === "up" || a.status === "healthy" ? 0 : 1;
+    const bDown = b.status === "up" || b.status === "healthy" ? 0 : 1;
+    return bDown - aDown || a.target.localeCompare(b.target);
+  });
+});
+const healthSummary = computed(() => {
+  const normal = latestHealth.value.filter(
+    (item) => item.status === "up" || item.status === "healthy",
+  ).length;
+  return { normal, abnormal: latestHealth.value.length - normal };
 });
 const stale = (time: string) => Date.now() - new Date(time).getTime() > 120000;
 const tone = (value: number) =>
@@ -239,14 +258,53 @@ const networkSeries = (group: (typeof grouped.value)[number]): TrendSeries[] => 
         </el-table>
       </section>
       <section class="panel sub-panel">
-        <h2>健康检查</h2>
-        <el-table :data="state.data.value.health">
+        <div class="support-panel-head">
+          <h2>健康检查</h2>
+          <div class="support-summary">
+            <el-tag size="small" type="success" effect="plain">
+              正常 {{ healthSummary.normal }}
+            </el-tag>
+            <el-tag
+              v-if="healthSummary.abnormal"
+              size="small"
+              type="danger"
+              effect="plain"
+            >
+              异常 {{ healthSummary.abnormal }}
+            </el-tag>
+          </div>
+        </div>
+        <p class="sub-note">每个目标仅展示最近一次检查，异常项优先。</p>
+        <el-table :data="latestHealth">
           <el-table-column prop="target" label="目标" />
           <el-table-column label="状态" width="90">
             <template #default="s"><StatusTag :value="s.row.status" /></template>
           </el-table-column>
-          <el-table-column prop="latency_ms" label="延迟 ms" align="right" />
+          <el-table-column prop="http_status_code" label="HTTP" width="72" align="right" />
+          <el-table-column prop="latency_ms" label="延迟" width="82" align="right">
+            <template #default="s">{{ s.row.latency_ms }} ms</template>
+          </el-table-column>
         </el-table>
+        <el-collapse
+          v-if="state.data.value.health.length > latestHealth.length"
+          class="health-history"
+        >
+          <el-collapse-item
+            :title="`历史记录（${state.data.value.health.length}）`"
+            name="history"
+          >
+            <el-table :data="state.data.value.health" max-height="320">
+              <el-table-column label="时间" width="148">
+                <template #default="s">{{ formatTime(s.row.checked_at) }}</template>
+              </el-table-column>
+              <el-table-column prop="target" label="目标" show-overflow-tooltip />
+              <el-table-column label="状态" width="82">
+                <template #default="s"><StatusTag :value="s.row.status" /></template>
+              </el-table-column>
+              <el-table-column prop="latency_ms" label="ms" width="68" align="right" />
+            </el-table>
+          </el-collapse-item>
+        </el-collapse>
       </section>
       <section class="panel sub-panel">
         <h2>容器</h2>
