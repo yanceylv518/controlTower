@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-17",
+    type: "bugfix",
+    version: "",
+    title: "CPU 99% 排查：清除两个周期性热点（Claude 直接实现）",
+    summary: "生产 CPU 曾打满,盘点全部周期性查询后定位:①告警评估链路每 30 秒执行 Latest1mMetrics('')——参数化 OR 使松散索引失效,退化为扫 24h 全量 metric_1m + 临时表分组,且连 user×model 交叉维度也评估告警(重复告警的第三元凶)。修复:空类型时先 DISTINCT 枚举活跃维度类型(索引前缀,极廉)再逐类型等值查询;currentAlerts 只评估四个核心维度类型。②渠道名批量解析的 GROUP_CONCAT 对全部历史快照排序,每 60s 缓存过期即重来——改为分组取最新快照的联结(与 8d08903 同方)。遗留提醒:调权 LatestChannels 优化仍未进已部署镜像(rc11 之后合入),随下个 tag 生效。",
+    docs: [],
+    commits: []
+  },
+  {
+    date: "2026-07-17",
     type: "review",
     version: "",
     title: "验收通过：调权快照查询优化 + 生产改用发布镜像;rc11 已发布",

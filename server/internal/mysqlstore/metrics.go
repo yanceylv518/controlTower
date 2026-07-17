@@ -52,12 +52,52 @@ func (s Store) recentMetrics(table string, limit int, latestOnly bool) ([]aggreg
 
 func (s Store) latestMetrics(table string, limit int, dimensionType string) ([]aggregator.Metric, error) {
 	cutoff := time.Now().UTC().Add(-24 * time.Hour)
-	rows, err := s.db.QueryContext(context.Background(), recentMetricsSQL(table, true), cutoff, dimensionType, dimensionType, limit)
+	types := []string{dimensionType}
+	if dimensionType == "" {
+		// A parameterized "match any type" predicate defeats the loose index
+		// scan on (dimension_type, instance_id, dimension_key, bucket_time),
+		// so enumerate the active types first (cheap loose scan) and run one
+		// index-friendly equality query per type instead.
+		var err error
+		if types, err = s.activeDimensionTypes(table, cutoff); err != nil {
+			return nil, err
+		}
+	}
+	var out []aggregator.Metric
+	for _, t := range types {
+		rows, err := s.db.QueryContext(context.Background(), recentMetricsSQL(table, true), cutoff, t, t, limit)
+		if err != nil {
+			return nil, err
+		}
+		metrics, err := scanMetrics(rows)
+		rows.Close()
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, metrics...)
+		if len(out) >= limit {
+			out = out[:limit]
+			break
+		}
+	}
+	return out, nil
+}
+
+func (s Store) activeDimensionTypes(table string, cutoff time.Time) ([]string, error) {
+	rows, err := s.db.QueryContext(context.Background(), `SELECT DISTINCT dimension_type FROM `+table+` WHERE bucket_time >= ?`, cutoff)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	return scanMetrics(rows)
+	var out []string
+	for rows.Next() {
+		var t string
+		if err := rows.Scan(&t); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
 }
 
 func scanMetrics(rows *sql.Rows) ([]aggregator.Metric, error) {

@@ -175,7 +175,17 @@ func (h Handler) HandleAlertEvents(w http.ResponseWriter, r *http.Request) {
 func (h Handler) currentAlerts() ([]AlertItem, error) {
 	metrics, err := latestOverviewMetrics(h.source)
 	if h.metricSource != nil {
-		metrics, err = h.metricSource.Latest1mMetrics("")
+		// Alert rules are only meaningful on the four core dimension types;
+		// evaluating cross dimensions (user×model etc.) both wastes CPU every
+		// runner cycle and produces duplicate alerts for the same incident.
+		for _, dimensionType := range []string{"instance", "instance_channel", "instance_user", "instance_model"} {
+			var typed []aggregator.Metric
+			typed, err = h.metricSource.Latest1mMetrics(dimensionType)
+			if err != nil {
+				break
+			}
+			metrics = append(metrics, typed...)
+		}
 	}
 	if err != nil {
 		return nil, err

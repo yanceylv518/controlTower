@@ -10,7 +10,17 @@ import (
 )
 
 func (s Store) ChannelNames(instanceID string) (map[int64]string, error) {
-	rows, err := s.db.QueryContext(context.Background(), `SELECT channel_id, SUBSTRING_INDEX(GROUP_CONCAT(channel_name ORDER BY captured_at DESC), ',', 1) FROM channel_snapshots WHERE instance_id = ? GROUP BY channel_id`, instanceID)
+	// Grouped-join on the latest snapshot per channel: the previous
+	// GROUP_CONCAT ordered the entire snapshot history on every cache miss.
+	rows, err := s.db.QueryContext(context.Background(), `SELECT c.channel_id, c.channel_name
+FROM channel_snapshots c
+JOIN (
+  SELECT channel_id, MAX(captured_at) AS captured_at
+  FROM channel_snapshots
+  WHERE instance_id = ?
+  GROUP BY channel_id
+) latest ON latest.channel_id = c.channel_id AND latest.captured_at = c.captured_at
+WHERE c.instance_id = ?`, instanceID, instanceID)
 	if err != nil {
 		return nil, err
 	}
