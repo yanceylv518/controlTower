@@ -107,6 +107,16 @@ const orderedKeys = computed(
 const currentIndex = computed(() =>
   orderedKeys.value.indexOf(props.dimensionKey),
 );
+const dimensionOptions = computed(() =>
+  (state.data.value || []).map((item) => ({
+    value: item.dimension_key,
+    label: item.display_name || item.display_key || item.dimension_key,
+  })),
+);
+function selectDimension(value: string) {
+  if (value && value !== props.dimensionKey)
+    void router.replace(`${listPath.value}/${encodeURIComponent(value)}`);
+}
 function goSibling(offset: number) {
   const target = orderedKeys.value[currentIndex.value + offset];
   if (target)
@@ -272,13 +282,6 @@ const quota = (v: number | null | undefined) =>
 const firingCount = computed(
   () => alerts.value.filter((a) => a.status === "firing").length,
 );
-const displayName = computed(
-  () =>
-    snapshot.value?.channel_name ||
-    current.value?.display_name ||
-    current.value?.display_key ||
-    idPart.value,
-);
 </script>
 <template>
   <AppShell :title="listTitle">
@@ -312,7 +315,20 @@ const displayName = computed(
       </template>
       <template v-if="current">
         <div class="detail-head">
-          <h2>{{ displayName }}</h2>
+          <el-select
+            class="detail-dimension-select"
+            :model-value="dimensionKey"
+            filterable
+            :placeholder="`选择${listTitle}`"
+            @change="selectDimension"
+          >
+            <el-option
+              v-for="option in dimensionOptions"
+              :key="option.value"
+              :label="option.label"
+              :value="option.value"
+            />
+          </el-select>
           <span class="detail-sub">
             {{ dimensionKey
             }}<template v-if="modelsList.length">

@@ -358,6 +358,12 @@ body {
   font-weight: 700;
   margin: 0;
 }
+.detail-dimension-select {
+  width: clamp(220px, 28vw, 420px);
+}
+.detail-dimension-select .el-select__wrapper {
+  font-weight: 700;
+}
 .detail-head .detail-sub {
   color: var(--ct-ink-3);
   font-size: 12px;
