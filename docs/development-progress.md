@@ -4,6 +4,7 @@
 
 ## 当前状态
 
+- 2026-07-17：设置页改为响应式双列布局，宽屏取消固定窄容器，主配置与辅助配置并排展示，减少右侧空白和纵向滚动。
 - 当前阶段：M2 Web 管理端完成；v2.0-B1 最小部署与发布闭环完成。
 - 当前主线：通过 Docker Compose 部署 Server/Web/MySQL，并通过 tag 流水线发布 Agent、Server 与 GHCR 镜像。
 - 当前不是主线：Mobile H5/PWA、Redis 后台任务、Caddy/TLS、HA/异地备份、自动调权。

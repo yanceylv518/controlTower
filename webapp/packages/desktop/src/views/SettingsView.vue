@@ -115,7 +115,8 @@ onMounted(load);
       >
     </template>
     <div v-loading="loading" class="settings-layout">
-      <section
+      <div class="settings-column settings-column-main">
+        <section
         v-for="section in sections"
         :key="section.title"
         class="panel sub-panel"
@@ -145,8 +146,10 @@ onMounted(load);
             </span>
           </div>
         </div>
-      </section>
-      <section class="panel sub-panel">
+        </section>
+      </div>
+      <div class="settings-column settings-column-side">
+        <section class="panel sub-panel">
         <h2>通知</h2>
         <p class="sub-note">关闭后 Server 侧告警不再向任何通知渠道投递</p>
         <div class="field-grid">
@@ -284,7 +287,8 @@ onMounted(load);
             <el-button @click="changePassword">修改密码</el-button>
           </div>
         </div>
-      </section>
+        </section>
+      </div>
     </div>
   </AppShell>
 </template>
