@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-17",
+    type: "review",
+    version: "",
+    title: "验收通过：调权快照查询优化 + 生产改用发布镜像;rc11 已发布",
+    summary: "①LatestChannels 逐行相关子查询→分组自联结(与维度页 latest 同病同方),带防回归测试(断言不得回到相关子查询形态);②compose 生产改为拉取 GHCR 镜像(CT_SERVER_IMAGE 于 .env 钉版本),生产服务器不再需要构建工具链,升级=改 tag+up -d。时序注意:rc11 tag 先于这两个提交,快照修复随下个 tag 出;拉取式部署后升级习惯变为改 .env 镜像版本。Linux 测试绿,零返工。",
+    docs: [],
+    commits: ["8d08903", "ccd3db1"]
+  },
+  {
+    date: "2026-07-17",
     type: "bugfix",
     version: "",
     title: "优化最新渠道快照查询，消除 MySQL 周期性高 CPU",
