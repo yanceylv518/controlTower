@@ -182,6 +182,7 @@ export interface UsageItem {
   dimension_type: string;
   dimension_key: string;
   display_key: string;
+  display_name: string;
   request_count: number;
   total_tokens: number;
   prompt_tokens: number;

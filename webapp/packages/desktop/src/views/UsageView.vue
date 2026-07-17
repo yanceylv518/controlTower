@@ -50,7 +50,13 @@ useAutoRefresh(state.reload);
         <section v-for="group in groups" :key="group.title" class="panel">
           <h2>{{ group.title }}</h2>
           <el-table :data="group.items"
-            ><el-table-column prop="display_key" label="名称" /><el-table-column
+            ><el-table-column label="名称" min-width="160"
+              ><template #default="s"
+                ><el-tooltip :content="s.row.dimension_key"
+                  ><span>{{ s.row.display_name || s.row.display_key }}</span></el-tooltip
+                ></template
+              ></el-table-column
+            ><el-table-column
               label="请求"
               ><template #default="s">{{
                 formatNumber(s.row.request_count)

@@ -13,6 +13,7 @@ type UsageItem struct {
 	DimensionType    string `json:"dimension_type"`
 	DimensionKey     string `json:"dimension_key"`
 	DisplayKey       string `json:"display_key"`
+	DisplayName      string `json:"display_name"`
 	RequestCount     int64  `json:"request_count"`
 	TotalTokens      int64  `json:"total_tokens"`
 	PromptTokens     int64  `json:"prompt_tokens"`
@@ -51,11 +52,11 @@ func (h Handler) HandleUsage(w http.ResponseWriter, r *http.Request) {
 		if instanceID != "" && !strings.HasPrefix(row.DimensionKey, instanceID+":") {
 			continue
 		}
-		items = append(items, usageItem(row))
+		items = append(items, h.usageItem(row))
 	}
 	writeDashboardJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
-func usageItem(row storage.UsageRow) UsageItem {
-	return UsageItem{DimensionType: row.DimensionType, DimensionKey: row.DimensionKey, DisplayKey: displayDimensionKey(row.DimensionType, row.DimensionKey), RequestCount: row.RequestCount, TotalTokens: row.PromptTokens + row.CompletionTokens, PromptTokens: row.PromptTokens, CompletionTokens: row.CompletionTokens, Quota: row.Quota}
+func (h Handler) usageItem(row storage.UsageRow) UsageItem {
+	return UsageItem{DimensionType: row.DimensionType, DimensionKey: row.DimensionKey, DisplayKey: h.displayDimensionKey(row.DimensionType, row.DimensionKey), DisplayName: h.displayDimensionName(row.DimensionType, row.DimensionKey), RequestCount: row.RequestCount, TotalTokens: row.PromptTokens + row.CompletionTokens, PromptTokens: row.PromptTokens, CompletionTokens: row.CompletionTokens, Quota: row.Quota}
 }
