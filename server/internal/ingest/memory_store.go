@@ -3,6 +3,7 @@ package ingest
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -322,6 +323,28 @@ func (s *MemoryStore) QueryMetricHistory(window, dimensionType, dimensionKey str
 		}
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].BucketTime.Before(items[j].BucketTime) })
+	return items, nil
+}
+
+func (s *MemoryStore) QueryMetricHistoryPrefix(window, dimensionType, dimensionKeyPrefix string, since time.Time) ([]aggregator.Metric, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	source := s.metrics1m
+	if window == "5m" {
+		source = s.metrics5m
+	}
+	items := make([]aggregator.Metric, 0)
+	for _, metric := range source {
+		if metric.DimensionType == dimensionType && strings.HasPrefix(metric.DimensionKey, dimensionKeyPrefix) && !metric.BucketTime.Before(since) {
+			items = append(items, metric)
+		}
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].DimensionKey == items[j].DimensionKey {
+			return items[i].BucketTime.Before(items[j].BucketTime)
+		}
+		return items[i].DimensionKey < items[j].DimensionKey
+	})
 	return items, nil
 }
 

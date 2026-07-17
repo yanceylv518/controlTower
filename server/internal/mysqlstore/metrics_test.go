@@ -36,6 +36,15 @@ func TestMetricHistorySQLFiltersAndSorts(t *testing.T) {
 		}
 	}
 }
+
+func TestMetricHistoryPrefixSQLFiltersAndSorts(t *testing.T) {
+	sqlText := metricHistoryPrefixSQL("metric_1m")
+	for _, fragment := range []string{"FROM metric_1m", "dimension_type = ?", "dimension_key LIKE CONCAT(?, '%')", "bucket_time >= ?", "ORDER BY dimension_key ASC, bucket_time ASC"} {
+		if !strings.Contains(sqlText, fragment) {
+			t.Fatalf("prefix history query missing %q: %s", fragment, sqlText)
+		}
+	}
+}
 func TestFloatPointerConvertsSQLNullFloat(t *testing.T) {
 	if got := floatPointer(sql.NullFloat64{}); got != nil {
 		t.Fatalf("nil SQL float = %#v, want nil", got)

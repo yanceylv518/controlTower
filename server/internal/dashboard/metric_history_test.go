@@ -18,6 +18,11 @@ type metricSourceStub struct {
 	since   time.Time
 }
 
+func (s *metricSourceStub) QueryMetricHistoryPrefix(_ string, _ string, _ string, since time.Time) ([]aggregator.Metric, error) {
+	s.since = since
+	return s.metrics, nil
+}
+
 func (s *metricSourceStub) Recent1mMetrics() ([]aggregator.Metric, error) { return s.metrics, nil }
 func (s *metricSourceStub) Recent5mMetrics() ([]aggregator.Metric, error) { return s.metrics, nil }
 func (s *metricSourceStub) Latest1mMetrics(_ string) ([]aggregator.Metric, error) {
@@ -73,6 +78,25 @@ func TestMetricHistoryAggregateReturnsRangeTotal(t *testing.T) {
 	}
 	if !strings.Contains(response.Body.String(), `"request_count":12`) || !strings.Contains(response.Body.String(), `"error_count":3`) || !strings.Contains(response.Body.String(), `"prompt_tokens":30`) {
 		t.Fatalf("unexpected aggregate response: %s", response.Body.String())
+	}
+}
+
+func TestMetricHistoryPrefixAggregateKeepsDimensionRowsSeparate(t *testing.T) {
+	now := time.Now().UTC()
+	source := &metricSourceStub{metrics: []aggregator.Metric{
+		{InstanceID: "inst", BucketTime: now.Add(-time.Minute), DimensionType: "instance_user_model", DimensionKey: "inst:user:9:model:a", RequestCount: 7},
+		{InstanceID: "inst", BucketTime: now, DimensionType: "instance_user_model", DimensionKey: "inst:user:9:model:a", RequestCount: 5},
+		{InstanceID: "inst", BucketTime: now, DimensionType: "instance_user_model", DimensionKey: "inst:user:9:model:b", RequestCount: 3},
+	}}
+	h := NewHandler(nil).WithMetricSource(source)
+	response := httptest.NewRecorder()
+	h.HandleMetricHistory(response, httptest.NewRequest(http.MethodGet, "/api/dashboard/metric-history?dimension_type=instance_user_model&dimension_key_prefix=inst:user:9:model:&hours=1&aggregate=true", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	body := response.Body.String()
+	if !strings.Contains(body, `"dimension_key":"inst:user:9:model:a"`) || !strings.Contains(body, `"request_count":12`) || !strings.Contains(body, `"dimension_key":"inst:user:9:model:b"`) || !strings.Contains(body, `"request_count":3`) {
+		t.Fatalf("unexpected prefix aggregate response: %s", body)
 	}
 }
 

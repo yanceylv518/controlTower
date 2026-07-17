@@ -40,6 +40,19 @@ func (s Store) QueryMetricHistory(window, dimensionType, dimensionKey string, si
 	return scanMetrics(rows)
 }
 
+func (s Store) QueryMetricHistoryPrefix(window, dimensionType, dimensionKeyPrefix string, since time.Time) ([]aggregator.Metric, error) {
+	table, err := metricTable(window)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(context.Background(), metricHistoryPrefixSQL(table), dimensionType, dimensionKeyPrefix, since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanMetrics(rows)
+}
+
 func (s Store) recentMetrics(table string, limit int, latestOnly bool) ([]aggregator.Metric, error) {
 	rows, err := s.db.QueryContext(context.Background(), recentMetricsSQL(table, latestOnly), limit)
 	if err != nil {
@@ -267,6 +280,17 @@ func metricHistorySQL(table string) string {
 FROM ` + table + `
 WHERE dimension_type = ? AND dimension_key = ? AND bucket_time >= ?
 ORDER BY bucket_time ASC`
+}
+
+func metricHistoryPrefixSQL(table string) string {
+	return `SELECT instance_id, bucket_time, dimension_type, dimension_key,
+  request_count, success_count, error_count, success_rate, error_rate,
+  tpm, prompt_tokens, completion_tokens, quota,
+  avg_use_time, p50_use_time, p95_use_time, p99_use_time, stream_rate, cache_token_rate,
+  use_time_sum, stream_count, cache_tokens_total, cache_prompt_tokens, big_input_count, big_input_cache_hits, ttft_count, ttft_sum_ms, ttft_p50_ms, ttft_p90_ms, ttft_p95_ms, ` + latencyBucketColumnSQL() + `, ` + v2BucketColumnSQL() + `
+FROM ` + table + `
+WHERE dimension_type = ? AND dimension_key LIKE CONCAT(?, '%') AND bucket_time >= ?
+ORDER BY dimension_key ASC, bucket_time ASC`
 }
 
 func metricTable(window string) (string, error) {

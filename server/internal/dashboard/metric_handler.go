@@ -22,6 +22,10 @@ type MetricSource interface {
 	UsageSummary(since time.Time) ([]storage.UsageRow, error)
 }
 
+type metricPrefixSource interface {
+	QueryMetricHistoryPrefix(window, dimensionType, dimensionKeyPrefix string, since time.Time) ([]aggregator.Metric, error)
+}
+
 type MetricListResponse struct {
 	Items []MetricItem `json:"items"`
 }
@@ -107,6 +111,7 @@ func (h Handler) HandleMetricHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	query := r.URL.Query()
 	dimensionType, dimensionKey := query.Get("dimension_type"), query.Get("dimension_key")
+	dimensionKeyPrefix := query.Get("dimension_key_prefix")
 	window := query.Get("window")
 	if window == "" {
 		window = "1m"
@@ -118,11 +123,23 @@ func (h Handler) HandleMetricHistory(w http.ResponseWriter, r *http.Request) {
 			hours = 0
 		}
 	}
-	if dimensionType == "" || dimensionKey == "" || (window != "1m" && window != "5m") || hours < 1 || hours > 24 {
+	if dimensionType == "" || (dimensionKey == "") == (dimensionKeyPrefix == "") || (window != "1m" && window != "5m") || hours < 1 || hours > 24 {
 		writeDashboardError(w, http.StatusBadRequest, "invalid_query")
 		return
 	}
-	metrics, err := h.metricSource.QueryMetricHistory(window, dimensionType, dimensionKey, time.Now().UTC().Add(-time.Duration(hours)*time.Hour))
+	since := time.Now().UTC().Add(-time.Duration(hours) * time.Hour)
+	var metrics []aggregator.Metric
+	var err error
+	if dimensionKeyPrefix != "" {
+		source, ok := h.metricSource.(metricPrefixSource)
+		if !ok {
+			writeDashboardError(w, http.StatusInternalServerError, "metric_prefix_source_not_configured")
+			return
+		}
+		metrics, err = source.QueryMetricHistoryPrefix(window, dimensionType, dimensionKeyPrefix, since)
+	} else {
+		metrics, err = h.metricSource.QueryMetricHistory(window, dimensionType, dimensionKey, since)
+	}
 	if err != nil {
 		writeDashboardError(w, http.StatusInternalServerError, "query_failed")
 		return
@@ -130,6 +147,24 @@ func (h Handler) HandleMetricHistory(w http.ResponseWriter, r *http.Request) {
 	if query.Get("aggregate") == "true" {
 		if len(metrics) == 0 {
 			writeDashboardJSON(w, http.StatusOK, MetricListResponse{Items: []MetricItem{}})
+			return
+		}
+		if dimensionKeyPrefix != "" {
+			grouped := make(map[string]aggregator.Metric)
+			for _, metric := range metrics {
+				if current, ok := grouped[metric.DimensionKey]; ok {
+					grouped[metric.DimensionKey] = aggregator.MergeMetric(current, metric)
+				} else {
+					grouped[metric.DimensionKey] = metric
+				}
+			}
+			merged := make([]aggregator.Metric, 0, len(grouped))
+			for _, metric := range grouped {
+				metric.BucketTime = time.Now().UTC()
+				merged = append(merged, metric)
+			}
+			sort.Slice(merged, func(i, j int) bool { return merged[i].DimensionKey < merged[j].DimensionKey })
+			writeDashboardJSON(w, http.StatusOK, MetricListResponse{Items: h.filterMetricItems(merged, dimensionType, "", query.Get("instance_id"))})
 			return
 		}
 		merged := metrics[0]

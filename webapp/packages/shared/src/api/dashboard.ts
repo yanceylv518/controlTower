@@ -347,7 +347,8 @@ export const dashboardApi = (client: ApiClient) => ({
   metricHistory: (params: {
     window: string;
     dimension_type: string;
-    dimension_key: string;
+    dimension_key?: string;
+    dimension_key_prefix?: string;
     hours: number;
     aggregate?: boolean;
   }) =>

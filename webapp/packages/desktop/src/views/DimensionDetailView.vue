@@ -66,7 +66,7 @@ const idPart = computed(() => props.dimensionKey.split(":").pop() || "");
 const instancePart = computed(() => props.dimensionKey.split(":")[0] || "");
 
 const state = useAsyncData(async () => {
-  const [metrics, channelData, alertData, cross] = await Promise.all([
+  const [metrics, channelData, alertData] = await Promise.all([
     dashboard.metrics({
       window: "1m",
       latest: true,
@@ -80,17 +80,11 @@ const state = useAsyncData(async () => {
         })
       : Promise.resolve({ items: [] as ChannelSnapshot[] }),
     dashboard.alerts({ limit: 200 }),
-    dashboard.metrics({
-      window: "1m",
-      latest: true,
-      dimension_type: crossType.value,
-    }),
   ]);
   snapshots.value = channelData.items;
   alerts.value = alertData.items.filter(
     (item) => item.dimension_key === props.dimensionKey,
   );
-  crossMetrics.value = cross.items;
   void loadHistory(state.data.value !== undefined);
   return metrics.items
     .filter((x) => !filters.instance_id || x.instance_id === filters.instance_id)
@@ -171,7 +165,7 @@ async function loadHistory(silent = false) {
   const background = silent && history.value.length > 0;
   if (!background) historyLoading.value = true;
   try {
-    const [response, aggregate] = await Promise.all([
+    const [response, aggregate, crossAggregate] = await Promise.all([
       dashboard.metricHistory({
         window: historyWindow.value,
         dimension_type: dimensionType.value,
@@ -185,10 +179,18 @@ async function loadHistory(silent = false) {
         hours: hours.value,
         aggregate: true,
       }),
+      dashboard.metricHistory({
+        window: historyWindow.value,
+        dimension_type: crossType.value,
+        dimension_key_prefix: crossPrefix.value,
+        hours: hours.value,
+        aggregate: true,
+      }),
     ]);
     if (historyToken === request) {
       history.value = response.items;
       rangeSummary.value = aggregate.items[0];
+      crossMetrics.value = crossAggregate.items;
     }
   } catch {
     if (historyToken === request && !background) {
