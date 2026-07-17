@@ -656,3 +656,29 @@ body {
   color: var(--ct-crit);
   font-weight: 700;
 }
+
+/* 页内说明 */
+.guide h3 {
+  font-size: 13px;
+  font-weight: 700;
+  margin: 14px 0 6px;
+}
+.guide h3:first-child {
+  margin-top: 0;
+}
+.guide ul,
+.guide ol {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--ct-ink-2);
+}
+.guide li {
+  margin: 4px 0;
+}
+.guide p {
+  margin: 4px 0;
+  color: var(--ct-ink-2);
+}
+.guide b {
+  color: var(--ct-ink);
+}

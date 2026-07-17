@@ -40,7 +40,7 @@ func (s Store) QueryNginxSlowSamples(q storage.NginxSlowSampleQuery) ([]storage.
 	if q.Limit <= 0 {
 		q.Limit = 50
 	}
-	rows, err := s.db.QueryContext(context.Background(), `SELECT id,instance_id,occurred_at,path,status,rt,uht,urt,bytes,COALESCE(request_id,'') FROM nginx_slow_samples WHERE instance_id=? AND occurred_at>=? ORDER BY occurred_at DESC LIMIT ?`, q.InstanceID, q.Since, q.Limit)
+	rows, err := s.db.QueryContext(context.Background(), `SELECT id,instance_id,occurred_at,path,status,rt,uht,urt,bytes,COALESCE(request_id,'') FROM nginx_slow_samples WHERE instance_id=? AND occurred_at>=? AND (? = '' OR request_id = ?) ORDER BY occurred_at DESC LIMIT ?`, q.InstanceID, q.Since, q.RequestID, q.RequestID, q.Limit)
 	if err != nil {
 		return nil, err
 	}

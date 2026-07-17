@@ -128,7 +128,7 @@ func (h Handler) HandleNginxSlowSamples(w http.ResponseWriter, r *http.Request) 
 	}
 	// Correlation filters are applied after loading request dimensions, so page
 	// after enrichment instead of skipping raw rows before the filters run.
-	items, err := h.nginxTimingStore.QueryNginxSlowSamples(storage.NginxSlowSampleQuery{InstanceID: instanceID, Since: time.Now().UTC().Add(-time.Duration(hours) * time.Hour), Limit: 200})
+	items, err := h.nginxTimingStore.QueryNginxSlowSamples(storage.NginxSlowSampleQuery{InstanceID: instanceID, Since: time.Now().UTC().Add(-time.Duration(hours) * time.Hour), Limit: 200, RequestID: strings.TrimSpace(r.URL.Query().Get("request_id"))})
 	if err != nil {
 		writeDashboardError(w, 500, "query_failed")
 		return

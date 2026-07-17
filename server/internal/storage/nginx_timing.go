@@ -30,6 +30,7 @@ type NginxSlowSampleQuery struct {
 	InstanceID string
 	Since      time.Time
 	Limit      int
+	RequestID  string
 }
 
 type RequestDimension struct {

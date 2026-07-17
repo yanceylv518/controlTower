@@ -32,6 +32,7 @@ const emptySummary = () => ({
 });
 const timing = ref<NginxTimingResponse>({ items: [], summary: emptySummary() });
 const samples = ref<NginxSlowSample[]>([]);
+const guideOpen = ref(false);
 const state = useAsyncData(async () => {
   if (!filters.instance_id) {
     timing.value = { items: [], summary: emptySummary() };
@@ -176,6 +177,7 @@ async function copyRequestID(value: string) {
           value="unmatched" /><el-option label="多条匹配" value="multiple"
       /></el-select>
       <HoursSelect v-model="hours" />
+      <el-button size="small" @click="guideOpen = true">说明</el-button>
     </template>
     <AsyncPanel
       :loading="state.loading.value"
@@ -299,7 +301,17 @@ async function copyRequestID(value: string) {
               formatBytes(row.bytes)
             }}</template></el-table-column
           >
-        </el-table>
+        <el-table-column label="" width="90">
+            <template #default="s2">
+              <router-link
+                v-if="s2.row.request_id"
+                :to="`/samples?request_id=${encodeURIComponent(s2.row.request_id)}`"
+                class="rowlink"
+                >业务明细 ›</router-link
+              >
+            </template>
+          </el-table-column>
+          </el-table>
         <ListPager
           v-model:page="page"
           v-model:page-size="pageSize"
@@ -307,5 +319,36 @@ async function copyRequestID(value: string) {
         />
       </section>
     </AsyncPanel>
+  <el-drawer v-model="guideOpen" title="延时分诊 · 怎么看这个页面" size="560px">
+      <div class="guide">
+        <h3>三个计时字段（都来自 Nginx,视角=网关）</h3>
+        <ul>
+          <li><b>RT（请求总耗时）</b>：客户端从发出到收完最后一个字节的全程——用户体感就是它。</li>
+          <li><b>UHT（上游首响应）</b>：网关等到 new-api 吐出第一个字节的时间 = 排队 + new-api 处理 + 上游首字节。<b>金指标</b>：不受流式长回答拖累,它高=真的慢。</li>
+          <li><b>URT（上游总耗时）</b>：new-api 处理完整个请求的时间,<b>含 new-api 内部重试</b>——所以它可能远大于上游自报的耗时。</li>
+        </ul>
+        <h3>两个派生段（相减出来的归因）</h3>
+        <ul>
+          <li><b>传输段 = URT − UHT</b>：首字节之后把内容送完的时间。大 → 流式长输出（正常）或出站链路差。</li>
+          <li><b>客户端段 = RT − URT</b>：网关外面的时间。大 → 用户侧网络 / 入站链路问题,与 new-api 无关。</li>
+        </ul>
+        <h3>组合读法（先看哪个,再看哪个）</h3>
+        <ol>
+          <li><b>UHT 大（≈URT≈RT）</b> → 首字节前就慢:查上游 / new-api / 内部重试。到样本详情里对 use_time 与 URT 的账,再查同 Request ID 是否多条日志（重试实锤）。</li>
+          <li><b>UHT 小、URT 大</b> → 传输段慢:先看是不是流式长回答（正常）,再怀疑出站链路。</li>
+          <li><b>URT 小、RT 大</b> → 客户端段慢:new-api 无辜,查用户侧网络。</li>
+        </ol>
+        <h3>顶部归因卡</h3>
+        <p>把上面第 1/2 种情况自动数好了：慢请求（RT 超阈值）里,「首响应主导」和「传输主导」各占多少——<b>哪边大先查哪边</b>。</p>
+        <h3>关联状态</h3>
+        <ul>
+          <li><b>已关联</b>：通过 Request ID 找到了对应的业务日志,能看到用户/渠道/模型。</li>
+          <li><b>多条匹配</b>：同一 Request ID 有多条业务日志 = <b>new-api 内部发生了重试</b>——这常是"日志延时大而上游自报小"的元凶。</li>
+          <li><b>未关联</b>：网关记了这条慢请求但业务日志没采到（采样上限或非业务接口）,只能看网关侧数据。</li>
+        </ul>
+        <h3>局限</h3>
+        <p>慢样本只保留每分钟最慢 5 条;分钟趋势是实例级的,分不出渠道/客户——业务维度请点「业务明细」跳到样本分析。</p>
+      </div>
+    </el-drawer>
   </AppShell>
 </template>

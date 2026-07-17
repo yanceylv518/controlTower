@@ -509,7 +509,7 @@ export const dashboardApi = (client: ApiClient) => ({
     channel_id?: string;
     model_name?: string;
     match_status?: string;
-  }) =>
+   request_id?: string }) =>
     client.request<ListResponse<NginxSlowSample>>(
       `/api/dashboard/nginx-timing/slow-samples${query(params)}`,
     ),

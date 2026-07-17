@@ -45,7 +45,7 @@ func (s *MemoryStore) QueryNginxSlowSamples(q storage.NginxSlowSampleQuery) ([]s
 	defer s.mu.Unlock()
 	var out []storage.NginxSlowSample
 	for _, v := range s.nginxSlowSamples {
-		if v.InstanceID == q.InstanceID && !v.OccurredAt.Before(q.Since) {
+		if v.InstanceID == q.InstanceID && !v.OccurredAt.Before(q.Since) && (q.RequestID == "" || v.RequestID == q.RequestID) {
 			out = append(out, v)
 		}
 	}

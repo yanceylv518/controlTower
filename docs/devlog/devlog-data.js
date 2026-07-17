@@ -5,6 +5,15 @@ window.DEVLOG = [
     date: "2026-07-17",
     type: "release",
     version: "",
+    title: "样本↔延时分诊双向关联 + 延时分诊页内说明（Claude 直接实现）",
+    summary: "①样本分析行点开详情抽屉:业务账(use_time/token/错误摘要) + 网关账(RT/UHT/URT/传输段/客户端段/归因结论)按 request_id 对齐——『这条慢请求慢在哪一段』一击可查;网关未采样或无 request_id 时如实说明。nginx 慢样本接口增量 request_id 过滤(索引现成)。②延时分诊慢样本行加『业务明细›』跳样本页(带 request_id 过滤)。③延时分诊页顶栏『说明』抽屉:三个计时字段、两个派生段、组合读法三步骤、归因卡与关联状态解释、multiple=内部重试的提示、覆盖率局限——页面自带使用手册。全部测试与构建绿。",
+    docs: [],
+    commits: []
+  },
+  {
+    date: "2026-07-17",
+    type: "release",
+    version: "",
     title: "告警保留清理 + 一键清理按钮（Claude 直接实现）",
     summary: "用户发现真实缺口：alerts/alert_events/notification_deliveries 三表不在保留清理范围,告警无限累积。①设置中心新增『已解决告警保留天数』(默认30):清理器只删已解决且超期的告警(firing/已确认/已静默不受年龄影响),时间线与投递记录随删;②告警中心新增『清理告警』下拉:按已确认/已静默/已解决/全部非活动一键删除(确认框+审计友好);③告警中心默认只显示活动告警。顺手修一个真 bug:defaultAlertSettings 手抄默认值 map,新增设置键后 Parse 半途失败致阈值归零(内存70%也触发 critical)——改为 settings.DefaultValue() 权威来源,根除手抄。全部测试与构建绿。",
     docs: [],
