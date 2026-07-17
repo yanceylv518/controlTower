@@ -9,6 +9,7 @@ import { useAutoRefresh } from "../composables/useAutoRefresh";
 import AppShell from "../components/AppShell.vue";
 import AsyncPanel from "../components/AsyncPanel.vue";
 import StatusTag from "../components/StatusTag.vue";
+import ChannelOperations from "../components/ChannelOperations.vue";
 import { formatTokens } from "../utils/format";
 
 const props = defineProps<{ kind: "customers" | "channels" | "models" }>();
@@ -135,6 +136,10 @@ function toggleKind(key: string) {
   activeKinds.value = activeKinds.value.includes(key)
     ? activeKinds.value.filter((x) => x !== key)
     : [...activeKinds.value, key];
+}
+const opChannel = ref<DimRow | null>(null);
+function openOps(row: DimRow) {
+  opChannel.value = row;
 }
 function openDetail(row: DimRow) {
   void router.push(`/${props.kind}/${encodeURIComponent(row.dimension_key)}`);
@@ -267,13 +272,34 @@ function rowClass({ row }: { row: DimRow }) {
               {{ formatTokens(row.completion_tokens) }}</template
             >
           </el-table-column>
-          <el-table-column label="" width="80" align="right">
-            <template #default>
+          <el-table-column
+            label=""
+            :width="kind === 'channels' ? 140 : 80"
+            align="right"
+          >
+            <template #default="{ row }">
+              <el-button
+                v-if="kind === 'channels'"
+                size="small"
+                @click.stop="openOps(row)"
+                >操作</el-button
+              >
               <span class="rowlink">详情 ›</span>
             </template>
           </el-table-column>
         </el-table>
       </div>
     </AsyncPanel>
+    <el-drawer
+      :model-value="Boolean(opChannel)"
+      :title="`渠道操作 · ${opChannel?.display_name || opChannel?.display_key || ''}`"
+      size="640px"
+      @update:model-value="opChannel = null"
+    >
+      <ChannelOperations
+        v-if="opChannel"
+        :channel-id="Number(opChannel.dimension_key.split(':').pop())"
+      />
+    </el-drawer>
   </AppShell>
 </template>

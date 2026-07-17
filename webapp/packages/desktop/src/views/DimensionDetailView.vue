@@ -14,7 +14,6 @@ import MetricMini from "../components/MetricMini.vue";
 import RateBar from "../components/RateBar.vue";
 import StatusTag from "../components/StatusTag.vue";
 import HoursSelect from "../components/HoursSelect.vue";
-import ChannelOperations from "../components/ChannelOperations.vue";
 import ListPager from "../components/ListPager.vue";
 import TrendChart, { type TrendSeries } from "../components/TrendChart.vue";
 import { formatQuota, formatTime, formatTokens } from "../utils/format";
@@ -544,9 +543,6 @@ const displayName = computed(
                 description="该维度暂无告警记录"
               />
             </div>
-          </el-tab-pane>
-          <el-tab-pane v-if="kind === 'channels'" label="操作" name="ops">
-            <ChannelOperations :channel-id="Number(idPart)" />
           </el-tab-pane>
         </el-tabs>
       </template>
