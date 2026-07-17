@@ -87,6 +87,26 @@ func buildChannelSnapshotQuery(query storage.ChannelSnapshotQuery) (string, []an
 	}
 	args = append(args, limit, offset)
 	builder := strings.Builder{}
+	if query.LatestOnly {
+		// 先按 (instance_id, channel_id) 分组取最新 captured_at，再连接取整行，
+		// 复用 idx_channel_snapshots_instance_channel，避免对全量历史行
+		// （含较大的 models_text）做 filesort。
+		builder.WriteString(`SELECT s.id, s.instance_id, s.channel_id, s.channel_name, s.status, s.weight, s.models_text, s.group_name, s.priority, s.captured_at
+FROM channel_snapshots s
+JOIN (
+  SELECT instance_id, channel_id, MAX(captured_at) AS captured_at
+  FROM channel_snapshots`)
+		builder.WriteString(where)
+		builder.WriteString(`
+  GROUP BY instance_id, channel_id
+) latest
+  ON latest.instance_id = s.instance_id
+ AND latest.channel_id = s.channel_id
+ AND latest.captured_at = s.captured_at
+ORDER BY s.instance_id ASC, s.channel_id ASC
+LIMIT ? OFFSET ?`)
+		return builder.String(), args
+	}
 	builder.WriteString(`SELECT id, instance_id, channel_id, channel_name, status, weight, models_text, group_name, priority, captured_at
 FROM channel_snapshots`)
 	builder.WriteString(where)

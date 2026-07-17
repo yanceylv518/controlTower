@@ -187,3 +187,54 @@ func TestMetricBatchUpsertSQLAndArgs(t *testing.T) {
 		t.Fatalf("args len = %d, want 142", len(args))
 	}
 }
+
+func TestBuildChannelSnapshotQueryLatestOnlyUsesGroupedJoin(t *testing.T) {
+	sqlText, args := buildChannelSnapshotQuery(storage.ChannelSnapshotQuery{
+		InstanceID: "inst-1",
+		LatestOnly: true,
+		Limit:      500,
+	})
+
+	for _, fragment := range []string{
+		"MAX(captured_at) AS captured_at",
+		"GROUP BY instance_id, channel_id",
+		"instance_id = ?",
+		"ORDER BY s.instance_id ASC, s.channel_id ASC",
+		"LIMIT ? OFFSET ?",
+	} {
+		if !strings.Contains(sqlText, fragment) {
+			t.Fatalf("latest-only query missing %q: %s", fragment, sqlText)
+		}
+	}
+	if strings.Contains(sqlText, "ORDER BY captured_at DESC") {
+		t.Fatalf("latest-only query must not filesort full history: %s", sqlText)
+	}
+	if len(args) != 3 {
+		t.Fatalf("args len = %d, want 3: %#v", len(args), args)
+	}
+}
+
+func TestBuildChannelSnapshotQueryHistoryKeepsTimeOrder(t *testing.T) {
+	sqlText, args := buildChannelSnapshotQuery(storage.ChannelSnapshotQuery{
+		InstanceID: "inst-1",
+		ChannelID:  18,
+		Limit:      50,
+	})
+
+	for _, fragment := range []string{
+		"FROM channel_snapshots",
+		"instance_id = ?",
+		"channel_id = ?",
+		"ORDER BY captured_at DESC, channel_id ASC",
+	} {
+		if !strings.Contains(sqlText, fragment) {
+			t.Fatalf("history query missing %q: %s", fragment, sqlText)
+		}
+	}
+	if strings.Contains(sqlText, "GROUP BY") {
+		t.Fatalf("history query must not dedupe: %s", sqlText)
+	}
+	if len(args) != 4 {
+		t.Fatalf("args len = %d, want 4: %#v", len(args), args)
+	}
+}
