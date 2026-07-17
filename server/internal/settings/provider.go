@@ -1,10 +1,10 @@
 package settings
 
 import (
-	"strings"
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,6 +15,7 @@ const (
 	RetentionDetail      = "CT_RETENTION_DETAIL_DAYS"
 	RetentionMetric5m    = "CT_RETENTION_METRIC5M_DAYS"
 	RetentionRuntime     = "CT_RETENTION_RUNTIME_DAYS"
+	RetentionHealthHours = "CT_RETENTION_HEALTH_HOURS"
 	RetentionAlerts      = "CT_RETENTION_ALERTS_DAYS"
 	OfflineSeconds       = "CT_OFFLINE_ALERT_SECONDS"
 	CPUWarn              = "CT_CPU_WARN_PERCENT"
@@ -34,7 +35,7 @@ const (
 )
 
 var defaults = map[string]string{
-	RetentionDetail: "30", RetentionMetric5m: "90", RetentionRuntime: "7", RetentionAlerts: "30", OfflineSeconds: "120",
+	RetentionDetail: "30", RetentionMetric5m: "90", RetentionRuntime: "7", RetentionHealthHours: "6", RetentionAlerts: "30", OfflineSeconds: "120",
 	CPUWarn: "80", CPUCrit: "90", MemoryWarn: "80", MemoryCrit: "90", DiskWarn: "85", DiskCrit: "95",
 	ErrorRateWarn: "20", ErrorRateCrit: "50", P95Warn: "5", P95Crit: "10", NotificationsEnabled: "true",
 	QuotaPerUnit: "500000", CurrencySymbol: "¥", DefaultInstanceID: "",
@@ -46,9 +47,9 @@ type Item struct {
 	Default string `json:"default"`
 }
 type Values struct {
-	RetentionDetailDays, RetentionMetric5mDays, RetentionRuntimeDays, RetentionAlertsDays, OfflineSeconds              int
-	CPUWarn, CPUCrit, MemoryWarn, MemoryCrit, DiskWarn, DiskCrit, ErrorRateWarn, ErrorRateCrit, P95Warn, P95Crit float64
-	NotificationsEnabled                                                                                         bool
+	RetentionDetailDays, RetentionMetric5mDays, RetentionRuntimeDays, RetentionHealthHours, RetentionAlertsDays, OfflineSeconds int
+	CPUWarn, CPUCrit, MemoryWarn, MemoryCrit, DiskWarn, DiskCrit, ErrorRateWarn, ErrorRateCrit, P95Warn, P95Crit                float64
+	NotificationsEnabled                                                                                                        bool
 }
 type Provider struct {
 	store  storage.SystemSettingStore
@@ -61,12 +62,13 @@ type Provider struct {
 func NewProvider(store storage.SystemSettingStore, ttl time.Duration) *Provider {
 	return &Provider{store: store, ttl: ttl}
 }
+
 // DefaultValue exposes the authoritative built-in default for a key so other
 // packages never hand-copy the defaults map.
 func DefaultValue(key string) string { return defaults[key] }
 
 func Keys() []string {
-	return []string{RetentionDetail, RetentionMetric5m, RetentionRuntime, RetentionAlerts, OfflineSeconds, CPUWarn, CPUCrit, MemoryWarn, MemoryCrit, DiskWarn, DiskCrit, ErrorRateWarn, ErrorRateCrit, P95Warn, P95Crit, NotificationsEnabled, QuotaPerUnit, CurrencySymbol, DefaultInstanceID}
+	return []string{RetentionDetail, RetentionMetric5m, RetentionRuntime, RetentionHealthHours, RetentionAlerts, OfflineSeconds, CPUWarn, CPUCrit, MemoryWarn, MemoryCrit, DiskWarn, DiskCrit, ErrorRateWarn, ErrorRateCrit, P95Warn, P95Crit, NotificationsEnabled, QuotaPerUnit, CurrencySymbol, DefaultInstanceID}
 }
 func (p *Provider) Invalidate() { p.mu.Lock(); p.loaded = time.Time{}; p.mu.Unlock() }
 func (p *Provider) Items() (map[string]Item, error) {
@@ -124,6 +126,9 @@ func Parse(items map[string]Item) (Values, error) {
 		return v, err
 	}
 	if v.RetentionRuntimeDays, err = i(RetentionRuntime); err != nil {
+		return v, err
+	}
+	if v.RetentionHealthHours, err = i(RetentionHealthHours); err != nil {
 		return v, err
 	}
 	if v.RetentionAlertsDays, err = i(RetentionAlerts); err != nil {
@@ -184,6 +189,9 @@ func Validate(values map[string]string) map[string]string {
 		if trimmed == "" || len([]rune(trimmed)) > 4 {
 			errs[CurrencySymbol] = "must be 1-4 characters"
 		}
+	}
+	if v, ok := get(RetentionHealthHours); ok && (v < 1 || v > 168 || v != float64(int(v))) {
+		errs[RetentionHealthHours] = "must be an integer between 1 and 168"
 	}
 	if instanceID, ok := values[DefaultInstanceID]; ok && len([]rune(strings.TrimSpace(instanceID))) > 128 {
 		errs[DefaultInstanceID] = "must be at most 128 characters"

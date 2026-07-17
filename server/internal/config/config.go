@@ -27,6 +27,7 @@ type Config struct {
 	RetentionDetailDays          int
 	RetentionMetric5mDays        int
 	RetentionRuntimeDays         int
+	RetentionHealthHours         int
 }
 
 func Load(values map[string]string) (Config, error) {
@@ -50,6 +51,7 @@ func Load(values map[string]string) (Config, error) {
 		RetentionDetailDays:     intOrDefault(values, "CT_RETENTION_DETAIL_DAYS", 30),
 		RetentionMetric5mDays:   intOrDefault(values, "CT_RETENTION_METRIC5M_DAYS", 90),
 		RetentionRuntimeDays:    intOrDefault(values, "CT_RETENTION_RUNTIME_DAYS", 7),
+		RetentionHealthHours:    intOrDefault(values, "CT_RETENTION_HEALTH_HOURS", 6),
 	}
 	if cfg.PublicBaseURL == "" || cfg.DatabaseDSN == "" || cfg.AgentToken == "" || cfg.DashboardToken == "" || cfg.AgentTokenPepper == "" {
 		return Config{}, errors.New("missing required control tower server config")
@@ -78,8 +80,8 @@ func Load(values map[string]string) (Config, error) {
 	if cfg.CommandExpiryMinutes < 1 || cfg.CommandExpiryMinutes > 1440 {
 		return Config{}, errors.New("CT_COMMAND_EXPIRY_MINUTES must be between 1 and 1440")
 	}
-	if cfg.RetentionDetailDays < 0 || cfg.RetentionMetric5mDays < 0 || cfg.RetentionRuntimeDays < 0 {
-		return Config{}, errors.New("retention days must not be negative")
+	if cfg.RetentionDetailDays < 0 || cfg.RetentionMetric5mDays < 0 || cfg.RetentionRuntimeDays < 0 || cfg.RetentionHealthHours < 1 || cfg.RetentionHealthHours > 168 {
+		return Config{}, errors.New("retention settings are outside the allowed range")
 	}
 	return cfg, nil
 }
@@ -100,7 +102,7 @@ func Keys() []string {
 		"CT_NOTIFICATION_INTERVAL_SECONDS",
 		"CT_CHANNEL_SNAPSHOT_RETENTION_DAYS",
 		"CT_ADMIN_USERNAME", "CT_ADMIN_INITIAL_PASSWORD", "CT_SESSION_TTL_HOURS", "CT_NOTIFICATION_MAX_ATTEMPTS",
-		"CT_COMMAND_EXPIRY_MINUTES", "CT_RETENTION_DETAIL_DAYS", "CT_RETENTION_METRIC5M_DAYS", "CT_RETENTION_RUNTIME_DAYS",
+		"CT_COMMAND_EXPIRY_MINUTES", "CT_RETENTION_DETAIL_DAYS", "CT_RETENTION_METRIC5M_DAYS", "CT_RETENTION_RUNTIME_DAYS", "CT_RETENTION_HEALTH_HOURS",
 		"CT_OFFLINE_ALERT_SECONDS", "CT_CPU_WARN_PERCENT", "CT_CPU_CRIT_PERCENT", "CT_MEMORY_WARN_PERCENT", "CT_MEMORY_CRIT_PERCENT", "CT_DISK_WARN_PERCENT", "CT_DISK_CRIT_PERCENT", "CT_ERROR_RATE_WARN_PERCENT", "CT_ERROR_RATE_CRIT_PERCENT", "CT_P95_WARN_SECONDS", "CT_P95_CRIT_SECONDS", "CT_NOTIFICATIONS_ENABLED",
 	}
 }

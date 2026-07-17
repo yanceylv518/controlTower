@@ -28,6 +28,7 @@ const sections: ReadonlyArray<{ title: string; note: string; fields: readonly Fi
       ["CT_RETENTION_DETAIL_DAYS", "明细数据（天）", 1, 365],
       ["CT_RETENTION_METRIC5M_DAYS", "5 分钟指标（天）", 1, 365],
       ["CT_RETENTION_RUNTIME_DAYS", "运行状态（天）", 1, 365],
+      ["CT_RETENTION_HEALTH_HOURS", "健康检查（小时）", 1, 168],
       ["CT_RETENTION_ALERTS_DAYS", "告警（天）", 1, 365],
     ],
   },

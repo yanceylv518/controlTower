@@ -49,8 +49,8 @@ func TestProviderDBEnvDefaultAndInvalidate(t *testing.T) {
 }
 
 func TestValidateSettings(t *testing.T) {
-	bad := Validate(map[string]string{CPUWarn: "95", CPUCrit: "90", RetentionDetail: "0", P95Warn: "0.1"})
-	for _, key := range []string{CPUWarn, RetentionDetail, P95Warn} {
+	bad := Validate(map[string]string{CPUWarn: "95", CPUCrit: "90", RetentionDetail: "0", RetentionHealthHours: "169", P95Warn: "0.1"})
+	for _, key := range []string{CPUWarn, RetentionDetail, RetentionHealthHours, P95Warn} {
 		if bad[key] == "" {
 			t.Fatalf("missing validation for %s", key)
 		}

@@ -112,25 +112,25 @@ func startRetentionRunner(store retentionStore, provider *settings.Provider) {
 			log.Printf("retention settings failed: %v", err)
 			return
 		}
-		pruneRetention(store, values.RetentionDetailDays, values.RetentionMetric5mDays, values.RetentionRuntimeDays, values.RetentionAlertsDays, time.Now().UTC())
+		pruneRetention(store, values.RetentionDetailDays, values.RetentionMetric5mDays, values.RetentionRuntimeDays, values.RetentionHealthHours, values.RetentionAlertsDays, time.Now().UTC())
 	}
 	go func() {
 		timer := time.NewTimer(time.Minute)
 		defer timer.Stop()
 		<-timer.C
 		prune()
-		ticker := time.NewTicker(24 * time.Hour)
+		ticker := time.NewTicker(time.Hour)
 		defer ticker.Stop()
 		for range ticker.C {
 			prune()
 		}
 	}()
 }
-func pruneRetention(store retentionStore, detailDays, metric5mDays, runtimeDays, alertsDays int, now time.Time) {
+func pruneRetention(store retentionStore, detailDays, metric5mDays, runtimeDays, healthHours, alertsDays int, now time.Time) {
 	groups := []struct {
 		days  int
 		kinds []string
-	}{{detailDays, []string{"log_events", "log_samples", "metric_1m", "nginx_timing_1m", "nginx_slow_samples"}}, {metric5mDays, []string{"metric_5m"}}, {runtimeDays, []string{"server_metrics", "health_checks", "docker_statuses"}}, {alertsDays, []string{"alerts", "alert_events", "notification_deliveries"}}}
+	}{{detailDays, []string{"log_events", "log_samples", "metric_1m", "nginx_timing_1m", "nginx_slow_samples"}}, {metric5mDays, []string{"metric_5m"}}, {runtimeDays, []string{"server_metrics", "docker_statuses"}}, {alertsDays, []string{"alerts", "alert_events", "notification_deliveries"}}}
 	for _, g := range groups {
 		if g.days == 0 {
 			continue
@@ -143,6 +143,15 @@ func pruneRetention(store retentionStore, detailDays, metric5mDays, runtimeDays,
 			} else {
 				log.Printf("retention prune %s rows=%d", kind, n)
 			}
+		}
+	}
+	if healthHours > 0 {
+		cutoff := now.Add(-time.Duration(healthHours) * time.Hour)
+		n, err := store.PruneBefore("health_checks", cutoff)
+		if err != nil {
+			log.Printf("retention prune health_checks failed: %v", err)
+		} else {
+			log.Printf("retention prune health_checks rows=%d", n)
 		}
 	}
 }
