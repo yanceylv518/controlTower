@@ -61,7 +61,7 @@ func (s Store) QueryMetrics(id string, start, end time.Time) ([]tuning.ChannelMe
 	return out, rows.Err()
 }
 func (s Store) LatestChannels(id string) ([]tuning.Channel, error) {
-	rows, e := s.db.QueryContext(context.Background(), `SELECT channel_id,channel_name,status,weight FROM channel_snapshots c WHERE instance_id=? AND captured_at=(SELECT MAX(c2.captured_at) FROM channel_snapshots c2 WHERE c2.instance_id=c.instance_id AND c2.channel_id=c.channel_id)`, id)
+	rows, e := s.db.QueryContext(context.Background(), latestChannelsSQL, id, id)
 	if e != nil {
 		return nil, e
 	}
@@ -76,6 +76,19 @@ func (s Store) LatestChannels(id string) ([]tuning.Channel, error) {
 	}
 	return out, rows.Err()
 }
+
+const latestChannelsSQL = `
+SELECT c.channel_id,c.channel_name,c.status,c.weight
+FROM channel_snapshots c
+JOIN (
+  SELECT channel_id,MAX(captured_at) AS captured_at
+  FROM channel_snapshots
+  WHERE instance_id=?
+  GROUP BY channel_id
+) latest
+  ON latest.channel_id=c.channel_id AND latest.captured_at=c.captured_at
+WHERE c.instance_id=?`
+
 func (s Store) InsertRecommendation(r tuning.Recommendation) error {
 	ev, _ := json.Marshal(r.Evidence)
 	_, e := s.db.ExecContext(context.Background(), `INSERT INTO tuning_recommendations(id,instance_id,channel_id,channel_name,created_at,rule,evidence_json,current_weight,proposed_weight,current_priority,proposed_priority,mode_at_creation,status,command_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, r.ID, r.InstanceID, r.ChannelID, r.ChannelName, r.CreatedAt, r.Rule, string(ev), r.CurrentWeight, r.ProposedWeight, r.CurrentPriority, r.ProposedPriority, r.ModeAtCreation, r.Status, r.CommandID)

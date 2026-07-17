@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-17",
+    type: "bugfix",
+    version: "",
+    title: "优化最新渠道快照查询，消除 MySQL 周期性高 CPU",
+    summary: "生产排查确认 LatestChannels 的相关子查询单次执行超过 160 秒。查询改为先按渠道一次性分组求最新 captured_at，再与快照表连接，复用现有 (instance_id, channel_id, captured_at) 索引，避免对每个渠道反复扫描 channel_snapshots；新增 SQL 结构回归测试。",
+    docs: [],
+    commits: []
+  },
+  {
+    date: "2026-07-17",
     type: "decision",
     version: "v2.0.0-rc11",
     title: "生产 Compose 切换为版本化 GHCR 镜像部署",
