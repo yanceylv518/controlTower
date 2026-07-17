@@ -27,8 +27,8 @@ func TestPruneRetentionGroupsAndZeroDisabled(t *testing.T) {
 	if !r.calls["server_metrics"].Equal(now.Add(-7 * 24 * time.Hour)) {
 		t.Fatalf("runtime cutoff=%v", r.calls["server_metrics"])
 	}
-	if !r.calls["alerts_resolved"].Equal(now.Add(-30 * 24 * time.Hour)) {
-		t.Fatalf("alerts cutoff=%v", r.calls["alerts_resolved"])
+	if !r.calls["alerts"].Equal(now.Add(-30 * 24 * time.Hour)) {
+		t.Fatalf("alerts cutoff=%v", r.calls["alerts"])
 	}
 	if _, ok := r.calls["notification_deliveries"]; !ok {
 		t.Fatal("deliveries not pruned")

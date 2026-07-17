@@ -168,10 +168,11 @@ func (s Store) QueryOperationAudits(q storage.OperationAuditQuery) ([]storage.Op
 }
 
 func (s Store) PruneBefore(kind string, cutoff time.Time) (int64, error) {
-	if kind == "alerts_resolved" {
-		// Only resolved alerts age out; firing/acknowledged/silenced stay
-		// visible regardless of age.
-		result, err := s.db.ExecContext(context.Background(), `DELETE FROM alerts WHERE status = 'resolved' AND last_seen_at < ?`, cutoff)
+	if kind == "alerts" {
+		// Age out by last-seen time regardless of status: anything still
+		// firing gets its last_seen_at refreshed every evaluation cycle, so
+		// only genuinely stale history is removed.
+		result, err := s.db.ExecContext(context.Background(), `DELETE FROM alerts WHERE last_seen_at < ?`, cutoff)
 		if err != nil {
 			return 0, err
 		}

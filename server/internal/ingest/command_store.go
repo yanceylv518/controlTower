@@ -119,7 +119,7 @@ func (s *MemoryStore) PruneBefore(kind string, cutoff time.Time) (int64, error) 
 	}
 	var n int64
 	switch kind {
-	case "alerts_resolved", "alert_events", "notification_deliveries":
+	case "alerts", "alert_events", "notification_deliveries":
 		// Alert history lives in the MySQL store; the in-memory store keeps
 		// none of it, so pruning is a no-op here.
 		return 0, nil
