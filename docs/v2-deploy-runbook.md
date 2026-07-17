@@ -139,9 +139,9 @@ curl -s http://127.0.0.1:8080/healthz
 cd /opt/controlTower
 git fetch --tags
 git rev-parse --short HEAD > /tmp/ct-rollback-point   # 记下回滚点
-git checkout v2.0.0-rc12
+git checkout v2.0.0-rc13
 cd deploy/compose
-# 同步把 .env 的 CT_SERVER_IMAGE 固定为 ghcr.io/yanceylv518/controltower-server:v2.0.0-rc12
+# 同步把 .env 的 CT_SERVER_IMAGE 固定为 ghcr.io/yanceylv518/controltower-server:v2.0.0-rc13
 docker compose pull server
 docker compose up -d --no-build server     # .env 其余配置不动;迁移在 Server 启动时自动重放（幂等）
 ```
@@ -198,10 +198,10 @@ curl -s -o /dev/null -w '%{http_code}' http://CT_IP:8080/healthz
 
 ```bash
 cd /tmp
-wget https://github.com/yanceylv518/controlTower/releases/download/v2.0.0-rc12/control-tower-agent-v2.0.0-rc12-linux-amd64.tar.gz
-tar xzf control-tower-agent-v2.0.0-rc12-linux-amd64.tar.gz
-cd control-tower-agent-v2.0.0-rc12-linux-amd64   # 目录名以解压实际为准 ls 确认
-sha256sum -c <(grep agent-v2.0.0-rc12-linux-amd64 SHA256SUMS) 2>/dev/null || echo "校验清单在包外时跳过"
+wget https://github.com/yanceylv518/controlTower/releases/download/v2.0.0-rc13/control-tower-agent-v2.0.0-rc13-linux-amd64.tar.gz
+tar xzf control-tower-agent-v2.0.0-rc13-linux-amd64.tar.gz
+cd control-tower-agent-v2.0.0-rc13-linux-amd64   # 目录名以解压实际为准 ls 确认
+sha256sum -c <(grep agent-v2.0.0-rc13-linux-amd64 SHA256SUMS) 2>/dev/null || echo "校验清单在包外时跳过"
 ```
 
 ### 3.2 路径 A：已有 Agent 的机器（升级 + 双模式）
@@ -244,7 +244,7 @@ sudo systemctl start control-tower-agent
 journalctl -u control-tower-agent -f
 ```
 
-**预期**（一分钟内依次出现）：版本行含 `v2.0.0-rc12`；每 30 秒一条 `alert pass` 审计日志；**无** 401/403/connection refused。Ctrl+C 退出观察。
+**预期**（一分钟内依次出现）：版本行含 `v2.0.0-rc13`；每 30 秒一条 `alert pass` 审计日志；**无** 401/403/connection refused。Ctrl+C 退出观察。
 
 ### 3.3 路径 B：全新安装的机器
 
@@ -259,7 +259,7 @@ journalctl -u control-tower-agent -f   # 预期同 3.2
 
 ### 3.4 每台接入后：Web 三查（~2 分钟）
 
-1. 实例管理页：该实例 Agent **在线**、版本 `v2.0.0-rc12`、最后心跳在滚动；
+1. 实例管理页：该实例 Agent **在线**、版本 `v2.0.0-rc13`、最后心跳在滚动；
 2. 总览页顶栏切到该实例：1~2 分钟后 KPI/趋势出现数据；
 3. 系统状态页：该实例的系统指标/健康检查/容器状态有记录。
 
