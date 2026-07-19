@@ -2,6 +2,15 @@
 // type: release(发版) | bugfix(缺陷修复) | incident(生产事故) | review(代码评审) | decision(方案决策)
 window.DEVLOG = [
   {
+    date: "2026-07-19",
+    type: "bugfix",
+    version: "",
+    title: "修复总览页首次加载的实例初始化竞态",
+    summary: "总览页首次刷新现在会先等待实例列表与默认实例初始化完成，再按选中实例请求 overview、metrics 和 alerts，避免页面挂载时以空 instance_id 抢先请求导致顶部短暂显示“数据加载失败”，随后数据又正常出现。",
+    docs: [],
+    commits: []
+  },
+  {
     date: "2026-07-17",
     type: "decision",
     version: "",

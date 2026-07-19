@@ -110,8 +110,11 @@ async function refresh(silent = false) {
     loading.value = true;
     error.value = "";
   }
-  const instance_id = filters.instance_id || undefined;
   try {
+    // AppShell 中的实例选择器也会在挂载时初始化实例。总览首刷必须等待
+    // 初始化完成，否则可能先以空 instance_id 请求全部实例并短暂报错。
+    await filters.loadInstances();
+    const instance_id = filters.instance_id || undefined;
     const [o, latest, active] = await Promise.all([
       dashboard.overview(instance_id),
       dashboard.metrics({
