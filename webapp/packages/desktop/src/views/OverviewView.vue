@@ -36,14 +36,17 @@ const overview = ref<Overview | null>(null);
 const alerts = ref<AlertItem[]>([]);
 const history = ref<MetricItem[]>([]);
 const lastUpdated = ref<Date | null>(null);
-const chartEl = ref<HTMLDivElement>();
-let chart: echarts.ECharts | undefined;
+const tpmChartEl = ref<HTMLDivElement>();
+const successChartEl = ref<HTMLDivElement>();
+let tpmChart: echarts.ECharts | undefined;
+let successChart: echarts.ECharts | undefined;
 const cards = computed(() => {
   const m = overview.value?.recent_1m;
   const runtime = overview.value?.runtime;
   const error = m?.error_rate || 0;
   const success = m?.success_rate || 0;
   return [
+    { label: "TPM", value: formatNumber(m?.tpm), icon: DataLine, tone: "" },
     {
       label: "成功率",
       value: formatPercent(m?.success_rate),
@@ -68,7 +71,6 @@ const cards = computed(() => {
       icon: Stopwatch,
       tone: "",
     },
-    { label: "TPM", value: formatNumber(m?.tpm), icon: DataLine, tone: "" },
     {
       label: "平均耗时",
       value: formatSeconds(m?.avg_use_time),
@@ -148,40 +150,69 @@ async function refresh(silent = false) {
   }
 }
 function renderChart() {
-  if (!chartEl.value) return;
-  chart ??= echarts.init(chartEl.value);
-  chart.setOption({
+  const timeAxis = history.value.map((x) =>
+    new Date(x.bucket_time).toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+    }),
+  );
+  if (tpmChartEl.value) {
+    tpmChart ??= echarts.init(tpmChartEl.value);
+    tpmChart.setOption({
+      tooltip: {
+        trigger: "axis",
+        valueFormatter: (value: unknown) => formatNumber(Number(value)),
+      },
+      grid: { left: 62, right: 20, bottom: 30, top: 20 },
+      xAxis: { type: "category", boundaryGap: false, data: timeAxis },
+      yAxis: { type: "value", min: 0 },
+      series: [
+        {
+          name: "TPM",
+          type: "line",
+          smooth: true,
+          showSymbol: false,
+          lineStyle: { width: 2 },
+          areaStyle: { opacity: 0.08 },
+          data: history.value.map((x) => x.tpm),
+        },
+      ],
+    });
+  }
+  if (!successChartEl.value) return;
+  successChart ??= echarts.init(successChartEl.value);
+  successChart.setOption({
     tooltip: { trigger: "axis" },
-    legend: { data: ["请求量", "错误数"] },
-    grid: { left: 38, right: 20, bottom: 30, top: 45 },
-    xAxis: {
-      type: "category",
-      data: history.value.map((x) =>
-        new Date(x.bucket_time).toLocaleTimeString([], {
-          hour: "2-digit",
-          minute: "2-digit",
-        }),
-      ),
+    grid: { left: 54, right: 20, bottom: 30, top: 20 },
+    xAxis: { type: "category", boundaryGap: false, data: timeAxis },
+    yAxis: {
+      type: "value",
+      min: 0,
+      max: 100,
+      axisLabel: { formatter: "{value}%" },
     },
-    yAxis: { type: "value", minInterval: 1 },
     series: [
       {
-        name: "请求量",
+        name: "成功率",
         type: "line",
         smooth: true,
-        data: history.value.map((x) => x.request_count),
-      },
-      {
-        name: "错误数",
-        type: "line",
-        smooth: true,
-        data: history.value.map((x) => x.error_count),
+        showSymbol: false,
+        lineStyle: { width: 2 },
+        areaStyle: { opacity: 0.08 },
+        itemStyle: { color: "#178a5e" },
+        data: history.value.map((x) =>
+          x.success_rate === null ? null : Number((x.success_rate * 100).toFixed(2)),
+        ),
+        tooltip: {
+          valueFormatter: (value: unknown) => `${Number(value).toFixed(2)}%`,
+        },
       },
     ],
   });
 }
 function resize() {
-  chart?.resize();
+  tpmChart?.resize();
+  successChart?.resize();
 }
 useAutoRefresh(refresh);
 watch(
@@ -191,7 +222,8 @@ watch(
 window.addEventListener("resize", resize);
 onBeforeUnmount(() => {
   window.removeEventListener("resize", resize);
-  chart?.dispose();
+  tpmChart?.dispose();
+  successChart?.dispose();
 });
 </script>
 <template>
@@ -233,12 +265,21 @@ onBeforeUnmount(() => {
         </article>
       </div>
       <div class="dashboard-grid">
-        <section class="panel chart-panel">
+        <section class="panel trends-panel">
           <div class="panel-title">
-            <h2>近一小时趋势</h2>
-            <span>请求量 / 错误数</span>
+            <h2>全站近一小时趋势</h2>
+            <span>当前实例 · 1 分钟桶</span>
           </div>
-          <div v-if="history.length" ref="chartEl" class="chart"></div>
+          <div v-if="history.length" class="trend-charts">
+            <article class="trend-chart">
+              <h3>TPM</h3>
+              <div ref="tpmChartEl" class="chart"></div>
+            </article>
+            <article class="trend-chart">
+              <h3>成功率</h3>
+              <div ref="successChartEl" class="chart"></div>
+            </article>
+          </div>
           <el-empty v-else description="Agent 上报后将显示近一小时趋势" />
         </section>
         <section class="panel alerts-panel">
@@ -272,3 +313,32 @@ onBeforeUnmount(() => {
       </div></section
   ></AppShell>
 </template>
+
+<style scoped>
+.trends-panel {
+  min-height: 520px;
+}
+.trend-charts {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 18px;
+  margin-top: 18px;
+}
+.trend-chart {
+  min-width: 0;
+  padding-top: 4px;
+  border-top: 1px solid #edf0f5;
+}
+.trend-chart:first-child {
+  border-top: 0;
+}
+.trend-chart h3 {
+  margin: 0 0 4px;
+  color: #46546a;
+  font-size: 13px;
+  font-weight: 600;
+}
+.trend-chart .chart {
+  height: 205px;
+}
+</style>
