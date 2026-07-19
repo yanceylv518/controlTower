@@ -26,6 +26,11 @@ type metricPrefixSource interface {
 	QueryMetricHistoryPrefix(window, dimensionType, dimensionKeyPrefix string, since time.Time) ([]aggregator.Metric, error)
 }
 
+type instanceLatestMetricSource interface {
+	Latest1mMetricsForInstance(dimensionType, instanceID string) ([]aggregator.Metric, error)
+	Latest5mMetricsForInstance(dimensionType, instanceID string) ([]aggregator.Metric, error)
+}
+
 type MetricListResponse struct {
 	Items []MetricItem `json:"items"`
 }
@@ -83,10 +88,16 @@ func (h Handler) HandleMetrics(w http.ResponseWriter, r *http.Request) {
 	var err error
 	latest := query.Get("latest") == "true"
 	dimensionType := query.Get("dimension_type")
-	if window == "5m" && latest {
+	instanceID := query.Get("instance_id")
+	instanceSource, supportsInstanceQuery := h.metricSource.(instanceLatestMetricSource)
+	if window == "5m" && latest && instanceID != "" && supportsInstanceQuery {
+		metrics, err = instanceSource.Latest5mMetricsForInstance(dimensionType, instanceID)
+	} else if window == "5m" && latest {
 		metrics, err = h.metricSource.Latest5mMetrics(dimensionType)
 	} else if window == "5m" {
 		metrics, err = h.metricSource.Recent5mMetrics()
+	} else if latest && instanceID != "" && supportsInstanceQuery {
+		metrics, err = instanceSource.Latest1mMetricsForInstance(dimensionType, instanceID)
 	} else if latest {
 		metrics, err = h.metricSource.Latest1mMetrics(dimensionType)
 	} else {

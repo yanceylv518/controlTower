@@ -28,6 +28,19 @@ func TestLatestMetricsSQLRestrictsToNewestBucket(t *testing.T) {
 	}
 }
 
+func TestLatestMetricsForInstanceSQLUsesCompositeIndexPrefix(t *testing.T) {
+	sqlText := latestMetricsForInstanceSQL("metric_1m")
+	for _, fragment := range []string{
+		"dimension_type = ? AND instance_id = ?",
+		"GROUP BY dimension_key",
+		"m.dimension_type = ? AND m.instance_id = ?",
+	} {
+		if !strings.Contains(sqlText, fragment) {
+			t.Fatalf("instance latest metrics query missing %q: %s", fragment, sqlText)
+		}
+	}
+}
+
 func TestMetricHistorySQLFiltersAndSorts(t *testing.T) {
 	sqlText := metricHistorySQL("metric_5m")
 	for _, fragment := range []string{"FROM metric_5m", "dimension_type = ?", "dimension_key = ?", "bucket_time >= ?", "ORDER BY bucket_time ASC"} {

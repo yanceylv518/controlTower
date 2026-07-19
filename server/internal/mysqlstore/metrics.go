@@ -19,12 +19,20 @@ func (s Store) Latest1mMetrics(dimensionType string) ([]aggregator.Metric, error
 	return s.latestMetrics("metric_1m", 5000, dimensionType)
 }
 
+func (s Store) Latest1mMetricsForInstance(dimensionType, instanceID string) ([]aggregator.Metric, error) {
+	return s.latestMetricsForInstance("metric_1m", 5000, dimensionType, instanceID)
+}
+
 func (s Store) Recent5mMetrics() ([]aggregator.Metric, error) {
 	return s.recentMetrics("metric_5m", 200, false)
 }
 
 func (s Store) Latest5mMetrics(dimensionType string) ([]aggregator.Metric, error) {
 	return s.latestMetrics("metric_5m", 5000, dimensionType)
+}
+
+func (s Store) Latest5mMetricsForInstance(dimensionType, instanceID string) ([]aggregator.Metric, error) {
+	return s.latestMetricsForInstance("metric_5m", 5000, dimensionType, instanceID)
 }
 
 func (s Store) QueryMetricHistory(window, dimensionType, dimensionKey string, since time.Time) ([]aggregator.Metric, error) {
@@ -94,6 +102,20 @@ func (s Store) latestMetrics(table string, limit int, dimensionType string) ([]a
 		}
 	}
 	return out, nil
+}
+
+func (s Store) latestMetricsForInstance(table string, limit int, dimensionType, instanceID string) ([]aggregator.Metric, error) {
+	rows, err := s.db.QueryContext(
+		context.Background(),
+		latestMetricsForInstanceSQL(table),
+		time.Now().UTC().Add(-24*time.Hour), dimensionType, instanceID,
+		dimensionType, instanceID, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanMetrics(rows)
 }
 
 func (s Store) activeDimensionTypes(table string, cutoff time.Time) ([]string, error) {
@@ -251,6 +273,23 @@ LIMIT ?`
   use_time_sum, stream_count, cache_tokens_total, cache_prompt_tokens, big_input_count, big_input_cache_hits, ttft_count, ttft_sum_ms, ttft_p50_ms, ttft_p90_ms, ttft_p95_ms, ` + latencyBucketColumnSQL() + `, ` + v2BucketColumnSQL() + `
 FROM ` + table + `
 ORDER BY bucket_time DESC, dimension_type ASC, dimension_key ASC
+LIMIT ?`
+}
+
+func latestMetricsForInstanceSQL(table string) string {
+	return `SELECT m.instance_id, m.bucket_time, m.dimension_type, m.dimension_key,
+  m.request_count, m.success_count, m.error_count, m.success_rate, m.error_rate,
+  m.tpm, m.prompt_tokens, m.completion_tokens, m.quota,
+  m.avg_use_time, m.p50_use_time, m.p95_use_time, m.p99_use_time, m.stream_rate, m.cache_token_rate,
+  m.use_time_sum, m.stream_count, m.cache_tokens_total, m.cache_prompt_tokens, m.big_input_count, m.big_input_cache_hits, m.ttft_count, m.ttft_sum_ms, m.ttft_p50_ms, m.ttft_p90_ms, m.ttft_p95_ms, ` + prefixedLatencyBucketColumnSQL("m") + `, ` + prefixedV2BucketColumnSQL("m") + `
+FROM ` + table + ` m JOIN (
+  SELECT dimension_key, MAX(bucket_time) AS mb
+  FROM ` + table + `
+  WHERE bucket_time >= ? AND dimension_type = ? AND instance_id = ?
+  GROUP BY dimension_key
+) t ON m.dimension_key=t.dimension_key AND m.bucket_time=t.mb
+WHERE m.dimension_type = ? AND m.instance_id = ?
+ORDER BY m.bucket_time DESC, m.dimension_key ASC
 LIMIT ?`
 }
 

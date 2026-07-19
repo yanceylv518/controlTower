@@ -26,6 +26,7 @@ const dimensionType = computed(() =>
       ? "instance_channel"
       : "instance_model",
 );
+let initialized = false;
 const title = computed(
   () =>
     ({ customers: "客户监控", channels: "渠道监控", models: "模型监控" })[
@@ -44,8 +45,10 @@ watch(
 );
 
 const state = useAsyncData(async () => {
+  await filters.loadInstances();
   const [metrics, channelData] = await Promise.all([
     dashboard.metrics({
+      instance_id: filters.instance_id || undefined,
       window: "1m",
       latest: true,
       dimension_type: dimensionType.value,
@@ -59,13 +62,14 @@ const state = useAsyncData(async () => {
       : Promise.resolve({ items: [] as ChannelSnapshot[] }),
   ]);
   snapshots.value = channelData.items;
-  return metrics.items.filter(
-    (x) => !filters.instance_id || x.instance_id === filters.instance_id,
-  );
+  initialized = true;
+  return metrics.items;
 });
 watch(
   () => [props.kind, filters.instance_id],
-  () => void state.reload(),
+  () => {
+    if (initialized) void state.reload();
+  },
 );
 useAutoRefresh(state.reload);
 

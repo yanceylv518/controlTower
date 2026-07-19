@@ -5,6 +5,15 @@ window.DEVLOG = [
     date: "2026-07-19",
     type: "bugfix",
     version: "",
+    title: "缩短三类监控列表的首次加载时间",
+    summary: "客户、渠道和模型监控现在会等待默认实例初始化完成，只发起一次首屏指标请求，并将 instance_id 下推到 Server。MySQL 按维度类型与实例联合过滤后再取各维度最新桶，避免扫描其他实例近 24 小时指标再由应用层丢弃；实例与系统设置初始化请求也增加并发复用。聚合频率保持 1 分钟不变。",
+    docs: [],
+    commits: []
+  },
+  {
+    date: "2026-07-19",
+    type: "bugfix",
+    version: "",
     title: "修复总览页首次加载的实例初始化竞态",
     summary: "总览页首次刷新现在会先等待实例列表与默认实例初始化完成，再按选中实例请求 overview、metrics 和 alerts，避免页面挂载时以空 instance_id 抢先请求导致顶部短暂显示“数据加载失败”，随后数据又正常出现。",
     docs: [],
