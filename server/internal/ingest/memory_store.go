@@ -326,7 +326,7 @@ func (s *MemoryStore) QueryMetricHistory(window, dimensionType, dimensionKey str
 	return items, nil
 }
 
-func (s *MemoryStore) QueryMetricHistoryPrefix(window, dimensionType, dimensionKeyPrefix string, since time.Time) ([]aggregator.Metric, error) {
+func (s *MemoryStore) QueryMetricHistoryPrefix(window, dimensionType, dimensionKeyPrefix, instanceID string, since time.Time) ([]aggregator.Metric, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	source := s.metrics1m
@@ -335,6 +335,9 @@ func (s *MemoryStore) QueryMetricHistoryPrefix(window, dimensionType, dimensionK
 	}
 	items := make([]aggregator.Metric, 0)
 	for _, metric := range source {
+		if instanceID != "" && metric.InstanceID != instanceID {
+			continue
+		}
 		if metric.DimensionType == dimensionType && strings.HasPrefix(metric.DimensionKey, dimensionKeyPrefix) && !metric.BucketTime.Before(since) {
 			items = append(items, metric)
 		}

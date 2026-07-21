@@ -16,7 +16,7 @@ import CustomerCompareChart from "../components/CustomerCompareChart.vue";
 import CustomerTokenChart from "../components/CustomerTokenChart.vue";
 import MiniSparkline from "../components/MiniSparkline.vue";
 
-const props = defineProps<{ kind: "customers" | "channels" | "models" }>();
+const props = defineProps<{ kind: "channels" | "models" }>();
 const filters = useFiltersStore();
 const route = useRoute();
 const router = useRouter();
@@ -29,18 +29,11 @@ const history = ref<MetricItem[]>([]);
 const activeKinds = ref<string[]>([]);
 const snapshots = ref<ChannelSnapshot[]>([]);
 const dimensionType = computed(() =>
-  props.kind === "customers"
-    ? "instance_user"
-    : props.kind === "channels"
-      ? "instance_channel"
-      : "instance_model",
+  props.kind === "channels" ? "instance_channel" : "instance_model",
 );
 let initialized = false;
 const title = computed(
-  () =>
-    ({ customers: "客户监控", channels: "渠道监控", models: "模型监控" })[
-      props.kind
-    ],
+  () => ({ channels: "渠道监控", models: "模型监控" })[props.kind],
 );
 
 // 旧链接兼容：/channels?key=... 一律跳到详情子页
@@ -90,8 +83,47 @@ watch(
 useAutoRefresh(state.reload);
 
 type DimRow = MetricItem & { channelStatus?: string };
-const rows = computed<DimRow[]>(() =>
-  (state.data.value || []).map((item) => ({
+// 时间窗内无流量的渠道不产生指标行，靠快照兜底补出"无流量/已禁用"行，
+// 否则被禁用的渠道会从页面上整体消失（B2 渠道清晰化的健康墙前提）。
+function snapshotFallbackRow(s: ChannelSnapshot): DimRow {
+  return {
+    instance_id: s.instance_id,
+    instance_name: s.instance_name,
+    bucket_time: s.captured_at,
+    dimension_type: "instance_channel",
+    dimension_key: `${s.instance_id}:channel:${s.channel_id}`,
+    display_key: String(s.channel_id),
+    display_name: s.channel_name,
+    request_count: 0,
+    success_count: 0,
+    error_count: 0,
+    success_rate: null,
+    error_rate: null,
+    tpm: 0,
+    prompt_tokens: 0,
+    completion_tokens: 0,
+    quota: 0,
+    avg_use_time: null,
+    p50_use_time: null,
+    p95_use_time: null,
+    p99_use_time: null,
+    stream_rate: null,
+    cache_token_rate: null,
+    big_input_count: null,
+    big_input_cache_hits: null,
+    cache_hit_rate: null,
+    ttft_count: null,
+    ttft_avg_ms: null,
+    ttft_p50_ms: null,
+    ttft_p90_ms: null,
+    ttft_p95_ms: null,
+    otps: null,
+    otps_sample_tokens: 0,
+    channelStatus: s.status || "enabled",
+  };
+}
+const rows = computed<DimRow[]>(() => {
+  const metricRows = (state.data.value || []).map((item) => ({
     ...item,
     channelStatus:
       props.kind === "channels"
@@ -101,8 +133,14 @@ const rows = computed<DimRow[]>(() =>
               s.instance_id === item.instance_id,
           )?.status || "enabled"
         : undefined,
-  })),
-);
+  }));
+  if (props.kind !== "channels") return metricRows;
+  const present = new Set(metricRows.map((item) => item.dimension_key));
+  const fallback = snapshots.value
+    .filter((s) => !present.has(`${s.instance_id}:channel:${s.channel_id}`))
+    .map(snapshotFallbackRow);
+  return [...metricRows, ...fallback];
+});
 function totalTokens(item: MetricItem) {
   return item.prompt_tokens + item.completion_tokens;
 }

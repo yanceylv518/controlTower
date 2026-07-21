@@ -36,3 +36,13 @@
 ## 结论
 
 四个提交**验收通过、保留在 main**；发现项 1/2 建议随下批小修一并处理，发现项 3 需用户拍板后决定是否补快照兜底。处理完毕再打新 tag 部署（013 迁移随 Server 启动自动应用，先 Server 后 Agent 的既有顺序不变）。
+
+## 处理记录（2026-07-21，用户拍板后 Claude 直接修复）
+
+用户选择发现项 3 的方案 2（渠道页补快照兜底），并授权直接实现。三个 P2 同批修复：
+
+1. **路由重复**：删除旧 `/customers` DimensionView 路由行；DimensionView 的 `kind` 收窄为 `"channels" | "models"`，customers 死分支（dimensionType/title 映射）一并清理。
+2. **instance_id 下推**：`QueryMetricHistoryPrefix` 接口加 `instanceID` 参数；MySQL 侧新增 `metricHistoryPrefixInstanceSQL`（等值列顺序对齐 008 索引 `(dimension_type, instance_id, dimension_key, bucket_time)`），空实例时回退原 SQL；MemoryStore 同步过滤；新增 SQL 结构回归测试。三个监控页调用本就带 `instance_id`，详情页交叉维度聚合调用补传 `instancePart`。
+3. **快照兜底行**：渠道页把快照中存在、但时间窗内无指标行的渠道补为零流量 DimRow（指标列 null/0，状态签取快照 status），自然排在 Token 排序尾部；默认视图仍隐藏 idle/disabled，通过"无流量/已禁用"筛选签展开，计数恢复真实。模型/客户页无快照源，维持时窗行为（有意决策）。
+
+验证：Go 全量测试绿、`vue-tsc` 绿、生产构建绿、gofmt 本批文件合规。发现项 4/5（P3）仍记档未动。部署后建议对 `metric_1m` 的前缀查询 EXPLAIN 确认走 `idx_metric_1m_dim_bucket`。

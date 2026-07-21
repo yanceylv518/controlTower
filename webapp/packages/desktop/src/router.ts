@@ -20,7 +20,7 @@ import LatencyView from './views/LatencyView.vue'
 export const router = createRouter({ history: createWebHistory('/'), routes: [
   { path: '/customers', component: CustomerMonitorView, meta: { title: '客户监控' } },
   { path: '/login', name: 'login', component: LoginView, meta: { title: '登录' } }, { path: '/', name: 'overview', component: OverviewView, meta: { title: '运行总览' } },
-  { path: '/customers', component: DimensionView, props: { kind: 'customers' }, meta: { title: '客户监控' } }, { path: '/channels', component: DimensionView, props: { kind: 'channels' }, meta: { title: '渠道监控' } }, { path: '/models', component: DimensionView, props: { kind: 'models' }, meta: { title: '模型监控' } },
+  { path: '/channels', component: DimensionView, props: { kind: 'channels' }, meta: { title: '渠道监控' } }, { path: '/models', component: DimensionView, props: { kind: 'models' }, meta: { title: '模型监控' } },
   { path: '/customers/:key', component: DimensionDetailView, props: route => ({ kind: 'customers', dimensionKey: String(route.params.key) }), meta: { title: '客户详情' } },
   { path: '/channels/:key', component: DimensionDetailView, props: route => ({ kind: 'channels', dimensionKey: String(route.params.key) }), meta: { title: '渠道详情' } },
   { path: '/models/:key', component: DimensionDetailView, props: route => ({ kind: 'models', dimensionKey: String(route.params.key) }), meta: { title: '模型详情' } },

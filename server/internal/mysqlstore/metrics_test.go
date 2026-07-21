@@ -58,6 +58,15 @@ func TestMetricHistoryPrefixSQLFiltersAndSorts(t *testing.T) {
 		}
 	}
 }
+
+func TestMetricHistoryPrefixInstanceSQLUsesCompositeIndexPrefix(t *testing.T) {
+	sqlText := metricHistoryPrefixInstanceSQL("metric_1m")
+	for _, fragment := range []string{"FROM metric_1m", "dimension_type = ? AND instance_id = ? AND dimension_key LIKE CONCAT(?, '%')", "bucket_time >= ?", "ORDER BY dimension_key ASC, bucket_time ASC"} {
+		if !strings.Contains(sqlText, fragment) {
+			t.Fatalf("instance prefix history query missing %q: %s", fragment, sqlText)
+		}
+	}
+}
 func TestFloatPointerConvertsSQLNullFloat(t *testing.T) {
 	if got := floatPointer(sql.NullFloat64{}); got != nil {
 		t.Fatalf("nil SQL float = %#v, want nil", got)

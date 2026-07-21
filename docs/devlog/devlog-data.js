@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-21",
+    type: "bugfix",
+    version: "",
+    title: "验收发现三个 P2 修复：影子路由/前缀查询下推/渠道快照兜底（Claude 直接实现）",
+    summary: "用户拍板渠道可见性走快照兜底方案后一并修复：①删除重复注册的 /customers 旧路由与 DimensionView 的 customers 死分支；②QueryMetricHistoryPrefix 接口下推 instance_id，新增与 008 索引前缀对齐的 SQL 变体（空实例回退原查询），详情页交叉维度聚合补传实例，带 SQL 结构回归测试；③渠道页将快照中存在但时间窗内无指标的渠道补为零流量行（状态签取快照），默认折叠、经无流量/已禁用筛选签展开，恢复 B2 健康墙语义；模型/客户页无快照源，维持时窗行为为有意决策。Go 全量测试、vue-tsc 与生产构建绿。",
+    docs: ["docs/review-customer-metrics-otps-2026-07-21.md"],
+    commits: []
+  },
+  {
+    date: "2026-07-21",
     type: "review",
     version: "",
     title: "验收通过：客户监控页/OTPS 全链路 + 07-19 三提交；三个 P2 待处理",

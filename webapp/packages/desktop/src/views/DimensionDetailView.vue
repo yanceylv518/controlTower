@@ -180,6 +180,7 @@ async function loadHistory(silent = false) {
         aggregate: true,
       }),
       dashboard.metricHistory({
+        instance_id: instancePart.value || undefined,
         window: historyWindow.value,
         dimension_type: crossType.value,
         dimension_key_prefix: crossPrefix.value,

@@ -23,7 +23,7 @@ type MetricSource interface {
 }
 
 type metricPrefixSource interface {
-	QueryMetricHistoryPrefix(window, dimensionType, dimensionKeyPrefix string, since time.Time) ([]aggregator.Metric, error)
+	QueryMetricHistoryPrefix(window, dimensionType, dimensionKeyPrefix, instanceID string, since time.Time) ([]aggregator.Metric, error)
 }
 
 type instanceLatestMetricSource interface {
@@ -149,7 +149,7 @@ func (h Handler) HandleMetricHistory(w http.ResponseWriter, r *http.Request) {
 			writeDashboardError(w, http.StatusInternalServerError, "metric_prefix_source_not_configured")
 			return
 		}
-		metrics, err = source.QueryMetricHistoryPrefix(window, dimensionType, dimensionKeyPrefix, since)
+		metrics, err = source.QueryMetricHistoryPrefix(window, dimensionType, dimensionKeyPrefix, query.Get("instance_id"), since)
 	} else {
 		metrics, err = h.metricSource.QueryMetricHistory(window, dimensionType, dimensionKey, since)
 	}

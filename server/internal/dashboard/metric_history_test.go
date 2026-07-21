@@ -18,7 +18,7 @@ type metricSourceStub struct {
 	since   time.Time
 }
 
-func (s *metricSourceStub) QueryMetricHistoryPrefix(_ string, _ string, _ string, since time.Time) ([]aggregator.Metric, error) {
+func (s *metricSourceStub) QueryMetricHistoryPrefix(_ string, _ string, _ string, _ string, since time.Time) ([]aggregator.Metric, error) {
 	s.since = since
 	return s.metrics, nil
 }

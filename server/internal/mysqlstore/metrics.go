@@ -48,10 +48,18 @@ func (s Store) QueryMetricHistory(window, dimensionType, dimensionKey string, si
 	return scanMetrics(rows)
 }
 
-func (s Store) QueryMetricHistoryPrefix(window, dimensionType, dimensionKeyPrefix string, since time.Time) ([]aggregator.Metric, error) {
+func (s Store) QueryMetricHistoryPrefix(window, dimensionType, dimensionKeyPrefix, instanceID string, since time.Time) ([]aggregator.Metric, error) {
 	table, err := metricTable(window)
 	if err != nil {
 		return nil, err
+	}
+	if instanceID != "" {
+		rows, err := s.db.QueryContext(context.Background(), metricHistoryPrefixInstanceSQL(table), dimensionType, instanceID, dimensionKeyPrefix, since)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		return scanMetrics(rows)
 	}
 	rows, err := s.db.QueryContext(context.Background(), metricHistoryPrefixSQL(table), dimensionType, dimensionKeyPrefix, since)
 	if err != nil {
@@ -331,6 +339,20 @@ func metricHistoryPrefixSQL(table string) string {
   use_time_sum, stream_count, cache_tokens_total, cache_prompt_tokens, big_input_count, big_input_cache_hits, ttft_count, ttft_sum_ms, ttft_p50_ms, ttft_p90_ms, ttft_p95_ms, otps_output_tokens, otps_duration_seconds, ` + latencyBucketColumnSQL() + `, ` + v2BucketColumnSQL() + `
 FROM ` + table + `
 WHERE dimension_type = ? AND dimension_key LIKE CONCAT(?, '%') AND bucket_time >= ?
+ORDER BY dimension_key ASC, bucket_time ASC`
+}
+
+// metricHistoryPrefixInstanceSQL keeps the equality columns aligned with the
+// idx_metric_*_dim_bucket index prefix (dimension_type, instance_id,
+// dimension_key, bucket_time) so the LIKE range can use the index.
+func metricHistoryPrefixInstanceSQL(table string) string {
+	return `SELECT instance_id, bucket_time, dimension_type, dimension_key,
+  request_count, success_count, error_count, success_rate, error_rate,
+  tpm, prompt_tokens, completion_tokens, quota,
+  avg_use_time, p50_use_time, p95_use_time, p99_use_time, stream_rate, cache_token_rate,
+  use_time_sum, stream_count, cache_tokens_total, cache_prompt_tokens, big_input_count, big_input_cache_hits, ttft_count, ttft_sum_ms, ttft_p50_ms, ttft_p90_ms, ttft_p95_ms, otps_output_tokens, otps_duration_seconds, ` + latencyBucketColumnSQL() + `, ` + v2BucketColumnSQL() + `
+FROM ` + table + `
+WHERE dimension_type = ? AND instance_id = ? AND dimension_key LIKE CONCAT(?, '%') AND bucket_time >= ?
 ORDER BY dimension_key ASC, bucket_time ASC`
 }
 
