@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-21",
+    type: "release",
+    version: "v2.0.0-rc15",
+    title: "rc15 打包：客户监控页/OTPS + 验收修复全收",
+    summary: "在 rc14（仅含 05775c3,未随验收修复）基础上收入：05775c3 客户监控页与 OTPS 全链路（013 迁移随 Server 启动自动应用）、07-19 三提交（总览竞态/实例下推/总览 TPM）、验收三 P2 修复（影子路由/前缀查询 instance_id 下推/渠道快照兜底行），以及排名页渲染优化（history 按 dimension_key 预分组，表格每行不再全量扫描，客户规模增长后排名页不卡）。部署顺序不变：先 Server（改 .env 的 CT_SERVER_IMAGE 为 rc15 后 pull + up --no-build）后 Agent；部署后对 metric_1m 前缀查询 EXPLAIN 确认走 idx_metric_1m_dim_bucket。",
+    docs: ["docs/review-customer-metrics-otps-2026-07-21.md", "docs/v2-deploy-runbook.md"],
+    commits: []
+  },
+  {
+    date: "2026-07-21",
     type: "bugfix",
     version: "",
     title: "验收发现三个 P2 修复：影子路由/前缀查询下推/渠道快照兜底（Claude 直接实现）",

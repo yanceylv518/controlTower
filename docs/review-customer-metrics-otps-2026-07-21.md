@@ -45,4 +45,6 @@
 2. **instance_id 下推**：`QueryMetricHistoryPrefix` 接口加 `instanceID` 参数；MySQL 侧新增 `metricHistoryPrefixInstanceSQL`（等值列顺序对齐 008 索引 `(dimension_type, instance_id, dimension_key, bucket_time)`），空实例时回退原 SQL；MemoryStore 同步过滤；新增 SQL 结构回归测试。三个监控页调用本就带 `instance_id`，详情页交叉维度聚合调用补传 `instancePart`。
 3. **快照兜底行**：渠道页把快照中存在、但时间窗内无指标行的渠道补为零流量 DimRow（指标列 null/0，状态签取快照 status），自然排在 Token 排序尾部；默认视图仍隐藏 idle/disabled，通过"无流量/已禁用"筛选签展开，计数恢复真实。模型/客户页无快照源，维持时窗行为（有意决策）。
 
-验证：Go 全量测试绿、`vue-tsc` 绿、生产构建绿、gofmt 本批文件合规。发现项 4/5（P3）仍记档未动。部署后建议对 `metric_1m` 的前缀查询 EXPLAIN 确认走 `idx_metric_1m_dim_bucket`。
+验证：Go 全量测试绿、`vue-tsc` 绿、生产构建绿、gofmt 本批文件合规。部署后建议对 `metric_1m` 的前缀查询 EXPLAIN 确认走 `idx_metric_1m_dim_bucket`。
+
+**发现项 4（P3 渲染开销）随后同日修复**：两个监控页各加 `historyByKey` computed（按 dimension_key 预分组、每组排一次时间序），峰值 TPM、sparkline、趋势序列全部改为查 Map，表格每行渲染不再全量扫描 history。**发现项 5（OTPS 精度）确认无解**：`use_time` 整秒粒度是数据源天花板，仅记档。全部处理完毕后打 tag `v2.0.0-rc15`。

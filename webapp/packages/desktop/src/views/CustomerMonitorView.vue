@@ -91,10 +91,19 @@ const totalPrompt = computed(() => allRows.value.reduce((sum, item) => sum + ite
 const totalCompletion = computed(() => allRows.value.reduce((sum, item) => sum + item.completion_tokens, 0));
 const totalRequests = computed(() => allRows.value.reduce((sum, item) => sum + item.request_count, 0));
 const bucketMinutes = computed(() => hours.value === 24 ? 5 : 1);
+// 按 dimension_key 预分组并排好时间序，避免表格每行渲染都全量扫描 history。
+const historyByKey = computed(() => {
+  const map = new Map<string, MetricItem[]>();
+  history.value.forEach(item => {
+    const list = map.get(item.dimension_key);
+    if (list) list.push(item);
+    else map.set(item.dimension_key, [item]);
+  });
+  map.forEach(list => list.sort((a, b) => Date.parse(a.bucket_time) - Date.parse(b.bucket_time)));
+  return map;
+});
 function customerTPM(key: string) {
-  return history.value
-    .filter(item => item.dimension_key === key)
-    .map(item => item.tpm / bucketMinutes.value);
+  return (historyByKey.value.get(key) || []).map(item => item.tpm / bucketMinutes.value);
 }
 function peakCustomerTPM(key: string) {
   return Math.max(...customerTPM(key), 0);
@@ -138,16 +147,14 @@ function toggleCompare(key: string, checked: boolean) {
   } else selectedKeys.value = selectedKeys.value.filter(item => item !== key);
 }
 function pointsFor(key: string, field: "ttft_p50_ms" | "ttft_p95_ms" | "prompt_tokens" | "completion_tokens") {
-  return history.value
-    .filter(item => item.dimension_key === key)
-    .sort((a, b) => Date.parse(a.bucket_time) - Date.parse(b.bucket_time))
-    .map(item => item[field]);
+  return (historyByKey.value.get(key) || []).map(item => item[field]);
+}
+function tokenTrendPoints(key: string) {
+  return (historyByKey.value.get(key) || []).map(item => item.prompt_tokens + item.completion_tokens);
 }
 function customerSeries(key: string, field: "ttft_p50_ms" | "ttft_p90_ms" | "ttft_p95_ms" | "tpm" | "otps", scale = 1, seriesName?: string) {
   const row = allRows.value.find(item => item.dimension_key === key);
-  const data = history.value
-    .filter(item => item.dimension_key === key)
-    .sort((a, b) => Date.parse(a.bucket_time) - Date.parse(b.bucket_time))
+  const data = (historyByKey.value.get(key) || [])
     .map(item => [item.bucket_time, item[field] == null ? null : Number(item[field]) / scale] as [string, number | null]);
   return [{ name: seriesName || (row ? customerName(row) : key), data }];
 }
@@ -246,7 +253,7 @@ function openDetail(row: MetricItem) {
           <el-table-column label="TTFT P95" width="118" align="right" sortable :sort-method="(a: MetricItem, b: MetricItem) => (a.ttft_p95_ms || 0) - (b.ttft_p95_ms || 0)">
             <template #default="{ row }"><span :class="['ttft-pill', ttftStatus(row.ttft_p95_ms).key]">{{ ms(row.ttft_p95_ms) }}</span></template>
           </el-table-column>
-          <el-table-column label="Token 趋势" width="120"><template #default="{ row }"><MiniSparkline :values="pointsFor(row.dimension_key, 'prompt_tokens').map((value, i) => Number(value || 0) + Number(pointsFor(row.dimension_key, 'completion_tokens')[i] || 0))" bars /></template></el-table-column>
+          <el-table-column label="Token 趋势" width="120"><template #default="{ row }"><MiniSparkline :values="tokenTrendPoints(row.dimension_key)" bars /></template></el-table-column>
           <el-table-column label="TTFT 趋势" width="120"><template #default="{ row }"><MiniSparkline :values="pointsFor(row.dimension_key, 'ttft_p95_ms')" color="#16a6b6" /></template></el-table-column>
           <el-table-column label="请求数" width="100" align="right"><template #default="{ row }">{{ row.request_count.toLocaleString() }}</template></el-table-column>
           <el-table-column label="状态" width="92"><template #default="{ row }"><span :class="['status-label', ttftStatus(row.ttft_p95_ms).key]">{{ ttftStatus(row.ttft_p95_ms).label }}</span></template></el-table-column>

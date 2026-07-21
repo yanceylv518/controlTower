@@ -210,14 +210,26 @@ watch(rows, (items) => {
   selectedKeys.value = kept.length ? kept : items.slice(0, 8).map((item) => item.dimension_key);
 }, { immediate: true });
 const bucketMinutes = computed(() => hours.value === 24 ? 5 : 1);
+// 按 dimension_key 预分组并排好时间序，避免表格每行渲染都全量扫描 history。
+const historyByKey = computed(() => {
+  const map = new Map<string, MetricItem[]>();
+  history.value.forEach((item) => {
+    const list = map.get(item.dimension_key);
+    if (list) list.push(item);
+    else map.set(item.dimension_key, [item]);
+  });
+  map.forEach((list) => list.sort((a, b) => Date.parse(a.bucket_time) - Date.parse(b.bucket_time)));
+  return map;
+});
 function dimensionSeries(key: string, field: "ttft_p50_ms" | "ttft_p90_ms" | "ttft_p95_ms" | "tpm" | "otps", scale = 1, name?: string) {
   return [{
     name: name || field,
-    data: history.value
-      .filter((item) => item.dimension_key === key)
-      .sort((a, b) => Date.parse(a.bucket_time) - Date.parse(b.bucket_time))
+    data: (historyByKey.value.get(key) || [])
       .map((item) => [item.bucket_time, item[field] == null ? null : Number(item[field]) / scale] as [string, number | null]),
   }];
+}
+function peakDimTPM(key: string) {
+  return Math.max(...(historyByKey.value.get(key) || []).map((item) => item.tpm / bucketMinutes.value), 0);
 }
 const selectedTrendGroups = computed(() => selectedKeys.value.map((key) => {
   const row = rows.value.find((item) => item.dimension_key === key);
@@ -240,7 +252,7 @@ function toggleChart(key: string, checked: boolean) {
   if (!checked) selectedKeys.value = selectedKeys.value.filter((item) => item !== key);
 }
 function historyPoints(key: string, field: "ttft_p95_ms" | "otps" | "prompt_tokens") {
-  return history.value.filter((item) => item.dimension_key === key).map((item) => item[field]);
+  return (historyByKey.value.get(key) || []).map((item) => item[field]);
 }
 function toggleKind(key: string) {
   activeKinds.value = activeKinds.value.includes(key)
@@ -410,7 +422,7 @@ function rowClass({ row }: { row: DimRow }) {
             </template>
           </el-table-column>
           <el-table-column label="峰值 TPM" min-width="100" align="right">
-            <template #default="{ row }">{{ formatTokens(Math.max(...history.filter(item => item.dimension_key === row.dimension_key).map(item => item.tpm / bucketMinutes), 0)) }}</template>
+            <template #default="{ row }">{{ formatTokens(peakDimTPM(row.dimension_key)) }}</template>
           </el-table-column>
           <el-table-column label="OTPS" min-width="100" align="right">
             <template #default="{ row }"><span :class="{ 'dim-muted': row.otps == null }">{{ row.otps == null ? '—' : row.otps.toFixed(2) }}</span></template>
