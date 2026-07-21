@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-21",
+    type: "review",
+    version: "",
+    title: "验收通过：TTFT 图表阈值可配置（be192b8）；注意该提交在 rc15 之后",
+    summary: "核实：①三个新设置键 CT_TTFT_P50/P90/P95_THRESHOLD_SECONDS 带默认值（3/30/60 秒）走库>env>默认三级回退，DefaultValue 权威来源保证存量部署不归零；校验含 0.1~600 区间与 P50<P90<P95 单调序。②图表实现为分段等高 y 轴：以不超过数据最大值的阈值为断点等高分段，上限=最高阈值+10 截断打加号，tooltip 显示原始值；无阈值或数据低于全部阈值时退回线性轴，TPM/OTPS 图不受影响。③prefs store 安全默认+失败重试，设置保存后强制刷新。边界推演（空阈值/恰等于阈值/超上限/全 null 序列）自洽。Linux 全量测试、typecheck、生产构建绿。记档 P3：状态签与 KPI 的『TTFT 超阈值』仍硬编码 2 秒/1.5 秒，与可配置的图表阈值（默认 P95=60 秒）口径不一致，后续宜统一；设置页 UI 下限 0.5 与服务端校验下限 0.1 不一致（无害）。该提交晚于 rc15 tag，部署若要包含需打 rc16。",
+    docs: [],
+    commits: ["be192b8"]
+  },
+  {
+    date: "2026-07-21",
     type: "release",
     version: "v2.0.0-rc15",
     title: "rc15 打包：客户监控页/OTPS + 验收修复全收",
