@@ -2,6 +2,15 @@
 // type: release(发版) | bugfix(缺陷修复) | incident(生产事故) | review(代码评审) | decision(方案决策)
 window.DEVLOG = [
   {
+    date: "2026-07-21",
+    type: "review",
+    version: "",
+    title: "验收通过：客户监控页/OTPS 全链路 + 07-19 三提交；三个 P2 待处理",
+    summary: "核实四个未评审提交（9e38ac1 总览竞态、c57c7c8 实例下推、2d9fe01 总览 TPM、05775c3 客户页+OTPS）：Go 31 包与前端 typecheck/构建 Linux 全绿；013 迁移幂等（ADD COLUMN+1060 容忍，无 010 式重建）；OTPS 双累加器全链路线性可加，跨窗聚合为真实 token 加权值，契约只增不改双向兼容。发现不阻断但打 tag 前应处理：①/customers 路由重复注册靠顺序取胜，旧行成死代码；②QueryMetricHistoryPrefix 未下推 instance_id，与 008 索引形状不匹配（latest 10s/CPU 99% 同族隐患，页面还带 30s 自动刷新）；③渠道/模型列表由 24h latest 视野改为时窗聚合（默认 1h），无流量/禁用渠道整行消失，B2 渠道清晰化行为被实质改变——需用户拍板是否补快照兜底。详见验收文档。",
+    docs: ["docs/review-customer-metrics-otps-2026-07-21.md"],
+    commits: ["9e38ac1", "c57c7c8", "2d9fe01", "05775c3"]
+  },
+  {
     date: "2026-07-19",
     type: "bugfix",
     version: "",
