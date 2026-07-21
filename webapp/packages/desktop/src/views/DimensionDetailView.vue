@@ -261,6 +261,9 @@ const ttftSeries = computed<TrendSeries[]>(() => [
   { name: "P90", color: "#1391a5", data: points("ttft_p90_ms", 0.001), unit: "s", sparse: true },
   { name: "P95", color: "#b96e0c", data: points("ttft_p95_ms", 0.001), unit: "s", sparse: true },
 ]);
+const otpsSeries = computed<TrendSeries[]>(() => [
+  { name: "OTPS", color: "#7a5af8", data: points("otps"), unit: " token/s", sparse: true },
+]);
 const cacheHitSeries = computed<TrendSeries[]>(() => [
   { name: "缓存命中率", color: "#1391a5", data: points("cache_hit_rate", 100), unit: "%", sparse: true },
 ]);
@@ -368,6 +371,10 @@ const firingCount = computed(
             label="TTFT P50 / P90 / P95"
             :value="`${msFmt(summary?.ttft_p50_ms)} / ${msFmt(summary?.ttft_p90_ms)} / ${msFmt(summary?.ttft_p95_ms)}`"
           />
+          <MetricMini
+            label="OTPS"
+            :value="summary?.otps == null ? '—' : `${summary.otps.toFixed(2)} token/s`"
+          />
         </div>
         <el-tabs v-model="tab" class="detail-tabs">
           <el-tab-pane label="趋势" name="trends">
@@ -386,6 +393,7 @@ const firingCount = computed(
                 percent
               />
               <TrendChart :title="`TTFT（${bucketLabel}）`" :series="ttftSeries" />
+              <TrendChart :title="`OTPS（${bucketLabel}）`" :series="otpsSeries" />
               <TrendChart
                 :title="`缓存命中率（${bucketLabel}）`"
                 :series="cacheHitSeries"
@@ -458,6 +466,11 @@ const firingCount = computed(
                   <template #default="{ row }">{{
                     msFmt(row.ttft_p95_ms)
                   }}</template>
+                </el-table-column>
+                <el-table-column label="OTPS" width="110" align="right">
+                  <template #default="{ row }">
+                    {{ row.otps == null ? "—" : `${row.otps.toFixed(2)} token/s` }}
+                  </template>
                 </el-table-column>
                 <el-table-column label="缓存命中" width="100" align="right">
                   <template #default="{ row }">{{

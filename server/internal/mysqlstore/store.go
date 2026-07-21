@@ -1,8 +1,8 @@
 package mysqlstore
 
 import (
-	"controltower/internal/latencyhist"
 	"context"
+	"controltower/internal/latencyhist"
 	"database/sql"
 	"strings"
 	"time"
@@ -615,7 +615,7 @@ func metricBatchUpsertSQL(table string, rows int) string {
   instance_id, bucket_time, dimension_type, dimension_key, request_count, success_count, error_count,
   success_rate, error_rate, tpm, prompt_tokens, completion_tokens, quota,
   avg_use_time, p50_use_time, p95_use_time, p99_use_time, stream_rate, cache_token_rate,
-  use_time_sum, stream_count, cache_tokens_total, cache_prompt_tokens, big_input_count, big_input_cache_hits, ttft_count, ttft_sum_ms, ttft_p50_ms, ttft_p90_ms, ttft_p95_ms, ` + latencyBucketColumnSQL() + `, ` + v2BucketColumnSQL() + `, updated_at
+  use_time_sum, stream_count, cache_tokens_total, cache_prompt_tokens, big_input_count, big_input_cache_hits, ttft_count, ttft_sum_ms, ttft_p50_ms, ttft_p90_ms, ttft_p95_ms, otps_output_tokens, otps_duration_seconds, ` + latencyBucketColumnSQL() + `, ` + v2BucketColumnSQL() + `, updated_at
 ) VALUES ` + strings.Join(values, ", ") + `
 ON DUPLICATE KEY UPDATE
   request_count = VALUES(request_count),
@@ -644,6 +644,8 @@ ON DUPLICATE KEY UPDATE
   ttft_p50_ms = VALUES(ttft_p50_ms),
   ttft_p90_ms = VALUES(ttft_p90_ms),
   ttft_p95_ms = VALUES(ttft_p95_ms),
+  otps_output_tokens = VALUES(otps_output_tokens),
+  otps_duration_seconds = VALUES(otps_duration_seconds),
   ` + latencyBucketReplaceAssignmentsSQL() + `,
   ` + v2BucketReplaceAssignmentsSQL() + `,
   updated_at = VALUES(updated_at)`
@@ -684,6 +686,8 @@ func metricBatchMergeSQL(table string, rows int) string {
   big_input_cache_hits = IF(big_input_cache_hits IS NULL AND VALUES(big_input_cache_hits) IS NULL, NULL, COALESCE(big_input_cache_hits, 0) + COALESCE(VALUES(big_input_cache_hits), 0)),
   ttft_count = IF(ttft_count IS NULL AND VALUES(ttft_count) IS NULL, NULL, COALESCE(ttft_count, 0) + COALESCE(VALUES(ttft_count), 0)),
   ttft_sum_ms = IF(ttft_sum_ms IS NULL AND VALUES(ttft_sum_ms) IS NULL, NULL, COALESCE(ttft_sum_ms, 0) + COALESCE(VALUES(ttft_sum_ms), 0)),
+  otps_output_tokens = otps_output_tokens + VALUES(otps_output_tokens),
+  otps_duration_seconds = otps_duration_seconds + VALUES(otps_duration_seconds),
   ` + latencyBucketMergeAssignmentsSQL() + `,
   ` + v2BucketMergeAssignmentsSQL() + `,
   updated_at = VALUES(updated_at)`
@@ -701,7 +705,7 @@ func metricUpsertSQL(table string) string {
   instance_id, bucket_time, dimension_type, dimension_key, request_count, success_count, error_count,
   success_rate, error_rate, tpm, prompt_tokens, completion_tokens, quota,
   avg_use_time, p50_use_time, p95_use_time, p99_use_time, stream_rate, cache_token_rate,
-  use_time_sum, stream_count, cache_tokens_total, cache_prompt_tokens, big_input_count, big_input_cache_hits, ttft_count, ttft_sum_ms, ttft_p50_ms, ttft_p90_ms, ttft_p95_ms, ` + latencyBucketColumnSQL() + `, ` + v2BucketColumnSQL() + `, updated_at
+  use_time_sum, stream_count, cache_tokens_total, cache_prompt_tokens, big_input_count, big_input_cache_hits, ttft_count, ttft_sum_ms, ttft_p50_ms, ttft_p90_ms, ttft_p95_ms, otps_output_tokens, otps_duration_seconds, ` + latencyBucketColumnSQL() + `, ` + v2BucketColumnSQL() + `, updated_at
 ) VALUES ` + metricValuePlaceholders() + `
 ON DUPLICATE KEY UPDATE
   request_count = VALUES(request_count),
@@ -730,6 +734,8 @@ ON DUPLICATE KEY UPDATE
   ttft_p50_ms = VALUES(ttft_p50_ms),
   ttft_p90_ms = VALUES(ttft_p90_ms),
   ttft_p95_ms = VALUES(ttft_p95_ms),
+  otps_output_tokens = VALUES(otps_output_tokens),
+  otps_duration_seconds = VALUES(otps_duration_seconds),
   ` + latencyBucketReplaceAssignmentsSQL() + `,
   ` + v2BucketReplaceAssignmentsSQL() + `,
   updated_at = VALUES(updated_at)`
@@ -767,6 +773,8 @@ func metricArgs(metric aggregator.Metric) []any {
 		nullFloat(metric.TTFTP50MS),
 		nullFloat(metric.TTFTP90MS),
 		nullFloat(metric.TTFTP95MS),
+		metric.OTPSOutputTokens,
+		metric.OTPSDurationSecs,
 	}
 	for _, bucket := range metric.LatencyBuckets {
 		args = append(args, bucket)

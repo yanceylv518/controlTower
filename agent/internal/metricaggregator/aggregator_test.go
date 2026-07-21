@@ -75,6 +75,19 @@ func TestAggregateExactQuantilesCacheBoundaryAndStreamTTFT(t *testing.T) {
 	}
 }
 
+func TestAggregateOTPSUsesOnlyValidSuccessfulStreamGenerationTime(t *testing.T) {
+	base := time.Date(2026, 7, 21, 10, 0, 0, 0, time.UTC)
+	firstResponse := int64(1000)
+	metrics := Aggregate("inst", []logcollector.Event{
+		{CreatedAt: base, LogType: "consume", UseTime: 5, IsStream: true, FirstResponseMs: &firstResponse, CompletionTokens: 80},
+		{CreatedAt: base, LogType: "error", UseTime: 5, IsStream: true, FirstResponseMs: &firstResponse, CompletionTokens: 100},
+		{CreatedAt: base, LogType: "consume", UseTime: 5, CompletionTokens: 100},
+	}, 512)
+	if len(metrics) != 1 || metrics[0].OTPSOutputTokens != 80 || metrics[0].OTPSDurationSecs != 4 {
+		t.Fatalf("unexpected OTPS accumulators: %#v", metrics)
+	}
+}
+
 func TestAggregateCapsRawQuantileValues(t *testing.T) {
 	base := time.Date(2026, 7, 16, 10, 0, 0, 0, time.UTC)
 	events := make([]logcollector.Event, maxRawValuesPerBucket+1)

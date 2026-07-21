@@ -343,6 +343,8 @@ func toAggregatorMetrics(instanceID string, payloads []agentgateway.AggregatedMe
 			TTFTP50MS:         payload.TTFTP50MS,
 			TTFTP90MS:         payload.TTFTP90MS,
 			TTFTP95MS:         payload.TTFTP95MS,
+			OTPSOutputTokens:  payload.OTPSOutputTokens,
+			OTPSDurationSecs:  payload.OTPSDurationSecs,
 			LatencyBuckets:    payload.LatencyBuckets,
 			LatencyBucketsV2:  bucketsV2FromSlice(payload.LatencyBucketsV2),
 			TTFTBuckets:       bucketsV2FromSlice(payload.TTFTBuckets),

@@ -72,6 +72,8 @@ func (a *rollupAccumulator) add(metric Metric) {
 	a.metric.BigInputCacheHits = addNullableInt64(a.metric.BigInputCacheHits, metric.BigInputCacheHits)
 	a.metric.TTFTCount = addNullableInt64(a.metric.TTFTCount, metric.TTFTCount)
 	a.metric.TTFTSumMS = addNullableInt64(a.metric.TTFTSumMS, metric.TTFTSumMS)
+	a.metric.OTPSOutputTokens += metric.OTPSOutputTokens
+	a.metric.OTPSDurationSecs += metric.OTPSDurationSecs
 	// The P95 of a union is at most the maximum P95 of its subsets: at most
 	// 5% of every subset exceeds that maximum, so the same bound holds after
 	// merging. MAX is therefore a conservative 5m approximation.

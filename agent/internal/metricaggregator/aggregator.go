@@ -104,6 +104,11 @@ func (a *accumulator) add(event logcollector.Event, cacheHitMinPromptTokens int6
 			a.ttftValues = append(a.ttftValues, float64(*event.FirstResponseMs))
 		}
 		a.ttftV2[latencyhist.IndexV2(float64(*event.FirstResponseMs)/1000)]++
+		generationSeconds := event.UseTime - float64(*event.FirstResponseMs)/1000
+		if event.LogType == "consume" && event.CompletionTokens > 0 && generationSeconds > 0 {
+			a.metric.OTPSOutputTokens += event.CompletionTokens
+			a.metric.OTPSDurationSecs += generationSeconds
+		}
 	}
 }
 

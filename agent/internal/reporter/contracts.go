@@ -123,6 +123,8 @@ type AggregatedMetricPayload struct {
 	TTFTP50MS         *float64            `json:"ttft_p50_ms,omitempty"`
 	TTFTP90MS         *float64            `json:"ttft_p90_ms,omitempty"`
 	TTFTP95MS         *float64            `json:"ttft_p95_ms,omitempty"`
+	OTPSOutputTokens  int64               `json:"otps_output_tokens,omitempty"`
+	OTPSDurationSecs  float64             `json:"otps_duration_seconds,omitempty"`
 	LatencyBuckets    latencyhist.Buckets `json:"latency_buckets"`
 	LatencyBucketsV2  []int64             `json:"latency_buckets_v2,omitempty"`
 	TTFTBuckets       []int64             `json:"ttft_buckets,omitempty"`

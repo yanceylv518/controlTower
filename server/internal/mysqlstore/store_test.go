@@ -94,8 +94,8 @@ func TestMetricArgsConvertsNilRatesToSQLNulls(t *testing.T) {
 		DimensionKey:  "inst-1",
 		RequestCount:  5,
 	})
-	if len(args) != 71 {
-		t.Fatalf("metric args len = %d, want 71", len(args))
+	if len(args) != 73 {
+		t.Fatalf("metric args len = %d, want 73", len(args))
 	}
 	for _, idx := range []int{7, 8, 13, 14, 15, 16} {
 		value, ok := args[idx].(interface{ IsZero() bool })
@@ -183,8 +183,8 @@ func TestMetricBatchUpsertSQLAndArgs(t *testing.T) {
 	}
 	now := time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC)
 	args := metricBatchArgs([]aggregator.Metric{{InstanceID: "inst-1", BucketTime: now}, {InstanceID: "inst-2", BucketTime: now}})
-	if len(args) != 142 {
-		t.Fatalf("args len = %d, want 142", len(args))
+	if len(args) != 146 {
+		t.Fatalf("args len = %d, want 146", len(args))
 	}
 }
 

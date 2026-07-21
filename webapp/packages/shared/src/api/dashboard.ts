@@ -51,6 +51,8 @@ export interface MetricItem {
   ttft_p50_ms: number | null;
   ttft_p90_ms: number | null;
   ttft_p95_ms: number | null;
+  otps: number | null;
+  otps_sample_tokens: number;
 }
 export interface AlertItem {
   id: string;
@@ -345,6 +347,7 @@ export const dashboardApi = (client: ApiClient) => ({
       `/api/dashboard/metrics${query(params)}`,
     ),
   metricHistory: (params: {
+    instance_id?: string;
     window: string;
     dimension_type: string;
     dimension_key?: string;

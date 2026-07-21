@@ -40,6 +40,8 @@ type Metric struct {
 	TTFTP50MS         *float64
 	TTFTP90MS         *float64
 	TTFTP95MS         *float64
+	OTPSOutputTokens  int64
+	OTPSDurationSecs  float64
 	LatencyBuckets    latencyhist.Buckets
 	LatencyBucketsV2  *latencyhist.BucketsV2
 	TTFTBuckets       *latencyhist.BucketsV2
@@ -204,6 +206,8 @@ func MergeMetric(current Metric, incoming Metric) Metric {
 	merged.BigInputCacheHits = addNullableInt64(merged.BigInputCacheHits, incoming.BigInputCacheHits)
 	merged.TTFTCount = addNullableInt64(merged.TTFTCount, incoming.TTFTCount)
 	merged.TTFTSumMS = addNullableInt64(merged.TTFTSumMS, incoming.TTFTSumMS)
+	merged.OTPSOutputTokens += incoming.OTPSOutputTokens
+	merged.OTPSDurationSecs += incoming.OTPSDurationSecs
 	merged.LatencyBuckets = latencyhist.Add(merged.LatencyBuckets, incoming.LatencyBuckets)
 	merged.LatencyBucketsV2 = addNullableV2(merged.LatencyBucketsV2, incoming.LatencyBucketsV2)
 	merged.TTFTBuckets = addNullableV2(merged.TTFTBuckets, incoming.TTFTBuckets)

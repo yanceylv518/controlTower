@@ -5,6 +5,7 @@ import { setUnauthorizedHandler } from './api'
 import LoginView from './views/LoginView.vue'
 import OverviewView from './views/OverviewView.vue'
 import DimensionView from './views/DimensionView.vue'
+import CustomerMonitorView from './views/CustomerMonitorView.vue'
 import DimensionDetailView from './views/DimensionDetailView.vue'
 import SamplesView from './views/SamplesView.vue'
 import RuntimeView from './views/RuntimeView.vue'
@@ -17,6 +18,7 @@ import SettingsView from './views/SettingsView.vue'
 import NotFoundView from './views/NotFoundView.vue'
 import LatencyView from './views/LatencyView.vue'
 export const router = createRouter({ history: createWebHistory('/'), routes: [
+  { path: '/customers', component: CustomerMonitorView, meta: { title: '客户监控' } },
   { path: '/login', name: 'login', component: LoginView, meta: { title: '登录' } }, { path: '/', name: 'overview', component: OverviewView, meta: { title: '运行总览' } },
   { path: '/customers', component: DimensionView, props: { kind: 'customers' }, meta: { title: '客户监控' } }, { path: '/channels', component: DimensionView, props: { kind: 'channels' }, meta: { title: '渠道监控' } }, { path: '/models', component: DimensionView, props: { kind: 'models' }, meta: { title: '模型监控' } },
   { path: '/customers/:key', component: DimensionDetailView, props: route => ({ kind: 'customers', dimensionKey: String(route.params.key) }), meta: { title: '客户详情' } },

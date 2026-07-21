@@ -175,6 +175,8 @@ func scanMetrics(rows *sql.Rows) ([]aggregator.Metric, error) {
 			&ttftP50MS,
 			&ttftP90MS,
 			&ttftP95MS,
+			&metric.OTPSOutputTokens,
+			&metric.OTPSDurationSecs,
 		}
 		for i := range buckets {
 			dest = append(dest, &buckets[i])
@@ -255,7 +257,7 @@ func recentMetricsSQL(table string, latestOnly bool) string {
   m.request_count, m.success_count, m.error_count, m.success_rate, m.error_rate,
   m.tpm, m.prompt_tokens, m.completion_tokens, m.quota,
   m.avg_use_time, m.p50_use_time, m.p95_use_time, m.p99_use_time, m.stream_rate, m.cache_token_rate,
-  m.use_time_sum, m.stream_count, m.cache_tokens_total, m.cache_prompt_tokens, m.big_input_count, m.big_input_cache_hits, m.ttft_count, m.ttft_sum_ms, m.ttft_p50_ms, m.ttft_p90_ms, m.ttft_p95_ms, ` + prefixedLatencyBucketColumnSQL("m") + `, ` + prefixedV2BucketColumnSQL("m") + `
+  m.use_time_sum, m.stream_count, m.cache_tokens_total, m.cache_prompt_tokens, m.big_input_count, m.big_input_cache_hits, m.ttft_count, m.ttft_sum_ms, m.ttft_p50_ms, m.ttft_p90_ms, m.ttft_p95_ms, m.otps_output_tokens, m.otps_duration_seconds, ` + prefixedLatencyBucketColumnSQL("m") + `, ` + prefixedV2BucketColumnSQL("m") + `
 FROM ` + table + ` m JOIN (
   SELECT instance_id, dimension_type, dimension_key, MAX(bucket_time) AS mb
   FROM ` + table + `
@@ -270,7 +272,7 @@ LIMIT ?`
   request_count, success_count, error_count, success_rate, error_rate,
   tpm, prompt_tokens, completion_tokens, quota,
   avg_use_time, p50_use_time, p95_use_time, p99_use_time, stream_rate, cache_token_rate,
-  use_time_sum, stream_count, cache_tokens_total, cache_prompt_tokens, big_input_count, big_input_cache_hits, ttft_count, ttft_sum_ms, ttft_p50_ms, ttft_p90_ms, ttft_p95_ms, ` + latencyBucketColumnSQL() + `, ` + v2BucketColumnSQL() + `
+  use_time_sum, stream_count, cache_tokens_total, cache_prompt_tokens, big_input_count, big_input_cache_hits, ttft_count, ttft_sum_ms, ttft_p50_ms, ttft_p90_ms, ttft_p95_ms, otps_output_tokens, otps_duration_seconds, ` + latencyBucketColumnSQL() + `, ` + v2BucketColumnSQL() + `
 FROM ` + table + `
 ORDER BY bucket_time DESC, dimension_type ASC, dimension_key ASC
 LIMIT ?`
@@ -281,7 +283,7 @@ func latestMetricsForInstanceSQL(table string) string {
   m.request_count, m.success_count, m.error_count, m.success_rate, m.error_rate,
   m.tpm, m.prompt_tokens, m.completion_tokens, m.quota,
   m.avg_use_time, m.p50_use_time, m.p95_use_time, m.p99_use_time, m.stream_rate, m.cache_token_rate,
-  m.use_time_sum, m.stream_count, m.cache_tokens_total, m.cache_prompt_tokens, m.big_input_count, m.big_input_cache_hits, m.ttft_count, m.ttft_sum_ms, m.ttft_p50_ms, m.ttft_p90_ms, m.ttft_p95_ms, ` + prefixedLatencyBucketColumnSQL("m") + `, ` + prefixedV2BucketColumnSQL("m") + `
+  m.use_time_sum, m.stream_count, m.cache_tokens_total, m.cache_prompt_tokens, m.big_input_count, m.big_input_cache_hits, m.ttft_count, m.ttft_sum_ms, m.ttft_p50_ms, m.ttft_p90_ms, m.ttft_p95_ms, m.otps_output_tokens, m.otps_duration_seconds, ` + prefixedLatencyBucketColumnSQL("m") + `, ` + prefixedV2BucketColumnSQL("m") + `
 FROM ` + table + ` m JOIN (
   SELECT dimension_key, MAX(bucket_time) AS mb
   FROM ` + table + `
@@ -315,7 +317,7 @@ func metricHistorySQL(table string) string {
   request_count, success_count, error_count, success_rate, error_rate,
   tpm, prompt_tokens, completion_tokens, quota,
   avg_use_time, p50_use_time, p95_use_time, p99_use_time, stream_rate, cache_token_rate,
-  use_time_sum, stream_count, cache_tokens_total, cache_prompt_tokens, big_input_count, big_input_cache_hits, ttft_count, ttft_sum_ms, ttft_p50_ms, ttft_p90_ms, ttft_p95_ms, ` + latencyBucketColumnSQL() + `, ` + v2BucketColumnSQL() + `
+  use_time_sum, stream_count, cache_tokens_total, cache_prompt_tokens, big_input_count, big_input_cache_hits, ttft_count, ttft_sum_ms, ttft_p50_ms, ttft_p90_ms, ttft_p95_ms, otps_output_tokens, otps_duration_seconds, ` + latencyBucketColumnSQL() + `, ` + v2BucketColumnSQL() + `
 FROM ` + table + `
 WHERE dimension_type = ? AND dimension_key = ? AND bucket_time >= ?
 ORDER BY bucket_time ASC`
@@ -326,7 +328,7 @@ func metricHistoryPrefixSQL(table string) string {
   request_count, success_count, error_count, success_rate, error_rate,
   tpm, prompt_tokens, completion_tokens, quota,
   avg_use_time, p50_use_time, p95_use_time, p99_use_time, stream_rate, cache_token_rate,
-  use_time_sum, stream_count, cache_tokens_total, cache_prompt_tokens, big_input_count, big_input_cache_hits, ttft_count, ttft_sum_ms, ttft_p50_ms, ttft_p90_ms, ttft_p95_ms, ` + latencyBucketColumnSQL() + `, ` + v2BucketColumnSQL() + `
+  use_time_sum, stream_count, cache_tokens_total, cache_prompt_tokens, big_input_count, big_input_cache_hits, ttft_count, ttft_sum_ms, ttft_p50_ms, ttft_p90_ms, ttft_p95_ms, otps_output_tokens, otps_duration_seconds, ` + latencyBucketColumnSQL() + `, ` + v2BucketColumnSQL() + `
 FROM ` + table + `
 WHERE dimension_type = ? AND dimension_key LIKE CONCAT(?, '%') AND bucket_time >= ?
 ORDER BY dimension_key ASC, bucket_time ASC`
