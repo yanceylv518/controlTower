@@ -21,6 +21,7 @@ async function render() {
   chart ??= echarts.init(chartEl.value);
   const observedMax = Math.max(...props.series.flatMap(item => item.data.map(([, value]) => value ?? 0)), 0);
   const configuredThresholdValues = props.thresholds.map(item => item.value).sort((a, b) => a - b);
+  const unitOnAxis = props.unit.trim() === "token/s";
   const activeThresholds = props.thresholds.filter(item => item.value <= observedMax);
   const thresholdValues = activeThresholds.map(item => item.value).sort((a, b) => a - b);
   const highestConfiguredThreshold = configuredThresholdValues.length ? Math.max(...configuredThresholdValues) : undefined;
@@ -86,12 +87,16 @@ async function render() {
     xAxis: { type: "time", axisLabel: { hideOverlap: true }, axisLine: { lineStyle: { color: "#dfe4ec" } } },
     yAxis: {
       type: "value",
+      name: unitOnAxis ? props.unit.trim() : undefined,
+      nameLocation: "end",
+      nameGap: 8,
+      nameTextStyle: { color: "#6b7280", fontSize: 10, align: "right" },
       min: 0,
       max: yMax,
       interval: yMax == null ? undefined : 1,
       axisLabel: { formatter: (value: number) => {
         if (props.compact) return compactNumber(value);
-        if (actualCap == null) return `${value}${props.unit}`;
+        if (actualCap == null) return unitOnAxis ? String(value) : `${value}${props.unit}`;
         const labels = [0, ...thresholdValues, actualCap];
         const actualValue = labels[Math.round(value)];
         const capped = hardCap != null && actualCap === hardCap;
