@@ -214,7 +214,7 @@ const topTen = computed(() => visibleRows.value.slice(0, 10).map((item) => ({
   prompt: item.prompt_tokens,
   completion: item.completion_tokens,
 })));
-watch(rows, (items) => {
+watch(visibleRows, (items) => {
   const available = new Set(items.map((item) => item.dimension_key));
   const kept = selectedKeys.value.filter((key) => available.has(key));
   selectedKeys.value = kept.length ? kept : items.slice(0, 8).map((item) => item.dimension_key);
