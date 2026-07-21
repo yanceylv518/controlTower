@@ -12,18 +12,26 @@ import AsyncPanel from "../components/AsyncPanel.vue";
 import StatusTag from "../components/StatusTag.vue";
 import ChannelOperations from "../components/ChannelOperations.vue";
 import { formatTokens } from "../utils/format";
+import { usePrefsStore } from "../stores/prefs";
 import CustomerCompareChart from "../components/CustomerCompareChart.vue";
 import CustomerTokenChart from "../components/CustomerTokenChart.vue";
 import MiniSparkline from "../components/MiniSparkline.vue";
 
 const props = defineProps<{ kind: "channels" | "models" }>();
 const filters = useFiltersStore();
+const prefs = usePrefsStore();
+void prefs.load();
 const route = useRoute();
 const router = useRouter();
 const search = ref("");
 const hours = ref(1);
 const activeTab = ref<"charts" | "ranking">("charts");
 const activeMetric = ref<"ttft" | "tpm" | "otps">("ttft");
+const ttftThresholds = computed(() => [
+  { name: "P50", value: prefs.ttftP50Threshold, color: "#2f6fed" },
+  { name: "P90", value: prefs.ttftP90Threshold, color: "#16a6b6" },
+  { name: "P95", value: prefs.ttftP95Threshold, color: "#7357d8" },
+]);
 const selectedKeys = ref<string[]>([]);
 const history = ref<MetricItem[]>([]);
 const activeKinds = ref<string[]>([]);
@@ -323,7 +331,7 @@ function rowClass({ row }: { row: DimRow }) {
         <div class="dimension-chart-grid">
           <article v-for="group in selectedTrendGroups" :key="group.key" class="dimension-chart-card">
             <header><div><h2>{{ group.name }}</h2><p>{{ kind === 'channels' ? '渠道' : '模型' }} ID {{ group.id }} · 按 Token 排名</p></div><el-button v-if="group.row" link type="primary" @click="openDetail(group.row)">详情</el-button></header>
-            <section v-if="activeMetric === 'ttft'" class="dimension-chart"><h3>TTFT</h3><p>P50 / P90 / P95</p><CustomerCompareChart :series="group.ttft" unit="s" :threshold="2" /></section>
+            <section v-if="activeMetric === 'ttft'" class="dimension-chart"><h3>TTFT</h3><p>P50 / P90 / P95</p><CustomerCompareChart :series="group.ttft" unit="s" :thresholds="ttftThresholds" /></section>
             <section v-else-if="activeMetric === 'tpm'" class="dimension-chart"><h3>TPM</h3><p>每分钟 Token</p><CustomerCompareChart :series="group.tpm" compact /></section>
             <section v-else class="dimension-chart"><h3>OTPS</h3><p>流式请求生成阶段每秒输出 Token</p><CustomerCompareChart :series="group.otps" unit=" token/s" /></section>
           </article>

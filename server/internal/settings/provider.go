@@ -32,6 +32,9 @@ const (
 	QuotaPerUnit         = "CT_QUOTA_PER_UNIT"
 	CurrencySymbol       = "CT_CURRENCY_SYMBOL"
 	DefaultInstanceID    = "CT_DEFAULT_INSTANCE_ID"
+	TTFTP50Threshold     = "CT_TTFT_P50_THRESHOLD_SECONDS"
+	TTFTP90Threshold     = "CT_TTFT_P90_THRESHOLD_SECONDS"
+	TTFTP95Threshold     = "CT_TTFT_P95_THRESHOLD_SECONDS"
 )
 
 var defaults = map[string]string{
@@ -39,6 +42,7 @@ var defaults = map[string]string{
 	CPUWarn: "80", CPUCrit: "90", MemoryWarn: "80", MemoryCrit: "90", DiskWarn: "85", DiskCrit: "95",
 	ErrorRateWarn: "20", ErrorRateCrit: "50", P95Warn: "5", P95Crit: "10", NotificationsEnabled: "true",
 	QuotaPerUnit: "500000", CurrencySymbol: "¥", DefaultInstanceID: "",
+	TTFTP50Threshold: "3", TTFTP90Threshold: "30", TTFTP95Threshold: "60",
 }
 
 type Item struct {
@@ -49,6 +53,7 @@ type Item struct {
 type Values struct {
 	RetentionDetailDays, RetentionMetric5mDays, RetentionRuntimeDays, RetentionHealthHours, RetentionAlertsDays, OfflineSeconds int
 	CPUWarn, CPUCrit, MemoryWarn, MemoryCrit, DiskWarn, DiskCrit, ErrorRateWarn, ErrorRateCrit, P95Warn, P95Crit                float64
+	TTFTP50Threshold, TTFTP90Threshold, TTFTP95Threshold                                                                        float64
 	NotificationsEnabled                                                                                                        bool
 }
 type Provider struct {
@@ -68,7 +73,7 @@ func NewProvider(store storage.SystemSettingStore, ttl time.Duration) *Provider 
 func DefaultValue(key string) string { return defaults[key] }
 
 func Keys() []string {
-	return []string{RetentionDetail, RetentionMetric5m, RetentionRuntime, RetentionHealthHours, RetentionAlerts, OfflineSeconds, CPUWarn, CPUCrit, MemoryWarn, MemoryCrit, DiskWarn, DiskCrit, ErrorRateWarn, ErrorRateCrit, P95Warn, P95Crit, NotificationsEnabled, QuotaPerUnit, CurrencySymbol, DefaultInstanceID}
+	return []string{RetentionDetail, RetentionMetric5m, RetentionRuntime, RetentionHealthHours, RetentionAlerts, OfflineSeconds, CPUWarn, CPUCrit, MemoryWarn, MemoryCrit, DiskWarn, DiskCrit, ErrorRateWarn, ErrorRateCrit, P95Warn, P95Crit, NotificationsEnabled, QuotaPerUnit, CurrencySymbol, DefaultInstanceID, TTFTP50Threshold, TTFTP90Threshold, TTFTP95Threshold}
 }
 func (p *Provider) Invalidate() { p.mu.Lock(); p.loaded = time.Time{}; p.mu.Unlock() }
 func (p *Provider) Items() (map[string]Item, error) {
@@ -140,7 +145,7 @@ func Parse(items map[string]Item) (Values, error) {
 	ptrs := []struct {
 		k string
 		p *float64
-	}{{CPUWarn, &v.CPUWarn}, {CPUCrit, &v.CPUCrit}, {MemoryWarn, &v.MemoryWarn}, {MemoryCrit, &v.MemoryCrit}, {DiskWarn, &v.DiskWarn}, {DiskCrit, &v.DiskCrit}, {ErrorRateWarn, &v.ErrorRateWarn}, {ErrorRateCrit, &v.ErrorRateCrit}, {P95Warn, &v.P95Warn}, {P95Crit, &v.P95Crit}}
+	}{{CPUWarn, &v.CPUWarn}, {CPUCrit, &v.CPUCrit}, {MemoryWarn, &v.MemoryWarn}, {MemoryCrit, &v.MemoryCrit}, {DiskWarn, &v.DiskWarn}, {DiskCrit, &v.DiskCrit}, {ErrorRateWarn, &v.ErrorRateWarn}, {ErrorRateCrit, &v.ErrorRateCrit}, {P95Warn, &v.P95Warn}, {P95Crit, &v.P95Crit}, {TTFTP50Threshold, &v.TTFTP50Threshold}, {TTFTP90Threshold, &v.TTFTP90Threshold}, {TTFTP95Threshold, &v.TTFTP95Threshold}}
 	for _, x := range ptrs {
 		if *x.p, err = f(x.k); err != nil {
 			return v, fmt.Errorf("%s: %w", x.k, err)
@@ -218,6 +223,20 @@ func Validate(values map[string]string) map[string]string {
 	c, cok := get(P95Crit)
 	if wok && cok && w >= c {
 		errs[P95Warn] = "must be lower than critical"
+	}
+	for _, k := range []string{TTFTP50Threshold, TTFTP90Threshold, TTFTP95Threshold} {
+		if v, ok := get(k); ok && (v < 0.1 || v > 600) {
+			errs[k] = "must be between 0.1 and 600"
+		}
+	}
+	p50, p50ok := get(TTFTP50Threshold)
+	p90, p90ok := get(TTFTP90Threshold)
+	p95, p95ok := get(TTFTP95Threshold)
+	if p50ok && p90ok && p50 >= p90 {
+		errs[TTFTP50Threshold] = "must be lower than P90"
+	}
+	if p90ok && p95ok && p90 >= p95 {
+		errs[TTFTP90Threshold] = "must be lower than P95"
 	}
 	if s, ok := values[NotificationsEnabled]; ok {
 		if _, e := strconv.ParseBool(s); e != nil {

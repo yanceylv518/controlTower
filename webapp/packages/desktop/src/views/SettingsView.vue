@@ -6,9 +6,11 @@ import { auth, dashboard } from "../api";
 import AppShell from "../components/AppShell.vue";
 import { useAuthStore } from "../stores/auth";
 import { useFiltersStore } from "../stores/filters";
+import { usePrefsStore } from "../stores/prefs";
 
 const store = useAuthStore();
 const filters = useFiltersStore();
+const prefs = usePrefsStore();
 const loading = ref(false);
 const saving = ref(false);
 const items = ref<Record<string, SystemSettingItem>>({});
@@ -21,6 +23,15 @@ const password = reactive({
 
 type Field = readonly [string, string, number, number];
 const sections: ReadonlyArray<{ title: string; note: string; fields: readonly Field[] }> = [
+  {
+    title: "TTFT 图表阈值",
+    note: "用于客户、渠道、模型监控图表的等高分段轴；P50 必须小于 P90，P90 必须小于 P95",
+    fields: [
+      ["CT_TTFT_P50_THRESHOLD_SECONDS", "P50 阈值（秒）", 0.5, 600],
+      ["CT_TTFT_P90_THRESHOLD_SECONDS", "P90 阈值（秒）", 0.5, 600],
+      ["CT_TTFT_P95_THRESHOLD_SECONDS", "P95 阈值（秒）", 0.5, 600],
+    ],
+  },
   {
     title: "数据保留",
     note: "超过保留期的数据由每日清理任务删除，修改后下一轮生效",
@@ -84,6 +95,7 @@ async function save() {
     const response = await dashboard.saveSettings(payload);
     items.value = response.items;
     await filters.loadInstances(true);
+    await prefs.load(true);
     ElMessage.success("设置已保存，将在下一轮任务中生效");
   } catch (e) {
     ElMessage.error(

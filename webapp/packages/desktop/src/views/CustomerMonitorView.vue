@@ -11,14 +11,22 @@ import MiniSparkline from "../components/MiniSparkline.vue";
 import { useAsyncData } from "../composables/useAsyncData";
 import { useAutoRefresh } from "../composables/useAutoRefresh";
 import { useFiltersStore } from "../stores/filters";
+import { usePrefsStore } from "../stores/prefs";
 import { formatTokens } from "../utils/format";
 import { useRouter } from "vue-router";
 
 const filters = useFiltersStore();
+const prefs = usePrefsStore();
+void prefs.load();
 const router = useRouter();
 const hours = ref(1);
 const activeTab = ref<"charts" | "ranking">("charts");
 const activeMetric = ref<"ttft" | "tpm" | "otps">("ttft");
+const ttftThresholds = computed(() => [
+  { name: "P50", value: prefs.ttftP50Threshold, color: "#2f6fed" },
+  { name: "P90", value: prefs.ttftP90Threshold, color: "#16a6b6" },
+  { name: "P95", value: prefs.ttftP95Threshold, color: "#7357d8" },
+]);
 const search = ref("");
 const selectedKeys = ref<string[]>([]);
 const page = ref(1);
@@ -219,7 +227,7 @@ function openDetail(row: MetricItem) {
         <div class="customer-trend-groups">
           <article v-for="group in selectedTrendGroups" :key="group.key" class="customer-trend-group">
             <header><div><h2>{{ group.name }}</h2><p>客户 ID {{ group.id }} · 按 Token 排名</p></div><el-button link type="primary" @click="openDetail(allRows.find(item => item.dimension_key === group.key)!)">详情</el-button></header>
-            <section v-if="activeMetric === 'ttft'" class="customer-metric-card"><h3>TTFT</h3><p>P50 / P90 / P95 首字响应分位数</p><CustomerCompareChart :series="group.ttft" unit="s" :threshold="2" /></section>
+            <section v-if="activeMetric === 'ttft'" class="customer-metric-card"><h3>TTFT</h3><p>P50 / P90 / P95 首字响应分位数</p><CustomerCompareChart :series="group.ttft" unit="s" :thresholds="ttftThresholds" /></section>
             <section v-else-if="activeMetric === 'tpm'" class="customer-metric-card"><h3>TPM</h3><p>每分钟 Token</p><CustomerCompareChart :series="group.tpm" compact /></section>
             <section v-else class="customer-metric-card"><h3>OTPS</h3><p>流式请求生成阶段每秒输出 Token</p><CustomerCompareChart :series="group.otps" unit=" token/s" /></section>
           </article>
