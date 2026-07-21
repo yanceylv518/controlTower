@@ -195,7 +195,9 @@ const totalPrompt = computed(() => visibleRows.value.reduce((sum, item) => sum +
 const totalCompletion = computed(() => visibleRows.value.reduce((sum, item) => sum + item.completion_tokens, 0));
 const totalRequests = computed(() => visibleRows.value.reduce((sum, item) => sum + item.request_count, 0));
 const activeCount = computed(() => visibleRows.value.filter((item) => item.request_count > 0).length);
-const overThreshold = computed(() => visibleRows.value.filter((item) => (item.ttft_p95_ms || 0) >= 2000).length);
+// 与图表阈值同源：P95 实测值对照配置的 P95 阈值。
+const ttftP95ThresholdMs = computed(() => prefs.ttftP95Threshold * 1000);
+const overThreshold = computed(() => visibleRows.value.filter((item) => (item.ttft_p95_ms || 0) >= ttftP95ThresholdMs.value).length);
 const weightedOTPS = computed(() => {
   let tokens = 0;
   let weighted = 0;
@@ -343,7 +345,7 @@ function rowClass({ row }: { row: DimRow }) {
         <article class="dimension-kpi out"><span>Token Out</span><strong>{{ formatTokens(totalCompletion) }}</strong><small>{{ grandTotal ? `${(totalCompletion / grandTotal * 100).toFixed(1)}%` : '—' }} 占比</small></article>
         <article class="dimension-kpi otps"><span>OTPS</span><strong>{{ weightedOTPS == null ? '—' : weightedOTPS.toFixed(2) }}</strong><small>按有效输出 Token 加权</small></article>
         <article class="dimension-kpi"><span>活跃{{ kind === 'channels' ? '渠道' : '模型' }}</span><strong>{{ activeCount }}</strong><small>{{ totalRequests.toLocaleString() }} 次请求</small></article>
-        <article class="dimension-kpi danger"><span>TTFT 超阈值</span><strong>{{ overThreshold }}</strong><small>阈值 ≥ 2 秒</small></article>
+        <article class="dimension-kpi danger"><span>TTFT 超阈值</span><strong>{{ overThreshold }}</strong><small>P95 阈值 ≥ {{ prefs.ttftP95Threshold }} 秒</small></article>
       </section>
       <section v-show="activeTab === 'ranking'" class="dimension-ranking-chart">
         <header><div><h2>Token 消耗 Top 10</h2><p>按 Token In + Token Out 降序</p></div></header>

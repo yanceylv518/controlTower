@@ -27,9 +27,9 @@ const sections: ReadonlyArray<{ title: string; note: string; fields: readonly Fi
     title: "TTFT 图表阈值",
     note: "用于客户、渠道、模型监控图表的等高分段轴；P50 必须小于 P90，P90 必须小于 P95",
     fields: [
-      ["CT_TTFT_P50_THRESHOLD_SECONDS", "P50 阈值（秒）", 0.5, 600],
-      ["CT_TTFT_P90_THRESHOLD_SECONDS", "P90 阈值（秒）", 0.5, 600],
-      ["CT_TTFT_P95_THRESHOLD_SECONDS", "P95 阈值（秒）", 0.5, 600],
+      ["CT_TTFT_P50_THRESHOLD_SECONDS", "P50 阈值（秒）", 0.1, 600],
+      ["CT_TTFT_P90_THRESHOLD_SECONDS", "P90 阈值（秒）", 0.1, 600],
+      ["CT_TTFT_P95_THRESHOLD_SECONDS", "P95 阈值（秒）", 0.1, 600],
     ],
   },
   {

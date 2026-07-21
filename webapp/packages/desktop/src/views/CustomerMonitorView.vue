@@ -86,10 +86,12 @@ function customerID(item: MetricItem) {
 function ms(value: number | null | undefined) {
   return value == null ? "—" : value >= 1000 ? `${(value / 1000).toFixed(2)}s` : `${Math.round(value)}ms`;
 }
+// 状态判定与图表阈值同源：P95 实测值对照配置的 P95 阈值，75% 起算"接近"。
+const ttftP95ThresholdMs = computed(() => prefs.ttftP95Threshold * 1000);
 function ttftStatus(value: number | null | undefined) {
   if (value == null) return { key: "empty", label: "无样本" };
-  if (value >= 2000) return { key: "crit", label: "超阈值" };
-  if (value >= 1500) return { key: "warn", label: "接近阈值" };
+  if (value >= ttftP95ThresholdMs.value) return { key: "crit", label: "超阈值" };
+  if (value >= ttftP95ThresholdMs.value * 0.75) return { key: "warn", label: "接近阈值" };
   return { key: "ok", label: "正常" };
 }
 
@@ -135,7 +137,7 @@ const weightedTTFT = computed(() => {
   });
   return count ? sum / count : null;
 });
-const overThreshold = computed(() => allRows.value.filter(item => (item.ttft_p95_ms || 0) >= 2000).length);
+const overThreshold = computed(() => allRows.value.filter(item => (item.ttft_p95_ms || 0) >= ttftP95ThresholdMs.value).length);
 const filteredRows = computed(() => {
   const keyword = search.value.trim().toLowerCase();
   return allRows.value.filter(item => !keyword || `${customerName(item)} ${item.dimension_key}`.toLowerCase().includes(keyword));
@@ -208,7 +210,7 @@ function openDetail(row: MetricItem) {
         <article class="customer-kpi"><span>TTFT P95</span><strong>{{ ms(weightedTTFT) }}</strong><small>按样本量加权</small></article>
         <article class="customer-kpi tpm"><span>峰值 TPM</span><strong>{{ formatTokens(peakTPM) }}</strong><small>按时间桶折算的每分钟峰值</small></article>
         <article class="customer-kpi"><span>活跃客户</span><strong>{{ allRows.filter(item => item.request_count > 0).length }}</strong><small>{{ totalRequests.toLocaleString() }} 次请求</small></article>
-        <article class="customer-kpi danger"><span>TTFT 超阈值</span><strong>{{ overThreshold }}</strong><small>阈值 ≥ 2 秒</small></article>
+        <article class="customer-kpi danger"><span>TTFT 超阈值</span><strong>{{ overThreshold }}</strong><small>P95 阈值 ≥ {{ prefs.ttftP95Threshold }} 秒</small></article>
       </section>
 
       <section v-show="activeTab === 'ranking'" class="customer-chart-grid">
