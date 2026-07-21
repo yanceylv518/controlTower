@@ -3,6 +3,15 @@
 window.DEVLOG = [
   {
     date: "2026-07-21",
+    type: "release",
+    version: "v2.0.0-rc16",
+    title: "rc16 打包：在 rc15 之上收入 TTFT 阈值可配置与口径统一",
+    summary: "相对 rc15 新增：be192b8 TTFT 图表阈值三设置键（默认 3/30/60 秒，分段等高 y 轴）、c8c0554 状态签与 KPI 改读配置 P95 阈值（与图表同源，默认口径比旧 2 秒宽松，可在设置页调严，60 秒 provider 缓存内即时生效）。部署与 rc15 相同：先 Server（.env 的 CT_SERVER_IMAGE 改 rc16 后 pull + up --no-build，013 迁移自动应用）后 Agent；部署后对 metric_1m 前缀查询 EXPLAIN 确认走 idx_metric_1m_dim_bucket。rc14/rc15 均未部署到生产，可直接跳到 rc16。",
+    docs: ["docs/v2-deploy-runbook.md"],
+    commits: []
+  },
+  {
+    date: "2026-07-21",
     type: "bugfix",
     version: "",
     title: "TTFT 状态判定与图表阈值统一口径（Claude 直接实现）",

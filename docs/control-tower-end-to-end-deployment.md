@@ -24,7 +24,7 @@ new-api MySQL（只读）
 | `NEW_API_IP` | new-api 服务器出口 IP |
 | `INSTANCE_ID` | Web 创建的实例 ID，例如 `inst-prod-01` |
 | `INSTANCE_TOKEN` | 创建实例时只显示一次的 Agent Token |
-| `RELEASE_VERSION` | 要部署的版本，例如 `v2.0.0-rc15` |
+| `RELEASE_VERSION` | 要部署的版本，例如 `v2.0.0-rc16` |
 
 > 发布版本必须真实存在。不要移动或覆盖旧 Tag。若最新修复晚于 rc4，应先发布新版本，不要继续部署旧 rc4 Server 包。
 
