@@ -111,12 +111,12 @@ async function render() {
       markLine: index === 0 && activeThresholds.length ? {
         silent: true,
         symbol: "none",
-        lineStyle: { type: "dashed", width: 2, opacity: .9 },
+        lineStyle: { type: "dashed", width: 1, opacity: .5 },
         label: { show: false },
         data: activeThresholds.map(item => ({
           name: item.name,
           yAxis: thresholdValues.indexOf(item.value) + 1,
-          lineStyle: { color: item.color, type: "dashed", width: 2, opacity: .9 },
+          lineStyle: { color: item.color, type: "dashed", width: 1, opacity: .5 },
         })),
       } : undefined,
     })),
