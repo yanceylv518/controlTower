@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import type { HealthCheckItem, ServerMetricItem } from "@ct/shared";
+import { siteOf, type HealthCheckItem, type ServerMetricItem } from "@ct/shared";
 import { dashboard } from "../api";
 import { useFiltersStore } from "../stores/filters";
 import { useAsyncData } from "../composables/useAsyncData";
@@ -60,6 +60,19 @@ const grouped = computed(() => {
     items: items.sort((a, b) => a.collected_at.localeCompare(b.collected_at)),
     latest: items[items.length - 1],
   }));
+});
+const siteGroups = computed(() => {
+  const sites = new Map<string, typeof grouped.value>();
+  for (const group of grouped.value) {
+    const instance = filters.instances.find(
+      (item) => item.instance_id === group.id,
+    );
+    const siteID = instance ? siteOf(instance) : group.id;
+    const list = sites.get(siteID) || [];
+    list.push(group);
+    sites.set(siteID, list);
+  }
+  return [...sites].map(([id, instances]) => ({ id, instances }));
 });
 const latestHealth = computed(() => {
   const latest = new Map<string, HealthCheckItem>();
@@ -122,11 +135,13 @@ const networkSeries = (group: (typeof grouped.value)[number]): TrendSeries[] => 
         />
       </template>
       <!-- 每实例一张机器卡：状态行 + 资源仪表 + 趋势 -->
-      <section
-        v-for="group in grouped"
-        :key="group.id"
-        class="panel machine-card"
-      >
+      <template v-for="site in siteGroups" :key="site.id">
+        <h2 class="site-group-title">站点 {{ site.id }}</h2>
+        <section
+          v-for="group in site.instances"
+          :key="group.id"
+          class="panel machine-card"
+        >
         <div class="machine-head">
           <h2>{{ group.name }}</h2>
           <el-tooltip :content="group.id"
@@ -233,7 +248,8 @@ const networkSeries = (group: (typeof grouped.value)[number]): TrendSeries[] => 
             </el-table>
           </el-collapse-item>
         </el-collapse>
-      </section>
+        </section>
+      </template>
     </AsyncPanel>
     <div v-if="state.data.value" class="support-grid">
       <section class="panel sub-panel">

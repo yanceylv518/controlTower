@@ -46,11 +46,11 @@ func TestInstanceListUsesSnakeCaseDTO(t *testing.T) {
 	s := ingest.NewMemoryStore()
 	h := InstanceHandler{Store: s, Runtime: s, Pepper: "pep"}
 	w := httptest.NewRecorder()
-	h.Create(w, httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(`{"instance_id":"inst-dto","name":"D"}`)))
+	h.Create(w, httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(`{"instance_id":"inst-dto","site_id":"site-a","name":"D"}`)))
 	w = httptest.NewRecorder()
 	h.List(w, httptest.NewRequest(http.MethodGet, "/", nil))
 	body := w.Body.String()
-	for _, want := range []string{`"instance_id"`, `"enabled"`, `"agents"`} {
+	for _, want := range []string{`"instance_id"`, `"site_id":"site-a"`, `"enabled"`, `"agents"`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("missing %s in %s", want, body)
 		}
@@ -59,6 +59,23 @@ func TestInstanceListUsesSnakeCaseDTO(t *testing.T) {
 		if strings.Contains(body, forbid) {
 			t.Fatalf("storage struct leaked into API: %s in %s", forbid, body)
 		}
+	}
+}
+
+func TestInstanceSiteValidationAndFallback(t *testing.T) {
+	s := ingest.NewMemoryStore()
+	h := InstanceHandler{Store: s, Runtime: s, Pepper: "pep"}
+
+	w := httptest.NewRecorder()
+	h.Create(w, httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(`{"instance_id":"site_a_1","name":"A"}`)))
+	if w.Code != http.StatusCreated || !strings.Contains(w.Body.String(), `"site_id":"site_a_1"`) {
+		t.Fatalf("expected instance-id fallback, status=%d body=%s", w.Code, w.Body.String())
+	}
+
+	w = httptest.NewRecorder()
+	h.Create(w, httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(`{"instance_id":"site-a-2","site_id":"BAD SITE"}`)))
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "invalid_site_id") {
+		t.Fatalf("expected site validation error, status=%d body=%s", w.Code, w.Body.String())
 	}
 }
 

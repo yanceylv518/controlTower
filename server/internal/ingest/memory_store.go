@@ -125,10 +125,11 @@ func (s *MemoryStore) CreateInstance(v storage.Instance) error {
 	s.instances[v.ID] = v
 	return nil
 }
-func (s *MemoryStore) UpdateInstance(id, n string, e bool, now time.Time) error {
+func (s *MemoryStore) UpdateInstance(id, siteID, n string, e bool, now time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	v := s.instances[id]
+	v.SiteID = siteID
 	v.Name = n
 	v.Enabled = e
 	v.UpdatedAt = now

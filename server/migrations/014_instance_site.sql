@@ -1,0 +1,2 @@
+ALTER TABLE instances
+  ADD COLUMN site_id VARCHAR(64) NOT NULL DEFAULT '';

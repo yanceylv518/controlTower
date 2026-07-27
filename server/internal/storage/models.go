@@ -15,6 +15,7 @@ type Session struct {
 
 type Instance struct {
 	ID        string
+	SiteID    string
 	Name      string
 	Env       string
 	Region    string

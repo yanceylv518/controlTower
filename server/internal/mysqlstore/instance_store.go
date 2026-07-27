@@ -8,7 +8,7 @@ import (
 )
 
 func (s Store) ListInstances() ([]storage.Instance, error) {
-	r, e := s.db.Query("SELECT id,name,env,region,base_url,enabled,created_at,updated_at FROM instances ORDER BY id")
+	r, e := s.db.Query("SELECT id,site_id,name,env,region,base_url,enabled,created_at,updated_at FROM instances ORDER BY id")
 	if e != nil {
 		return nil, e
 	}
@@ -16,7 +16,7 @@ func (s Store) ListInstances() ([]storage.Instance, error) {
 	var o []storage.Instance
 	for r.Next() {
 		var v storage.Instance
-		if e = r.Scan(&v.ID, &v.Name, &v.Env, &v.Region, &v.BaseURL, &v.Enabled, &v.CreatedAt, &v.UpdatedAt); e != nil {
+		if e = r.Scan(&v.ID, &v.SiteID, &v.Name, &v.Env, &v.Region, &v.BaseURL, &v.Enabled, &v.CreatedAt, &v.UpdatedAt); e != nil {
 			return nil, e
 		}
 		o = append(o, v)
@@ -25,18 +25,18 @@ func (s Store) ListInstances() ([]storage.Instance, error) {
 }
 func (s Store) InstanceByID(id string) (storage.Instance, bool, error) {
 	var v storage.Instance
-	e := s.db.QueryRow("SELECT id,name,env,region,base_url,enabled,created_at,updated_at FROM instances WHERE id=?", id).Scan(&v.ID, &v.Name, &v.Env, &v.Region, &v.BaseURL, &v.Enabled, &v.CreatedAt, &v.UpdatedAt)
+	e := s.db.QueryRow("SELECT id,site_id,name,env,region,base_url,enabled,created_at,updated_at FROM instances WHERE id=?", id).Scan(&v.ID, &v.SiteID, &v.Name, &v.Env, &v.Region, &v.BaseURL, &v.Enabled, &v.CreatedAt, &v.UpdatedAt)
 	if errors.Is(e, sql.ErrNoRows) {
 		return v, false, nil
 	}
 	return v, e == nil, e
 }
 func (s Store) CreateInstance(v storage.Instance) error {
-	_, e := s.db.Exec("INSERT INTO instances(id,name,env,region,base_url,enabled,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)", v.ID, v.Name, v.Env, v.Region, v.BaseURL, v.Enabled, v.CreatedAt, v.UpdatedAt)
+	_, e := s.db.Exec("INSERT INTO instances(id,site_id,name,env,region,base_url,enabled,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)", v.ID, v.SiteID, v.Name, v.Env, v.Region, v.BaseURL, v.Enabled, v.CreatedAt, v.UpdatedAt)
 	return e
 }
-func (s Store) UpdateInstance(id, n string, en bool, now time.Time) error {
-	_, e := s.db.Exec("UPDATE instances SET name=?,enabled=?,updated_at=? WHERE id=?", n, en, now, id)
+func (s Store) UpdateInstance(id, siteID, n string, en bool, now time.Time) error {
+	_, e := s.db.Exec("UPDATE instances SET site_id=?,name=?,enabled=?,updated_at=? WHERE id=?", siteID, n, en, now, id)
 	return e
 }
 func (s Store) CreateInstanceToken(v storage.InstanceToken) error {

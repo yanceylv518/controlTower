@@ -16,7 +16,7 @@ type InstanceStore interface {
 	ListInstances() ([]storage.Instance, error)
 	InstanceByID(string) (storage.Instance, bool, error)
 	CreateInstance(storage.Instance) error
-	UpdateInstance(string, string, bool, time.Time) error
+	UpdateInstance(string, string, string, bool, time.Time) error
 	CreateInstanceToken(storage.InstanceToken) error
 	ExpireInstanceTokens(string, time.Time, time.Time) error
 }
@@ -28,6 +28,7 @@ type InstanceHandler struct {
 }
 type InstanceItem struct {
 	InstanceID string          `json:"instance_id"`
+	SiteID     string          `json:"site_id"`
 	Name       string          `json:"name"`
 	Enabled    bool            `json:"enabled"`
 	CreatedAt  time.Time       `json:"created_at"`
@@ -43,7 +44,7 @@ type InstanceAgent struct {
 }
 
 func (i InstanceHandler) item(v storage.Instance) (InstanceItem, error) {
-	out := InstanceItem{InstanceID: v.ID, Name: v.Name, Enabled: v.Enabled, CreatedAt: v.CreatedAt, UpdatedAt: v.UpdatedAt, Agents: []InstanceAgent{}}
+	out := InstanceItem{InstanceID: v.ID, SiteID: siteOf(v), Name: v.Name, Enabled: v.Enabled, CreatedAt: v.CreatedAt, UpdatedAt: v.UpdatedAt, Agents: []InstanceAgent{}}
 	if i.Runtime != nil {
 		agents, e := i.Runtime.QueryAgents(storage.AgentQuery{InstanceID: v.ID, Limit: storage.MaxRuntimeQueryLimit})
 		if e != nil {
@@ -63,7 +64,8 @@ func (i InstanceHandler) item(v storage.Instance) (InstanceItem, error) {
 	return out, nil
 }
 
-var instanceIDPattern = regexp.MustCompile(`^[a-z0-9-]{1,64}$`)
+var instanceIDPattern = regexp.MustCompile(`^[a-z0-9_-]{1,64}$`)
+var siteIDPattern = regexp.MustCompile(`^[a-z0-9_-]{0,64}$`)
 
 func tokenHash(p, t string) string {
 	x := sha256.Sum256([]byte(p + t))
@@ -93,11 +95,16 @@ func (i InstanceHandler) List(w http.ResponseWriter, r *http.Request) {
 }
 func (i InstanceHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var q struct {
-		ID   string `json:"instance_id"`
-		Name string `json:"name"`
+		ID     string `json:"instance_id"`
+		SiteID string `json:"site_id"`
+		Name   string `json:"name"`
 	}
 	if json.NewDecoder(r.Body).Decode(&q) != nil || !instanceIDPattern.MatchString(q.ID) {
 		writeDashboardError(w, 400, "invalid_instance_id")
+		return
+	}
+	if !siteIDPattern.MatchString(q.SiteID) {
+		writeDashboardError(w, 400, "invalid_site_id")
 		return
 	}
 	if _, ok, _ := i.Store.InstanceByID(q.ID); ok {
@@ -105,7 +112,7 @@ func (i InstanceHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	n := time.Now().UTC()
-	v := storage.Instance{ID: q.ID, Name: q.Name, Enabled: true, CreatedAt: n, UpdatedAt: n}
+	v := storage.Instance{ID: q.ID, SiteID: q.SiteID, Name: q.Name, Enabled: true, CreatedAt: n, UpdatedAt: n}
 	if i.Store.CreateInstance(v) != nil {
 		writeDashboardError(w, 500, "create_failed")
 		return
@@ -119,7 +126,7 @@ func (i InstanceHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeDashboardError(w, 500, "query_failed")
 		return
 	}
-	writeDashboardJSON(w, 201, map[string]string{"instance_id": q.ID, "name": q.Name, "token": t})
+	writeDashboardJSON(w, 201, map[string]string{"instance_id": q.ID, "site_id": siteOf(v), "name": q.Name, "token": t})
 }
 func (i InstanceHandler) Update(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
@@ -129,17 +136,26 @@ func (i InstanceHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var q struct {
+		SiteID  *string `json:"site_id"`
 		Name    *string `json:"name"`
 		Enabled *bool   `json:"enabled"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&q)
+	if q.SiteID != nil {
+		if !siteIDPattern.MatchString(*q.SiteID) {
+			writeDashboardError(w, 400, "invalid_site_id")
+			return
+		}
+		v.SiteID = *q.SiteID
+	}
 	if q.Name != nil {
 		v.Name = *q.Name
 	}
 	if q.Enabled != nil {
 		v.Enabled = *q.Enabled
 	}
-	if i.Store.UpdateInstance(id, v.Name, v.Enabled, time.Now().UTC()) != nil {
+	v.UpdatedAt = time.Now().UTC()
+	if i.Store.UpdateInstance(id, v.SiteID, v.Name, v.Enabled, v.UpdatedAt) != nil {
 		writeDashboardError(w, 500, "query_failed")
 		return
 	}

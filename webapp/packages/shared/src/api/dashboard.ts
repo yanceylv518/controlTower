@@ -96,6 +96,7 @@ export interface ListResponse<T> {
 }
 export interface InstanceItem {
   instance_id: string;
+  site_id: string;
   name: string;
   enabled: boolean;
   created_at: string;
@@ -222,10 +223,12 @@ export interface NotificationDeliveryItem {
 }
 export interface InstanceCreateResponse {
   instance_id: string;
+  site_id: string;
   name: string;
   token: string;
 }
 export interface InstanceUpdateInput {
+  site_id?: string;
   name?: string;
   enabled?: boolean;
 }
@@ -462,7 +465,7 @@ export const dashboardApi = (client: ApiClient) => ({
       `/api/dashboard/notification-deliveries/${encodeURIComponent(id)}/resend`,
       { method: "POST" },
     ),
-  createInstance: (input: { instance_id: string; name: string }) =>
+  createInstance: (input: { instance_id: string; site_id?: string; name: string }) =>
     client.request<InstanceCreateResponse>("/api/dashboard/instances", {
       method: "POST",
       body: JSON.stringify(input),

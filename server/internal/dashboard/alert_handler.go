@@ -267,7 +267,8 @@ func appendInstanceOfflineAlerts(items []AlertItem, instances []storage.Instance
 		if minutes < 1 {
 			minutes = 1
 		}
-		items = append(items, AlertItem{ID: alertID(instance.ID, "instance_offline", instance.ID), InstanceID: instance.ID, RuleKey: "instance_offline", Severity: "critical", Status: "firing", Title: "实例离线", Summary: fmt.Sprintf("最后心跳于 %d 分钟前", minutes), SeenAt: agent.LastSeenAt, FirstSeenAt: agent.LastSeenAt, LastSeenAt: agent.LastSeenAt})
+		siteID := siteOf(instance)
+		items = append(items, AlertItem{ID: alertID(instance.ID, "instance_offline", instance.ID), InstanceID: instance.ID, RuleKey: "instance_offline", Severity: "critical", Status: "firing", Title: siteID + " 节点离线", Summary: fmt.Sprintf("站点 %s 节点 %s 最后心跳于 %d 分钟前", siteID, instance.ID, minutes), SeenAt: agent.LastSeenAt, FirstSeenAt: agent.LastSeenAt, LastSeenAt: agent.LastSeenAt})
 	}
 	return items
 }
