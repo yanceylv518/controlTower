@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
-import type { NginxSlowSample, NginxTimingResponse } from "@ct/shared";
+import { siteOf, type NginxSlowSample, type NginxTimingResponse } from "@ct/shared";
 import { dashboard } from "../api";
 import { useFiltersStore } from "../stores/filters";
 import { useAsyncData } from "../composables/useAsyncData";
@@ -13,6 +13,13 @@ import TrendChart, { type TrendSeries } from "../components/TrendChart.vue";
 import ListPager from "../components/ListPager.vue";
 
 const filters = useFiltersStore();
+void filters.loadInstances();
+const selectedInstanceID = ref("");
+const siteInstances = computed(() =>
+  filters.instances
+    .filter((item) => item.enabled && siteOf(item) === filters.site_id)
+    .sort((a, b) => a.instance_id.localeCompare(b.instance_id)),
+);
 const hours = ref(1);
 const userID = ref("");
 const channelID = ref("");
@@ -34,18 +41,18 @@ const timing = ref<NginxTimingResponse>({ items: [], summary: emptySummary() });
 const samples = ref<NginxSlowSample[]>([]);
 const guideOpen = ref(false);
 const state = useAsyncData(async () => {
-  if (!filters.instance_id) {
+  if (!selectedInstanceID.value) {
     timing.value = { items: [], summary: emptySummary() };
     samples.value = [];
     return false;
   }
   const [timingResponse, sampleResponse] = await Promise.all([
     dashboard.nginxTiming({
-      instance_id: filters.instance_id,
+      instance_id: selectedInstanceID.value,
       hours: hours.value,
     }),
     dashboard.nginxSlowSamples({
-      instance_id: filters.instance_id,
+      instance_id: selectedInstanceID.value,
       hours: hours.value,
       limit: pageSize.value,
       offset: (page.value - 1) * pageSize.value,
@@ -59,21 +66,23 @@ const state = useAsyncData(async () => {
   samples.value = sampleResponse.items;
   return timingResponse.items.length > 0;
 });
-watch(
-  () => filters.loaded,
-  (loaded) => {
-    if (loaded && !filters.instance_id && filters.instances.length) {
-      const online = filters.instances.find((item) =>
+function selectDefaultInstance() {
+  const candidates = siteInstances.value;
+  if (!candidates.some((item) => item.instance_id === selectedInstanceID.value)) {
+      const online = candidates.find((item) =>
         item.agents?.some((agent) => agent.online),
       );
-      filters.instance_id = (online || filters.instances[0]).instance_id;
-    }
-  },
+      selectedInstanceID.value = (online || candidates[0])?.instance_id || "";
+  }
+}
+watch(
+  () => [filters.loaded, filters.site_id, siteInstances.value.length],
+  () => selectDefaultInstance(),
   { immediate: true },
 );
 watch(
   () => [
-    filters.instance_id,
+    selectedInstanceID.value,
     hours.value,
     userID.value,
     channelID.value,
@@ -134,7 +143,7 @@ const matchLabel = (row: NginxSlowSample) =>
 const dimensionLink = (
   kind: "customers" | "channels" | "models",
   key: string | number,
-) => `/${kind}?key=${encodeURIComponent(`${filters.instance_id}:${key}`)}`;
+) => `/${kind}?key=${encodeURIComponent(`${selectedInstanceID.value}:${key}`)}`;
 async function copyRequestID(value: string) {
   if (!value) return;
   try {
@@ -149,6 +158,18 @@ async function copyRequestID(value: string) {
 <template>
   <AppShell title="延时分诊">
     <template #tools>
+      <el-select
+        v-model="selectedInstanceID"
+        placeholder="选择实例"
+        style="width: 180px"
+      >
+        <el-option
+          v-for="item in siteInstances"
+          :key="item.instance_id"
+          :label="item.name || item.instance_id"
+          :value="item.instance_id"
+        />
+      </el-select>
       <el-input
         v-model="userID"
         placeholder="用户 ID"
@@ -182,7 +203,7 @@ async function copyRequestID(value: string) {
     <AsyncPanel
       :loading="state.loading.value"
       :error="state.error.value"
-      :empty="Boolean(filters.instance_id) && !timing.items.length"
+      :empty="Boolean(selectedInstanceID) && !timing.items.length"
       @retry="state.reload"
     >
       <template #empty

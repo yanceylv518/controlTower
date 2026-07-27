@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onMounted } from "vue";
 import { siteOf } from "@ct/shared";
 import { useFiltersStore } from "../stores/filters";
 
 const filters = useFiltersStore();
+onMounted(() => void filters.loadInstances());
 const sites = computed(() => [
   ...new Set(
     filters.instances.filter((item) => item.enabled).map((item) => siteOf(item)),

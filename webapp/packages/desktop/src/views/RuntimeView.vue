@@ -22,7 +22,13 @@ const hours = ref(1);
 const startTime = () =>
   new Date(Date.now() - hours.value * 3600000).toISOString();
 const state = useAsyncData(async () => {
-  const common = { instance_id: filters.instance_id || undefined, limit: 200 };
+  await filters.loadInstances();
+  const common = { limit: 200 };
+  const siteInstanceIDs = new Set(
+    filters.instances
+      .filter((item) => siteOf(item) === filters.site_id)
+      .map((item) => item.instance_id),
+  );
   const [agents, metrics, health, docker] = await Promise.all([
     dashboard.agents(common),
     dashboard.serverMetrics({
@@ -34,14 +40,14 @@ const state = useAsyncData(async () => {
     dashboard.dockerStatuses(common),
   ]);
   return {
-    agents: agents.items,
-    metrics: metrics.items,
-    health: health.items,
-    docker: docker.items,
+    agents: agents.items.filter((item) => siteInstanceIDs.has(item.instance_id)),
+    metrics: metrics.items.filter((item) => siteInstanceIDs.has(item.instance_id)),
+    health: health.items.filter((item) => siteInstanceIDs.has(item.instance_id)),
+    docker: docker.items.filter((item) => siteInstanceIDs.has(item.instance_id)),
   };
 });
 watch(
-  () => [filters.instance_id, hours.value],
+  () => [filters.site_id, hours.value],
   () => void state.reload(),
 );
 useAutoRefresh(state.reload);

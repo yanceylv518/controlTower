@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -59,6 +60,20 @@ func TestInstanceOfflineAlertBranches(t *testing.T) {
 	items := appendInstanceOfflineAlerts(nil, instances, agents, now, 120)
 	if len(items) != 1 || items[0].InstanceID != "offline" || items[0].Severity != "critical" || items[0].Title != "offline 节点离线" {
 		t.Fatalf("unexpected offline alerts: %#v", items)
+	}
+}
+
+func TestInstanceOfflineAlertUsesDisplayName(t *testing.T) {
+	now := time.Now().UTC()
+	items := appendInstanceOfflineAlerts(
+		nil,
+		[]storage.Instance{{ID: "site-a-2", SiteID: "site-a", Name: "节点二", Enabled: true}},
+		[]storage.Agent{{InstanceID: "site-a-2", LastSeenAt: now.Add(-3 * time.Minute)}},
+		now,
+		120,
+	)
+	if len(items) != 1 || !strings.Contains(items[0].Summary, "节点二") || strings.Contains(items[0].Summary, "site-a-2") {
+		t.Fatalf("expected display name in offline summary: %#v", items)
 	}
 }
 

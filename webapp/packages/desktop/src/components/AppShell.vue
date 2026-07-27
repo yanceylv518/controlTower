@@ -16,7 +16,6 @@ import {
   User,
 } from "@element-plus/icons-vue";
 import { useAuthStore } from "../stores/auth";
-import InstanceSelect from "./InstanceSelect.vue";
 import SiteSelect from "./SiteSelect.vue";
 
 defineProps<{ title: string }>();
@@ -83,7 +82,6 @@ async function logout() {
         <div class="topbar-spacer"></div>
         <div class="user">
           <SiteSelect />
-          <InstanceSelect />
           <span>{{ auth.user?.username }}</span>
           <el-button text @click="logout">退出</el-button>
         </div>

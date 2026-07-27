@@ -5,11 +5,9 @@ import { ElMessage } from "element-plus";
 import { auth, dashboard } from "../api";
 import AppShell from "../components/AppShell.vue";
 import { useAuthStore } from "../stores/auth";
-import { useFiltersStore } from "../stores/filters";
 import { usePrefsStore } from "../stores/prefs";
 
 const store = useAuthStore();
-const filters = useFiltersStore();
 const prefs = usePrefsStore();
 const loading = ref(false);
 const saving = ref(false);
@@ -70,15 +68,13 @@ const sourceLabels: Record<string, string> = {
 async function load() {
   loading.value = true;
   try {
-    await filters.loadInstances();
     const response = await dashboard.settings();
     items.value = response.items;
     Object.entries(response.items).forEach(
       ([key, item]) =>
         (values[key] =
           key === "CT_NOTIFICATIONS_ENABLED" ||
-          key === "CT_CURRENCY_SYMBOL" ||
-          key === "CT_DEFAULT_INSTANCE_ID"
+          key === "CT_CURRENCY_SYMBOL"
             ? item.value
             : Number(item.value)),
     );
@@ -94,7 +90,6 @@ async function save() {
     );
     const response = await dashboard.saveSettings(payload);
     items.value = response.items;
-    await filters.loadInstances(true);
     await prefs.load(true);
     ElMessage.success("设置已保存，将在下一轮任务中生效");
   } catch (e) {
@@ -184,34 +179,6 @@ onMounted(load);
                 }}</span
               >
             </span>
-          </div>
-        </div>
-      </section>
-      <section class="panel sub-panel">
-        <h2>默认实例</h2>
-        <p class="sub-note">
-          登录或刷新后，各监控页面优先展示此实例。顶部实例选择器仍可临时切换为其他实例或全部实例。
-        </p>
-        <div class="field-grid">
-          <div class="field-item">
-            <label>默认展示实例</label>
-            <el-select
-              v-model="values.CT_DEFAULT_INSTANCE_ID as string"
-              size="small"
-              clearable
-              placeholder="请选择默认实例"
-              style="width: 240px"
-            >
-              <el-option
-                v-for="item in filters.instances.filter(
-                  (entry) => entry.enabled,
-                )"
-                :key="item.instance_id"
-                :label="item.name || item.instance_id"
-                :value="item.instance_id"
-              />
-            </el-select>
-            <span class="field-meta">删除或禁用后自动回退到第一个可用实例</span>
           </div>
         </div>
       </section>

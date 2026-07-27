@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
+import { siteOf } from "@ct/shared";
 import { dashboard } from "../api";
 import { useAsyncData } from "../composables/useAsyncData";
 import { useAutoRefresh } from "../composables/useAutoRefresh";
@@ -10,6 +11,14 @@ import ListPager from "./ListPager.vue";
 import StatusTag from "./StatusTag.vue";
 const props = defineProps<{ channelId: number }>();
 const filters = useFiltersStore();
+const siteInstances = computed(() =>
+  filters.instances
+    .filter((item) => item.enabled && siteOf(item) === filters.site_id)
+    .sort((a, b) => a.instance_id.localeCompare(b.instance_id)),
+);
+const defaultInstanceID = computed(
+  () => siteInstances.value[0]?.instance_id || "",
+);
 const open = ref(false);
 const confirmed = ref(false);
 const resultId = ref("");
@@ -23,7 +32,7 @@ const form = reactive<{
 }>({ instance_id: "" });
 watch(open, (v) => {
   if (v) {
-    form.instance_id = filters.instance_id;
+    form.instance_id = defaultInstanceID.value;
     confirmed.value = false;
     resultId.value = "";
   }
@@ -39,7 +48,7 @@ const valid = computed(
 const state = useAsyncData(async () =>
   (
     await dashboard.channelCommands({
-      instance_id: filters.instance_id || undefined,
+      instance_id: defaultInstanceID.value || undefined,
       limit: 100,
     })
   ).items.filter((x) => x.channel_id === props.channelId),
@@ -64,7 +73,7 @@ async function submit() {
     ElMessage.error(e instanceof Error ? e.message : "下发失败");
   }
 }
-watch([() => filters.instance_id, () => props.channelId], () => {
+watch([() => filters.site_id, () => props.channelId], () => {
   page.value = 1;
   void state.reload();
 });
@@ -107,7 +116,7 @@ useAutoRefresh(state.reload);
         ><el-form-item label="目标实例"
           ><el-select v-model="form.instance_id"
             ><el-option
-              v-for="item in filters.instances"
+              v-for="item in siteInstances"
               :key="item.instance_id"
               :label="item.name || item.instance_id"
               :value="item.instance_id" /></el-select></el-form-item

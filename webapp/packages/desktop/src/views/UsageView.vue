@@ -10,6 +10,7 @@ import ListPager from "../components/ListPager.vue";
 import { formatNumber, formatQuota, formatTokens } from "../utils/format";
 import { usePrefsStore } from "../stores/prefs";
 import { useFiltersStore } from "../stores/filters";
+import { siteOf } from "@ct/shared";
 const hours = ref(24);
 const prefs = usePrefsStore();
 const filters = useFiltersStore();
@@ -19,8 +20,16 @@ const quotaFmt = (v: number | null | undefined) =>
 const page = ref(1);
 const pageSize = ref(20);
 const state = useAsyncData(
-  async () =>
-    (await dashboard.usage(hours.value, filters.instance_id || undefined)).items,
+  async () => {
+    await filters.loadInstances();
+    const instanceIDs = filters.instances
+      .filter((item) => item.enabled && siteOf(item) === filters.site_id)
+      .map((item) => item.instance_id);
+    const responses = await Promise.all(
+      instanceIDs.map((instanceID) => dashboard.usage(hours.value, instanceID)),
+    );
+    return responses.flatMap((response) => response.items);
+  },
 );
 const groups = computed(() =>
   ["instance_user", "instance_channel", "instance_model"].map((type, i) => ({
@@ -30,7 +39,7 @@ const groups = computed(() =>
       .slice((page.value - 1) * pageSize.value, page.value * pageSize.value),
   })),
 );
-watch([hours, () => filters.instance_id], () => {
+watch([hours, () => filters.site_id], () => {
   page.value = 1;
   void state.reload();
 });

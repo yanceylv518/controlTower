@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { ApiError, type AlertEvent, type AlertItem } from "@ct/shared";
 import { dashboard } from "../api";
@@ -21,18 +21,33 @@ const drawer = ref(false);
 const selected = ref<AlertItem>();
 const displayName = (value: string) => value.replace(/ \(ID \d+\)$/, "");
 const events = ref<AlertEvent[]>([]);
+const siteInstanceIDs = computed(
+  () =>
+    new Set(
+      filters.instances
+        .filter((item) => item.site_id === filters.site_id)
+        .map((item) => item.instance_id),
+    ),
+);
 const state = useAsyncData(
-  async () =>
-    (
+  async () => {
+    await filters.loadInstances();
+    const items = (
       await dashboard.alerts({
-        instance_id: filters.instance_id || undefined,
         status: status.value || undefined,
         severity: severity.value || undefined,
         active_only: activeOnly.value || undefined,
-        limit: pageSize.value,
-        offset: (page.value - 1) * pageSize.value,
+        limit: 200,
       })
-    ).items,
+    ).items.filter((item) => siteInstanceIDs.value.has(item.instance_id));
+    return items;
+  },
+);
+const pageItems = computed(() =>
+  (state.data.value || []).slice(
+    (page.value - 1) * pageSize.value,
+    page.value * pageSize.value,
+  ),
 );
 const dimensionRoute = (item: AlertItem) => {
   const base =
@@ -120,7 +135,7 @@ async function cleanup(command: string) {
     ElMessage.error(e instanceof Error ? e.message : "清理失败");
   }
 }
-watch([() => filters.instance_id, status, severity, activeOnly], () => {
+watch([() => filters.site_id, status, severity, activeOnly], () => {
   page.value = 1;
   void state.reload();
 });
@@ -164,7 +179,7 @@ useAutoRefresh(state.reload);
       @retry="state.reload"
       ><div class="action-list">
         <article
-          v-for="item in state.data.value"
+          v-for="item in pageItems"
           :key="item.id"
           class="alert-card"
           :data-severity="item.severity"

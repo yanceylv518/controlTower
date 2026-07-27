@@ -4,7 +4,6 @@ import { useRouter } from "vue-router";
 import { ArrowLeft, ArrowRight } from "@element-plus/icons-vue";
 import type { AlertItem, ChannelSnapshot, LogSample, MetricItem } from "@ct/shared";
 import { dashboard } from "../api";
-import { useFiltersStore } from "../stores/filters";
 import { usePrefsStore } from "../stores/prefs";
 import { useAsyncData } from "../composables/useAsyncData";
 import { useAutoRefresh } from "../composables/useAutoRefresh";
@@ -23,7 +22,6 @@ const props = defineProps<{
   dimensionKey: string;
 }>();
 const router = useRouter();
-const filters = useFiltersStore();
 const prefs = usePrefsStore();
 onMounted(() => void prefs.load());
 
@@ -87,7 +85,7 @@ const state = useAsyncData(async () => {
   );
   void loadHistory(state.data.value !== undefined);
   return metrics.items
-    .filter((x) => !filters.instance_id || x.instance_id === filters.instance_id)
+    .filter((x) => x.instance_id === instancePart.value)
     .sort((a, b) => b.request_count - a.request_count);
 });
 

@@ -116,7 +116,11 @@ async function refresh(silent = false) {
     // AppShell 中的实例选择器也会在挂载时初始化实例。总览首刷必须等待
     // 初始化完成，否则可能先以空 instance_id 请求全部实例并短暂报错。
     await filters.loadInstances();
-    const instance_id = filters.instance_id || undefined;
+    const siteInstanceIDs = new Set(
+      filters.instances
+        .filter((item) => item.site_id === filters.site_id)
+        .map((item) => item.instance_id),
+    );
     const [o, latest, active] = await Promise.all([
       dashboard.overview(undefined, filters.site_id || undefined),
       dashboard.metrics({
@@ -125,10 +129,12 @@ async function refresh(silent = false) {
         latest: true,
         dimension_type: "instance",
       }),
-      dashboard.alerts({ instance_id, active_only: true, limit: 5 }),
+      dashboard.alerts({ active_only: true, limit: 50 }),
     ]);
     overview.value = o;
-    alerts.value = active.items.slice(0, 5);
+    alerts.value = active.items
+      .filter((item) => siteInstanceIDs.has(item.instance_id))
+      .slice(0, 5);
     const metric = latest.items[0];
     history.value = metric
       ? (
