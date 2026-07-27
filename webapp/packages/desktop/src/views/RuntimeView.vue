@@ -26,7 +26,7 @@ const state = useAsyncData(async () => {
   const common = { limit: 200 };
   const siteInstanceIDs = new Set(
     filters.instances
-      .filter((item) => siteOf(item) === filters.site_id)
+      .filter((item) => item.enabled && siteOf(item) === filters.site_id)
       .map((item) => item.instance_id),
   );
   const [agents, metrics, health, docker] = await Promise.all([
