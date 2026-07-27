@@ -8,6 +8,9 @@ CT_AGENT_TOKEN=local-agent-token
 
 # Use a read-only MySQL account when possible.
 # Example: user:password@tcp(127.0.0.1:3306)/newapi?parseTime=true&loc=UTC
+# Set false on secondary load-balanced nodes. They will keep reporting
+# heartbeat/health/system/docker/nginx data without connecting to shared MySQL.
+CT_LOG_COLLECT_ENABLED=true
 CT_LOG_DSN=readonly_user:REPLACE_ME@tcp(127.0.0.1:3306)/newapi?parseTime=true&loc=UTC
 
 CT_DATA_DIR=./data/agent

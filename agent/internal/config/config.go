@@ -14,6 +14,7 @@ type Config struct {
 	InstanceID                     string
 	ServerURL                      string
 	AgentToken                     string
+	LogCollectEnabled              bool
 	LogDSN                         string
 	DataDir                        string
 	LogPollIntervalSeconds         int
@@ -82,6 +83,7 @@ func LoadFromMap(values map[string]string) (Config, error) {
 		InstanceID:                     values["CT_INSTANCE_ID"],
 		ServerURL:                      values["CT_SERVER_URL"],
 		AgentToken:                     values["CT_AGENT_TOKEN"],
+		LogCollectEnabled:              boolOrDefault(values, "CT_LOG_COLLECT_ENABLED", true),
 		LogDSN:                         values["CT_LOG_DSN"],
 		DataDir:                        valueOrDefault(values, "CT_DATA_DIR", "data"),
 		LogPollIntervalSeconds:         intOrDefault(values, "CT_LOG_POLL_INTERVAL_SECONDS", 30),
@@ -117,8 +119,20 @@ func LoadFromMap(values map[string]string) (Config, error) {
 		CacheHitMinPromptTokens:        int64(intOrDefault(values, "CT_CACHE_HIT_MIN_PROMPT_TOKENS", 512)),
 	}
 
-	if cfg.AgentID == "" || cfg.InstanceID == "" || cfg.LogDSN == "" {
+	if !cfg.LogCollectEnabled && values["CT_CHANNEL_SNAPSHOT_ENABLED"] == "" {
+		cfg.ChannelSnapshotEnabled = false
+	}
+	if cfg.AgentID == "" || cfg.InstanceID == "" || (cfg.LogCollectEnabled && cfg.LogDSN == "") {
 		return Config{}, errors.New("missing required control tower agent config")
+	}
+	if !cfg.LogCollectEnabled && cfg.ServerURL == "" {
+		return Config{}, errors.New("CT_SERVER_URL is required when CT_LOG_COLLECT_ENABLED=false")
+	}
+	if !cfg.LogCollectEnabled && cfg.WeComWebhookURL != "" {
+		return Config{}, errors.New("CT_WECOM_WEBHOOK_URL requires CT_LOG_COLLECT_ENABLED=true")
+	}
+	if !cfg.LogCollectEnabled && cfg.ChannelSnapshotEnabled {
+		return Config{}, errors.New("CT_CHANNEL_SNAPSHOT_ENABLED cannot be true when CT_LOG_COLLECT_ENABLED=false")
 	}
 	// Standalone alert-only mode: with a WeCom webhook configured the
 	// server connection becomes optional; otherwise it stays required.
@@ -191,6 +205,7 @@ func envMap() map[string]string {
 		"CT_INSTANCE_ID",
 		"CT_SERVER_URL",
 		"CT_AGENT_TOKEN",
+		"CT_LOG_COLLECT_ENABLED",
 		"CT_LOG_DSN",
 		"CT_DATA_DIR",
 		"CT_LOG_POLL_INTERVAL_SECONDS",

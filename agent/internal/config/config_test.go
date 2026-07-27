@@ -22,6 +22,9 @@ func TestLoadFromMapAppliesDefaults(t *testing.T) {
 	if cfg.LogPollIntervalSeconds != 30 {
 		t.Fatalf("unexpected poll interval: %d", cfg.LogPollIntervalSeconds)
 	}
+	if !cfg.LogCollectEnabled {
+		t.Fatalf("log collection should default to enabled")
+	}
 	if cfg.LogBatchSize != 1000 {
 		t.Fatalf("unexpected batch size: %d", cfg.LogBatchSize)
 	}
@@ -42,6 +45,60 @@ func TestLoadFromMapAppliesDefaults(t *testing.T) {
 	}
 	if cfg.ChannelSnapshotIntervalSeconds != 600 {
 		t.Fatalf("unexpected channel snapshot interval: %d", cfg.ChannelSnapshotIntervalSeconds)
+	}
+}
+
+func TestLoadFromMapAllowsHeartbeatOnlyModeWithoutLogDSN(t *testing.T) {
+	cfg, err := LoadFromMap(map[string]string{
+		"CT_AGENT_ID":            "agent-2",
+		"CT_INSTANCE_ID":         "inst-2",
+		"CT_SERVER_URL":          "https://control.example.com",
+		"CT_AGENT_TOKEN":         "token",
+		"CT_LOG_COLLECT_ENABLED": "false",
+	})
+	if err != nil {
+		t.Fatalf("heartbeat-only mode should be valid: %v", err)
+	}
+	if cfg.LogCollectEnabled || cfg.ChannelSnapshotEnabled || cfg.LogDSN != "" {
+		t.Fatalf("unexpected heartbeat-only config: %#v", cfg)
+	}
+}
+
+func TestLoadFromMapRejectsInvalidHeartbeatOnlyCombinations(t *testing.T) {
+	tests := []struct {
+		name   string
+		values map[string]string
+	}{
+		{
+			name: "missing server",
+			values: map[string]string{
+				"CT_AGENT_ID": "agent-2", "CT_INSTANCE_ID": "inst-2",
+				"CT_LOG_COLLECT_ENABLED": "false",
+			},
+		},
+		{
+			name: "wecom webhook",
+			values: map[string]string{
+				"CT_AGENT_ID": "agent-2", "CT_INSTANCE_ID": "inst-2",
+				"CT_SERVER_URL": "https://control.example.com", "CT_AGENT_TOKEN": "token",
+				"CT_LOG_COLLECT_ENABLED": "false", "CT_WECOM_WEBHOOK_URL": "https://example.com/hook",
+			},
+		},
+		{
+			name: "explicit channel snapshots",
+			values: map[string]string{
+				"CT_AGENT_ID": "agent-2", "CT_INSTANCE_ID": "inst-2",
+				"CT_SERVER_URL": "https://control.example.com", "CT_AGENT_TOKEN": "token",
+				"CT_LOG_COLLECT_ENABLED": "false", "CT_CHANNEL_SNAPSHOT_ENABLED": "true",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := LoadFromMap(tt.values); err == nil {
+				t.Fatal("expected invalid heartbeat-only configuration")
+			}
+		})
 	}
 }
 

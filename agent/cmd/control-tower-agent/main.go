@@ -280,41 +280,45 @@ func collectAndReportFullPass(ctx context.Context, client controlTowerReporter, 
 	now := time.Now().UTC()
 	sequence := now.Unix()
 
-	// The local segment deliberately runs before every Server RPC. A sick or
-	// unreachable Control Tower must never stop new-api log collection or the
-	// independent local WeCom alert path.
-	db, err := logcollector.OpenMySQL(cfg.LogDSN)
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-	nameRefresher.maybeRefresh(ctx, db, notifier)
-
-	collector := logcollector.NewMySQLCollector(db)
-	var channelCollector channelSnapshotCollector
-	if cfg.ChannelSnapshotEnabled {
-		channelCollector = channelcollector.NewMySQLCollectorWithInterval(db, time.Duration(cfg.ChannelSnapshotIntervalSeconds)*time.Second)
-	}
-	events, lastLogID, err := collector.Collect(ctx, current.LastLogID, cfg.LogBatchSize)
-	if err != nil {
-		current.ConsecutiveReportFailures++
-		_ = stateStore.Save(current)
-		return err
-	}
-
-	// Alert evaluation runs right after collection so a report failure below
-	// does not delay or drop WeCom notifications.
-	alertStats := notifier.Process(ctx, events)
-	log.Printf("control tower alert pass: after_log_id=%d last_log_id=%d events=%d errors=%d channel_dimensions=%d user_dimensions=%d alerts_triggered=%d alerts_sent=%d alerts_failed=%d",
-		current.LastLogID, lastLogID, alertStats.EventCount, alertStats.ErrorCount,
-		alertStats.ChannelDimensions, alertStats.UserDimensions, alertStats.AlertsTriggered,
-		alertStats.AlertsSent, alertStats.AlertsSendFailures)
-
+	var events []logcollector.Event
+	lastLogID := current.LastLogID
 	backlog := logcollector.BacklogStats{}
-	if stats, backlogErr := collector.Backlog(ctx, lastLogID); backlogErr != nil {
-		log.Printf("control tower backlog telemetry failed: %v", backlogErr)
-	} else {
-		backlog = stats
+	var channelCollector channelSnapshotCollector
+	if cfg.LogCollectEnabled {
+		// The local segment deliberately runs before every Server RPC. A sick or
+		// unreachable Control Tower must never stop new-api log collection or the
+		// independent local WeCom alert path.
+		db, openErr := logcollector.OpenMySQL(cfg.LogDSN)
+		if openErr != nil {
+			return openErr
+		}
+		defer db.Close()
+		nameRefresher.maybeRefresh(ctx, db, notifier)
+
+		collector := logcollector.NewMySQLCollector(db)
+		if cfg.ChannelSnapshotEnabled {
+			channelCollector = channelcollector.NewMySQLCollectorWithInterval(db, time.Duration(cfg.ChannelSnapshotIntervalSeconds)*time.Second)
+		}
+		events, lastLogID, err = collector.Collect(ctx, current.LastLogID, cfg.LogBatchSize)
+		if err != nil {
+			current.ConsecutiveReportFailures++
+			_ = stateStore.Save(current)
+			return err
+		}
+
+		// Alert evaluation runs right after collection so a report failure below
+		// does not delay or drop WeCom notifications.
+		alertStats := notifier.Process(ctx, events)
+		log.Printf("control tower alert pass: after_log_id=%d last_log_id=%d events=%d errors=%d channel_dimensions=%d user_dimensions=%d alerts_triggered=%d alerts_sent=%d alerts_failed=%d",
+			current.LastLogID, lastLogID, alertStats.EventCount, alertStats.ErrorCount,
+			alertStats.ChannelDimensions, alertStats.UserDimensions, alertStats.AlertsTriggered,
+			alertStats.AlertsSent, alertStats.AlertsSendFailures)
+
+		if stats, backlogErr := collector.Backlog(ctx, lastLogID); backlogErr != nil {
+			log.Printf("control tower backlog telemetry failed: %v", backlogErr)
+		} else {
+			backlog = stats
+		}
 	}
 
 	report := buildReport(ctx, cfg, now, sequence+1, lastLogID, backlog, events, metricCollector, checker, dockerCollector, channelCollector)

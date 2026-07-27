@@ -54,7 +54,11 @@ func Run(ctx context.Context, cfg config.Config) Result {
 	r.add(StatusPass, "config", "required configuration loaded")
 	r.checkDataDir(cfg.DataDir)
 	r.checkServer(ctx, cfg)
-	r.checkMySQL(ctx, cfg)
+	if cfg.LogCollectEnabled {
+		r.checkMySQL(ctx, cfg)
+	} else {
+		r.add(StatusPass, "mysql", "skipped because CT_LOG_COLLECT_ENABLED=false")
+	}
 	return r
 }
 

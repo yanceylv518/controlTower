@@ -7,6 +7,7 @@ CT_AGENT_ID=agent-prod-01
 CT_INSTANCE_ID=inst-prod
 
 # Read-only account; only SELECT on the logs table is needed in this mode.
+CT_LOG_COLLECT_ENABLED=true
 CT_LOG_DSN=ct_readonly:REPLACE_PASSWORD@tcp(127.0.0.1:3306)/newapi?parseTime=false&timeout=2s
 
 # Local state directory (cursor persistence).

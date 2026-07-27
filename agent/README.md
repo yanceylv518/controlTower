@@ -21,6 +21,13 @@ Set `CT_AGENT_RUN_ONCE=true` for local validation or scheduled one-shot executio
 
 Set `CT_AGENT_FAKE_EVENT=true` only for smoke testing. Fake event mode sends one synthetic heartbeat/report and does not read the new-api database.
 
+For a secondary node behind a load balancer, set `CT_LOG_COLLECT_ENABLED=false`.
+The agent then avoids the shared new-api database entirely while continuing to
+report heartbeat, health, system, Docker, and Nginx timing data. `CT_LOG_DSN`
+is optional in this mode and channel snapshots are disabled. Do not configure
+the standalone WeCom webhook or explicitly enable channel snapshots on such a
+node.
+
 
 
 ## Log Event Mode
@@ -193,7 +200,7 @@ Preflight checks:
 - Agent config is complete.
 - `CT_DATA_DIR` is writable.
 - Control Tower Server `GET /healthz` is reachable.
-- MySQL can connect with the configured DSN.
+- MySQL can connect with the configured DSN (skipped when `CT_LOG_COLLECT_ENABLED=false`).
 - `logs` can be queried for the collector cursor.
 - `channels` can be queried when channel snapshots are enabled.
 - `logs.id` has an index, reported as a warning if missing.
