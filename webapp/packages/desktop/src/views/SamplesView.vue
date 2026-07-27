@@ -25,14 +25,14 @@ const state = useAsyncData(
     (
       await dashboard.logSamples({
         ...form,
-        instance_id: filters.instance_id || undefined,
+        site: filters.site_id || undefined,
         limit: pageSize.value,
         offset: (page.value - 1) * pageSize.value,
       })
     ).items,
 );
 watch(
-  () => filters.instance_id,
+  () => filters.site_id,
   () => {
     page.value = 1;
     void state.reload();

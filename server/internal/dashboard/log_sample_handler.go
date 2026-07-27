@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"net/http"
+	"sort"
 	"time"
 
 	"controltower/server/internal/storage"
@@ -49,7 +50,38 @@ func (h Handler) HandleLogSamples(w http.ResponseWriter, r *http.Request) {
 		writeDashboardError(w, http.StatusInternalServerError, "log_sample_store_not_configured")
 		return
 	}
-	items, err := h.logSampleStore.QueryLogSamples(parseLogSampleFilter(r))
+	filter := parseLogSampleFilter(r)
+	instanceIDs, err := h.instanceIDsForRequest(filter.InstanceID, r.URL.Query().Get("site"))
+	if err != nil {
+		writeDashboardError(w, http.StatusInternalServerError, "query_failed")
+		return
+	}
+	var items []storage.LogSample
+	if instanceIDs == nil {
+		items, err = h.logSampleStore.QueryLogSamples(filter)
+	} else {
+		requestedLimit, requestedOffset := filter.Limit, filter.Offset
+		filter.Offset = 0
+		filter.Limit = requestedLimit + requestedOffset
+		for _, instanceID := range instanceIDs {
+			filter.InstanceID = instanceID
+			part, queryErr := h.logSampleStore.QueryLogSamples(filter)
+			if queryErr != nil {
+				err = queryErr
+				break
+			}
+			items = append(items, part...)
+		}
+		sort.Slice(items, func(i, j int) bool { return items[i].CreatedAt.After(items[j].CreatedAt) })
+		if requestedOffset >= len(items) {
+			items = []storage.LogSample{}
+		} else {
+			items = items[requestedOffset:]
+			if requestedLimit > 0 && len(items) > requestedLimit {
+				items = items[:requestedLimit]
+			}
+		}
+	}
 	if err != nil {
 		writeDashboardError(w, http.StatusInternalServerError, "query_failed")
 		return

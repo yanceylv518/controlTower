@@ -163,9 +163,9 @@ Instance tokens are stored only as `SHA-256(pepper + token)` hashes. A token may
 
 | 方法与路径 | 参数 | 成功响应示例 |
 | --- | --- | --- |
-| `GET /api/dashboard/overview` | Query `instance_id` | `{"cards":[],"runtime":{...}}` |
-| `GET /api/dashboard/metrics` | Query `window,instance_id,dimension_type,dimension_key` | `{"items":[{"window":"1m","request_count":10}]}` |
-| `GET /api/dashboard/metric-history` | Query `window,dimension_type,dimension_key,since` | `{"items":[{"bucket_time":"...","request_count":10}]}` |
+| `GET /api/dashboard/overview` | Query `instance_id`, optional `site` | `{"cards":[],"runtime":{...}}` |
+| `GET /api/dashboard/metrics` | Query `window,instance_id,site,dimension_type,dimension_key` | `{"items":[{"window":"1m","request_count":10}]}` |
+| `GET /api/dashboard/metric-history` | Query `window,instance_id,site,dimension_type,dimension_key,since` | `{"items":[{"bucket_time":"...","request_count":10}]}` |
 | `GET /api/dashboard/usage` | Query `window,instance_id,limit` | `{"items":[{"dimension_key":"user:7","quota":100}]}` |
 
 ### 日志与运行态

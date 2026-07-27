@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import type { ChannelSnapshot, MetricItem } from "@ct/shared";
+import { siteOf, type ChannelSnapshot, type MetricItem } from "@ct/shared";
 import { Refresh, Search } from "@element-plus/icons-vue";
 import { dashboard } from "../api";
 import { useFiltersStore } from "../stores/filters";
@@ -56,9 +56,9 @@ watch(
 
 const state = useAsyncData(async () => {
   await filters.loadInstances();
-  const instanceIDs = filters.instance_id
-    ? [filters.instance_id]
-    : filters.instances.filter((item) => item.enabled).map((item) => item.instance_id);
+  const instanceIDs = filters.instances
+    .filter((item) => item.enabled && siteOf(item) === filters.site_id)
+    .map((item) => item.instance_id);
   const window = hours.value === 24 ? "5m" : "1m";
   const prefix = (instanceID: string) => `${instanceID}:${props.kind === "channels" ? "channel" : "model"}:`;
   const metricResponses = await Promise.all(instanceIDs.flatMap((instanceID) => [
@@ -71,11 +71,11 @@ const state = useAsyncData(async () => {
   history.value = points;
   const channelData = await (
     props.kind === "channels"
-      ? dashboard.channelSnapshots({
-          instance_id: filters.instance_id || undefined,
+      ? Promise.all(instanceIDs.map((instanceID) => dashboard.channelSnapshots({
+          instance_id: instanceID,
           latest_only: true,
           limit: 500,
-        })
+        }))).then((responses) => ({ items: responses.flatMap((response) => response.items) }))
       : Promise.resolve({ items: [] as ChannelSnapshot[] })
   );
   snapshots.value = channelData.items;
@@ -83,7 +83,7 @@ const state = useAsyncData(async () => {
   return summaries.sort((a, b) => totalTokens(b) - totalTokens(a));
 });
 watch(
-  () => [props.kind, filters.instance_id, hours.value],
+  () => [props.kind, filters.site_id, hours.value],
   () => {
     if (initialized) void state.reload();
   },

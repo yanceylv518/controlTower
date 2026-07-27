@@ -333,13 +333,14 @@ const query = (
 export const dashboardApi = (client: ApiClient) => ({
   instances: () =>
     client.request<ListResponse<InstanceItem>>("/api/dashboard/instances"),
-  overview: (instance_id?: string) =>
+  overview: (instance_id?: string, site?: string) =>
     client.request<Overview>(
-      `/api/dashboard/overview${query({ instance_id })}`,
+      `/api/dashboard/overview${query({ instance_id, site })}`,
     ),
   metrics: (
     params: {
       instance_id?: string;
+      site?: string;
       window?: string;
       latest?: boolean;
       dimension_type?: string;
@@ -351,6 +352,7 @@ export const dashboardApi = (client: ApiClient) => ({
     ),
   metricHistory: (params: {
     instance_id?: string;
+    site?: string;
     window: string;
     dimension_type: string;
     dimension_key?: string;
@@ -401,6 +403,7 @@ export const dashboardApi = (client: ApiClient) => ({
   logSamples: (
     params: {
       instance_id?: string;
+      site?: string;
       sample_kind?: string;
       model_name?: string;
       user_id?: string;

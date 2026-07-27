@@ -55,10 +55,16 @@ func (h Handler) HandleOverview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	instanceID := r.URL.Query().Get("instance_id")
-	if instanceID != "" {
+	instanceIDs, err := h.instanceIDsForRequest(instanceID, r.URL.Query().Get("site"))
+	if err != nil {
+		writeDashboardError(w, http.StatusInternalServerError, "query_failed")
+		return
+	}
+	allowed := instanceIDSet(instanceIDs)
+	if allowed != nil {
 		filtered := metrics[:0]
 		for _, m := range metrics {
-			if m.InstanceID == instanceID {
+			if allowed[m.InstanceID] {
 				filtered = append(filtered, m)
 			}
 		}
@@ -68,22 +74,58 @@ func (h Handler) HandleOverview(w http.ResponseWriter, r *http.Request) {
 		writeDashboardJSON(w, http.StatusOK, BuildOverview(metrics))
 		return
 	}
-	serverMetrics, err := h.runtimeStore.QueryServerMetrics(storage.ServerMetricQuery{InstanceID: instanceID, Limit: storage.MaxRuntimeQueryLimit})
+	runtimeInstanceID := instanceID
+	serverMetrics, err := h.runtimeStore.QueryServerMetrics(storage.ServerMetricQuery{InstanceID: runtimeInstanceID, Limit: storage.MaxRuntimeQueryLimit})
 	if err != nil {
 		writeDashboardError(w, http.StatusInternalServerError, "query_failed")
 		return
 	}
-	healthChecks, err := h.runtimeStore.QueryHealthChecks(storage.HealthCheckQuery{InstanceID: instanceID, Limit: storage.MaxRuntimeQueryLimit})
+	healthChecks, err := h.runtimeStore.QueryHealthChecks(storage.HealthCheckQuery{InstanceID: runtimeInstanceID, Limit: storage.MaxRuntimeQueryLimit})
 	if err != nil {
 		writeDashboardError(w, http.StatusInternalServerError, "query_failed")
 		return
 	}
-	dockerStatuses, err := h.runtimeStore.QueryDockerStatuses(storage.DockerStatusQuery{InstanceID: instanceID, Limit: storage.MaxRuntimeQueryLimit})
+	dockerStatuses, err := h.runtimeStore.QueryDockerStatuses(storage.DockerStatusQuery{InstanceID: runtimeInstanceID, Limit: storage.MaxRuntimeQueryLimit})
 	if err != nil {
 		writeDashboardError(w, http.StatusInternalServerError, "query_failed")
 		return
+	}
+	if allowed != nil && runtimeInstanceID == "" {
+		serverMetrics = filterServerMetricsByInstance(serverMetrics, allowed)
+		healthChecks = filterHealthChecksByInstance(healthChecks, allowed)
+		dockerStatuses = filterDockerStatusesByInstance(dockerStatuses, allowed)
 	}
 	writeDashboardJSON(w, http.StatusOK, BuildOverviewWithRuntime(metrics, serverMetrics, healthChecks, dockerStatuses))
+}
+
+func filterServerMetricsByInstance(items []storage.ServerMetric, allowed map[string]bool) []storage.ServerMetric {
+	out := items[:0]
+	for _, item := range items {
+		if allowed[item.InstanceID] {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func filterHealthChecksByInstance(items []storage.HealthCheck, allowed map[string]bool) []storage.HealthCheck {
+	out := items[:0]
+	for _, item := range items {
+		if allowed[item.InstanceID] {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func filterDockerStatusesByInstance(items []storage.DockerStatus, allowed map[string]bool) []storage.DockerStatus {
+	out := items[:0]
+	for _, item := range items {
+		if allowed[item.InstanceID] {
+			out = append(out, item)
+		}
+	}
+	return out
 }
 
 type latest1mOverviewSource interface {

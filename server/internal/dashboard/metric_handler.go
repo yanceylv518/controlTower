@@ -26,6 +26,10 @@ type metricPrefixSource interface {
 	QueryMetricHistoryPrefix(window, dimensionType, dimensionKeyPrefix, instanceID string, since time.Time) ([]aggregator.Metric, error)
 }
 
+type metricPrefixInstancesSource interface {
+	QueryMetricHistoryPrefixForInstances(window, dimensionType, dimensionKeyPrefix string, instanceIDs []string, since time.Time) ([]aggregator.Metric, error)
+}
+
 type instanceLatestMetricSource interface {
 	Latest1mMetricsForInstance(dimensionType, instanceID string) ([]aggregator.Metric, error)
 	Latest5mMetricsForInstance(dimensionType, instanceID string) ([]aggregator.Metric, error)
@@ -85,9 +89,14 @@ func (h Handler) HandleMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	query := r.URL.Query()
+	instanceIDs, err := h.instanceIDsForRequest(query.Get("instance_id"), query.Get("site"))
+	if err != nil {
+		writeDashboardError(w, http.StatusInternalServerError, "query_failed")
+		return
+	}
 	window := query.Get("window")
 	var metrics []aggregator.Metric
-	var err error
+	err = nil
 	latest := query.Get("latest") == "true"
 	dimensionType := query.Get("dimension_type")
 	instanceID := query.Get("instance_id")
@@ -109,7 +118,7 @@ func (h Handler) HandleMetrics(w http.ResponseWriter, r *http.Request) {
 		writeDashboardError(w, http.StatusInternalServerError, "query_failed")
 		return
 	}
-	items := h.filterMetricItems(metrics, query.Get("dimension_type"), query.Get("dimension_key"), query.Get("instance_id"))
+	items := h.filterMetricItemsByInstances(metrics, query.Get("dimension_type"), query.Get("dimension_key"), instanceIDs)
 	writeDashboardJSON(w, http.StatusOK, MetricListResponse{Items: items})
 }
 
@@ -123,6 +132,11 @@ func (h Handler) HandleMetricHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	query := r.URL.Query()
+	instanceIDs, resolveErr := h.instanceIDsForRequest(query.Get("instance_id"), query.Get("site"))
+	if resolveErr != nil {
+		writeDashboardError(w, http.StatusInternalServerError, "query_failed")
+		return
+	}
 	dimensionType, dimensionKey := query.Get("dimension_type"), query.Get("dimension_key")
 	dimensionKeyPrefix := query.Get("dimension_key_prefix")
 	window := query.Get("window")
@@ -144,18 +158,35 @@ func (h Handler) HandleMetricHistory(w http.ResponseWriter, r *http.Request) {
 	var metrics []aggregator.Metric
 	var err error
 	if dimensionKeyPrefix != "" {
-		source, ok := h.metricSource.(metricPrefixSource)
-		if !ok {
+		if instanceIDs != nil {
+			source, ok := h.metricSource.(metricPrefixInstancesSource)
+			if !ok {
+				writeDashboardError(w, http.StatusInternalServerError, "metric_prefix_source_not_configured")
+				return
+			}
+			metrics, err = source.QueryMetricHistoryPrefixForInstances(window, dimensionType, dimensionKeyPrefix, instanceIDs, since)
+		} else if source, ok := h.metricSource.(metricPrefixSource); ok {
+			metrics, err = source.QueryMetricHistoryPrefix(window, dimensionType, dimensionKeyPrefix, "", since)
+		} else {
 			writeDashboardError(w, http.StatusInternalServerError, "metric_prefix_source_not_configured")
 			return
 		}
-		metrics, err = source.QueryMetricHistoryPrefix(window, dimensionType, dimensionKeyPrefix, query.Get("instance_id"), since)
 	} else {
 		metrics, err = h.metricSource.QueryMetricHistory(window, dimensionType, dimensionKey, since)
 	}
 	if err != nil {
 		writeDashboardError(w, http.StatusInternalServerError, "query_failed")
 		return
+	}
+	if instanceIDs != nil && dimensionKeyPrefix == "" {
+		allowed := instanceIDSet(instanceIDs)
+		filtered := metrics[:0]
+		for _, metric := range metrics {
+			if allowed[metric.InstanceID] {
+				filtered = append(filtered, metric)
+			}
+		}
+		metrics = filtered
 	}
 	if query.Get("aggregate") == "true" {
 		if len(metrics) == 0 {
@@ -198,9 +229,18 @@ func filterMetricItems(metrics []aggregator.Metric, dimensionType string, dimens
 }
 
 func (h Handler) filterMetricItems(metrics []aggregator.Metric, dimensionType string, dimensionKey string, instanceID ...string) []MetricItem {
+	var ids []string
+	if len(instanceID) > 0 && instanceID[0] != "" {
+		ids = []string{instanceID[0]}
+	}
+	return h.filterMetricItemsByInstances(metrics, dimensionType, dimensionKey, ids)
+}
+
+func (h Handler) filterMetricItemsByInstances(metrics []aggregator.Metric, dimensionType string, dimensionKey string, instanceIDs []string) []MetricItem {
+	allowed := instanceIDSet(instanceIDs)
 	items := make([]MetricItem, 0, len(metrics))
 	for _, metric := range metrics {
-		if len(instanceID) > 0 && instanceID[0] != "" && metric.InstanceID != instanceID[0] {
+		if allowed != nil && !allowed[metric.InstanceID] {
 			continue
 		}
 		if dimensionType != "" && metric.DimensionType != dimensionType {

@@ -118,9 +118,9 @@ async function refresh(silent = false) {
     await filters.loadInstances();
     const instance_id = filters.instance_id || undefined;
     const [o, latest, active] = await Promise.all([
-      dashboard.overview(instance_id),
+      dashboard.overview(undefined, filters.site_id || undefined),
       dashboard.metrics({
-        instance_id,
+        site: filters.site_id || undefined,
         window: "1m",
         latest: true,
         dimension_type: "instance",
@@ -133,6 +133,7 @@ async function refresh(silent = false) {
     history.value = metric
       ? (
           await dashboard.metricHistory({
+            site: filters.site_id || undefined,
             window: "1m",
             dimension_type: "instance",
             dimension_key: metric.dimension_key,
@@ -216,7 +217,7 @@ function resize() {
 }
 useAutoRefresh(refresh);
 watch(
-  () => filters.instance_id,
+  () => filters.site_id,
   () => void refresh(),
 );
 window.addEventListener("resize", resize);

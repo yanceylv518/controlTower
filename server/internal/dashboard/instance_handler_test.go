@@ -94,6 +94,36 @@ func TestMetricsFilterByInstance(t *testing.T) {
 	}
 }
 
+func TestMetricsFilterBySiteAndInstancePrecedence(t *testing.T) {
+	bucket := time.Date(2026, 7, 13, 12, 0, 0, 0, time.UTC)
+	store := ingest.NewMemoryStore()
+	for _, instance := range []storage.Instance{
+		{ID: "site-a-1", SiteID: "site-a"},
+		{ID: "site-a-2", SiteID: "site-a"},
+		{ID: "site-b-1", SiteID: "site-b"},
+	} {
+		_ = store.CreateInstance(instance)
+	}
+	stub := &metricSourceStub{metrics: []aggregator.Metric{
+		{InstanceID: "site-a-1", BucketTime: bucket, DimensionType: "instance", DimensionKey: "site-a-1", RequestCount: 7},
+		{InstanceID: "site-a-2", BucketTime: bucket, DimensionType: "instance", DimensionKey: "site-a-2", RequestCount: 8},
+		{InstanceID: "site-b-1", BucketTime: bucket, DimensionType: "instance", DimensionKey: "site-b-1", RequestCount: 9},
+	}}
+	h := NewHandler(nil).WithMetricSource(stub).WithInstanceStore(store)
+
+	w := httptest.NewRecorder()
+	h.HandleMetrics(w, httptest.NewRequest(http.MethodGet, "/api/dashboard/metrics?site=site-a", nil))
+	if body := w.Body.String(); !strings.Contains(body, "site-a-1") || !strings.Contains(body, "site-a-2") || strings.Contains(body, "site-b-1") {
+		t.Fatalf("site filter leaked: %s", body)
+	}
+
+	w = httptest.NewRecorder()
+	h.HandleMetrics(w, httptest.NewRequest(http.MethodGet, "/api/dashboard/metrics?site=site-a&instance_id=site-a-2", nil))
+	if body := w.Body.String(); strings.Contains(body, "site-a-1") || !strings.Contains(body, "site-a-2") {
+		t.Fatalf("instance precedence failed: %s", body)
+	}
+}
+
 func TestRuntimeQueriesFilterByInstance(t *testing.T) {
 	s := ingest.NewMemoryStore()
 	now := time.Now().UTC()

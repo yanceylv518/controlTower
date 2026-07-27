@@ -352,6 +352,24 @@ func (s *MemoryStore) QueryMetricHistoryPrefix(window, dimensionType, dimensionK
 	return items, nil
 }
 
+func (s *MemoryStore) QueryMetricHistoryPrefixForInstances(window, dimensionType, dimensionKeyPrefix string, instanceIDs []string, since time.Time) ([]aggregator.Metric, error) {
+	allowed := make(map[string]bool, len(instanceIDs))
+	for _, id := range instanceIDs {
+		allowed[id] = true
+	}
+	items, err := s.QueryMetricHistoryPrefix(window, dimensionType, dimensionKeyPrefix, "", since)
+	if err != nil {
+		return nil, err
+	}
+	out := items[:0]
+	for _, item := range items {
+		if allowed[item.InstanceID] {
+			out = append(out, item)
+		}
+	}
+	return out, nil
+}
+
 func latestMetrics(source map[string]aggregator.Metric, dimensionType string, cutoff time.Time) []aggregator.Metric {
 	latest := make(map[string]aggregator.Metric)
 	for _, metric := range source {

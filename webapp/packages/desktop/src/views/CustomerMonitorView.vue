@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { Refresh, Search } from "@element-plus/icons-vue";
-import type { MetricItem } from "@ct/shared";
+import { siteOf, type MetricItem } from "@ct/shared";
 import { dashboard } from "../api";
 import AppShell from "../components/AppShell.vue";
 import AsyncPanel from "../components/AsyncPanel.vue";
@@ -36,9 +36,9 @@ let initialized = false;
 
 const state = useAsyncData(async () => {
   await filters.loadInstances();
-  const instanceIDs = filters.instance_id
-    ? [filters.instance_id]
-    : filters.instances.filter(item => item.enabled).map(item => item.instance_id);
+  const instanceIDs = filters.instances
+    .filter((item) => item.enabled && siteOf(item) === filters.site_id)
+    .map((item) => item.instance_id);
   const window = hours.value === 24 ? "5m" : "1m";
   const responses = await Promise.all(instanceIDs.flatMap(instanceID => [
     dashboard.metricHistory({
@@ -68,7 +68,7 @@ const state = useAsyncData(async () => {
   return summaries.sort((a, b) => totalTokens(b) - totalTokens(a));
 });
 
-watch([hours, () => filters.instance_id], () => {
+watch([hours, () => filters.site_id], () => {
   page.value = 1;
   if (initialized) void state.reload();
 });

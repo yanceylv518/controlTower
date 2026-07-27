@@ -69,6 +69,28 @@ func (s Store) QueryMetricHistoryPrefix(window, dimensionType, dimensionKeyPrefi
 	return scanMetrics(rows)
 }
 
+func (s Store) QueryMetricHistoryPrefixForInstances(window, dimensionType, dimensionKeyPrefix string, instanceIDs []string, since time.Time) ([]aggregator.Metric, error) {
+	table, err := metricTable(window)
+	if err != nil {
+		return nil, err
+	}
+	if len(instanceIDs) == 0 {
+		return []aggregator.Metric{}, nil
+	}
+	args := make([]any, 0, len(instanceIDs)+3)
+	args = append(args, dimensionType)
+	for _, id := range instanceIDs {
+		args = append(args, id)
+	}
+	args = append(args, dimensionKeyPrefix, since)
+	rows, err := s.db.QueryContext(context.Background(), metricHistoryPrefixInstancesSQL(table, len(instanceIDs)), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanMetrics(rows)
+}
+
 func (s Store) recentMetrics(table string, limit int, latestOnly bool) ([]aggregator.Metric, error) {
 	rows, err := s.db.QueryContext(context.Background(), recentMetricsSQL(table, latestOnly), limit)
 	if err != nil {
@@ -353,6 +375,18 @@ func metricHistoryPrefixInstanceSQL(table string) string {
   use_time_sum, stream_count, cache_tokens_total, cache_prompt_tokens, big_input_count, big_input_cache_hits, ttft_count, ttft_sum_ms, ttft_p50_ms, ttft_p90_ms, ttft_p95_ms, otps_output_tokens, otps_duration_seconds, ` + latencyBucketColumnSQL() + `, ` + v2BucketColumnSQL() + `
 FROM ` + table + `
 WHERE dimension_type = ? AND instance_id = ? AND dimension_key LIKE CONCAT(?, '%') AND bucket_time >= ?
+ORDER BY dimension_key ASC, bucket_time ASC`
+}
+
+func metricHistoryPrefixInstancesSQL(table string, count int) string {
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", count), ",")
+	return `SELECT instance_id, bucket_time, dimension_type, dimension_key,
+  request_count, success_count, error_count, success_rate, error_rate,
+  tpm, prompt_tokens, completion_tokens, quota,
+  avg_use_time, p50_use_time, p95_use_time, p99_use_time, stream_rate, cache_token_rate,
+  use_time_sum, stream_count, cache_tokens_total, cache_prompt_tokens, big_input_count, big_input_cache_hits, ttft_count, ttft_sum_ms, ttft_p50_ms, ttft_p90_ms, ttft_p95_ms, otps_output_tokens, otps_duration_seconds, ` + latencyBucketColumnSQL() + `, ` + v2BucketColumnSQL() + `
+FROM ` + table + `
+WHERE dimension_type = ? AND instance_id IN (` + placeholders + `) AND dimension_key LIKE CONCAT(?, '%') AND bucket_time >= ?
 ORDER BY dimension_key ASC, bucket_time ASC`
 }
 
