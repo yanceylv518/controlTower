@@ -31,7 +31,6 @@ const (
 	NotificationsEnabled = "CT_NOTIFICATIONS_ENABLED"
 	QuotaPerUnit         = "CT_QUOTA_PER_UNIT"
 	CurrencySymbol       = "CT_CURRENCY_SYMBOL"
-	DefaultInstanceID    = "CT_DEFAULT_INSTANCE_ID"
 	TTFTP50Threshold     = "CT_TTFT_P50_THRESHOLD_SECONDS"
 	TTFTP90Threshold     = "CT_TTFT_P90_THRESHOLD_SECONDS"
 	TTFTP95Threshold     = "CT_TTFT_P95_THRESHOLD_SECONDS"
@@ -41,7 +40,7 @@ var defaults = map[string]string{
 	RetentionDetail: "30", RetentionMetric5m: "90", RetentionRuntime: "7", RetentionHealthHours: "6", RetentionAlerts: "30", OfflineSeconds: "120",
 	CPUWarn: "80", CPUCrit: "90", MemoryWarn: "80", MemoryCrit: "90", DiskWarn: "85", DiskCrit: "95",
 	ErrorRateWarn: "20", ErrorRateCrit: "50", P95Warn: "5", P95Crit: "10", NotificationsEnabled: "true",
-	QuotaPerUnit: "500000", CurrencySymbol: "¥", DefaultInstanceID: "",
+	QuotaPerUnit: "500000", CurrencySymbol: "¥",
 	TTFTP50Threshold: "3", TTFTP90Threshold: "30", TTFTP95Threshold: "60",
 }
 
@@ -73,7 +72,7 @@ func NewProvider(store storage.SystemSettingStore, ttl time.Duration) *Provider 
 func DefaultValue(key string) string { return defaults[key] }
 
 func Keys() []string {
-	return []string{RetentionDetail, RetentionMetric5m, RetentionRuntime, RetentionHealthHours, RetentionAlerts, OfflineSeconds, CPUWarn, CPUCrit, MemoryWarn, MemoryCrit, DiskWarn, DiskCrit, ErrorRateWarn, ErrorRateCrit, P95Warn, P95Crit, NotificationsEnabled, QuotaPerUnit, CurrencySymbol, DefaultInstanceID, TTFTP50Threshold, TTFTP90Threshold, TTFTP95Threshold}
+	return []string{RetentionDetail, RetentionMetric5m, RetentionRuntime, RetentionHealthHours, RetentionAlerts, OfflineSeconds, CPUWarn, CPUCrit, MemoryWarn, MemoryCrit, DiskWarn, DiskCrit, ErrorRateWarn, ErrorRateCrit, P95Warn, P95Crit, NotificationsEnabled, QuotaPerUnit, CurrencySymbol, TTFTP50Threshold, TTFTP90Threshold, TTFTP95Threshold}
 }
 func (p *Provider) Invalidate() { p.mu.Lock(); p.loaded = time.Time{}; p.mu.Unlock() }
 func (p *Provider) Items() (map[string]Item, error) {
@@ -197,9 +196,6 @@ func Validate(values map[string]string) map[string]string {
 	}
 	if v, ok := get(RetentionHealthHours); ok && (v < 1 || v > 168 || v != float64(int(v))) {
 		errs[RetentionHealthHours] = "must be an integer between 1 and 168"
-	}
-	if instanceID, ok := values[DefaultInstanceID]; ok && len([]rune(strings.TrimSpace(instanceID))) > 128 {
-		errs[DefaultInstanceID] = "must be at most 128 characters"
 	}
 	for _, pair := range [][2]string{{CPUWarn, CPUCrit}, {MemoryWarn, MemoryCrit}, {DiskWarn, DiskCrit}, {ErrorRateWarn, ErrorRateCrit}} {
 		w, wok := get(pair[0])

@@ -2,7 +2,6 @@ package settings
 
 import (
 	"os"
-	"strings"
 	"testing"
 	"time"
 
@@ -57,11 +56,10 @@ func TestValidateSettings(t *testing.T) {
 	}
 }
 
-func TestValidateDefaultInstanceID(t *testing.T) {
-	if got := Validate(map[string]string{DefaultInstanceID: "inst-prod"}); len(got) != 0 {
-		t.Fatalf("valid default instance rejected: %#v", got)
-	}
-	if got := Validate(map[string]string{DefaultInstanceID: strings.Repeat("x", 129)}); got[DefaultInstanceID] == "" {
-		t.Fatal("missing default instance length validation")
+func TestRetiredDefaultInstanceKeyAbsent(t *testing.T) {
+	for _, key := range Keys() {
+		if key == "CT_DEFAULT_INSTANCE_ID" {
+			t.Fatal("CT_DEFAULT_INSTANCE_ID was retired with the global instance context and must stay out of the registry")
+		}
 	}
 }
