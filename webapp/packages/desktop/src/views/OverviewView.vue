@@ -22,6 +22,10 @@ import { useAutoRefresh } from "../composables/useAutoRefresh";
 import { useFiltersStore } from "../stores/filters";
 import AppShell from "../components/AppShell.vue";
 import { formatNumber, formatPercent, formatSeconds } from "../utils/format";
+import {
+  cancelChartRender,
+  scheduleChartRender,
+} from "../utils/chartRenderQueue";
 echarts.use([
   LineChart,
   GridComponent,
@@ -40,6 +44,7 @@ const tpmChartEl = ref<HTMLDivElement>();
 const successChartEl = ref<HTMLDivElement>();
 let tpmChart: echarts.ECharts | undefined;
 let successChart: echarts.ECharts | undefined;
+const renderToken = {};
 const cards = computed(() => {
   const m = overview.value?.recent_1m;
   const runtime = overview.value?.runtime;
@@ -149,7 +154,7 @@ async function refresh(silent = false) {
       : [];
     lastUpdated.value = new Date();
     await nextTick();
-    renderChart();
+    scheduleChartRender(renderToken, renderChart);
   } catch {
     if (!background) error.value = "数据加载失败，请稍后重试";
   } finally {
@@ -228,6 +233,7 @@ watch(
 );
 window.addEventListener("resize", resize);
 onBeforeUnmount(() => {
+  cancelChartRender(renderToken);
   window.removeEventListener("resize", resize);
   tpmChart?.dispose();
   successChart?.dispose();

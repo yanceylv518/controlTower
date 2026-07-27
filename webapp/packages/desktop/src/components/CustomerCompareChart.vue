@@ -4,6 +4,7 @@ import * as echarts from "echarts/core";
 import { LineChart } from "echarts/charts";
 import { DataZoomComponent, GridComponent, LegendComponent, MarkLineComponent, TooltipComponent } from "echarts/components";
 import { CanvasRenderer } from "echarts/renderers";
+import { cancelChartRender, scheduleChartRender } from "../utils/chartRenderQueue";
 
 export interface CustomerCompareSeries { name: string; data: Array<[string, number | null]> }
 export interface CustomerCompareThreshold { name: string; value: number; color: string }
@@ -11,6 +12,7 @@ const props = withDefaults(defineProps<{ series: CustomerCompareSeries[]; unit?:
 const chartEl = ref<HTMLDivElement>();
 let chart: echarts.ECharts | undefined;
 let observer: ResizeObserver | undefined;
+const renderToken = {};
 echarts.use([LineChart, DataZoomComponent, GridComponent, LegendComponent, MarkLineComponent, TooltipComponent, CanvasRenderer]);
 const colors = ["#2f6fed", "#16a6b6", "#7357d8", "#e47b22", "#36a269"];
 const compactNumber = (value: number) => value >= 1_000_000 ? `${(value / 1_000_000).toFixed(1)}M` : value >= 1_000 ? `${(value / 1_000).toFixed(0)}K` : String(Math.round(value));
@@ -18,6 +20,12 @@ const compactNumber = (value: number) => value >= 1_000_000 ? `${(value / 1_000_
 async function render() {
   await nextTick();
   if (!chartEl.value || !props.series.length) return;
+  scheduleChartRender(renderToken, renderNow);
+}
+
+function renderNow() {
+  if (!chartEl.value || !props.series.length) return;
+  const initial = !chart;
   chart ??= echarts.init(chartEl.value);
   const observedMax = Math.max(...props.series.flatMap(item => item.data.map(([, value]) => value ?? 0)), 0);
   const configuredThresholdValues = props.thresholds.map(item => item.value).sort((a, b) => a - b);
@@ -60,7 +68,7 @@ async function render() {
     };
   });
   chart.setOption({
-    animationDuration: 250,
+    animationDuration: initial ? 150 : 0,
     color: colors,
     tooltip: yMax == null ? {
       trigger: "axis",
@@ -125,7 +133,11 @@ async function render() {
 
 watch(() => [props.series, props.unit, props.thresholds, props.compact], () => void render(), { deep: true, immediate: true });
 watch(chartEl, element => { observer?.disconnect(); if (element) { observer = new ResizeObserver(() => chart?.resize()); observer.observe(element); void render(); } });
-onBeforeUnmount(() => { observer?.disconnect(); chart?.dispose(); });
+onBeforeUnmount(() => {
+  cancelChartRender(renderToken);
+  observer?.disconnect();
+  chart?.dispose();
+});
 </script>
 
 <template>

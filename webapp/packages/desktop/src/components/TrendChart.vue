@@ -8,6 +8,10 @@ import {
   TooltipComponent,
 } from "echarts/components";
 import { CanvasRenderer } from "echarts/renderers";
+import {
+  cancelChartRender,
+  scheduleChartRender,
+} from "../utils/chartRenderQueue";
 
 export interface TrendSeries {
   name: string;
@@ -27,6 +31,7 @@ const hasData = computed(() =>
 );
 let chart: echarts.ECharts | undefined;
 let observer: ResizeObserver | undefined;
+const renderToken = {};
 
 echarts.use([
   LineChart,
@@ -39,16 +44,23 @@ echarts.use([
 
 async function render() {
   if (!hasData.value) {
+    cancelChartRender(renderToken);
     chart?.dispose();
     chart = undefined;
     return;
   }
   await nextTick();
   if (!chartEl.value) return;
+  scheduleChartRender(renderToken, renderNow);
+}
+
+function renderNow() {
+  if (!chartEl.value || !hasData.value) return;
+  const initial = !chart;
   chart ??= echarts.init(chartEl.value);
   chart.setOption(
     {
-      animationDuration: 250,
+      animationDuration: initial ? 150 : 0,
       color: props.series.map((item) => item.color),
       tooltip: { trigger: "axis" },
       legend: { top: 0, right: 0, data: props.series.map((item) => item.name) },
@@ -95,6 +107,7 @@ watch(chartEl, (element) => {
   }
 });
 onBeforeUnmount(() => {
+  cancelChartRender(renderToken);
   observer?.disconnect();
   chart?.dispose();
 });

@@ -4,12 +4,14 @@ import * as echarts from "echarts/core";
 import { BarChart } from "echarts/charts";
 import { GridComponent, LegendComponent, TooltipComponent } from "echarts/components";
 import { CanvasRenderer } from "echarts/renderers";
+import { cancelChartRender, scheduleChartRender } from "../utils/chartRenderQueue";
 
 export interface TokenRankItem { name: string; prompt: number; completion: number }
 const props = defineProps<{ items: TokenRankItem[] }>();
 const chartEl = ref<HTMLDivElement>();
 let chart: echarts.ECharts | undefined;
 let observer: ResizeObserver | undefined;
+const renderToken = {};
 echarts.use([BarChart, GridComponent, LegendComponent, TooltipComponent, CanvasRenderer]);
 
 const compact = (value: number) => {
@@ -21,10 +23,16 @@ const compact = (value: number) => {
 async function render() {
   await nextTick();
   if (!chartEl.value || !props.items.length) return;
+  scheduleChartRender(renderToken, renderNow);
+}
+
+function renderNow() {
+  if (!chartEl.value || !props.items.length) return;
+  const initial = !chart;
   chart ??= echarts.init(chartEl.value);
   const items = [...props.items].reverse();
   chart.setOption({
-    animationDuration: 300,
+    animationDuration: initial ? 150 : 0,
     color: ["#2f6fed", "#f08a24"],
     tooltip: { trigger: "axis", axisPointer: { type: "shadow" }, valueFormatter: compact },
     legend: { top: 0, right: 4, data: ["Token In", "Token Out"] },
@@ -72,7 +80,11 @@ watch(chartEl, element => {
   observer?.disconnect();
   if (element) { observer = new ResizeObserver(() => chart?.resize()); observer.observe(element); void render(); }
 });
-onBeforeUnmount(() => { observer?.disconnect(); chart?.dispose(); });
+onBeforeUnmount(() => {
+  cancelChartRender(renderToken);
+  observer?.disconnect();
+  chart?.dispose();
+});
 </script>
 
 <template>
