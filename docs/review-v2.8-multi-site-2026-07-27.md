@@ -17,6 +17,13 @@
 - **P3**：离线告警文案用 instance.ID，规格要求"有 display_name 用 display_name"（instances.name），未实现。
 - **记档**："实例维度页业务区加全站汇总标注"一项无落点——不存在独立实例维度页（实例维度仅总览图表），codex 跳过合理，规格假设有误。
 
+## B4 验收（2026-07-27 追加，e2212fa）
+
+结论：**通过，1 个验收修正已由验收方直接修复**。`go vet` + 全量测试 + `pnpm typecheck` 全绿；全仓 `filters.instance_id`/`InstanceSelect`/`CT_DEFAULT_INSTANCE_ID` 前端零残余；六消费方 + 三修复逐项核对通过。客户端按 `item.site_id` 直比是安全的——B2 的 List 接口在 server 侧已用 siteOf 预解析，site_id 永不为空。
+
+- **验收修正（已修）**：SettingsView 移除"默认实例"设置区后，server settings 注册表仍下发 `CT_DEFAULT_INSTANCE_ID`，该键落入 `Number()` 分支——空值变 0、旧存值变 NaN，每次保存设置都会把脏值写回 system_settings。修复：从注册表移除该键（const/defaults/Keys/校验），原校验测试替换为"该键不得回归注册表"的守卫测试。库中已存的旧值成为孤儿行，无消费方，无害。
+- **记档**：告警中心改为单次拉 200 条客户端分页，超 200 条的旧告警不可见（静默上限；告警清理功能在，实际难触顶）；"全部站点"筛选项未实现（规格标注"可加"，属可选项）；SettingsView 删除默认实例设置区为合理的超范围改动（键已无语义）。
+
 ## 部署后必做（本机无 MySQL，无法实证）
 
 1. `EXPLAIN` 验证 `QueryMetricHistoryPrefixForInstances` 的 IN 查询走 `idx_metric_1m_dim_bucket`（1m/5m 两表）。
