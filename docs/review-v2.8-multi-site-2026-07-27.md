@@ -24,6 +24,12 @@
 - **验收修正（已修）**：SettingsView 移除"默认实例"设置区后，server settings 注册表仍下发 `CT_DEFAULT_INSTANCE_ID`，该键落入 `Number()` 分支——空值变 0、旧存值变 NaN，每次保存设置都会把脏值写回 system_settings。修复：从注册表移除该键（const/defaults/Keys/校验），原校验测试替换为"该键不得回归注册表"的守卫测试。库中已存的旧值成为孤儿行，无消费方，无害。
 - **记档**：告警中心改为单次拉 200 条客户端分页，超 200 条的旧告警不可见（静默上限；告警清理功能在，实际难触顶）；"全部站点"筛选项未实现（规格标注"可加"，属可选项）；SettingsView 删除默认实例设置区为合理的超范围改动（键已无语义）。
 
+## rc18 后散修验收（2026-07-28 追加）
+
+- **37c071a 系统状态页隐藏禁用实例**：一行，与各站点过滤处的 `enabled` 语义对齐。通过。
+- **0dc803b 图表渲染错峰**：新增 chartRenderQueue（每 rAF 帧渲染一张、token 去重、卸载/空数据取消、flush 时复查 DOM 与数据防陈旧渲染），接入 TrendChart/两个客户图表/总览。实现无泄漏无饿死，通过。**行为变化记档**：图表更新动画 250ms→0（首绘 150ms），刷新不再有过渡动画，属有意的性能取舍。
+- `vue-tsc` 通过；两笔均纯 web，Go 侧无涉。**注意 tag v2.0.0-rc18 打在 49edb69，不含这两笔**——要上线需打新 tag。
+
 ## 部署后必做（本机无 MySQL，无法实证）
 
 1. `EXPLAIN` 验证 `QueryMetricHistoryPrefixForInstances` 的 IN 查询走 `idx_metric_1m_dim_bucket`（1m/5m 两表）。
