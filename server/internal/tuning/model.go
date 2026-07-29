@@ -1,6 +1,7 @@
 package tuning
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -12,14 +13,9 @@ var (
 	ErrNoTargetInstance         = errors.New("no_target_instance")
 )
 
-type Policy struct {
+type SchedulingParams struct {
 	WindowMinutes       int     `json:"window_minutes"`
 	MinSamples          int64   `json:"min_samples"`
-	ErrorRateThreshold  float64 `json:"error_rate_threshold"`
-	SevereThreshold     float64 `json:"severe_threshold"`
-	LatencyMultiplier   float64 `json:"latency_multiplier"`
-	LatencyFloorSeconds float64 `json:"latency_floor_seconds"`
-	SustainedWindows    int     `json:"sustained_windows"`
 	TrialInitialMinutes int     `json:"trial_initial_minutes"`
 	TrialBackoffFactor  float64 `json:"trial_backoff_factor"`
 	TrialMaxMinutes     int     `json:"trial_max_minutes"`
@@ -28,48 +24,139 @@ type Policy struct {
 	DailyActionLimit    int     `json:"daily_action_limit"`
 }
 
-func DefaultPolicy() Policy {
-	return Policy{15, 20, .15, .50, 2, 10, 2, 60, 2, 1440, 2, 10, 6}
+type DegradeCriteria struct {
+	Name                string  `json:"name"`
+	ErrorRateThreshold  float64 `json:"error_rate_threshold"`
+	SevereThreshold     float64 `json:"severe_threshold"`
+	LatencyMultiplier   float64 `json:"latency_multiplier"`
+	LatencyFloorSeconds float64 `json:"latency_floor_seconds"`
+	SustainedWindows    int     `json:"sustained_windows"`
 }
+
+type Policy struct {
+	Scheduling  SchedulingParams  `json:"scheduling"`
+	Criteria    []DegradeCriteria `json:"criteria"`
+	Assignments map[string]string `json:"assignments"`
+}
+
+func DefaultPolicy() Policy {
+	return Policy{
+		Scheduling: SchedulingParams{
+			WindowMinutes: 15, MinSamples: 20, TrialInitialMinutes: 60,
+			TrialBackoffFactor: 2, TrialMaxMinutes: 1440, TrialWindows: 2,
+			CooldownMinutes: 10, DailyActionLimit: 6,
+		},
+		Criteria: []DegradeCriteria{{
+			Name: "default", ErrorRateThreshold: .15, SevereThreshold: .50,
+			LatencyMultiplier: 2, LatencyFloorSeconds: 10, SustainedWindows: 2,
+		}},
+		Assignments: map[string]string{},
+	}
+}
+
+// DecodePolicyJSON accepts only the structured v2.9-B2.5 representation.
+// A valid legacy flat policy is intentionally treated as the default policy:
+// v2.9 was never deployed, and silently mapping fields would preserve stale
+// v2.1 semantics instead of making the schema transition explicit.
+func DecodePolicyJSON(raw []byte) (Policy, error) {
+	var shape map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &shape); err != nil {
+		return Policy{}, err
+	}
+	if shape["scheduling"] == nil && shape["criteria"] == nil && shape["assignments"] == nil {
+		return DefaultPolicy(), nil
+	}
+	p := DefaultPolicy()
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return Policy{}, err
+	}
+	if p.Assignments == nil {
+		p.Assignments = map[string]string{}
+	}
+	return p, nil
+}
+
+func criteriaFor(p Policy, model string) DegradeCriteria {
+	name := p.Assignments[model]
+	if name == "" {
+		name = "default"
+	}
+	for _, criteria := range p.Criteria {
+		if criteria.Name == name {
+			return criteria
+		}
+	}
+	for _, criteria := range p.Criteria {
+		if criteria.Name == "default" {
+			return criteria
+		}
+	}
+	return DefaultPolicy().Criteria[0]
+}
+
 func (p Policy) Validate() map[string]string {
 	e := map[string]string{}
 	for name, value := range map[string]int{
-		"window_minutes": p.WindowMinutes, "trial_initial_minutes": p.TrialInitialMinutes,
-		"trial_max_minutes": p.TrialMaxMinutes, "cooldown_minutes": p.CooldownMinutes,
+		"window_minutes": p.Scheduling.WindowMinutes, "trial_initial_minutes": p.Scheduling.TrialInitialMinutes,
+		"trial_max_minutes": p.Scheduling.TrialMaxMinutes, "cooldown_minutes": p.Scheduling.CooldownMinutes,
 	} {
 		if value < 1 || value > 2880 {
-			e[name] = "must_be_between_1_and_2880"
+			e["scheduling."+name] = "must_be_between_1_and_2880"
 		}
 	}
-	if p.MinSamples < 1 || p.MinSamples > 1000 {
-		e["min_samples"] = "must_be_between_1_and_1000"
+	if p.Scheduling.MinSamples < 1 || p.Scheduling.MinSamples > 1000 {
+		e["scheduling.min_samples"] = "must_be_between_1_and_1000"
 	}
-	if p.ErrorRateThreshold <= 0 || p.ErrorRateThreshold > 1 {
-		e["error_rate_threshold"] = "must_be_greater_than_0_and_at_most_1"
+	if p.Scheduling.TrialBackoffFactor < 1 {
+		e["scheduling.trial_backoff_factor"] = "must_be_at_least_1"
 	}
-	if p.SevereThreshold <= 0 || p.SevereThreshold > 1 {
-		e["severe_threshold"] = "must_be_greater_than_0_and_at_most_1"
+	if p.Scheduling.TrialWindows < 1 {
+		e["scheduling.trial_windows"] = "must_be_positive"
 	}
-	if p.ErrorRateThreshold >= p.SevereThreshold {
-		e["error_rate_threshold"] = "must_be_less_than_severe_threshold"
+	if p.Scheduling.DailyActionLimit < 1 {
+		e["scheduling.daily_action_limit"] = "must_be_positive"
 	}
-	if p.LatencyMultiplier < 1 {
-		e["latency_multiplier"] = "must_be_at_least_1"
+	if len(p.Criteria) == 0 {
+		e["criteria"] = "must_include_default"
+		return e
 	}
-	if p.LatencyFloorSeconds <= 0 {
-		e["latency_floor_seconds"] = "must_be_positive"
+	seen := map[string]bool{}
+	for _, criteria := range p.Criteria {
+		prefix := "criteria[" + criteria.Name + "]."
+		if criteria.Name == "" {
+			e["criteria[].name"] = "must_not_be_empty"
+			continue
+		}
+		if seen[criteria.Name] {
+			e[prefix+"name"] = "must_be_unique"
+		}
+		seen[criteria.Name] = true
+		if criteria.ErrorRateThreshold <= 0 || criteria.ErrorRateThreshold > 1 {
+			e[prefix+"error_rate_threshold"] = "must_be_greater_than_0_and_at_most_1"
+		}
+		if criteria.SevereThreshold <= 0 || criteria.SevereThreshold > 1 {
+			e[prefix+"severe_threshold"] = "must_be_greater_than_0_and_at_most_1"
+		}
+		if criteria.ErrorRateThreshold >= criteria.SevereThreshold {
+			e[prefix+"error_rate_threshold"] = "must_be_less_than_severe_threshold"
+		}
+		if criteria.LatencyMultiplier < 1 {
+			e[prefix+"latency_multiplier"] = "must_be_at_least_1"
+		}
+		if criteria.LatencyFloorSeconds <= 0 {
+			e[prefix+"latency_floor_seconds"] = "must_be_positive"
+		}
+		if criteria.SustainedWindows < 1 {
+			e[prefix+"sustained_windows"] = "must_be_positive"
+		}
 	}
-	if p.SustainedWindows < 1 {
-		e["sustained_windows"] = "must_be_positive"
+	if !seen["default"] {
+		e["criteria"] = "must_include_default"
 	}
-	if p.TrialBackoffFactor < 1 {
-		e["trial_backoff_factor"] = "must_be_at_least_1"
-	}
-	if p.TrialWindows < 1 {
-		e["trial_windows"] = "must_be_positive"
-	}
-	if p.DailyActionLimit < 1 {
-		e["daily_action_limit"] = "must_be_positive"
+	for model, name := range p.Assignments {
+		if !seen[name] {
+			e["assignments."+model] = "criteria_not_found"
+		}
 	}
 	return e
 }

@@ -14,9 +14,9 @@ func TestDutyPolicyValidation(t *testing.T) {
 	if errors := p.Validate(); len(errors) != 0 {
 		t.Fatalf("default invalid: %#v", errors)
 	}
-	p.ErrorRateThreshold = p.SevereThreshold
-	p.MinSamples = 1001
-	if errors := p.Validate(); errors["error_rate_threshold"] == "" || errors["min_samples"] == "" {
+	p.Criteria[0].ErrorRateThreshold = p.Criteria[0].SevereThreshold
+	p.Scheduling.MinSamples = 1001
+	if errors := p.Validate(); errors["criteria[default].error_rate_threshold"] == "" || errors["scheduling.min_samples"] == "" {
 		t.Fatalf("missing validation: %#v", errors)
 	}
 }
@@ -39,6 +39,9 @@ func TestDutyDemoteSustainedSevereAndTiedActive(t *testing.T) {
 		if rec.Rule != "demote" || rec.ProposedPriority == nil || *rec.ProposedPriority != 49 {
 			t.Fatalf("invalid demote: %#v", rec)
 		}
+		if rec.Evidence["criteria_name"] != "default" {
+			t.Fatalf("demote evidence must record criteria: %#v", rec.Evidence)
+		}
 	}
 
 	f2 := &fakeStore{policy: p, channels: channels, metrics: []ChannelMetric{{1, 100, 50, 1}}}
@@ -50,7 +53,7 @@ func TestDutyDemoteSustainedSevereAndTiedActive(t *testing.T) {
 
 func TestDutyLatencyMixedAndBackupBranches(t *testing.T) {
 	p := testPolicy()
-	p.Policy.SevereThreshold = .4
+	p.Policy.Criteria[0].SevereThreshold = .4
 	now := time.Now().UTC()
 	baseline := []float64{5, 5, 5, 5, 5, 5, 5, 5}
 	f := &fakeStore{
@@ -84,7 +87,7 @@ func TestDutyLatencyMixedAndBackupBranches(t *testing.T) {
 
 func TestDutyTrialBackoffAndRestartRestore(t *testing.T) {
 	p := testPolicy()
-	p.Policy.TrialMaxMinutes = 180
+	p.Policy.Scheduling.TrialMaxMinutes = 180
 	if trialDelay(p.Policy, 0) != time.Hour || trialDelay(p.Policy, 3) != 3*time.Hour {
 		t.Fatal("unexpected trial backoff")
 	}
@@ -97,6 +100,9 @@ func TestDutyTrialBackoffAndRestartRestore(t *testing.T) {
 	NewEngine(f).Tick(now)
 	if len(f.recommendations) != 1 || f.recommendations[0].Rule != "trial" || f.dispatch[1].NextTrialAt != nil {
 		t.Fatalf("restored trial=%#v %#v", f.recommendations, f.dispatch)
+	}
+	if f.recommendations[0].Evidence["criteria_name"] != "default" {
+		t.Fatalf("trial evidence must record criteria: %#v", f.recommendations[0].Evidence)
 	}
 }
 
@@ -125,7 +131,7 @@ func TestDutyBaselineInsufficientCooldownAndDailyLimit(t *testing.T) {
 	}
 	limited := &fakeStore{
 		policy: p, channels: channels, metrics: []ChannelMetric{{1, 100, 50, 1}},
-		actionCount: p.Policy.DailyActionLimit,
+		actionCount: p.Policy.Scheduling.DailyActionLimit,
 	}
 	NewEngine(limited).Tick(now)
 	if len(limited.recommendations) != 0 {

@@ -73,7 +73,7 @@ func (e *Engine) Tick(now time.Time) {
 		if !ok {
 			p = PolicyRecord{InstanceID: id, Policy: DefaultPolicy(), Mode: "observe"}
 		}
-		if now.Sub(e.last[id]) >= time.Duration(p.Policy.WindowMinutes)*time.Minute {
+		if now.Sub(e.last[id]) >= time.Duration(p.Policy.Scheduling.WindowMinutes)*time.Minute {
 			n, c := e.evaluate(id, p, now)
 			e.last[id] = now
 			log.Printf("tuning duty evaluation instance=%s active_channels=%d recommendations=%d mode=%s", id, c, n, p.Mode)
@@ -87,7 +87,7 @@ func (e *Engine) Tick(now time.Time) {
 	e.fillOutcomes(now)
 }
 func (e *Engine) evaluate(id string, pr PolicyRecord, now time.Time) (int, int) {
-	metrics, err := e.store.QueryMetrics(id, now.Add(-time.Duration(pr.Policy.WindowMinutes)*time.Minute), now)
+	metrics, err := e.store.QueryMetrics(id, now.Add(-time.Duration(pr.Policy.Scheduling.WindowMinutes)*time.Minute), now)
 	if err != nil {
 		return 0, 0
 	}
@@ -181,25 +181,27 @@ func enabled(status string) bool {
 }
 
 func (e *Engine) evaluateActive(id, model string, ch Channel, ladder []Channel, m ChannelMetric, p Policy, mode string, dispatch map[int64]DispatchState, now time.Time) int {
+	scheduling := p.Scheduling
+	criteria := criteriaFor(p, model)
 	key := id + ":" + fmtInt(ch.ID)
 	local := e.states[key]
 	if local == nil {
 		local = &channelState{}
 		e.states[key] = local
 	}
-	if m.RequestCount < p.MinSamples {
+	if m.RequestCount < scheduling.MinSamples {
 		local.errorWindows, local.latencyWindows = 0, 0
 		return 0
 	}
 	rate := m.ErrorRate()
-	severe := rate >= p.SevereThreshold
-	if rate >= p.ErrorRateThreshold {
+	severe := rate >= criteria.SevereThreshold
+	if rate >= criteria.ErrorRateThreshold {
 		local.errorWindows++
 	} else {
 		local.errorWindows = 0
 	}
-	baseline, baselineOK := e.baseline(id, ch.ID, p.MinSamples, now)
-	latencyBad := baselineOK && m.P95 >= p.LatencyFloorSeconds && m.P95 >= baseline*p.LatencyMultiplier
+	baseline, baselineOK := e.baseline(id, ch.ID, scheduling.MinSamples, now)
+	latencyBad := baselineOK && m.P95 >= criteria.LatencyFloorSeconds && m.P95 >= baseline*criteria.LatencyMultiplier
 	if latencyBad {
 		local.latencyWindows++
 	} else {
@@ -208,15 +210,15 @@ func (e *Engine) evaluateActive(id, model string, ch Channel, ladder []Channel, 
 	trigger := ""
 	if severe {
 		trigger = "severe"
-	} else if local.errorWindows >= p.SustainedWindows {
+	} else if local.errorWindows >= criteria.SustainedWindows {
 		trigger = "degrade"
-	} else if local.latencyWindows >= p.SustainedWindows {
+	} else if local.latencyWindows >= criteria.SustainedWindows {
 		trigger = "latency_degrade"
 	}
 	if trigger == "" {
 		if state, trialing := dispatch[ch.ID]; trialing && state.NextTrialAt == nil {
 			local.trialHealthyWindows++
-			if local.trialHealthyWindows >= p.TrialWindows {
+			if local.trialHealthyWindows >= scheduling.TrialWindows {
 				_ = e.store.DeleteDispatchState(id, ch.ID)
 				delete(dispatch, ch.ID)
 				local.trialHealthyWindows = 0
@@ -242,12 +244,13 @@ func (e *Engine) evaluateActive(id, model string, ch Channel, ladder []Channel, 
 	proposed := ladder[len(ladder)-1].Priority - 1
 	ev := map[string]any{
 		"trigger": trigger, "model": model, "error_rate": rate,
-		"error_rate_threshold": p.ErrorRateThreshold, "severe_threshold": p.SevereThreshold,
-		"min_samples": p.MinSamples, "samples": m.RequestCount,
+		"criteria_name":        criteria.Name,
+		"error_rate_threshold": criteria.ErrorRateThreshold, "severe_threshold": criteria.SevereThreshold,
+		"min_samples": scheduling.MinSamples, "samples": m.RequestCount,
 		"p95": m.P95, "baseline_p95": baseline,
-		"latency_multiplier": p.LatencyMultiplier, "latency_floor_seconds": p.LatencyFloorSeconds,
+		"latency_multiplier": criteria.LatencyMultiplier, "latency_floor_seconds": criteria.LatencyFloorSeconds,
 		"backup_channel_id": backup.ID, "backup_channel_name": backup.Name,
-		"window_start": now.Add(-time.Duration(p.WindowMinutes) * time.Minute), "window_end": now,
+		"window_start": now.Add(-time.Duration(scheduling.WindowMinutes) * time.Minute), "window_end": now,
 	}
 	rec := Recommendation{
 		ID: NewID(now, id, ch.ID, "demote"), InstanceID: id, ChannelID: ch.ID,
@@ -279,6 +282,7 @@ func (e *Engine) evaluateActive(id, model string, ch Channel, ladder []Channel, 
 }
 
 func (e *Engine) scheduleTrials(id string, channels []Channel, states map[int64]DispatchState, p Policy, mode string, now time.Time) int {
+	scheduling := p.Scheduling
 	byID := map[int64]Channel{}
 	for _, ch := range channels {
 		byID[ch.ID] = ch
@@ -293,14 +297,16 @@ func (e *Engine) scheduleTrials(id string, channels []Channel, states map[int64]
 			continue
 		}
 		current, proposed := ch.Priority, state.OriginalPriority
+		criteria := criteriaFor(p, state.ModelName)
 		rec := Recommendation{
 			ID: NewID(now, id, ch.ID, "trial"), InstanceID: id, ChannelID: ch.ID,
 			ChannelName: ch.Name, CreatedAt: now, Rule: "trial",
 			Evidence: map[string]any{
 				"model": state.ModelName, "hypothetical": true,
+				"criteria_name":  criteria.Name,
 				"trial_attempts": state.TrialAttempts, "demoted_at": state.DemotedAt,
-				"min_samples": p.MinSamples, "error_rate_threshold": p.ErrorRateThreshold,
-				"latency_multiplier": p.LatencyMultiplier, "latency_floor_seconds": p.LatencyFloorSeconds,
+				"min_samples": scheduling.MinSamples, "error_rate_threshold": criteria.ErrorRateThreshold,
+				"latency_multiplier": criteria.LatencyMultiplier, "latency_floor_seconds": criteria.LatencyFloorSeconds,
 			},
 			CurrentWeight: ch.Weight, ProposedWeight: ch.Weight,
 			CurrentPriority: &current, ProposedPriority: &proposed,
@@ -378,11 +384,11 @@ func (e *Engine) actionAllowed(id string, channelID int64, p Policy, now time.Ti
 		}
 	}
 	last, ok, err := e.store.LastActionRecommendationAt(id, channelID)
-	if err != nil || (ok && now.Sub(last) < time.Duration(p.CooldownMinutes)*time.Minute) {
+	if err != nil || (ok && now.Sub(last) < time.Duration(p.Scheduling.CooldownMinutes)*time.Minute) {
 		return false
 	}
 	count, err := e.store.CountActionRecommendations(id, channelID, now.Add(-24*time.Hour))
-	return err == nil && count < p.DailyActionLimit
+	return err == nil && count < p.Scheduling.DailyActionLimit
 }
 
 func findBackup(ladder []Channel, activeID int64, dispatch map[int64]DispatchState) (*Channel, bool) {
@@ -416,9 +422,9 @@ func priorityOf(ladder []Channel, id int64) int64 {
 }
 
 func trialDelay(p Policy, attempts int) time.Duration {
-	minutes := float64(p.TrialInitialMinutes) * math.Pow(p.TrialBackoffFactor, float64(attempts))
-	if minutes > float64(p.TrialMaxMinutes) {
-		minutes = float64(p.TrialMaxMinutes)
+	minutes := float64(p.Scheduling.TrialInitialMinutes) * math.Pow(p.Scheduling.TrialBackoffFactor, float64(attempts))
+	if minutes > float64(p.Scheduling.TrialMaxMinutes) {
+		minutes = float64(p.Scheduling.TrialMaxMinutes)
 	}
 	return time.Duration(minutes * float64(time.Minute))
 }
@@ -444,6 +450,8 @@ func (e *Engine) baseline(id string, channelID, minSamples int64, now time.Time)
 }
 
 func (e *Engine) fillOutcomes(now time.Time) {
+	defaultPolicy := DefaultPolicy()
+	defaultCriteria := criteriaFor(defaultPolicy, "")
 	items, err := e.store.PendingOutcomes(now.Add(-30*time.Minute), 100)
 	if err != nil {
 		return
@@ -463,11 +471,11 @@ func (e *Engine) fillOutcomes(now time.Time) {
 				m = x
 			}
 		}
-		errorThreshold := evidenceNumber(r.Evidence, "error_rate_threshold", DefaultPolicy().ErrorRateThreshold)
-		latencyMultiplier := evidenceNumber(r.Evidence, "latency_multiplier", DefaultPolicy().LatencyMultiplier)
-		latencyFloor := evidenceNumber(r.Evidence, "latency_floor_seconds", DefaultPolicy().LatencyFloorSeconds)
+		errorThreshold := evidenceNumber(r.Evidence, "error_rate_threshold", defaultCriteria.ErrorRateThreshold)
+		latencyMultiplier := evidenceNumber(r.Evidence, "latency_multiplier", defaultCriteria.LatencyMultiplier)
+		latencyFloor := evidenceNumber(r.Evidence, "latency_floor_seconds", defaultCriteria.LatencyFloorSeconds)
 		baseline := evidenceNumber(r.Evidence, "baseline_p95", 0)
-		minSamples := int64(evidenceNumber(r.Evidence, "min_samples", float64(DefaultPolicy().MinSamples)))
+		minSamples := int64(evidenceNumber(r.Evidence, "min_samples", float64(defaultPolicy.Scheduling.MinSamples)))
 		out := map[string]any{
 			"error_rate": m.ErrorRate(), "samples": m.RequestCount, "p95": m.P95,
 			"error_rate_threshold": errorThreshold, "baseline_p95": baseline,

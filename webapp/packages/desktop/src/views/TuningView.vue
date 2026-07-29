@@ -11,11 +11,18 @@ const filters = useFiltersStore();
 const loading = ref(false);
 const mode = ref<"observe" | "confirm">("observe");
 const policy = reactive<TuningPolicy>({
-  window_minutes: 15, min_samples: 20, error_rate_threshold: .15, severe_threshold: .5,
-  latency_multiplier: 2, latency_floor_seconds: 10, sustained_windows: 2,
-  trial_initial_minutes: 60, trial_backoff_factor: 2, trial_max_minutes: 1440,
-  trial_windows: 2, cooldown_minutes: 10, daily_action_limit: 6,
+  scheduling: {
+    window_minutes: 15, min_samples: 20, trial_initial_minutes: 60,
+    trial_backoff_factor: 2, trial_max_minutes: 1440, trial_windows: 2,
+    cooldown_minutes: 10, daily_action_limit: 6,
+  },
+  criteria: [{
+    name: "default", error_rate_threshold: .15, severe_threshold: .5,
+    latency_multiplier: 2, latency_floor_seconds: 10, sustained_windows: 2,
+  }],
+  assignments: {},
 });
+const defaultCriteria = computed(() => policy.criteria.find(item => item.name === "default") || policy.criteria[0]);
 const recommendations = ref<TuningRecommendation[]>([]);
 const reports = reactive<Record<7 | 30, TuningReport | null>>({ 7: null, 30: null });
 const reportDays = ref<7 | 30>(7);
@@ -77,21 +84,31 @@ onMounted(() => void load());
         <template #header><strong>模式与策略</strong><span class="hint">　当前采集实例：{{ instanceID || "无" }}</span></template>
         <el-form label-position="top">
           <el-form-item label="运行模式"><el-radio-group v-model="mode"><el-radio-button value="observe">观察</el-radio-button><el-radio-button value="confirm">人工确认</el-radio-button><el-radio-button value="auto" disabled>自动（B3）</el-radio-button></el-radio-group></el-form-item>
-          <div class="policy-grid">
-            <el-form-item label="评估窗口（分钟）"><el-input-number v-model="policy.window_minutes" :min="1" /></el-form-item>
-            <el-form-item label="最少样本"><el-input-number v-model="policy.min_samples" :min="1" /></el-form-item>
-            <el-form-item label="错误率线"><el-input-number v-model="policy.error_rate_threshold" :min=".01" :max="1" :step=".01" /></el-form-item>
-            <el-form-item label="熔断线"><el-input-number v-model="policy.severe_threshold" :min=".01" :max="1" :step=".01" /></el-form-item>
-            <el-form-item label="延迟倍数"><el-input-number v-model="policy.latency_multiplier" :min="1" :step=".1" /></el-form-item>
-            <el-form-item label="延迟下限（秒）"><el-input-number v-model="policy.latency_floor_seconds" :min=".1" /></el-form-item>
-            <el-form-item label="持续窗口"><el-input-number v-model="policy.sustained_windows" :min="1" /></el-form-item>
-            <el-form-item label="首次试岗（分钟）"><el-input-number v-model="policy.trial_initial_minutes" :min="1" /></el-form-item>
-            <el-form-item label="退避倍数"><el-input-number v-model="policy.trial_backoff_factor" :min="1" :step=".1" /></el-form-item>
-            <el-form-item label="试岗上限（分钟）"><el-input-number v-model="policy.trial_max_minutes" :min="1" /></el-form-item>
-            <el-form-item label="试岗观察窗口"><el-input-number v-model="policy.trial_windows" :min="1" /></el-form-item>
-            <el-form-item label="冷却（分钟）"><el-input-number v-model="policy.cooldown_minutes" :min="1" /></el-form-item>
-            <el-form-item label="每日动作上限"><el-input-number v-model="policy.daily_action_limit" :min="1" /></el-form-item>
-          </div>
+          <section v-if="defaultCriteria" class="policy-section">
+            <h3>降级标准（默认标准）</h3>
+            <p class="hint">当前所有模型使用默认标准；后续可增加多套标准并按模型指派。</p>
+            <div class="policy-grid">
+              <el-form-item label="错误率线"><el-input-number v-model="defaultCriteria.error_rate_threshold" :min=".01" :max="1" :step=".01" /></el-form-item>
+              <el-form-item label="熔断线"><el-input-number v-model="defaultCriteria.severe_threshold" :min=".01" :max="1" :step=".01" /></el-form-item>
+              <el-form-item label="延迟倍数"><el-input-number v-model="defaultCriteria.latency_multiplier" :min="1" :step=".1" /></el-form-item>
+              <el-form-item label="延迟下限（秒）"><el-input-number v-model="defaultCriteria.latency_floor_seconds" :min=".1" /></el-form-item>
+              <el-form-item label="持续窗口"><el-input-number v-model="defaultCriteria.sustained_windows" :min="1" /></el-form-item>
+            </div>
+          </section>
+          <section class="policy-section">
+            <h3>调度参数</h3>
+            <p class="hint">控制评估频率、试岗退避和动作节奏，不决定何时触发降级。</p>
+            <div class="policy-grid">
+              <el-form-item label="评估窗口（分钟）"><el-input-number v-model="policy.scheduling.window_minutes" :min="1" /></el-form-item>
+              <el-form-item label="最少样本"><el-input-number v-model="policy.scheduling.min_samples" :min="1" /></el-form-item>
+              <el-form-item label="首次试岗（分钟）"><el-input-number v-model="policy.scheduling.trial_initial_minutes" :min="1" /></el-form-item>
+              <el-form-item label="退避倍数"><el-input-number v-model="policy.scheduling.trial_backoff_factor" :min="1" :step=".1" /></el-form-item>
+              <el-form-item label="试岗上限（分钟）"><el-input-number v-model="policy.scheduling.trial_max_minutes" :min="1" /></el-form-item>
+              <el-form-item label="试岗观察窗口"><el-input-number v-model="policy.scheduling.trial_windows" :min="1" /></el-form-item>
+              <el-form-item label="冷却（分钟）"><el-input-number v-model="policy.scheduling.cooldown_minutes" :min="1" /></el-form-item>
+              <el-form-item label="每日动作上限"><el-input-number v-model="policy.scheduling.daily_action_limit" :min="1" /></el-form-item>
+            </div>
+          </section>
           <el-button type="primary" :disabled="!instanceID" @click="save">保存策略</el-button>
         </el-form>
       </el-card>
@@ -129,5 +146,5 @@ onMounted(() => void load());
 </template>
 
 <style scoped>
-.tuning-page{display:grid;gap:16px}.hint{font-size:12px;color:#8491a5}.policy-grid{display:grid;grid-template-columns:repeat(5,minmax(150px,1fr));gap:0 16px}.ladder-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.ladder{border:1px solid #e5eaf2;border-radius:8px;padding:12px}.ladder-row{display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:center;margin-top:10px}.recommendation{border:1px solid #e8edf5;border-radius:8px;padding:12px}.recommendation p{color:#657086}.status{margin-left:8px}.report-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px}.report-grid div{background:#f6f8fb;padding:16px;border-radius:8px}.report-grid span,.report-grid b{display:block}.report-grid b{font-size:24px;margin-top:6px}
+.tuning-page{display:grid;gap:16px}.hint{font-size:12px;color:#8491a5}.policy-section{margin:18px 0;padding-top:16px;border-top:1px solid #ebeef5}.policy-section h3{margin:0 0 6px;font-size:15px}.policy-section .hint{margin:0 0 12px}.policy-grid{display:grid;grid-template-columns:repeat(5,minmax(150px,1fr));gap:0 16px}.ladder-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.ladder{border:1px solid #e5eaf2;border-radius:8px;padding:12px}.ladder-row{display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:center;margin-top:10px}.recommendation{border:1px solid #e8edf5;border-radius:8px;padding:12px}.recommendation p{color:#657086}.status{margin-left:8px}.report-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px}.report-grid div{background:#f6f8fb;padding:16px;border-radius:8px}.report-grid span,.report-grid b{display:block}.report-grid b{font-size:24px;margin-top:6px}
 </style>

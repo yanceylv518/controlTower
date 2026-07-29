@@ -207,7 +207,35 @@ Instance tokens are stored only as `SHA-256(pepper + token)` hashes. A token may
 ## v2.9-B2 Duty-Rotation Tuning (observe and confirm)
 
 - `GET|PUT /api/dashboard/tuning/policy?instance_id=` reads or writes the instance policy. Supported modes are `observe` and `confirm`; `auto` is reserved for B3.
-- Policy fields are `window_minutes`, `min_samples`, `error_rate_threshold`, `severe_threshold`, `latency_multiplier`, `latency_floor_seconds`, `sustained_windows`, `trial_initial_minutes`, `trial_backoff_factor`, `trial_max_minutes`, `trial_windows`, `cooldown_minutes`, and `daily_action_limit`.
+- Policy uses the structured v2.9-B2.5 shape:
+  - `scheduling`: `window_minutes`, `min_samples`, `trial_initial_minutes`, `trial_backoff_factor`, `trial_max_minutes`, `trial_windows`, `cooldown_minutes`, and `daily_action_limit`.
+  - `criteria`: named degradation standards containing `name`, `error_rate_threshold`, `severe_threshold`, `latency_multiplier`, `latency_floor_seconds`, and `sustained_windows`. A `default` criterion is required.
+  - `assignments`: model name to criterion name mappings. Unassigned models use `default`.
+- Example policy:
+  ```json
+  {
+    "scheduling": {
+      "window_minutes": 15,
+      "min_samples": 20,
+      "trial_initial_minutes": 60,
+      "trial_backoff_factor": 2,
+      "trial_max_minutes": 1440,
+      "trial_windows": 2,
+      "cooldown_minutes": 10,
+      "daily_action_limit": 6
+    },
+    "criteria": [{
+      "name": "default",
+      "error_rate_threshold": 0.15,
+      "severe_threshold": 0.5,
+      "latency_multiplier": 2,
+      "latency_floor_seconds": 10,
+      "sustained_windows": 2
+    }],
+    "assignments": {}
+  }
+  ```
+- Legacy flat policy JSON is treated as the complete default policy. Every subsequent write uses the structured shape.
 - `GET /api/dashboard/tuning/ladders?instance_id=` returns the current channel ladder and dispatch states.
 - `GET /api/dashboard/tuning/recommendations?instance_id=&limit=&before=` returns duty-rotation recommendations. In confirm mode, action rules (`demote` and `trial`) start as `pending`; informational rules (`mixed_channel`, `no_backup`, and `ladder_exhausted`) remain recorded.
 - `POST /api/dashboard/tuning/recommendations/{id}/adopt` atomically adopts a pending action recommendation, creates a `channel.update` command for the first enabled instance in the same site, records the command ID and actor, and writes an operation audit.

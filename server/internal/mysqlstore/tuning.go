@@ -24,11 +24,7 @@ func (s Store) GetPolicy(id string) (tuning.PolicyRecord, bool, error) {
 		return r, false, err
 	}
 	r.InstanceID = id
-	// Old observe policies remain in production. Decode on top of the new
-	// defaults so removed fields are ignored and newly introduced fields never
-	// become unsafe zero values during the v2.9 schema transition.
-	r.Policy = tuning.DefaultPolicy()
-	err = json.Unmarshal([]byte(raw), &r.Policy)
+	r.Policy, err = tuning.DecodePolicyJSON([]byte(raw))
 	return r, true, err
 }
 func (s Store) PutPolicy(r tuning.PolicyRecord) error {
@@ -52,6 +48,7 @@ func (s Store) ListEnabledInstances() ([]string, error) {
 	}
 	return out, rows.Err()
 }
+
 // instance_channel dimension keys are "<instance>:channel:<id>"; the channel
 // id must be split out of the suffix — CAST on the whole key yields 0 for
 // every row and no channel ever matches.
@@ -353,14 +350,16 @@ func (s Store) AdoptRecommendation(id, actor string, now time.Time) (tuning.Reco
 		policy := tuning.DefaultPolicy()
 		var raw string
 		if e := tx.QueryRowContext(ctx, `SELECT policy_json FROM tuning_policies WHERE instance_id=?`, rec.InstanceID).Scan(&raw); e == nil {
-			_ = json.Unmarshal([]byte(raw), &policy)
+			if decoded, decodeErr := tuning.DecodePolicyJSON([]byte(raw)); decodeErr == nil {
+				policy = decoded
+			}
 		}
 		model, _ := rec.Evidence["model"].(string)
 		original := int64(0)
 		if rec.CurrentPriority != nil {
 			original = *rec.CurrentPriority
 		}
-		next := now.Add(time.Duration(policy.TrialInitialMinutes) * time.Minute)
+		next := now.Add(time.Duration(policy.Scheduling.TrialInitialMinutes) * time.Minute)
 		if _, err = tx.ExecContext(ctx, `INSERT INTO tuning_dispatch_states(instance_id,channel_id,model_name,original_priority,demoted_at,trial_attempts,next_trial_at,updated_at) VALUES(?,?,?,?,?,0,?,?) ON DUPLICATE KEY UPDATE model_name=VALUES(model_name),original_priority=VALUES(original_priority),demoted_at=VALUES(demoted_at),next_trial_at=VALUES(next_trial_at),updated_at=VALUES(updated_at)`, rec.InstanceID, rec.ChannelID, model, original, now, next, now); err != nil {
 			return tuning.Recommendation{}, err
 		}

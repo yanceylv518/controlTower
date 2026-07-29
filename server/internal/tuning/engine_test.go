@@ -92,9 +92,9 @@ func (f *fakeStore) ExpirePendingRecommendations(before time.Time) (int64, error
 }
 func testPolicy() PolicyRecord {
 	p := DefaultPolicy()
-	p.WindowMinutes = 1
-	p.SustainedWindows = 2
-	p.CooldownMinutes = 10
+	p.Scheduling.WindowMinutes = 1
+	p.Criteria[0].SustainedWindows = 2
+	p.Scheduling.CooldownMinutes = 10
 	return PolicyRecord{InstanceID: "i", Policy: p, Mode: "observe"}
 }
 func TestEngineMinSamplesSustainedCooldownAndFloor(t *testing.T) {
@@ -105,7 +105,7 @@ func TestEngineMinSamplesSustainedCooldownAndFloor(t *testing.T) {
 			{ID: 1, Name: "active", Status: "enabled", Priority: 100, Models: []string{"m"}},
 			{ID: 2, Name: "backup", Status: "enabled", Priority: 50, Models: []string{"m"}},
 		},
-		metrics: []ChannelMetric{{ChannelID: 1, RequestCount: p.Policy.MinSamples - 1, ErrorCount: p.Policy.MinSamples - 1}},
+		metrics: []ChannelMetric{{ChannelID: 1, RequestCount: p.Policy.Scheduling.MinSamples - 1, ErrorCount: p.Policy.Scheduling.MinSamples - 1}},
 	}
 	e := NewEngine(f)
 	now := time.Now().UTC()
@@ -125,7 +125,7 @@ func TestEngineWeightedRateAndRecoverSimulation(t *testing.T) {
 func TestEngineConfirmCreatesPendingWithoutAdvancingDispatchAndExpires(t *testing.T) {
 	p := testPolicy()
 	p.Mode = "confirm"
-	p.Policy.SustainedWindows = 1
+	p.Policy.Criteria[0].SustainedWindows = 1
 	f := &fakeStore{
 		policy: p,
 		channels: []Channel{
@@ -185,7 +185,7 @@ func (f *fakeStore) HasPendingActionRecommendation(_ string, ch int64) (bool, er
 func TestEngineConfirmDoesNotStackPendingDuplicates(t *testing.T) {
 	p := testPolicy()
 	p.Mode = "confirm"
-	p.Policy.SustainedWindows = 1
+	p.Policy.Criteria[0].SustainedWindows = 1
 	f := &fakeStore{
 		policy: p,
 		channels: []Channel{

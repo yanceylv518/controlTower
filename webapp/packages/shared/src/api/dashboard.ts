@@ -319,12 +319,19 @@ export interface NginxSlowSample {
   token_name: string;
 }
 
+export interface TuningSchedulingParams {
+  window_minutes: number; min_samples: number; trial_initial_minutes: number;
+  trial_backoff_factor: number; trial_max_minutes: number; trial_windows: number;
+  cooldown_minutes: number; daily_action_limit: number;
+}
+export interface TuningDegradeCriteria {
+  name: string; error_rate_threshold: number; severe_threshold: number;
+  latency_multiplier: number; latency_floor_seconds: number; sustained_windows: number;
+}
 export interface TuningPolicy {
-  window_minutes: number; min_samples: number; error_rate_threshold: number;
-  severe_threshold: number; latency_multiplier: number; latency_floor_seconds: number;
-  sustained_windows: number; trial_initial_minutes: number; trial_backoff_factor: number;
-  trial_max_minutes: number; trial_windows: number; cooldown_minutes: number;
-  daily_action_limit: number;
+  scheduling: TuningSchedulingParams;
+  criteria: TuningDegradeCriteria[];
+  assignments: Record<string, string>;
 }
 export interface TuningPolicyResponse {
   instance_id: string; policy: TuningPolicy; mode: "observe" | "confirm";
