@@ -24,10 +24,25 @@ func (s *tuningStub) ListEnabledInstances() ([]string, error) { return nil, nil 
 func (s *tuningStub) QueryMetrics(string, time.Time, time.Time) ([]tuning.ChannelMetric, error) {
 	return nil, nil
 }
-func (s *tuningStub) LatestChannels(string) ([]tuning.Channel, error)    { return nil, nil }
-func (s *tuningStub) InsertRecommendation(tuning.Recommendation) error   { return nil }
-func (s *tuningStub) OriginalDegrade(string, int64) (int64, bool, error) { return 0, false, nil }
-func (s *tuningStub) HasUnrecoveredDegrade(string, int64) (bool, error)  { return false, nil }
+func (s *tuningStub) QueryP95Buckets(string, int64, time.Time, time.Time, int64) ([]float64, error) {
+	return nil, nil
+}
+func (s *tuningStub) LatestChannels(string) ([]tuning.Channel, error)  { return nil, nil }
+func (s *tuningStub) InsertRecommendation(tuning.Recommendation) error { return nil }
+func (s *tuningStub) HasRecentRecommendation(string, int64, string, time.Time) (bool, error) {
+	return false, nil
+}
+func (s *tuningStub) CountActionRecommendations(string, int64, time.Time) (int, error) {
+	return 0, nil
+}
+func (s *tuningStub) LastActionRecommendationAt(string, int64) (time.Time, bool, error) {
+	return time.Time{}, false, nil
+}
+func (s *tuningStub) ListDispatchStates(string) ([]tuning.DispatchState, error) {
+	return nil, nil
+}
+func (s *tuningStub) PutDispatchState(tuning.DispatchState) error { return nil }
+func (s *tuningStub) DeleteDispatchState(string, int64) error     { return nil }
 func (s *tuningStub) PendingOutcomes(time.Time, int) ([]tuning.Recommendation, error) {
 	return nil, nil
 }
@@ -47,7 +62,7 @@ func TestTuningPolicyDefaultValidationAndMode(t *testing.T) {
 	if rr.Code != 200 || !bytes.Contains(rr.Body.Bytes(), []byte(`"isDefault":true`)) {
 		t.Fatalf("default: %d %s", rr.Code, rr.Body.String())
 	}
-	bad := `{"mode":"observe","policy":{"evaluation_window_minutes":0}}`
+	bad := `{"mode":"observe","policy":{"window_minutes":0}}`
 	rr = httptest.NewRecorder()
 	h.HandleTuningPolicy(rr, httptest.NewRequest("PUT", "/api/dashboard/tuning/policy?instance_id=i", bytes.NewBufferString(bad)))
 	if rr.Code != 400 || !bytes.Contains(rr.Body.Bytes(), []byte("validation_failed")) {

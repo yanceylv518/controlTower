@@ -204,4 +204,12 @@ Instance tokens are stored only as `SHA-256(pepper + token)` hashes. A token may
 | `GET /api/dashboard/channel-commands` | Query `instance_id,status,limit,offset` | `{"items":[{"id":"...","status":"succeeded","payload":{"status":2}}]}` |
 | `GET /api/dashboard/operation-audits` | Query `instance_id,limit,offset` | `{"items":[{"operation_type":"channel.update","target_type":"channel","target_id":"7","actor_id":"admin","after_summary":"...","created_at":"..."}]}` |
 
+## v2.9-B1 Duty-Rotation Tuning (observe-only)
+
+- `GET|PUT /api/dashboard/tuning/policy?instance_id=` reads or writes the instance policy. B1 accepts only `mode=observe`.
+- Policy fields are `window_minutes`, `min_samples`, `error_rate_threshold`, `severe_threshold`, `latency_multiplier`, `latency_floor_seconds`, `sustained_windows`, `trial_initial_minutes`, `trial_backoff_factor`, `trial_max_minutes`, `trial_windows`, `cooldown_minutes`, and `daily_action_limit`.
+- `GET /api/dashboard/tuning/recommendations?instance_id=&limit=&before=` returns duty-rotation recommendations. Action rules are `demote` and `trial`; informational rules are `mixed_channel`, `no_backup`, and `ladder_exhausted`.
+- `GET /api/dashboard/tuning/report?instance_id=&days=7|30` reports hit rate using only `demote` and `trial`.
+- B1 never creates channel commands. Priority changes remain hypothetical until the confirm/auto phases.
+
 命令状态机固定为 `pending → delivered → succeeded|failed`，或 `pending → expired`。缺少人工确认返回 `400 confirm_required`，实例不存在返回 `404 instance_not_found`，空更新返回 `400 invalid_command`。

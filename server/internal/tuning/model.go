@@ -5,58 +5,64 @@ import (
 	"time"
 )
 
-type Rule struct {
-	ErrorRateThreshold float64 `json:"error_rate_threshold"`
-	SustainedWindows   int     `json:"sustained_windows"`
-	WeightStepRatio    float64 `json:"weight_step_ratio"`
-	WeightFloor        int64   `json:"weight_floor,omitempty"`
-}
-type Severe struct {
-	// Parsed and stored for forward compatibility; B1 does not evaluate priority_drop.
-	ErrorRateThreshold float64 `json:"error_rate_threshold"`
-	Action             string  `json:"action"`
-}
 type Policy struct {
-	EvaluationWindowMinutes int    `json:"evaluation_window_minutes"`
-	MinSamples              int64  `json:"min_samples"`
-	Degrade                 Rule   `json:"degrade"`
-	Severe                  Severe `json:"severe"`
-	Recover                 Rule   `json:"recover"`
-	CooldownMinutes         int    `json:"cooldown_minutes"`
+	WindowMinutes       int     `json:"window_minutes"`
+	MinSamples          int64   `json:"min_samples"`
+	ErrorRateThreshold  float64 `json:"error_rate_threshold"`
+	SevereThreshold     float64 `json:"severe_threshold"`
+	LatencyMultiplier   float64 `json:"latency_multiplier"`
+	LatencyFloorSeconds float64 `json:"latency_floor_seconds"`
+	SustainedWindows    int     `json:"sustained_windows"`
+	TrialInitialMinutes int     `json:"trial_initial_minutes"`
+	TrialBackoffFactor  float64 `json:"trial_backoff_factor"`
+	TrialMaxMinutes     int     `json:"trial_max_minutes"`
+	TrialWindows        int     `json:"trial_windows"`
+	CooldownMinutes     int     `json:"cooldown_minutes"`
+	DailyActionLimit    int     `json:"daily_action_limit"`
 }
 
 func DefaultPolicy() Policy {
-	return Policy{15, 20, Rule{.15, 2, .5, 1}, Severe{.5, "priority_drop"}, Rule{.02, 4, 2, 0}, 10}
+	return Policy{15, 20, .15, .50, 2, 10, 2, 60, 2, 1440, 2, 10, 6}
 }
 func (p Policy) Validate() map[string]string {
 	e := map[string]string{}
-	if p.EvaluationWindowMinutes <= 0 {
-		e["evaluation_window_minutes"] = "must_be_positive"
-	}
-	if p.MinSamples <= 0 {
-		e["min_samples"] = "must_be_positive"
-	}
-	if p.CooldownMinutes < 1 {
-		e["cooldown_minutes"] = "must_be_at_least_1"
-	}
-	check := func(n string, r Rule, recover bool) {
-		if r.ErrorRateThreshold < 0 || r.ErrorRateThreshold > 1 {
-			e[n+".error_rate_threshold"] = "must_be_between_0_and_1"
-		}
-		if r.SustainedWindows <= 0 {
-			e[n+".sustained_windows"] = "must_be_positive"
-		}
-		if r.WeightStepRatio <= 0 || (!recover && r.WeightStepRatio > 1) {
-			e[n+".weight_step_ratio"] = "invalid_step_ratio"
-		}
-		if !recover && r.WeightFloor < 1 {
-			e[n+".weight_floor"] = "must_be_at_least_1"
+	for name, value := range map[string]int{
+		"window_minutes": p.WindowMinutes, "trial_initial_minutes": p.TrialInitialMinutes,
+		"trial_max_minutes": p.TrialMaxMinutes, "cooldown_minutes": p.CooldownMinutes,
+	} {
+		if value < 1 || value > 2880 {
+			e[name] = "must_be_between_1_and_2880"
 		}
 	}
-	check("degrade", p.Degrade, false)
-	check("recover", p.Recover, true)
-	if p.Severe.ErrorRateThreshold < 0 || p.Severe.ErrorRateThreshold > 1 {
-		e["severe.error_rate_threshold"] = "must_be_between_0_and_1"
+	if p.MinSamples < 1 || p.MinSamples > 1000 {
+		e["min_samples"] = "must_be_between_1_and_1000"
+	}
+	if p.ErrorRateThreshold <= 0 || p.ErrorRateThreshold > 1 {
+		e["error_rate_threshold"] = "must_be_greater_than_0_and_at_most_1"
+	}
+	if p.SevereThreshold <= 0 || p.SevereThreshold > 1 {
+		e["severe_threshold"] = "must_be_greater_than_0_and_at_most_1"
+	}
+	if p.ErrorRateThreshold >= p.SevereThreshold {
+		e["error_rate_threshold"] = "must_be_less_than_severe_threshold"
+	}
+	if p.LatencyMultiplier < 1 {
+		e["latency_multiplier"] = "must_be_at_least_1"
+	}
+	if p.LatencyFloorSeconds <= 0 {
+		e["latency_floor_seconds"] = "must_be_positive"
+	}
+	if p.SustainedWindows < 1 {
+		e["sustained_windows"] = "must_be_positive"
+	}
+	if p.TrialBackoffFactor < 1 {
+		e["trial_backoff_factor"] = "must_be_at_least_1"
+	}
+	if p.TrialWindows < 1 {
+		e["trial_windows"] = "must_be_positive"
+	}
+	if p.DailyActionLimit < 1 {
+		e["daily_action_limit"] = "must_be_positive"
 	}
 	return e
 }
@@ -84,6 +90,18 @@ type Channel struct {
 	ID           int64
 	Name, Status string
 	Weight       int64
+	Models       []string
+	Priority     int64
+}
+type DispatchState struct {
+	InstanceID       string
+	ChannelID        int64
+	ModelName        string
+	OriginalPriority int64
+	DemotedAt        time.Time
+	TrialAttempts    int
+	NextTrialAt      *time.Time
+	UpdatedAt        time.Time
 }
 type Recommendation struct {
 	ID, InstanceID, ChannelName, Rule string

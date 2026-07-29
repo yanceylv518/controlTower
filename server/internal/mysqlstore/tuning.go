@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"controltower/server/internal/tuning"
@@ -20,6 +21,10 @@ func (s Store) GetPolicy(id string) (tuning.PolicyRecord, bool, error) {
 		return r, false, err
 	}
 	r.InstanceID = id
+	// Old observe policies remain in production. Decode on top of the new
+	// defaults so removed fields are ignored and newly introduced fields never
+	// become unsafe zero values during the v2.9 schema transition.
+	r.Policy = tuning.DefaultPolicy()
 	err = json.Unmarshal([]byte(raw), &r.Policy)
 	return r, true, err
 }
@@ -69,16 +74,18 @@ func (s Store) LatestChannels(id string) ([]tuning.Channel, error) {
 	var out []tuning.Channel
 	for rows.Next() {
 		var c tuning.Channel
-		if e = rows.Scan(&c.ID, &c.Name, &c.Status, &c.Weight); e != nil {
+		var models string
+		if e = rows.Scan(&c.ID, &c.Name, &c.Status, &c.Weight, &models, &c.Priority); e != nil {
 			return nil, e
 		}
+		c.Models = parseChannelModels(models)
 		out = append(out, c)
 	}
 	return out, rows.Err()
 }
 
 const latestChannelsSQL = `
-SELECT c.channel_id,c.channel_name,c.status,c.weight
+SELECT c.channel_id,c.channel_name,c.status,c.weight,c.models_text,COALESCE(c.priority,0)
 FROM channel_snapshots c
 JOIN (
   SELECT channel_id,MAX(captured_at) AS captured_at
@@ -94,21 +101,91 @@ func (s Store) InsertRecommendation(r tuning.Recommendation) error {
 	_, e := s.db.ExecContext(context.Background(), `INSERT INTO tuning_recommendations(id,instance_id,channel_id,channel_name,created_at,rule,evidence_json,current_weight,proposed_weight,current_priority,proposed_priority,mode_at_creation,status,command_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, r.ID, r.InstanceID, r.ChannelID, r.ChannelName, r.CreatedAt, r.Rule, string(ev), r.CurrentWeight, r.ProposedWeight, r.CurrentPriority, r.ProposedPriority, r.ModeAtCreation, r.Status, r.CommandID)
 	return e
 }
-func (s Store) OriginalDegrade(id string, ch int64) (int64, bool, error) {
-	var w int64
-	e := s.db.QueryRowContext(context.Background(), `SELECT current_weight FROM tuning_recommendations WHERE instance_id=? AND channel_id=? AND rule='degrade' ORDER BY created_at ASC LIMIT 1`, id, ch).Scan(&w)
-	if e == sql.ErrNoRows {
-		return 0, false, nil
+
+func parseChannelModels(raw string) []string {
+	var models []string
+	if json.Unmarshal([]byte(raw), &models) != nil {
+		models = strings.FieldsFunc(raw, func(r rune) bool { return r == ',' })
 	}
-	return w, e == nil, e
+	seen := map[string]bool{}
+	out := make([]string, 0, len(models))
+	for _, model := range models {
+		model = strings.TrimSpace(model)
+		if model != "" && !seen[model] {
+			seen[model] = true
+			out = append(out, model)
+		}
+	}
+	return out
 }
-func (s Store) HasUnrecoveredDegrade(id string, ch int64) (bool, error) {
-	var rule string
-	e := s.db.QueryRowContext(context.Background(), `SELECT rule FROM tuning_recommendations WHERE instance_id=? AND channel_id=? AND rule IN ('degrade','recover') ORDER BY created_at DESC LIMIT 1`, id, ch).Scan(&rule)
-	if e == sql.ErrNoRows {
-		return false, nil
+
+func (s Store) QueryP95Buckets(id string, channelID int64, start, end time.Time, minSamples int64) ([]float64, error) {
+	rows, err := s.db.QueryContext(context.Background(), `SELECT p95_use_time FROM metric_1m WHERE instance_id=? AND dimension_type='instance_channel' AND dimension_key=? AND bucket_time>=? AND bucket_time<? AND request_count>=? AND p95_use_time IS NOT NULL ORDER BY bucket_time`, id, channelID, start, end, minSamples)
+	if err != nil {
+		return nil, err
 	}
-	return rule == "degrade", e
+	defer rows.Close()
+	var out []float64
+	for rows.Next() {
+		var value float64
+		if err = rows.Scan(&value); err != nil {
+			return nil, err
+		}
+		out = append(out, value)
+	}
+	return out, rows.Err()
+}
+
+func (s Store) HasRecentRecommendation(id string, channelID int64, rule string, since time.Time) (bool, error) {
+	var found int
+	err := s.db.QueryRowContext(context.Background(), `SELECT EXISTS(SELECT 1 FROM tuning_recommendations WHERE instance_id=? AND channel_id=? AND rule=? AND created_at>=?)`, id, channelID, rule, since).Scan(&found)
+	return found == 1, err
+}
+
+func (s Store) CountActionRecommendations(id string, channelID int64, since time.Time) (int, error) {
+	var count int
+	err := s.db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM tuning_recommendations WHERE instance_id=? AND channel_id=? AND rule IN ('demote','trial') AND created_at>=?`, id, channelID, since).Scan(&count)
+	return count, err
+}
+
+func (s Store) LastActionRecommendationAt(id string, channelID int64) (time.Time, bool, error) {
+	var value sql.NullTime
+	err := s.db.QueryRowContext(context.Background(), `SELECT MAX(created_at) FROM tuning_recommendations WHERE instance_id=? AND channel_id=? AND rule IN ('demote','trial')`, id, channelID).Scan(&value)
+	if err != nil || !value.Valid {
+		return time.Time{}, false, err
+	}
+	return value.Time, true, nil
+}
+
+func (s Store) ListDispatchStates(id string) ([]tuning.DispatchState, error) {
+	rows, err := s.db.QueryContext(context.Background(), `SELECT instance_id,channel_id,model_name,original_priority,demoted_at,trial_attempts,next_trial_at,updated_at FROM tuning_dispatch_states WHERE instance_id=?`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []tuning.DispatchState
+	for rows.Next() {
+		var state tuning.DispatchState
+		var next sql.NullTime
+		if err = rows.Scan(&state.InstanceID, &state.ChannelID, &state.ModelName, &state.OriginalPriority, &state.DemotedAt, &state.TrialAttempts, &next, &state.UpdatedAt); err != nil {
+			return nil, err
+		}
+		if next.Valid {
+			state.NextTrialAt = &next.Time
+		}
+		out = append(out, state)
+	}
+	return out, rows.Err()
+}
+
+func (s Store) PutDispatchState(state tuning.DispatchState) error {
+	_, err := s.db.ExecContext(context.Background(), `INSERT INTO tuning_dispatch_states(instance_id,channel_id,model_name,original_priority,demoted_at,trial_attempts,next_trial_at,updated_at) VALUES(?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE model_name=VALUES(model_name),original_priority=VALUES(original_priority),demoted_at=VALUES(demoted_at),trial_attempts=VALUES(trial_attempts),next_trial_at=VALUES(next_trial_at),updated_at=VALUES(updated_at)`, state.InstanceID, state.ChannelID, state.ModelName, state.OriginalPriority, state.DemotedAt, state.TrialAttempts, state.NextTrialAt, state.UpdatedAt)
+	return err
+}
+
+func (s Store) DeleteDispatchState(id string, channelID int64) error {
+	_, err := s.db.ExecContext(context.Background(), `DELETE FROM tuning_dispatch_states WHERE instance_id=? AND channel_id=?`, id, channelID)
+	return err
 }
 func scanRecommendation(rows *sql.Rows) ([]tuning.Recommendation, error) {
 	var out []tuning.Recommendation
@@ -150,7 +227,7 @@ func scanRecommendation(rows *sql.Rows) ([]tuning.Recommendation, error) {
 const recommendationColumns = `id,instance_id,channel_id,channel_name,created_at,rule,evidence_json,current_weight,proposed_weight,current_priority,proposed_priority,mode_at_creation,status,command_id,outcome_json,outcome_at,hit`
 
 func (s Store) PendingOutcomes(before time.Time, limit int) ([]tuning.Recommendation, error) {
-	rows, e := s.db.QueryContext(context.Background(), `SELECT `+recommendationColumns+` FROM tuning_recommendations WHERE outcome_at IS NULL AND created_at<=? ORDER BY created_at LIMIT ?`, before, limit)
+	rows, e := s.db.QueryContext(context.Background(), `SELECT `+recommendationColumns+` FROM tuning_recommendations WHERE outcome_at IS NULL AND rule IN ('demote','trial') AND created_at<=? ORDER BY created_at LIMIT ?`, before, limit)
 	if e != nil {
 		return nil, e
 	}
@@ -183,7 +260,7 @@ func (s Store) ListRecommendations(q tuning.RecommendationQuery) ([]tuning.Recom
 func (s Store) RecommendationReport(q tuning.RecommendationQuery) (tuning.Report, error) {
 	r := tuning.Report{ByRule: map[string]int64{}}
 	since := time.Now().UTC().Add(-time.Duration(q.Days) * 24 * time.Hour)
-	rows, e := s.db.QueryContext(context.Background(), `SELECT rule,COUNT(*),SUM(outcome_at IS NOT NULL),SUM(hit IS NOT NULL),SUM(hit=1) FROM tuning_recommendations WHERE instance_id=? AND created_at>=? GROUP BY rule`, q.InstanceID, since)
+	rows, e := s.db.QueryContext(context.Background(), `SELECT rule,COUNT(*),SUM(outcome_at IS NOT NULL),SUM(hit IS NOT NULL),SUM(hit=1) FROM tuning_recommendations WHERE instance_id=? AND rule IN ('demote','trial') AND created_at>=? GROUP BY rule`, q.InstanceID, since)
 	if e != nil {
 		return r, e
 	}
