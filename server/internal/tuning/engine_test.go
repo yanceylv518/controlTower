@@ -172,3 +172,41 @@ func TestOutcomeHitMissAndInsufficient(t *testing.T) {
 	}
 }
 func boolp(v bool) *bool { return &v }
+
+func (f *fakeStore) HasPendingActionRecommendation(_ string, ch int64) (bool, error) {
+	for _, r := range f.recommendations {
+		if r.ChannelID == ch && r.Status == "pending" && (r.Rule == "demote" || r.Rule == "trial") {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func TestEngineConfirmDoesNotStackPendingDuplicates(t *testing.T) {
+	p := testPolicy()
+	p.Mode = "confirm"
+	p.Policy.SustainedWindows = 1
+	f := &fakeStore{
+		policy: p,
+		channels: []Channel{
+			{ID: 1, Name: "active", Status: "enabled", Priority: 100, Models: []string{"m"}},
+			{ID: 2, Name: "backup", Status: "enabled", Priority: 50, Models: []string{"m"}},
+		},
+		metrics: []ChannelMetric{{ChannelID: 1, RequestCount: 100, ErrorCount: 60}},
+	}
+	now := time.Now().UTC()
+	engine := NewEngine(f)
+	engine.Tick(now)
+	// Past the cooldown, channel still degraded, first recommendation still
+	// pending: the engine must not add a duplicate for the same open decision.
+	engine.Tick(now.Add(11 * time.Minute))
+	demotes := 0
+	for _, r := range f.recommendations {
+		if r.Rule == "demote" {
+			demotes++
+		}
+	}
+	if demotes != 1 {
+		t.Fatalf("pending decision duplicated: %#v", f.recommendations)
+	}
+}

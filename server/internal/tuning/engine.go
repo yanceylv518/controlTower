@@ -366,6 +366,17 @@ func actionStatus(mode string) string {
 }
 
 func (e *Engine) actionAllowed(id string, channelID int64, p Policy, now time.Time) bool {
+	// One open decision per channel: while a pending action recommendation
+	// awaits confirm, re-evaluations must not stack duplicates (the window is
+	// longer than the cooldown, so every pass would add one) or burn the
+	// daily budget on repeats of the same decision.
+	if checker, ok := e.store.(interface {
+		HasPendingActionRecommendation(string, int64) (bool, error)
+	}); ok {
+		if pending, err := checker.HasPendingActionRecommendation(id, channelID); err != nil || pending {
+			return false
+		}
+	}
 	last, ok, err := e.store.LastActionRecommendationAt(id, channelID)
 	if err != nil || (ok && now.Sub(last) < time.Duration(p.CooldownMinutes)*time.Minute) {
 		return false

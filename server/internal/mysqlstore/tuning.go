@@ -419,6 +419,12 @@ func (s Store) DismissRecommendation(id, actor string, now time.Time) (tuning.Re
 	return rec, nil
 }
 
+func (s Store) HasPendingActionRecommendation(id string, channelID int64) (bool, error) {
+	var found int
+	err := s.db.QueryRowContext(context.Background(), `SELECT EXISTS(SELECT 1 FROM tuning_recommendations WHERE instance_id=? AND channel_id=? AND status='pending' AND rule IN ('demote','trial'))`, id, channelID).Scan(&found)
+	return found == 1, err
+}
+
 func (s Store) ExpirePendingRecommendations(before time.Time) (int64, error) {
 	result, err := s.db.ExecContext(context.Background(), `UPDATE tuning_recommendations SET status='expired',acted_at=? WHERE status='pending' AND created_at<?`, time.Now().UTC(), before)
 	if err != nil {

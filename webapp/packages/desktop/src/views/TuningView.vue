@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import type { TuningPolicy, TuningRecommendation, TuningReport, TuningLadders } from "@ct/shared";
+import { siteOf, type TuningPolicy, type TuningRecommendation, type TuningReport, type TuningLadders } from "@ct/shared";
 import { dashboard } from "../api";
 import AppShell from "../components/AppShell.vue";
 import { useFiltersStore } from "../stores/filters";
@@ -21,7 +21,7 @@ const reports = reactive<Record<7 | 30, TuningReport | null>>({ 7: null, 30: nul
 const reportDays = ref<7 | 30>(7);
 const ladders = ref<TuningLadders>({ channels: [], dispatch_states: [] });
 const instanceID = computed(() => filters.instances
-  .filter(x => x.enabled && (x.site_id || x.instance_id) === filters.site_id)
+  .filter(x => x.enabled && siteOf(x) === filters.site_id)
   .map(x => x.instance_id).sort()[0] || "");
 const stateByChannel = computed(() => new Map(ladders.value.dispatch_states.map(x => [x.ChannelID, x])));
 const groupedLadders = computed(() => {
