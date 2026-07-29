@@ -49,8 +49,13 @@ func (s Store) ListEnabledInstances() ([]string, error) {
 	}
 	return out, rows.Err()
 }
+// instance_channel dimension keys are "<instance>:channel:<id>"; the channel
+// id must be split out of the suffix — CAST on the whole key yields 0 for
+// every row and no channel ever matches.
+const tuningChannelMetricsSQL = `SELECT CAST(SUBSTRING_INDEX(dimension_key,':',-1) AS SIGNED),SUM(request_count),SUM(error_count),COALESCE(MAX(p95_use_time),0) FROM metric_1m WHERE instance_id=? AND dimension_type='instance_channel' AND bucket_time>=? AND bucket_time<? GROUP BY dimension_key`
+
 func (s Store) QueryMetrics(id string, start, end time.Time) ([]tuning.ChannelMetric, error) {
-	rows, e := s.db.QueryContext(context.Background(), `SELECT CAST(dimension_key AS SIGNED),SUM(request_count),SUM(error_count),COALESCE(MAX(p95_use_time),0) FROM metric_1m WHERE instance_id=? AND dimension_type='instance_channel' AND bucket_time>=? AND bucket_time<? GROUP BY dimension_key`, id, start, end)
+	rows, e := s.db.QueryContext(context.Background(), tuningChannelMetricsSQL, id, start, end)
 	if e != nil {
 		return nil, e
 	}
@@ -119,8 +124,10 @@ func parseChannelModels(raw string) []string {
 	return out
 }
 
+const tuningP95BucketsSQL = `SELECT p95_use_time FROM metric_1m WHERE instance_id=? AND dimension_type='instance_channel' AND dimension_key=CONCAT(?,':channel:',?) AND bucket_time>=? AND bucket_time<? AND request_count>=? AND p95_use_time IS NOT NULL ORDER BY bucket_time`
+
 func (s Store) QueryP95Buckets(id string, channelID int64, start, end time.Time, minSamples int64) ([]float64, error) {
-	rows, err := s.db.QueryContext(context.Background(), `SELECT p95_use_time FROM metric_1m WHERE instance_id=? AND dimension_type='instance_channel' AND dimension_key=? AND bucket_time>=? AND bucket_time<? AND request_count>=? AND p95_use_time IS NOT NULL ORDER BY bucket_time`, id, channelID, start, end, minSamples)
+	rows, err := s.db.QueryContext(context.Background(), tuningP95BucketsSQL, id, id, channelID, start, end, minSamples)
 	if err != nil {
 		return nil, err
 	}
