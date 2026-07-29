@@ -76,8 +76,13 @@ func (e *Engine) Tick(now time.Time) {
 		if now.Sub(e.last[id]) >= time.Duration(p.Policy.WindowMinutes)*time.Minute {
 			n, c := e.evaluate(id, p, now)
 			e.last[id] = now
-			log.Printf("tuning duty evaluation instance=%s active_channels=%d recommendations=%d mode=observe", id, c, n)
+			log.Printf("tuning duty evaluation instance=%s active_channels=%d recommendations=%d mode=%s", id, c, n, p.Mode)
 		}
+	}
+	if expirer, ok := e.store.(interface {
+		ExpirePendingRecommendations(time.Time) (int64, error)
+	}); ok {
+		_, _ = expirer.ExpirePendingRecommendations(now.Add(-60 * time.Minute))
 	}
 	e.fillOutcomes(now)
 }
@@ -102,7 +107,8 @@ func (e *Engine) evaluate(id string, pr PolicyRecord, now time.Time) (int, int) 
 	for _, state := range dispatchRows {
 		dispatch[state.ChannelID] = state
 	}
-	made := e.recordMixedChannels(id, channels, now)
+	mode := normalizedMode(pr.Mode)
+	made := e.recordMixedChannels(id, channels, mode, now)
 	evaluated := 0
 	for model, ladder := range buildLadders(channels) {
 		available := make([]Channel, 0, len(ladder))
@@ -122,7 +128,7 @@ func (e *Engine) evaluate(id string, pr PolicyRecord, now time.Time) (int, int) 
 				}
 			}
 			if !trialDue {
-				made += e.recordInfo(id, ladder[0], "ladder_exhausted", model, now, map[string]any{"model": model})
+				made += e.recordInfo(id, ladder[0], "ladder_exhausted", model, mode, now, map[string]any{"model": model})
 			}
 			continue
 		}
@@ -136,10 +142,10 @@ func (e *Engine) evaluate(id string, pr PolicyRecord, now time.Time) (int, int) 
 				continue
 			}
 			evaluated++
-			made += e.evaluateActive(id, model, ch, ladder, m, pr.Policy, dispatch, now)
+			made += e.evaluateActive(id, model, ch, ladder, m, pr.Policy, mode, dispatch, now)
 		}
 	}
-	made += e.scheduleTrials(id, channels, dispatch, pr.Policy, now)
+	made += e.scheduleTrials(id, channels, dispatch, pr.Policy, mode, now)
 	return made, evaluated
 }
 
@@ -174,7 +180,7 @@ func enabled(status string) bool {
 	}
 }
 
-func (e *Engine) evaluateActive(id, model string, ch Channel, ladder []Channel, m ChannelMetric, p Policy, dispatch map[int64]DispatchState, now time.Time) int {
+func (e *Engine) evaluateActive(id, model string, ch Channel, ladder []Channel, m ChannelMetric, p Policy, mode string, dispatch map[int64]DispatchState, now time.Time) int {
 	key := id + ":" + fmtInt(ch.ID)
 	local := e.states[key]
 	if local == nil {
@@ -228,7 +234,7 @@ func (e *Engine) evaluateActive(id, model string, ch Channel, ladder []Channel, 
 		if exhausted {
 			rule = "ladder_exhausted"
 		}
-		return e.recordInfo(id, ch, rule, model, now, map[string]any{
+		return e.recordInfo(id, ch, rule, model, mode, now, map[string]any{
 			"trigger": trigger, "error_rate": rate, "p95": m.P95,
 		})
 	}
@@ -248,7 +254,7 @@ func (e *Engine) evaluateActive(id, model string, ch Channel, ladder []Channel, 
 		ChannelName: ch.Name, CreatedAt: now, Rule: "demote", Evidence: ev,
 		CurrentWeight: ch.Weight, ProposedWeight: ch.Weight,
 		CurrentPriority: &current, ProposedPriority: &proposed,
-		ModeAtCreation: "observe", Status: "recorded",
+		ModeAtCreation: mode, Status: actionStatus(mode),
 	}
 	if e.store.InsertRecommendation(rec) != nil {
 		return 0
@@ -263,14 +269,16 @@ func (e *Engine) evaluateActive(id, model string, ch Channel, ladder []Channel, 
 		OriginalPriority: current, DemotedAt: now, TrialAttempts: attempts,
 		NextTrialAt: &next, UpdatedAt: now,
 	}
-	if e.store.PutDispatchState(state) == nil {
-		dispatch[ch.ID] = state
+	if mode == "observe" {
+		if e.store.PutDispatchState(state) == nil {
+			dispatch[ch.ID] = state
+		}
 	}
 	local.errorWindows, local.latencyWindows = 0, 0
 	return 1
 }
 
-func (e *Engine) scheduleTrials(id string, channels []Channel, states map[int64]DispatchState, p Policy, now time.Time) int {
+func (e *Engine) scheduleTrials(id string, channels []Channel, states map[int64]DispatchState, p Policy, mode string, now time.Time) int {
 	byID := map[int64]Channel{}
 	for _, ch := range channels {
 		byID[ch.ID] = ch
@@ -296,31 +304,33 @@ func (e *Engine) scheduleTrials(id string, channels []Channel, states map[int64]
 			},
 			CurrentWeight: ch.Weight, ProposedWeight: ch.Weight,
 			CurrentPriority: &current, ProposedPriority: &proposed,
-			ModeAtCreation: "observe", Status: "recorded",
+			ModeAtCreation: mode, Status: actionStatus(mode),
 		}
 		if e.store.InsertRecommendation(rec) != nil {
 			continue
 		}
-		state.NextTrialAt = nil
-		state.UpdatedAt = now
-		_ = e.store.PutDispatchState(state)
-		states[channelID] = state
+		if mode == "observe" {
+			state.NextTrialAt = nil
+			state.UpdatedAt = now
+			_ = e.store.PutDispatchState(state)
+			states[channelID] = state
+		}
 		made++
 	}
 	return made
 }
 
-func (e *Engine) recordMixedChannels(id string, channels []Channel, now time.Time) int {
+func (e *Engine) recordMixedChannels(id string, channels []Channel, mode string, now time.Time) int {
 	made := 0
 	for _, ch := range channels {
 		if enabled(ch.Status) && len(ch.Models) > 1 {
-			made += e.recordInfo(id, ch, "mixed_channel", "", now, map[string]any{"models": ch.Models})
+			made += e.recordInfo(id, ch, "mixed_channel", "", mode, now, map[string]any{"models": ch.Models})
 		}
 	}
 	return made
 }
 
-func (e *Engine) recordInfo(id string, ch Channel, rule, model string, now time.Time, ev map[string]any) int {
+func (e *Engine) recordInfo(id string, ch Channel, rule, model, mode string, now time.Time, ev map[string]any) int {
 	exists, err := e.store.HasRecentRecommendation(id, ch.ID, rule, now.Add(-24*time.Hour))
 	if err != nil || exists {
 		return 0
@@ -334,11 +344,25 @@ func (e *Engine) recordInfo(id string, ch Channel, rule, model string, now time.
 		ChannelName: ch.Name, CreatedAt: now, Rule: rule, Evidence: ev,
 		CurrentWeight: ch.Weight, ProposedWeight: ch.Weight,
 		CurrentPriority: &current, ProposedPriority: &current,
-		ModeAtCreation: "observe", Status: "recorded",
+		ModeAtCreation: mode, Status: "recorded",
 	}) != nil {
 		return 0
 	}
 	return 1
+}
+
+func normalizedMode(mode string) string {
+	if mode == "confirm" {
+		return "confirm"
+	}
+	return "observe"
+}
+
+func actionStatus(mode string) string {
+	if mode == "confirm" {
+		return "pending"
+	}
+	return "recorded"
 }
 
 func (e *Engine) actionAllowed(id string, channelID int64, p Policy, now time.Time) bool {

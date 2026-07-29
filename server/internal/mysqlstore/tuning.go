@@ -2,8 +2,11 @@ package mysqlstore
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
@@ -204,7 +207,8 @@ func scanRecommendation(rows *sql.Rows) ([]tuning.Recommendation, error) {
 		var hit sql.NullBool
 		var cp, pp sql.NullInt64
 		var command sql.NullString
-		if e := rows.Scan(&r.ID, &r.InstanceID, &r.ChannelID, &r.ChannelName, &r.CreatedAt, &r.Rule, &ev, &r.CurrentWeight, &r.ProposedWeight, &cp, &pp, &r.ModeAtCreation, &r.Status, &command, &outcome, &outcomeAt, &hit); e != nil {
+		var actedAt sql.NullTime
+		if e := rows.Scan(&r.ID, &r.InstanceID, &r.ChannelID, &r.ChannelName, &r.CreatedAt, &r.Rule, &ev, &r.CurrentWeight, &r.ProposedWeight, &cp, &pp, &r.ModeAtCreation, &r.Status, &command, &outcome, &outcomeAt, &hit, &r.ActedBy, &actedAt); e != nil {
 			return nil, e
 		}
 		_ = json.Unmarshal([]byte(ev), &r.Evidence)
@@ -226,15 +230,18 @@ func scanRecommendation(rows *sql.Rows) ([]tuning.Recommendation, error) {
 		if hit.Valid {
 			r.Hit = &hit.Bool
 		}
+		if actedAt.Valid {
+			r.ActedAt = &actedAt.Time
+		}
 		out = append(out, r)
 	}
 	return out, rows.Err()
 }
 
-const recommendationColumns = `id,instance_id,channel_id,channel_name,created_at,rule,evidence_json,current_weight,proposed_weight,current_priority,proposed_priority,mode_at_creation,status,command_id,outcome_json,outcome_at,hit`
+const recommendationColumns = `id,instance_id,channel_id,channel_name,created_at,rule,evidence_json,current_weight,proposed_weight,current_priority,proposed_priority,mode_at_creation,status,command_id,outcome_json,outcome_at,hit,acted_by,acted_at`
 
 func (s Store) PendingOutcomes(before time.Time, limit int) ([]tuning.Recommendation, error) {
-	rows, e := s.db.QueryContext(context.Background(), `SELECT `+recommendationColumns+` FROM tuning_recommendations WHERE outcome_at IS NULL AND rule IN ('demote','trial') AND created_at<=? ORDER BY created_at LIMIT ?`, before, limit)
+	rows, e := s.db.QueryContext(context.Background(), `SELECT `+recommendationColumns+` FROM tuning_recommendations WHERE outcome_at IS NULL AND rule IN ('demote','trial') AND status IN ('recorded','adopted','dismissed','expired') AND created_at<=? ORDER BY created_at LIMIT ?`, before, limit)
 	if e != nil {
 		return nil, e
 	}
@@ -267,22 +274,155 @@ func (s Store) ListRecommendations(q tuning.RecommendationQuery) ([]tuning.Recom
 func (s Store) RecommendationReport(q tuning.RecommendationQuery) (tuning.Report, error) {
 	r := tuning.Report{ByRule: map[string]int64{}}
 	since := time.Now().UTC().Add(-time.Duration(q.Days) * 24 * time.Hour)
-	rows, e := s.db.QueryContext(context.Background(), `SELECT rule,COUNT(*),SUM(outcome_at IS NOT NULL),SUM(hit IS NOT NULL),SUM(hit=1) FROM tuning_recommendations WHERE instance_id=? AND rule IN ('demote','trial') AND created_at>=? GROUP BY rule`, q.InstanceID, since)
+	rows, e := s.db.QueryContext(context.Background(), `SELECT rule,COUNT(*),SUM(status='adopted'),SUM(outcome_at IS NOT NULL),SUM(hit IS NOT NULL),SUM(hit=1) FROM tuning_recommendations WHERE instance_id=? AND rule IN ('demote','trial') AND created_at>=? GROUP BY rule`, q.InstanceID, since)
 	if e != nil {
 		return r, e
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var rule string
-		var count, filled, judged, hits sql.NullInt64
-		if e = rows.Scan(&rule, &count, &filled, &judged, &hits); e != nil {
+		var count, adopted, filled, judged, hits sql.NullInt64
+		if e = rows.Scan(&rule, &count, &adopted, &filled, &judged, &hits); e != nil {
 			return r, e
 		}
 		r.ByRule[rule] = count.Int64
 		r.Total += count.Int64
+		r.Adopted += adopted.Int64
 		r.Filled += filled.Int64
 		r.Judged += judged.Int64
 		r.Hits += hits.Int64
 	}
 	return r, rows.Err()
+}
+
+func randomTuningID() (string, error) {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(raw[:]), nil
+}
+
+func recommendationForUpdate(ctx context.Context, tx *sql.Tx, id string) (tuning.Recommendation, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT `+recommendationColumns+` FROM tuning_recommendations WHERE id=? FOR UPDATE`, id)
+	if err != nil {
+		return tuning.Recommendation{}, err
+	}
+	defer rows.Close()
+	recs, err := scanRecommendation(rows)
+	if err != nil {
+		return tuning.Recommendation{}, err
+	}
+	if len(recs) == 0 {
+		return tuning.Recommendation{}, tuning.ErrRecommendationNotFound
+	}
+	return recs[0], nil
+}
+
+func (s Store) AdoptRecommendation(id, actor string, now time.Time) (tuning.Recommendation, error) {
+	ctx := context.Background()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return tuning.Recommendation{}, err
+	}
+	defer tx.Rollback()
+	rec, err := recommendationForUpdate(ctx, tx, id)
+	if err != nil {
+		return tuning.Recommendation{}, err
+	}
+	if rec.Status != "pending" || (rec.Rule != "demote" && rec.Rule != "trial") || rec.ProposedPriority == nil {
+		return tuning.Recommendation{}, tuning.ErrRecommendationNotPending
+	}
+	var target string
+	err = tx.QueryRowContext(ctx, `SELECT target.id FROM instances source JOIN instances target ON COALESCE(NULLIF(target.site_id,''),target.id)=COALESCE(NULLIF(source.site_id,''),source.id) WHERE source.id=? AND target.enabled=1 ORDER BY target.id LIMIT 1`, rec.InstanceID).Scan(&target)
+	if err == sql.ErrNoRows {
+		return tuning.Recommendation{}, tuning.ErrNoTargetInstance
+	}
+	if err != nil {
+		return tuning.Recommendation{}, err
+	}
+	commandID, err := randomTuningID()
+	if err != nil {
+		return tuning.Recommendation{}, err
+	}
+	payload, _ := json.Marshal(map[string]any{"priority": *rec.ProposedPriority})
+	if _, err = tx.ExecContext(ctx, `INSERT INTO channel_commands(id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at) VALUES(?,?,?,?,?,'pending',?,'',?,?)`, commandID, target, rec.ChannelID, "channel.update", string(payload), actor, now, now); err != nil {
+		return tuning.Recommendation{}, err
+	}
+	if rec.Rule == "demote" {
+		policy := tuning.DefaultPolicy()
+		var raw string
+		if e := tx.QueryRowContext(ctx, `SELECT policy_json FROM tuning_policies WHERE instance_id=?`, rec.InstanceID).Scan(&raw); e == nil {
+			_ = json.Unmarshal([]byte(raw), &policy)
+		}
+		model, _ := rec.Evidence["model"].(string)
+		original := int64(0)
+		if rec.CurrentPriority != nil {
+			original = *rec.CurrentPriority
+		}
+		next := now.Add(time.Duration(policy.TrialInitialMinutes) * time.Minute)
+		if _, err = tx.ExecContext(ctx, `INSERT INTO tuning_dispatch_states(instance_id,channel_id,model_name,original_priority,demoted_at,trial_attempts,next_trial_at,updated_at) VALUES(?,?,?,?,?,0,?,?) ON DUPLICATE KEY UPDATE model_name=VALUES(model_name),original_priority=VALUES(original_priority),demoted_at=VALUES(demoted_at),next_trial_at=VALUES(next_trial_at),updated_at=VALUES(updated_at)`, rec.InstanceID, rec.ChannelID, model, original, now, next, now); err != nil {
+			return tuning.Recommendation{}, err
+		}
+	} else if _, err = tx.ExecContext(ctx, `UPDATE tuning_dispatch_states SET next_trial_at=NULL,updated_at=? WHERE instance_id=? AND channel_id=?`, now, rec.InstanceID, rec.ChannelID); err != nil {
+		return tuning.Recommendation{}, err
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE tuning_recommendations SET status='adopted',command_id=?,acted_by=?,acted_at=? WHERE id=? AND status='pending'`, commandID, actor, now, id)
+	if err != nil {
+		return tuning.Recommendation{}, err
+	}
+	if count, _ := result.RowsAffected(); count != 1 {
+		return tuning.Recommendation{}, tuning.ErrRecommendationNotPending
+	}
+	before := fmt.Sprintf(`{"recommendation_id":%q,"status":"pending"}`, id)
+	after := fmt.Sprintf(`{"recommendation_id":%q,"status":"adopted","command_id":%q,"priority":%d}`, id, commandID, *rec.ProposedPriority)
+	if _, err = tx.ExecContext(ctx, `INSERT INTO operation_audits(id,instance_id,operation_type,target_type,target_id,actor_id,before_summary,after_summary,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, commandID, target, "tuning.adopt", "tuning_recommendation", id, actor, before, after, "success", now); err != nil {
+		return tuning.Recommendation{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return tuning.Recommendation{}, err
+	}
+	rec.Status, rec.CommandID, rec.ActedBy, rec.ActedAt = "adopted", &commandID, actor, &now
+	return rec, nil
+}
+
+func (s Store) DismissRecommendation(id, actor string, now time.Time) (tuning.Recommendation, error) {
+	ctx := context.Background()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return tuning.Recommendation{}, err
+	}
+	defer tx.Rollback()
+	rec, err := recommendationForUpdate(ctx, tx, id)
+	if err != nil {
+		return tuning.Recommendation{}, err
+	}
+	if rec.Status != "pending" {
+		return tuning.Recommendation{}, tuning.ErrRecommendationNotPending
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE tuning_recommendations SET status='dismissed',acted_by=?,acted_at=? WHERE id=? AND status='pending'`, actor, now, id); err != nil {
+		return tuning.Recommendation{}, err
+	}
+	auditID, err := randomTuningID()
+	if err != nil {
+		return tuning.Recommendation{}, err
+	}
+	before := fmt.Sprintf(`{"recommendation_id":%q,"status":"pending"}`, id)
+	after := fmt.Sprintf(`{"recommendation_id":%q,"status":"dismissed"}`, id)
+	if _, err = tx.ExecContext(ctx, `INSERT INTO operation_audits(id,instance_id,operation_type,target_type,target_id,actor_id,before_summary,after_summary,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, auditID, rec.InstanceID, "tuning.dismiss", "tuning_recommendation", id, actor, before, after, "success", now); err != nil {
+		return tuning.Recommendation{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return tuning.Recommendation{}, err
+	}
+	rec.Status, rec.ActedBy, rec.ActedAt = "dismissed", actor, &now
+	return rec, nil
+}
+
+func (s Store) ExpirePendingRecommendations(before time.Time) (int64, error) {
+	result, err := s.db.ExecContext(context.Background(), `UPDATE tuning_recommendations SET status='expired',acted_at=? WHERE status='pending' AND created_at<?`, time.Now().UTC(), before)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }

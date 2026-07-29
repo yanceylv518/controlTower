@@ -16,6 +16,7 @@ type fakeStore struct {
 	dispatch        map[int64]DispatchState
 	actionCount     int
 	lastAction      time.Time
+	expiredBefore   time.Time
 }
 
 func (f *fakeStore) GetPolicy(string) (PolicyRecord, bool, error) { return f.policy, true, nil }
@@ -80,6 +81,15 @@ func (f *fakeStore) ListRecommendations(RecommendationQuery) ([]Recommendation, 
 	return f.recommendations, nil
 }
 func (f *fakeStore) RecommendationReport(RecommendationQuery) (Report, error) { return Report{}, nil }
+func (f *fakeStore) ExpirePendingRecommendations(before time.Time) (int64, error) {
+	f.expiredBefore = before
+	for i := range f.recommendations {
+		if f.recommendations[i].Status == "pending" && f.recommendations[i].CreatedAt.Before(before) {
+			f.recommendations[i].Status = "expired"
+		}
+	}
+	return 0, nil
+}
 func testPolicy() PolicyRecord {
 	p := DefaultPolicy()
 	p.WindowMinutes = 1
@@ -109,6 +119,33 @@ func TestEngineWeightedRateAndRecoverSimulation(t *testing.T) {
 	m := ChannelMetric{RequestCount: 110, ErrorCount: 20}
 	if got := m.ErrorRate(); got != 20.0/110 {
 		t.Fatalf("weighted rate=%v", got)
+	}
+}
+
+func TestEngineConfirmCreatesPendingWithoutAdvancingDispatchAndExpires(t *testing.T) {
+	p := testPolicy()
+	p.Mode = "confirm"
+	p.Policy.SustainedWindows = 1
+	f := &fakeStore{
+		policy: p,
+		channels: []Channel{
+			{ID: 1, Name: "active", Status: "enabled", Priority: 100, Models: []string{"m"}},
+			{ID: 2, Name: "backup", Status: "enabled", Priority: 50, Models: []string{"m"}},
+		},
+		metrics: []ChannelMetric{{ChannelID: 1, RequestCount: 100, ErrorCount: 60}},
+	}
+	now := time.Now().UTC()
+	NewEngine(f).Tick(now)
+	if len(f.recommendations) != 1 || f.recommendations[0].Status != "pending" || f.recommendations[0].ModeAtCreation != "confirm" {
+		t.Fatalf("confirm recommendation=%#v", f.recommendations)
+	}
+	if len(f.dispatch) != 0 {
+		t.Fatalf("confirm must not advance dispatch before adoption: %#v", f.dispatch)
+	}
+	f.recommendations[0].CreatedAt = now.Add(-61 * time.Minute)
+	NewEngine(f).Tick(now.Add(time.Minute))
+	if f.recommendations[0].Status != "expired" || f.expiredBefore.IsZero() {
+		t.Fatalf("pending recommendation not expired: %#v", f.recommendations[0])
 	}
 }
 func TestOutcomeHitMissAndInsufficient(t *testing.T) {

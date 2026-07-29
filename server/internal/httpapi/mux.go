@@ -100,6 +100,8 @@ func NewMux(options Options) *http.ServeMux {
 		mux.Handle("/api/dashboard/tuning/policy", protect(http.HandlerFunc(dashboardHandler.HandleTuningPolicy)))
 		mux.Handle("GET /api/dashboard/tuning/recommendations", protect(http.HandlerFunc(dashboardHandler.HandleTuningRecommendations)))
 		mux.Handle("GET /api/dashboard/tuning/report", protect(http.HandlerFunc(dashboardHandler.HandleTuningReport)))
+		mux.Handle("GET /api/dashboard/tuning/ladders", protect(http.HandlerFunc(dashboardHandler.HandleTuningLadders)))
+		mux.Handle("POST /api/dashboard/tuning/recommendations/{id}/{action}", protect(http.HandlerFunc(dashboardHandler.HandleTuningRecommendationAction)))
 	}
 	instances := dashboard.InstanceHandler{Store: options.Store, Runtime: options.Store, Pepper: options.AgentTokenPepper, Settings: options.SettingsProvider}
 	commands := (dashboard.CommandHandler{Store: options.Store, Instances: options.Store}).WithNameSource(options.Store)

@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
@@ -37,6 +38,8 @@ type RecommendationItem struct {
 	Outcome          map[string]any `json:"outcome"`
 	OutcomeAt        *time.Time     `json:"outcome_at"`
 	Hit              *bool          `json:"hit"`
+	ActedBy          string         `json:"acted_by,omitempty"`
+	ActedAt          *time.Time     `json:"acted_at,omitempty"`
 }
 
 func (h Handler) WithTuningStore(s TuningStore) Handler { h.tuningStore = s; return h }
@@ -67,8 +70,8 @@ func (h Handler) HandleTuningPolicy(w http.ResponseWriter, r *http.Request) {
 			writeDashboardError(w, 400, "invalid_json")
 			return
 		}
-		if req.Mode != "observe" {
-			writeDashboardError(w, 400, "mode_not_supported")
+		if req.Mode != "observe" && req.Mode != "confirm" {
+			writeDashboardError(w, 400, "mode_not_supported_until_v2.9-B3")
 			return
 		}
 		if fields := req.Policy.Validate(); len(fields) > 0 {
@@ -87,7 +90,69 @@ func (h Handler) HandleTuningPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 }
 func recommendationItem(r tuning.Recommendation) RecommendationItem {
-	return RecommendationItem{r.ID, r.InstanceID, r.ChannelName, r.Rule, r.ChannelID, r.CreatedAt, r.Evidence, r.CurrentWeight, r.ProposedWeight, r.CurrentPriority, r.ProposedPriority, r.ModeAtCreation, r.Status, r.CommandID, r.Outcome, r.OutcomeAt, r.Hit}
+	return RecommendationItem{r.ID, r.InstanceID, r.ChannelName, r.Rule, r.ChannelID, r.CreatedAt, r.Evidence, r.CurrentWeight, r.ProposedWeight, r.CurrentPriority, r.ProposedPriority, r.ModeAtCreation, r.Status, r.CommandID, r.Outcome, r.OutcomeAt, r.Hit, r.ActedBy, r.ActedAt}
+}
+
+func (h Handler) HandleTuningRecommendationAction(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeDashboardError(w, 400, "recommendation_id_required")
+		return
+	}
+	var (
+		rec tuning.Recommendation
+		err error
+	)
+	now := time.Now().UTC()
+	actions, ok := h.tuningStore.(interface {
+		AdoptRecommendation(string, string, time.Time) (tuning.Recommendation, error)
+		DismissRecommendation(string, string, time.Time) (tuning.Recommendation, error)
+	})
+	if !ok {
+		writeDashboardError(w, 501, "action_not_supported")
+		return
+	}
+	switch r.PathValue("action") {
+	case "adopt":
+		rec, err = actions.AdoptRecommendation(id, ctauth.Actor(r), now)
+	case "dismiss":
+		rec, err = actions.DismissRecommendation(id, ctauth.Actor(r), now)
+	default:
+		writeDashboardError(w, 404, "action_not_found")
+		return
+	}
+	if errors.Is(err, tuning.ErrRecommendationNotFound) {
+		writeDashboardError(w, 404, err.Error())
+		return
+	}
+	if errors.Is(err, tuning.ErrRecommendationNotPending) || errors.Is(err, tuning.ErrNoTargetInstance) {
+		writeDashboardError(w, 409, err.Error())
+		return
+	}
+	if err != nil {
+		writeDashboardError(w, 500, "action_failed")
+		return
+	}
+	writeDashboardJSON(w, 200, recommendationItem(rec))
+}
+
+func (h Handler) HandleTuningLadders(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("instance_id")
+	if id == "" {
+		writeDashboardError(w, 400, "instance_id_required")
+		return
+	}
+	channels, err := h.tuningStore.LatestChannels(id)
+	if err != nil {
+		writeDashboardError(w, 500, "query_failed")
+		return
+	}
+	states, err := h.tuningStore.ListDispatchStates(id)
+	if err != nil {
+		writeDashboardError(w, 500, "query_failed")
+		return
+	}
+	writeDashboardJSON(w, 200, map[string]any{"channels": channels, "dispatch_states": states})
 }
 func (h Handler) HandleTuningRecommendations(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("instance_id")
@@ -124,5 +189,9 @@ func (h Handler) HandleTuningReport(w http.ResponseWriter, r *http.Request) {
 	if x.Judged > 0 {
 		rate = float64(x.Hits) / float64(x.Judged)
 	}
-	writeDashboardJSON(w, 200, map[string]any{"total": x.Total, "by_rule": x.ByRule, "filled": x.Filled, "judged": x.Judged, "hits": x.Hits, "hit_rate": rate, "autoCriteria": "观察期命中率持续 ≥85% 且无最小可用集险情，才建议切 auto"})
+	adoptionRate := float64(0)
+	if x.Total > 0 {
+		adoptionRate = float64(x.Adopted) / float64(x.Total)
+	}
+	writeDashboardJSON(w, 200, map[string]any{"total": x.Total, "adopted": x.Adopted, "adoption_rate": adoptionRate, "by_rule": x.ByRule, "filled": x.Filled, "judged": x.Judged, "hits": x.Hits, "hit_rate": rate, "autoCriteria": "观察期命中率持续 ≥ 85% 且无最小可用集风险，才建议切换至 auto"})
 }

@@ -319,6 +319,33 @@ export interface NginxSlowSample {
   token_name: string;
 }
 
+export interface TuningPolicy {
+  window_minutes: number; min_samples: number; error_rate_threshold: number;
+  severe_threshold: number; latency_multiplier: number; latency_floor_seconds: number;
+  sustained_windows: number; trial_initial_minutes: number; trial_backoff_factor: number;
+  trial_max_minutes: number; trial_windows: number; cooldown_minutes: number;
+  daily_action_limit: number;
+}
+export interface TuningPolicyResponse {
+  instance_id: string; policy: TuningPolicy; mode: "observe" | "confirm";
+  isDefault?: boolean; updated_at?: string; updated_by?: string;
+}
+export interface TuningRecommendation {
+  id: string; instance_id: string; channel_id: number; channel_name: string;
+  created_at: string; rule: string; evidence: Record<string, unknown>;
+  current_priority?: number; proposed_priority?: number; mode_at_creation: string;
+  status: string; command_id?: string; outcome?: Record<string, unknown>;
+  outcome_at?: string; hit?: boolean; acted_by?: string; acted_at?: string;
+}
+export interface TuningReport {
+  total: number; adopted: number; adoption_rate: number; by_rule: Record<string, number>; filled: number; judged: number;
+  hits: number; hit_rate: number; autoCriteria: string;
+}
+export interface TuningLadders {
+  channels: Array<{ ID: number; Name: string; Status: string; Priority: number; Models: string[] }>;
+  dispatch_states: Array<{ InstanceID: string; ChannelID: number; ModelName: string; OriginalPriority: number; TrialAttempts: number; NextTrialAt?: string }>;
+}
+
 const query = (
   values: Record<string, string | number | boolean | undefined>,
 ) => {
@@ -524,4 +551,16 @@ export const dashboardApi = (client: ApiClient) => ({
     client.request<ListResponse<NginxSlowSample>>(
       `/api/dashboard/nginx-timing/slow-samples${query(params)}`,
     ),
+  tuningPolicy: (instance_id: string) =>
+    client.request<TuningPolicyResponse>(`/api/dashboard/tuning/policy${query({ instance_id })}`),
+  saveTuningPolicy: (instance_id: string, policy: TuningPolicy, mode: "observe" | "confirm") =>
+    client.request<TuningPolicyResponse>(`/api/dashboard/tuning/policy${query({ instance_id })}`, { method: "PUT", body: JSON.stringify({ policy, mode }) }),
+  tuningRecommendations: (instance_id: string, limit = 100) =>
+    client.request<ListResponse<TuningRecommendation>>(`/api/dashboard/tuning/recommendations${query({ instance_id, limit })}`),
+  tuningRecommendationAction: (id: string, action: "adopt" | "dismiss") =>
+    client.request<TuningRecommendation>(`/api/dashboard/tuning/recommendations/${encodeURIComponent(id)}/${action}`, { method: "POST" }),
+  tuningReport: (instance_id: string, days: 7 | 30) =>
+    client.request<TuningReport>(`/api/dashboard/tuning/report${query({ instance_id, days })}`),
+  tuningLadders: (instance_id: string) =>
+    client.request<TuningLadders>(`/api/dashboard/tuning/ladders${query({ instance_id })}`),
 });

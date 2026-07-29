@@ -1,6 +1,7 @@
 package mysqlstore
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -38,5 +39,27 @@ func TestTuningP95BucketsSQLBuildsFullDimensionKey(t *testing.T) {
 	}
 	if strings.Contains(tuningP95BucketsSQL, "dimension_key=? ") {
 		t.Fatalf("binding the bare channel id never matches any bucket: %s", tuningP95BucketsSQL)
+	}
+}
+
+func TestConfirmRecommendationSQLContracts(t *testing.T) {
+	source, err := os.ReadFile("tuning.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(source)
+	for _, fragment := range []string{
+		"FOR UPDATE",
+		"target.enabled=1 ORDER BY target.id LIMIT 1",
+		`"channel.update"`,
+		"status='adopted',command_id=?",
+		`"tuning.adopt"`,
+		"status='dismissed'",
+		`"tuning.dismiss"`,
+		"status='expired'",
+	} {
+		if !strings.Contains(text, fragment) {
+			t.Fatalf("confirm flow missing %q", fragment)
+		}
 	}
 }

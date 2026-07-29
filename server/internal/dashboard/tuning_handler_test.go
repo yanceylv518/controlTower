@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"bytes"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -14,13 +15,14 @@ type tuningStub struct {
 	recs   []tuning.Recommendation
 	report tuning.Report
 	query  tuning.RecommendationQuery
+	saved  tuning.PolicyRecord
 }
 
 func (s *tuningStub) GetPolicy(string) (tuning.PolicyRecord, bool, error) {
 	return tuning.PolicyRecord{}, false, nil
 }
-func (s *tuningStub) PutPolicy(tuning.PolicyRecord) error     { return nil }
-func (s *tuningStub) ListEnabledInstances() ([]string, error) { return nil, nil }
+func (s *tuningStub) PutPolicy(value tuning.PolicyRecord) error { s.saved = value; return nil }
+func (s *tuningStub) ListEnabledInstances() ([]string, error)   { return nil, nil }
 func (s *tuningStub) QueryMetrics(string, time.Time, time.Time) ([]tuning.ChannelMetric, error) {
 	return nil, nil
 }
@@ -74,9 +76,16 @@ func TestTuningPolicyDefaultValidationAndMode(t *testing.T) {
 	if rr.Code != 400 || !bytes.Contains(rr.Body.Bytes(), []byte("mode_not_supported")) {
 		t.Fatalf("mode: %d %s", rr.Code, rr.Body.String())
 	}
+	policyJSON, _ := json.Marshal(tuning.DefaultPolicy())
+	confirm := `{"mode":"confirm","policy":` + string(policyJSON) + `}`
+	rr = httptest.NewRecorder()
+	h.HandleTuningPolicy(rr, httptest.NewRequest("PUT", "/api/dashboard/tuning/policy?instance_id=i", bytes.NewBufferString(confirm)))
+	if rr.Code != 200 || s.saved.Mode != "confirm" {
+		t.Fatalf("confirm: %d %s %#v", rr.Code, rr.Body.String(), s.saved)
+	}
 }
 func TestTuningRecommendationsPaginationAndReport(t *testing.T) {
-	s := &tuningStub{recs: []tuning.Recommendation{{ID: "r", InstanceID: "i", Evidence: map[string]any{"samples": 20}}}, report: tuning.Report{Total: 3, ByRule: map[string]int64{"degrade": 3}, Filled: 3, Judged: 2, Hits: 1}}
+	s := &tuningStub{recs: []tuning.Recommendation{{ID: "r", InstanceID: "i", Evidence: map[string]any{"samples": 20}}}, report: tuning.Report{Total: 4, Adopted: 3, ByRule: map[string]int64{"demote": 4}, Filled: 3, Judged: 2, Hits: 1}}
 	h := NewHandler(nil).WithTuningStore(s)
 	rr := httptest.NewRecorder()
 	h.HandleTuningRecommendations(rr, httptest.NewRequest(http.MethodGet, "/api/dashboard/tuning/recommendations?instance_id=i&limit=12&before=2026-07-14T00:00:00Z", nil))
@@ -85,7 +94,7 @@ func TestTuningRecommendationsPaginationAndReport(t *testing.T) {
 	}
 	rr = httptest.NewRecorder()
 	h.HandleTuningReport(rr, httptest.NewRequest(http.MethodGet, "/api/dashboard/tuning/report?instance_id=i&days=7", nil))
-	if rr.Code != 200 || !bytes.Contains(rr.Body.Bytes(), []byte(`"hit_rate":0.5`)) || !bytes.Contains(rr.Body.Bytes(), []byte("autoCriteria")) {
+	if rr.Code != 200 || !bytes.Contains(rr.Body.Bytes(), []byte(`"hit_rate":0.5`)) || !bytes.Contains(rr.Body.Bytes(), []byte(`"adoption_rate":0.75`)) || !bytes.Contains(rr.Body.Bytes(), []byte("autoCriteria")) {
 		t.Fatalf("report: %d %s", rr.Code, rr.Body.String())
 	}
 }

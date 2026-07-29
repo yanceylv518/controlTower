@@ -1,8 +1,15 @@
 package tuning
 
 import (
+	"errors"
 	"fmt"
 	"time"
+)
+
+var (
+	ErrRecommendationNotFound   = errors.New("recommendation_not_found")
+	ErrRecommendationNotPending = errors.New("recommendation_not_pending")
+	ErrNoTargetInstance         = errors.New("no_target_instance")
 )
 
 type Policy struct {
@@ -115,6 +122,8 @@ type Recommendation struct {
 	Outcome                           map[string]any
 	OutcomeAt                         *time.Time
 	Hit                               *bool
+	ActedBy                           string
+	ActedAt                           *time.Time
 }
 type RecommendationQuery struct {
 	InstanceID string
@@ -123,8 +132,8 @@ type RecommendationQuery struct {
 	Days       int
 }
 type Report struct {
-	Total  int64
-	ByRule map[string]int64
+	Total, Adopted int64
+	ByRule         map[string]int64
 	// Filled counts backfilled rows; Judged excludes insufficient-sample rows
 	// (hit IS NULL) so the auto-mode criterion is not biased by unjudgeable data.
 	Filled, Judged, Hits int64

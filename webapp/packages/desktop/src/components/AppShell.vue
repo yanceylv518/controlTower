@@ -13,6 +13,7 @@ import {
   Notification,
   Operation,
   SetUp,
+  TrendCharts,
   User,
 } from "@element-plus/icons-vue";
 import { useAuthStore } from "../stores/auth";
@@ -47,6 +48,7 @@ const nav = [
       ["/notifications", "通知设置", Notification],
       ["/instances", "实例管理", Management],
       ["/audits", "操作审计", Operation],
+      ["/tuning", "调权中心", TrendCharts],
       ["/settings", "设置", SetUp],
     ],
   },
