@@ -27,6 +27,10 @@ TuningView 内联 `site_id || instance_id` 回退，改走 shared siteOf（v2.8 
 
 结论：**通过，零缺陷**。`go vet` + 全量测试 + `pnpm typecheck` 全绿。策略拆为 scheduling/criteria/assignments 三段；DecodePolicyJSON 旧平面 JSON 整体回退默认值（有测试）；criteriaFor 指派/回退有测试；evidence 带 criteria_name；表单两区块带说明文案；校验错误路径分组前缀。行为等价硬证据成立——引擎测试的判定断言零修改，仅有的断言改动是批次自身要求的校验路径前缀与新增 criteria_name 断言。自查清单本批已按要求贴入 commit message（上批违规未再犯）。
 
+## 页内标准说明验收（2026-07-30 追加，b12a595）
+
+调权中心新增降级标准说明卡（判定公式动态引用当前配置值）+ 参数注释 + 归因口径说明。逐条对照引擎行为核验：常规/延迟/持续窗口重计/归因公式/0.15=15% 标注均准确；响应式布局与 typecheck 通过。**验收修正（bb93def）**：熔断条目原文"无需等待持续窗口立即触发"漏说最少样本闸同样生效（不足 20 条不评估），已补——运维误读风险（少量请求全失败≠触发熔断）。
+
 ## 部署提示
 
 先 Server（016 自动迁移）；confirm 档开启前建议先在 observe 下看几天新引擎的建议质量。
