@@ -87,9 +87,39 @@ onMounted(() => void load());
           <section v-if="defaultCriteria" class="policy-section">
             <h3>降级标准（默认标准）</h3>
             <p class="hint">当前所有模型使用默认标准；后续可增加多套标准并按模型指派。</p>
+            <el-alert class="criteria-summary" type="info" :closable="false" show-icon>
+              <template #title>
+                满足以下任一条件即判定渠道需要降级
+              </template>
+              <div class="criteria-formula">
+                <p>
+                  <b>常规错误：</b>最近 {{ policy.scheduling.window_minutes }} 分钟内至少
+                  {{ policy.scheduling.min_samples }} 个请求，渠道错误率连续
+                  {{ defaultCriteria.sustained_windows }} 个评估窗口达到
+                  {{ (defaultCriteria.error_rate_threshold * 100).toFixed(0) }}%。
+                </p>
+                <p>
+                  <b>严重错误：</b>渠道错误率单个窗口达到
+                  {{ (defaultCriteria.severe_threshold * 100).toFixed(0) }}%，无需等待持续窗口，立即触发。
+                </p>
+                <p>
+                  <b>延迟恶化：</b>P95 延迟连续 {{ defaultCriteria.sustained_windows }} 个窗口同时达到
+                  “不低于 {{ defaultCriteria.latency_floor_seconds }} 秒”和
+                  “不低于该渠道历史基线的 {{ defaultCriteria.latency_multiplier }} 倍”。
+                </p>
+              </div>
+            </el-alert>
+            <div class="criteria-notes">
+              <div><b>错误率线</b><span>常规降级门槛。输入 0.15 表示 15%，必须连续满足“持续窗口”次数。</span></div>
+              <div><b>熔断线</b><span>严重错误门槛。输入 0.5 表示 50%，单个窗口达到就立即触发。</span></div>
+              <div><b>延迟倍数</b><span>当前 P95 与该渠道过去 24 小时 P95 基线的比较倍数。</span></div>
+              <div><b>延迟下限</b><span>防止低延迟场景因轻微波动误判；倍数和绝对秒数必须同时达到。</span></div>
+              <div><b>持续窗口</b><span>常规错误或延迟需要连续异常的评估次数，中间恢复一次就重新计数。</span></div>
+              <div class="wide"><b>错误归因口径</b><span>渠道错误率 = max（总错误数 − 用户侧错误数，0）÷ 请求数。默认排除 400、413、422；总错误统计和客户告警仍保留这些错误。</span></div>
+            </div>
             <div class="policy-grid">
-              <el-form-item label="错误率线"><el-input-number v-model="defaultCriteria.error_rate_threshold" :min=".01" :max="1" :step=".01" /></el-form-item>
-              <el-form-item label="熔断线"><el-input-number v-model="defaultCriteria.severe_threshold" :min=".01" :max="1" :step=".01" /></el-form-item>
+              <el-form-item label="错误率线（0.15 = 15%）"><el-input-number v-model="defaultCriteria.error_rate_threshold" :min=".01" :max="1" :step=".01" /></el-form-item>
+              <el-form-item label="熔断线（0.5 = 50%）"><el-input-number v-model="defaultCriteria.severe_threshold" :min=".01" :max="1" :step=".01" /></el-form-item>
               <el-form-item label="延迟倍数"><el-input-number v-model="defaultCriteria.latency_multiplier" :min="1" :step=".1" /></el-form-item>
               <el-form-item label="延迟下限（秒）"><el-input-number v-model="defaultCriteria.latency_floor_seconds" :min=".1" /></el-form-item>
               <el-form-item label="持续窗口"><el-input-number v-model="defaultCriteria.sustained_windows" :min="1" /></el-form-item>
@@ -146,5 +176,5 @@ onMounted(() => void load());
 </template>
 
 <style scoped>
-.tuning-page{display:grid;gap:16px}.hint{font-size:12px;color:#8491a5}.policy-section{margin:18px 0;padding-top:16px;border-top:1px solid #ebeef5}.policy-section h3{margin:0 0 6px;font-size:15px}.policy-section .hint{margin:0 0 12px}.policy-grid{display:grid;grid-template-columns:repeat(5,minmax(150px,1fr));gap:0 16px}.ladder-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.ladder{border:1px solid #e5eaf2;border-radius:8px;padding:12px}.ladder-row{display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:center;margin-top:10px}.recommendation{border:1px solid #e8edf5;border-radius:8px;padding:12px}.recommendation p{color:#657086}.status{margin-left:8px}.report-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px}.report-grid div{background:#f6f8fb;padding:16px;border-radius:8px}.report-grid span,.report-grid b{display:block}.report-grid b{font-size:24px;margin-top:6px}
+.tuning-page{display:grid;gap:16px}.hint{font-size:12px;color:#8491a5}.policy-section{margin:18px 0;padding-top:16px;border-top:1px solid #ebeef5}.policy-section h3{margin:0 0 6px;font-size:15px}.policy-section .hint{margin:0 0 12px}.criteria-summary{margin-bottom:12px}.criteria-formula p{margin:5px 0;line-height:1.65}.criteria-notes{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:0 0 14px}.criteria-notes div{display:flex;flex-direction:column;gap:4px;padding:10px 12px;border:1px solid #e4eaf3;border-radius:6px;background:#fafbfd}.criteria-notes b{font-size:13px;color:#303b4d}.criteria-notes span{font-size:12px;line-height:1.55;color:#657086}.criteria-notes .wide{grid-column:1/-1;background:#fffaf2;border-color:#f3dfb7}.policy-grid{display:grid;grid-template-columns:repeat(5,minmax(150px,1fr));gap:0 16px}.ladder-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.ladder{border:1px solid #e5eaf2;border-radius:8px;padding:12px}.ladder-row{display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:center;margin-top:10px}.recommendation{border:1px solid #e8edf5;border-radius:8px;padding:12px}.recommendation p{color:#657086}.status{margin-left:8px}.report-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px}.report-grid div{background:#f6f8fb;padding:16px;border-radius:8px}.report-grid span,.report-grid b{display:block}.report-grid b{font-size:24px;margin-top:6px}@media(max-width:1200px){.criteria-notes{grid-template-columns:1fr 1fr}.policy-grid{grid-template-columns:repeat(3,minmax(150px,1fr))}}
 </style>
