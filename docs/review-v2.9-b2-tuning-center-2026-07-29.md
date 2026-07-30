@@ -23,6 +23,10 @@ TuningView 内联 `site_id || instance_id` 回退，改走 shared siteOf（v2.8 
 - dismiss 后渠道若持续劣化，下个窗口会再次产出建议（受冷却与每日上限约束）——"忽略≠静默"是有意语义，页面说明区未明说，B3 时补文案。
 - 采纳 trial 后的试岗观察由引擎 trialHealthyWindows 自动收敛（状态删除=留任），confirm 模式下无需人工二次确认留任——合理，记档明确语义。
 
+## B2.5 验收（2026-07-30 追加，d478fb5）
+
+结论：**通过，零缺陷**。`go vet` + 全量测试 + `pnpm typecheck` 全绿。策略拆为 scheduling/criteria/assignments 三段；DecodePolicyJSON 旧平面 JSON 整体回退默认值（有测试）；criteriaFor 指派/回退有测试；evidence 带 criteria_name；表单两区块带说明文案；校验错误路径分组前缀。行为等价硬证据成立——引擎测试的判定断言零修改，仅有的断言改动是批次自身要求的校验路径前缀与新增 criteria_name 断言。自查清单本批已按要求贴入 commit message（上批违规未再犯）。
+
 ## 部署提示
 
 先 Server（016 自动迁移）；confirm 档开启前建议先在 observe 下看几天新引擎的建议质量。
