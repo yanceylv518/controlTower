@@ -6,6 +6,26 @@ import (
 	"testing"
 )
 
+func TestUserErrorCodeDefaultsAndValidation(t *testing.T) {
+	base := map[string]string{
+		"CT_AGENT_ID": "a", "CT_INSTANCE_ID": "i", "CT_SERVER_URL": "http://server",
+		"CT_AGENT_TOKEN": "t", "CT_LOG_DSN": "dsn",
+	}
+	cfg, err := LoadFromMap(base)
+	if err != nil || !cfg.UserErrorCodes[400] || !cfg.UserErrorCodes[413] || !cfg.UserErrorCodes[422] {
+		t.Fatalf("default codes not loaded: cfg=%#v err=%v", cfg, err)
+	}
+	base["CT_USER_ERROR_CODES"] = "400,429"
+	cfg, err = LoadFromMap(base)
+	if err != nil || !cfg.UserErrorCodes[429] {
+		t.Fatalf("custom codes not loaded: cfg=%#v err=%v", cfg, err)
+	}
+	base["CT_USER_ERROR_CODES"] = "99"
+	if _, err := LoadFromMap(base); err == nil {
+		t.Fatal("out-of-range status code should fail")
+	}
+}
+
 func TestLoadFromMapAppliesDefaults(t *testing.T) {
 	cfg, err := LoadFromMap(map[string]string{
 		"CT_AGENT_ID":    "agent-1",

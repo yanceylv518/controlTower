@@ -48,6 +48,14 @@ group message. The dimension does not notify again until it first recovers
 (errors drop below the threshold), so a continuously failing dimension does not
 spam the group. Failed sends are retried on the next collector pass.
 
+`CT_USER_ERROR_CODES` is a comma-separated list of HTTP status codes attributed
+to caller/request problems (default `400,413,422`; values must be 100–599).
+They remain in total error and customer/user alert statistics, but are excluded
+from channel alerts and automatic dispatch demotion. Unknown statuses remain
+channel-side. Calibrate this list against production gateway semantics; `403`
+is intentionally channel-side by default because it may be a channel credential
+failure.
+
 - The rule is evaluated directly on rows read from the source `logs` table, so
   it works in every log event mode and does not require the server.
 - Alert messages show the channel name next to the id (`渠道 18(OpenAI-主力)`)

@@ -116,9 +116,29 @@ func TestEngineMinSamplesSustainedCooldownAndFloor(t *testing.T) {
 	}
 }
 func TestEngineWeightedRateAndRecoverSimulation(t *testing.T) {
-	m := ChannelMetric{RequestCount: 110, ErrorCount: 20}
-	if got := m.ErrorRate(); got != 20.0/110 {
+	m := ChannelMetric{RequestCount: 110, ErrorCount: 20, UserErrorCount: 15}
+	if got := m.ErrorRate(); got != 5.0/110 {
 		t.Fatalf("weighted rate=%v", got)
+	}
+	if got := (ChannelMetric{RequestCount: 10, ErrorCount: 2, UserErrorCount: 3}).ErrorRate(); got != 0 {
+		t.Fatalf("negative attributed error count must clamp to zero: %v", got)
+	}
+}
+
+func TestEngineDoesNotDemoteForUserAttributedErrors(t *testing.T) {
+	p := testPolicy()
+	p.Policy.Criteria[0].SustainedWindows = 1
+	f := &fakeStore{
+		policy: p,
+		channels: []Channel{
+			{ID: 1, Name: "active", Status: "enabled", Priority: 100, Models: []string{"m"}},
+			{ID: 2, Name: "backup", Status: "enabled", Priority: 50, Models: []string{"m"}},
+		},
+		metrics: []ChannelMetric{{ChannelID: 1, RequestCount: 100, ErrorCount: 60, UserErrorCount: 60}},
+	}
+	NewEngine(f).Tick(time.Now().UTC())
+	if len(f.recommendations) != 0 {
+		t.Fatalf("user-attributed errors must not demote channel: %#v", f.recommendations)
 	}
 }
 
@@ -156,11 +176,11 @@ func TestOutcomeHitMissAndInsufficient(t *testing.T) {
 		metric   ChannelMetric
 		want     *bool
 	}{
-		{"demote-hit", "demote", ChannelMetric{1, 20, 4, 1}, boolp(true)},
-		{"demote-miss", "demote", ChannelMetric{1, 20, 0, 1}, boolp(false)},
-		{"trial-hit", "trial", ChannelMetric{1, 20, 0, 1}, boolp(true)},
-		{"trial-miss", "trial", ChannelMetric{1, 20, 4, 1}, boolp(false)},
-		{"few", "trial", ChannelMetric{1, 4, 0, 1}, nil},
+		{"demote-hit", "demote", ChannelMetric{1, 20, 4, 0, 1}, boolp(true)},
+		{"demote-miss", "demote", ChannelMetric{1, 20, 0, 0, 1}, boolp(false)},
+		{"trial-hit", "trial", ChannelMetric{1, 20, 0, 0, 1}, boolp(true)},
+		{"trial-miss", "trial", ChannelMetric{1, 20, 4, 0, 1}, boolp(false)},
+		{"few", "trial", ChannelMetric{1, 4, 0, 0, 1}, nil},
 	}
 	for _, c := range cases {
 		f := &fakeStore{policy: p, metrics: []ChannelMetric{c.metric}, pending: []Recommendation{{ID: c.id, InstanceID: "i", ChannelID: 1, Rule: c.rule, CreatedAt: now.Add(-time.Hour)}}}

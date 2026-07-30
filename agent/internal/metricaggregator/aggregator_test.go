@@ -7,6 +7,17 @@ import (
 	"controltower/agent/internal/logcollector"
 )
 
+func TestAggregateTracksTotalAndUserErrors(t *testing.T) {
+	now := time.Now().UTC()
+	metrics := Aggregate("inst", []logcollector.Event{
+		{CreatedAt: now, LogType: "error", ErrorSummary: "status code 400"},
+		{CreatedAt: now, LogType: "error", ErrorSummary: "HTTP 502"},
+	}, 512, map[int]bool{400: true})
+	if len(metrics) != 1 || metrics[0].ErrorCount != 2 || metrics[0].UserErrorCount != 1 {
+		t.Fatalf("unexpected attributed counts: %#v", metrics)
+	}
+}
+
 func TestAggregateBuildsCoreDimensions(t *testing.T) {
 	base := time.Date(2026, 7, 8, 10, 0, 10, 0, time.UTC)
 	cacheTokens := int64(8)

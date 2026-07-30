@@ -62,7 +62,7 @@ func v2BucketMergeAssignmentsSQL() string {
 }
 
 func metricValuePlaceholders() string {
-	count := 33 + latencyhist.BucketCount + 2*latencyhist.BucketCountV2
+	count := 34 + latencyhist.BucketCount + 2*latencyhist.BucketCountV2
 	values := make([]string, 0, count)
 	for i := 0; i < count; i++ {
 		values = append(values, "?")

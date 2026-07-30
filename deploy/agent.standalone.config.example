@@ -20,6 +20,8 @@ CT_WECOM_WEBHOOK_URL=https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=REPLAC
 # evaluated per channel and per user.
 CT_ALERT_ERROR_WINDOW=10
 CT_ALERT_ERROR_THRESHOLD=3
+# Excluded from channel alerts only; customer/user alerts still include them.
+CT_USER_ERROR_CODES=400,413,422
 
 # Poll interval in seconds.
 CT_LOG_POLL_INTERVAL_SECONDS=30

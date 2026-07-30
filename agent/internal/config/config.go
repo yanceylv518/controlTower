@@ -48,6 +48,7 @@ type Config struct {
 	AlertNoCacheMinPromptTokens    int64
 	AlertNoCacheWindow             int
 	CacheHitMinPromptTokens        int64
+	UserErrorCodes                 map[int]bool
 }
 
 func Load() (Config, error) {
@@ -78,6 +79,10 @@ func LoadFromFileAndMap(path string, envValues map[string]string) (Config, error
 }
 
 func LoadFromMap(values map[string]string) (Config, error) {
+	userErrorCodes, err := parseStatusCodes(valueOrDefault(values, "CT_USER_ERROR_CODES", "400,413,422"))
+	if err != nil {
+		return Config{}, err
+	}
 	cfg := Config{
 		AgentID:                        values["CT_AGENT_ID"],
 		InstanceID:                     values["CT_INSTANCE_ID"],
@@ -117,6 +122,7 @@ func LoadFromMap(values map[string]string) (Config, error) {
 		AlertNoCacheMinPromptTokens:    int64(intOrDefault(values, "CT_ALERT_NOCACHE_MIN_PROMPT_TOKENS", 512)),
 		AlertNoCacheWindow:             intOrDefault(values, "CT_ALERT_NOCACHE_WINDOW", 10),
 		CacheHitMinPromptTokens:        int64(intOrDefault(values, "CT_CACHE_HIT_MIN_PROMPT_TOKENS", 512)),
+		UserErrorCodes:                 userErrorCodes,
 	}
 
 	if !cfg.LogCollectEnabled && values["CT_CHANNEL_SNAPSHOT_ENABLED"] == "" {
@@ -239,12 +245,26 @@ func envMap() map[string]string {
 		"CT_ALERT_NOCACHE_MIN_PROMPT_TOKENS",
 		"CT_ALERT_NOCACHE_WINDOW",
 		"CT_CACHE_HIT_MIN_PROMPT_TOKENS",
+		"CT_USER_ERROR_CODES",
 	}
 	values := make(map[string]string, len(keys))
 	for _, key := range keys {
 		values[key] = os.Getenv(key)
 	}
 	return values
+}
+
+func parseStatusCodes(value string) (map[int]bool, error) {
+	result := make(map[int]bool)
+	for _, raw := range strings.Split(value, ",") {
+		raw = strings.TrimSpace(raw)
+		code, err := strconv.Atoi(raw)
+		if err != nil || code < 100 || code > 599 {
+			return nil, fmt.Errorf("CT_USER_ERROR_CODES must contain comma-separated status codes between 100 and 599")
+		}
+		result[code] = true
+	}
+	return result, nil
 }
 
 func readConfigFile(path string) (map[string]string, error) {

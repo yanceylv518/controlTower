@@ -23,6 +23,20 @@ type capture struct {
 	contents []string
 }
 
+func TestUserErrorExcludedFromChannelButKeptForCustomer(t *testing.T) {
+	n := New("", "inst", 10, 3, nil).WithUserErrorCodes(map[int]bool{400: true})
+	n.Process(context.Background(), []logcollector.Event{{
+		ChannelID: 7, UserID: 9, LogType: "error",
+		ErrorSummary: "request failed with status code 400", CreatedAt: time.Now(),
+	}})
+	if _, ok := n.states["channel:7"]; ok {
+		t.Fatalf("user-side error entered channel window: %#v", n.states["channel:7"])
+	}
+	if state := n.states["user:9"]; state == nil || len(state.outcomes) != 1 || !state.outcomes[0].isError {
+		t.Fatalf("user-side error missing from customer window: %#v", state)
+	}
+}
+
 func TestNoCacheRuleTriggersAndRearms(t *testing.T) {
 	c := &capture{}
 	server := c.server()

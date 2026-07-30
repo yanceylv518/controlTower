@@ -17,6 +17,7 @@ type Metric struct {
 	RequestCount      int64
 	SuccessCount      int64
 	ErrorCount        int64
+	UserErrorCount    int64
 	SuccessRate       *float64
 	ErrorRate         *float64
 	TPM               int64
@@ -194,6 +195,7 @@ func MergeMetric(current Metric, incoming Metric) Metric {
 	merged.RequestCount += incoming.RequestCount
 	merged.SuccessCount += incoming.SuccessCount
 	merged.ErrorCount += incoming.ErrorCount
+	merged.UserErrorCount += incoming.UserErrorCount
 	merged.TPM += incoming.TPM
 	merged.PromptTokens += incoming.PromptTokens
 	merged.CompletionTokens += incoming.CompletionTokens

@@ -168,12 +168,19 @@ type PolicyRecord struct {
 	UpdatedAt       time.Time
 }
 type ChannelMetric struct {
-	ChannelID                int64
-	RequestCount, ErrorCount int64
-	P95                      float64
+	ChannelID                                int64
+	RequestCount, ErrorCount, UserErrorCount int64
+	P95                                      float64
 }
 
 func (m ChannelMetric) ErrorRate() float64 {
+	if m.RequestCount == 0 {
+		return 0
+	}
+	return float64(max(m.ErrorCount-m.UserErrorCount, 0)) / float64(m.RequestCount)
+}
+
+func (m ChannelMetric) TotalErrorRate() float64 {
 	if m.RequestCount == 0 {
 		return 0
 	}

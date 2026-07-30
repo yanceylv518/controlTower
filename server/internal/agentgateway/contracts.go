@@ -99,6 +99,7 @@ type AggregatedMetricPayload struct {
 	RequestCount      int64               `json:"request_count"`
 	SuccessCount      int64               `json:"success_count"`
 	ErrorCount        int64               `json:"error_count"`
+	UserErrorCount    int64               `json:"user_error_count"`
 	SuccessRate       *float64            `json:"success_rate"`
 	ErrorRate         *float64            `json:"error_rate"`
 	TPM               int64               `json:"tpm"`

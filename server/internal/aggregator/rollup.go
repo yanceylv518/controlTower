@@ -52,6 +52,7 @@ func (a *rollupAccumulator) add(metric Metric) {
 	a.metric.RequestCount += metric.RequestCount
 	a.metric.SuccessCount += metric.SuccessCount
 	a.metric.ErrorCount += metric.ErrorCount
+	a.metric.UserErrorCount += metric.UserErrorCount
 	a.metric.TPM += metric.TPM
 	a.metric.PromptTokens += metric.PromptTokens
 	a.metric.CompletionTokens += metric.CompletionTokens

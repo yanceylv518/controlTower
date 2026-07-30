@@ -320,6 +320,7 @@ func toAggregatorMetrics(instanceID string, payloads []agentgateway.AggregatedMe
 			RequestCount:      payload.RequestCount,
 			SuccessCount:      payload.SuccessCount,
 			ErrorCount:        payload.ErrorCount,
+			UserErrorCount:    payload.UserErrorCount,
 			SuccessRate:       payload.SuccessRate,
 			ErrorRate:         payload.ErrorRate,
 			TPM:               payload.TPM,

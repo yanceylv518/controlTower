@@ -98,6 +98,7 @@ func run() error {
 	var nameRefresher *channelNameRefresher
 	if cfg.WeComWebhookURL != "" {
 		alertNotifier = erroralert.New(cfg.WeComWebhookURL, cfg.InstanceID, cfg.AlertErrorWindow, cfg.AlertErrorThreshold, log.Printf).
+			WithUserErrorCodes(cfg.UserErrorCodes).
 			WithWindowMaxAge(time.Duration(cfg.AlertWindowMaxAgeMinutes) * time.Minute).
 			WithRemindInterval(time.Duration(cfg.AlertRemindMinutes) * time.Minute).
 			WithEventLog(filepath.Join(cfg.DataDir, "alert-events.jsonl"))
@@ -442,7 +443,7 @@ func buildReport(ctx context.Context, cfg config.Config, reportedAt time.Time, s
 		MetricBatchID:     metricBatchID(cfg.AgentID, events),
 		LogEvents:         toPayloads(selectLogEventsForReport(cfg, events)),
 		LogSamples:        selectLogSamplesForReport(cfg, events),
-		AggregatedMetrics: metricaggregator.Aggregate(cfg.InstanceID, events, cfg.CacheHitMinPromptTokens),
+		AggregatedMetrics: metricaggregator.Aggregate(cfg.InstanceID, events, cfg.CacheHitMinPromptTokens, cfg.UserErrorCodes),
 		ServerMetrics:     serverMetrics,
 		DockerStatuses:    dockerStatuses,
 		HealthChecks:      healthChecks,

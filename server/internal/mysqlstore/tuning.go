@@ -52,7 +52,7 @@ func (s Store) ListEnabledInstances() ([]string, error) {
 // instance_channel dimension keys are "<instance>:channel:<id>"; the channel
 // id must be split out of the suffix — CAST on the whole key yields 0 for
 // every row and no channel ever matches.
-const tuningChannelMetricsSQL = `SELECT CAST(SUBSTRING_INDEX(dimension_key,':',-1) AS SIGNED),SUM(request_count),SUM(error_count),COALESCE(MAX(p95_use_time),0) FROM metric_1m WHERE instance_id=? AND dimension_type='instance_channel' AND bucket_time>=? AND bucket_time<? GROUP BY dimension_key`
+const tuningChannelMetricsSQL = `SELECT CAST(SUBSTRING_INDEX(dimension_key,':',-1) AS SIGNED),SUM(request_count),SUM(error_count),SUM(user_error_count),COALESCE(MAX(p95_use_time),0) FROM metric_1m WHERE instance_id=? AND dimension_type='instance_channel' AND bucket_time>=? AND bucket_time<? GROUP BY dimension_key`
 
 func (s Store) QueryMetrics(id string, start, end time.Time) ([]tuning.ChannelMetric, error) {
 	rows, e := s.db.QueryContext(context.Background(), tuningChannelMetricsSQL, id, start, end)
@@ -63,7 +63,7 @@ func (s Store) QueryMetrics(id string, start, end time.Time) ([]tuning.ChannelMe
 	var out []tuning.ChannelMetric
 	for rows.Next() {
 		var m tuning.ChannelMetric
-		if e = rows.Scan(&m.ChannelID, &m.RequestCount, &m.ErrorCount, &m.P95); e != nil {
+		if e = rows.Scan(&m.ChannelID, &m.RequestCount, &m.ErrorCount, &m.UserErrorCount, &m.P95); e != nil {
 			return nil, e
 		}
 		out = append(out, m)

@@ -21,6 +21,7 @@ func TestRollup5mCombinesCountsAndRates(t *testing.T) {
 			RequestCount:     10,
 			SuccessCount:     9,
 			ErrorCount:       1,
+			UserErrorCount:   1,
 			TPM:              100,
 			PromptTokens:     70,
 			CompletionTokens: 30,
@@ -36,6 +37,7 @@ func TestRollup5mCombinesCountsAndRates(t *testing.T) {
 			RequestCount:     30,
 			SuccessCount:     21,
 			ErrorCount:       9,
+			UserErrorCount:   2,
 			TPM:              300,
 			PromptTokens:     200,
 			CompletionTokens: 100,
@@ -54,6 +56,9 @@ func TestRollup5mCombinesCountsAndRates(t *testing.T) {
 	}
 	if metric.RequestCount != 40 || metric.SuccessCount != 30 || metric.ErrorCount != 10 {
 		t.Fatalf("unexpected counts: %#v", metric)
+	}
+	if metric.UserErrorCount != 3 {
+		t.Fatalf("unexpected user error count: %#v", metric)
 	}
 	if metric.SuccessRate == nil || *metric.SuccessRate != 0.75 {
 		t.Fatalf("unexpected success rate: %#v", metric.SuccessRate)

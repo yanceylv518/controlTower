@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"time"
 
+	"controltower/agent/internal/errorclass"
 	"controltower/agent/internal/logcollector"
 	"controltower/agent/internal/reporter"
 	"controltower/internal/latencyhist"
@@ -32,7 +33,11 @@ type dimension struct {
 	dimensionKey  string
 }
 
-func Aggregate(instanceID string, events []logcollector.Event, cacheHitMinPromptTokens int64) []reporter.AggregatedMetricPayload {
+func Aggregate(instanceID string, events []logcollector.Event, cacheHitMinPromptTokens int64, configuredUserCodes ...map[int]bool) []reporter.AggregatedMetricPayload {
+	userCodes := map[int]bool{400: true, 413: true, 422: true}
+	if len(configuredUserCodes) > 0 && configuredUserCodes[0] != nil {
+		userCodes = configuredUserCodes[0]
+	}
 	accumulators := make(map[string]*accumulator)
 	for _, event := range events {
 		bucket := event.CreatedAt.Truncate(time.Minute)
@@ -43,7 +48,7 @@ func Aggregate(instanceID string, events []logcollector.Event, cacheHitMinPrompt
 				acc = &accumulator{metric: reporter.AggregatedMetricPayload{BucketTime: bucket, WindowSeconds: 60, DimensionType: dimension.dimensionType, DimensionKey: dimension.dimensionKey}}
 				accumulators[key] = acc
 			}
-			acc.add(event, cacheHitMinPromptTokens)
+			acc.add(event, cacheHitMinPromptTokens, userCodes)
 		}
 	}
 
@@ -63,13 +68,16 @@ func Aggregate(instanceID string, events []logcollector.Event, cacheHitMinPrompt
 	return metrics
 }
 
-func (a *accumulator) add(event logcollector.Event, cacheHitMinPromptTokens int64) {
+func (a *accumulator) add(event logcollector.Event, cacheHitMinPromptTokens int64, userCodes map[int]bool) {
 	a.metric.RequestCount++
 	if event.LogType == "consume" {
 		a.metric.SuccessCount++
 	}
 	if event.LogType == "error" {
 		a.metric.ErrorCount++
+		if errorclass.IsUserError(event.ErrorSummary, userCodes) {
+			a.metric.UserErrorCount++
+		}
 	}
 	a.metric.TPM += event.TotalTokens
 	a.metric.PromptTokens += event.PromptTokens

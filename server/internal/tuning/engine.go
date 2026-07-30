@@ -237,13 +237,13 @@ func (e *Engine) evaluateActive(id, model string, ch Channel, ladder []Channel, 
 			rule = "ladder_exhausted"
 		}
 		return e.recordInfo(id, ch, rule, model, mode, now, map[string]any{
-			"trigger": trigger, "error_rate": rate, "p95": m.P95,
+			"trigger": trigger, "error_rate": rate, "error_rate_total": m.TotalErrorRate(), "user_error_count": m.UserErrorCount, "p95": m.P95,
 		})
 	}
 	current := ch.Priority
 	proposed := ladder[len(ladder)-1].Priority - 1
 	ev := map[string]any{
-		"trigger": trigger, "model": model, "error_rate": rate,
+		"trigger": trigger, "model": model, "error_rate": rate, "error_rate_total": m.TotalErrorRate(), "user_error_count": m.UserErrorCount,
 		"criteria_name":        criteria.Name,
 		"error_rate_threshold": criteria.ErrorRateThreshold, "severe_threshold": criteria.SevereThreshold,
 		"min_samples": scheduling.MinSamples, "samples": m.RequestCount,
@@ -477,7 +477,7 @@ func (e *Engine) fillOutcomes(now time.Time) {
 		baseline := evidenceNumber(r.Evidence, "baseline_p95", 0)
 		minSamples := int64(evidenceNumber(r.Evidence, "min_samples", float64(defaultPolicy.Scheduling.MinSamples)))
 		out := map[string]any{
-			"error_rate": m.ErrorRate(), "samples": m.RequestCount, "p95": m.P95,
+			"error_rate": m.ErrorRate(), "error_rate_total": m.TotalErrorRate(), "user_error_count": m.UserErrorCount, "samples": m.RequestCount, "p95": m.P95,
 			"error_rate_threshold": errorThreshold, "baseline_p95": baseline,
 		}
 		var hit *bool

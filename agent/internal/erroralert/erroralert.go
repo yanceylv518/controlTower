@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"controltower/agent/internal/errorclass"
 	"controltower/agent/internal/logcollector"
 )
 
@@ -38,6 +39,7 @@ type Notifier struct {
 	nocacheMin     int64
 	nocacheWindow  int
 	eventLog       *eventLogger
+	userErrorCodes map[int]bool
 
 	mu               sync.Mutex
 	states           map[string]*dimensionState
@@ -123,7 +125,21 @@ func New(webhookURL string, instanceID string, window int, threshold int, logf f
 		now:        time.Now,
 		logf:       logf,
 		states:     make(map[string]*dimensionState),
+		userErrorCodes: map[int]bool{
+			400: true,
+			413: true,
+			422: true,
+		},
 	}
+}
+
+// WithUserErrorCodes configures errors attributable to the caller. These
+// errors remain visible in customer windows but do not enter channel windows.
+func (n *Notifier) WithUserErrorCodes(codes map[int]bool) *Notifier {
+	if n != nil && codes != nil {
+		n.userErrorCodes = codes
+	}
+	return n
 }
 
 // WithWindowMaxAge drops window entries older than maxAge during evaluation,
@@ -162,8 +178,10 @@ func (n *Notifier) Process(ctx context.Context, events []logcollector.Event) Pro
 		}
 		if event.ChannelID > 0 && !n.disabledChannels[event.ChannelID] {
 			channelDimensions[event.ChannelID] = struct{}{}
-			key := "channel:" + strconv.FormatInt(event.ChannelID, 10)
-			n.observeLocked(key, "渠道错误激增", n.channelLabelLocked(event.ChannelID), event, true)
+			if event.LogType != "error" || !errorclass.IsUserError(event.ErrorSummary, n.userErrorCodes) {
+				key := "channel:" + strconv.FormatInt(event.ChannelID, 10)
+				n.observeLocked(key, "渠道错误激增", n.channelLabelLocked(event.ChannelID), event, true)
+			}
 		}
 		if event.UserID > 0 {
 			userDimensions[event.UserID] = struct{}{}

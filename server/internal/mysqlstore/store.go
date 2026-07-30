@@ -612,7 +612,7 @@ func metricBatchUpsertSQL(table string, rows int) string {
 		values = append(values, "("+metricValuePlaceholders()+")")
 	}
 	return `INSERT INTO ` + table + ` (
-  instance_id, bucket_time, dimension_type, dimension_key, request_count, success_count, error_count,
+  instance_id, bucket_time, dimension_type, dimension_key, request_count, success_count, error_count, user_error_count,
   success_rate, error_rate, tpm, prompt_tokens, completion_tokens, quota,
   avg_use_time, p50_use_time, p95_use_time, p99_use_time, stream_rate, cache_token_rate,
   use_time_sum, stream_count, cache_tokens_total, cache_prompt_tokens, big_input_count, big_input_cache_hits, ttft_count, ttft_sum_ms, ttft_p50_ms, ttft_p90_ms, ttft_p95_ms, otps_output_tokens, otps_duration_seconds, ` + latencyBucketColumnSQL() + `, ` + v2BucketColumnSQL() + `, updated_at
@@ -621,6 +621,7 @@ ON DUPLICATE KEY UPDATE
   request_count = VALUES(request_count),
   success_count = VALUES(success_count),
   error_count = VALUES(error_count),
+  user_error_count = VALUES(user_error_count),
   success_rate = VALUES(success_rate),
   error_rate = VALUES(error_rate),
   tpm = VALUES(tpm),
@@ -674,6 +675,7 @@ func metricBatchMergeSQL(table string, rows int) string {
   request_count = request_count + VALUES(request_count),
   success_count = success_count + VALUES(success_count),
   error_count = error_count + VALUES(error_count),
+  user_error_count = user_error_count + VALUES(user_error_count),
   tpm = tpm + VALUES(tpm),
   prompt_tokens = prompt_tokens + VALUES(prompt_tokens),
   completion_tokens = completion_tokens + VALUES(completion_tokens),
@@ -702,7 +704,7 @@ func metricBatchArgs(metrics []aggregator.Metric) []any {
 }
 func metricUpsertSQL(table string) string {
 	return `INSERT INTO ` + table + ` (
-  instance_id, bucket_time, dimension_type, dimension_key, request_count, success_count, error_count,
+  instance_id, bucket_time, dimension_type, dimension_key, request_count, success_count, error_count, user_error_count,
   success_rate, error_rate, tpm, prompt_tokens, completion_tokens, quota,
   avg_use_time, p50_use_time, p95_use_time, p99_use_time, stream_rate, cache_token_rate,
   use_time_sum, stream_count, cache_tokens_total, cache_prompt_tokens, big_input_count, big_input_cache_hits, ttft_count, ttft_sum_ms, ttft_p50_ms, ttft_p90_ms, ttft_p95_ms, otps_output_tokens, otps_duration_seconds, ` + latencyBucketColumnSQL() + `, ` + v2BucketColumnSQL() + `, updated_at
@@ -711,6 +713,7 @@ ON DUPLICATE KEY UPDATE
   request_count = VALUES(request_count),
   success_count = VALUES(success_count),
   error_count = VALUES(error_count),
+  user_error_count = VALUES(user_error_count),
   success_rate = VALUES(success_rate),
   error_rate = VALUES(error_rate),
   tpm = VALUES(tpm),
@@ -750,6 +753,7 @@ func metricArgs(metric aggregator.Metric) []any {
 		metric.RequestCount,
 		metric.SuccessCount,
 		metric.ErrorCount,
+		metric.UserErrorCount,
 		nullFloat(metric.SuccessRate),
 		nullFloat(metric.ErrorRate),
 		metric.TPM,
