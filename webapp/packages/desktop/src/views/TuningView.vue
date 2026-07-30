@@ -100,7 +100,8 @@ onMounted(() => void load());
                 </p>
                 <p>
                   <b>严重错误：</b>渠道错误率单个窗口达到
-                  {{ (defaultCriteria.severe_threshold * 100).toFixed(0) }}%，无需等待持续窗口，立即触发。
+                  {{ (defaultCriteria.severe_threshold * 100).toFixed(0) }}%，无需等待持续窗口，立即触发（同样要求窗口内至少
+                  {{ policy.scheduling.min_samples }} 个请求）。
                 </p>
                 <p>
                   <b>延迟恶化：</b>P95 延迟连续 {{ defaultCriteria.sustained_windows }} 个窗口同时达到
