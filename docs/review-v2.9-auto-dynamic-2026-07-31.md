@@ -24,6 +24,10 @@
 - rebalance 的命中率回填语义未定义（fillOutcomes 对 rebalance 标记 informational？需核对报表口径——目前报表只计 demote/trial，rebalance 不参与命中率，可接受但记档）。
 - 交付 commit 均未贴自查清单（无对应批次文件，属未立项交付的连带问题）。
 
+## B2.7 验收（2026-07-31 追加，1b0ec0a）
+
+结论：**通过，零缺陷**。全量测试 + typecheck 绿，自查清单已贴。配权三态（off/observe/auto）与全局模式完全解耦——交叉矩阵有实测（全局 observe + 配权 auto：rebalance 自动执行、demote 不动）；`enabled` 旧字段兼容读（true→observe/false→off）有测试；哨兵扩展为双开关分别回落并各记 auto_paused（evidence 带 target/fallback，ID 加后缀防撞）；梯队行"权重 当前→目标"带 2×窗口过期判定与倍率悬浮；recommendations `rule` 参数进契约文档。顺带把配权指标（TTFT/缓存/OTPS）并入 QueryMetrics 单查询，无额外往返。
+
 ## 部署提示
 
-rc19 打在 63ae0b9，**不含动态配权与 auto 两笔及验收修正**；要发完整功能需新 tag。生产开启顺序建议：observe（动态配权建议先看一周）→ confirm → 数据达标且"人工优先"补齐后再 auto。
+rc19 打在 63ae0b9，**不含动态配权、auto、16c7b88 验收修正与 B2.7**；要发完整功能需新 tag。生产开启顺序建议：全局 observe + 配权 observe（各看一周数据）→ 降级切 confirm 用一阵 → 数据达标且"人工优先 24h 静默"补齐后再开两个 auto。
