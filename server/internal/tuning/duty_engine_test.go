@@ -24,7 +24,7 @@ func TestDutyPolicyValidation(t *testing.T) {
 func TestDutyDemoteSustainedSevereAndTiedActive(t *testing.T) {
 	p := testPolicy()
 	channels := []Channel{dutyChannel(1, 100, "m"), dutyChannel(2, 100, "m"), dutyChannel(3, 50, "m")}
-	f := &fakeStore{policy: p, channels: channels, metrics: []ChannelMetric{{1, 100, 20, 0, 1}, {2, 100, 20, 0, 1}}}
+	f := &fakeStore{policy: p, channels: channels, metrics: []ChannelMetric{{ChannelID: 1, RequestCount: 100, ErrorCount: 20, P95: 1}, {ChannelID: 2, RequestCount: 100, ErrorCount: 20, P95: 1}}}
 	e := NewEngine(f)
 	now := time.Now().UTC()
 	e.Tick(now)
@@ -44,7 +44,7 @@ func TestDutyDemoteSustainedSevereAndTiedActive(t *testing.T) {
 		}
 	}
 
-	f2 := &fakeStore{policy: p, channels: channels, metrics: []ChannelMetric{{1, 100, 50, 0, 1}}}
+	f2 := &fakeStore{policy: p, channels: channels, metrics: []ChannelMetric{{ChannelID: 1, RequestCount: 100, ErrorCount: 50, P95: 1}}}
 	NewEngine(f2).Tick(now)
 	if len(f2.recommendations) != 1 || f2.recommendations[0].Evidence["trigger"] != "severe" {
 		t.Fatalf("severe must be immediate: %#v", f2.recommendations)
@@ -59,7 +59,7 @@ func TestDutyLatencyMixedAndBackupBranches(t *testing.T) {
 	f := &fakeStore{
 		policy: p, buckets: map[int64][]float64{1: baseline},
 		channels: []Channel{dutyChannel(1, 100, "m"), dutyChannel(2, 50, "m"), dutyChannel(9, 1, "a", "b")},
-		metrics:  []ChannelMetric{{1, 100, 0, 0, 11}},
+		metrics:  []ChannelMetric{{ChannelID: 1, RequestCount: 100, P95: 11}},
 	}
 	e := NewEngine(f)
 	e.Tick(now)
@@ -68,7 +68,7 @@ func TestDutyLatencyMixedAndBackupBranches(t *testing.T) {
 		t.Fatalf("latency/mixed=%#v", f.recommendations)
 	}
 
-	single := &fakeStore{policy: p, channels: []Channel{dutyChannel(1, 100, "m")}, metrics: []ChannelMetric{{1, 100, 50, 0, 1}}}
+	single := &fakeStore{policy: p, channels: []Channel{dutyChannel(1, 100, "m")}, metrics: []ChannelMetric{{ChannelID: 1, RequestCount: 100, ErrorCount: 50, P95: 1}}}
 	NewEngine(single).Tick(now)
 	if len(single.recommendations) != 1 || single.recommendations[0].Rule != "no_backup" {
 		t.Fatalf("single ladder=%#v", single.recommendations)
@@ -76,7 +76,7 @@ func TestDutyLatencyMixedAndBackupBranches(t *testing.T) {
 	next := now.Add(time.Hour)
 	exhausted := &fakeStore{
 		policy: p, channels: []Channel{dutyChannel(1, 100, "m"), dutyChannel(2, 50, "m")},
-		metrics:  []ChannelMetric{{1, 100, 50, 0, 1}},
+		metrics:  []ChannelMetric{{ChannelID: 1, RequestCount: 100, ErrorCount: 50, P95: 1}},
 		dispatch: map[int64]DispatchState{2: {InstanceID: "i", ChannelID: 2, ModelName: "m", NextTrialAt: &next}},
 	}
 	NewEngine(exhausted).Tick(now)
@@ -112,7 +112,7 @@ func TestDutyBaselineInsufficientCooldownAndDailyLimit(t *testing.T) {
 	channels := []Channel{dutyChannel(1, 100, "m"), dutyChannel(2, 50, "m")}
 	insufficient := &fakeStore{
 		policy: p, buckets: map[int64][]float64{1: {5, 5, 5, 5, 5, 5, 5}},
-		channels: channels, metrics: []ChannelMetric{{1, 100, 0, 0, 50}},
+		channels: channels, metrics: []ChannelMetric{{ChannelID: 1, RequestCount: 100, P95: 50}},
 	}
 	e := NewEngine(insufficient)
 	e.Tick(now)
@@ -122,7 +122,7 @@ func TestDutyBaselineInsufficientCooldownAndDailyLimit(t *testing.T) {
 	}
 
 	cooldown := &fakeStore{
-		policy: p, channels: channels, metrics: []ChannelMetric{{1, 100, 50, 0, 1}},
+		policy: p, channels: channels, metrics: []ChannelMetric{{ChannelID: 1, RequestCount: 100, ErrorCount: 50, P95: 1}},
 		lastAction: now.Add(-30 * time.Second),
 	}
 	NewEngine(cooldown).Tick(now)
@@ -130,7 +130,7 @@ func TestDutyBaselineInsufficientCooldownAndDailyLimit(t *testing.T) {
 		t.Fatal("cooldown must suppress action recommendation")
 	}
 	limited := &fakeStore{
-		policy: p, channels: channels, metrics: []ChannelMetric{{1, 100, 50, 0, 1}},
+		policy: p, channels: channels, metrics: []ChannelMetric{{ChannelID: 1, RequestCount: 100, ErrorCount: 50, P95: 1}},
 		actionCount: p.Policy.Scheduling.DailyActionLimit,
 	}
 	NewEngine(limited).Tick(now)

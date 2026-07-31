@@ -324,12 +324,19 @@ export interface TuningSchedulingParams {
   trial_backoff_factor: number; trial_max_minutes: number; trial_windows: number;
   cooldown_minutes: number; daily_action_limit: number;
 }
+export interface TuningDynamicWeightingParams {
+  enabled: boolean;
+  ttft_influence: number; error_influence: number; cache_influence: number; otps_influence: number;
+  min_multiplier: number; max_multiplier: number; smoothing_alpha: number;
+  max_increase_per_round: number; max_decrease_per_round: number;
+}
 export interface TuningDegradeCriteria {
   name: string; error_rate_threshold: number; severe_threshold: number;
   latency_multiplier: number; latency_floor_seconds: number; sustained_windows: number;
 }
 export interface TuningPolicy {
   scheduling: TuningSchedulingParams;
+  dynamic_weighting: TuningDynamicWeightingParams;
   criteria: TuningDegradeCriteria[];
   assignments: Record<string, string>;
 }
@@ -340,6 +347,7 @@ export interface TuningPolicyResponse {
 export interface TuningRecommendation {
   id: string; instance_id: string; channel_id: number; channel_name: string;
   created_at: string; rule: string; evidence: Record<string, unknown>;
+  current_weight: number; proposed_weight: number;
   current_priority?: number; proposed_priority?: number; mode_at_creation: string;
   status: string; command_id?: string; outcome?: Record<string, unknown>;
   outcome_at?: string; hit?: boolean; acted_by?: string; acted_at?: string;

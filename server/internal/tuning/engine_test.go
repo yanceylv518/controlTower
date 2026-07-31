@@ -142,6 +142,44 @@ func TestEngineDoesNotDemoteForUserAttributedErrors(t *testing.T) {
 	}
 }
 
+func TestEngineDynamicWeightingUsesRelativeMetricsAndProtection(t *testing.T) {
+	p := testPolicy()
+	p.Policy.DynamicWeighting = DynamicWeightingParams{
+		Enabled: true, TTFTInfluence: 1, ErrorInfluence: 0,
+		CacheInfluence: 0, OTPSInfluence: 0,
+		MinMultiplier: .5, MaxMultiplier: 1.5, SmoothingAlpha: 1,
+		MaxIncreasePerRound: .2, MaxDecreasePerRound: .3,
+	}
+	f := &fakeStore{
+		policy: p,
+		channels: []Channel{
+			{ID: 1, Name: "fast", Status: "enabled", Weight: 100, Priority: 100, Models: []string{"m"}},
+			{ID: 2, Name: "slow", Status: "enabled", Weight: 100, Priority: 100, Models: []string{"m"}},
+		},
+		metrics: []ChannelMetric{
+			{ChannelID: 1, RequestCount: 100, TTFTP95: 2},
+			{ChannelID: 2, RequestCount: 100, TTFTP95: 8},
+		},
+	}
+	NewEngine(f).Tick(time.Now().UTC())
+	if len(f.recommendations) != 2 {
+		t.Fatalf("dynamic recommendations=%#v", f.recommendations)
+	}
+	byID := map[int64]Recommendation{}
+	for _, recommendation := range f.recommendations {
+		byID[recommendation.ChannelID] = recommendation
+		if recommendation.Rule != "rebalance" || recommendation.Status != "recorded" {
+			t.Fatalf("unexpected recommendation=%#v", recommendation)
+		}
+	}
+	if byID[1].ProposedWeight != 120 {
+		t.Fatalf("increase protection not applied: %#v", byID[1])
+	}
+	if byID[2].ProposedWeight != 70 {
+		t.Fatalf("decrease protection not applied: %#v", byID[2])
+	}
+}
+
 func TestEngineConfirmCreatesPendingWithoutAdvancingDispatchAndExpires(t *testing.T) {
 	p := testPolicy()
 	p.Mode = "confirm"
@@ -176,11 +214,11 @@ func TestOutcomeHitMissAndInsufficient(t *testing.T) {
 		metric   ChannelMetric
 		want     *bool
 	}{
-		{"demote-hit", "demote", ChannelMetric{1, 20, 4, 0, 1}, boolp(true)},
-		{"demote-miss", "demote", ChannelMetric{1, 20, 0, 0, 1}, boolp(false)},
-		{"trial-hit", "trial", ChannelMetric{1, 20, 0, 0, 1}, boolp(true)},
-		{"trial-miss", "trial", ChannelMetric{1, 20, 4, 0, 1}, boolp(false)},
-		{"few", "trial", ChannelMetric{1, 4, 0, 0, 1}, nil},
+		{"demote-hit", "demote", ChannelMetric{ChannelID: 1, RequestCount: 20, ErrorCount: 4, P95: 1}, boolp(true)},
+		{"demote-miss", "demote", ChannelMetric{ChannelID: 1, RequestCount: 20, P95: 1}, boolp(false)},
+		{"trial-hit", "trial", ChannelMetric{ChannelID: 1, RequestCount: 20, P95: 1}, boolp(true)},
+		{"trial-miss", "trial", ChannelMetric{ChannelID: 1, RequestCount: 20, ErrorCount: 4, P95: 1}, boolp(false)},
+		{"few", "trial", ChannelMetric{ChannelID: 1, RequestCount: 4, P95: 1}, nil},
 	}
 	for _, c := range cases {
 		f := &fakeStore{policy: p, metrics: []ChannelMetric{c.metric}, pending: []Recommendation{{ID: c.id, InstanceID: "i", ChannelID: 1, Rule: c.rule, CreatedAt: now.Add(-time.Hour)}}}

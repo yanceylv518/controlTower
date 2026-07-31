@@ -144,9 +144,107 @@ func (e *Engine) evaluate(id string, pr PolicyRecord, now time.Time) (int, int) 
 			evaluated++
 			made += e.evaluateActive(id, model, ch, ladder, m, pr.Policy, mode, dispatch, now)
 		}
+		made += e.evaluateDynamicWeights(id, model, available, mm, pr.Policy, mode, dispatch, now)
 	}
 	made += e.scheduleTrials(id, channels, dispatch, pr.Policy, mode, now)
 	return made, evaluated
+}
+
+func (e *Engine) evaluateDynamicWeights(id, model string, channels []Channel, metrics map[int64]ChannelMetric, p Policy, mode string, dispatch map[int64]DispatchState, now time.Time) int {
+	d := p.DynamicWeighting
+	if !d.Enabled || len(channels) < 2 {
+		return 0
+	}
+	top := channels[0].Priority
+	eligible := make([]Channel, 0, len(channels))
+	for _, ch := range channels {
+		m, ok := metrics[ch.ID]
+		_, degraded := dispatch[ch.ID]
+		if ch.Priority == top && ok && !degraded && m.RequestCount >= p.Scheduling.MinSamples {
+			eligible = append(eligible, ch)
+		}
+	}
+	if len(eligible) < 2 {
+		return 0
+	}
+	var total float64
+	var baseTTFT, baseError, baseCache, baseOTPS float64
+	for _, ch := range eligible {
+		m := metrics[ch.ID]
+		w := float64(m.RequestCount)
+		total += w
+		baseTTFT += positiveLatency(m) * w
+		baseError += m.ErrorRate() * w
+		baseCache += m.CacheHitRate * w
+		baseOTPS += m.OTPS * w
+	}
+	if total == 0 {
+		return 0
+	}
+	baseTTFT, baseError, baseCache, baseOTPS = baseTTFT/total, baseError/total, baseCache/total, baseOTPS/total
+	made := 0
+	for _, ch := range eligible {
+		m := metrics[ch.ID]
+		ttftFactor := ratioFactor(baseTTFT, positiveLatency(m), d.TTFTInfluence)
+		errorFactor := ratioFactor(1-m.ErrorRate(), 1-baseError, d.ErrorInfluence)
+		cacheFactor := 1.0
+		if m.CacheHitRate > baseCache {
+			cacheFactor = math.Pow(1+(m.CacheHitRate-baseCache), d.CacheInfluence)
+		}
+		otpsFactor := ratioFactor(m.OTPS, baseOTPS, d.OTPSInfluence)
+		raw := clamp(ttftFactor*errorFactor*cacheFactor*otpsFactor, d.MinMultiplier, d.MaxMultiplier)
+		smoothed := 1 + d.SmoothingAlpha*(raw-1)
+		protected := clamp(smoothed, 1-d.MaxDecreasePerRound, 1+d.MaxIncreasePerRound)
+		proposed := max(int64(math.Round(float64(ch.Weight)*protected)), 1)
+		if proposed == ch.Weight {
+			continue
+		}
+		recent, err := e.store.HasRecentRecommendation(id, ch.ID, "rebalance", now.Add(-time.Duration(p.Scheduling.WindowMinutes)*time.Minute))
+		if err != nil || recent {
+			continue
+		}
+		ev := map[string]any{
+			"model": model, "samples": m.RequestCount,
+			"ttft_p95": positiveLatency(m), "baseline_ttft_p95": baseTTFT,
+			"error_rate": m.ErrorRate(), "baseline_error_rate": baseError,
+			"cache_hit_rate": m.CacheHitRate, "baseline_cache_hit_rate": baseCache,
+			"otps": m.OTPS, "baseline_otps": baseOTPS,
+			"ttft_factor": ttftFactor, "error_factor": errorFactor,
+			"cache_factor": cacheFactor, "otps_factor": otpsFactor,
+			"raw_multiplier": raw, "protected_multiplier": protected,
+			"observe_only": true,
+			"window_start": now.Add(-time.Duration(p.Scheduling.WindowMinutes) * time.Minute), "window_end": now,
+		}
+		currentPriority := ch.Priority
+		if e.store.InsertRecommendation(Recommendation{
+			ID: NewID(now, id, ch.ID, "rebalance"), InstanceID: id, ChannelID: ch.ID,
+			ChannelName: ch.Name, CreatedAt: now, Rule: "rebalance", Evidence: ev,
+			CurrentWeight: ch.Weight, ProposedWeight: proposed,
+			CurrentPriority: &currentPriority, ProposedPriority: &currentPriority,
+			ModeAtCreation: mode, Status: "recorded",
+		}) == nil {
+			made++
+		}
+	}
+	return made
+}
+
+func positiveLatency(m ChannelMetric) float64 {
+	if m.TTFTP95 > 0 {
+		return m.TTFTP95
+	}
+	return m.P95
+}
+
+func ratioFactor(numerator, denominator, influence float64) float64 {
+	if influence == 0 || numerator <= 0 || denominator <= 0 {
+		return 1
+	}
+	return math.Pow(numerator/denominator, influence)
+}
+
+func clamp(value, low, high float64) float64 {
+	return math.Max(low, math.Min(high, value))
 }
 
 func buildLadders(channels []Channel) map[string][]Channel {

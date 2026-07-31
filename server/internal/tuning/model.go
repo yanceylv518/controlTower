@@ -24,6 +24,19 @@ type SchedulingParams struct {
 	DailyActionLimit    int     `json:"daily_action_limit"`
 }
 
+type DynamicWeightingParams struct {
+	Enabled             bool    `json:"enabled"`
+	TTFTInfluence       float64 `json:"ttft_influence"`
+	ErrorInfluence      float64 `json:"error_influence"`
+	CacheInfluence      float64 `json:"cache_influence"`
+	OTPSInfluence       float64 `json:"otps_influence"`
+	MinMultiplier       float64 `json:"min_multiplier"`
+	MaxMultiplier       float64 `json:"max_multiplier"`
+	SmoothingAlpha      float64 `json:"smoothing_alpha"`
+	MaxIncreasePerRound float64 `json:"max_increase_per_round"`
+	MaxDecreasePerRound float64 `json:"max_decrease_per_round"`
+}
+
 type DegradeCriteria struct {
 	Name                string  `json:"name"`
 	ErrorRateThreshold  float64 `json:"error_rate_threshold"`
@@ -34,9 +47,10 @@ type DegradeCriteria struct {
 }
 
 type Policy struct {
-	Scheduling  SchedulingParams  `json:"scheduling"`
-	Criteria    []DegradeCriteria `json:"criteria"`
-	Assignments map[string]string `json:"assignments"`
+	Scheduling       SchedulingParams       `json:"scheduling"`
+	DynamicWeighting DynamicWeightingParams `json:"dynamic_weighting"`
+	Criteria         []DegradeCriteria      `json:"criteria"`
+	Assignments      map[string]string      `json:"assignments"`
 }
 
 func DefaultPolicy() Policy {
@@ -45,6 +59,12 @@ func DefaultPolicy() Policy {
 			WindowMinutes: 15, MinSamples: 20, TrialInitialMinutes: 60,
 			TrialBackoffFactor: 2, TrialMaxMinutes: 1440, TrialWindows: 2,
 			CooldownMinutes: 10, DailyActionLimit: 6,
+		},
+		DynamicWeighting: DynamicWeightingParams{
+			Enabled: true, TTFTInfluence: .50, ErrorInfluence: .30,
+			CacheInfluence: .10, OTPSInfluence: .10,
+			MinMultiplier: .50, MaxMultiplier: 1.50, SmoothingAlpha: .30,
+			MaxIncreasePerRound: .20, MaxDecreasePerRound: .30,
 		},
 		Criteria: []DegradeCriteria{{
 			Name: "default", ErrorRateThreshold: .15, SevereThreshold: .50,
@@ -116,6 +136,30 @@ func (p Policy) Validate() map[string]string {
 	if p.Scheduling.DailyActionLimit < 1 {
 		e["scheduling.daily_action_limit"] = "must_be_positive"
 	}
+	d := p.DynamicWeighting
+	for name, value := range map[string]float64{
+		"ttft_influence": d.TTFTInfluence, "error_influence": d.ErrorInfluence,
+		"cache_influence": d.CacheInfluence, "otps_influence": d.OTPSInfluence,
+	} {
+		if value < 0 || value > 1 {
+			e["dynamic_weighting."+name] = "must_be_between_0_and_1"
+		}
+	}
+	if d.MinMultiplier <= 0 || d.MinMultiplier > 1 {
+		e["dynamic_weighting.min_multiplier"] = "must_be_greater_than_0_and_at_most_1"
+	}
+	if d.MaxMultiplier < 1 || d.MaxMultiplier > 5 || d.MaxMultiplier < d.MinMultiplier {
+		e["dynamic_weighting.max_multiplier"] = "must_be_between_1_and_5_and_not_less_than_min"
+	}
+	for name, value := range map[string]float64{
+		"smoothing_alpha":        d.SmoothingAlpha,
+		"max_increase_per_round": d.MaxIncreasePerRound,
+		"max_decrease_per_round": d.MaxDecreasePerRound,
+	} {
+		if value <= 0 || value > 1 {
+			e["dynamic_weighting."+name] = "must_be_greater_than_0_and_at_most_1"
+		}
+	}
 	if len(p.Criteria) == 0 {
 		e["criteria"] = "must_include_default"
 		return e
@@ -171,6 +215,9 @@ type ChannelMetric struct {
 	ChannelID                                int64
 	RequestCount, ErrorCount, UserErrorCount int64
 	P95                                      float64
+	TTFTP95                                  float64
+	CacheHitRate                             float64
+	OTPS                                     float64
 }
 
 func (m ChannelMetric) ErrorRate() float64 {

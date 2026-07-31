@@ -16,6 +16,12 @@ const policy = reactive<TuningPolicy>({
     trial_backoff_factor: 2, trial_max_minutes: 1440, trial_windows: 2,
     cooldown_minutes: 10, daily_action_limit: 6,
   },
+  dynamic_weighting: {
+    enabled: true, ttft_influence: .5, error_influence: .3,
+    cache_influence: .1, otps_influence: .1,
+    min_multiplier: .5, max_multiplier: 1.5, smoothing_alpha: .3,
+    max_increase_per_round: .2, max_decrease_per_round: .3,
+  },
   criteria: [{
     name: "default", error_rate_threshold: .15, severe_threshold: .5,
     latency_multiplier: 2, latency_floor_seconds: 10, sustained_windows: 2,
@@ -38,7 +44,7 @@ const groupedLadders = computed(() => {
   }));
   return [...groups.entries()].map(([model, channels]) => ({ model, channels: channels.sort((a, b) => b.Priority - a.Priority) }));
 });
-const ruleText: Record<string, string> = { demote: "降级", trial: "恢复验证", no_backup: "无备岗", ladder_exhausted: "梯队用尽", mixed_channel: "混布" };
+const ruleText: Record<string, string> = { demote: "降级", trial: "恢复验证", rebalance: "动态配权", no_backup: "无备岗", ladder_exhausted: "梯队用尽", mixed_channel: "混布" };
 
 async function load() {
   await filters.loadInstances();
@@ -69,6 +75,7 @@ async function act(item: TuningRecommendation, action: "adopt" | "dismiss") {
 }
 function evidence(item: TuningRecommendation) {
   const e = item.evidence;
+  if (item.rule === "rebalance") return `样本 ${e.samples ?? "-"}，TTFT P95 ${Number(e.ttft_p95 || 0).toFixed(2)}s，错误率 ${(Number(e.error_rate || 0) * 100).toFixed(1)}%，缓存命中 ${(Number(e.cache_hit_rate || 0) * 100).toFixed(1)}%，OTPS ${Number(e.otps || 0).toFixed(1)}；原始倍率 ${Number(e.raw_multiplier || 1).toFixed(2)}，保护后 ${Number(e.protected_multiplier || 1).toFixed(2)}`;
   if (item.rule === "demote") return `样本 ${e.samples ?? "-"}，错误率 ${(Number(e.error_rate || 0) * 100).toFixed(1)}%，P95 ${e.p95 ?? "-"}s`;
   if (item.rule === "trial") return `第 ${Number(e.trial_attempts || 0) + 1} 次恢复验证`;
   return String(e.model || (Array.isArray(e.models) ? e.models.join("、") : "信息建议"));
@@ -127,6 +134,25 @@ onMounted(() => void load());
             </div>
           </section>
           <section class="policy-section">
+            <h3>健康渠道动态配权</h3>
+            <p class="hint">只比较同一模型、同一优先级且样本充足的健康渠道。固定阈值仍单独负责降级；动态倍率目前只生成观察建议，不会写入 new-api。</p>
+            <el-alert class="criteria-summary" type="info" :closable="false" show-icon title="计算与保护顺序">
+              先按请求量计算同模型基线，再综合 TTFT P95、服务端错误率、缓存命中率和 OTPS；随后执行倍率上下限、平滑和单轮涨跌幅保护。客户端参数错误不会计入服务端错误率。
+            </el-alert>
+            <div class="policy-grid">
+              <el-form-item label="启用动态配权"><el-switch v-model="policy.dynamic_weighting.enabled" /></el-form-item>
+              <el-form-item label="TTFT 影响"><el-input-number v-model="policy.dynamic_weighting.ttft_influence" :min="0" :max="1" :step=".05" /></el-form-item>
+              <el-form-item label="错误率影响"><el-input-number v-model="policy.dynamic_weighting.error_influence" :min="0" :max="1" :step=".05" /></el-form-item>
+              <el-form-item label="缓存影响"><el-input-number v-model="policy.dynamic_weighting.cache_influence" :min="0" :max="1" :step=".05" /></el-form-item>
+              <el-form-item label="OTPS 影响"><el-input-number v-model="policy.dynamic_weighting.otps_influence" :min="0" :max="1" :step=".05" /></el-form-item>
+              <el-form-item label="最低倍率"><el-input-number v-model="policy.dynamic_weighting.min_multiplier" :min=".1" :max="1" :step=".1" /></el-form-item>
+              <el-form-item label="最高倍率"><el-input-number v-model="policy.dynamic_weighting.max_multiplier" :min="1" :max="5" :step=".1" /></el-form-item>
+              <el-form-item label="平滑系数"><el-input-number v-model="policy.dynamic_weighting.smoothing_alpha" :min=".05" :max="1" :step=".05" /></el-form-item>
+              <el-form-item label="单轮最多上调"><el-input-number v-model="policy.dynamic_weighting.max_increase_per_round" :min=".01" :max="1" :step=".05" /></el-form-item>
+              <el-form-item label="单轮最多下调"><el-input-number v-model="policy.dynamic_weighting.max_decrease_per_round" :min=".01" :max="1" :step=".05" /></el-form-item>
+            </div>
+          </section>
+          <section class="policy-section">
             <h3>调度参数</h3>
             <p class="hint">控制评估频率、恢复验证和动作节奏，不决定何时触发降级。</p>
             <div class="dispatch-flow">
@@ -180,7 +206,7 @@ onMounted(() => void load());
         <el-timeline v-if="recommendations.length"><el-timeline-item v-for="item in recommendations" :key="item.id" :timestamp="formatTime(item.created_at)" placement="top">
           <div class="recommendation"><div><el-tag>{{ ruleText[item.rule] || item.rule }}</el-tag> <strong>{{ item.channel_name }}</strong>
             <el-tag class="status" :type="item.status === 'pending' ? 'warning' : item.status === 'adopted' ? 'success' : 'info'">{{ item.status }}</el-tag></div>
-            <p>{{ evidence(item) }}<template v-if="item.proposed_priority !== item.current_priority">；优先级 {{ item.current_priority }} → {{ item.proposed_priority }}</template></p>
+            <p>{{ evidence(item) }}<template v-if="item.rule === 'rebalance'">；权重 {{ item.current_weight }} → {{ item.proposed_weight }}</template><template v-else-if="item.proposed_priority !== item.current_priority">；优先级 {{ item.current_priority }} → {{ item.proposed_priority }}</template></p>
             <div v-if="item.outcome_at">事后：<b>{{ item.hit === true ? "命中 ✓" : item.hit === false ? "未命中 ✕" : "样本不足" }}</b></div>
             <div v-if="item.status === 'pending'"><el-button type="primary" size="small" @click="act(item, 'adopt')">采纳</el-button><el-button size="small" @click="act(item, 'dismiss')">忽略</el-button></div>
           </div></el-timeline-item></el-timeline><el-empty v-else description="暂无建议" :image-size="50" />
