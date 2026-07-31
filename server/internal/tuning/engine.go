@@ -19,8 +19,8 @@ type Store interface {
 	LatestChannels(string) ([]Channel, error)
 	InsertRecommendation(Recommendation) error
 	HasRecentRecommendation(string, int64, string, time.Time) (bool, error)
-	CountActionRecommendations(string, int64, time.Time) (int, error)
-	LastActionRecommendationAt(string, int64) (time.Time, bool, error)
+	CountActionRecommendations(string, int64, time.Time, ...string) (int, error)
+	LastActionRecommendationAt(string, int64, ...string) (time.Time, bool, error)
 	ListDispatchStates(string) ([]DispatchState, error)
 	PutDispatchState(DispatchState) error
 	DeleteDispatchState(string, int64) error
@@ -76,6 +76,7 @@ func (e *Engine) Tick(now time.Time) {
 		if !ok {
 			p = PolicyRecord{InstanceID: id, Policy: DefaultPolicy(), Mode: "observe"}
 		}
+		e.runAutoSentinel(&p, now)
 		if now.Sub(e.last[id]) >= time.Duration(p.Policy.Scheduling.WindowMinutes)*time.Minute {
 			n, c := e.evaluate(id, p, now)
 			e.last[id] = now
@@ -89,6 +90,45 @@ func (e *Engine) Tick(now time.Time) {
 	}
 	e.fillOutcomes(now)
 }
+// runAutoSentinel is the design §4 guard for the control-machine convention:
+// an auto-created command that expired unexecuted means commands are landing
+// on an agent that cannot run them. Fall back to confirm so the failure is a
+// visible pending queue instead of a silent stall. Only expirations after the
+// policy's own UpdatedAt count, so re-enabling auto is not instantly re-paused
+// by stale history.
+func (e *Engine) runAutoSentinel(p *PolicyRecord, now time.Time) {
+	if normalizedMode(p.Mode) != "auto" {
+		return
+	}
+	checker, ok := e.store.(interface {
+		HasExpiredAutoCommands(string, time.Time) (bool, error)
+	})
+	if !ok {
+		return
+	}
+	since := p.UpdatedAt
+	if floor := now.Add(-24 * time.Hour); since.Before(floor) {
+		since = floor
+	}
+	expired, err := checker.HasExpiredAutoCommands(p.InstanceID, since)
+	if err != nil || !expired {
+		return
+	}
+	p.Mode = "confirm"
+	p.UpdatedAt = now
+	p.UpdatedBy = "system:sentinel"
+	if e.store.PutPolicy(*p) != nil {
+		return
+	}
+	log.Printf("tuning auto paused instance=%s: auto-created command expired unexecuted, falling back to confirm", p.InstanceID)
+	_ = e.store.InsertRecommendation(Recommendation{
+		ID: NewID(now, p.InstanceID, 0, "auto_paused"), InstanceID: p.InstanceID,
+		ChannelName: "-", CreatedAt: now, Rule: "auto_paused",
+		Evidence:       map[string]any{"reason": "auto command expired unexecuted; check the channel-control agent", "since": since},
+		ModeAtCreation: "auto", Status: "recorded",
+	})
+}
+
 func (e *Engine) evaluate(id string, pr PolicyRecord, now time.Time) (int, int) {
 	metrics, err := e.store.QueryMetrics(id, now.Add(-time.Duration(pr.Policy.Scheduling.WindowMinutes)*time.Minute), now)
 	if err != nil {
@@ -226,7 +266,7 @@ func (e *Engine) evaluateDynamicWeights(id, model string, channels []Channel, me
 			CurrentPriority: &currentPriority, ProposedPriority: &currentPriority,
 			ModeAtCreation: mode, Status: actionStatus(mode),
 		}
-		if mode != "observe" && !e.actionAllowed(id, ch.ID, p, now) {
+		if mode != "observe" && !e.actionAllowed(id, ch.ID, p, now, "rebalance") {
 			continue
 		}
 		if e.store.InsertRecommendation(rec) != nil {
@@ -389,7 +429,12 @@ func (e *Engine) evaluateActive(id, model string, ch Channel, ladder []Channel, 
 		if !e.executeAutomatically(rec.ID, now) {
 			return 0
 		}
-		dispatch[ch.ID] = state
+		// AdoptRecommendation seeds the dispatch row with a fresh initial
+		// trial delay; persist the engine-computed state on top so repeated
+		// demotions keep their incremented attempts and exponential backoff.
+		if e.store.PutDispatchState(state) == nil {
+			dispatch[ch.ID] = state
+		}
 	}
 	local.errorWindows, local.latencyWindows = 0, 0
 	return 1
@@ -507,23 +552,30 @@ func (e *Engine) executeAutomatically(id string, now time.Time) bool {
 	return true
 }
 
-func (e *Engine) actionAllowed(id string, channelID int64, p Policy, now time.Time) bool {
-	// One open decision per channel: while a pending action recommendation
-	// awaits confirm, re-evaluations must not stack duplicates (the window is
-	// longer than the cooldown, so every pass would add one) or burn the
-	// daily budget on repeats of the same decision.
+// actionAllowed gates one rule class at a time. Priority moves (demote/trial)
+// and weight rebalances hold separate cooldown and daily budgets: routine
+// rebalancing must never starve a degradation of its budget, and a pending
+// cosmetic rebalance must never block an urgent demote.
+func (e *Engine) actionAllowed(id string, channelID int64, p Policy, now time.Time, rules ...string) bool {
+	if len(rules) == 0 {
+		rules = []string{"demote", "trial"}
+	}
+	// One open decision per channel and class: while a pending action
+	// recommendation awaits confirm, re-evaluations must not stack duplicates
+	// (the window is longer than the cooldown, so every pass would add one)
+	// or burn the daily budget on repeats of the same decision.
 	if checker, ok := e.store.(interface {
-		HasPendingActionRecommendation(string, int64) (bool, error)
+		HasPendingActionRecommendation(string, int64, ...string) (bool, error)
 	}); ok {
-		if pending, err := checker.HasPendingActionRecommendation(id, channelID); err != nil || pending {
+		if pending, err := checker.HasPendingActionRecommendation(id, channelID, rules...); err != nil || pending {
 			return false
 		}
 	}
-	last, ok, err := e.store.LastActionRecommendationAt(id, channelID)
+	last, ok, err := e.store.LastActionRecommendationAt(id, channelID, rules...)
 	if err != nil || (ok && now.Sub(last) < time.Duration(p.Scheduling.CooldownMinutes)*time.Minute) {
 		return false
 	}
-	count, err := e.store.CountActionRecommendations(id, channelID, now.Add(-24*time.Hour))
+	count, err := e.store.CountActionRecommendations(id, channelID, now.Add(-24*time.Hour), rules...)
 	return err == nil && count < p.Scheduling.DailyActionLimit
 }
 

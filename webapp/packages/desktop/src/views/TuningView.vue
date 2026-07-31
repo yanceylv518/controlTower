@@ -44,7 +44,7 @@ const groupedLadders = computed(() => {
   }));
   return [...groups.entries()].map(([model, channels]) => ({ model, channels: channels.sort((a, b) => b.Priority - a.Priority) }));
 });
-const ruleText: Record<string, string> = { demote: "降级", trial: "恢复验证", rebalance: "动态配权", no_backup: "无备岗", ladder_exhausted: "梯队用尽", mixed_channel: "混布" };
+const ruleText: Record<string, string> = { demote: "降级", trial: "恢复验证", rebalance: "动态配权", no_backup: "无备岗", ladder_exhausted: "梯队用尽", mixed_channel: "混布", auto_paused: "自动暂停" };
 
 async function load() {
   await filters.loadInstances();

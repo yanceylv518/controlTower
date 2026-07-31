@@ -34,10 +34,10 @@ func (s *tuningStub) InsertRecommendation(tuning.Recommendation) error { return 
 func (s *tuningStub) HasRecentRecommendation(string, int64, string, time.Time) (bool, error) {
 	return false, nil
 }
-func (s *tuningStub) CountActionRecommendations(string, int64, time.Time) (int, error) {
+func (s *tuningStub) CountActionRecommendations(string, int64, time.Time, ...string) (int, error) {
 	return 0, nil
 }
-func (s *tuningStub) LastActionRecommendationAt(string, int64) (time.Time, bool, error) {
+func (s *tuningStub) LastActionRecommendationAt(string, int64, ...string) (time.Time, bool, error) {
 	return time.Time{}, false, nil
 }
 func (s *tuningStub) ListDispatchStates(string) ([]tuning.DispatchState, error) {

@@ -17,10 +17,14 @@ type fakeStore struct {
 	actionCount     int
 	lastAction      time.Time
 	expiredBefore   time.Time
+	expiredAuto     bool
 }
 
 func (f *fakeStore) GetPolicy(string) (PolicyRecord, bool, error) { return f.policy, true, nil }
-func (f *fakeStore) PutPolicy(PolicyRecord) error                 { return nil }
+func (f *fakeStore) PutPolicy(p PolicyRecord) error               { f.policy = p; return nil }
+func (f *fakeStore) HasExpiredAutoCommands(string, time.Time) (bool, error) {
+	return f.expiredAuto, nil
+}
 func (f *fakeStore) ListEnabledInstances() ([]string, error)      { return []string{"i"}, nil }
 func (f *fakeStore) QueryMetrics(string, time.Time, time.Time) ([]ChannelMetric, error) {
 	return f.metrics, nil
@@ -64,11 +68,40 @@ func (f *fakeStore) HasRecentRecommendation(id string, ch int64, rule string, si
 	}
 	return false, nil
 }
-func (f *fakeStore) CountActionRecommendations(string, int64, time.Time) (int, error) {
-	return f.actionCount, nil
+func (f *fakeStore) CountActionRecommendations(_ string, ch int64, since time.Time, rules ...string) (int, error) {
+	if f.actionCount > 0 {
+		return f.actionCount, nil
+	}
+	count := 0
+	for _, r := range f.recommendations {
+		if r.ChannelID == ch && ruleIn(r.Rule, rules) && !r.CreatedAt.Before(since) {
+			count++
+		}
+	}
+	return count, nil
 }
-func (f *fakeStore) LastActionRecommendationAt(string, int64) (time.Time, bool, error) {
-	return f.lastAction, !f.lastAction.IsZero(), nil
+func (f *fakeStore) LastActionRecommendationAt(_ string, ch int64, rules ...string) (time.Time, bool, error) {
+	if !f.lastAction.IsZero() {
+		return f.lastAction, true, nil
+	}
+	var last time.Time
+	for _, r := range f.recommendations {
+		if r.ChannelID == ch && ruleIn(r.Rule, rules) && r.CreatedAt.After(last) {
+			last = r.CreatedAt
+		}
+	}
+	return last, !last.IsZero(), nil
+}
+func ruleIn(rule string, rules []string) bool {
+	if len(rules) == 0 {
+		rules = []string{"demote", "trial"}
+	}
+	for _, candidate := range rules {
+		if candidate == rule {
+			return true
+		}
+	}
+	return false
 }
 func (f *fakeStore) ListDispatchStates(string) ([]DispatchState, error) {
 	var out []DispatchState
@@ -304,9 +337,9 @@ func TestOutcomeHitMissAndInsufficient(t *testing.T) {
 }
 func boolp(v bool) *bool { return &v }
 
-func (f *fakeStore) HasPendingActionRecommendation(_ string, ch int64) (bool, error) {
+func (f *fakeStore) HasPendingActionRecommendation(_ string, ch int64, rules ...string) (bool, error) {
 	for _, r := range f.recommendations {
-		if r.ChannelID == ch && r.Status == "pending" && (r.Rule == "demote" || r.Rule == "trial") {
+		if r.ChannelID == ch && r.Status == "pending" && ruleIn(r.Rule, rules) {
 			return true, nil
 		}
 	}
@@ -339,5 +372,58 @@ func TestEngineConfirmDoesNotStackPendingDuplicates(t *testing.T) {
 	}
 	if demotes != 1 {
 		t.Fatalf("pending decision duplicated: %#v", f.recommendations)
+	}
+}
+
+func TestAutoSentinelFallsBackToConfirmOnExpiredCommand(t *testing.T) {
+	p := testPolicy()
+	p.Mode = "auto"
+	f := &fakeStore{policy: p, expiredAuto: true}
+	NewEngine(f).Tick(time.Now().UTC())
+	if f.policy.Mode != "confirm" || f.policy.UpdatedBy != "system:sentinel" {
+		t.Fatalf("sentinel must fall auto back to confirm: %#v", f.policy)
+	}
+	found := false
+	for _, r := range f.recommendations {
+		if r.Rule == "auto_paused" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("sentinel must record an auto_paused entry: %#v", f.recommendations)
+	}
+}
+
+func TestRebalanceBudgetDoesNotStarveDemotion(t *testing.T) {
+	p := testPolicy()
+	p.Mode = "confirm"
+	p.Policy.Criteria[0].SustainedWindows = 1
+	now := time.Now().UTC()
+	f := &fakeStore{
+		policy: p,
+		channels: []Channel{
+			{ID: 1, Name: "active", Status: "enabled", Priority: 100, Models: []string{"m"}},
+			{ID: 2, Name: "backup", Status: "enabled", Priority: 50, Models: []string{"m"}},
+		},
+		metrics: []ChannelMetric{{ChannelID: 1, RequestCount: 100, ErrorCount: 60}},
+	}
+	// A full day of rebalance actions on this channel must not consume the
+	// demote/trial budget: the demotion below still has to go through.
+	for i := 0; i < p.Policy.Scheduling.DailyActionLimit; i++ {
+		f.recommendations = append(f.recommendations, Recommendation{
+			ID: NewID(now.Add(time.Duration(-i-1)*time.Hour), "i", 1, "rebalance"),
+			InstanceID: "i", ChannelID: 1, Rule: "rebalance", Status: "auto_executed",
+			CreatedAt: now.Add(time.Duration(-i-1) * time.Hour),
+		})
+	}
+	NewEngine(f).Tick(now)
+	demotes := 0
+	for _, r := range f.recommendations {
+		if r.Rule == "demote" && r.Status == "pending" {
+			demotes++
+		}
+	}
+	if demotes != 1 {
+		t.Fatalf("rebalance history starved the demotion budget: %#v", f.recommendations)
 	}
 }

@@ -158,19 +158,41 @@ func (s Store) HasRecentRecommendation(id string, channelID int64, rule string, 
 	return found == 1, err
 }
 
-func (s Store) CountActionRecommendations(id string, channelID int64, since time.Time) (int, error) {
+func ruleFilter(rules []string) (string, []any) {
+	if len(rules) == 0 {
+		rules = []string{"demote", "trial"}
+	}
+	args := make([]any, 0, len(rules))
+	for _, rule := range rules {
+		args = append(args, rule)
+	}
+	return strings.TrimSuffix(strings.Repeat("?,", len(rules)), ","), args
+}
+
+func (s Store) CountActionRecommendations(id string, channelID int64, since time.Time, rules ...string) (int, error) {
+	placeholders, ruleArgs := ruleFilter(rules)
 	var count int
-	err := s.db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM tuning_recommendations WHERE instance_id=? AND channel_id=? AND rule IN ('demote','trial','rebalance') AND created_at>=?`, id, channelID, since).Scan(&count)
+	args := append([]any{id, channelID}, ruleArgs...)
+	args = append(args, since)
+	err := s.db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM tuning_recommendations WHERE instance_id=? AND channel_id=? AND rule IN (`+placeholders+`) AND created_at>=?`, args...).Scan(&count)
 	return count, err
 }
 
-func (s Store) LastActionRecommendationAt(id string, channelID int64) (time.Time, bool, error) {
+func (s Store) LastActionRecommendationAt(id string, channelID int64, rules ...string) (time.Time, bool, error) {
+	placeholders, ruleArgs := ruleFilter(rules)
 	var value sql.NullTime
-	err := s.db.QueryRowContext(context.Background(), `SELECT MAX(created_at) FROM tuning_recommendations WHERE instance_id=? AND channel_id=? AND rule IN ('demote','trial','rebalance')`, id, channelID).Scan(&value)
+	args := append([]any{id, channelID}, ruleArgs...)
+	err := s.db.QueryRowContext(context.Background(), `SELECT MAX(created_at) FROM tuning_recommendations WHERE instance_id=? AND channel_id=? AND rule IN (`+placeholders+`)`, args...).Scan(&value)
 	if err != nil || !value.Valid {
 		return time.Time{}, false, err
 	}
 	return value.Time, true, nil
+}
+
+func (s Store) HasExpiredAutoCommands(id string, since time.Time) (bool, error) {
+	var found int
+	err := s.db.QueryRowContext(context.Background(), `SELECT EXISTS(SELECT 1 FROM channel_commands WHERE instance_id=? AND created_by='system:auto' AND status='expired' AND updated_at>=?)`, id, since).Scan(&found)
+	return found == 1, err
 }
 
 func (s Store) ListDispatchStates(id string) ([]tuning.DispatchState, error) {
@@ -454,9 +476,11 @@ func (s Store) DismissRecommendation(id, actor string, now time.Time) (tuning.Re
 	return rec, nil
 }
 
-func (s Store) HasPendingActionRecommendation(id string, channelID int64) (bool, error) {
+func (s Store) HasPendingActionRecommendation(id string, channelID int64, rules ...string) (bool, error) {
+	placeholders, ruleArgs := ruleFilter(rules)
 	var found int
-	err := s.db.QueryRowContext(context.Background(), `SELECT EXISTS(SELECT 1 FROM tuning_recommendations WHERE instance_id=? AND channel_id=? AND status='pending' AND rule IN ('demote','trial','rebalance'))`, id, channelID).Scan(&found)
+	args := append([]any{id, channelID}, ruleArgs...)
+	err := s.db.QueryRowContext(context.Background(), `SELECT EXISTS(SELECT 1 FROM tuning_recommendations WHERE instance_id=? AND channel_id=? AND status='pending' AND rule IN (`+placeholders+`))`, args...).Scan(&found)
 	return found == 1, err
 }
 
