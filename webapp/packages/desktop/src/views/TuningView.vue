@@ -9,7 +9,7 @@ import { formatTime } from "../utils/format";
 
 const filters = useFiltersStore();
 const loading = ref(false);
-const mode = ref<"observe" | "confirm">("observe");
+const mode = ref<"observe" | "confirm" | "auto">("observe");
 const policy = reactive<TuningPolicy>({
   scheduling: {
     window_minutes: 15, min_samples: 20, trial_initial_minutes: 60,
@@ -65,10 +65,15 @@ async function save() {
   ElMessage.success("策略已保存，将在下一轮评估生效");
 }
 async function act(item: TuningRecommendation, action: "adopt" | "dismiss") {
-  if (action === "adopt") await ElMessageBox.confirm(
-    `将渠道 ${item.channel_name} 的优先级从 ${item.current_priority} 调整为 ${item.proposed_priority}，并创建渠道指令。`,
-    "确认采纳建议", { type: "warning" },
-  );
+  if (action === "adopt") {
+    const change = item.rule === "rebalance"
+      ? `权重从 ${item.current_weight} 调整为 ${item.proposed_weight}`
+      : `优先级从 ${item.current_priority} 调整为 ${item.proposed_priority}`;
+    await ElMessageBox.confirm(
+      `将渠道 ${item.channel_name} 的${change}，并创建渠道指令。`,
+      "确认采纳建议", { type: "warning" },
+    );
+  }
   await dashboard.tuningRecommendationAction(item.id, action);
   ElMessage.success(action === "adopt" ? "已采纳并创建渠道指令" : "已忽略");
   await load();
@@ -90,7 +95,7 @@ onMounted(() => void load());
       <el-card shadow="never">
         <template #header><strong>模式与策略</strong><span class="hint">　当前采集实例：{{ instanceID || "无" }}</span></template>
         <el-form label-position="top">
-          <el-form-item label="运行模式"><el-radio-group v-model="mode"><el-radio-button value="observe">观察</el-radio-button><el-radio-button value="confirm">人工确认</el-radio-button><el-radio-button value="auto" disabled>自动（B3）</el-radio-button></el-radio-group></el-form-item>
+          <el-form-item label="运行模式"><el-radio-group v-model="mode"><el-radio-button value="observe">观察</el-radio-button><el-radio-button value="confirm">人工确认</el-radio-button><el-radio-button value="auto">自动</el-radio-button></el-radio-group></el-form-item>
           <section v-if="defaultCriteria" class="policy-section">
             <h3>降级标准（默认标准）</h3>
             <p class="hint">当前所有模型使用默认标准；后续可增加多套标准并按模型指派。</p>
@@ -175,8 +180,9 @@ onMounted(() => void load());
             </div>
             <el-alert class="mode-effect" type="warning" :closable="false" show-icon>
               <template #title>当前运行模式如何执行</template>
-              <span v-if="mode === 'observe'">观察模式只生成建议和模拟状态，不会实际修改渠道优先级。</span>
-              <span v-else>人工确认模式会生成待处理建议；只有点击“采纳”后，才会创建渠道调权指令。</span>
+              <span v-if="mode === 'observe'">观察模式只生成建议和模拟状态，不会实际修改渠道优先级或权重。</span>
+              <span v-else-if="mode === 'confirm'">人工确认模式会生成待处理建议；只有点击“采纳”后，才会创建渠道调权指令。</span>
+              <span v-else>自动模式会在达到降级、恢复验证或动态配权条件时，自动创建渠道指令；仍受最小样本、持续窗口、冷却、单轮限幅和每日动作上限保护。</span>
             </el-alert>
             <div class="policy-grid">
               <el-form-item label="评估窗口（分钟）"><el-input-number v-model="policy.scheduling.window_minutes" :min="1" /></el-form-item>
@@ -205,7 +211,7 @@ onMounted(() => void load());
       <el-card shadow="never"><template #header><strong>建议流水</strong></template>
         <el-timeline v-if="recommendations.length"><el-timeline-item v-for="item in recommendations" :key="item.id" :timestamp="formatTime(item.created_at)" placement="top">
           <div class="recommendation"><div><el-tag>{{ ruleText[item.rule] || item.rule }}</el-tag> <strong>{{ item.channel_name }}</strong>
-            <el-tag class="status" :type="item.status === 'pending' ? 'warning' : item.status === 'adopted' ? 'success' : 'info'">{{ item.status }}</el-tag></div>
+            <el-tag class="status" :type="item.status === 'pending' ? 'warning' : ['adopted', 'auto_executed'].includes(item.status) ? 'success' : 'info'">{{ item.status }}</el-tag></div>
             <p>{{ evidence(item) }}<template v-if="item.rule === 'rebalance'">；权重 {{ item.current_weight }} → {{ item.proposed_weight }}</template><template v-else-if="item.proposed_priority !== item.current_priority">；优先级 {{ item.current_priority }} → {{ item.proposed_priority }}</template></p>
             <div v-if="item.outcome_at">事后：<b>{{ item.hit === true ? "命中 ✓" : item.hit === false ? "未命中 ✕" : "样本不足" }}</b></div>
             <div v-if="item.status === 'pending'"><el-button type="primary" size="small" @click="act(item, 'adopt')">采纳</el-button><el-button size="small" @click="act(item, 'dismiss')">忽略</el-button></div>
@@ -214,12 +220,12 @@ onMounted(() => void load());
 
       <el-card shadow="never"><template #header><strong>命中率报告</strong><el-radio-group v-model="reportDays" size="small"><el-radio-button :value="7">7 天</el-radio-button><el-radio-button :value="30">30 天</el-radio-button></el-radio-group></template>
         <div class="report-grid"><div><span>动作建议</span><b>{{ reports[reportDays]?.total || 0 }}</b></div><div><span>采纳率</span><b>{{ ((reports[reportDays]?.adoption_rate || 0) * 100).toFixed(1) }}%</b></div><div><span>已判断</span><b>{{ reports[reportDays]?.judged || 0 }}</b></div><div><span>命中率</span><b>{{ ((reports[reportDays]?.hit_rate || 0) * 100).toFixed(1) }}%</b></div></div>
-        <el-alert title="命中率持续 ≥ 85% 且无最小可用集险情，才建议开启 auto。" type="info" :closable="false" />
+        <el-alert title="自动模式已可用；建议先观察命中率，并确认 Agent 指令回执正常后再开启。" type="info" :closable="false" />
       </el-card>
 
       <el-card shadow="never"><template #header><strong>说明</strong></template>
         <p><b>值班模型：</b>同一模型按渠道优先级组成梯队；在岗异常时建议让位给下一岗，等待后再进行恢复验证。</p>
-        <p><b>观察：</b>只记录建议。<b>人工确认：</b>动作建议等待人工处理，采纳后进入现有渠道指令队列。<b>自动：</b>B3 才会提供。</p>
+        <p><b>观察：</b>只记录建议。<b>人工确认：</b>动作建议等待人工处理，采纳后进入渠道指令队列。<b>自动：</b>建议先落库，再自动创建渠道指令；Agent 执行结果和失败原因仍可追踪，固定降级规则优先于动态配权。</p>
       </el-card>
     </div>
   </AppShell>

@@ -70,13 +70,13 @@ func TestTuningPolicyDefaultValidationAndMode(t *testing.T) {
 	if rr.Code != 400 || !bytes.Contains(rr.Body.Bytes(), []byte("validation_failed")) {
 		t.Fatalf("validation: %d %s", rr.Code, rr.Body.String())
 	}
-	auto := `{"mode":"auto","policy":{}}`
+	policyJSON, _ := json.Marshal(tuning.DefaultPolicy())
+	auto := `{"mode":"auto","policy":` + string(policyJSON) + `}`
 	rr = httptest.NewRecorder()
 	h.HandleTuningPolicy(rr, httptest.NewRequest("PUT", "/api/dashboard/tuning/policy?instance_id=i", bytes.NewBufferString(auto)))
-	if rr.Code != 400 || !bytes.Contains(rr.Body.Bytes(), []byte("mode_not_supported")) {
+	if rr.Code != 200 || s.saved.Mode != "auto" {
 		t.Fatalf("mode: %d %s", rr.Code, rr.Body.String())
 	}
-	policyJSON, _ := json.Marshal(tuning.DefaultPolicy())
 	confirm := `{"mode":"confirm","policy":` + string(policyJSON) + `}`
 	rr = httptest.NewRecorder()
 	h.HandleTuningPolicy(rr, httptest.NewRequest("PUT", "/api/dashboard/tuning/policy?instance_id=i", bytes.NewBufferString(confirm)))

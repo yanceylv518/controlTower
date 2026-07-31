@@ -33,6 +33,29 @@ func (f *fakeStore) InsertRecommendation(r Recommendation) error {
 	f.recommendations = append(f.recommendations, r)
 	return nil
 }
+func (f *fakeStore) AdoptRecommendation(id, actor string, now time.Time) (Recommendation, error) {
+	for i := range f.recommendations {
+		if f.recommendations[i].ID != id || f.recommendations[i].Status != "pending" {
+			continue
+		}
+		f.recommendations[i].Status = "auto_executed"
+		f.recommendations[i].ActedBy = actor
+		f.recommendations[i].ActedAt = &now
+		if f.recommendations[i].Rule == "demote" {
+			if f.dispatch == nil {
+				f.dispatch = map[int64]DispatchState{}
+			}
+			f.dispatch[f.recommendations[i].ChannelID] = DispatchState{
+				InstanceID: f.recommendations[i].InstanceID,
+				ChannelID:  f.recommendations[i].ChannelID,
+				DemotedAt:  now,
+				UpdatedAt:  now,
+			}
+		}
+		return f.recommendations[i], nil
+	}
+	return Recommendation{}, ErrRecommendationNotPending
+}
 func (f *fakeStore) HasRecentRecommendation(id string, ch int64, rule string, since time.Time) (bool, error) {
 	for _, r := range f.recommendations {
 		if r.InstanceID == id && r.ChannelID == ch && r.Rule == rule && !r.CreatedAt.Before(since) {
@@ -204,6 +227,56 @@ func TestEngineConfirmCreatesPendingWithoutAdvancingDispatchAndExpires(t *testin
 	NewEngine(f).Tick(now.Add(time.Minute))
 	if f.recommendations[0].Status != "expired" || f.expiredBefore.IsZero() {
 		t.Fatalf("pending recommendation not expired: %#v", f.recommendations[0])
+	}
+}
+
+func TestEngineAutoExecutesDemoteAndAdvancesDispatch(t *testing.T) {
+	p := testPolicy()
+	p.Mode = "auto"
+	p.Policy.Criteria[0].SustainedWindows = 1
+	f := &fakeStore{
+		policy: p,
+		channels: []Channel{
+			{ID: 1, Name: "active", Status: "enabled", Priority: 100, Models: []string{"m"}},
+			{ID: 2, Name: "backup", Status: "enabled", Priority: 50, Models: []string{"m"}},
+		},
+		metrics: []ChannelMetric{{ChannelID: 1, RequestCount: 100, ErrorCount: 60}},
+	}
+	NewEngine(f).Tick(time.Now().UTC())
+	if len(f.recommendations) != 1 || f.recommendations[0].Status != "auto_executed" || f.recommendations[0].ActedBy != "system:auto" {
+		t.Fatalf("auto recommendation=%#v", f.recommendations)
+	}
+	if _, ok := f.dispatch[1]; !ok {
+		t.Fatalf("auto demote must advance dispatch after command creation: %#v", f.dispatch)
+	}
+}
+
+func TestEngineAutoExecutesProtectedDynamicWeights(t *testing.T) {
+	p := testPolicy()
+	p.Mode = "auto"
+	p.Policy.DynamicWeighting = DynamicWeightingParams{
+		Enabled: true, TTFTInfluence: 1, MinMultiplier: .5, MaxMultiplier: 1.5,
+		SmoothingAlpha: 1, MaxIncreasePerRound: .2, MaxDecreasePerRound: .3,
+	}
+	f := &fakeStore{
+		policy: p,
+		channels: []Channel{
+			{ID: 1, Name: "fast", Status: "enabled", Weight: 100, Priority: 100, Models: []string{"m"}},
+			{ID: 2, Name: "slow", Status: "enabled", Weight: 100, Priority: 100, Models: []string{"m"}},
+		},
+		metrics: []ChannelMetric{
+			{ChannelID: 1, RequestCount: 100, TTFTP95: 2},
+			{ChannelID: 2, RequestCount: 100, TTFTP95: 8},
+		},
+	}
+	NewEngine(f).Tick(time.Now().UTC())
+	if len(f.recommendations) != 2 {
+		t.Fatalf("auto dynamic recommendations=%#v", f.recommendations)
+	}
+	for _, rec := range f.recommendations {
+		if rec.Status != "auto_executed" || rec.Rule != "rebalance" {
+			t.Fatalf("auto dynamic recommendation=%#v", rec)
+		}
 	}
 }
 func TestOutcomeHitMissAndInsufficient(t *testing.T) {

@@ -160,13 +160,13 @@ func (s Store) HasRecentRecommendation(id string, channelID int64, rule string, 
 
 func (s Store) CountActionRecommendations(id string, channelID int64, since time.Time) (int, error) {
 	var count int
-	err := s.db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM tuning_recommendations WHERE instance_id=? AND channel_id=? AND rule IN ('demote','trial') AND created_at>=?`, id, channelID, since).Scan(&count)
+	err := s.db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM tuning_recommendations WHERE instance_id=? AND channel_id=? AND rule IN ('demote','trial','rebalance') AND created_at>=?`, id, channelID, since).Scan(&count)
 	return count, err
 }
 
 func (s Store) LastActionRecommendationAt(id string, channelID int64) (time.Time, bool, error) {
 	var value sql.NullTime
-	err := s.db.QueryRowContext(context.Background(), `SELECT MAX(created_at) FROM tuning_recommendations WHERE instance_id=? AND channel_id=? AND rule IN ('demote','trial')`, id, channelID).Scan(&value)
+	err := s.db.QueryRowContext(context.Background(), `SELECT MAX(created_at) FROM tuning_recommendations WHERE instance_id=? AND channel_id=? AND rule IN ('demote','trial','rebalance')`, id, channelID).Scan(&value)
 	if err != nil || !value.Valid {
 		return time.Time{}, false, err
 	}
@@ -336,7 +336,14 @@ func (s Store) AdoptRecommendation(id, actor string, now time.Time) (tuning.Reco
 	if err != nil {
 		return tuning.Recommendation{}, err
 	}
-	if rec.Status != "pending" || (rec.Rule != "demote" && rec.Rule != "trial") || rec.ProposedPriority == nil {
+	actionRule := rec.Rule == "demote" || rec.Rule == "trial" || rec.Rule == "rebalance"
+	if rec.Status != "pending" || !actionRule {
+		return tuning.Recommendation{}, tuning.ErrRecommendationNotPending
+	}
+	if rec.Rule == "rebalance" && rec.ProposedWeight <= 0 {
+		return tuning.Recommendation{}, tuning.ErrRecommendationNotPending
+	}
+	if rec.Rule != "rebalance" && rec.ProposedPriority == nil {
 		return tuning.Recommendation{}, tuning.ErrRecommendationNotPending
 	}
 	var target string
@@ -351,7 +358,13 @@ func (s Store) AdoptRecommendation(id, actor string, now time.Time) (tuning.Reco
 	if err != nil {
 		return tuning.Recommendation{}, err
 	}
-	payload, _ := json.Marshal(map[string]any{"priority": *rec.ProposedPriority})
+	payloadValues := map[string]any{}
+	if rec.Rule == "rebalance" {
+		payloadValues["weight"] = rec.ProposedWeight
+	} else {
+		payloadValues["priority"] = *rec.ProposedPriority
+	}
+	payload, _ := json.Marshal(payloadValues)
 	if _, err = tx.ExecContext(ctx, `INSERT INTO channel_commands(id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at) VALUES(?,?,?,?,?,'pending',?,'',?,?)`, commandID, target, rec.ChannelID, "channel.update", string(payload), actor, now, now); err != nil {
 		return tuning.Recommendation{}, err
 	}
@@ -372,10 +385,18 @@ func (s Store) AdoptRecommendation(id, actor string, now time.Time) (tuning.Reco
 		if _, err = tx.ExecContext(ctx, `INSERT INTO tuning_dispatch_states(instance_id,channel_id,model_name,original_priority,demoted_at,trial_attempts,next_trial_at,updated_at) VALUES(?,?,?,?,?,0,?,?) ON DUPLICATE KEY UPDATE model_name=VALUES(model_name),original_priority=VALUES(original_priority),demoted_at=VALUES(demoted_at),next_trial_at=VALUES(next_trial_at),updated_at=VALUES(updated_at)`, rec.InstanceID, rec.ChannelID, model, original, now, next, now); err != nil {
 			return tuning.Recommendation{}, err
 		}
-	} else if _, err = tx.ExecContext(ctx, `UPDATE tuning_dispatch_states SET next_trial_at=NULL,updated_at=? WHERE instance_id=? AND channel_id=?`, now, rec.InstanceID, rec.ChannelID); err != nil {
-		return tuning.Recommendation{}, err
+	} else if rec.Rule == "trial" {
+		if _, err = tx.ExecContext(ctx, `UPDATE tuning_dispatch_states SET next_trial_at=NULL,updated_at=? WHERE instance_id=? AND channel_id=?`, now, rec.InstanceID, rec.ChannelID); err != nil {
+			return tuning.Recommendation{}, err
+		}
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE tuning_recommendations SET status='adopted',command_id=?,acted_by=?,acted_at=? WHERE id=? AND status='pending'`, commandID, actor, now, id)
+	finalStatus := "adopted"
+	operationType := "tuning.adopt"
+	if rec.ModeAtCreation == "auto" {
+		finalStatus = "auto_executed"
+		operationType = "tuning.auto_execute"
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE tuning_recommendations SET status=?,command_id=?,acted_by=?,acted_at=? WHERE id=? AND status='pending'`, finalStatus, commandID, actor, now, id)
 	if err != nil {
 		return tuning.Recommendation{}, err
 	}
@@ -383,14 +404,20 @@ func (s Store) AdoptRecommendation(id, actor string, now time.Time) (tuning.Reco
 		return tuning.Recommendation{}, tuning.ErrRecommendationNotPending
 	}
 	before := fmt.Sprintf(`{"recommendation_id":%q,"status":"pending"}`, id)
-	after := fmt.Sprintf(`{"recommendation_id":%q,"status":"adopted","command_id":%q,"priority":%d}`, id, commandID, *rec.ProposedPriority)
-	if _, err = tx.ExecContext(ctx, `INSERT INTO operation_audits(id,instance_id,operation_type,target_type,target_id,actor_id,before_summary,after_summary,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, commandID, target, "tuning.adopt", "tuning_recommendation", id, actor, before, after, "success", now); err != nil {
+	afterValues := map[string]any{"recommendation_id": id, "status": finalStatus, "command_id": commandID}
+	if rec.Rule == "rebalance" {
+		afterValues["weight"] = rec.ProposedWeight
+	} else {
+		afterValues["priority"] = *rec.ProposedPriority
+	}
+	afterBytes, _ := json.Marshal(afterValues)
+	if _, err = tx.ExecContext(ctx, `INSERT INTO operation_audits(id,instance_id,operation_type,target_type,target_id,actor_id,before_summary,after_summary,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, commandID, target, operationType, "tuning_recommendation", id, actor, before, string(afterBytes), "success", now); err != nil {
 		return tuning.Recommendation{}, err
 	}
 	if err = tx.Commit(); err != nil {
 		return tuning.Recommendation{}, err
 	}
-	rec.Status, rec.CommandID, rec.ActedBy, rec.ActedAt = "adopted", &commandID, actor, &now
+	rec.Status, rec.CommandID, rec.ActedBy, rec.ActedAt = finalStatus, &commandID, actor, &now
 	return rec, nil
 }
 
@@ -429,7 +456,7 @@ func (s Store) DismissRecommendation(id, actor string, now time.Time) (tuning.Re
 
 func (s Store) HasPendingActionRecommendation(id string, channelID int64) (bool, error) {
 	var found int
-	err := s.db.QueryRowContext(context.Background(), `SELECT EXISTS(SELECT 1 FROM tuning_recommendations WHERE instance_id=? AND channel_id=? AND status='pending' AND rule IN ('demote','trial'))`, id, channelID).Scan(&found)
+	err := s.db.QueryRowContext(context.Background(), `SELECT EXISTS(SELECT 1 FROM tuning_recommendations WHERE instance_id=? AND channel_id=? AND status='pending' AND rule IN ('demote','trial','rebalance'))`, id, channelID).Scan(&found)
 	return found == 1, err
 }
 

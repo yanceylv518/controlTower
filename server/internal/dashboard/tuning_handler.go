@@ -70,8 +70,8 @@ func (h Handler) HandleTuningPolicy(w http.ResponseWriter, r *http.Request) {
 			writeDashboardError(w, 400, "invalid_json")
 			return
 		}
-		if req.Mode != "observe" && req.Mode != "confirm" {
-			writeDashboardError(w, 400, "mode_not_supported_until_v2.9-B3")
+		if req.Mode != "observe" && req.Mode != "confirm" && req.Mode != "auto" {
+			writeDashboardError(w, 400, "mode_not_supported")
 			return
 		}
 		if fields := req.Policy.Validate(); len(fields) > 0 {

@@ -29,6 +29,9 @@ type Store interface {
 	ListRecommendations(RecommendationQuery) ([]Recommendation, error)
 	RecommendationReport(RecommendationQuery) (Report, error)
 }
+type recommendationExecutor interface {
+	AdoptRecommendation(string, string, time.Time) (Recommendation, error)
+}
 type channelState struct {
 	errorWindows, latencyWindows, trialHealthyWindows int
 }
@@ -212,19 +215,27 @@ func (e *Engine) evaluateDynamicWeights(id, model string, channels []Channel, me
 			"ttft_factor": ttftFactor, "error_factor": errorFactor,
 			"cache_factor": cacheFactor, "otps_factor": otpsFactor,
 			"raw_multiplier": raw, "protected_multiplier": protected,
-			"observe_only": true,
+			"observe_only": mode == "observe",
 			"window_start": now.Add(-time.Duration(p.Scheduling.WindowMinutes) * time.Minute), "window_end": now,
 		}
 		currentPriority := ch.Priority
-		if e.store.InsertRecommendation(Recommendation{
+		rec := Recommendation{
 			ID: NewID(now, id, ch.ID, "rebalance"), InstanceID: id, ChannelID: ch.ID,
 			ChannelName: ch.Name, CreatedAt: now, Rule: "rebalance", Evidence: ev,
 			CurrentWeight: ch.Weight, ProposedWeight: proposed,
 			CurrentPriority: &currentPriority, ProposedPriority: &currentPriority,
-			ModeAtCreation: mode, Status: "recorded",
-		}) == nil {
-			made++
+			ModeAtCreation: mode, Status: actionStatus(mode),
 		}
+		if mode != "observe" && !e.actionAllowed(id, ch.ID, p, now) {
+			continue
+		}
+		if e.store.InsertRecommendation(rec) != nil {
+			continue
+		}
+		if mode == "auto" && !e.executeAutomatically(rec.ID, now) {
+			continue
+		}
+		made++
 	}
 	return made
 }
@@ -374,6 +385,11 @@ func (e *Engine) evaluateActive(id, model string, ch Channel, ladder []Channel, 
 		if e.store.PutDispatchState(state) == nil {
 			dispatch[ch.ID] = state
 		}
+	} else if mode == "auto" {
+		if !e.executeAutomatically(rec.ID, now) {
+			return 0
+		}
+		dispatch[ch.ID] = state
 	}
 	local.errorWindows, local.latencyWindows = 0, 0
 	return 1
@@ -418,6 +434,13 @@ func (e *Engine) scheduleTrials(id string, channels []Channel, states map[int64]
 			state.UpdatedAt = now
 			_ = e.store.PutDispatchState(state)
 			states[channelID] = state
+		} else if mode == "auto" {
+			if !e.executeAutomatically(rec.ID, now) {
+				continue
+			}
+			state.NextTrialAt = nil
+			state.UpdatedAt = now
+			states[channelID] = state
 		}
 		made++
 	}
@@ -456,17 +479,32 @@ func (e *Engine) recordInfo(id string, ch Channel, rule, model, mode string, now
 }
 
 func normalizedMode(mode string) string {
-	if mode == "confirm" {
-		return "confirm"
+	switch mode {
+	case "confirm", "auto":
+		return mode
+	default:
+		return "observe"
 	}
-	return "observe"
 }
 
 func actionStatus(mode string) string {
-	if mode == "confirm" {
+	if mode == "confirm" || mode == "auto" {
 		return "pending"
 	}
 	return "recorded"
+}
+
+func (e *Engine) executeAutomatically(id string, now time.Time) bool {
+	executor, ok := e.store.(recommendationExecutor)
+	if !ok {
+		log.Printf("tuning auto execution unsupported recommendation=%s", id)
+		return false
+	}
+	if _, err := executor.AdoptRecommendation(id, "system:auto", now); err != nil {
+		log.Printf("tuning auto execution failed recommendation=%s error=%v", id, err)
+		return false
+	}
+	return true
 }
 
 func (e *Engine) actionAllowed(id string, channelID int64, p Policy, now time.Time) bool {

@@ -341,7 +341,7 @@ export interface TuningPolicy {
   assignments: Record<string, string>;
 }
 export interface TuningPolicyResponse {
-  instance_id: string; policy: TuningPolicy; mode: "observe" | "confirm";
+  instance_id: string; policy: TuningPolicy; mode: "observe" | "confirm" | "auto";
   isDefault?: boolean; updated_at?: string; updated_by?: string;
 }
 export interface TuningRecommendation {
@@ -568,7 +568,7 @@ export const dashboardApi = (client: ApiClient) => ({
     ),
   tuningPolicy: (instance_id: string) =>
     client.request<TuningPolicyResponse>(`/api/dashboard/tuning/policy${query({ instance_id })}`),
-  saveTuningPolicy: (instance_id: string, policy: TuningPolicy, mode: "observe" | "confirm") =>
+  saveTuningPolicy: (instance_id: string, policy: TuningPolicy, mode: "observe" | "confirm" | "auto") =>
     client.request<TuningPolicyResponse>(`/api/dashboard/tuning/policy${query({ instance_id })}`, { method: "PUT", body: JSON.stringify({ policy, mode }) }),
   tuningRecommendations: (instance_id: string, limit = 100) =>
     client.request<ListResponse<TuningRecommendation>>(`/api/dashboard/tuning/recommendations${query({ instance_id, limit })}`),
