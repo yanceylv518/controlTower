@@ -38,7 +38,7 @@ const groupedLadders = computed(() => {
   }));
   return [...groups.entries()].map(([model, channels]) => ({ model, channels: channels.sort((a, b) => b.Priority - a.Priority) }));
 });
-const ruleText: Record<string, string> = { demote: "降级", trial: "试岗", no_backup: "无备岗", ladder_exhausted: "梯队用尽", mixed_channel: "混布" };
+const ruleText: Record<string, string> = { demote: "降级", trial: "恢复验证", no_backup: "无备岗", ladder_exhausted: "梯队用尽", mixed_channel: "混布" };
 
 async function load() {
   await filters.loadInstances();
@@ -70,7 +70,7 @@ async function act(item: TuningRecommendation, action: "adopt" | "dismiss") {
 function evidence(item: TuningRecommendation) {
   const e = item.evidence;
   if (item.rule === "demote") return `样本 ${e.samples ?? "-"}，错误率 ${(Number(e.error_rate || 0) * 100).toFixed(1)}%，P95 ${e.p95 ?? "-"}s`;
-  if (item.rule === "trial") return `第 ${Number(e.trial_attempts || 0) + 1} 次试岗`;
+  if (item.rule === "trial") return `第 ${Number(e.trial_attempts || 0) + 1} 次恢复验证`;
   return String(e.model || (Array.isArray(e.models) ? e.models.join("、") : "信息建议"));
 }
 watch(() => filters.site_id, () => void load());
@@ -128,14 +128,37 @@ onMounted(() => void load());
           </section>
           <section class="policy-section">
             <h3>调度参数</h3>
-            <p class="hint">控制评估频率、试岗退避和动作节奏，不决定何时触发降级。</p>
+            <p class="hint">控制评估频率、恢复验证和动作节奏，不决定何时触发降级。</p>
+            <div class="dispatch-flow">
+              <div class="flow-step">
+                <span class="step-number">1</span>
+                <div><b>触发降级</b><p>达到上述任一标准后，将异常渠道的优先级降到同模型梯队末尾，由下一可用渠道接管流量。</p></div>
+              </div>
+              <div class="flow-step">
+                <span class="step-number">2</span>
+                <div><b>等待恢复</b><p>渠道保持降级，首次等待 {{ policy.scheduling.trial_initial_minutes }} 分钟；冷却期和每日动作上限仍然有效。</p></div>
+              </div>
+              <div class="flow-step">
+                <span class="step-number">3</span>
+                <div><b>恢复验证</b><p>临时恢复原优先级并接收真实流量，连续观察 {{ policy.scheduling.trial_windows }} 个评估窗口，确认是否已经恢复。</p></div>
+              </div>
+              <div class="flow-step">
+                <span class="step-number">4</span>
+                <div><b>确认或再次降级</b><p>连续健康则保留原优先级；仍异常则再次移到梯队末尾，下次等待按 {{ policy.scheduling.trial_backoff_factor }} 倍延长，最长 {{ policy.scheduling.trial_max_minutes }} 分钟。</p></div>
+              </div>
+            </div>
+            <el-alert class="mode-effect" type="warning" :closable="false" show-icon>
+              <template #title>当前运行模式如何执行</template>
+              <span v-if="mode === 'observe'">观察模式只生成建议和模拟状态，不会实际修改渠道优先级。</span>
+              <span v-else>人工确认模式会生成待处理建议；只有点击“采纳”后，才会创建渠道调权指令。</span>
+            </el-alert>
             <div class="policy-grid">
               <el-form-item label="评估窗口（分钟）"><el-input-number v-model="policy.scheduling.window_minutes" :min="1" /></el-form-item>
               <el-form-item label="最少样本"><el-input-number v-model="policy.scheduling.min_samples" :min="1" /></el-form-item>
-              <el-form-item label="首次试岗（分钟）"><el-input-number v-model="policy.scheduling.trial_initial_minutes" :min="1" /></el-form-item>
-              <el-form-item label="退避倍数"><el-input-number v-model="policy.scheduling.trial_backoff_factor" :min="1" :step=".1" /></el-form-item>
-              <el-form-item label="试岗上限（分钟）"><el-input-number v-model="policy.scheduling.trial_max_minutes" :min="1" /></el-form-item>
-              <el-form-item label="试岗观察窗口"><el-input-number v-model="policy.scheduling.trial_windows" :min="1" /></el-form-item>
+              <el-form-item label="首次恢复验证等待（分钟）"><el-input-number v-model="policy.scheduling.trial_initial_minutes" :min="1" /></el-form-item>
+              <el-form-item label="失败退避倍数"><el-input-number v-model="policy.scheduling.trial_backoff_factor" :min="1" :step=".1" /></el-form-item>
+              <el-form-item label="最大验证等待（分钟）"><el-input-number v-model="policy.scheduling.trial_max_minutes" :min="1" /></el-form-item>
+              <el-form-item label="恢复验证观察窗口"><el-input-number v-model="policy.scheduling.trial_windows" :min="1" /></el-form-item>
               <el-form-item label="冷却（分钟）"><el-input-number v-model="policy.scheduling.cooldown_minutes" :min="1" /></el-form-item>
               <el-form-item label="每日动作上限"><el-input-number v-model="policy.scheduling.daily_action_limit" :min="1" /></el-form-item>
             </div>
@@ -149,7 +172,7 @@ onMounted(() => void load());
         <div v-else class="ladder-grid"><div v-for="group in groupedLadders" :key="group.model" class="ladder"><strong>{{ group.model }}</strong>
           <div v-for="channel in group.channels" :key="channel.ID" class="ladder-row"><span>{{ channel.Name }}</span><code>P{{ channel.Priority }}</code>
             <el-tag v-if="stateByChannel.get(channel.ID)?.NextTrialAt" type="warning">降级中 · {{ formatTime(stateByChannel.get(channel.ID)!.NextTrialAt!) }}</el-tag>
-            <el-tag v-else-if="stateByChannel.has(channel.ID)" type="success">试岗中</el-tag><el-tag v-else>在岗</el-tag>
+            <el-tag v-else-if="stateByChannel.has(channel.ID)" type="success">恢复验证中</el-tag><el-tag v-else>在岗</el-tag>
           </div></div></div>
       </el-card>
 
@@ -169,7 +192,7 @@ onMounted(() => void load());
       </el-card>
 
       <el-card shadow="never"><template #header><strong>说明</strong></template>
-        <p><b>值班模型：</b>同一模型按渠道优先级组成梯队；在岗异常时建议让位给下一岗，冷却后再安排试岗。</p>
+        <p><b>值班模型：</b>同一模型按渠道优先级组成梯队；在岗异常时建议让位给下一岗，等待后再进行恢复验证。</p>
         <p><b>观察：</b>只记录建议。<b>人工确认：</b>动作建议等待人工处理，采纳后进入现有渠道指令队列。<b>自动：</b>B3 才会提供。</p>
       </el-card>
     </div>
@@ -177,5 +200,5 @@ onMounted(() => void load());
 </template>
 
 <style scoped>
-.tuning-page{display:grid;gap:16px}.hint{font-size:12px;color:#8491a5}.policy-section{margin:18px 0;padding-top:16px;border-top:1px solid #ebeef5}.policy-section h3{margin:0 0 6px;font-size:15px}.policy-section .hint{margin:0 0 12px}.criteria-summary{margin-bottom:12px}.criteria-formula p{margin:5px 0;line-height:1.65}.criteria-notes{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:0 0 14px}.criteria-notes div{display:flex;flex-direction:column;gap:4px;padding:10px 12px;border:1px solid #e4eaf3;border-radius:6px;background:#fafbfd}.criteria-notes b{font-size:13px;color:#303b4d}.criteria-notes span{font-size:12px;line-height:1.55;color:#657086}.criteria-notes .wide{grid-column:1/-1;background:#fffaf2;border-color:#f3dfb7}.policy-grid{display:grid;grid-template-columns:repeat(5,minmax(150px,1fr));gap:0 16px}.ladder-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.ladder{border:1px solid #e5eaf2;border-radius:8px;padding:12px}.ladder-row{display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:center;margin-top:10px}.recommendation{border:1px solid #e8edf5;border-radius:8px;padding:12px}.recommendation p{color:#657086}.status{margin-left:8px}.report-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px}.report-grid div{background:#f6f8fb;padding:16px;border-radius:8px}.report-grid span,.report-grid b{display:block}.report-grid b{font-size:24px;margin-top:6px}@media(max-width:1200px){.criteria-notes{grid-template-columns:1fr 1fr}.policy-grid{grid-template-columns:repeat(3,minmax(150px,1fr))}}
+.tuning-page{display:grid;gap:16px}.hint{font-size:12px;color:#8491a5}.policy-section{margin:18px 0;padding-top:16px;border-top:1px solid #ebeef5}.policy-section h3{margin:0 0 6px;font-size:15px}.policy-section .hint{margin:0 0 12px}.criteria-summary{margin-bottom:12px}.criteria-formula p{margin:5px 0;line-height:1.65}.criteria-notes{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:0 0 14px}.criteria-notes div{display:flex;flex-direction:column;gap:4px;padding:10px 12px;border:1px solid #e4eaf3;border-radius:6px;background:#fafbfd}.criteria-notes b{font-size:13px;color:#303b4d}.criteria-notes span{font-size:12px;line-height:1.55;color:#657086}.criteria-notes .wide{grid-column:1/-1;background:#fffaf2;border-color:#f3dfb7}.dispatch-flow{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:0 0 12px}.flow-step{display:flex;gap:10px;padding:12px;border:1px solid #dfe7f3;border-radius:8px;background:#f8faff}.step-number{display:flex;align-items:center;justify-content:center;flex:0 0 24px;width:24px;height:24px;border-radius:50%;background:#3568e8;color:#fff;font-weight:700}.flow-step b{font-size:13px}.flow-step p{margin:5px 0 0;color:#657086;font-size:12px;line-height:1.55}.mode-effect{margin:0 0 14px}.policy-grid{display:grid;grid-template-columns:repeat(5,minmax(150px,1fr));gap:0 16px}.ladder-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.ladder{border:1px solid #e5eaf2;border-radius:8px;padding:12px}.ladder-row{display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:center;margin-top:10px}.recommendation{border:1px solid #e8edf5;border-radius:8px;padding:12px}.recommendation p{color:#657086}.status{margin-left:8px}.report-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px}.report-grid div{background:#f6f8fb;padding:16px;border-radius:8px}.report-grid span,.report-grid b{display:block}.report-grid b{font-size:24px;margin-top:6px}@media(max-width:1200px){.criteria-notes{grid-template-columns:1fr 1fr}.dispatch-flow{grid-template-columns:1fr 1fr}.policy-grid{grid-template-columns:repeat(3,minmax(150px,1fr))}}
 </style>
