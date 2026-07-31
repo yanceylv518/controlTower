@@ -79,6 +79,32 @@ func (s Store) QueryMetrics(id string, start, end time.Time) ([]tuning.ChannelMe
 	}
 	return out, rows.Err()
 }
+
+const tuningRecentChannelBucketsSQL = `SELECT
+bucket_time,request_count,error_count,user_error_count
+FROM metric_1m
+WHERE instance_id=? AND dimension_type='instance_channel'
+  AND dimension_key=CONCAT(?,':channel:',?) AND bucket_time>=? AND request_count>0
+ORDER BY bucket_time DESC
+LIMIT ?`
+
+func (s Store) QueryRecentChannelBuckets(id string, channelID int64, since time.Time, limit int) ([]tuning.RecentChannelBucket, error) {
+	rows, err := s.db.QueryContext(context.Background(), tuningRecentChannelBucketsSQL, id, id, channelID, since, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []tuning.RecentChannelBucket
+	for rows.Next() {
+		var bucket tuning.RecentChannelBucket
+		if err = rows.Scan(&bucket.BucketTime, &bucket.RequestCount, &bucket.ErrorCount, &bucket.UserErrorCount); err != nil {
+			return nil, err
+		}
+		out = append(out, bucket)
+	}
+	return out, rows.Err()
+}
+
 func (s Store) LatestChannels(id string) ([]tuning.Channel, error) {
 	rows, e := s.db.QueryContext(context.Background(), latestChannelsSQL, id, id)
 	if e != nil {

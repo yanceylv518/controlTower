@@ -29,6 +29,23 @@ func TestDecodePolicyJSONLegacyFlatFallsBackToDefaults(t *testing.T) {
 	}
 }
 
+func TestDecodePolicyJSONDefaultsMissingSparseFields(t *testing.T) {
+	raw := []byte(`{
+		"scheduling":{"window_minutes":15,"min_samples":20},
+		"criteria":[{"name":"default","error_rate_threshold":0.15,"severe_threshold":0.5,"latency_multiplier":2,"latency_floor_seconds":10,"sustained_windows":2}],
+		"assignments":{}
+	}`)
+	got, err := DecodePolicyJSON(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaults := DefaultPolicy().Scheduling
+	if got.Scheduling.SparseMinSamples != defaults.SparseMinSamples ||
+		got.Scheduling.SparseLookbackMinutes != defaults.SparseLookbackMinutes {
+		t.Fatalf("missing sparse fields must use defaults: %#v", got.Scheduling)
+	}
+}
+
 func TestCriteriaForAssignmentAndFallback(t *testing.T) {
 	p := DefaultPolicy()
 	special := p.Criteria[0]

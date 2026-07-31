@@ -13,6 +13,8 @@ type fakeStore struct {
 	pending         []Recommendation
 	outcomes        map[string]*bool
 	buckets         map[int64][]float64
+	recentBuckets   map[int64][]RecentChannelBucket
+	recentQueries   int
 	dispatch        map[int64]DispatchState
 	actionCount     int
 	lastAction      time.Time
@@ -28,6 +30,10 @@ func (f *fakeStore) HasExpiredAutoCommands(string, time.Time) (bool, error) {
 func (f *fakeStore) ListEnabledInstances() ([]string, error) { return []string{"i"}, nil }
 func (f *fakeStore) QueryMetrics(string, time.Time, time.Time) ([]ChannelMetric, error) {
 	return f.metrics, nil
+}
+func (f *fakeStore) QueryRecentChannelBuckets(_ string, ch int64, _ time.Time, _ int) ([]RecentChannelBucket, error) {
+	f.recentQueries++
+	return f.recentBuckets[ch], nil
 }
 func (f *fakeStore) LatestChannels(string) ([]Channel, error) { return f.channels, nil }
 func (f *fakeStore) QueryP95Buckets(_ string, ch int64, _, _ time.Time, _ int64) ([]float64, error) {

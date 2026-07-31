@@ -14,14 +14,16 @@ var (
 )
 
 type SchedulingParams struct {
-	WindowMinutes       int     `json:"window_minutes"`
-	MinSamples          int64   `json:"min_samples"`
-	TrialInitialMinutes int     `json:"trial_initial_minutes"`
-	TrialBackoffFactor  float64 `json:"trial_backoff_factor"`
-	TrialMaxMinutes     int     `json:"trial_max_minutes"`
-	TrialWindows        int     `json:"trial_windows"`
-	CooldownMinutes     int     `json:"cooldown_minutes"`
-	DailyActionLimit    int     `json:"daily_action_limit"`
+	WindowMinutes         int     `json:"window_minutes"`
+	MinSamples            int64   `json:"min_samples"`
+	SparseMinSamples      int64   `json:"sparse_min_samples"`
+	SparseLookbackMinutes int     `json:"sparse_lookback_minutes"`
+	TrialInitialMinutes   int     `json:"trial_initial_minutes"`
+	TrialBackoffFactor    float64 `json:"trial_backoff_factor"`
+	TrialMaxMinutes       int     `json:"trial_max_minutes"`
+	TrialWindows          int     `json:"trial_windows"`
+	CooldownMinutes       int     `json:"cooldown_minutes"`
+	DailyActionLimit      int     `json:"daily_action_limit"`
 }
 
 type DynamicWeightingParams struct {
@@ -56,7 +58,7 @@ type Policy struct {
 func DefaultPolicy() Policy {
 	return Policy{
 		Scheduling: SchedulingParams{
-			WindowMinutes: 15, MinSamples: 20, TrialInitialMinutes: 60,
+			WindowMinutes: 15, MinSamples: 20, SparseMinSamples: 10, SparseLookbackMinutes: 360, TrialInitialMinutes: 60,
 			TrialBackoffFactor: 2, TrialMaxMinutes: 1440, TrialWindows: 2,
 			CooldownMinutes: 10, DailyActionLimit: 6,
 		},
@@ -145,6 +147,12 @@ func (p Policy) Validate() map[string]string {
 	}
 	if p.Scheduling.MinSamples < 1 || p.Scheduling.MinSamples > 1000 {
 		e["scheduling.min_samples"] = "must_be_between_1_and_1000"
+	}
+	if p.Scheduling.SparseMinSamples < 1 || p.Scheduling.SparseMinSamples > p.Scheduling.MinSamples {
+		e["scheduling.sparse_min_samples"] = "must_be_between_1_and_min_samples"
+	}
+	if p.Scheduling.SparseLookbackMinutes < p.Scheduling.WindowMinutes || p.Scheduling.SparseLookbackMinutes > 2880 {
+		e["scheduling.sparse_lookback_minutes"] = "must_be_between_window_minutes_and_2880"
 	}
 	if p.Scheduling.TrialBackoffFactor < 1 {
 		e["scheduling.trial_backoff_factor"] = "must_be_at_least_1"
@@ -240,6 +248,11 @@ type ChannelMetric struct {
 	TTFTP95                                  float64
 	CacheHitRate                             float64
 	OTPS                                     float64
+}
+
+type RecentChannelBucket struct {
+	BucketTime                               time.Time
+	RequestCount, ErrorCount, UserErrorCount int64
 }
 
 func (m ChannelMetric) ErrorRate() float64 {

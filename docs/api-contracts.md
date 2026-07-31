@@ -208,7 +208,8 @@ Instance tokens are stored only as `SHA-256(pepper + token)` hashes. A token may
 
 - `GET|PUT /api/dashboard/tuning/policy?instance_id=` reads or writes the instance policy. Supported modes are `observe`, `confirm`, and `auto`. In `auto`, action recommendations are persisted first and then atomically converted into auditable channel commands.
 - Policy uses the structured v2.9-B2.5 shape:
-  - `scheduling`: `window_minutes`, `min_samples`, `trial_initial_minutes`, `trial_backoff_factor`, `trial_max_minutes`, `trial_windows`, `cooldown_minutes`, and `daily_action_limit`.
+  - `scheduling`: `window_minutes`, `min_samples`, `sparse_min_samples`, `sparse_lookback_minutes`, `trial_initial_minutes`, `trial_backoff_factor`, `trial_max_minutes`, `trial_windows`, `cooldown_minutes`, and `daily_action_limit`.
+    - `sparse_min_samples` and `sparse_lookback_minutes` provide count-based fallback for low-traffic channels. The fallback only affects attributed error-rate decisions and trial recovery checks; latency degradation and dynamic weighting still require the normal current-window sample count. At least one current-window request is required by the freshness guard.
   - `criteria`: named degradation standards containing `name`, `error_rate_threshold`, `severe_threshold`, `latency_multiplier`, `latency_floor_seconds`, and `sustained_windows`. A `default` criterion is required.
   - `assignments`: model name to criterion name mappings. Unassigned models use `default`.
 - Example policy:
@@ -217,6 +218,8 @@ Instance tokens are stored only as `SHA-256(pepper + token)` hashes. A token may
     "scheduling": {
       "window_minutes": 15,
       "min_samples": 20,
+      "sparse_min_samples": 10,
+      "sparse_lookback_minutes": 360,
       "trial_initial_minutes": 60,
       "trial_backoff_factor": 2,
       "trial_max_minutes": 1440,

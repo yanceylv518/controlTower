@@ -42,6 +42,20 @@ func TestTuningP95BucketsSQLBuildsFullDimensionKey(t *testing.T) {
 	}
 }
 
+func TestTuningRecentChannelBucketsSQLUsesNewestNonEmptyBuckets(t *testing.T) {
+	for _, fragment := range []string{
+		"dimension_key=CONCAT(?,':channel:',?)",
+		"bucket_time>=?",
+		"request_count>0",
+		"ORDER BY bucket_time DESC",
+		"LIMIT ?",
+	} {
+		if !strings.Contains(tuningRecentChannelBucketsSQL, fragment) {
+			t.Fatalf("recent channel bucket query missing %q: %s", fragment, tuningRecentChannelBucketsSQL)
+		}
+	}
+}
+
 func TestConfirmRecommendationSQLContracts(t *testing.T) {
 	source, err := os.ReadFile("tuning.go")
 	if err != nil {

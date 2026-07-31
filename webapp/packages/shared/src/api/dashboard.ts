@@ -320,7 +320,9 @@ export interface NginxSlowSample {
 }
 
 export interface TuningSchedulingParams {
-  window_minutes: number; min_samples: number; trial_initial_minutes: number;
+  window_minutes: number; min_samples: number;
+  sparse_min_samples: number; sparse_lookback_minutes: number;
+  trial_initial_minutes: number;
   trial_backoff_factor: number; trial_max_minutes: number; trial_windows: number;
   cooldown_minutes: number; daily_action_limit: number;
 }

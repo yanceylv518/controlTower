@@ -15,6 +15,7 @@ type Store interface {
 	PutPolicy(PolicyRecord) error
 	ListEnabledInstances() ([]string, error)
 	QueryMetrics(string, time.Time, time.Time) ([]ChannelMetric, error)
+	QueryRecentChannelBuckets(string, int64, time.Time, int) ([]RecentChannelBucket, error)
 	QueryP95Buckets(string, int64, time.Time, time.Time, int64) ([]float64, error)
 	LatestChannels(string) ([]Channel, error)
 	InsertRecommendation(Recommendation) error
@@ -359,9 +360,17 @@ func (e *Engine) evaluateActive(id, model string, ch Channel, ladder []Channel, 
 		local = &channelState{}
 		e.states[key] = local
 	}
+	sparse := false
+	sparseStart, sparseEnd := time.Time{}, time.Time{}
 	if m.RequestCount < scheduling.MinSamples {
-		local.errorWindows, local.latencyWindows = 0, 0
-		return 0
+		var ok bool
+		m, sparseStart, sparseEnd, ok = e.sparseMetric(id, ch.ID, scheduling, now)
+		local.latencyWindows = 0
+		if !ok {
+			local.errorWindows, local.trialHealthyWindows = 0, 0
+			return 0
+		}
+		sparse = true
 	}
 	rate := m.ErrorRate()
 	severe := rate >= criteria.SevereThreshold
@@ -370,10 +379,16 @@ func (e *Engine) evaluateActive(id, model string, ch Channel, ladder []Channel, 
 	} else {
 		local.errorWindows = 0
 	}
-	baseline, baselineOK := e.baseline(id, ch.ID, scheduling.MinSamples, now)
-	latencyBad := baselineOK && m.P95 >= criteria.LatencyFloorSeconds && m.P95 >= baseline*criteria.LatencyMultiplier
-	if latencyBad {
-		local.latencyWindows++
+	baseline, latencyBad := 0.0, false
+	if !sparse {
+		var baselineOK bool
+		baseline, baselineOK = e.baseline(id, ch.ID, scheduling.MinSamples, now)
+		latencyBad = baselineOK && m.P95 >= criteria.LatencyFloorSeconds && m.P95 >= baseline*criteria.LatencyMultiplier
+		if latencyBad {
+			local.latencyWindows++
+		} else {
+			local.latencyWindows = 0
+		}
 	} else {
 		local.latencyWindows = 0
 	}
@@ -406,9 +421,16 @@ func (e *Engine) evaluateActive(id, model string, ch Channel, ladder []Channel, 
 		if exhausted {
 			rule = "ladder_exhausted"
 		}
-		return e.recordInfo(id, ch, rule, model, mode, now, map[string]any{
+		infoEvidence := map[string]any{
 			"trigger": trigger, "error_rate": rate, "error_rate_total": m.TotalErrorRate(), "user_error_count": m.UserErrorCount, "p95": m.P95,
-		})
+		}
+		if sparse {
+			infoEvidence["sparse"] = true
+			infoEvidence["sparse_samples"] = m.RequestCount
+			infoEvidence["sparse_window_start"] = sparseStart
+			infoEvidence["sparse_window_end"] = sparseEnd
+		}
+		return e.recordInfo(id, ch, rule, model, mode, now, infoEvidence)
 	}
 	current := ch.Priority
 	proposed := ladder[len(ladder)-1].Priority - 1
@@ -421,6 +443,12 @@ func (e *Engine) evaluateActive(id, model string, ch Channel, ladder []Channel, 
 		"latency_multiplier": criteria.LatencyMultiplier, "latency_floor_seconds": criteria.LatencyFloorSeconds,
 		"backup_channel_id": backup.ID, "backup_channel_name": backup.Name,
 		"window_start": now.Add(-time.Duration(scheduling.WindowMinutes) * time.Minute), "window_end": now,
+	}
+	if sparse {
+		ev["sparse"] = true
+		ev["sparse_samples"] = m.RequestCount
+		ev["sparse_window_start"] = sparseStart
+		ev["sparse_window_end"] = sparseEnd
 	}
 	rec := Recommendation{
 		ID: NewID(now, id, ch.ID, "demote"), InstanceID: id, ChannelID: ch.ID,
@@ -459,6 +487,34 @@ func (e *Engine) evaluateActive(id, model string, ch Channel, ladder []Channel, 
 	}
 	local.errorWindows, local.latencyWindows = 0, 0
 	return 1
+}
+
+func (e *Engine) sparseMetric(id string, channelID int64, scheduling SchedulingParams, now time.Time) (ChannelMetric, time.Time, time.Time, bool) {
+	buckets, err := e.store.QueryRecentChannelBuckets(
+		id,
+		channelID,
+		now.Add(-time.Duration(scheduling.SparseLookbackMinutes)*time.Minute),
+		int(scheduling.SparseMinSamples),
+	)
+	if err != nil || len(buckets) == 0 {
+		return ChannelMetric{}, time.Time{}, time.Time{}, false
+	}
+	windowStart := now.Add(-time.Duration(scheduling.WindowMinutes) * time.Minute)
+	if buckets[0].BucketTime.Before(windowStart) {
+		return ChannelMetric{}, time.Time{}, time.Time{}, false
+	}
+	metric := ChannelMetric{ChannelID: channelID}
+	newest, oldest := buckets[0].BucketTime, buckets[0].BucketTime
+	for _, bucket := range buckets {
+		metric.RequestCount += bucket.RequestCount
+		metric.ErrorCount += bucket.ErrorCount
+		metric.UserErrorCount += bucket.UserErrorCount
+		oldest = bucket.BucketTime
+		if metric.RequestCount >= scheduling.SparseMinSamples {
+			return metric, oldest, newest, true
+		}
+	}
+	return ChannelMetric{}, time.Time{}, time.Time{}, false
 }
 
 func (e *Engine) scheduleTrials(id string, channels []Channel, states map[int64]DispatchState, p Policy, mode string, now time.Time) int {

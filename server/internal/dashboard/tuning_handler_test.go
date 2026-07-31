@@ -26,6 +26,9 @@ func (s *tuningStub) ListEnabledInstances() ([]string, error)   { return nil, ni
 func (s *tuningStub) QueryMetrics(string, time.Time, time.Time) ([]tuning.ChannelMetric, error) {
 	return nil, nil
 }
+func (s *tuningStub) QueryRecentChannelBuckets(string, int64, time.Time, int) ([]tuning.RecentChannelBucket, error) {
+	return nil, nil
+}
 func (s *tuningStub) QueryP95Buckets(string, int64, time.Time, time.Time, int64) ([]float64, error) {
 	return nil, nil
 }

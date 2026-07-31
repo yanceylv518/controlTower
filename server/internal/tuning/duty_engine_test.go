@@ -16,8 +16,143 @@ func TestDutyPolicyValidation(t *testing.T) {
 	}
 	p.Criteria[0].ErrorRateThreshold = p.Criteria[0].SevereThreshold
 	p.Scheduling.MinSamples = 1001
-	if errors := p.Validate(); errors["criteria[default].error_rate_threshold"] == "" || errors["scheduling.min_samples"] == "" {
+	p.Scheduling.SparseMinSamples = 1002
+	p.Scheduling.SparseLookbackMinutes = p.Scheduling.WindowMinutes - 1
+	if errors := p.Validate(); errors["criteria[default].error_rate_threshold"] == "" ||
+		errors["scheduling.min_samples"] == "" ||
+		errors["scheduling.sparse_min_samples"] == "" ||
+		errors["scheduling.sparse_lookback_minutes"] == "" {
 		t.Fatalf("missing validation: %#v", errors)
+	}
+}
+
+func sparseBuckets(now time.Time, requests, errors int64) []RecentChannelBucket {
+	return []RecentChannelBucket{
+		{BucketTime: now.Add(-30 * time.Second), RequestCount: 1, ErrorCount: min64(errors, 1)},
+		{BucketTime: now.Add(-30 * time.Minute), RequestCount: requests - 1, ErrorCount: max64(errors-1, 0)},
+	}
+}
+
+func min64(a, b int64) int64 {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func max64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func TestDutySparseSamplingTriggersAndMarksEvidence(t *testing.T) {
+	p := testPolicy()
+	now := time.Now().UTC()
+	f := &fakeStore{
+		policy:        p,
+		channels:      []Channel{dutyChannel(1, 100, "m"), dutyChannel(2, 50, "m")},
+		metrics:       []ChannelMetric{{ChannelID: 1, RequestCount: 1, ErrorCount: 1}},
+		recentBuckets: map[int64][]RecentChannelBucket{1: sparseBuckets(now, 10, 6)},
+	}
+	NewEngine(f).Tick(now)
+	if len(f.recommendations) != 1 || f.recommendations[0].Evidence["sparse"] != true {
+		t.Fatalf("sparse severe error must trigger with evidence: %#v", f.recommendations)
+	}
+	if f.recommendations[0].Evidence["sparse_samples"] != int64(10) {
+		t.Fatalf("unexpected sparse sample evidence: %#v", f.recommendations[0].Evidence)
+	}
+}
+
+func TestDutySparseSamplingFreshnessAndCountGuards(t *testing.T) {
+	p := testPolicy()
+	now := time.Now().UTC()
+	base := fakeStore{
+		policy:   p,
+		channels: []Channel{dutyChannel(1, 100, "m"), dutyChannel(2, 50, "m")},
+		metrics:  []ChannelMetric{{ChannelID: 1, RequestCount: 1, ErrorCount: 1}},
+	}
+	stale := base
+	stale.recentBuckets = map[int64][]RecentChannelBucket{1: {
+		{BucketTime: now.Add(-2 * time.Minute), RequestCount: 10, ErrorCount: 10},
+	}}
+	NewEngine(&stale).Tick(now)
+	if len(stale.recommendations) != 0 {
+		t.Fatal("stale sparse data must not trigger")
+	}
+	insufficient := base
+	insufficient.recentBuckets = map[int64][]RecentChannelBucket{1: sparseBuckets(now, 9, 9)}
+	NewEngine(&insufficient).Tick(now)
+	if len(insufficient.recommendations) != 0 {
+		t.Fatal("insufficient sparse request count must not trigger")
+	}
+}
+
+func TestDutySparseSamplingSupportsTrialHealthAndRedemotion(t *testing.T) {
+	p := testPolicy()
+	p.Policy.Scheduling.TrialWindows = 1
+	now := time.Now().UTC()
+	trialState := DispatchState{InstanceID: "i", ChannelID: 1, ModelName: "m", OriginalPriority: 100}
+	healthy := &fakeStore{
+		policy:        p,
+		channels:      []Channel{dutyChannel(1, 100, "m"), dutyChannel(2, 50, "m")},
+		metrics:       []ChannelMetric{{ChannelID: 1, RequestCount: 1}},
+		recentBuckets: map[int64][]RecentChannelBucket{1: sparseBuckets(now, 10, 0)},
+		dispatch:      map[int64]DispatchState{1: trialState},
+	}
+	NewEngine(healthy).Tick(now)
+	if _, ok := healthy.dispatch[1]; ok {
+		t.Fatal("healthy sparse trial must retain the channel")
+	}
+	bad := &fakeStore{
+		policy:        p,
+		channels:      []Channel{dutyChannel(1, 100, "m"), dutyChannel(2, 50, "m")},
+		metrics:       []ChannelMetric{{ChannelID: 1, RequestCount: 1, ErrorCount: 1}},
+		recentBuckets: map[int64][]RecentChannelBucket{1: sparseBuckets(now, 10, 6)},
+		dispatch:      map[int64]DispatchState{1: trialState},
+	}
+	NewEngine(bad).Tick(now)
+	if len(bad.recommendations) != 1 || bad.recommendations[0].Rule != "demote" {
+		t.Fatalf("unhealthy sparse trial must be demoted again: %#v", bad.recommendations)
+	}
+}
+
+func TestDutySparseSamplingDoesNotTriggerLatencyOrDynamicWeighting(t *testing.T) {
+	p := testPolicy()
+	p.Policy.DynamicWeighting.Mode = "observe"
+	now := time.Now().UTC()
+	f := &fakeStore{
+		policy:   p,
+		channels: []Channel{dutyChannel(1, 100, "m"), dutyChannel(2, 100, "m"), dutyChannel(3, 50, "m")},
+		metrics: []ChannelMetric{
+			{ChannelID: 1, RequestCount: 1, P95: 100, TTFTP95: 100},
+			{ChannelID: 2, RequestCount: 1, P95: 1, TTFTP95: 1},
+		},
+		buckets: map[int64][]float64{1: {1, 1, 1, 1, 1, 1, 1, 1}},
+		recentBuckets: map[int64][]RecentChannelBucket{
+			1: sparseBuckets(now, 10, 0),
+			2: sparseBuckets(now, 10, 0),
+		},
+	}
+	e := NewEngine(f)
+	e.Tick(now)
+	e.Tick(now.Add(time.Minute))
+	if len(f.recommendations) != 0 {
+		t.Fatalf("sparse path must not affect latency or dynamic weighting: %#v", f.recommendations)
+	}
+}
+
+func TestDutyNormalSamplePathDoesNotQuerySparseBuckets(t *testing.T) {
+	p := testPolicy()
+	f := &fakeStore{
+		policy:   p,
+		channels: []Channel{dutyChannel(1, 100, "m"), dutyChannel(2, 50, "m")},
+		metrics:  []ChannelMetric{{ChannelID: 1, RequestCount: 100}},
+	}
+	NewEngine(f).Tick(time.Now().UTC())
+	if f.recentQueries != 0 {
+		t.Fatalf("normal sample path queried sparse buckets %d times", f.recentQueries)
 	}
 }
 

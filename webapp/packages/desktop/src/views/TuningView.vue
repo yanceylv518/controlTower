@@ -12,7 +12,9 @@ const loading = ref(false);
 const mode = ref<"observe" | "confirm" | "auto">("observe");
 const policy = reactive<TuningPolicy>({
   scheduling: {
-    window_minutes: 15, min_samples: 20, trial_initial_minutes: 60,
+    window_minutes: 15, min_samples: 20,
+    sparse_min_samples: 10, sparse_lookback_minutes: 360,
+    trial_initial_minutes: 60,
     trial_backoff_factor: 2, trial_max_minutes: 1440, trial_windows: 2,
     cooldown_minutes: 10, daily_action_limit: 6,
   },
@@ -138,6 +140,12 @@ onMounted(() => void load());
                   “不低于 {{ defaultCriteria.latency_floor_seconds }} 秒”和
                   “不低于该渠道历史基线的 {{ defaultCriteria.latency_multiplier }} 倍”。
                 </p>
+                <p>
+                  <b>低流量回退：</b>当前窗口少于 {{ policy.scheduling.min_samples }} 条但仍有新请求时，
+                  最多回看 {{ policy.scheduling.sparse_lookback_minutes }} 分钟，累计最近
+                  {{ policy.scheduling.sparse_min_samples }} 条请求判断错误率。该规则仅用于错误降级和恢复验证，
+                  不用于延迟恶化与动态配权。
+                </p>
               </div>
             </el-alert>
             <div class="criteria-notes">
@@ -187,6 +195,17 @@ onMounted(() => void load());
           <section class="policy-section">
             <h3>调度参数</h3>
             <p class="hint">控制评估频率、恢复验证和动作节奏，不决定何时触发降级。</p>
+            <el-alert
+              class="criteria-summary"
+              type="info"
+              :closable="false"
+              show-icon
+              title="低流量渠道回退规则"
+            >
+              低流量渠道回退用最近 {{ policy.scheduling.sparse_min_samples }} 条请求统计，
+              最多回看 {{ policy.scheduling.sparse_lookback_minutes }} 分钟，仅作用于错误率与恢复验证；
+              不参与延迟判定和动态配权。当前评估窗口必须有新请求，避免旧数据重复触发。
+            </el-alert>
             <div class="dispatch-flow">
               <div class="flow-step">
                 <span class="step-number">1</span>
@@ -214,6 +233,8 @@ onMounted(() => void load());
             <div class="policy-grid">
               <el-form-item label="评估窗口（分钟）"><el-input-number v-model="policy.scheduling.window_minutes" :min="1" /></el-form-item>
               <el-form-item label="最少样本"><el-input-number v-model="policy.scheduling.min_samples" :min="1" /></el-form-item>
+              <el-form-item label="稀疏统计最少样本"><el-input-number v-model="policy.scheduling.sparse_min_samples" :min="1" :max="policy.scheduling.min_samples" /></el-form-item>
+              <el-form-item label="稀疏统计回看（分钟）"><el-input-number v-model="policy.scheduling.sparse_lookback_minutes" :min="policy.scheduling.window_minutes" :max="2880" /></el-form-item>
               <el-form-item label="首次恢复验证等待（分钟）"><el-input-number v-model="policy.scheduling.trial_initial_minutes" :min="1" /></el-form-item>
               <el-form-item label="失败退避倍数"><el-input-number v-model="policy.scheduling.trial_backoff_factor" :min="1" :step=".1" /></el-form-item>
               <el-form-item label="最大验证等待（分钟）"><el-input-number v-model="policy.scheduling.trial_max_minutes" :min="1" /></el-form-item>
@@ -241,6 +262,7 @@ onMounted(() => void load());
       <el-card shadow="never"><template #header><strong>建议流水</strong></template>
         <el-timeline v-if="recommendations.length"><el-timeline-item v-for="item in recommendations" :key="item.id" :timestamp="formatTime(item.created_at)" placement="top">
           <div class="recommendation"><div><el-tag>{{ ruleText[item.rule] || item.rule }}</el-tag> <strong>{{ item.channel_name }}</strong>
+            <el-tag v-if="item.evidence.sparse" class="status" type="warning">稀疏统计</el-tag>
             <el-tag class="status" :type="item.status === 'pending' ? 'warning' : ['adopted', 'auto_executed'].includes(item.status) ? 'success' : 'info'">{{ item.status }}</el-tag></div>
             <p>{{ evidence(item) }}<template v-if="item.rule === 'rebalance'">；权重 {{ item.current_weight }} → {{ item.proposed_weight }}</template><template v-else-if="item.proposed_priority !== item.current_priority">；优先级 {{ item.current_priority }} → {{ item.proposed_priority }}</template></p>
             <div v-if="item.outcome_at">事后：<b>{{ item.hit === true ? "命中 ✓" : item.hit === false ? "未命中 ✕" : "样本不足" }}</b></div>
