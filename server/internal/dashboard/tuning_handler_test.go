@@ -88,8 +88,8 @@ func TestTuningRecommendationsPaginationAndReport(t *testing.T) {
 	s := &tuningStub{recs: []tuning.Recommendation{{ID: "r", InstanceID: "i", Evidence: map[string]any{"samples": 20}}}, report: tuning.Report{Total: 4, Adopted: 3, ByRule: map[string]int64{"demote": 4}, Filled: 3, Judged: 2, Hits: 1}}
 	h := NewHandler(nil).WithTuningStore(s)
 	rr := httptest.NewRecorder()
-	h.HandleTuningRecommendations(rr, httptest.NewRequest(http.MethodGet, "/api/dashboard/tuning/recommendations?instance_id=i&limit=12&before=2026-07-14T00:00:00Z", nil))
-	if rr.Code != 200 || s.query.Limit != 12 || s.query.Before.IsZero() || !bytes.Contains(rr.Body.Bytes(), []byte(`"evidence"`)) {
+	h.HandleTuningRecommendations(rr, httptest.NewRequest(http.MethodGet, "/api/dashboard/tuning/recommendations?instance_id=i&limit=12&before=2026-07-14T00:00:00Z&rule=rebalance", nil))
+	if rr.Code != 200 || s.query.Limit != 12 || s.query.Rule != "rebalance" || s.query.Before.IsZero() || !bytes.Contains(rr.Body.Bytes(), []byte(`"evidence"`)) {
 		t.Fatalf("recommendations: %d %s %#v", rr.Code, rr.Body.String(), s.query)
 	}
 	rr = httptest.NewRecorder()

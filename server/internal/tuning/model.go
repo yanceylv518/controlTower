@@ -25,7 +25,7 @@ type SchedulingParams struct {
 }
 
 type DynamicWeightingParams struct {
-	Enabled             bool    `json:"enabled"`
+	Mode                string  `json:"mode"`
 	TTFTInfluence       float64 `json:"ttft_influence"`
 	ErrorInfluence      float64 `json:"error_influence"`
 	CacheInfluence      float64 `json:"cache_influence"`
@@ -61,7 +61,7 @@ func DefaultPolicy() Policy {
 			CooldownMinutes: 10, DailyActionLimit: 6,
 		},
 		DynamicWeighting: DynamicWeightingParams{
-			Enabled: true, TTFTInfluence: .50, ErrorInfluence: .30,
+			Mode: "observe", TTFTInfluence: .50, ErrorInfluence: .30,
 			CacheInfluence: .10, OTPSInfluence: .10,
 			MinMultiplier: .50, MaxMultiplier: 1.50, SmoothingAlpha: .30,
 			MaxIncreasePerRound: .20, MaxDecreasePerRound: .30,
@@ -89,6 +89,25 @@ func DecodePolicyJSON(raw []byte) (Policy, error) {
 	p := DefaultPolicy()
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return Policy{}, err
+	}
+	var dynamicShape map[string]json.RawMessage
+	if dynamicRaw := shape["dynamic_weighting"]; dynamicRaw != nil {
+		if err := json.Unmarshal(dynamicRaw, &dynamicShape); err != nil {
+			return Policy{}, err
+		}
+		if dynamicShape["mode"] == nil {
+			var enabled bool
+			if legacy := dynamicShape["enabled"]; legacy != nil {
+				if err := json.Unmarshal(legacy, &enabled); err != nil {
+					return Policy{}, err
+				}
+				if enabled {
+					p.DynamicWeighting.Mode = "observe"
+				} else {
+					p.DynamicWeighting.Mode = "off"
+				}
+			}
+		}
 	}
 	if p.Assignments == nil {
 		p.Assignments = map[string]string{}
@@ -137,6 +156,9 @@ func (p Policy) Validate() map[string]string {
 		e["scheduling.daily_action_limit"] = "must_be_positive"
 	}
 	d := p.DynamicWeighting
+	if d.Mode != "off" && d.Mode != "observe" && d.Mode != "auto" {
+		e["dynamic_weighting.mode"] = "must_be_off_observe_or_auto"
+	}
 	for name, value := range map[string]float64{
 		"ttft_influence": d.TTFTInfluence, "error_influence": d.ErrorInfluence,
 		"cache_influence": d.CacheInfluence, "otps_influence": d.OTPSInfluence,
@@ -268,6 +290,7 @@ type Recommendation struct {
 }
 type RecommendationQuery struct {
 	InstanceID string
+	Rule       string
 	Limit      int
 	Before     time.Time
 	Days       int

@@ -17,7 +17,7 @@ const policy = reactive<TuningPolicy>({
     cooldown_minutes: 10, daily_action_limit: 6,
   },
   dynamic_weighting: {
-    enabled: true, ttft_influence: .5, error_influence: .3,
+    mode: "observe", ttft_influence: .5, error_influence: .3,
     cache_influence: .1, otps_influence: .1,
     min_multiplier: .5, max_multiplier: 1.5, smoothing_alpha: .3,
     max_increase_per_round: .2, max_decrease_per_round: .3,
@@ -30,6 +30,7 @@ const policy = reactive<TuningPolicy>({
 });
 const defaultCriteria = computed(() => policy.criteria.find(item => item.name === "default") || policy.criteria[0]);
 const recommendations = ref<TuningRecommendation[]>([]);
+const weightRecommendations = ref<TuningRecommendation[]>([]);
 const reports = reactive<Record<7 | 30, TuningReport | null>>({ 7: null, 30: null });
 const reportDays = ref<7 | 30>(7);
 const ladders = ref<TuningLadders>({ channels: [], dispatch_states: [] });
@@ -37,6 +38,21 @@ const instanceID = computed(() => filters.instances
   .filter(x => x.enabled && siteOf(x) === filters.site_id)
   .map(x => x.instance_id).sort()[0] || "");
 const stateByChannel = computed(() => new Map(ladders.value.dispatch_states.map(x => [x.ChannelID, x])));
+const latestWeightByChannel = computed(() => {
+  const result = new Map<number, TuningRecommendation>();
+  const maxAgeMs = policy.scheduling.window_minutes * 2 * 60_000;
+  const now = Date.now();
+  for (const item of weightRecommendations.value) {
+    if (result.has(item.channel_id) || now - new Date(item.created_at).getTime() > maxAgeMs) continue;
+    result.set(item.channel_id, item);
+  }
+  return result;
+});
+function weightTip(channelID: number) {
+  const item = latestWeightByChannel.value.get(channelID);
+  if (!item) return "";
+  return `建议时间 ${formatTime(item.created_at)}；原始倍率 ${Number(item.evidence.raw_multiplier || 1).toFixed(2)}，保护后倍率 ${Number(item.evidence.protected_multiplier || 1).toFixed(2)}`;
+}
 const groupedLadders = computed(() => {
   const groups = new Map<string, typeof ladders.value.channels>();
   ladders.value.channels.forEach(channel => channel.Models.forEach(model => {
@@ -51,13 +67,15 @@ async function load() {
   if (!instanceID.value) return;
   loading.value = true;
   try {
-    const [p, recs, ladder, r7, r30] = await Promise.all([
+    const [p, recs, weightRecs, ladder, r7, r30] = await Promise.all([
       dashboard.tuningPolicy(instanceID.value), dashboard.tuningRecommendations(instanceID.value),
+      dashboard.tuningRecommendations(instanceID.value, 100, "rebalance"),
       dashboard.tuningLadders(instanceID.value), dashboard.tuningReport(instanceID.value, 7),
       dashboard.tuningReport(instanceID.value, 30),
     ]);
     mode.value = p.mode; Object.assign(policy, p.policy);
-    recommendations.value = recs.items; ladders.value = ladder; reports[7] = r7; reports[30] = r30;
+    recommendations.value = recs.items; weightRecommendations.value = weightRecs.items;
+    ladders.value = ladder; reports[7] = r7; reports[30] = r30;
   } finally { loading.value = false; }
 }
 async function save() {
@@ -140,12 +158,21 @@ onMounted(() => void load());
           </section>
           <section class="policy-section">
             <h3>健康渠道动态配权</h3>
-            <p class="hint">只比较同一模型、同一优先级且样本充足的健康渠道。固定阈值仍单独负责降级；动态倍率目前只生成观察建议，不会写入 new-api。</p>
+            <p class="hint">只比较同一模型、同一优先级且样本充足的健康渠道。固定阈值单独负责降级；配权模式独立决定关闭评估、只记录建议或自动写入 new-api。</p>
             <el-alert class="criteria-summary" type="info" :closable="false" show-icon title="计算与保护顺序">
               先按请求量计算同模型基线，再综合 TTFT P95、服务端错误率、缓存命中率和 OTPS；随后执行倍率上下限、平滑和单轮涨跌幅保护。客户端参数错误不会计入服务端错误率。
             </el-alert>
             <div class="policy-grid">
-              <el-form-item label="启用动态配权"><el-switch v-model="policy.dynamic_weighting.enabled" /></el-form-item>
+              <el-form-item class="weighting-mode" label="配权模式">
+                <el-radio-group v-model="policy.dynamic_weighting.mode">
+                  <el-radio-button value="off">关闭</el-radio-button>
+                  <el-radio-button value="observe">观察</el-radio-button>
+                  <el-tooltip content="建议生成后立即自动执行，并保留命令与审计记录以便回滚" placement="top">
+                    <el-radio-button value="auto">自动</el-radio-button>
+                  </el-tooltip>
+                </el-radio-group>
+                <span class="hint">独立于上方运行模式，仅控制动态配权。</span>
+              </el-form-item>
               <el-form-item label="TTFT 影响"><el-input-number v-model="policy.dynamic_weighting.ttft_influence" :min="0" :max="1" :step=".05" /></el-form-item>
               <el-form-item label="错误率影响"><el-input-number v-model="policy.dynamic_weighting.error_influence" :min="0" :max="1" :step=".05" /></el-form-item>
               <el-form-item label="缓存影响"><el-input-number v-model="policy.dynamic_weighting.cache_influence" :min="0" :max="1" :step=".05" /></el-form-item>
@@ -182,7 +209,7 @@ onMounted(() => void load());
               <template #title>当前运行模式如何执行</template>
               <span v-if="mode === 'observe'">观察模式只生成建议和模拟状态，不会实际修改渠道优先级或权重。</span>
               <span v-else-if="mode === 'confirm'">人工确认模式会生成待处理建议；只有点击“采纳”后，才会创建渠道调权指令。</span>
-              <span v-else>自动模式会在达到降级、恢复验证或动态配权条件时，自动创建渠道指令；仍受最小样本、持续窗口、冷却、单轮限幅和每日动作上限保护。</span>
+              <span v-else>自动模式会在达到降级或恢复验证条件时自动创建渠道指令；动态配权是否自动执行由上方“配权模式”单独决定。</span>
             </el-alert>
             <div class="policy-grid">
               <el-form-item label="评估窗口（分钟）"><el-input-number v-model="policy.scheduling.window_minutes" :min="1" /></el-form-item>
@@ -203,6 +230,9 @@ onMounted(() => void load());
         <el-empty v-if="!groupedLadders.length" description="暂无单模型渠道快照" :image-size="50" />
         <div v-else class="ladder-grid"><div v-for="group in groupedLadders" :key="group.model" class="ladder"><strong>{{ group.model }}</strong>
           <div v-for="channel in group.channels" :key="channel.ID" class="ladder-row"><span>{{ channel.Name }}</span><code>P{{ channel.Priority }}</code>
+            <el-tooltip :disabled="!latestWeightByChannel.has(channel.ID)" :content="weightTip(channel.ID)" placement="top">
+              <span class="weight-value">权重 {{ channel.Weight }}<template v-if="latestWeightByChannel.has(channel.ID)"> → {{ latestWeightByChannel.get(channel.ID)!.proposed_weight }}</template></span>
+            </el-tooltip>
             <el-tag v-if="stateByChannel.get(channel.ID)?.NextTrialAt" type="warning">降级中 · {{ formatTime(stateByChannel.get(channel.ID)!.NextTrialAt!) }}</el-tag>
             <el-tag v-else-if="stateByChannel.has(channel.ID)" type="success">恢复验证中</el-tag><el-tag v-else>在岗</el-tag>
           </div></div></div>
@@ -225,12 +255,12 @@ onMounted(() => void load());
 
       <el-card shadow="never"><template #header><strong>说明</strong></template>
         <p><b>值班模型：</b>同一模型按渠道优先级组成梯队；在岗异常时建议让位给下一岗，等待后再进行恢复验证。</p>
-        <p><b>观察：</b>只记录建议。<b>人工确认：</b>动作建议等待人工处理，采纳后进入渠道指令队列。<b>自动：</b>建议先落库，再自动创建渠道指令；Agent 执行结果和失败原因仍可追踪，固定降级规则优先于动态配权。</p>
+        <p><b>降级调度：</b>观察只记录建议；人工确认等待采纳；自动会直接创建渠道指令。<b>动态配权：</b>拥有独立的关闭、观察、自动三态，不受降级调度模式影响；建议先落库，执行结果和失败原因仍可追踪。</p>
       </el-card>
     </div>
   </AppShell>
 </template>
 
 <style scoped>
-.tuning-page{display:grid;gap:16px}.hint{font-size:12px;color:#8491a5}.policy-section{margin:18px 0;padding-top:16px;border-top:1px solid #ebeef5}.policy-section h3{margin:0 0 6px;font-size:15px}.policy-section .hint{margin:0 0 12px}.criteria-summary{margin-bottom:12px}.criteria-formula p{margin:5px 0;line-height:1.65}.criteria-notes{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:0 0 14px}.criteria-notes div{display:flex;flex-direction:column;gap:4px;padding:10px 12px;border:1px solid #e4eaf3;border-radius:6px;background:#fafbfd}.criteria-notes b{font-size:13px;color:#303b4d}.criteria-notes span{font-size:12px;line-height:1.55;color:#657086}.criteria-notes .wide{grid-column:1/-1;background:#fffaf2;border-color:#f3dfb7}.dispatch-flow{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:0 0 12px}.flow-step{display:flex;gap:10px;padding:12px;border:1px solid #dfe7f3;border-radius:8px;background:#f8faff}.step-number{display:flex;align-items:center;justify-content:center;flex:0 0 24px;width:24px;height:24px;border-radius:50%;background:#3568e8;color:#fff;font-weight:700}.flow-step b{font-size:13px}.flow-step p{margin:5px 0 0;color:#657086;font-size:12px;line-height:1.55}.mode-effect{margin:0 0 14px}.policy-grid{display:grid;grid-template-columns:repeat(5,minmax(150px,1fr));gap:0 16px}.ladder-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.ladder{border:1px solid #e5eaf2;border-radius:8px;padding:12px}.ladder-row{display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:center;margin-top:10px}.recommendation{border:1px solid #e8edf5;border-radius:8px;padding:12px}.recommendation p{color:#657086}.status{margin-left:8px}.report-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px}.report-grid div{background:#f6f8fb;padding:16px;border-radius:8px}.report-grid span,.report-grid b{display:block}.report-grid b{font-size:24px;margin-top:6px}@media(max-width:1200px){.criteria-notes{grid-template-columns:1fr 1fr}.dispatch-flow{grid-template-columns:1fr 1fr}.policy-grid{grid-template-columns:repeat(3,minmax(150px,1fr))}}
+.tuning-page{display:grid;gap:16px}.hint{font-size:12px;color:#8491a5}.policy-section{margin:18px 0;padding-top:16px;border-top:1px solid #ebeef5}.policy-section h3{margin:0 0 6px;font-size:15px}.policy-section .hint{margin:0 0 12px}.criteria-summary{margin-bottom:12px}.criteria-formula p{margin:5px 0;line-height:1.65}.criteria-notes{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:0 0 14px}.criteria-notes div{display:flex;flex-direction:column;gap:4px;padding:10px 12px;border:1px solid #e4eaf3;border-radius:6px;background:#fafbfd}.criteria-notes b{font-size:13px;color:#303b4d}.criteria-notes span{font-size:12px;line-height:1.55;color:#657086}.criteria-notes .wide{grid-column:1/-1;background:#fffaf2;border-color:#f3dfb7}.dispatch-flow{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:0 0 12px}.flow-step{display:flex;gap:10px;padding:12px;border:1px solid #dfe7f3;border-radius:8px;background:#f8faff}.step-number{display:flex;align-items:center;justify-content:center;flex:0 0 24px;width:24px;height:24px;border-radius:50%;background:#3568e8;color:#fff;font-weight:700}.flow-step b{font-size:13px}.flow-step p{margin:5px 0 0;color:#657086;font-size:12px;line-height:1.55}.mode-effect{margin:0 0 14px}.policy-grid{display:grid;grid-template-columns:repeat(5,minmax(150px,1fr));gap:0 16px}.weighting-mode{grid-column:span 2}.weighting-mode .hint{display:block;margin:6px 0 0}.ladder-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.ladder{border:1px solid #e5eaf2;border-radius:8px;padding:12px}.ladder-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto auto;gap:8px;align-items:center;margin-top:10px}.weight-value{white-space:nowrap;color:#526078;font-size:12px}.recommendation{border:1px solid #e8edf5;border-radius:8px;padding:12px}.recommendation p{color:#657086}.status{margin-left:8px}.report-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px}.report-grid div{background:#f6f8fb;padding:16px;border-radius:8px}.report-grid span,.report-grid b{display:block}.report-grid b{font-size:24px;margin-top:6px}@media(max-width:1200px){.criteria-notes{grid-template-columns:1fr 1fr}.dispatch-flow{grid-template-columns:1fr 1fr}.policy-grid{grid-template-columns:repeat(3,minmax(150px,1fr))}}
 </style>

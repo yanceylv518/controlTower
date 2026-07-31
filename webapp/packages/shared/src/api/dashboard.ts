@@ -325,7 +325,7 @@ export interface TuningSchedulingParams {
   cooldown_minutes: number; daily_action_limit: number;
 }
 export interface TuningDynamicWeightingParams {
-  enabled: boolean;
+  mode: "off" | "observe" | "auto";
   ttft_influence: number; error_influence: number; cache_influence: number; otps_influence: number;
   min_multiplier: number; max_multiplier: number; smoothing_alpha: number;
   max_increase_per_round: number; max_decrease_per_round: number;
@@ -357,7 +357,7 @@ export interface TuningReport {
   hits: number; hit_rate: number; autoCriteria: string;
 }
 export interface TuningLadders {
-  channels: Array<{ ID: number; Name: string; Status: string; Priority: number; Models: string[] }>;
+  channels: Array<{ ID: number; Name: string; Status: string; Priority: number; Weight: number; Models: string[] }>;
   dispatch_states: Array<{ InstanceID: string; ChannelID: number; ModelName: string; OriginalPriority: number; TrialAttempts: number; NextTrialAt?: string }>;
 }
 
@@ -570,8 +570,8 @@ export const dashboardApi = (client: ApiClient) => ({
     client.request<TuningPolicyResponse>(`/api/dashboard/tuning/policy${query({ instance_id })}`),
   saveTuningPolicy: (instance_id: string, policy: TuningPolicy, mode: "observe" | "confirm" | "auto") =>
     client.request<TuningPolicyResponse>(`/api/dashboard/tuning/policy${query({ instance_id })}`, { method: "PUT", body: JSON.stringify({ policy, mode }) }),
-  tuningRecommendations: (instance_id: string, limit = 100) =>
-    client.request<ListResponse<TuningRecommendation>>(`/api/dashboard/tuning/recommendations${query({ instance_id, limit })}`),
+  tuningRecommendations: (instance_id: string, limit = 100, rule?: string) =>
+    client.request<ListResponse<TuningRecommendation>>(`/api/dashboard/tuning/recommendations${query({ instance_id, limit, rule })}`),
   tuningRecommendationAction: (id: string, action: "adopt" | "dismiss") =>
     client.request<TuningRecommendation>(`/api/dashboard/tuning/recommendations/${encodeURIComponent(id)}/${action}`, { method: "POST" }),
   tuningReport: (instance_id: string, days: 7 | 30) =>

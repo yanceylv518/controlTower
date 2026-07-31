@@ -25,7 +25,7 @@ func (f *fakeStore) PutPolicy(p PolicyRecord) error               { f.policy = p
 func (f *fakeStore) HasExpiredAutoCommands(string, time.Time) (bool, error) {
 	return f.expiredAuto, nil
 }
-func (f *fakeStore) ListEnabledInstances() ([]string, error)      { return []string{"i"}, nil }
+func (f *fakeStore) ListEnabledInstances() ([]string, error) { return []string{"i"}, nil }
 func (f *fakeStore) QueryMetrics(string, time.Time, time.Time) ([]ChannelMetric, error) {
 	return f.metrics, nil
 }
@@ -201,7 +201,7 @@ func TestEngineDoesNotDemoteForUserAttributedErrors(t *testing.T) {
 func TestEngineDynamicWeightingUsesRelativeMetricsAndProtection(t *testing.T) {
 	p := testPolicy()
 	p.Policy.DynamicWeighting = DynamicWeightingParams{
-		Enabled: true, TTFTInfluence: 1, ErrorInfluence: 0,
+		Mode: "observe", TTFTInfluence: 1, ErrorInfluence: 0,
 		CacheInfluence: 0, OTPSInfluence: 0,
 		MinMultiplier: .5, MaxMultiplier: 1.5, SmoothingAlpha: 1,
 		MaxIncreasePerRound: .2, MaxDecreasePerRound: .3,
@@ -233,6 +233,26 @@ func TestEngineDynamicWeightingUsesRelativeMetricsAndProtection(t *testing.T) {
 	}
 	if byID[2].ProposedWeight != 70 {
 		t.Fatalf("decrease protection not applied: %#v", byID[2])
+	}
+}
+
+func TestEngineDynamicWeightingOffDoesNotEvaluate(t *testing.T) {
+	p := testPolicy()
+	p.Policy.DynamicWeighting.Mode = "off"
+	f := &fakeStore{
+		policy: p,
+		channels: []Channel{
+			{ID: 1, Name: "fast", Status: "enabled", Weight: 100, Priority: 100, Models: []string{"m"}},
+			{ID: 2, Name: "slow", Status: "enabled", Weight: 100, Priority: 100, Models: []string{"m"}},
+		},
+		metrics: []ChannelMetric{
+			{ChannelID: 1, RequestCount: 100, TTFTP95: 2},
+			{ChannelID: 2, RequestCount: 100, TTFTP95: 8},
+		},
+	}
+	NewEngine(f).Tick(time.Now().UTC())
+	if len(f.recommendations) != 0 {
+		t.Fatalf("weighting off must not evaluate: %#v", f.recommendations)
 	}
 }
 
@@ -286,9 +306,9 @@ func TestEngineAutoExecutesDemoteAndAdvancesDispatch(t *testing.T) {
 
 func TestEngineAutoExecutesProtectedDynamicWeights(t *testing.T) {
 	p := testPolicy()
-	p.Mode = "auto"
+	p.Mode = "observe"
 	p.Policy.DynamicWeighting = DynamicWeightingParams{
-		Enabled: true, TTFTInfluence: 1, MinMultiplier: .5, MaxMultiplier: 1.5,
+		Mode: "auto", TTFTInfluence: 1, MinMultiplier: .5, MaxMultiplier: 1.5,
 		SmoothingAlpha: 1, MaxIncreasePerRound: .2, MaxDecreasePerRound: .3,
 	}
 	f := &fakeStore{
@@ -394,6 +414,20 @@ func TestAutoSentinelFallsBackToConfirmOnExpiredCommand(t *testing.T) {
 	}
 }
 
+func TestAutoSentinelFallsBackIndependentWeightingMode(t *testing.T) {
+	p := testPolicy()
+	p.Mode = "observe"
+	p.Policy.DynamicWeighting.Mode = "auto"
+	f := &fakeStore{policy: p, expiredAuto: true}
+	NewEngine(f).Tick(time.Now().UTC())
+	if f.policy.Mode != "observe" || f.policy.Policy.DynamicWeighting.Mode != "observe" {
+		t.Fatalf("sentinel must pause weighting without changing global mode: %#v", f.policy)
+	}
+	if len(f.recommendations) != 1 || f.recommendations[0].Evidence["target"] != "dynamic_weighting" {
+		t.Fatalf("weighting pause must be audited: %#v", f.recommendations)
+	}
+}
+
 func TestRebalanceBudgetDoesNotStarveDemotion(t *testing.T) {
 	p := testPolicy()
 	p.Mode = "confirm"
@@ -411,7 +445,7 @@ func TestRebalanceBudgetDoesNotStarveDemotion(t *testing.T) {
 	// demote/trial budget: the demotion below still has to go through.
 	for i := 0; i < p.Policy.Scheduling.DailyActionLimit; i++ {
 		f.recommendations = append(f.recommendations, Recommendation{
-			ID: NewID(now.Add(time.Duration(-i-1)*time.Hour), "i", 1, "rebalance"),
+			ID:         NewID(now.Add(time.Duration(-i-1)*time.Hour), "i", 1, "rebalance"),
 			InstanceID: "i", ChannelID: 1, Rule: "rebalance", Status: "auto_executed",
 			CreatedAt: now.Add(time.Duration(-i-1) * time.Hour),
 		})

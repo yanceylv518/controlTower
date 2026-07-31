@@ -292,7 +292,15 @@ func (s Store) ListRecommendations(q tuning.RecommendationQuery) ([]tuning.Recom
 	if before.IsZero() {
 		before = time.Now().UTC().Add(time.Hour)
 	}
-	rows, e := s.db.QueryContext(context.Background(), `SELECT `+recommendationColumns+` FROM tuning_recommendations WHERE instance_id=? AND created_at<? ORDER BY created_at DESC LIMIT ?`, q.InstanceID, before, q.Limit)
+	query := `SELECT ` + recommendationColumns + ` FROM tuning_recommendations WHERE instance_id=? AND created_at<?`
+	args := []any{q.InstanceID, before}
+	if q.Rule != "" {
+		query += ` AND rule=?`
+		args = append(args, q.Rule)
+	}
+	query += ` ORDER BY created_at DESC LIMIT ?`
+	args = append(args, q.Limit)
+	rows, e := s.db.QueryContext(context.Background(), query, args...)
 	if e != nil {
 		return nil, e
 	}

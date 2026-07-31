@@ -162,7 +162,8 @@ func (h Handler) HandleTuningRecommendations(w http.ResponseWriter, r *http.Requ
 	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	before, _ := time.Parse(time.RFC3339Nano, r.URL.Query().Get("before"))
-	rows, err := h.tuningStore.ListRecommendations(tuning.RecommendationQuery{InstanceID: id, Limit: limit, Before: before})
+	rule := r.URL.Query().Get("rule")
+	rows, err := h.tuningStore.ListRecommendations(tuning.RecommendationQuery{InstanceID: id, Rule: rule, Limit: limit, Before: before})
 	if err != nil {
 		writeDashboardError(w, 500, "query_failed")
 		return

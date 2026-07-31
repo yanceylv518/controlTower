@@ -90,6 +90,7 @@ func (e *Engine) Tick(now time.Time) {
 	}
 	e.fillOutcomes(now)
 }
+
 // runAutoSentinel is the design §4 guard for the control-machine convention:
 // an auto-created command that expired unexecuted means commands are landing
 // on an agent that cannot run them. Fall back to confirm so the failure is a
@@ -97,7 +98,9 @@ func (e *Engine) Tick(now time.Time) {
 // policy's own UpdatedAt count, so re-enabling auto is not instantly re-paused
 // by stale history.
 func (e *Engine) runAutoSentinel(p *PolicyRecord, now time.Time) {
-	if normalizedMode(p.Mode) != "auto" {
+	globalAuto := normalizedMode(p.Mode) == "auto"
+	weightingAuto := p.Policy.DynamicWeighting.Mode == "auto"
+	if !globalAuto && !weightingAuto {
 		return
 	}
 	checker, ok := e.store.(interface {
@@ -114,17 +117,34 @@ func (e *Engine) runAutoSentinel(p *PolicyRecord, now time.Time) {
 	if err != nil || !expired {
 		return
 	}
-	p.Mode = "confirm"
+	if globalAuto {
+		p.Mode = "confirm"
+	}
+	if weightingAuto {
+		p.Policy.DynamicWeighting.Mode = "observe"
+	}
 	p.UpdatedAt = now
 	p.UpdatedBy = "system:sentinel"
 	if e.store.PutPolicy(*p) != nil {
 		return
 	}
-	log.Printf("tuning auto paused instance=%s: auto-created command expired unexecuted, falling back to confirm", p.InstanceID)
+	if globalAuto {
+		e.recordAutoPause(*p, now, since, "scheduling", "confirm")
+	}
+	if weightingAuto {
+		e.recordAutoPause(*p, now, since, "dynamic_weighting", "observe")
+	}
+}
+
+func (e *Engine) recordAutoPause(p PolicyRecord, now, since time.Time, target, fallback string) {
+	log.Printf("tuning auto paused instance=%s target=%s fallback=%s", p.InstanceID, target, fallback)
 	_ = e.store.InsertRecommendation(Recommendation{
-		ID: NewID(now, p.InstanceID, 0, "auto_paused"), InstanceID: p.InstanceID,
+		ID: NewID(now, p.InstanceID, 0, "auto_paused-"+target), InstanceID: p.InstanceID,
 		ChannelName: "-", CreatedAt: now, Rule: "auto_paused",
-		Evidence:       map[string]any{"reason": "auto command expired unexecuted; check the channel-control agent", "since": since},
+		Evidence: map[string]any{
+			"reason": "auto command expired unexecuted; check the channel-control agent",
+			"since":  since, "target": target, "fallback": fallback,
+		},
 		ModeAtCreation: "auto", Status: "recorded",
 	})
 }
@@ -187,15 +207,16 @@ func (e *Engine) evaluate(id string, pr PolicyRecord, now time.Time) (int, int) 
 			evaluated++
 			made += e.evaluateActive(id, model, ch, ladder, m, pr.Policy, mode, dispatch, now)
 		}
-		made += e.evaluateDynamicWeights(id, model, available, mm, pr.Policy, mode, dispatch, now)
+		made += e.evaluateDynamicWeights(id, model, available, mm, pr.Policy, dispatch, now)
 	}
 	made += e.scheduleTrials(id, channels, dispatch, pr.Policy, mode, now)
 	return made, evaluated
 }
 
-func (e *Engine) evaluateDynamicWeights(id, model string, channels []Channel, metrics map[int64]ChannelMetric, p Policy, mode string, dispatch map[int64]DispatchState, now time.Time) int {
+func (e *Engine) evaluateDynamicWeights(id, model string, channels []Channel, metrics map[int64]ChannelMetric, p Policy, dispatch map[int64]DispatchState, now time.Time) int {
 	d := p.DynamicWeighting
-	if !d.Enabled || len(channels) < 2 {
+	mode := d.Mode
+	if mode == "off" || len(channels) < 2 {
 		return 0
 	}
 	top := channels[0].Priority

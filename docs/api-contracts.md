@@ -237,7 +237,7 @@ Instance tokens are stored only as `SHA-256(pepper + token)` hashes. A token may
   ```
 - Legacy flat policy JSON is treated as the complete default policy. Every subsequent write uses the structured shape.
 - `GET /api/dashboard/tuning/ladders?instance_id=` returns the current channel ladder and dispatch states.
-- `GET /api/dashboard/tuning/recommendations?instance_id=&limit=&before=` returns duty-rotation and dynamic-weight recommendations. In confirm mode, action rules (`demote`, `trial`, and `rebalance`) start as `pending`. In auto mode they pass through `pending` and become `auto_executed` only after a channel command and operation audit are committed. Informational rules (`mixed_channel`, `no_backup`, and `ladder_exhausted`) remain recorded.
+- `GET /api/dashboard/tuning/recommendations?instance_id=&limit=&before=&rule=` returns duty-rotation and dynamic-weight recommendations. `rule` is optional and filters to one rule such as `rebalance`. Global confirm/auto controls `demote` and `trial`; `dynamic_weighting.mode` independently controls `rebalance` (`off`, `observe`, or `auto`). Informational rules (`mixed_channel`, `no_backup`, and `ladder_exhausted`) remain recorded.
 - `POST /api/dashboard/tuning/recommendations/{id}/adopt` atomically adopts a pending action recommendation, creates a `channel.update` command for the first enabled instance in the same site, records the command ID and actor, and writes an operation audit.
 - `POST /api/dashboard/tuning/recommendations/{id}/dismiss` dismisses a pending action recommendation and writes an operation audit. Pending recommendations expire after 60 minutes.
 - `GET /api/dashboard/tuning/report?instance_id=&days=7|30` reports adoption and hit rates using only `demote` and `trial`.

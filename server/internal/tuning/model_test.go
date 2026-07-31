@@ -3,6 +3,7 @@ package tuning
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -48,6 +49,40 @@ func TestCriteriaForAssignmentAndFallback(t *testing.T) {
 	}
 }
 
+func TestDecodePolicyJSONLegacyDynamicWeightingEnabled(t *testing.T) {
+	base := DefaultPolicy()
+	raw, err := json.Marshal(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var shape map[string]any
+	if err := json.Unmarshal(raw, &shape); err != nil {
+		t.Fatal(err)
+	}
+	dynamic := shape["dynamic_weighting"].(map[string]any)
+	delete(dynamic, "mode")
+	dynamic["enabled"] = false
+	raw, _ = json.Marshal(shape)
+	got, err := DecodePolicyJSON(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.DynamicWeighting.Mode != "off" {
+		t.Fatalf("legacy enabled=false must become off: %#v", got.DynamicWeighting)
+	}
+	encoded, _ := json.Marshal(got)
+	if bytes := string(encoded); !strings.Contains(bytes, `"mode":"off"`) || strings.Contains(bytes, `"enabled"`) {
+		t.Fatalf("policy must write only the new mode field: %s", bytes)
+	}
+
+	dynamic["enabled"] = true
+	raw, _ = json.Marshal(shape)
+	got, err = DecodePolicyJSON(raw)
+	if err != nil || got.DynamicWeighting.Mode != "observe" {
+		t.Fatalf("legacy enabled=true must become observe: %#v err=%v", got.DynamicWeighting, err)
+	}
+}
+
 func TestPolicyValidationUsesGroupedPaths(t *testing.T) {
 	p := DefaultPolicy()
 	p.Scheduling.MinSamples = 0
@@ -58,5 +93,10 @@ func TestPolicyValidationUsesGroupedPaths(t *testing.T) {
 	}
 	if fields["criteria[default].latency_floor_seconds"] == "" {
 		t.Fatalf("missing criteria path: %#v", fields)
+	}
+	p = DefaultPolicy()
+	p.DynamicWeighting.Mode = "confirm"
+	if p.Validate()["dynamic_weighting.mode"] == "" {
+		t.Fatalf("invalid weighting mode must be rejected: %#v", p.Validate())
 	}
 }
