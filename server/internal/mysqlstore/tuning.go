@@ -139,6 +139,8 @@ const tuningChannelMetricsSQL = `SELECT
 CAST(SUBSTRING_INDEX(dimension_key,':',-1) AS SIGNED),
 SUM(request_count),SUM(error_count),SUM(user_error_count),
 COALESCE(MAX(p95_use_time),0),
+COALESCE(MAX(ttft_p50_ms),0)/1000,
+COALESCE(MAX(ttft_p90_ms),0)/1000,
 COALESCE(MAX(ttft_p95_ms),0)/1000,
 CASE WHEN SUM(cache_prompt_tokens)>0 THEN SUM(cache_tokens_total)/SUM(cache_prompt_tokens) ELSE 0 END,
 CASE WHEN SUM(otps_duration_seconds)>0 THEN SUM(otps_output_tokens)/SUM(otps_duration_seconds) ELSE 0 END
@@ -155,12 +157,68 @@ func (s Store) QueryMetrics(id string, start, end time.Time) ([]tuning.ChannelMe
 	var out []tuning.ChannelMetric
 	for rows.Next() {
 		var m tuning.ChannelMetric
-		if e = rows.Scan(&m.ChannelID, &m.RequestCount, &m.ErrorCount, &m.UserErrorCount, &m.P95, &m.TTFTP95, &m.CacheHitRate, &m.OTPS); e != nil {
+		if e = rows.Scan(&m.ChannelID, &m.RequestCount, &m.ErrorCount, &m.UserErrorCount, &m.P95, &m.TTFTP50, &m.TTFTP90, &m.TTFTP95, &m.CacheHitRate, &m.OTPS); e != nil {
 			return nil, e
 		}
 		out = append(out, m)
 	}
 	return out, rows.Err()
+}
+
+func (s Store) ListContinuousStates(id string) ([]tuning.ContinuousState, error) {
+	rows, err := s.db.QueryContext(context.Background(), `SELECT instance_id,channel_id,model_name,k_error,k_speed,k_cache,k_otps,multiplier,proposed_weight,last_written_weight,last_write_at,last_observed_requests,last_observed_errors,paused_reason,updated_at FROM tuning_continuous_states WHERE instance_id=?`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []tuning.ContinuousState
+	for rows.Next() {
+		var v tuning.ContinuousState
+		var written sql.NullInt64
+		var writeAt sql.NullTime
+		if err = rows.Scan(&v.InstanceID, &v.ChannelID, &v.ModelName, &v.KError, &v.KSpeed, &v.KCache, &v.KOTPS, &v.Multiplier, &v.ProposedWeight, &written, &writeAt, &v.LastObservedRequests, &v.LastObservedErrors, &v.PausedReason, &v.UpdatedAt); err != nil {
+			return nil, err
+		}
+		if written.Valid {
+			x := written.Int64
+			v.LastWrittenWeight = &x
+		}
+		if writeAt.Valid {
+			x := writeAt.Time
+			v.LastWriteAt = &x
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+func (s Store) PutContinuousState(v tuning.ContinuousState) error {
+	_, err := s.db.ExecContext(context.Background(), `INSERT INTO tuning_continuous_states(instance_id,channel_id,model_name,k_error,k_speed,k_cache,k_otps,multiplier,proposed_weight,last_written_weight,last_write_at,last_observed_requests,last_observed_errors,paused_reason,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE model_name=VALUES(model_name),k_error=VALUES(k_error),k_speed=VALUES(k_speed),k_cache=VALUES(k_cache),k_otps=VALUES(k_otps),multiplier=VALUES(multiplier),proposed_weight=VALUES(proposed_weight),last_written_weight=VALUES(last_written_weight),last_write_at=VALUES(last_write_at),last_observed_requests=VALUES(last_observed_requests),last_observed_errors=VALUES(last_observed_errors),paused_reason=VALUES(paused_reason),updated_at=VALUES(updated_at)`, v.InstanceID, v.ChannelID, v.ModelName, v.KError, v.KSpeed, v.KCache, v.KOTPS, v.Multiplier, v.ProposedWeight, v.LastWrittenWeight, v.LastWriteAt, v.LastObservedRequests, v.LastObservedErrors, v.PausedReason, v.UpdatedAt)
+	return err
+}
+
+func (s Store) CreateContinuousWeightChange(v tuning.Recommendation, actor string, now time.Time) (string, error) {
+	tx, err := s.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+	ev, _ := json.Marshal(v.Evidence)
+	commandID := randomCommandID()
+	payload, _ := json.Marshal(map[string]any{"weight": v.ProposedWeight})
+	if _, err = tx.Exec(`INSERT INTO tuning_recommendations(id,instance_id,channel_id,channel_name,created_at,rule,evidence_json,current_weight,proposed_weight,current_priority,proposed_priority,mode_at_creation,status,command_id,acted_by,acted_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, v.ID, v.InstanceID, v.ChannelID, v.ChannelName, v.CreatedAt, v.Rule, string(ev), v.CurrentWeight, v.ProposedWeight, v.CurrentPriority, v.ProposedPriority, v.ModeAtCreation, "adopted", commandID, actor, now); err != nil {
+		return "", err
+	}
+	if _, err = tx.Exec(`INSERT INTO channel_commands(id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at) VALUES(?,?,?,?,?,'pending',?,'',?,?)`, commandID, v.InstanceID, v.ChannelID, "channel.update", string(payload), actor, now, now); err != nil {
+		return "", err
+	}
+	return commandID, tx.Commit()
+}
+
+func randomCommandID() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
 }
 
 const tuningRecentChannelBucketsSQL = `SELECT

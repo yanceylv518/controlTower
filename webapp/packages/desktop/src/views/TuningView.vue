@@ -28,6 +28,13 @@ const policy = reactive<TuningPolicy>({
     name: "default", error_rate_threshold: .15, severe_threshold: .5,
     latency_multiplier: 2, latency_floor_seconds: 10, sustained_windows: 2,
   }],
+  continuous: {
+    sensitivity: 1, otps_cap: 1.5, circuit_threshold: .1,
+    recovery_threshold: .2, silent_minutes: 5,
+    probe_interval_seconds: 5, probe_count: 10,
+    soft_start_multiplier: .2, window_minutes: 15,
+    min_samples: 20, sparse_lookback_minutes: 360,
+  },
   assignments: {},
   dispatch_modes: {},
 });

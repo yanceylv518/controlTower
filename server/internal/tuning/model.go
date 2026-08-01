@@ -49,12 +49,30 @@ type DegradeCriteria struct {
 	SustainedWindows    int     `json:"sustained_windows"`
 }
 
+// ContinuousDispatchParams is the v3.0 continuous weighting policy.  The
+// former shift/demotion fields are still decoded for rolling upgrades, but
+// the v3 engine only evaluates this section.
+type ContinuousDispatchParams struct {
+	Sensitivity           float64 `json:"sensitivity"`
+	OTPSCap               float64 `json:"otps_cap"`
+	CircuitThreshold      float64 `json:"circuit_threshold"`
+	RecoveryThreshold     float64 `json:"recovery_threshold"`
+	SilentMinutes         int     `json:"silent_minutes"`
+	ProbeIntervalSeconds  int     `json:"probe_interval_seconds"`
+	ProbeCount            int     `json:"probe_count"`
+	SoftStartMultiplier   float64 `json:"soft_start_multiplier"`
+	WindowMinutes         int     `json:"window_minutes"`
+	MinSamples            int64   `json:"min_samples"`
+	SparseLookbackMinutes int     `json:"sparse_lookback_minutes"`
+}
+
 type Policy struct {
-	Scheduling       SchedulingParams       `json:"scheduling"`
-	DynamicWeighting DynamicWeightingParams `json:"dynamic_weighting"`
-	Criteria         []DegradeCriteria      `json:"criteria"`
-	Assignments      map[string]string      `json:"assignments"`
-	DispatchModes    map[string]string      `json:"dispatch_modes"`
+	Scheduling       SchedulingParams         `json:"scheduling"`
+	DynamicWeighting DynamicWeightingParams   `json:"dynamic_weighting"`
+	Criteria         []DegradeCriteria        `json:"criteria"`
+	Assignments      map[string]string        `json:"assignments"`
+	DispatchModes    map[string]string        `json:"dispatch_modes"`
+	Continuous       ContinuousDispatchParams `json:"continuous"`
 }
 
 func DefaultPolicy() Policy {
@@ -76,6 +94,11 @@ func DefaultPolicy() Policy {
 		}},
 		Assignments:   map[string]string{},
 		DispatchModes: map[string]string{},
+		Continuous: ContinuousDispatchParams{
+			Sensitivity: 1, OTPSCap: 1.5, CircuitThreshold: .1, RecoveryThreshold: .2,
+			SilentMinutes: 5, ProbeIntervalSeconds: 5, ProbeCount: 10, SoftStartMultiplier: .2,
+			WindowMinutes: 15, MinSamples: 20, SparseLookbackMinutes: 360,
+		},
 	}
 }
 
@@ -143,6 +166,37 @@ func criteriaFor(p Policy, model string) DegradeCriteria {
 
 func (p Policy) Validate() map[string]string {
 	e := map[string]string{}
+	c := p.Continuous
+	if c.Sensitivity <= 0 || c.Sensitivity > 5 {
+		e["continuous.sensitivity"] = "must_be_greater_than_0_and_at_most_5"
+	}
+	if c.OTPSCap < 1 || c.OTPSCap > 3 {
+		e["continuous.otps_cap"] = "must_be_between_1_and_3"
+	}
+	if c.CircuitThreshold <= 0 || c.CircuitThreshold >= c.RecoveryThreshold {
+		e["continuous.circuit_threshold"] = "must_be_positive_and_less_than_recovery"
+	}
+	if c.RecoveryThreshold > 1 {
+		e["continuous.recovery_threshold"] = "must_be_at_most_1"
+	}
+	if c.SilentMinutes < 1 || c.SilentMinutes > 1440 {
+		e["continuous.silent_minutes"] = "must_be_between_1_and_1440"
+	}
+	if c.ProbeIntervalSeconds < 1 || c.ProbeCount < 1 {
+		e["continuous.probe"] = "must_be_positive"
+	}
+	if c.SoftStartMultiplier <= 0 || c.SoftStartMultiplier > 1 {
+		e["continuous.soft_start_multiplier"] = "must_be_greater_than_0_and_at_most_1"
+	}
+	if c.WindowMinutes < 1 || c.WindowMinutes > 1440 {
+		e["continuous.window_minutes"] = "must_be_between_1_and_1440"
+	}
+	if c.MinSamples < 1 {
+		e["continuous.min_samples"] = "must_be_positive"
+	}
+	if c.SparseLookbackMinutes < c.WindowMinutes || c.SparseLookbackMinutes > 2880 {
+		e["continuous.sparse_lookback_minutes"] = "must_be_between_window_and_2880"
+	}
 	for name, value := range map[string]int{
 		"window_minutes": p.Scheduling.WindowMinutes, "trial_initial_minutes": p.Scheduling.TrialInitialMinutes,
 		"trial_max_minutes": p.Scheduling.TrialMaxMinutes, "cooldown_minutes": p.Scheduling.CooldownMinutes,
@@ -272,9 +326,27 @@ type ChannelMetric struct {
 	ChannelID                                int64
 	RequestCount, ErrorCount, UserErrorCount int64
 	P95                                      float64
-	TTFTP95                                  float64
+	TTFTP50, TTFTP90, TTFTP95                float64
 	CacheHitRate                             float64
 	OTPS                                     float64
+}
+
+type ContinuousState struct {
+	InstanceID           string     `json:"instance_id"`
+	ChannelID            int64      `json:"channel_id"`
+	ModelName            string     `json:"model_name"`
+	KError               float64    `json:"k_error"`
+	KSpeed               float64    `json:"k_speed"`
+	KCache               float64    `json:"k_cache"`
+	KOTPS                float64    `json:"k_otps"`
+	Multiplier           float64    `json:"multiplier"`
+	ProposedWeight       int64      `json:"proposed_weight"`
+	LastWrittenWeight    *int64     `json:"last_written_weight,omitempty"`
+	LastWriteAt          *time.Time `json:"last_write_at,omitempty"`
+	LastObservedRequests int64      `json:"last_observed_requests"`
+	LastObservedErrors   int64      `json:"last_observed_errors"`
+	PausedReason         string     `json:"paused_reason,omitempty"`
+	UpdatedAt            time.Time  `json:"updated_at"`
 }
 
 type RecentChannelBucket struct {

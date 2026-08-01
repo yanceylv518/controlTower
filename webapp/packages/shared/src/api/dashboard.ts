@@ -336,10 +336,24 @@ export interface TuningDegradeCriteria {
   name: string; error_rate_threshold: number; severe_threshold: number;
   latency_multiplier: number; latency_floor_seconds: number; sustained_windows: number;
 }
+export interface TuningContinuousDispatchParams {
+  sensitivity: number;
+  otps_cap: number;
+  circuit_threshold: number;
+  recovery_threshold: number;
+  silent_minutes: number;
+  probe_interval_seconds: number;
+  probe_count: number;
+  soft_start_multiplier: number;
+  window_minutes: number;
+  min_samples: number;
+  sparse_lookback_minutes: number;
+}
 export interface TuningPolicy {
   scheduling: TuningSchedulingParams;
   dynamic_weighting: TuningDynamicWeightingParams;
   criteria: TuningDegradeCriteria[];
+  continuous: TuningContinuousDispatchParams;
   assignments: Record<string, string>;
   dispatch_modes: Record<string, "off" | "observe" | "auto">;
 }
@@ -367,6 +381,26 @@ export interface TuningReport {
 export interface TuningLadders {
   channels: Array<{ ID: number; Name: string; Status: string; Priority: number; Weight: number; Models: string[] }>;
   dispatch_states: Array<{ InstanceID: string; ChannelID: number; ModelName: string; OriginalPriority: number; TrialAttempts: number; NextTrialAt?: string }>;
+}
+export interface TuningContinuousState {
+  instance_id: string;
+  channel_id: number;
+  channel_name: string;
+  model_name: string;
+  base_weight: number;
+  base_priority: number;
+  k_speed: number;
+  k_cache: number;
+  k_otps: number;
+  k_error: number;
+  multiplier: number;
+  proposed_weight: number;
+  last_written_weight: number;
+  last_write_at?: string;
+  success_count: number;
+  error_count: number;
+  paused_reason?: string;
+  updated_at: string;
 }
 
 const query = (
@@ -588,6 +622,8 @@ export const dashboardApi = (client: ApiClient) => ({
     client.request<TuningLadders>(`/api/dashboard/tuning/ladders${query({ instance_id })}`),
   tuningBaseValues: (instance_id: string, model?: string) =>
     client.request<ListResponse<ChannelBaseValue>>(`/api/dashboard/tuning/base-values${query({ instance_id, model })}`),
+  tuningContinuousStates: (instance_id: string) =>
+    client.request<ListResponse<TuningContinuousState>>(`/api/dashboard/tuning/continuous-states${query({ instance_id })}`),
   saveTuningBaseValues: (instance_id: string, items: ChannelBaseValue[]) =>
     client.request<ListResponse<ChannelBaseValue>>(`/api/dashboard/tuning/base-values${query({ instance_id })}`, { method: "PUT", body: JSON.stringify({ items }) }),
   syncTuningBaseValues: (instance_id: string, models: string[]) =>

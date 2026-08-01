@@ -78,7 +78,10 @@ func (e *Engine) Tick(now time.Time) {
 			p = PolicyRecord{InstanceID: id, Policy: DefaultPolicy(), Mode: "observe"}
 		}
 		e.runAutoSentinel(&p, now)
-		if now.Sub(e.last[id]) >= time.Duration(p.Policy.Scheduling.WindowMinutes)*time.Minute {
+		if cs, supported := e.store.(continuousStore); supported {
+			n, c := e.evaluateContinuous(id, p, now, cs)
+			log.Printf("tuning continuous evaluation instance=%s active_channels=%d writes=%d", id, c, n)
+		} else if now.Sub(e.last[id]) >= time.Duration(p.Policy.Scheduling.WindowMinutes)*time.Minute {
 			n, c := e.evaluate(id, p, now)
 			e.last[id] = now
 			log.Printf("tuning duty evaluation instance=%s active_channels=%d recommendations=%d mode=%s", id, c, n, p.Mode)
@@ -100,7 +103,15 @@ func (e *Engine) Tick(now time.Time) {
 // by stale history.
 func (e *Engine) runAutoSentinel(p *PolicyRecord, now time.Time) {
 	globalAuto := normalizedMode(p.Mode) == "auto"
-	weightingAuto := p.Policy.DynamicWeighting.Mode == "auto"
+	legacyWeightingAuto := p.Policy.DynamicWeighting.Mode == "auto"
+	continuousAuto := false
+	for _, mode := range p.Policy.DispatchModes {
+		if mode == "auto" {
+			continuousAuto = true
+			break
+		}
+	}
+	weightingAuto := legacyWeightingAuto || continuousAuto
 	if !globalAuto && !weightingAuto {
 		return
 	}
@@ -122,7 +133,14 @@ func (e *Engine) runAutoSentinel(p *PolicyRecord, now time.Time) {
 		p.Mode = "confirm"
 	}
 	if weightingAuto {
-		p.Policy.DynamicWeighting.Mode = "observe"
+		if p.Policy.DynamicWeighting.Mode == "auto" {
+			p.Policy.DynamicWeighting.Mode = "observe"
+		}
+		for model, mode := range p.Policy.DispatchModes {
+			if mode == "auto" {
+				p.Policy.DispatchModes[model] = "observe"
+			}
+		}
 	}
 	p.UpdatedAt = now
 	p.UpdatedBy = "system:sentinel"
@@ -133,7 +151,11 @@ func (e *Engine) runAutoSentinel(p *PolicyRecord, now time.Time) {
 		e.recordAutoPause(*p, now, since, "scheduling", "confirm")
 	}
 	if weightingAuto {
-		e.recordAutoPause(*p, now, since, "dynamic_weighting", "observe")
+		target := "continuous_dispatch"
+		if legacyWeightingAuto && !continuousAuto {
+			target = "dynamic_weighting"
+		}
+		e.recordAutoPause(*p, now, since, target, "observe")
 	}
 }
 

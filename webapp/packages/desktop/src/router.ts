@@ -17,7 +17,7 @@ import AuditsView from './views/AuditsView.vue'
 import SettingsView from './views/SettingsView.vue'
 import NotFoundView from './views/NotFoundView.vue'
 import LatencyView from './views/LatencyView.vue'
-import TuningView from './views/TuningView.vue'
+import TuningView from './views/ContinuousTuningView.vue'
 export const router = createRouter({ history: createWebHistory('/'), routes: [
   { path: '/customers', component: CustomerMonitorView, meta: { title: '客户监控' } },
   { path: '/login', name: 'login', component: LoginView, meta: { title: '登录' } }, { path: '/', name: 'overview', component: OverviewView, meta: { title: '运行总览' } },

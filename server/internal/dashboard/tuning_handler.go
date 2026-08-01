@@ -18,6 +18,29 @@ type ChannelBaseValueStore interface {
 	SaveChannelBaseValues(string, string, []tuning.ChannelBaseValue, time.Time) error
 	SyncChannelBaseValues(string, []string) ([]tuning.ChannelBaseValue, error)
 }
+type ContinuousStateStore interface {
+	ListContinuousStates(string) ([]tuning.ContinuousState, error)
+}
+
+func (h Handler) HandleTuningContinuousStates(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("instance_id")
+	if id == "" {
+		writeDashboardError(w, 400, "instance_id_required")
+		return
+	}
+	store, ok := h.tuningStore.(ContinuousStateStore)
+	if !ok {
+		writeDashboardError(w, 501, "continuous_dispatch_not_supported")
+		return
+	}
+	items, err := store.ListContinuousStates(id)
+	if err != nil {
+		writeDashboardError(w, 500, "query_failed")
+		return
+	}
+	writeDashboardJSON(w, 200, map[string]any{"items": items})
+}
+
 type PolicyResponse struct {
 	InstanceID string        `json:"instance_id"`
 	Policy     tuning.Policy `json:"policy"`

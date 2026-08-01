@@ -1,0 +1,19 @@
+CREATE TABLE IF NOT EXISTS tuning_continuous_states (
+  instance_id VARCHAR(64) NOT NULL,
+  channel_id BIGINT NOT NULL,
+  model_name VARCHAR(255) NOT NULL,
+  k_error DOUBLE NOT NULL DEFAULT 1,
+  k_speed DOUBLE NOT NULL DEFAULT 1,
+  k_cache DOUBLE NOT NULL DEFAULT 1,
+  k_otps DOUBLE NOT NULL DEFAULT 1,
+  multiplier DOUBLE NOT NULL DEFAULT 1,
+  proposed_weight BIGINT NOT NULL DEFAULT 0,
+  last_written_weight BIGINT NULL,
+  last_write_at DATETIME(6) NULL,
+  last_observed_requests BIGINT NOT NULL DEFAULT 0,
+  last_observed_errors BIGINT NOT NULL DEFAULT 0,
+  paused_reason VARCHAR(64) NOT NULL DEFAULT '',
+  updated_at DATETIME(6) NOT NULL,
+  PRIMARY KEY (instance_id, channel_id),
+  KEY idx_tuning_continuous_instance_model (instance_id, model_name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
