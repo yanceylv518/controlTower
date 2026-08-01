@@ -10,6 +10,7 @@ type continuousStore interface {
 	ListContinuousStates(string) ([]ContinuousState, error)
 	PutContinuousState(ContinuousState) error
 	CreateContinuousWeightChange(Recommendation, string, time.Time) (string, error)
+	CreateContinuousProbe(Recommendation, string, int, int, time.Time) (string, error)
 }
 
 type continuousBaseline struct {
@@ -17,9 +18,8 @@ type continuousBaseline struct {
 	cache, otps            float64
 }
 
-// evaluateContinuous implements v3.0-B2. Circuit/probe transitions are
-// intentionally deferred to B3; B2 persists the factor state and exposes the
-// value that would be written in observe mode.
+// evaluateContinuous implements the v3.0 continuous dispatch state machine,
+// including B3 circuit breaking, active probes, and one-cycle soft start.
 func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, cs continuousStore) (int, int) {
 	p := pr.Policy.Continuous
 	values, err := cs.ListChannelBaseValues(id, "")
@@ -62,6 +62,9 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 			if !exists || state.KError <= 0 {
 				state.KError = 1
 			}
+			if state.Phase == "" {
+				state.Phase = "normal"
+			}
 			state.KSpeed, state.KCache, state.KOTPS = 1, 1, 1
 
 			// Mixed-channel fuse (design §4): the weight knob is channel-wide,
@@ -84,6 +87,95 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 
 			m := metricByID[base.ChannelID]
 			requests, channelErrors := e.foldErrorDecay(id, base.ChannelID, &state, now)
+			recoveredNow := false
+
+			// A completed probe round is folded before normal factor evaluation.
+			if state.Phase == "probing" && state.ProbeCommandID == nil && state.ProbeAttempts > 0 {
+				successRatio := float64(state.ProbeSuccesses) / float64(state.ProbeAttempts)
+				probeSpeed := 1.0
+				if state.ProbeSuccesses > 0 && healthy && baseline.ttft95 > 0 {
+					avg := state.ProbeDurationSum / float64(state.ProbeSuccesses)
+					if avg > 0 {
+						probeSpeed = clamp(math.Sqrt(baseline.ttft95/avg), .1, 1)
+					}
+				}
+				probeMultiplier := successRatio * probeSpeed
+				if probeMultiplier >= p.RecoveryThreshold {
+					state.Phase, state.SoftStartPending = "soft_start", true
+					state.Multiplier = p.SoftStartMultiplier
+					state.ProposedWeight = max(int64(1), int64(math.Round(float64(base.BaseWeight)*state.Multiplier)))
+					rec := continuousEvent(id, base, state, "circuit_recovered", mode, now)
+					if state.OriginalPriority != nil {
+						rec.ProposedPriority = state.OriginalPriority
+					}
+					if mode == "auto" {
+						if _, err = cs.CreateContinuousWeightChange(rec, "system:auto", now); err == nil {
+							recoveredNow = true
+							w := state.ProposedWeight
+							at := now
+							state.LastWrittenWeight = &w
+							state.LastWriteAt = &at
+							writes++
+						} else {
+							state.Phase, state.SoftStartPending = "circuit", false
+							next := now.Add(time.Duration(p.SilentMinutes) * time.Minute)
+							state.NextProbeAt = &next
+						}
+					} else {
+						recoveredNow = true
+						_ = e.store.InsertRecommendation(rec)
+					}
+				} else {
+					state.Phase = "circuit"
+					next := now.Add(time.Duration(p.SilentMinutes) * time.Minute)
+					state.NextProbeAt = &next
+					_ = e.store.InsertRecommendation(continuousEvent(id, base, state, "probe_failed", mode, now))
+				}
+				state.ProbeAttempts, state.ProbeSuccesses, state.ProbeDurationSum = 0, 0, 0
+			}
+			if recoveredNow {
+				state.UpdatedAt = now
+				_ = cs.PutContinuousState(state)
+				evaluated++
+				continue
+			}
+			if state.Phase == "circuit" {
+				if mode == "auto" && state.NextProbeAt != nil && !now.Before(*state.NextProbeAt) {
+					rec := continuousEvent(id, base, state, "probe_started", mode, now)
+					if commandID, probeErr := cs.CreateContinuousProbe(rec, model, p.ProbeCount, p.ProbeIntervalSeconds, now); probeErr == nil {
+						state.Phase = "probing"
+						state.ProbeCommandID = &commandID
+					}
+				}
+				state.UpdatedAt = now
+				_ = cs.PutContinuousState(state)
+				evaluated++
+				continue
+			}
+			if state.Phase == "probing" {
+				// Do not strand a channel forever when a probe command is lost or
+				// expires before an Agent reports it.
+				if state.NextProbeAt != nil && now.After(state.NextProbeAt.Add(10*time.Minute)) {
+					state.Phase, state.ProbeCommandID = "circuit", nil
+					next := now.Add(time.Duration(p.SilentMinutes) * time.Minute)
+					state.NextProbeAt = &next
+				}
+				state.UpdatedAt = now
+				_ = cs.PutContinuousState(state)
+				evaluated++
+				continue
+			}
+			if state.Phase == "soft_start" && state.SoftStartPending {
+				state.SoftStartPending = false
+				state.UpdatedAt = now
+				_ = cs.PutContinuousState(state)
+				evaluated++
+				continue
+			} else if state.Phase == "soft_start" {
+				state.Phase = "normal"
+				state.CircuitOpenedAt = nil
+				state.NextProbeAt = nil
+			}
 			if healthy && mode != "off" && m.RequestCount >= p.MinSamples {
 				state.KSpeed = speedFactor(m, baseline, p.Sensitivity)
 				state.KCache = continuousRatioFactor(m.CacheHitRate, baseline.cache, p.Sensitivity, 1.5)
@@ -96,6 +188,40 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 			state.ProposedWeight = int64(math.Round(float64(base.BaseWeight) * state.Multiplier))
 			if state.ProposedWeight < 1 && base.BaseWeight > 0 {
 				state.ProposedWeight = 1
+			}
+			if mode != "off" && state.Phase == "normal" && state.Multiplier < p.CircuitThreshold {
+				state.Phase = "circuit"
+				state.Multiplier = 0
+				state.ProposedWeight = 0
+				opened := now
+				next := now.Add(time.Duration(p.SilentMinutes) * time.Minute)
+				original := base.BasePriority
+				state.CircuitOpenedAt = &opened
+				state.NextProbeAt = &next
+				state.OriginalPriority = &original
+				rec := continuousEvent(id, base, state, "circuit_opened", mode, now)
+				zero := int64(0)
+				rec.ProposedPriority = &zero
+				if mode == "auto" {
+					if _, err = cs.CreateContinuousWeightChange(rec, "system:auto", now); err == nil {
+						w := int64(0)
+						at := now
+						state.LastWrittenWeight = &w
+						state.LastWriteAt = &at
+						writes++
+					} else {
+						state.Phase = "normal"
+						state.Multiplier = state.KSpeed * state.KCache * state.KOTPS * state.KError
+						state.ProposedWeight = max(int64(1), int64(math.Round(float64(base.BaseWeight)*state.Multiplier)))
+						state.CircuitOpenedAt, state.NextProbeAt, state.OriginalPriority = nil, nil, nil
+					}
+				} else {
+					_ = e.store.InsertRecommendation(rec)
+				}
+				state.UpdatedAt = now
+				_ = cs.PutContinuousState(state)
+				evaluated++
+				continue
 			}
 
 			// Manual-override detection. Snapshots refresh every ~10 minutes,
@@ -216,6 +342,6 @@ func continuousRatioFactor(value, average, sensitivity, upper float64) float64 {
 
 func continuousEvent(id string, base ChannelBaseValue, state ContinuousState, rule, mode string, now time.Time) Recommendation {
 	return Recommendation{ID: NewID(now, id, base.ChannelID, rule), InstanceID: id, ChannelID: base.ChannelID, ChannelName: base.ChannelName, CreatedAt: now, Rule: rule,
-		Evidence:      map[string]any{"model": base.ModelName, "multiplier": state.Multiplier, "k_speed": state.KSpeed, "k_cache": state.KCache, "k_otps": state.KOTPS, "k_error": state.KError},
+		Evidence:      map[string]any{"model": base.ModelName, "phase": state.Phase, "multiplier": state.Multiplier, "k_speed": state.KSpeed, "k_cache": state.KCache, "k_otps": state.KOTPS, "k_error": state.KError, "probe_attempts": state.ProbeAttempts, "probe_successes": state.ProbeSuccesses},
 		CurrentWeight: base.CurrentWeight, ProposedWeight: state.ProposedWeight, CurrentPriority: &base.CurrentPriority, ProposedPriority: &base.BasePriority, ModeAtCreation: mode, Status: "recorded"}
 }

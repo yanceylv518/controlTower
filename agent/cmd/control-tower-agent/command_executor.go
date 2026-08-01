@@ -26,7 +26,7 @@ func executeCommands(ctx context.Context, controller channelController, commands
 			results = append(results, result)
 			continue
 		}
-		if command.Type != "channel.update" {
+		if command.Type != "channel.update" && command.Type != "channel.probe" {
 			result.Status = "failed"
 			result.Error = fmt.Sprintf("unsupported command type %q", command.Type)
 			results = append(results, result)
@@ -35,6 +35,41 @@ func executeCommands(ctx context.Context, controller channelController, commands
 		if command.ID == "" || command.ChannelID <= 0 {
 			result.Status = "failed"
 			result.Error = "command id and positive channel id are required"
+			results = append(results, result)
+			continue
+		}
+		if command.Type == "channel.probe" {
+			count := command.ProbeCount
+			if count < 1 {
+				count = 1
+			}
+			interval := time.Duration(command.ProbeIntervalSeconds) * time.Second
+			var lastError string
+			for attempt := 0; attempt < count; attempt++ {
+				if attempt > 0 && interval > 0 {
+					select {
+					case <-ctx.Done():
+						lastError = ctx.Err().Error()
+						attempt = count
+						continue
+					case <-time.After(interval):
+					}
+				}
+				probe, err := controller.Probe(ctx, command.ChannelID, command.Model)
+				result.Attempts++
+				if err == nil && probe.Success {
+					result.Successes++
+					result.DurationSeconds += probe.Duration
+				} else if err != nil {
+					lastError = err.Error()
+				} else {
+					lastError = probe.Message
+				}
+			}
+			// A probe command reports the whole round even when individual probes
+			// fail; the server decides recovery from attempts/successes.
+			result.Status = "succeeded"
+			result.Error = lastError
 			results = append(results, result)
 			continue
 		}

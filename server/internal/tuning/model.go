@@ -304,14 +304,14 @@ func (p Policy) Validate() map[string]string {
 }
 
 type ChannelBaseValue struct {
-	InstanceID      string    `json:"instance_id"`
-	ChannelID       int64     `json:"channel_id"`
-	ChannelName     string    `json:"channel_name"`
-	ModelName       string    `json:"model_name"`
-	BaseWeight      int64     `json:"base_weight"`
-	BasePriority    int64     `json:"base_priority"`
-	CurrentWeight   int64     `json:"current_weight"`
-	CurrentPriority int64     `json:"current_priority"`
+	InstanceID      string `json:"instance_id"`
+	ChannelID       int64  `json:"channel_id"`
+	ChannelName     string `json:"channel_name"`
+	ModelName       string `json:"model_name"`
+	BaseWeight      int64  `json:"base_weight"`
+	BasePriority    int64  `json:"base_priority"`
+	CurrentWeight   int64  `json:"current_weight"`
+	CurrentPriority int64  `json:"current_priority"`
 	// SnapshotAt is when CurrentWeight/CurrentPriority were captured from
 	// new-api. Manual-override detection must compare against it: snapshots
 	// refresh every ~10 minutes, so a value differing from our last write is
@@ -356,9 +356,18 @@ type ContinuousState struct {
 	// Buckets arrive late (agent reports every ~30s), so the decay must walk
 	// complete buckets past this cursor instead of re-reading "the last
 	// minute" — that both misses late counts and re-counts on jitter.
-	LastBucketAt *time.Time `json:"last_bucket_at,omitempty"`
-	PausedReason string     `json:"paused_reason,omitempty"`
-	UpdatedAt            time.Time  `json:"updated_at"`
+	LastBucketAt     *time.Time `json:"last_bucket_at,omitempty"`
+	PausedReason     string     `json:"paused_reason,omitempty"`
+	Phase            string     `json:"phase"`
+	CircuitOpenedAt  *time.Time `json:"circuit_opened_at,omitempty"`
+	NextProbeAt      *time.Time `json:"next_probe_at,omitempty"`
+	ProbeCommandID   *string    `json:"probe_command_id,omitempty"`
+	ProbeAttempts    int        `json:"probe_attempts"`
+	ProbeSuccesses   int        `json:"probe_successes"`
+	ProbeDurationSum float64    `json:"probe_duration_sum"`
+	OriginalPriority *int64     `json:"original_priority,omitempty"`
+	SoftStartPending bool       `json:"soft_start_pending"`
+	UpdatedAt        time.Time  `json:"updated_at"`
 }
 
 type RecentChannelBucket struct {

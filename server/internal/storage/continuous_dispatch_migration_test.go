@@ -7,13 +7,18 @@ import (
 )
 
 func TestContinuousDispatchMigrationIsForwardOnly(t *testing.T) {
-	data, err := os.ReadFile("../../migrations/019_continuous_dispatch_states.sql")
+	base, err := os.ReadFile("../../migrations/019_continuous_dispatch_states.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
-	sql := strings.ToLower(string(data))
+	b3, err := os.ReadFile("../../migrations/020_continuous_circuit_breaker.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := strings.ToLower(string(base) + "\n" + string(b3))
 	for _, required := range []string{
 		"create table if not exists tuning_continuous_states",
+		"add column phase",
 		"primary key (instance_id, channel_id)",
 		"idx_tuning_continuous_instance_model",
 		"last_write_at datetime(6)",

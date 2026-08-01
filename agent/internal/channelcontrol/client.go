@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/cookiejar"
+	neturl "net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -27,6 +28,34 @@ type Result struct {
 	Status    *int
 	Weight    *uint
 	Priority  *int64
+}
+
+type ProbeResult struct {
+	Success  bool
+	Duration float64
+	Message  string
+}
+
+func (c *Client) Probe(ctx context.Context, channelID int64, model string) (ProbeResult, error) {
+	if channelID <= 0 {
+		return ProbeResult{}, fmt.Errorf("channel id must be positive")
+	}
+	if err := c.ensureToken(ctx); err != nil {
+		return ProbeResult{}, err
+	}
+	url := c.baseURL + "/api/channel/test/" + strconv.FormatInt(channelID, 10)
+	if model != "" {
+		url += "?model=" + neturl.QueryEscape(model)
+	}
+	var response struct {
+		Success bool    `json:"success"`
+		Message string  `json:"message"`
+		Time    float64 `json:"time"`
+	}
+	if err := c.do(ctx, http.MethodGet, url, nil, &response, true); err != nil {
+		return ProbeResult{}, err
+	}
+	return ProbeResult{Success: response.Success, Duration: response.Time, Message: response.Message}, nil
 }
 
 type TokenStore interface {

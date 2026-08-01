@@ -168,7 +168,7 @@ func (s Store) QueryMetrics(id string, start, end time.Time) ([]tuning.ChannelMe
 }
 
 func (s Store) ListContinuousStates(id string) ([]tuning.ContinuousState, error) {
-	rows, err := s.db.QueryContext(context.Background(), `SELECT instance_id,channel_id,model_name,k_error,k_speed,k_cache,k_otps,multiplier,proposed_weight,last_written_weight,last_write_at,last_observed_requests,last_observed_errors,last_bucket_at,paused_reason,updated_at FROM tuning_continuous_states WHERE instance_id=?`, id)
+	rows, err := s.db.QueryContext(context.Background(), `SELECT instance_id,channel_id,model_name,k_error,k_speed,k_cache,k_otps,multiplier,proposed_weight,last_written_weight,last_write_at,last_observed_requests,last_observed_errors,last_bucket_at,paused_reason,phase,circuit_opened_at,next_probe_at,probe_command_id,probe_attempts,probe_successes,probe_duration_sum,original_priority,soft_start_pending,updated_at FROM tuning_continuous_states WHERE instance_id=?`, id)
 	if err != nil {
 		return nil, err
 	}
@@ -177,8 +177,10 @@ func (s Store) ListContinuousStates(id string) ([]tuning.ContinuousState, error)
 	for rows.Next() {
 		var v tuning.ContinuousState
 		var written sql.NullInt64
-		var writeAt sql.NullTime
-		if err = rows.Scan(&v.InstanceID, &v.ChannelID, &v.ModelName, &v.KError, &v.KSpeed, &v.KCache, &v.KOTPS, &v.Multiplier, &v.ProposedWeight, &written, &writeAt, &v.LastObservedRequests, &v.LastObservedErrors, &v.PausedReason, &v.UpdatedAt); err != nil {
+		var writeAt, bucketAt, openedAt, nextProbeAt sql.NullTime
+		var probeID sql.NullString
+		var originalPriority sql.NullInt64
+		if err = rows.Scan(&v.InstanceID, &v.ChannelID, &v.ModelName, &v.KError, &v.KSpeed, &v.KCache, &v.KOTPS, &v.Multiplier, &v.ProposedWeight, &written, &writeAt, &v.LastObservedRequests, &v.LastObservedErrors, &bucketAt, &v.PausedReason, &v.Phase, &openedAt, &nextProbeAt, &probeID, &v.ProbeAttempts, &v.ProbeSuccesses, &v.ProbeDurationSum, &originalPriority, &v.SoftStartPending, &v.UpdatedAt); err != nil {
 			return nil, err
 		}
 		if written.Valid {
@@ -189,13 +191,33 @@ func (s Store) ListContinuousStates(id string) ([]tuning.ContinuousState, error)
 			x := writeAt.Time
 			v.LastWriteAt = &x
 		}
+		if bucketAt.Valid {
+			x := bucketAt.Time
+			v.LastBucketAt = &x
+		}
+		if openedAt.Valid {
+			x := openedAt.Time
+			v.CircuitOpenedAt = &x
+		}
+		if nextProbeAt.Valid {
+			x := nextProbeAt.Time
+			v.NextProbeAt = &x
+		}
+		if probeID.Valid {
+			x := probeID.String
+			v.ProbeCommandID = &x
+		}
+		if originalPriority.Valid {
+			x := originalPriority.Int64
+			v.OriginalPriority = &x
+		}
 		out = append(out, v)
 	}
 	return out, rows.Err()
 }
 
 func (s Store) PutContinuousState(v tuning.ContinuousState) error {
-	_, err := s.db.ExecContext(context.Background(), `INSERT INTO tuning_continuous_states(instance_id,channel_id,model_name,k_error,k_speed,k_cache,k_otps,multiplier,proposed_weight,last_written_weight,last_write_at,last_observed_requests,last_observed_errors,last_bucket_at,paused_reason,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE model_name=VALUES(model_name),k_error=VALUES(k_error),k_speed=VALUES(k_speed),k_cache=VALUES(k_cache),k_otps=VALUES(k_otps),multiplier=VALUES(multiplier),proposed_weight=VALUES(proposed_weight),last_written_weight=VALUES(last_written_weight),last_write_at=VALUES(last_write_at),last_observed_requests=VALUES(last_observed_requests),last_observed_errors=VALUES(last_observed_errors),last_bucket_at=VALUES(last_bucket_at),paused_reason=VALUES(paused_reason),updated_at=VALUES(updated_at)`, v.InstanceID, v.ChannelID, v.ModelName, v.KError, v.KSpeed, v.KCache, v.KOTPS, v.Multiplier, v.ProposedWeight, v.LastWrittenWeight, v.LastWriteAt, v.LastObservedRequests, v.LastObservedErrors, v.LastBucketAt, v.PausedReason, v.UpdatedAt)
+	_, err := s.db.ExecContext(context.Background(), `INSERT INTO tuning_continuous_states(instance_id,channel_id,model_name,k_error,k_speed,k_cache,k_otps,multiplier,proposed_weight,last_written_weight,last_write_at,last_observed_requests,last_observed_errors,last_bucket_at,paused_reason,phase,circuit_opened_at,next_probe_at,probe_command_id,probe_attempts,probe_successes,probe_duration_sum,original_priority,soft_start_pending,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE model_name=VALUES(model_name),k_error=VALUES(k_error),k_speed=VALUES(k_speed),k_cache=VALUES(k_cache),k_otps=VALUES(k_otps),multiplier=VALUES(multiplier),proposed_weight=VALUES(proposed_weight),last_written_weight=VALUES(last_written_weight),last_write_at=VALUES(last_write_at),last_observed_requests=VALUES(last_observed_requests),last_observed_errors=VALUES(last_observed_errors),last_bucket_at=VALUES(last_bucket_at),paused_reason=VALUES(paused_reason),phase=VALUES(phase),circuit_opened_at=VALUES(circuit_opened_at),next_probe_at=VALUES(next_probe_at),probe_command_id=VALUES(probe_command_id),probe_attempts=VALUES(probe_attempts),probe_successes=VALUES(probe_successes),probe_duration_sum=VALUES(probe_duration_sum),original_priority=VALUES(original_priority),soft_start_pending=VALUES(soft_start_pending),updated_at=VALUES(updated_at)`, v.InstanceID, v.ChannelID, v.ModelName, v.KError, v.KSpeed, v.KCache, v.KOTPS, v.Multiplier, v.ProposedWeight, v.LastWrittenWeight, v.LastWriteAt, v.LastObservedRequests, v.LastObservedErrors, v.LastBucketAt, v.PausedReason, v.Phase, v.CircuitOpenedAt, v.NextProbeAt, v.ProbeCommandID, v.ProbeAttempts, v.ProbeSuccesses, v.ProbeDurationSum, v.OriginalPriority, v.SoftStartPending, v.UpdatedAt)
 	return err
 }
 
@@ -207,7 +229,11 @@ func (s Store) CreateContinuousWeightChange(v tuning.Recommendation, actor strin
 	defer tx.Rollback()
 	ev, _ := json.Marshal(v.Evidence)
 	commandID := randomCommandID()
-	payload, _ := json.Marshal(map[string]any{"weight": v.ProposedWeight})
+	payloadValues := map[string]any{"weight": v.ProposedWeight}
+	if v.ProposedPriority != nil && (v.Rule == "circuit_opened" || v.Rule == "circuit_recovered") {
+		payloadValues["priority"] = *v.ProposedPriority
+	}
+	payload, _ := json.Marshal(payloadValues)
 	if _, err = tx.Exec(`INSERT INTO tuning_recommendations(id,instance_id,channel_id,channel_name,created_at,rule,evidence_json,current_weight,proposed_weight,current_priority,proposed_priority,mode_at_creation,status,command_id,acted_by,acted_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, v.ID, v.InstanceID, v.ChannelID, v.ChannelName, v.CreatedAt, v.Rule, string(ev), v.CurrentWeight, v.ProposedWeight, v.CurrentPriority, v.ProposedPriority, v.ModeAtCreation, "auto_executed", commandID, actor, now); err != nil {
 		return "", err
 	}
@@ -220,6 +246,34 @@ func (s Store) CreateContinuousWeightChange(v tuning.Recommendation, actor strin
 		return "", err
 	}
 	return commandID, tx.Commit()
+}
+
+func (s Store) CreateContinuousProbe(v tuning.Recommendation, model string, count, interval int, now time.Time) (string, error) {
+	tx, err := s.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+	commandID := randomCommandID()
+	payload, _ := json.Marshal(map[string]any{"model": model, "probe_count": count, "probe_interval_seconds": interval})
+	_, err = tx.Exec(`INSERT INTO channel_commands(id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at) VALUES(?,?,?,?,?,'pending','system:auto','',?,?)`, commandID, v.InstanceID, v.ChannelID, "channel.probe", string(payload), now, now)
+	if err != nil {
+		return "", err
+	}
+	v.Rule, v.Status, v.CommandID = "probe_started", "auto_executed", &commandID
+	ev, _ := json.Marshal(v.Evidence)
+	if _, err = tx.Exec(`INSERT INTO tuning_recommendations(id,instance_id,channel_id,channel_name,created_at,rule,evidence_json,current_weight,proposed_weight,current_priority,proposed_priority,mode_at_creation,status,command_id,acted_by,acted_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, v.ID, v.InstanceID, v.ChannelID, v.ChannelName, v.CreatedAt, v.Rule, string(ev), v.CurrentWeight, v.ProposedWeight, v.CurrentPriority, v.ProposedPriority, v.ModeAtCreation, v.Status, commandID, "system:auto", now); err != nil {
+		return "", err
+	}
+	if err = tx.Commit(); err != nil {
+		return "", err
+	}
+	return commandID, nil
+}
+
+func (s Store) RecordContinuousProbeResult(instanceID string, channelID int64, commandID string, attempts, successes int, duration float64, now time.Time) error {
+	_, err := s.db.ExecContext(context.Background(), `UPDATE tuning_continuous_states SET probe_command_id=NULL,probe_attempts=?,probe_successes=?,probe_duration_sum=?,updated_at=? WHERE instance_id=? AND channel_id=? AND probe_command_id=?`, attempts, successes, duration, now, instanceID, channelID, commandID)
+	return err
 }
 
 func randomCommandID() string {

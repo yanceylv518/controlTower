@@ -400,6 +400,15 @@ export interface TuningContinuousState {
   success_count: number;
   error_count: number;
   paused_reason?: string;
+  phase: "normal" | "circuit" | "probing" | "soft_start";
+  circuit_opened_at?: string;
+  next_probe_at?: string;
+  probe_command_id?: string;
+  probe_attempts: number;
+  probe_successes: number;
+  probe_duration_sum: number;
+  original_priority?: number;
+  soft_start_pending: boolean;
   updated_at: string;
 }
 

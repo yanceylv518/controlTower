@@ -22,20 +22,26 @@ type AgentHeartbeatResponse struct {
 }
 
 type ChannelCommand struct {
-	ID        string `json:"id"`
-	Type      string `json:"type"`
-	ChannelID int64  `json:"channel_id"`
-	Status    *int   `json:"status,omitempty"`
-	Weight    *uint  `json:"weight,omitempty"`
-	Priority  *int64 `json:"priority,omitempty"`
+	ID                   string `json:"id"`
+	Type                 string `json:"type"`
+	ChannelID            int64  `json:"channel_id"`
+	Status               *int   `json:"status,omitempty"`
+	Weight               *uint  `json:"weight,omitempty"`
+	Priority             *int64 `json:"priority,omitempty"`
+	Model                string `json:"model,omitempty"`
+	ProbeCount           int    `json:"probe_count,omitempty"`
+	ProbeIntervalSeconds int    `json:"probe_interval_seconds,omitempty"`
 }
 
 type ChannelCommandResult struct {
-	ID        string    `json:"id"`
-	ChannelID int64     `json:"channel_id"`
-	Status    string    `json:"status"`
-	Error     string    `json:"error,omitempty"`
-	AppliedAt time.Time `json:"applied_at"`
+	ID              string    `json:"id"`
+	ChannelID       int64     `json:"channel_id"`
+	Status          string    `json:"status"`
+	Error           string    `json:"error,omitempty"`
+	AppliedAt       time.Time `json:"applied_at"`
+	DurationSeconds float64   `json:"duration_seconds,omitempty"`
+	Attempts        int       `json:"attempts,omitempty"`
+	Successes       int       `json:"successes,omitempty"`
 }
 type AgentReportRequest struct {
 	InstanceID         string                     `json:"instance_id"`

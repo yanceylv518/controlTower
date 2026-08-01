@@ -41,6 +41,12 @@ type continuousFake struct {
 	bases  []ChannelBaseValue
 	states map[int64]ContinuousState
 	writes []Recommendation
+	probes []Recommendation
+}
+
+func (f *continuousFake) CreateContinuousProbe(r Recommendation, _ string, _, _ int, _ time.Time) (string, error) {
+	f.probes = append(f.probes, r)
+	return "probe-" + r.ID, nil
 }
 
 func (f *continuousFake) ListChannelBaseValues(string, string) ([]ChannelBaseValue, error) {
@@ -162,6 +168,41 @@ func TestMixedChannelFuseSkipsContinuousTuning(t *testing.T) {
 	}
 	if events != 1 {
 		t.Fatalf("mixed fuse event must be recorded once: %d", events)
+	}
+}
+
+func TestContinuousCircuitProbeAndSoftStart(t *testing.T) {
+	now := time.Now().UTC()
+	p := autoPolicy()
+	p.Policy.Continuous.CircuitThreshold = .1
+	p.Policy.Continuous.RecoveryThreshold = .2
+	p.Policy.Continuous.SilentMinutes = 5
+	p.Policy.Continuous.SoftStartMultiplier = .2
+	f := &continuousFake{bases: []ChannelBaseValue{
+		{ChannelID: 1, ChannelName: "c", ModelName: "m", Models: []string{"m"}, BaseWeight: 100, BasePriority: 7, CurrentWeight: 100, CurrentPriority: 7, SnapshotAt: now},
+		{ChannelID: 2, ChannelName: "peer", ModelName: "m", Models: []string{"m"}, BaseWeight: 100, BasePriority: 7, CurrentWeight: 100, CurrentPriority: 7, SnapshotAt: now},
+	}, states: map[int64]ContinuousState{1: {InstanceID: "i", ChannelID: 1, ModelName: "m", KError: .05, Phase: "normal"}}}
+	f.metrics = []ChannelMetric{{ChannelID: 1, RequestCount: 20, TTFTP50: 1, TTFTP90: 1, TTFTP95: 1}, {ChannelID: 2, RequestCount: 20, TTFTP50: 1, TTFTP90: 1, TTFTP95: 1}}
+	e := NewEngine(f)
+	e.evaluateContinuous("i", p, now, f)
+	s := f.states[1]
+	if s.Phase != "circuit" || s.ProposedWeight != 0 || s.NextProbeAt == nil || len(f.writes) != 1 || f.writes[0].ProposedPriority == nil || *f.writes[0].ProposedPriority != 0 {
+		t.Fatalf("circuit did not open safely: %#v writes=%#v", s, f.writes)
+	}
+	e.evaluateContinuous("i", p, now.Add(5*time.Minute), f)
+	s = f.states[1]
+	if s.Phase != "probing" || s.ProbeCommandID == nil || len(f.probes) != 1 {
+		t.Fatalf("probe was not scheduled: %#v", s)
+	}
+	s.ProbeCommandID = nil
+	s.ProbeAttempts = 10
+	s.ProbeSuccesses = 10
+	s.ProbeDurationSum = 10
+	f.states[1] = s
+	e.evaluateContinuous("i", p, now.Add(6*time.Minute), f)
+	s = f.states[1]
+	if s.Phase != "soft_start" || s.ProposedWeight != 20 || !s.SoftStartPending || len(f.writes) != 2 {
+		t.Fatalf("successful probe must soft-start: %#v", s)
 	}
 }
 

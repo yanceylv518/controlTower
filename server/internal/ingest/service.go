@@ -84,14 +84,17 @@ func (s Service) SaveHeartbeatWithCommands(req agentgateway.AgentHeartbeatReques
 	commands := make([]agentgateway.ChannelCommand, 0, len(stored))
 	for _, v := range stored {
 		var p struct {
-			Status   *int   `json:"status"`
-			Weight   *uint  `json:"weight"`
-			Priority *int64 `json:"priority"`
+			Status               *int   `json:"status"`
+			Weight               *uint  `json:"weight"`
+			Priority             *int64 `json:"priority"`
+			Model                string `json:"model"`
+			ProbeCount           int    `json:"probe_count"`
+			ProbeIntervalSeconds int    `json:"probe_interval_seconds"`
 		}
 		if json.Unmarshal([]byte(v.PayloadJSON), &p) != nil {
 			continue
 		}
-		commands = append(commands, agentgateway.ChannelCommand{ID: v.ID, Type: v.CommandType, ChannelID: v.ChannelID, Status: p.Status, Weight: p.Weight, Priority: p.Priority})
+		commands = append(commands, agentgateway.ChannelCommand{ID: v.ID, Type: v.CommandType, ChannelID: v.ChannelID, Status: p.Status, Weight: p.Weight, Priority: p.Priority, Model: p.Model, ProbeCount: p.ProbeCount, ProbeIntervalSeconds: p.ProbeIntervalSeconds})
 	}
 	return offset, commands, err
 }
@@ -129,8 +132,17 @@ func (s Service) SaveReport(req agentgateway.AgentReportRequest) error {
 		if !changed {
 			continue
 		}
-		summary, _ := json.Marshal(map[string]any{"payload": json.RawMessage(command.PayloadJSON), "result": map[string]any{"status": status, "error": result.Error, "applied_at": result.AppliedAt}})
-		if err = s.store.InsertOperationAudit(storage.OperationAudit{ID: command.ID, InstanceID: command.InstanceID, OperationType: "channel.update", TargetType: "channel", TargetID: strconv.FormatInt(command.ChannelID, 10), ActorID: command.CreatedBy, BeforeSummary: "", AfterSummary: string(summary), Status: status, CreatedAt: time.Now().UTC()}); err != nil {
+		if command.CommandType == "channel.probe" {
+			if recorder, ok := s.store.(interface {
+				RecordContinuousProbeResult(string, int64, string, int, int, float64, time.Time) error
+			}); ok {
+				if err = recorder.RecordContinuousProbeResult(command.InstanceID, command.ChannelID, command.ID, result.Attempts, result.Successes, result.DurationSeconds, time.Now().UTC()); err != nil {
+					return err
+				}
+			}
+		}
+		summary, _ := json.Marshal(map[string]any{"payload": json.RawMessage(command.PayloadJSON), "result": map[string]any{"status": status, "error": result.Error, "applied_at": result.AppliedAt, "attempts": result.Attempts, "successes": result.Successes, "duration_seconds": result.DurationSeconds}})
+		if err = s.store.InsertOperationAudit(storage.OperationAudit{ID: command.ID, InstanceID: command.InstanceID, OperationType: command.CommandType, TargetType: "channel", TargetID: strconv.FormatInt(command.ChannelID, 10), ActorID: command.CreatedBy, BeforeSummary: "", AfterSummary: string(summary), Status: status, CreatedAt: time.Now().UTC()}); err != nil {
 			return err
 		}
 	}

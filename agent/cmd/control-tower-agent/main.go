@@ -51,6 +51,7 @@ type channelSnapshotCollector interface {
 }
 type channelController interface {
 	Update(context.Context, channelcontrol.UpdateRequest) (channelcontrol.Result, error)
+	Probe(context.Context, int64, string) (channelcontrol.ProbeResult, error)
 }
 type dockerStatusCollector interface {
 	Collect(context.Context) []reporter.DockerStatusPayload
