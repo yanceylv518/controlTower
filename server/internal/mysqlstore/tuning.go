@@ -44,7 +44,7 @@ func (s Store) ListChannelBaseValues(instanceID, model string) ([]tuning.Channel
 FROM channel_base_values b
 JOIN channel_snapshots c ON c.instance_id=b.instance_id AND c.channel_id=b.channel_id
 JOIN (SELECT channel_id,MAX(captured_at) captured_at FROM channel_snapshots WHERE instance_id=? GROUP BY channel_id) x ON x.channel_id=c.channel_id AND x.captured_at=c.captured_at
-WHERE b.instance_id=?`+filter+` ORDER BY b.model_name,c.channel_name`, args...)
+WHERE b.instance_id=? AND LOWER(c.status) IN ('enabled','enable','active','normal','1')`+filter+` ORDER BY b.model_name,c.channel_name`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -208,7 +208,7 @@ func (s Store) CreateContinuousWeightChange(v tuning.Recommendation, actor strin
 	ev, _ := json.Marshal(v.Evidence)
 	commandID := randomCommandID()
 	payload, _ := json.Marshal(map[string]any{"weight": v.ProposedWeight})
-	if _, err = tx.Exec(`INSERT INTO tuning_recommendations(id,instance_id,channel_id,channel_name,created_at,rule,evidence_json,current_weight,proposed_weight,current_priority,proposed_priority,mode_at_creation,status,command_id,acted_by,acted_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, v.ID, v.InstanceID, v.ChannelID, v.ChannelName, v.CreatedAt, v.Rule, string(ev), v.CurrentWeight, v.ProposedWeight, v.CurrentPriority, v.ProposedPriority, v.ModeAtCreation, "adopted", commandID, actor, now); err != nil {
+	if _, err = tx.Exec(`INSERT INTO tuning_recommendations(id,instance_id,channel_id,channel_name,created_at,rule,evidence_json,current_weight,proposed_weight,current_priority,proposed_priority,mode_at_creation,status,command_id,acted_by,acted_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, v.ID, v.InstanceID, v.ChannelID, v.ChannelName, v.CreatedAt, v.Rule, string(ev), v.CurrentWeight, v.ProposedWeight, v.CurrentPriority, v.ProposedPriority, v.ModeAtCreation, "auto_executed", commandID, actor, now); err != nil {
 		return "", err
 	}
 	if _, err = tx.Exec(`INSERT INTO channel_commands(id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at) VALUES(?,?,?,?,?,'pending',?,'',?,?)`, commandID, v.InstanceID, v.ChannelID, "channel.update", string(payload), actor, now, now); err != nil {
