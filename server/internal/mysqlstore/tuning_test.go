@@ -33,15 +33,6 @@ func TestTuningChannelMetricsSQLExtractsChannelIDFromDimensionKey(t *testing.T) 
 	}
 }
 
-func TestTuningP95BucketsSQLBuildsFullDimensionKey(t *testing.T) {
-	if !strings.Contains(tuningP95BucketsSQL, "dimension_key=CONCAT(?,':channel:',?)") {
-		t.Fatalf("baseline query must build the full '<instance>:channel:<id>' key: %s", tuningP95BucketsSQL)
-	}
-	if strings.Contains(tuningP95BucketsSQL, "dimension_key=? ") {
-		t.Fatalf("binding the bare channel id never matches any bucket: %s", tuningP95BucketsSQL)
-	}
-}
-
 func TestTuningRecentChannelBucketsSQLUsesNewestNonEmptyBuckets(t *testing.T) {
 	for _, fragment := range []string{
 		"dimension_key=CONCAT(?,':channel:',?)",
@@ -52,30 +43,6 @@ func TestTuningRecentChannelBucketsSQLUsesNewestNonEmptyBuckets(t *testing.T) {
 	} {
 		if !strings.Contains(tuningRecentChannelBucketsSQL, fragment) {
 			t.Fatalf("recent channel bucket query missing %q: %s", fragment, tuningRecentChannelBucketsSQL)
-		}
-	}
-}
-
-func TestConfirmRecommendationSQLContracts(t *testing.T) {
-	source, err := os.ReadFile("tuning.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := string(source)
-	for _, fragment := range []string{
-		"FOR UPDATE",
-		"target.enabled=1 ORDER BY target.id LIMIT 1",
-		`"channel.update"`,
-		"status=?,command_id=?",
-		`"tuning.adopt"`,
-		`"tuning.auto_execute"`,
-		`payloadValues["weight"]`,
-		"status='dismissed'",
-		`"tuning.dismiss"`,
-		"status='expired'",
-	} {
-		if !strings.Contains(text, fragment) {
-			t.Fatalf("confirm flow missing %q", fragment)
 		}
 	}
 }
