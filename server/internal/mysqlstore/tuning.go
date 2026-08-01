@@ -32,6 +32,89 @@ func (s Store) PutPolicy(r tuning.PolicyRecord) error {
 	_, e := s.db.ExecContext(context.Background(), `INSERT INTO tuning_policies(instance_id,policy_json,mode,updated_at,updated_by) VALUES(?,?,?,?,?) ON DUPLICATE KEY UPDATE policy_json=VALUES(policy_json),mode=VALUES(mode),updated_at=VALUES(updated_at),updated_by=VALUES(updated_by)`, r.InstanceID, string(b), r.Mode, r.UpdatedAt, r.UpdatedBy)
 	return e
 }
+
+func (s Store) ListChannelBaseValues(instanceID, model string) ([]tuning.ChannelBaseValue, error) {
+	args := []any{instanceID, instanceID}
+	filter := ""
+	if model != "" {
+		filter = " AND b.model_name=?"
+		args = append(args, model)
+	}
+	rows, err := s.db.QueryContext(context.Background(), `SELECT b.instance_id,b.channel_id,c.channel_name,b.model_name,b.base_weight,b.base_priority,c.weight,COALESCE(c.priority,0),b.updated_at,b.updated_by
+FROM channel_base_values b
+JOIN channel_snapshots c ON c.instance_id=b.instance_id AND c.channel_id=b.channel_id
+JOIN (SELECT channel_id,MAX(captured_at) captured_at FROM channel_snapshots WHERE instance_id=? GROUP BY channel_id) x ON x.channel_id=c.channel_id AND x.captured_at=c.captured_at
+WHERE b.instance_id=?`+filter+` ORDER BY b.model_name,c.channel_name`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []tuning.ChannelBaseValue
+	for rows.Next() {
+		var v tuning.ChannelBaseValue
+		if err = rows.Scan(&v.InstanceID, &v.ChannelID, &v.ChannelName, &v.ModelName, &v.BaseWeight, &v.BasePriority, &v.CurrentWeight, &v.CurrentPriority, &v.UpdatedAt, &v.UpdatedBy); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+func (s Store) SaveChannelBaseValues(instanceID, actor string, values []tuning.ChannelBaseValue, now time.Time) error {
+	tx, err := s.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, v := range values {
+		var beforeWeight, beforePriority sql.NullInt64
+		_ = tx.QueryRow(`SELECT base_weight,base_priority FROM channel_base_values WHERE instance_id=? AND channel_id=?`, instanceID, v.ChannelID).Scan(&beforeWeight, &beforePriority)
+		if _, err = tx.Exec(`INSERT INTO channel_base_values(instance_id,channel_id,model_name,base_weight,base_priority,updated_at,updated_by) VALUES(?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE model_name=VALUES(model_name),base_weight=VALUES(base_weight),base_priority=VALUES(base_priority),updated_at=VALUES(updated_at),updated_by=VALUES(updated_by)`, instanceID, v.ChannelID, v.ModelName, v.BaseWeight, v.BasePriority, now, actor); err != nil {
+			return err
+		}
+		var beforeWeightValue, beforePriorityValue any
+		if beforeWeight.Valid {
+			beforeWeightValue = beforeWeight.Int64
+		}
+		if beforePriority.Valid {
+			beforePriorityValue = beforePriority.Int64
+		}
+		before, _ := json.Marshal(map[string]any{"weight": beforeWeightValue, "priority": beforePriorityValue})
+		after, _ := json.Marshal(map[string]any{"weight": v.BaseWeight, "priority": v.BasePriority, "model": v.ModelName})
+		id := fmt.Sprintf("tbase-%d-%d", now.UnixNano(), v.ChannelID)
+		if _, err = tx.Exec(`INSERT INTO operation_audits(id,instance_id,operation_type,target_type,target_id,actor_id,before_summary,after_summary,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, id, instanceID, "tuning.base_update", "channel", fmt.Sprint(v.ChannelID), actor, string(before), string(after), "success", now); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s Store) SyncChannelBaseValues(instanceID string, models []string) ([]tuning.ChannelBaseValue, error) {
+	channels, err := s.LatestChannels(instanceID)
+	if err != nil {
+		return nil, err
+	}
+	wanted := map[string]bool{}
+	for _, m := range models {
+		wanted[m] = true
+	}
+	var out []tuning.ChannelBaseValue
+	for _, c := range channels {
+		// v3.0-B1 stores one model anchor per channel. Mixed-model channels are
+		// deliberately excluded until the later dispatch engine defines their
+		// ownership semantics; otherwise the (instance, channel) key would make
+		// the last model silently overwrite the others.
+		if len(c.Models) != 1 {
+			continue
+		}
+		m := c.Models[0]
+		if len(wanted) > 0 && !wanted[m] {
+			continue
+		}
+		out = append(out, tuning.ChannelBaseValue{InstanceID: instanceID, ChannelID: c.ID, ChannelName: c.Name, ModelName: m, BaseWeight: c.Weight, BasePriority: c.Priority, CurrentWeight: c.Weight, CurrentPriority: c.Priority})
+	}
+	return out, nil
+}
 func (s Store) ListEnabledInstances() ([]string, error) {
 	rows, e := s.db.QueryContext(context.Background(), `SELECT id FROM instances WHERE enabled=1`)
 	if e != nil {

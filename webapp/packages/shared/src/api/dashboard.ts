@@ -341,6 +341,12 @@ export interface TuningPolicy {
   dynamic_weighting: TuningDynamicWeightingParams;
   criteria: TuningDegradeCriteria[];
   assignments: Record<string, string>;
+  dispatch_modes: Record<string, "off" | "observe" | "auto">;
+}
+export interface ChannelBaseValue {
+  instance_id: string; channel_id: number; channel_name: string; model_name: string;
+  base_weight: number; base_priority: number; current_weight: number; current_priority: number;
+  updated_at?: string; updated_by?: string;
 }
 export interface TuningPolicyResponse {
   instance_id: string; policy: TuningPolicy; mode: "observe" | "confirm" | "auto";
@@ -580,4 +586,10 @@ export const dashboardApi = (client: ApiClient) => ({
     client.request<TuningReport>(`/api/dashboard/tuning/report${query({ instance_id, days })}`),
   tuningLadders: (instance_id: string) =>
     client.request<TuningLadders>(`/api/dashboard/tuning/ladders${query({ instance_id })}`),
+  tuningBaseValues: (instance_id: string, model?: string) =>
+    client.request<ListResponse<ChannelBaseValue>>(`/api/dashboard/tuning/base-values${query({ instance_id, model })}`),
+  saveTuningBaseValues: (instance_id: string, items: ChannelBaseValue[]) =>
+    client.request<ListResponse<ChannelBaseValue>>(`/api/dashboard/tuning/base-values${query({ instance_id })}`, { method: "PUT", body: JSON.stringify({ items }) }),
+  syncTuningBaseValues: (instance_id: string, models: string[]) =>
+    client.request<ListResponse<ChannelBaseValue>>(`/api/dashboard/tuning/base-values/sync${query({ instance_id })}`, { method: "POST", body: JSON.stringify({ models }) }),
 });

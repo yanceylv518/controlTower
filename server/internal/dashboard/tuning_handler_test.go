@@ -16,6 +16,9 @@ type tuningStub struct {
 	report tuning.Report
 	query  tuning.RecommendationQuery
 	saved  tuning.PolicyRecord
+	baseValues []tuning.ChannelBaseValue
+	baseSaved  []tuning.ChannelBaseValue
+	syncModels []string
 }
 
 func (s *tuningStub) GetPolicy(string) (tuning.PolicyRecord, bool, error) {
@@ -59,6 +62,18 @@ func (s *tuningStub) ListRecommendations(q tuning.RecommendationQuery) ([]tuning
 func (s *tuningStub) RecommendationReport(tuning.RecommendationQuery) (tuning.Report, error) {
 	return s.report, nil
 }
+func (s *tuningStub) ListChannelBaseValues(string, string) ([]tuning.ChannelBaseValue, error) {
+	return s.baseValues, nil
+}
+func (s *tuningStub) SaveChannelBaseValues(_ string, _ string, values []tuning.ChannelBaseValue, _ time.Time) error {
+	s.baseSaved = append([]tuning.ChannelBaseValue(nil), values...)
+	s.baseValues = append([]tuning.ChannelBaseValue(nil), values...)
+	return nil
+}
+func (s *tuningStub) SyncChannelBaseValues(_ string, models []string) ([]tuning.ChannelBaseValue, error) {
+	s.syncModels = append([]string(nil), models...)
+	return []tuning.ChannelBaseValue{{InstanceID: "i", ChannelID: 7, ModelName: "m", BaseWeight: 10, BasePriority: 3}}, nil
+}
 func TestTuningPolicyDefaultValidationAndMode(t *testing.T) {
 	s := &tuningStub{}
 	h := NewHandler(nil).WithTuningStore(s)
@@ -99,5 +114,27 @@ func TestTuningRecommendationsPaginationAndReport(t *testing.T) {
 	h.HandleTuningReport(rr, httptest.NewRequest(http.MethodGet, "/api/dashboard/tuning/report?instance_id=i&days=7", nil))
 	if rr.Code != 200 || !bytes.Contains(rr.Body.Bytes(), []byte(`"hit_rate":0.5`)) || !bytes.Contains(rr.Body.Bytes(), []byte(`"adoption_rate":0.75`)) || !bytes.Contains(rr.Body.Bytes(), []byte("autoCriteria")) {
 		t.Fatalf("report: %d %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestTuningBaseValuesSyncDoesNotPersistAndPutValidates(t *testing.T) {
+	s := &tuningStub{}
+	h := NewHandler(nil).WithTuningStore(s)
+	rr := httptest.NewRecorder()
+	h.HandleTuningBaseValuesSync(rr, httptest.NewRequest(http.MethodPost, "/api/dashboard/tuning/base-values/sync?instance_id=i", bytes.NewBufferString(`{"models":["m"]}`)))
+	if rr.Code != http.StatusOK || len(s.syncModels) != 1 || len(s.baseSaved) != 0 {
+		t.Fatalf("sync must only return a preview: %d %s %#v", rr.Code, rr.Body.String(), s)
+	}
+
+	rr = httptest.NewRecorder()
+	h.HandleTuningBaseValues(rr, httptest.NewRequest(http.MethodPut, "/api/dashboard/tuning/base-values?instance_id=i", bytes.NewBufferString(`{"items":[{"channel_id":0,"model_name":"m","base_weight":1,"base_priority":1}]}`)))
+	if rr.Code != http.StatusBadRequest || len(s.baseSaved) != 0 {
+		t.Fatalf("invalid values must not persist: %d %s", rr.Code, rr.Body.String())
+	}
+
+	rr = httptest.NewRecorder()
+	h.HandleTuningBaseValues(rr, httptest.NewRequest(http.MethodPut, "/api/dashboard/tuning/base-values?instance_id=i", bytes.NewBufferString(`{"items":[{"channel_id":7,"model_name":"m","base_weight":10,"base_priority":3}]}`)))
+	if rr.Code != http.StatusOK || len(s.baseSaved) != 1 {
+		t.Fatalf("valid values must persist: %d %s", rr.Code, rr.Body.String())
 	}
 }

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { siteOf, type TuningPolicy, type TuningRecommendation, type TuningReport, type TuningLadders } from "@ct/shared";
+import { siteOf, type ChannelBaseValue, type TuningPolicy, type TuningRecommendation, type TuningReport, type TuningLadders } from "@ct/shared";
 import { dashboard } from "../api";
 import AppShell from "../components/AppShell.vue";
 import { useFiltersStore } from "../stores/filters";
@@ -29,6 +29,16 @@ const policy = reactive<TuningPolicy>({
     latency_multiplier: 2, latency_floor_seconds: 10, sustained_windows: 2,
   }],
   assignments: {},
+  dispatch_modes: {},
+});
+const baseValues = ref<ChannelBaseValue[]>([]);
+const selectedModels = ref<string[]>([]);
+const baseValuesDirty = ref(false);
+const availableModels = computed(() => [...new Set(ladders.value.channels.flatMap(x => x.Models))].sort());
+const groupedBaseValues = computed(() => {
+  const groups = new Map<string, ChannelBaseValue[]>();
+  baseValues.value.forEach(row => { const list=groups.get(row.model_name)||[]; list.push(row); groups.set(row.model_name,list); });
+  return [...groups.entries()].map(([model, rows]) => ({ model, rows }));
 });
 const defaultCriteria = computed(() => policy.criteria.find(item => item.name === "default") || policy.criteria[0]);
 const recommendations = ref<TuningRecommendation[]>([]);
@@ -69,16 +79,41 @@ async function load() {
   if (!instanceID.value) return;
   loading.value = true;
   try {
-    const [p, recs, weightRecs, ladder, r7, r30] = await Promise.all([
+    const [p, recs, weightRecs, ladder, r7, r30, bases] = await Promise.all([
       dashboard.tuningPolicy(instanceID.value), dashboard.tuningRecommendations(instanceID.value),
       dashboard.tuningRecommendations(instanceID.value, 100, "rebalance"),
       dashboard.tuningLadders(instanceID.value), dashboard.tuningReport(instanceID.value, 7),
       dashboard.tuningReport(instanceID.value, 30),
+      dashboard.tuningBaseValues(instanceID.value),
     ]);
-    mode.value = p.mode; Object.assign(policy, p.policy);
+    mode.value = p.mode; Object.assign(policy, p.policy); policy.dispatch_modes ||= {};
     recommendations.value = recs.items; weightRecommendations.value = weightRecs.items;
     ladders.value = ladder; reports[7] = r7; reports[30] = r30;
+    baseValues.value = bases.items;
+    baseValues.value.forEach(row => { policy.dispatch_modes[row.model_name] ||= "off"; });
+    baseValuesDirty.value = false;
   } finally { loading.value = false; }
+}
+async function syncBaseValues(kind: "weight" | "priority") {
+  const models = selectedModels.value.length ? selectedModels.value : availableModels.value;
+  const synced = (await dashboard.syncTuningBaseValues(instanceID.value, models)).items;
+  const existing = new Map(baseValues.value.map(x => [`${x.channel_id}:${x.model_name}`, x]));
+  synced.forEach(row => {
+    policy.dispatch_modes[row.model_name] ||= "off";
+    const old = existing.get(`${row.channel_id}:${row.model_name}`);
+    if (old) {
+      if (kind === "weight") old.base_weight = row.current_weight;
+      else old.base_priority = row.current_priority;
+    } else baseValues.value.push(row);
+  });
+  baseValuesDirty.value = true;
+  ElMessage.warning("已从 new-api 回填到表单，尚未保存");
+}
+async function saveBaseValues() {
+  baseValues.value = (await dashboard.saveTuningBaseValues(instanceID.value, baseValues.value)).items;
+  baseValuesDirty.value = false;
+  await dashboard.saveTuningPolicy(instanceID.value, policy, mode.value);
+  ElMessage.success("基础值与各模型调度模式已保存");
 }
 async function save() {
   await dashboard.saveTuningPolicy(instanceID.value, policy, mode.value);
@@ -114,6 +149,38 @@ onMounted(() => void load());
     <div v-loading="loading" class="tuning-page">
       <el-card shadow="never">
         <template #header><strong>模式与策略</strong><span class="hint">　当前采集实例：{{ instanceID || "无" }}</span></template>
+        <section class="base-values-section" :class="{ 'is-dirty': baseValuesDirty }">
+          <div class="base-values-title">
+            <div><h3>v3.0 基础值配置</h3><p class="hint">基础权重和基础优先级是连续调度的锚点。当前批次只保存配置，v3.0-B2 上线前不会改变现有调度引擎。</p></div>
+            <el-tag v-if="baseValuesDirty" type="warning">有未保存修改</el-tag>
+          </div>
+          <el-alert type="info" :closable="false" show-icon title="各模型调度模式">
+            关闭：不参与 v3.0；观察：计算拟写值但不修改 new-api；自动：自动写入 new-api。开关将在 B2 引擎上线后生效。
+          </el-alert>
+          <div class="base-toolbar">
+            <el-select v-model="selectedModels" multiple collapse-tags placeholder="选择模型；留空表示全部">
+              <el-option v-for="model in availableModels" :key="model" :label="model" :value="model" />
+            </el-select>
+            <el-button @click="syncBaseValues('weight')">一键同步权重</el-button>
+            <el-button @click="syncBaseValues('priority')">一键同步优先级</el-button>
+            <el-button type="primary" :disabled="!baseValuesDirty" @click="saveBaseValues">保存基础值</el-button>
+          </div>
+          <el-empty v-if="!groupedBaseValues.length" description="尚未建立基础值，请先选择模型并执行一键同步" :image-size="48" />
+          <div v-for="group in groupedBaseValues" :key="group.model" class="base-model">
+            <div class="base-model-header"><strong>{{ group.model }}</strong>
+              <el-radio-group v-model="policy.dispatch_modes[group.model]" size="small" @change="baseValuesDirty = true">
+                <el-radio-button value="off">关闭</el-radio-button><el-radio-button value="observe">观察</el-radio-button><el-radio-button value="auto">自动</el-radio-button>
+              </el-radio-group>
+            </div>
+            <el-table :data="group.rows" size="small">
+              <el-table-column prop="channel_name" label="渠道" min-width="180" />
+              <el-table-column label="当前权重" width="100"><template #default="{ row }">{{ row.current_weight }}</template></el-table-column>
+              <el-table-column label="基础权重" width="170"><template #default="{ row }"><el-input-number v-model="row.base_weight" :min="0" size="small" @change="baseValuesDirty = true" /></template></el-table-column>
+              <el-table-column label="当前优先级" width="110"><template #default="{ row }">{{ row.current_priority }}</template></el-table-column>
+              <el-table-column label="基础优先级" width="170"><template #default="{ row }"><el-input-number v-model="row.base_priority" :min="0" size="small" @change="baseValuesDirty = true" /></template></el-table-column>
+            </el-table>
+          </div>
+        </section>
         <el-form label-position="top">
           <el-form-item label="运行模式"><el-radio-group v-model="mode"><el-radio-button value="observe">观察</el-radio-button><el-radio-button value="confirm">人工确认</el-radio-button><el-radio-button value="auto">自动</el-radio-button></el-radio-group></el-form-item>
           <section v-if="defaultCriteria" class="policy-section">
@@ -284,5 +351,11 @@ onMounted(() => void load());
 </template>
 
 <style scoped>
-.tuning-page{display:grid;gap:16px}.hint{font-size:12px;color:#8491a5}.policy-section{margin:18px 0;padding-top:16px;border-top:1px solid #ebeef5}.policy-section h3{margin:0 0 6px;font-size:15px}.policy-section .hint{margin:0 0 12px}.criteria-summary{margin-bottom:12px}.criteria-formula p{margin:5px 0;line-height:1.65}.criteria-notes{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:0 0 14px}.criteria-notes div{display:flex;flex-direction:column;gap:4px;padding:10px 12px;border:1px solid #e4eaf3;border-radius:6px;background:#fafbfd}.criteria-notes b{font-size:13px;color:#303b4d}.criteria-notes span{font-size:12px;line-height:1.55;color:#657086}.criteria-notes .wide{grid-column:1/-1;background:#fffaf2;border-color:#f3dfb7}.dispatch-flow{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:0 0 12px}.flow-step{display:flex;gap:10px;padding:12px;border:1px solid #dfe7f3;border-radius:8px;background:#f8faff}.step-number{display:flex;align-items:center;justify-content:center;flex:0 0 24px;width:24px;height:24px;border-radius:50%;background:#3568e8;color:#fff;font-weight:700}.flow-step b{font-size:13px}.flow-step p{margin:5px 0 0;color:#657086;font-size:12px;line-height:1.55}.mode-effect{margin:0 0 14px}.policy-grid{display:grid;grid-template-columns:repeat(5,minmax(150px,1fr));gap:0 16px}.weighting-mode{grid-column:span 2}.weighting-mode .hint{display:block;margin:6px 0 0}.ladder-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.ladder{border:1px solid #e5eaf2;border-radius:8px;padding:12px}.ladder-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto auto;gap:8px;align-items:center;margin-top:10px}.weight-value{white-space:nowrap;color:#526078;font-size:12px}.recommendation{border:1px solid #e8edf5;border-radius:8px;padding:12px}.recommendation p{color:#657086}.status{margin-left:8px}.report-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px}.report-grid div{background:#f6f8fb;padding:16px;border-radius:8px}.report-grid span,.report-grid b{display:block}.report-grid b{font-size:24px;margin-top:6px}@media(max-width:1200px){.criteria-notes{grid-template-columns:1fr 1fr}.dispatch-flow{grid-template-columns:1fr 1fr}.policy-grid{grid-template-columns:repeat(3,minmax(150px,1fr))}}
+.tuning-page{display:grid;gap:16px}.hint{font-size:12px;color:#8491a5}.base-values-section{padding-bottom:18px;border-bottom:1px solid #ebeef5}.base-values-title,.base-model-header,.base-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px}.base-values-title h3{margin:0 0 5px}.base-values-title p{margin:0}.base-toolbar{justify-content:flex-start;margin:12px 0}.base-toolbar .el-select{width:320px}.base-model{margin-top:12px;border:1px solid #e4eaf3;border-radius:8px;overflow:hidden}.base-model-header{padding:10px 12px;background:#f7f9fc}.policy-section{margin:18px 0;padding-top:16px;border-top:1px solid #ebeef5}.policy-section h3{margin:0 0 6px;font-size:15px}.policy-section .hint{margin:0 0 12px}.criteria-summary{margin-bottom:12px}.criteria-formula p{margin:5px 0;line-height:1.65}.criteria-notes{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:0 0 14px}.criteria-notes div{display:flex;flex-direction:column;gap:4px;padding:10px 12px;border:1px solid #e4eaf3;border-radius:6px;background:#fafbfd}.criteria-notes b{font-size:13px;color:#303b4d}.criteria-notes span{font-size:12px;line-height:1.55;color:#657086}.criteria-notes .wide{grid-column:1/-1;background:#fffaf2;border-color:#f3dfb7}.dispatch-flow{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:0 0 12px}.flow-step{display:flex;gap:10px;padding:12px;border:1px solid #dfe7f3;border-radius:8px;background:#f8faff}.step-number{display:flex;align-items:center;justify-content:center;flex:0 0 24px;width:24px;height:24px;border-radius:50%;background:#3568e8;color:#fff;font-weight:700}.flow-step b{font-size:13px}.flow-step p{margin:5px 0 0;color:#657086;font-size:12px;line-height:1.55}.mode-effect{margin:0 0 14px}.policy-grid{display:grid;grid-template-columns:repeat(5,minmax(150px,1fr));gap:0 16px}.weighting-mode{grid-column:span 2}.weighting-mode .hint{display:block;margin:6px 0 0}.ladder-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.ladder{border:1px solid #e5eaf2;border-radius:8px;padding:12px}.ladder-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto auto;gap:8px;align-items:center;margin-top:10px}.weight-value{white-space:nowrap;color:#526078;font-size:12px}.recommendation{border:1px solid #e8edf5;border-radius:8px;padding:12px}.recommendation p{color:#657086}.status{margin-left:8px}.report-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px}.report-grid div{background:#f6f8fb;padding:16px;border-radius:8px}.report-grid span,.report-grid b{display:block}.report-grid b{font-size:24px;margin-top:6px}@media(max-width:1200px){.criteria-notes{grid-template-columns:1fr 1fr}.dispatch-flow{grid-template-columns:1fr 1fr}.policy-grid{grid-template-columns:repeat(3,minmax(150px,1fr))}}
+</style>
+<style scoped>
+.base-values-section.is-dirty {
+  background: #fffaf0;
+  border-color: #f3d19e;
+}
 </style>

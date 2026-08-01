@@ -117,3 +117,34 @@ func TestPolicyValidationUsesGroupedPaths(t *testing.T) {
 		t.Fatalf("invalid weighting mode must be rejected: %#v", p.Validate())
 	}
 }
+
+func TestDispatchModesDefaultCompatibilityAndValidation(t *testing.T) {
+	raw, err := json.Marshal(DefaultPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var shape map[string]any
+	if err := json.Unmarshal(raw, &shape); err != nil {
+		t.Fatal(err)
+	}
+	delete(shape, "dispatch_modes")
+	raw, _ = json.Marshal(shape)
+	got, err := DecodePolicyJSON(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.DispatchModes == nil || len(got.DispatchModes) != 0 {
+		t.Fatalf("missing dispatch_modes must decode to an empty map: %#v", got.DispatchModes)
+	}
+
+	got.DispatchModes["model-a"] = "observe"
+	got.DispatchModes["model-b"] = "auto"
+	got.DispatchModes["model-c"] = "off"
+	if fields := got.Validate(); len(fields) != 0 {
+		t.Fatalf("supported per-model modes must validate: %#v", fields)
+	}
+	got.DispatchModes["model-a"] = "confirm"
+	if got.Validate()["dispatch_modes.model-a"] == "" {
+		t.Fatalf("unsupported dispatch mode must be rejected: %#v", got.Validate())
+	}
+}

@@ -79,3 +79,21 @@ func TestConfirmRecommendationSQLContracts(t *testing.T) {
 		}
 	}
 }
+
+func TestChannelBaseValuesPersistenceContracts(t *testing.T) {
+	source, err := os.ReadFile("tuning.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(source)
+	for _, fragment := range []string{
+		"ON DUPLICATE KEY UPDATE model_name=VALUES(model_name)",
+		`"tuning.base_update"`,
+		"before_summary,after_summary",
+		"len(c.Models) != 1",
+	} {
+		if !strings.Contains(text, fragment) {
+			t.Fatalf("base-value persistence missing %q", fragment)
+		}
+	}
+}

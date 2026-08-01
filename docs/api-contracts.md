@@ -207,6 +207,10 @@ Instance tokens are stored only as `SHA-256(pepper + token)` hashes. A token may
 ## v2.9-B2 Duty-Rotation Tuning (observe and confirm)
 
 - `GET|PUT /api/dashboard/tuning/policy?instance_id=` reads or writes the instance policy. Supported modes are `observe`, `confirm`, and `auto`. In `auto`, action recommendations are persisted first and then atomically converted into auditable channel commands.
+- `GET /api/dashboard/tuning/base-values?instance_id=&model=` lists the saved v3.0 channel anchors together with the latest new-api weight and priority. `model` is optional.
+- `PUT /api/dashboard/tuning/base-values?instance_id=` saves `{ "items": ChannelBaseValue[] }` in one transaction. Weights and priorities must be non-negative; each changed channel writes a `tuning.base_update` operation audit containing before/after values.
+- `POST /api/dashboard/tuning/base-values/sync?instance_id=` accepts `{ "models": string[] }` and previews the current single-model channel values from the latest snapshot. It never writes the base-value table; the UI must issue the explicit PUT after the operator reviews the preview.
+- The tuning policy includes `dispatch_modes`, a map from model name to `off`, `observe`, or `auto`. Missing entries are treated as `off`; v3.0-B1 persists this configuration but does not connect it to the v2.9 engine.
 - Policy uses the structured v2.9-B2.5 shape:
   - `scheduling`: `window_minutes`, `min_samples`, `sparse_min_samples`, `sparse_lookback_minutes`, `trial_initial_minutes`, `trial_backoff_factor`, `trial_max_minutes`, `trial_windows`, `cooldown_minutes`, and `daily_action_limit`.
     - `sparse_min_samples` and `sparse_lookback_minutes` provide count-based fallback for low-traffic channels. The fallback only affects attributed error-rate decisions and trial recovery checks; latency degradation and dynamic weighting still require the normal current-window sample count. At least one current-window request is required by the freshness guard.

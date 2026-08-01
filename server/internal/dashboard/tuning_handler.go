@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	ctauth "controltower/server/internal/auth"
@@ -12,6 +13,11 @@ import (
 )
 
 type TuningStore interface{ tuning.Store }
+type ChannelBaseValueStore interface {
+	ListChannelBaseValues(string, string) ([]tuning.ChannelBaseValue, error)
+	SaveChannelBaseValues(string, string, []tuning.ChannelBaseValue, time.Time) error
+	SyncChannelBaseValues(string, []string) ([]tuning.ChannelBaseValue, error)
+}
 type PolicyResponse struct {
 	InstanceID string        `json:"instance_id"`
 	Policy     tuning.Policy `json:"policy"`
@@ -20,6 +26,87 @@ type PolicyResponse struct {
 	UpdatedAt  *time.Time    `json:"updated_at,omitempty"`
 	UpdatedBy  string        `json:"updated_by,omitempty"`
 }
+
+func (h Handler) HandleTuningBaseValues(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("instance_id")
+	if id == "" {
+		writeDashboardError(w, 400, "instance_id_required")
+		return
+	}
+	store, ok := h.tuningStore.(ChannelBaseValueStore)
+	if !ok {
+		writeDashboardError(w, 501, "base_values_not_supported")
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		items, err := store.ListChannelBaseValues(id, r.URL.Query().Get("model"))
+		if err != nil {
+			writeDashboardError(w, 500, "query_failed")
+			return
+		}
+		writeDashboardJSON(w, 200, map[string]any{"items": items})
+	case http.MethodPut:
+		var req struct {
+			Items []tuning.ChannelBaseValue `json:"items"`
+		}
+		if json.NewDecoder(r.Body).Decode(&req) != nil {
+			writeDashboardError(w, 400, "invalid_json")
+			return
+		}
+		seen := make(map[int64]struct{}, len(req.Items))
+		for _, v := range req.Items {
+			if v.ChannelID <= 0 || strings.TrimSpace(v.ModelName) == "" || v.BaseWeight < 0 || v.BasePriority < 0 {
+				writeDashboardError(w, 400, "validation_failed")
+				return
+			}
+			if _, duplicate := seen[v.ChannelID]; duplicate {
+				writeDashboardError(w, 400, "duplicate_channel_id")
+				return
+			}
+			seen[v.ChannelID] = struct{}{}
+		}
+		if err := store.SaveChannelBaseValues(id, ctauth.Actor(r), req.Items, time.Now().UTC()); err != nil {
+			writeDashboardError(w, 500, "save_failed")
+			return
+		}
+		items, err := store.ListChannelBaseValues(id, "")
+		if err != nil {
+			writeDashboardError(w, 500, "query_failed")
+			return
+		}
+		writeDashboardJSON(w, 200, map[string]any{"items": items})
+	default:
+		writeDashboardError(w, 405, "method_not_allowed")
+	}
+}
+
+func (h Handler) HandleTuningBaseValuesSync(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("instance_id")
+	if id == "" {
+		writeDashboardError(w, 400, "instance_id_required")
+		return
+	}
+	store, ok := h.tuningStore.(ChannelBaseValueStore)
+	if !ok {
+		writeDashboardError(w, 501, "base_values_not_supported")
+		return
+	}
+	var req struct {
+		Models []string `json:"models"`
+	}
+	if json.NewDecoder(r.Body).Decode(&req) != nil {
+		writeDashboardError(w, 400, "invalid_json")
+		return
+	}
+	items, err := store.SyncChannelBaseValues(id, req.Models)
+	if err != nil {
+		writeDashboardError(w, 500, "query_failed")
+		return
+	}
+	writeDashboardJSON(w, 200, map[string]any{"items": items})
+}
+
 type RecommendationItem struct {
 	ID               string         `json:"id"`
 	InstanceID       string         `json:"instance_id"`

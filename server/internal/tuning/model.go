@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -53,6 +54,7 @@ type Policy struct {
 	DynamicWeighting DynamicWeightingParams `json:"dynamic_weighting"`
 	Criteria         []DegradeCriteria      `json:"criteria"`
 	Assignments      map[string]string      `json:"assignments"`
+	DispatchModes    map[string]string      `json:"dispatch_modes"`
 }
 
 func DefaultPolicy() Policy {
@@ -72,7 +74,8 @@ func DefaultPolicy() Policy {
 			Name: "default", ErrorRateThreshold: .15, SevereThreshold: .50,
 			LatencyMultiplier: 2, LatencyFloorSeconds: 10, SustainedWindows: 2,
 		}},
-		Assignments: map[string]string{},
+		Assignments:   map[string]string{},
+		DispatchModes: map[string]string{},
 	}
 }
 
@@ -113,6 +116,9 @@ func DecodePolicyJSON(raw []byte) (Policy, error) {
 	}
 	if p.Assignments == nil {
 		p.Assignments = map[string]string{}
+	}
+	if p.DispatchModes == nil {
+		p.DispatchModes = map[string]string{}
 	}
 	return p, nil
 }
@@ -232,7 +238,28 @@ func (p Policy) Validate() map[string]string {
 			e["assignments."+model] = "criteria_not_found"
 		}
 	}
+	for model, mode := range p.DispatchModes {
+		if strings.TrimSpace(model) == "" {
+			e["dispatch_modes"] = "model_must_not_be_empty"
+		}
+		if mode != "off" && mode != "observe" && mode != "auto" {
+			e["dispatch_modes."+model] = "must_be_off_observe_or_auto"
+		}
+	}
 	return e
+}
+
+type ChannelBaseValue struct {
+	InstanceID      string    `json:"instance_id"`
+	ChannelID       int64     `json:"channel_id"`
+	ChannelName     string    `json:"channel_name"`
+	ModelName       string    `json:"model_name"`
+	BaseWeight      int64     `json:"base_weight"`
+	BasePriority    int64     `json:"base_priority"`
+	CurrentWeight   int64     `json:"current_weight"`
+	CurrentPriority int64     `json:"current_priority"`
+	UpdatedAt       time.Time `json:"updated_at,omitempty"`
+	UpdatedBy       string    `json:"updated_by,omitempty"`
 }
 
 type PolicyRecord struct {
