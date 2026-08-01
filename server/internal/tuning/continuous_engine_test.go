@@ -208,3 +208,28 @@ func TestContinuousCircuitProbeAndSoftStart(t *testing.T) {
 
 func mathPow(a, b float64) float64 { return math.Pow(a, b) }
 func mathAbs(a float64) float64    { return math.Abs(a) }
+
+func TestRecoveryFloorsErrorDecayAgainstReCircuitLoop(t *testing.T) {
+	now := time.Now().UTC()
+	p := autoPolicy()
+	f := &continuousFake{bases: []ChannelBaseValue{
+		{ChannelID: 1, ChannelName: "c", ModelName: "m", Models: []string{"m"}, BaseWeight: 100, BasePriority: 7, CurrentWeight: 0, CurrentPriority: 0, SnapshotAt: now},
+	}, states: map[int64]ContinuousState{1: {InstanceID: "i", ChannelID: 1, ModelName: "m",
+		KError: .01, Phase: "probing", ProbeAttempts: 10, ProbeSuccesses: 10}}}
+	e := NewEngine(f)
+	// Probe round passed -> soft start.
+	e.evaluateContinuous("i", p, now, f)
+	if f.states[1].Phase != "soft_start" {
+		t.Fatalf("passed probe round must recover: %#v", f.states[1])
+	}
+	if f.states[1].KError < p.Policy.Continuous.RecoveryThreshold {
+		t.Fatalf("recovery must floor the error decay: %v", f.states[1].KError)
+	}
+	// Soft-start hold cycle, then the first normal cycle: without the floor
+	// the crushed KError would re-open the circuit immediately.
+	e.evaluateContinuous("i", p, now.Add(time.Minute), f)
+	e.evaluateContinuous("i", p, now.Add(2*time.Minute), f)
+	if f.states[1].Phase != "normal" {
+		t.Fatalf("recovered channel with no new failures must settle to normal, got %q", f.states[1].Phase)
+	}
+}
