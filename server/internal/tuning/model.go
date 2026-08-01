@@ -312,8 +312,15 @@ type ChannelBaseValue struct {
 	BasePriority    int64     `json:"base_priority"`
 	CurrentWeight   int64     `json:"current_weight"`
 	CurrentPriority int64     `json:"current_priority"`
-	UpdatedAt       time.Time `json:"updated_at,omitempty"`
-	UpdatedBy       string    `json:"updated_by,omitempty"`
+	// SnapshotAt is when CurrentWeight/CurrentPriority were captured from
+	// new-api. Manual-override detection must compare against it: snapshots
+	// refresh every ~10 minutes, so a value differing from our last write is
+	// only evidence of an external change once the snapshot postdates the
+	// write (plus command-apply grace).
+	SnapshotAt time.Time `json:"snapshot_at,omitempty"`
+	Models     []string  `json:"models,omitempty"`
+	UpdatedAt  time.Time `json:"updated_at,omitempty"`
+	UpdatedBy  string    `json:"updated_by,omitempty"`
 }
 
 type PolicyRecord struct {
@@ -345,7 +352,12 @@ type ContinuousState struct {
 	LastWriteAt          *time.Time `json:"last_write_at,omitempty"`
 	LastObservedRequests int64      `json:"last_observed_requests"`
 	LastObservedErrors   int64      `json:"last_observed_errors"`
-	PausedReason         string     `json:"paused_reason,omitempty"`
+	// LastBucketAt is the newest metric bucket already folded into KError.
+	// Buckets arrive late (agent reports every ~30s), so the decay must walk
+	// complete buckets past this cursor instead of re-reading "the last
+	// minute" — that both misses late counts and re-counts on jitter.
+	LastBucketAt *time.Time `json:"last_bucket_at,omitempty"`
+	PausedReason string     `json:"paused_reason,omitempty"`
 	UpdatedAt            time.Time  `json:"updated_at"`
 }
 

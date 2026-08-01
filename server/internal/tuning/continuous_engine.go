@@ -30,19 +30,14 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 	if err != nil {
 		return 0, 0
 	}
-	minute, _ := e.store.QueryMetrics(id, now.Add(-time.Minute), now)
 	states, err := cs.ListContinuousStates(id)
 	if err != nil {
 		return 0, 0
 	}
 	metricByID := map[int64]ChannelMetric{}
-	minuteByID := map[int64]ChannelMetric{}
 	stateByID := map[int64]ContinuousState{}
 	for _, v := range metrics {
 		metricByID[v.ChannelID] = v
-	}
-	for _, v := range minute {
-		minuteByID[v.ChannelID] = v
 	}
 	for _, v := range states {
 		stateByID[v.ChannelID] = v
@@ -68,11 +63,27 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 				state.KError = 1
 			}
 			state.KSpeed, state.KCache, state.KOTPS = 1, 1, 1
+
+			// Mixed-channel fuse (design §4): the weight knob is channel-wide,
+			// so a channel serving several models must never be auto-tuned on
+			// one model's metrics.
+			if len(base.Models) > 1 {
+				state.Multiplier = 1
+				state.ProposedWeight = base.BaseWeight
+				if state.PausedReason != "mixed_channel" {
+					state.PausedReason = "mixed_channel"
+					_ = e.store.InsertRecommendation(continuousEvent(id, base, state, "mixed_channel", mode, now))
+				}
+				state.UpdatedAt = now
+				_ = cs.PutContinuousState(state)
+				continue
+			}
+			if state.PausedReason == "mixed_channel" {
+				state.PausedReason = ""
+			}
+
 			m := metricByID[base.ChannelID]
-			last := minuteByID[base.ChannelID]
-			channelErrors := max(last.ErrorCount-last.UserErrorCount, 0)
-			successes := max(last.RequestCount-last.ErrorCount, 0)
-			state.KError = clamp(state.KError*math.Pow(.8, float64(channelErrors))*math.Pow(1.08, float64(successes)), .001, 1)
+			requests, channelErrors := e.foldErrorDecay(id, base.ChannelID, &state, now)
 			if healthy && mode != "off" && m.RequestCount >= p.MinSamples {
 				state.KSpeed = speedFactor(m, baseline, p.Sensitivity)
 				state.KCache = continuousRatioFactor(m.CacheHitRate, baseline.cache, p.Sensitivity, 1.5)
@@ -87,16 +98,25 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 				state.ProposedWeight = 1
 			}
 
-			// A differing value after the command grace period means somebody
-			// changed new-api outside CT. Pause this channel until it is synced.
+			// Manual-override detection. Snapshots refresh every ~10 minutes,
+			// so a stale snapshot differing from our write is expected, not
+			// evidence: only flag when the snapshot was captured well after
+			// the write (command-apply grace) and still disagrees.
 			if state.LastWrittenWeight != nil && base.CurrentWeight == *state.LastWrittenWeight {
-				state.PausedReason = ""
-			} else if state.LastWrittenWeight != nil && state.LastWriteAt != nil && now.Sub(*state.LastWriteAt) > 2*time.Minute && state.PausedReason == "" {
+				if state.PausedReason == "manual_override" {
+					state.PausedReason = ""
+				}
+			} else if state.LastWrittenWeight != nil && state.LastWriteAt != nil &&
+				base.SnapshotAt.After(state.LastWriteAt.Add(2*time.Minute)) && state.PausedReason == "" {
 				state.PausedReason = "manual_override"
 				_ = e.store.InsertRecommendation(continuousEvent(id, base, state, "manual_takeover", mode, now))
 			}
 
-			if mode == "auto" && state.PausedReason == "" && state.ProposedWeight != base.CurrentWeight {
+			// Deduplicate against our own last write, not the snapshot value:
+			// the snapshot lags for minutes after a write and would otherwise
+			// re-issue the same command every evaluation.
+			alreadyWritten := state.LastWrittenWeight != nil && *state.LastWrittenWeight == state.ProposedWeight
+			if mode == "auto" && state.PausedReason == "" && !alreadyWritten && state.ProposedWeight != base.CurrentWeight {
 				rec := continuousEvent(id, base, state, "weight_write", mode, now)
 				if _, err = cs.CreateContinuousWeightChange(rec, "system:auto", now); err == nil {
 					written := state.ProposedWeight
@@ -105,13 +125,49 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 					writes++
 				}
 			}
-			state.LastObservedRequests, state.LastObservedErrors = last.RequestCount, channelErrors
+			state.LastObservedRequests, state.LastObservedErrors = requests, channelErrors
 			state.UpdatedAt = now
 			_ = cs.PutContinuousState(state)
 			evaluated++
 		}
 	}
 	return writes, evaluated
+}
+
+// foldErrorDecay advances KError over the complete metric buckets newer than
+// the stored cursor. Buckets land late (agent reports every ~30s), so only
+// buckets older than a 90s settling lag are folded, each exactly once.
+func (e *Engine) foldErrorDecay(id string, channelID int64, state *ContinuousState, now time.Time) (int64, int64) {
+	since := now.Add(-15 * time.Minute)
+	if state.LastBucketAt != nil && state.LastBucketAt.After(since) {
+		since = *state.LastBucketAt
+	}
+	buckets, err := e.store.QueryRecentChannelBuckets(id, channelID, since, 240)
+	if err != nil {
+		return state.LastObservedRequests, state.LastObservedErrors
+	}
+	settled := now.Add(-90 * time.Second)
+	var requests, channelErrors int64
+	newest := state.LastBucketAt
+	for _, bucket := range buckets {
+		if bucket.BucketTime.After(settled) {
+			continue
+		}
+		if state.LastBucketAt != nil && !bucket.BucketTime.After(*state.LastBucketAt) {
+			continue
+		}
+		errs := max(bucket.ErrorCount-bucket.UserErrorCount, 0)
+		successes := max(bucket.RequestCount-bucket.ErrorCount, 0)
+		state.KError = clamp(state.KError*math.Pow(.8, float64(errs))*math.Pow(1.08, float64(successes)), .001, 1)
+		requests += bucket.RequestCount
+		channelErrors += errs
+		if newest == nil || bucket.BucketTime.After(*newest) {
+			at := bucket.BucketTime
+			newest = &at
+		}
+	}
+	state.LastBucketAt = newest
+	return requests, channelErrors
 }
 
 func buildContinuousBaseline(rows []ChannelBaseValue, metrics map[int64]ChannelMetric, minSamples int64) (continuousBaseline, bool) {

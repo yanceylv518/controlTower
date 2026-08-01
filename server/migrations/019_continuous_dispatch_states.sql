@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS tuning_continuous_states (
   last_write_at DATETIME(6) NULL,
   last_observed_requests BIGINT NOT NULL DEFAULT 0,
   last_observed_errors BIGINT NOT NULL DEFAULT 0,
+  last_bucket_at DATETIME(6) NULL,
   paused_reason VARCHAR(64) NOT NULL DEFAULT '',
   updated_at DATETIME(6) NOT NULL,
   PRIMARY KEY (instance_id, channel_id),

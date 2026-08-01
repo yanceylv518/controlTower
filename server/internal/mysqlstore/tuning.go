@@ -40,7 +40,7 @@ func (s Store) ListChannelBaseValues(instanceID, model string) ([]tuning.Channel
 		filter = " AND b.model_name=?"
 		args = append(args, model)
 	}
-	rows, err := s.db.QueryContext(context.Background(), `SELECT b.instance_id,b.channel_id,c.channel_name,b.model_name,b.base_weight,b.base_priority,c.weight,COALESCE(c.priority,0),b.updated_at,b.updated_by
+	rows, err := s.db.QueryContext(context.Background(), `SELECT b.instance_id,b.channel_id,c.channel_name,b.model_name,b.base_weight,b.base_priority,c.weight,COALESCE(c.priority,0),c.captured_at,COALESCE(c.models_text,''),b.updated_at,b.updated_by
 FROM channel_base_values b
 JOIN channel_snapshots c ON c.instance_id=b.instance_id AND c.channel_id=b.channel_id
 JOIN (SELECT channel_id,MAX(captured_at) captured_at FROM channel_snapshots WHERE instance_id=? GROUP BY channel_id) x ON x.channel_id=c.channel_id AND x.captured_at=c.captured_at
@@ -52,9 +52,11 @@ WHERE b.instance_id=?`+filter+` ORDER BY b.model_name,c.channel_name`, args...)
 	var out []tuning.ChannelBaseValue
 	for rows.Next() {
 		var v tuning.ChannelBaseValue
-		if err = rows.Scan(&v.InstanceID, &v.ChannelID, &v.ChannelName, &v.ModelName, &v.BaseWeight, &v.BasePriority, &v.CurrentWeight, &v.CurrentPriority, &v.UpdatedAt, &v.UpdatedBy); err != nil {
+		var modelsText string
+		if err = rows.Scan(&v.InstanceID, &v.ChannelID, &v.ChannelName, &v.ModelName, &v.BaseWeight, &v.BasePriority, &v.CurrentWeight, &v.CurrentPriority, &v.SnapshotAt, &modelsText, &v.UpdatedAt, &v.UpdatedBy); err != nil {
 			return nil, err
 		}
+		v.Models = parseChannelModels(modelsText)
 		out = append(out, v)
 	}
 	return out, rows.Err()
@@ -166,7 +168,7 @@ func (s Store) QueryMetrics(id string, start, end time.Time) ([]tuning.ChannelMe
 }
 
 func (s Store) ListContinuousStates(id string) ([]tuning.ContinuousState, error) {
-	rows, err := s.db.QueryContext(context.Background(), `SELECT instance_id,channel_id,model_name,k_error,k_speed,k_cache,k_otps,multiplier,proposed_weight,last_written_weight,last_write_at,last_observed_requests,last_observed_errors,paused_reason,updated_at FROM tuning_continuous_states WHERE instance_id=?`, id)
+	rows, err := s.db.QueryContext(context.Background(), `SELECT instance_id,channel_id,model_name,k_error,k_speed,k_cache,k_otps,multiplier,proposed_weight,last_written_weight,last_write_at,last_observed_requests,last_observed_errors,last_bucket_at,paused_reason,updated_at FROM tuning_continuous_states WHERE instance_id=?`, id)
 	if err != nil {
 		return nil, err
 	}
@@ -193,7 +195,7 @@ func (s Store) ListContinuousStates(id string) ([]tuning.ContinuousState, error)
 }
 
 func (s Store) PutContinuousState(v tuning.ContinuousState) error {
-	_, err := s.db.ExecContext(context.Background(), `INSERT INTO tuning_continuous_states(instance_id,channel_id,model_name,k_error,k_speed,k_cache,k_otps,multiplier,proposed_weight,last_written_weight,last_write_at,last_observed_requests,last_observed_errors,paused_reason,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE model_name=VALUES(model_name),k_error=VALUES(k_error),k_speed=VALUES(k_speed),k_cache=VALUES(k_cache),k_otps=VALUES(k_otps),multiplier=VALUES(multiplier),proposed_weight=VALUES(proposed_weight),last_written_weight=VALUES(last_written_weight),last_write_at=VALUES(last_write_at),last_observed_requests=VALUES(last_observed_requests),last_observed_errors=VALUES(last_observed_errors),paused_reason=VALUES(paused_reason),updated_at=VALUES(updated_at)`, v.InstanceID, v.ChannelID, v.ModelName, v.KError, v.KSpeed, v.KCache, v.KOTPS, v.Multiplier, v.ProposedWeight, v.LastWrittenWeight, v.LastWriteAt, v.LastObservedRequests, v.LastObservedErrors, v.PausedReason, v.UpdatedAt)
+	_, err := s.db.ExecContext(context.Background(), `INSERT INTO tuning_continuous_states(instance_id,channel_id,model_name,k_error,k_speed,k_cache,k_otps,multiplier,proposed_weight,last_written_weight,last_write_at,last_observed_requests,last_observed_errors,last_bucket_at,paused_reason,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE model_name=VALUES(model_name),k_error=VALUES(k_error),k_speed=VALUES(k_speed),k_cache=VALUES(k_cache),k_otps=VALUES(k_otps),multiplier=VALUES(multiplier),proposed_weight=VALUES(proposed_weight),last_written_weight=VALUES(last_written_weight),last_write_at=VALUES(last_write_at),last_observed_requests=VALUES(last_observed_requests),last_observed_errors=VALUES(last_observed_errors),last_bucket_at=VALUES(last_bucket_at),paused_reason=VALUES(paused_reason),updated_at=VALUES(updated_at)`, v.InstanceID, v.ChannelID, v.ModelName, v.KError, v.KSpeed, v.KCache, v.KOTPS, v.Multiplier, v.ProposedWeight, v.LastWrittenWeight, v.LastWriteAt, v.LastObservedRequests, v.LastObservedErrors, v.LastBucketAt, v.PausedReason, v.UpdatedAt)
 	return err
 }
 
@@ -210,6 +212,11 @@ func (s Store) CreateContinuousWeightChange(v tuning.Recommendation, actor strin
 		return "", err
 	}
 	if _, err = tx.Exec(`INSERT INTO channel_commands(id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at) VALUES(?,?,?,?,?,'pending',?,'',?,?)`, commandID, v.InstanceID, v.ChannelID, "channel.update", string(payload), actor, now, now); err != nil {
+		return "", err
+	}
+	before := fmt.Sprintf(`{"weight":%d}`, v.CurrentWeight)
+	after := fmt.Sprintf(`{"weight":%d,"command_id":%q}`, v.ProposedWeight, commandID)
+	if _, err = tx.Exec(`INSERT INTO operation_audits(id,instance_id,operation_type,target_type,target_id,actor_id,before_summary,after_summary,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, commandID, v.InstanceID, "tuning.auto_execute", "channel", fmt.Sprint(v.ChannelID), actor, before, after, "success", now); err != nil {
 		return "", err
 	}
 	return commandID, tx.Commit()
