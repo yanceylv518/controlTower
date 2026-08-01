@@ -12,10 +12,10 @@ import (
 )
 
 type tuningStub struct {
-	recs   []tuning.Recommendation
-	report tuning.Report
-	query  tuning.RecommendationQuery
-	saved  tuning.PolicyRecord
+	recs       []tuning.Recommendation
+	report     tuning.Report
+	query      tuning.RecommendationQuery
+	saved      tuning.PolicyRecord
 	baseValues []tuning.ChannelBaseValue
 	baseSaved  []tuning.ChannelBaseValue
 	syncModels []string
@@ -32,29 +32,7 @@ func (s *tuningStub) QueryMetrics(string, time.Time, time.Time) ([]tuning.Channe
 func (s *tuningStub) QueryRecentChannelBuckets(string, int64, time.Time, int) ([]tuning.RecentChannelBucket, error) {
 	return nil, nil
 }
-func (s *tuningStub) QueryP95Buckets(string, int64, time.Time, time.Time, int64) ([]float64, error) {
-	return nil, nil
-}
-func (s *tuningStub) LatestChannels(string) ([]tuning.Channel, error)  { return nil, nil }
 func (s *tuningStub) InsertRecommendation(tuning.Recommendation) error { return nil }
-func (s *tuningStub) HasRecentRecommendation(string, int64, string, time.Time) (bool, error) {
-	return false, nil
-}
-func (s *tuningStub) CountActionRecommendations(string, int64, time.Time, ...string) (int, error) {
-	return 0, nil
-}
-func (s *tuningStub) LastActionRecommendationAt(string, int64, ...string) (time.Time, bool, error) {
-	return time.Time{}, false, nil
-}
-func (s *tuningStub) ListDispatchStates(string) ([]tuning.DispatchState, error) {
-	return nil, nil
-}
-func (s *tuningStub) PutDispatchState(tuning.DispatchState) error { return nil }
-func (s *tuningStub) DeleteDispatchState(string, int64) error     { return nil }
-func (s *tuningStub) PendingOutcomes(time.Time, int) ([]tuning.Recommendation, error) {
-	return nil, nil
-}
-func (s *tuningStub) UpdateOutcome(string, map[string]any, time.Time, *bool) error { return nil }
 func (s *tuningStub) ListRecommendations(q tuning.RecommendationQuery) ([]tuning.Recommendation, error) {
 	s.query = q
 	return s.recs, nil
@@ -103,7 +81,7 @@ func TestTuningPolicyDefaultValidationAndMode(t *testing.T) {
 	}
 }
 func TestTuningRecommendationsPaginationAndReport(t *testing.T) {
-	s := &tuningStub{recs: []tuning.Recommendation{{ID: "r", InstanceID: "i", Evidence: map[string]any{"samples": 20}}}, report: tuning.Report{Total: 4, Adopted: 3, ByRule: map[string]int64{"demote": 4}, Filled: 3, Judged: 2, Hits: 1}}
+	s := &tuningStub{recs: []tuning.Recommendation{{ID: "r", InstanceID: "i", Evidence: map[string]any{"samples": 20}}}, report: tuning.Report{Total: 4, ByRule: map[string]int64{"demote": 4}}}
 	h := NewHandler(nil).WithTuningStore(s)
 	rr := httptest.NewRecorder()
 	h.HandleTuningRecommendations(rr, httptest.NewRequest(http.MethodGet, "/api/dashboard/tuning/recommendations?instance_id=i&limit=12&before=2026-07-14T00:00:00Z&rule=rebalance", nil))
@@ -112,7 +90,7 @@ func TestTuningRecommendationsPaginationAndReport(t *testing.T) {
 	}
 	rr = httptest.NewRecorder()
 	h.HandleTuningReport(rr, httptest.NewRequest(http.MethodGet, "/api/dashboard/tuning/report?instance_id=i&days=7", nil))
-	if rr.Code != 200 || !bytes.Contains(rr.Body.Bytes(), []byte(`"hit_rate":0.5`)) || !bytes.Contains(rr.Body.Bytes(), []byte(`"adoption_rate":0.75`)) || !bytes.Contains(rr.Body.Bytes(), []byte("autoCriteria")) {
+	if rr.Code != 200 || !bytes.Contains(rr.Body.Bytes(), []byte(`"total":4`)) || !bytes.Contains(rr.Body.Bytes(), []byte(`"demote":4`)) || bytes.Contains(rr.Body.Bytes(), []byte("hit_rate")) {
 		t.Fatalf("report: %d %s", rr.Code, rr.Body.String())
 	}
 }

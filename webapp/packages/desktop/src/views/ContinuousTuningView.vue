@@ -14,9 +14,8 @@ const bases = ref<ChannelBaseValue[]>([]), states = ref<TuningContinuousState[]>
 const selectedModels = ref<string[]>([]);
 const continuousDefaults = () => ({ sensitivity: 1, otps_cap: 1.5, circuit_threshold: .1, recovery_threshold: .2, silent_minutes: 5, probe_interval_seconds: 5, probe_count: 10, soft_start_multiplier: .2, window_minutes: 15, min_samples: 20, sparse_lookback_minutes: 360 });
 const policy = reactive<TuningPolicy>({
-  scheduling: { window_minutes: 15, min_samples: 20, sparse_min_samples: 10, sparse_lookback_minutes: 360, trial_initial_minutes: 60, trial_backoff_factor: 2, trial_max_minutes: 1440, trial_windows: 2, cooldown_minutes: 10, daily_action_limit: 6 },
-  dynamic_weighting: { mode: "off", ttft_influence: .5, error_influence: .3, cache_influence: .1, otps_influence: .1, min_multiplier: .5, max_multiplier: 1.5, smoothing_alpha: .3, max_increase_per_round: .2, max_decrease_per_round: .3 },
-  criteria: [], continuous: continuousDefaults(), assignments: {}, dispatch_modes: {},
+  scheduling: { window_minutes: 15, min_samples: 20, sparse_min_samples: 10, sparse_lookback_minutes: 360 },
+  continuous: continuousDefaults(), dispatch_modes: {},
 });
 const instanceID = computed(() => filters.instances.filter(x => x.enabled && siteOf(x) === filters.site_id).map(x => x.instance_id).sort()[0] || "");
 const models = computed(() => [...new Set(bases.value.map(x => x.model_name))].sort());

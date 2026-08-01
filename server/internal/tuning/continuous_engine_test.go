@@ -37,11 +37,35 @@ func TestContinuousFactorsRewardFasterChannelAndRespectCap(t *testing.T) {
 }
 
 type continuousFake struct {
-	fakeStore
-	bases  []ChannelBaseValue
-	states map[int64]ContinuousState
-	writes []Recommendation
-	probes []Recommendation
+	metrics         []ChannelMetric
+	recentBuckets   map[int64][]RecentChannelBucket
+	recommendations []Recommendation
+	bases           []ChannelBaseValue
+	states          map[int64]ContinuousState
+	writes          []Recommendation
+	probes          []Recommendation
+}
+
+func (f *continuousFake) GetPolicy(string) (PolicyRecord, bool, error) {
+	return PolicyRecord{}, false, nil
+}
+func (f *continuousFake) PutPolicy(PolicyRecord) error            { return nil }
+func (f *continuousFake) ListEnabledInstances() ([]string, error) { return nil, nil }
+func (f *continuousFake) QueryMetrics(string, time.Time, time.Time) ([]ChannelMetric, error) {
+	return f.metrics, nil
+}
+func (f *continuousFake) QueryRecentChannelBuckets(_ string, id int64, _ time.Time, _ int) ([]RecentChannelBucket, error) {
+	return f.recentBuckets[id], nil
+}
+func (f *continuousFake) InsertRecommendation(r Recommendation) error {
+	f.recommendations = append(f.recommendations, r)
+	return nil
+}
+func (f *continuousFake) ListRecommendations(RecommendationQuery) ([]Recommendation, error) {
+	return f.recommendations, nil
+}
+func (f *continuousFake) RecommendationReport(RecommendationQuery) (Report, error) {
+	return Report{}, nil
 }
 
 func (f *continuousFake) CreateContinuousProbe(r Recommendation, _ string, _, _ int, _ time.Time) (string, error) {

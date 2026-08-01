@@ -322,19 +322,6 @@ export interface NginxSlowSample {
 export interface TuningSchedulingParams {
   window_minutes: number; min_samples: number;
   sparse_min_samples: number; sparse_lookback_minutes: number;
-  trial_initial_minutes: number;
-  trial_backoff_factor: number; trial_max_minutes: number; trial_windows: number;
-  cooldown_minutes: number; daily_action_limit: number;
-}
-export interface TuningDynamicWeightingParams {
-  mode: "off" | "observe" | "auto";
-  ttft_influence: number; error_influence: number; cache_influence: number; otps_influence: number;
-  min_multiplier: number; max_multiplier: number; smoothing_alpha: number;
-  max_increase_per_round: number; max_decrease_per_round: number;
-}
-export interface TuningDegradeCriteria {
-  name: string; error_rate_threshold: number; severe_threshold: number;
-  latency_multiplier: number; latency_floor_seconds: number; sustained_windows: number;
 }
 export interface TuningContinuousDispatchParams {
   sensitivity: number;
@@ -351,10 +338,7 @@ export interface TuningContinuousDispatchParams {
 }
 export interface TuningPolicy {
   scheduling: TuningSchedulingParams;
-  dynamic_weighting: TuningDynamicWeightingParams;
-  criteria: TuningDegradeCriteria[];
   continuous: TuningContinuousDispatchParams;
-  assignments: Record<string, string>;
   dispatch_modes: Record<string, "off" | "observe" | "auto">;
 }
 export interface ChannelBaseValue {
@@ -375,12 +359,7 @@ export interface TuningRecommendation {
   outcome_at?: string; hit?: boolean; acted_by?: string; acted_at?: string;
 }
 export interface TuningReport {
-  total: number; adopted: number; adoption_rate: number; by_rule: Record<string, number>; filled: number; judged: number;
-  hits: number; hit_rate: number; autoCriteria: string;
-}
-export interface TuningLadders {
-  channels: Array<{ ID: number; Name: string; Status: string; Priority: number; Weight: number; Models: string[] }>;
-  dispatch_states: Array<{ InstanceID: string; ChannelID: number; ModelName: string; OriginalPriority: number; TrialAttempts: number; NextTrialAt?: string }>;
+  total: number; by_rule: Record<string, number>;
 }
 export interface TuningContinuousState {
   instance_id: string;
@@ -623,12 +602,8 @@ export const dashboardApi = (client: ApiClient) => ({
     client.request<TuningPolicyResponse>(`/api/dashboard/tuning/policy${query({ instance_id })}`, { method: "PUT", body: JSON.stringify({ policy, mode }) }),
   tuningRecommendations: (instance_id: string, limit = 100, rule?: string) =>
     client.request<ListResponse<TuningRecommendation>>(`/api/dashboard/tuning/recommendations${query({ instance_id, limit, rule })}`),
-  tuningRecommendationAction: (id: string, action: "adopt" | "dismiss") =>
-    client.request<TuningRecommendation>(`/api/dashboard/tuning/recommendations/${encodeURIComponent(id)}/${action}`, { method: "POST" }),
   tuningReport: (instance_id: string, days: 7 | 30) =>
     client.request<TuningReport>(`/api/dashboard/tuning/report${query({ instance_id, days })}`),
-  tuningLadders: (instance_id: string) =>
-    client.request<TuningLadders>(`/api/dashboard/tuning/ladders${query({ instance_id })}`),
   tuningBaseValues: (instance_id: string, model?: string) =>
     client.request<ListResponse<ChannelBaseValue>>(`/api/dashboard/tuning/base-values${query({ instance_id, model })}`),
   tuningContinuousStates: (instance_id: string) =>
