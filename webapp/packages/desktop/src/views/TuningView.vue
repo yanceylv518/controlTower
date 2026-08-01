@@ -40,6 +40,7 @@ const groupedBaseValues = computed(() => {
   baseValues.value.forEach(row => { const list=groups.get(row.model_name)||[]; list.push(row); groups.set(row.model_name,list); });
   return [...groups.entries()].map(([model, rows]) => ({ model, rows }));
 });
+const defaultCriteria = computed(() => policy.criteria.find(item => item.name === "default") || policy.criteria[0]);
 const recommendations = ref<TuningRecommendation[]>([]);
 const weightRecommendations = ref<TuningRecommendation[]>([]);
 const reports = reactive<Record<7 | 30, TuningReport | null>>({ 7: null, 30: null });
@@ -182,9 +183,57 @@ onMounted(() => void load());
         </section>
         <el-form label-position="top">
           <el-form-item label="运行模式"><el-radio-group v-model="mode"><el-radio-button value="observe">观察</el-radio-button><el-radio-button value="confirm">人工确认</el-radio-button><el-radio-button value="auto">自动</el-radio-button></el-radio-group></el-form-item>
+          <section v-if="defaultCriteria" class="policy-section">
+            <h3>降级标准（默认标准）</h3>
+            <p class="hint">当前所有模型使用默认标准；后续可增加多套标准并按模型指派。</p>
+            <el-alert class="criteria-summary" type="info" :closable="false" show-icon>
+              <template #title>
+                满足以下任一条件即判定渠道需要降级
+              </template>
+              <div class="criteria-formula">
+                <p>
+                  <b>常规错误：</b>最近 {{ policy.scheduling.window_minutes }} 分钟内至少
+                  {{ policy.scheduling.min_samples }} 个请求，渠道错误率连续
+                  {{ defaultCriteria.sustained_windows }} 个评估窗口达到
+                  {{ (defaultCriteria.error_rate_threshold * 100).toFixed(0) }}%。
+                </p>
+                <p>
+                  <b>严重错误：</b>渠道错误率单个窗口达到
+                  {{ (defaultCriteria.severe_threshold * 100).toFixed(0) }}%，无需等待持续窗口，立即触发（同样要求窗口内至少
+                  {{ policy.scheduling.min_samples }} 个请求）。
+                </p>
+                <p>
+                  <b>延迟恶化：</b>P95 延迟连续 {{ defaultCriteria.sustained_windows }} 个窗口同时达到
+                  “不低于 {{ defaultCriteria.latency_floor_seconds }} 秒”和
+                  “不低于该渠道历史基线的 {{ defaultCriteria.latency_multiplier }} 倍”。
+                </p>
+                <p>
+                  <b>低流量回退：</b>当前窗口少于 {{ policy.scheduling.min_samples }} 条但仍有新请求时，
+                  最多回看 {{ policy.scheduling.sparse_lookback_minutes }} 分钟，累计最近
+                  {{ policy.scheduling.sparse_min_samples }} 条请求判断错误率。该规则仅用于错误降级和恢复验证，
+                  不用于延迟恶化与动态配权。
+                </p>
+              </div>
+            </el-alert>
+            <div class="criteria-notes">
+              <div><b>错误率线</b><span>常规降级门槛。输入 0.15 表示 15%，必须连续满足“持续窗口”次数。</span></div>
+              <div><b>熔断线</b><span>严重错误门槛。输入 0.5 表示 50%，单个窗口达到就立即触发。</span></div>
+              <div><b>延迟倍数</b><span>当前 P95 与该渠道过去 24 小时 P95 基线的比较倍数。</span></div>
+              <div><b>延迟下限</b><span>防止低延迟场景因轻微波动误判；倍数和绝对秒数必须同时达到。</span></div>
+              <div><b>持续窗口</b><span>常规错误或延迟需要连续异常的评估次数，中间恢复一次就重新计数。</span></div>
+              <div class="wide"><b>错误归因口径</b><span>渠道错误率 = max（总错误数 − 用户侧错误数，0）÷ 请求数。默认排除 400、413、422；总错误统计和客户告警仍保留这些错误。</span></div>
+            </div>
+            <div class="policy-grid">
+              <el-form-item label="错误率线（0.15 = 15%）"><el-input-number v-model="defaultCriteria.error_rate_threshold" :min=".01" :max="1" :step=".01" /></el-form-item>
+              <el-form-item label="熔断线（0.5 = 50%）"><el-input-number v-model="defaultCriteria.severe_threshold" :min=".01" :max="1" :step=".01" /></el-form-item>
+              <el-form-item label="延迟倍数"><el-input-number v-model="defaultCriteria.latency_multiplier" :min="1" :step=".1" /></el-form-item>
+              <el-form-item label="延迟下限（秒）"><el-input-number v-model="defaultCriteria.latency_floor_seconds" :min=".1" /></el-form-item>
+              <el-form-item label="持续窗口"><el-input-number v-model="defaultCriteria.sustained_windows" :min="1" /></el-form-item>
+            </div>
+          </section>
           <section class="policy-section">
             <h3>健康渠道动态配权</h3>
-            <p class="hint">只比较同一模型、同一优先级且样本充足的健康渠道；配权模式独立决定关闭评估、只记录建议或自动写入 new-api。</p>
+            <p class="hint">只比较同一模型、同一优先级且样本充足的健康渠道。固定阈值单独负责降级；配权模式独立决定关闭评估、只记录建议或自动写入 new-api。</p>
             <el-alert class="criteria-summary" type="info" :closable="false" show-icon title="计算与保护顺序">
               先按请求量计算同模型基线，再综合 TTFT P95、服务端错误率、缓存命中率和 OTPS；随后执行倍率上下限、平滑和单轮涨跌幅保护。客户端参数错误不会计入服务端错误率。
             </el-alert>
@@ -227,7 +276,7 @@ onMounted(() => void load());
             <div class="dispatch-flow">
               <div class="flow-step">
                 <span class="step-number">1</span>
-                <div><b>触发降级</b><p>兼容调度引擎判定渠道异常后，将其优先级降到同模型梯队末尾，由下一可用渠道接管流量。</p></div>
+                <div><b>触发降级</b><p>达到上述任一标准后，将异常渠道的优先级降到同模型梯队末尾，由下一可用渠道接管流量。</p></div>
               </div>
               <div class="flow-step">
                 <span class="step-number">2</span>
