@@ -48,7 +48,7 @@ watch(() => filters.site_id, (site, previous) => {
 <template>
   <AppShell title="用户管理">
     <div class="page-head">
-      <div><strong>用户列表</strong><span>查看 new-api 用户余额、用量与状态</span></div>
+      <div><strong>用户列表</strong></div>
       <el-button @click="state.reload">刷新</el-button>
     </div>
     <div class="filter-bar">
@@ -59,7 +59,6 @@ watch(() => filters.site_id, (site, previous) => {
       <el-input v-if="auth.user?.role==='admin'" v-model="userIDs" clearable placeholder="限定用户 ID，逗号分隔" class="user-filter"/>
       <el-button type="primary" @click="search">查询</el-button><el-button @click="reset">重置</el-button>
     </div>
-    <el-alert title="数据来自所选站点的 new-api 只读库。余额表示当前可用额度，总额度 = 余额 + 已用额度。" type="info" :closable="false"/>
     <el-alert v-if="state.error.value" :title="state.error.value" type="error" show-icon :closable="false"><el-button link type="primary" @click="state.reload">重新加载</el-button></el-alert>
     <el-alert v-else-if="!state.loading.value && state.data.value && !state.data.value.configured" title="只读数据库尚未配置，当前暂无数据。" type="info" show-icon :closable="false"/>
     <div v-loading="state.loading.value" class="table-panel">
