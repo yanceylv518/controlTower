@@ -29,10 +29,17 @@ const money = (quota: number) => {
   const amount = quota / (prefs.quotaPerUnit || 500000)
   return `${prefs.currencySymbol}${amount >= 1 ? amount.toFixed(2) : amount.toFixed(6)}`
 }
-const billingPrice = (value: number) => `${prefs.currencySymbol}${value.toFixed(6)}`
+const billingPrice = (value: number) => `${prefs.currencySymbol}${value.toLocaleString('zh-CN', { maximumFractionDigits: 6 })}`
 const initial = (name: string) => name?.trim().slice(0, 1) || '用'
 const requestPath = (row: ReadonlyLog) => textValue(row, 'request_path') || '—'
-const cacheTokens = (row: ReadonlyLog) => numberValue(row, 'cache_tokens') || 0
+const cacheReadTokens = (row: ReadonlyLog) => numberValue(row, 'cache_tokens') || 0
+const cacheWrite5mTokens = (row: ReadonlyLog) => numberValue(row, 'cache_creation_tokens_5m') || 0
+const cacheWrite1hTokens = (row: ReadonlyLog) => numberValue(row, 'cache_creation_tokens_1h') || 0
+const cacheWriteTokens = (row: ReadonlyLog) => {
+  const split = cacheWrite5mTokens(row) + cacheWrite1hTokens(row)
+  return split > 0 ? split : numberValue(row, 'cache_creation_tokens') || 0
+}
+const hasCacheTokens = (row: ReadonlyLog) => cacheReadTokens(row) > 0 || cacheWriteTokens(row) > 0
 const firstResponse = (row: ReadonlyLog) => numberValue(row, 'frt', 'first_response_time')
 const isConsume = (row: ReadonlyLog) => row.type === 2
 function streamStatus(row: ReadonlyLog) {
@@ -72,7 +79,11 @@ function billingSummary(row: ReadonlyLog) {
     const inputPrice = modelRatio * 2
     parts.push(`输入 ${billingPrice(inputPrice)} / 1M tokens`)
     if (completionRatio !== undefined) parts.push(`输出 ${billingPrice(inputPrice * completionRatio)} / 1M tokens`)
-    if (cacheTokens(row) > 0 && cacheRatio !== undefined) parts.push(`缓存读 ${billingPrice(inputPrice * cacheRatio)} / 1M tokens`)
+    if (cacheReadTokens(row) > 0 && cacheRatio !== undefined && cacheRatio !== 1) parts.push(`缓存读 ${billingPrice(inputPrice * cacheRatio)} / 1M tokens`)
+    const cacheWriteRatio = numberValue(row, 'cache_creation_ratio')
+    const cacheWrite1hRatio = numberValue(row, 'cache_creation_ratio_1h')
+    if (cacheWriteTokens(row) > 0 && cacheWriteRatio !== undefined && cacheWriteRatio !== 1) parts.push(`缓存写 ${billingPrice(inputPrice * cacheWriteRatio)} / 1M tokens`)
+    if (cacheWrite1hTokens(row) > 0 && cacheWrite1hRatio !== undefined && cacheWrite1hRatio !== 0) parts.push(`缓存写 1h ${billingPrice(inputPrice * cacheWrite1hRatio)} / 1M tokens`)
   }
   return parts.join('；') || row.content_summary || '—'
 }
@@ -89,10 +100,19 @@ function billingLines(row: ReadonlyLog) {
     const inputPrice = modelRatio * 2
     values.push(`输入价格：${billingPrice(inputPrice)} / 1M tokens`)
     if (completionRatio !== undefined) values.push(`输出价格：${billingPrice(inputPrice * completionRatio)} / 1M tokens`)
-    if (cacheTokens(row) > 0 && cacheRatio !== undefined) values.push(`缓存读取价格：${billingPrice(inputPrice * cacheRatio)} / 1M tokens`)
+    if (cacheReadTokens(row) > 0 && cacheRatio !== undefined && cacheRatio !== 1) values.push(`缓存读取价格：${billingPrice(inputPrice * cacheRatio)} / 1M tokens`)
+    const cacheWriteRatio = numberValue(row, 'cache_creation_ratio')
+    const cacheWrite5mRatio = numberValue(row, 'cache_creation_ratio_5m')
+    const cacheWrite1hRatio = numberValue(row, 'cache_creation_ratio_1h')
+    if (cacheWriteTokens(row) > 0 && cacheWriteRatio !== undefined && cacheWriteRatio !== 1) values.push(`缓存写入价格：${billingPrice(inputPrice * cacheWriteRatio)} / 1M tokens`)
+    if (cacheWrite5mTokens(row) > 0 && cacheWrite5mRatio !== undefined && cacheWrite5mRatio !== 0) values.push(`缓存写入 5m 价格：${billingPrice(inputPrice * cacheWrite5mRatio)} / 1M tokens`)
+    if (cacheWrite1hTokens(row) > 0 && cacheWrite1hRatio !== undefined && cacheWrite1hRatio !== 0) values.push(`缓存写入 1h 价格：${billingPrice(inputPrice * cacheWrite1hRatio)} / 1M tokens`)
   }
   if (groupRatio !== undefined) values.push(`分组倍率：${groupRatio}x`)
-  values.push(`输入 ${formatNumber(row.prompt_tokens)} tokens，缓存 ${formatNumber(cacheTokens(row))} tokens，输出 ${formatNumber(row.completion_tokens)} tokens`)
+  values.push(`输入 Tokens：${formatNumber(row.prompt_tokens)}`)
+  values.push(`输出 Tokens：${formatNumber(row.completion_tokens)}`)
+  if (cacheReadTokens(row) > 0) values.push(`缓存读取：${formatNumber(cacheReadTokens(row))}`)
+  if (cacheWriteTokens(row) > 0) values.push(`缓存写入：${formatNumber(cacheWriteTokens(row))}`)
   values.push(`最终花费：${money(row.quota)}`)
   return values
 }
@@ -125,11 +145,11 @@ watch(() => filters.site_id, (site, previous) => {
   <div v-loading="state.loading.value" class="table-panel">
     <el-table :data="state.data.value?.items||[]" height="100%" empty-text="暂无日志数据" row-key="id">
       <el-table-column type="expand" width="36"><template #default="s"><div class="expanded">
-        <template v-if="isConsume(s.row)"><div class="detail-row"><span>渠道信息</span><strong>{{channelInfo(s.row)}}</strong></div></template><div class="detail-row"><span>Request ID</span><strong>{{s.row.request_id||'—'}}</strong></div><template v-if="isConsume(s.row)"><div class="detail-row"><span>缓存 Tokens</span><strong>{{formatNumber(cacheTokens(s.row))}}</strong></div><div class="detail-row"><span>日志详情</span><strong>{{s.row.content_summary||'—'}}</strong></div>
+        <template v-if="isConsume(s.row)"><div class="detail-row"><span>渠道信息</span><strong>{{channelInfo(s.row)}}</strong></div></template><div class="detail-row"><span>Request ID</span><strong>{{s.row.request_id||'—'}}</strong></div><template v-if="isConsume(s.row)"><div v-if="hasCacheTokens(s.row)" class="detail-row"><span>缓存 Tokens</span><strong><span v-if="cacheReadTokens(s.row)">读取 {{formatNumber(cacheReadTokens(s.row))}}</span><span v-if="cacheWriteTokens(s.row)">{{cacheReadTokens(s.row) ? '，' : ''}}写入 {{formatNumber(cacheWriteTokens(s.row))}}</span></strong></div><div class="detail-row"><span>日志详情</span><strong>{{s.row.content_summary||'—'}}</strong></div>
         <div class="detail-row detail-multiline"><span>计费过程</span><div><div v-for="line in billingLines(s.row)" :key="line">{{line}}</div></div></div></template><div class="detail-row"><span>请求路径</span><strong>{{requestPath(s.row)}}</strong></div><template v-if="isConsume(s.row)"><div class="detail-row"><span>流状态</span><strong>{{streamStatus(s.row)}}</strong></div><div class="detail-row"><span>参数覆盖</span><strong>{{overrideText(s.row)||'无'}}</strong></div></template><div class="detail-row"><span>请求转换</span><strong>{{conversion(s.row)}}</strong></div><div class="detail-row"><span>计费模式</span><strong>{{billingMode(s.row)}}</strong></div>
       </div></template></el-table-column>
       <el-table-column label="时间" width="172"><template #default="s">{{new Date(s.row.created_at).toLocaleString()}}</template></el-table-column><el-table-column label="用户" min-width="120"><template #default="s"><span class="user-cell"><i>{{initial(s.row.username)}}</i>{{s.row.username||`用户 ${s.row.user_id}`}}</span></template></el-table-column><el-table-column label="令牌" min-width="130" show-overflow-tooltip><template #default="s"><span class="pill pill-token">{{s.row.token_name||'—'}}</span></template></el-table-column><el-table-column label="类型" width="74"><template #default="s"><el-tag :type="typeMeta(s.row.type)[1]" round size="small">{{typeMeta(s.row.type)[0]}}</el-tag></template></el-table-column><el-table-column label="模型" min-width="155" show-overflow-tooltip><template #default="s"><span class="pill pill-model">{{s.row.model_name||'—'}}</span></template></el-table-column>
-      <el-table-column label="用时/首字" width="132"><template #default="s"><span class="metric-pill">{{s.row.use_time}} s</span><span v-if="firstResponse(s.row)!==undefined" class="metric-pill warm">{{firstResponse(s.row)?.toFixed(1)}} s</span><span class="stream-pill">{{s.row.is_stream?'流':'非流'}}</span></template></el-table-column><el-table-column label="输入" width="112"><template #default="s"><div>{{formatNumber(s.row.prompt_tokens)}}</div><small v-if="cacheTokens(s.row)">缓存读 {{formatNumber(cacheTokens(s.row))}}</small></template></el-table-column><el-table-column label="输出" width="84"><template #default="s">{{formatNumber(s.row.completion_tokens)}}</template></el-table-column><el-table-column label="花费" width="112"><template #default="s">{{money(s.row.quota)}}</template></el-table-column><el-table-column label="详情" min-width="245"><template #default="s"><div class="billing-summary" v-for="part in billingSummary(s.row).split('；')" :key="part">{{part}}</div></template></el-table-column>
+      <el-table-column label="用时/首字" width="132"><template #default="s"><span class="metric-pill">{{s.row.use_time}} s</span><span v-if="firstResponse(s.row)!==undefined" class="metric-pill warm">{{firstResponse(s.row)?.toFixed(1)}} s</span><span class="stream-pill">{{s.row.is_stream?'流':'非流'}}</span></template></el-table-column><el-table-column label="输入" width="128"><template #default="s"><div>{{formatNumber(s.row.prompt_tokens)}}</div><small v-if="cacheReadTokens(s.row)">缓存读 {{formatNumber(cacheReadTokens(s.row))}}</small><small v-if="cacheWriteTokens(s.row)">缓存写 {{formatNumber(cacheWriteTokens(s.row))}}</small></template></el-table-column><el-table-column label="输出" width="84"><template #default="s">{{formatNumber(s.row.completion_tokens)}}</template></el-table-column><el-table-column label="花费" width="112"><template #default="s">{{money(s.row.quota)}}</template></el-table-column><el-table-column label="详情" min-width="245"><template #default="s"><div class="billing-summary" v-for="part in billingSummary(s.row).split('；')" :key="part">{{part}}</div></template></el-table-column>
     </el-table>
   </div>
   <div class="pager"><el-button :disabled="offset===0" @click="page(offset-limit)">上一页</el-button><span>第 {{Math.floor(offset/limit)+1}} 页</span><el-button :disabled="(state.data.value?.items.length||0)<limit" @click="page(offset+limit)">下一页</el-button></div>
