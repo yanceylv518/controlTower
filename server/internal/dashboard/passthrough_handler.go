@@ -202,19 +202,32 @@ func (h *PassthroughHandler) Users(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !configured {
-		writeDashboardJSON(w, 200, map[string]any{"items": []PassthroughUser{}, "configured": false})
+		writeDashboardJSON(w, 200, map[string]any{"items": []PassthroughUser{}, "configured": false, "total": 0})
 		return
 	}
 	limit, offset := queryPage(r, 200)
-	args := make([]any, 0, len(ids)+2)
-	where := ""
+	args := make([]any, 0, len(ids)+4)
+	where := " WHERE 1=1"
 	if len(ids) > 0 {
-		where = " WHERE id IN (" + placeholders(len(ids)) + ")"
+		where += " AND id IN (" + placeholders(len(ids)) + ")"
 		for _, id := range ids {
 			args = append(args, id)
 		}
 	}
-	args = append(args, limit, offset)
+	if keyword := strings.TrimSpace(r.URL.Query().Get("keyword")); keyword != "" {
+		where += " AND (username LIKE ? OR display_name LIKE ? OR CAST(id AS CHAR) LIKE ?)"
+		like := "%" + keyword + "%"
+		args = append(args, like, like, like)
+	}
+	if rawStatus := strings.TrimSpace(r.URL.Query().Get("status")); rawStatus != "" {
+		status, parseErr := strconv.Atoi(rawStatus)
+		if parseErr != nil {
+			writeDashboardError(w, 400, "invalid_status")
+			return
+		}
+		where += " AND status = ?"
+		args = append(args, status)
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), readonlyQueryTimeout)
 	defer cancel()
 	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
@@ -223,7 +236,13 @@ func (h *PassthroughHandler) Users(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	rows, err := tx.QueryContext(ctx, `SELECT id,username,COALESCE(display_name,''),quota,used_quota,status FROM users`+where+` ORDER BY id LIMIT ? OFFSET ?`, args...)
+	var total int64
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`+where, args...).Scan(&total); err != nil {
+		writeDashboardError(w, 502, "readonly_query_failed")
+		return
+	}
+	pageArgs := append(append([]any{}, args...), limit, offset)
+	rows, err := tx.QueryContext(ctx, `SELECT id,username,COALESCE(display_name,''),quota,used_quota,status FROM users`+where+` ORDER BY id LIMIT ? OFFSET ?`, pageArgs...)
 	if err != nil {
 		writeDashboardError(w, 502, "readonly_query_failed")
 		return
@@ -243,7 +262,7 @@ func (h *PassthroughHandler) Users(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.audit(r, site, "passthrough.users", map[string]any{"user_ids": ids, "limit": limit, "offset": offset})
-	writeDashboardJSON(w, 200, map[string]any{"items": items, "configured": true})
+	writeDashboardJSON(w, 200, map[string]any{"items": items, "configured": true, "total": total})
 }
 
 func (h *PassthroughHandler) Logs(w http.ResponseWriter, r *http.Request) {
@@ -263,7 +282,7 @@ func (h *PassthroughHandler) Logs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !configured {
-		writeDashboardJSON(w, 200, map[string]any{"items": []PassthroughLog{}, "configured": false})
+		writeDashboardJSON(w, 200, map[string]any{"items": []PassthroughLog{}, "configured": false, "total": 0})
 		return
 	}
 	limit, offset := queryPage(r, 100)
@@ -334,5 +353,5 @@ func (h *PassthroughHandler) Logs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.audit(r, site, "passthrough.logs", map[string]any{"user_ids": ids, "start_time": start, "end_time": end, "limit": limit, "offset": offset})
-	writeDashboardJSON(w, 200, map[string]any{"items": items, "configured": true})
+	writeDashboardJSON(w, 200, map[string]any{"items": items, "configured": true, "total": offset + len(items)})
 }
