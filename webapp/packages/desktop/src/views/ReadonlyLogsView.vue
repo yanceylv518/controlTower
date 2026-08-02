@@ -13,7 +13,13 @@ type LogExtra = Record<string, unknown>
 const auth = useAuthStore(), filters = useFiltersStore(), prefs = usePrefsStore()
 const username = ref(''), tokenName = ref(''), modelName = ref(''), requestID = ref('')
 const logType = ref<number>(), offset = ref(0), limit = 50
-const timeRange = ref<[Date, Date]>([new Date(new Date().setHours(0, 0, 0, 0)), new Date()])
+const defaultTimeRange = (): [Date, Date] => {
+  const now = new Date()
+  const start = new Date(now)
+  start.setHours(0, 0, 0, 0)
+  return [start, new Date(now.getTime() + 60 * 60 * 1000)]
+}
+const timeRange = ref<[Date, Date]>(defaultTimeRange())
 const params = computed(() => ({ site: filters.site_id, username: auth.user?.role === 'admin' ? username.value : undefined, start_time: timeRange.value[0].toISOString(), end_time: timeRange.value[1].toISOString(), token_name: tokenName.value, model_name: modelName.value, request_id: requestID.value, log_type: logType.value, limit, offset: offset.value }))
 const state = useAsyncData(() => passthrough.logs(params.value))
 const extraCache = new WeakMap<object, LogExtra>()
@@ -23,7 +29,7 @@ function numberValue(row: ReadonlyLog, ...keys: string[]) { const value = Number
 function textValue(row: ReadonlyLog, ...keys: string[]) { const value = first(row, ...keys); if (value === undefined) return ''; return typeof value === 'string' ? value : JSON.stringify(value) }
 const search = () => { offset.value = 0; void state.reload() }
 const page = (next: number) => { offset.value = Math.max(0, next); void state.reload() }
-const reset = () => { username.value = ''; tokenName.value = ''; modelName.value = ''; requestID.value = ''; logType.value = undefined; timeRange.value = [new Date(new Date().setHours(0, 0, 0, 0)), new Date()]; search() }
+const reset = () => { username.value = ''; tokenName.value = ''; modelName.value = ''; requestID.value = ''; logType.value = undefined; timeRange.value = defaultTimeRange(); search() }
 const typeMeta = (type: number) => ({ 1: ['充值', 'warning'], 2: ['消费', 'success'], 3: ['管理', 'info'], 4: ['系统', 'info'], 5: ['错误', 'danger'], 6: ['退款', 'warning'], 7: ['登录', 'info'] }[type] || [`类型 ${type}`, 'info']) as [string, 'success' | 'warning' | 'info' | 'danger']
 const money = (quota: number) => {
   const amount = quota / (prefs.quotaPerUnit || 500000)
