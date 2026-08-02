@@ -9,6 +9,7 @@ import (
 
 	"controltower/server/internal/agentgateway"
 	ctauth "controltower/server/internal/auth"
+	"controltower/server/internal/billing"
 	"controltower/server/internal/dashboard"
 	"controltower/server/internal/ingest"
 	"controltower/server/internal/settings"
@@ -128,6 +129,10 @@ func NewMux(options Options) *http.ServeMux {
 	mux.Handle("POST /api/dashboard/instances/{id}/rotate-token", protect(http.HandlerFunc(instances.Rotate)))
 	mux.Handle("GET /api/dashboard/passthrough/users", protect(http.HandlerFunc(passthrough.Users)))
 	mux.Handle("GET /api/dashboard/passthrough/logs", protect(http.HandlerFunc(passthrough.Logs)))
+	if billingStore, ok := any(options.Store).(billing.RollupStore); ok {
+		billingRollup := billing.RollupService{Source: dashboard.BillingReadonlySource{Handler: passthrough}, Store: billingStore}
+		mux.Handle("POST /api/dashboard/billing/backfill", protect(dashboard.BillingBackfillHandler{Rollup: billingRollup, Audit: options.Store}))
+	}
 
 	if options.WebAppDir == "" {
 		options.WebAppDir = options.NextWebDir // Backward-compatible option name for one release cycle.

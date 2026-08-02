@@ -12,6 +12,7 @@ import (
 
 	"controltower/server/internal/aggregator"
 	ctauth "controltower/server/internal/auth"
+	"controltower/server/internal/billing"
 	"controltower/server/internal/config"
 	"controltower/server/internal/dashboard"
 	"controltower/server/internal/httpapi"
@@ -89,6 +90,7 @@ func run() error {
 	startChannelSnapshotHistoryCleanup(store)
 	startRetentionRunner(store, settingsProvider)
 	startTuningRunner(store)
+	startBillingRunner(store, cfg.SecretKey)
 
 	server := &http.Server{
 		Addr:              cfg.ListenAddr,
@@ -97,6 +99,47 @@ func run() error {
 	}
 	log.Printf("control tower server listening on %s", cfg.ListenAddr)
 	return server.ListenAndServe()
+}
+
+func startBillingRunner(store mysqlstore.Store, secretKey string) {
+	readonly := &dashboard.PassthroughHandler{Config: store, SecretKey: secretKey}
+	service := billing.RollupService{Source: dashboard.BillingReadonlySource{Handler: readonly}, Store: store}
+	successfulDay := map[string]string{}
+	runDue := func(now time.Time) {
+		if now.Hour() < 2 {
+			return
+		}
+		day := time.Date(now.Year(), now.Month(), now.Day()-1, 0, 0, 0, 0, now.Location())
+		dayKey := day.Format("2006-01-02")
+		sites, err := store.ListBillingSites(context.Background())
+		if err != nil {
+			log.Printf("billing daily list sites failed: %v", err)
+			return
+		}
+		for _, site := range sites {
+			if successfulDay[site] == dayKey {
+				continue
+			}
+			result, rollupErr := service.RollupDay(context.Background(), site, day)
+			if rollupErr != nil {
+				log.Printf("billing daily failed site=%s day=%s: %v", site, dayKey, rollupErr)
+				continue
+			}
+			successfulDay[site] = dayKey
+			log.Printf("billing daily complete site=%s day=%s rows=%d", site, dayKey, result.Rows)
+		}
+	}
+	go func() {
+		timer := time.NewTimer(time.Minute)
+		defer timer.Stop()
+		<-timer.C
+		runDue(time.Now())
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for now := range ticker.C {
+			runDue(now)
+		}
+	}()
 }
 
 func startTuningRunner(store mysqlstore.Store) {

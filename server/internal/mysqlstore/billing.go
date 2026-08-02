@@ -8,6 +8,23 @@ import (
 	"controltower/server/internal/billing"
 )
 
+func (s Store) ListBillingSites(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT COALESCE(NULLIF(site_id,''),id) FROM instances WHERE enabled=1 AND logs_readonly_dsn<>'' ORDER BY COALESCE(NULLIF(site_id,''),id)`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var sites []string
+	for rows.Next() {
+		var site string
+		if err = rows.Scan(&site); err != nil {
+			return nil, err
+		}
+		sites = append(sites, site)
+	}
+	return sites, rows.Err()
+}
+
 func (s Store) ListBillingPrices(ctx context.Context, instanceID string) ([]billing.PriceRecord, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT instance_id,model_name,effective_from,tier_from,input_price,output_price,cache_price,updated_at,updated_by FROM billing_prices WHERE instance_id=? ORDER BY model_name,effective_from DESC,tier_from`, instanceID)
 	if err != nil {

@@ -3,6 +3,7 @@ package dashboard
 import (
 	"context"
 	ctauth "controltower/server/internal/auth"
+	"controltower/server/internal/billing"
 	"controltower/server/internal/storage"
 	"crypto/rand"
 	"database/sql"
@@ -21,6 +22,127 @@ import (
 
 type PassthroughAuditStore interface {
 	InsertOperationAudit(storage.OperationAudit) error
+}
+
+// Logs implements billing.Source using bounded, read-only hourly queries.
+// The rollup service calls this method serially for the 24 hours of one day.
+func (h *PassthroughHandler) LogsForBilling(ctx context.Context, site string, start, end time.Time) ([]billing.LogRecord, error) {
+	db, configured, err := h.database(site)
+	if err != nil {
+		return nil, err
+	}
+	if !configured {
+		return nil, fmt.Errorf("readonly database is not configured for %s", site)
+	}
+	queryCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	rows, err := db.QueryContext(queryCtx, `SELECT user_id,COALESCE(username,''),COALESCE(model_name,''),COALESCE(`+"`group`"+`,''),prompt_tokens,completion_tokens,quota,COALESCE(other,'') FROM logs WHERE created_at>=? AND created_at<? AND type=2 ORDER BY id`, start.Unix(), end.Unix())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []billing.LogRecord
+	for rows.Next() {
+		var v billing.LogRecord
+		var other string
+		if err = rows.Scan(&v.UserID, &v.Username, &v.ModelName, &v.GroupName, &v.PromptTokens, &v.CompletionTokens, &v.Quota, &other); err != nil {
+			return nil, err
+		}
+		v.CacheTokens = billingCacheTokens(other)
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+func (h *PassthroughHandler) RatioSnapshotForBilling(ctx context.Context, site string) (string, error) {
+	db, configured, err := h.database(site)
+	if err != nil {
+		return "", err
+	}
+	if !configured {
+		return "", fmt.Errorf("readonly database is not configured for %s", site)
+	}
+	rows, err := db.QueryContext(ctx, "SELECT `key`,value FROM options WHERE `key` IN ('ModelRatio','CompletionRatio','CacheRatio','GroupRatio','QuotaPerUnit')")
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	values := map[string]string{}
+	for rows.Next() {
+		var key, value string
+		if err = rows.Scan(&key, &value); err != nil {
+			return "", err
+		}
+		values[key] = value
+	}
+	if err = rows.Err(); err != nil {
+		return "", err
+	}
+	raw, err := json.Marshal(values)
+	return string(raw), err
+}
+
+func (h *PassthroughHandler) BalancesForBilling(ctx context.Context, site string) (map[int64]int64, error) {
+	db, configured, err := h.database(site)
+	if err != nil {
+		return nil, err
+	}
+	if !configured {
+		return nil, fmt.Errorf("readonly database is not configured for %s", site)
+	}
+	rows, err := db.QueryContext(ctx, `SELECT id,quota FROM users ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	values := map[int64]int64{}
+	for rows.Next() {
+		var id, balance int64
+		if err = rows.Scan(&id, &balance); err != nil {
+			return nil, err
+		}
+		values[id] = balance
+	}
+	return values, rows.Err()
+}
+
+// Adapter names keep PassthroughHandler's HTTP Logs method intact while
+// satisfying billing.Source through a small explicit wrapper.
+type BillingReadonlySource struct{ Handler *PassthroughHandler }
+
+func (s BillingReadonlySource) Logs(ctx context.Context, site string, start, end time.Time) ([]billing.LogRecord, error) {
+	return s.Handler.LogsForBilling(ctx, site, start, end)
+}
+func (s BillingReadonlySource) RatioSnapshot(ctx context.Context, site string) (string, error) {
+	return s.Handler.RatioSnapshotForBilling(ctx, site)
+}
+func (s BillingReadonlySource) Balances(ctx context.Context, site string) (map[int64]int64, error) {
+	return s.Handler.BalancesForBilling(ctx, site)
+}
+
+func billingCacheTokens(other string) int64 {
+	if strings.TrimSpace(other) == "" {
+		return 0
+	}
+	var values map[string]any
+	if json.Unmarshal([]byte(other), &values) != nil {
+		return 0
+	}
+	for _, key := range []string{"cache_tokens", "cached_tokens", "cache_read_input_tokens", "prompt_cache_hit_tokens"} {
+		if value, ok := values[key]; ok {
+			switch typed := value.(type) {
+			case float64:
+				return int64(typed)
+			case json.Number:
+				parsed, _ := typed.Int64()
+				return parsed
+			case string:
+				parsed, _ := strconv.ParseInt(typed, 10, 64)
+				return parsed
+			}
+		}
+	}
+	return 0
 }
 
 type passthroughPool struct {
