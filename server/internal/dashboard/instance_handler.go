@@ -1,11 +1,13 @@
 package dashboard
 
 import (
+	"context"
 	ctauth "controltower/server/internal/auth"
 	"controltower/server/internal/settings"
 	"controltower/server/internal/storage"
 	"crypto/rand"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
@@ -188,6 +190,10 @@ func (i InstanceHandler) Update(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if *q.LogsReadonlyDSN != "" {
+			if err := validateReadonlyDSN(r.Context(), *q.LogsReadonlyDSN); err != nil {
+				writeDashboardError(w, 400, "logs_readonly_connection_test_failed")
+				return
+			}
 			var err error
 			encryptedReadonlyDSN, err = encryptSecret(i.SecretKey, *q.LogsReadonlyDSN)
 			if err != nil {
@@ -206,6 +212,11 @@ func (i InstanceHandler) Update(w http.ResponseWriter, r *http.Request) {
 			writeDashboardError(w, 500, "query_failed")
 			return
 		}
+		persisted, err := i.ReadonlyConfig.ReadonlyDSNForSite(siteOf(v))
+		if err != nil || persisted != encryptedReadonlyDSN {
+			writeDashboardError(w, 500, "logs_readonly_config_not_persisted")
+			return
+		}
 	}
 	item, e := i.item(v)
 	if e != nil {
@@ -213,6 +224,31 @@ func (i InstanceHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeDashboardJSON(w, 200, item)
+}
+
+func validateReadonlyDSN(parent context.Context, dsn string) error {
+	db, err := sql.Open("mysql", dsn)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	configureReadonlyDB(db)
+	ctx, cancel := context.WithTimeout(parent, readonlyQueryTimeout)
+	defer cancel()
+	if err := db.PingContext(ctx); err != nil {
+		return err
+	}
+	for _, query := range []string{
+		"SELECT id,user_id,created_at,type,username,model_name,channel_id,token_name,prompt_tokens,completion_tokens,quota,use_time,request_id,content FROM logs LIMIT 0",
+		"SELECT id,username,display_name,quota,used_quota,status FROM users LIMIT 0",
+	} {
+		rows, queryErr := db.QueryContext(ctx, query)
+		if queryErr != nil {
+			return queryErr
+		}
+		_ = rows.Close()
+	}
+	return nil
 }
 func (i InstanceHandler) Rotate(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")

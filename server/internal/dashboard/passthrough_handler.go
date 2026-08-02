@@ -125,9 +125,6 @@ func passthroughScope(r *http.Request) (string, []int64, error) {
 		}
 		ids = append(ids, id)
 	}
-	if len(ids) == 0 {
-		return "", nil, fmt.Errorf("user_ids_required")
-	}
 	return site, ids, nil
 }
 
@@ -210,8 +207,12 @@ func (h *PassthroughHandler) Users(w http.ResponseWriter, r *http.Request) {
 	}
 	limit, offset := queryPage(r, 200)
 	args := make([]any, 0, len(ids)+2)
-	for _, id := range ids {
-		args = append(args, id)
+	where := ""
+	if len(ids) > 0 {
+		where = " WHERE id IN (" + placeholders(len(ids)) + ")"
+		for _, id := range ids {
+			args = append(args, id)
+		}
 	}
 	args = append(args, limit, offset)
 	ctx, cancel := context.WithTimeout(r.Context(), readonlyQueryTimeout)
@@ -222,7 +223,7 @@ func (h *PassthroughHandler) Users(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	rows, err := tx.QueryContext(ctx, `SELECT id,username,COALESCE(display_name,''),quota,used_quota,status FROM users WHERE id IN (`+placeholders(len(ids))+`) ORDER BY id LIMIT ? OFFSET ?`, args...)
+	rows, err := tx.QueryContext(ctx, `SELECT id,username,COALESCE(display_name,''),quota,used_quota,status FROM users`+where+` ORDER BY id LIMIT ? OFFSET ?`, args...)
 	if err != nil {
 		writeDashboardError(w, 502, "readonly_query_failed")
 		return
@@ -266,11 +267,41 @@ func (h *PassthroughHandler) Logs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit, offset := queryPage(r, 100)
-	args := make([]any, 0, len(ids)+4)
-	for _, id := range ids {
-		args = append(args, id)
+	args := make([]any, 0, len(ids)+10)
+	args = append(args, start.Unix(), end.Unix())
+	userFilter := ""
+	if len(ids) > 0 {
+		userFilter = " AND user_id IN (" + placeholders(len(ids)) + ")"
+		for _, id := range ids {
+			args = append(args, id)
+		}
 	}
-	args = append(args, start.Unix(), end.Unix(), limit, offset)
+	filters := ""
+	for _, spec := range []struct{ param, column string }{{"token_name", "token_name"}, {"model_name", "model_name"}, {"request_id", "request_id"}} {
+		if value := strings.TrimSpace(r.URL.Query().Get(spec.param)); value != "" {
+			filters += " AND " + spec.column + " LIKE ?"
+			args = append(args, "%"+value+"%")
+		}
+	}
+	if value := strings.TrimSpace(r.URL.Query().Get("channel_id")); value != "" {
+		channelID, parseErr := strconv.ParseInt(value, 10, 64)
+		if parseErr != nil {
+			writeDashboardError(w, 400, "invalid_channel_id")
+			return
+		}
+		filters += " AND channel_id = ?"
+		args = append(args, channelID)
+	}
+	if value := strings.TrimSpace(r.URL.Query().Get("log_type")); value != "" {
+		logType, parseErr := strconv.Atoi(value)
+		if parseErr != nil {
+			writeDashboardError(w, 400, "invalid_log_type")
+			return
+		}
+		filters += " AND type = ?"
+		args = append(args, logType)
+	}
+	args = append(args, limit, offset)
 	ctx, cancel := context.WithTimeout(r.Context(), readonlyQueryTimeout)
 	defer cancel()
 	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
@@ -279,7 +310,7 @@ func (h *PassthroughHandler) Logs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	rows, err := tx.QueryContext(ctx, `SELECT id,user_id,created_at,type,COALESCE(username,''),COALESCE(model_name,''),channel_id,COALESCE(token_name,''),prompt_tokens,completion_tokens,quota,use_time,COALESCE(request_id,''),COALESCE(content,'') FROM logs WHERE user_id IN (`+placeholders(len(ids))+`) AND created_at BETWEEN ? AND ? ORDER BY id DESC LIMIT ? OFFSET ?`, args...)
+	rows, err := tx.QueryContext(ctx, `SELECT id,user_id,created_at,type,COALESCE(username,''),COALESCE(model_name,''),channel_id,COALESCE(token_name,''),prompt_tokens,completion_tokens,quota,use_time,COALESCE(request_id,''),COALESCE(content,'') FROM logs WHERE created_at BETWEEN ? AND ?`+userFilter+filters+` ORDER BY id DESC LIMIT ? OFFSET ?`, args...)
 	if err != nil {
 		writeDashboardError(w, 502, "readonly_query_failed")
 		return

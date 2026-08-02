@@ -36,6 +36,35 @@ func TestContinuousFactorsRewardFasterChannelAndRespectCap(t *testing.T) {
 	}
 }
 
+func TestObservePublishesWindowProgressAndOnlyChangedProposals(t *testing.T) {
+	now := time.Now().UTC()
+	f := &continuousFake{
+		bases: []ChannelBaseValue{
+			{ChannelID: 1, ChannelName: "fast", ModelName: "m", Models: []string{"m"}, BaseWeight: 100, CurrentWeight: 100},
+			{ChannelID: 2, ChannelName: "slow", ModelName: "m", Models: []string{"m"}, BaseWeight: 100, CurrentWeight: 100},
+		},
+		metrics: []ChannelMetric{
+			{ChannelID: 1, RequestCount: 30, ErrorCount: 3, UserErrorCount: 1, TTFTP50: 1, TTFTP90: 1, TTFTP95: 1, CacheHitRate: .5, OTPS: 10},
+			{ChannelID: 2, RequestCount: 25, TTFTP50: 2, TTFTP90: 2, TTFTP95: 2, CacheHitRate: .5, OTPS: 10},
+		},
+	}
+	p := DefaultPolicy()
+	p.DispatchModes = map[string]string{"m": "observe"}
+	e := NewEngine(f)
+	e.evaluateContinuous("i", PolicyRecord{InstanceID: "i", Policy: p, Mode: "observe"}, now, f)
+
+	if got := f.states[1]; got.LastObservedRequests != 30 || got.LastObservedErrors != 2 || !got.MetricReady || !got.BaselineReady {
+		t.Fatalf("window visibility was not persisted: %#v", got)
+	}
+	if len(f.recommendations) != 2 || f.recommendations[0].Rule != "weight_observed" {
+		t.Fatalf("expected initial observation evidence, got %#v", f.recommendations)
+	}
+	e.evaluateContinuous("i", PolicyRecord{InstanceID: "i", Policy: p, Mode: "observe"}, now.Add(time.Minute), f)
+	if len(f.recommendations) != 2 {
+		t.Fatalf("unchanged proposals must not spam observation history: %d", len(f.recommendations))
+	}
+}
+
 type continuousFake struct {
 	metrics         []ChannelMetric
 	recentBuckets   map[int64][]RecentChannelBucket

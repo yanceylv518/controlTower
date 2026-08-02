@@ -14,7 +14,12 @@ curl -fsS -c "$jar" -H 'Content-Type: application/json' -d "{\"username\":\"$CT_
 make_instance(){ # $1 = instance id
   response=$(curl -sS -b "$jar" -H 'X-Requested-With: XMLHttpRequest' -H 'Content-Type: application/json' -d "{\"instance_id\":\"$1\",\"name\":\"Demo $1\"}" "$base/api/dashboard/instances")
   token=$(printf '%s' "$response" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
-  if [ -z "$token" ]; then echo "[seed] instance $1 exists already; recreate the test db for a clean seed" >&2; exit 1; fi
+  if [ -z "$token" ]; then
+    step "instance $1 exists; rotate its demo token" >&2
+    response=$(curl -fsS -b "$jar" -H 'X-Requested-With: XMLHttpRequest' -H 'Content-Type: application/json' -d '{}' "$base/api/dashboard/instances/$1/rotate-token")
+    token=$(printf '%s' "$response" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+  fi
+  if [ -z "$token" ]; then echo "[seed] failed to obtain token for $1" >&2; exit 1; fi
   printf '%s' "$token"
 }
 

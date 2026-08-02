@@ -39,8 +39,8 @@ const nav = [
       ["/samples", "样本分析", Document],
       ["/usage", "用量统计", Coin],
       ["/latency", "延时分诊", DataLine],
-      ["/readonly-users", "用户资料（只读）", User],
-      ["/readonly-logs", "使用日志（只读）", Document],
+      ["/readonly-users", "用户管理", User],
+      ["/readonly-logs", "使用日志", Document],
     ],
   },
   {

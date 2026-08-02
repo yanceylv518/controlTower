@@ -66,6 +66,13 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 				state.Phase = "normal"
 			}
 			state.KSpeed, state.KCache, state.KOTPS = 1, 1, 1
+			m := metricByID[base.ChannelID]
+			// Operator-facing sample progress describes the complete current
+			// evaluation window, not only error buckets folded since the last pass.
+			state.LastObservedRequests = m.RequestCount
+			state.LastObservedErrors = max(m.ErrorCount-m.UserErrorCount, 0)
+			state.MetricReady = m.RequestCount >= p.MinSamples && m.TTFTP50 > 0 && m.TTFTP90 > 0 && m.TTFTP95 > 0
+			state.BaselineReady = healthy
 
 			// Mixed-channel fuse (design §4): the weight knob is channel-wide,
 			// so a channel serving several models must never be auto-tuned on
@@ -85,8 +92,7 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 				state.PausedReason = ""
 			}
 
-			m := metricByID[base.ChannelID]
-			requests, channelErrors := e.foldErrorDecay(id, base.ChannelID, &state, now)
+			e.foldErrorDecay(id, base.ChannelID, &state, now)
 			recoveredNow := false
 
 			// A completed probe round is folded before normal factor evaluation.
@@ -231,6 +237,13 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 				continue
 			}
 
+			// Preserve useful observation evidence without adding one event per
+			// channel every minute: only record a material proposal change.
+			if mode == "observe" && healthy && m.RequestCount >= p.MinSamples &&
+				(!exists || previous.ProposedWeight != state.ProposedWeight) {
+				_ = e.store.InsertRecommendation(continuousEvent(id, base, state, "weight_observed", mode, now))
+			}
+
 			// Manual-override detection. Snapshots refresh every ~10 minutes,
 			// so a stale snapshot differing from our write is expected, not
 			// evidence: only flag when the snapshot was captured well after
@@ -258,7 +271,6 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 					writes++
 				}
 			}
-			state.LastObservedRequests, state.LastObservedErrors = requests, channelErrors
 			state.UpdatedAt = now
 			_ = cs.PutContinuousState(state)
 			evaluated++

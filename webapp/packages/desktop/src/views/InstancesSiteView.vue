@@ -18,7 +18,7 @@ const tokenOpen = ref(false);
 const token = ref("");
 const grace = ref<string>();
 const readonlyOpen = ref(false);
-const readonlyTarget = ref<InstanceItem>();
+const readonlyTarget = ref<ReadonlyInstanceItem>();
 const readonlyDSN = ref("");
 type ReadonlyInstanceItem = InstanceItem & { logs_readonly_configured: boolean };
 const state = useAsyncData(async () => (await dashboard.instances()).items as ReadonlyInstanceItem[]);
@@ -31,6 +31,8 @@ function message(error: unknown) {
       instance_not_found: "实例不存在",
       instance_disabled: "实例已停用",
       invalid_site_id: "站点 ID 格式不正确",
+      logs_readonly_connection_test_failed: "连接测试失败，请检查地址、账号权限、数据库名称以及 users/logs 表是否可读",
+      logs_readonly_config_not_persisted: "连接测试已通过，但配置未能写入数据库，请检查 Control Tower 数据库状态",
     }[error.code] || error.code;
   }
   return error instanceof Error ? error.message : "操作失败";
@@ -80,7 +82,7 @@ async function toggle(item: InstanceItem, value: boolean) {
     await state.reload();
   }
 }
-function configureReadonly(item: InstanceItem) {
+function configureReadonly(item: ReadonlyInstanceItem) {
   readonlyTarget.value = item;
   readonlyDSN.value = "";
   readonlyOpen.value = true;
@@ -93,16 +95,33 @@ function isFirstSiteRow(item: InstanceItem) {
 }
 async function saveReadonly() {
   if (!readonlyTarget.value) return;
+  if (!readonlyDSN.value.trim()) {
+    ElMessage.warning(readonlyTarget.value.logs_readonly_configured ? "请输入新的 DSN 以重新配置；原配置不会被清除" : "请输入 MySQL DSN");
+    return;
+  }
   try {
-    await client.request(`/api/dashboard/instances/${encodeURIComponent(readonlyTarget.value.instance_id)}`, {
+    const saved = await client.request<ReadonlyInstanceItem>(`/api/dashboard/instances/${encodeURIComponent(readonlyTarget.value.instance_id)}`, {
       method: "PUT",
       body: JSON.stringify({ logs_readonly_dsn: readonlyDSN.value.trim() }),
     });
+    if (!saved.logs_readonly_configured) throw new Error("连接配置未生效");
     readonlyOpen.value = false;
     await state.reload();
-    ElMessage.success(readonlyDSN.value.trim() ? "只读连接已加密保存" : "只读连接已清除");
+    ElMessage.success("连接测试通过，只读连接已加密保存");
   } catch (error) {
     ElMessage.error(message(error));
+  }
+}
+async function clearReadonly() {
+  if (!readonlyTarget.value || !readonlyTarget.value.logs_readonly_configured) return;
+  try {
+    await ElMessageBox.confirm("清除后，使用日志和用户管理将无法查询该站点数据。确认清除？", "清除只读连接", { type: "warning" });
+    await client.request(`/api/dashboard/instances/${encodeURIComponent(readonlyTarget.value.instance_id)}`, { method: "PUT", body: JSON.stringify({ logs_readonly_dsn: "" }) });
+    readonlyOpen.value = false;
+    await state.reload();
+    ElMessage.success("只读连接已清除");
+  } catch (error) {
+    if (error !== "cancel") ElMessage.error(message(error));
   }
 }
 useAutoRefresh(state.reload);
@@ -132,14 +151,15 @@ useAutoRefresh(state.reload);
       <template #footer><el-button @click="createOpen = false">取消</el-button><el-button type="primary" @click="create">创建</el-button></template>
     </el-dialog>
     <el-dialog v-model="readonlyOpen" :title="`配置站点只读查询：${readonlyTarget ? siteID(readonlyTarget) : ''}`" width="620px">
+      <el-alert v-if="readonlyTarget?.logs_readonly_configured" type="success" :closable="false" title="当前站点已配置只读连接。出于安全不会回显原连接；填写新 DSN 可测试并替换。" />
       <el-alert type="warning" :closable="false" title="请使用仅允许 SELECT users、logs 表的 new-api 数据库账号。连接串只会加密保存，不会返回或展示。" />
       <el-form label-position="top" style="margin-top: 16px">
         <el-form-item label="MySQL DSN">
           <el-input v-model="readonlyDSN" type="password" show-password autocomplete="new-password" placeholder="readonly_user:password@tcp(host:3306)/newapi?parseTime=true&loc=UTC" />
-          <div class="form-tip">同一站点的所有实例共用此连接；留空保存将清除配置。</div>
+          <div class="form-tip">同一站点的所有实例共用此连接；留空不会修改现有配置。</div>
         </el-form-item>
       </el-form>
-      <template #footer><el-button @click="readonlyOpen = false">取消</el-button><el-button type="primary" @click="saveReadonly">加密保存</el-button></template>
+      <template #footer><el-button v-if="readonlyTarget?.logs_readonly_configured" type="danger" plain @click="clearReadonly">清除配置</el-button><el-button @click="readonlyOpen = false">取消</el-button><el-button type="primary" @click="saveReadonly">测试连接并保存</el-button></template>
     </el-dialog>
     <TokenDialog v-model="tokenOpen" :token="token" :grace-until="grace" />
   </AppShell>

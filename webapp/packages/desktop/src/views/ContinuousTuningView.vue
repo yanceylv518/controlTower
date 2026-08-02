@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { type ChannelBaseValue, type TuningContinuousState, type TuningPolicy, type TuningRecommendation } from "@ct/shared";
 import { dashboard } from "../api";
@@ -20,7 +20,7 @@ const visibleModels = computed(() => models.value.filter(model => model.toLowerC
 const activeRows = computed(() => bases.value.filter(x => x.model_name === activeModel.value));
 const stateMap = computed(() => new Map(states.value.map(x => [`${x.channel_id}:${x.model_name}`, x])));
 const stateFor = (row: ChannelBaseValue) => stateMap.value.get(`${row.channel_id}:${row.model_name}`);
-const recentEvents = computed(() => events.value.filter(x => ["weight_write", "manual_takeover", "auto_paused", "circuit_opened", "probe_started", "probe_failed", "circuit_recovered"].includes(x.rule)));
+const recentEvents = computed(() => events.value.filter(x => ["weight_observed", "weight_write", "manual_takeover", "auto_paused", "circuit_opened", "probe_started", "probe_failed", "circuit_recovered"].includes(x.rule)));
 const counts = computed(() => models.value.reduce((v, model) => { v[policy.dispatch_modes[model] || "off"]++; return v; }, { off: 0, observe: 0, auto: 0 }));
 const abnormal = computed(() => states.value.filter(x => x.phase !== "normal" || x.paused_reason).length);
 const modelAbnormal = (model: string) => bases.value.filter(row => row.model_name === model && stateFor(row) && (stateFor(row)?.phase !== "normal" || stateFor(row)?.paused_reason)).length;
@@ -30,8 +30,18 @@ const modeText = (model: string) => ({ off: "已关闭", observe: "只观察", a
 const modeType = (model: string) => modelMode(model) === "auto" ? "success" : modelMode(model) === "observe" ? "warning" : "info";
 const phaseText = (s?: TuningContinuousState) => !s ? "等待首次评估" : s.paused_reason === "manual_override" ? "人工修改后已暂停" : s.paused_reason ? "安全保护已暂停" : s.phase === "circuit" ? `已熔断，下次检测 ${s.next_probe_at ? formatTime(s.next_probe_at) : "待定"}` : s.phase === "probing" ? `恢复检测 ${s.probe_attempts || 0}/${policy.continuous.probe_count}` : s.phase === "soft_start" ? "恢复中（低权重运行）" : "运行正常";
 const phaseType = (s?: TuningContinuousState) => s?.phase === "circuit" ? "danger" : s?.phase === "probing" || s?.phase === "soft_start" || s?.paused_reason ? "warning" : "success";
-const eventName = (rule: string) => ({ weight_write: "自动调整权重", manual_takeover: "检测到人工修改", auto_paused: "安全保护暂停", circuit_opened: "渠道熔断", probe_started: "开始恢复检测", probe_failed: "恢复检测未通过", circuit_recovered: "渠道恢复" } as Record<string, string>)[rule] || rule;
+const eventName = (rule: string) => ({ weight_observed: "观察到权重变化", weight_write: "自动调整权重", manual_takeover: "检测到人工修改", auto_paused: "安全保护暂停", circuit_opened: "渠道熔断", probe_started: "开始恢复检测", probe_failed: "恢复检测未通过", circuit_recovered: "渠道恢复" } as Record<string, string>)[rule] || rule;
 const eventCount = (days: number, rule: string) => events.value.filter(x => x.rule === rule && new Date(x.created_at).getTime() >= Date.now() - days * 86400000).length;
+const sampleText = (row: ChannelBaseValue) => `${stateFor(row)?.last_observed_requests ?? 0}/${policy.continuous.min_samples}`;
+const evaluationText = (row: ChannelBaseValue) => {
+  const state = stateFor(row), requests = state?.last_observed_requests ?? 0;
+  if ((row.models?.length ?? 1) > 1 || state?.paused_reason === "mixed_channel") return "多模型渠道，安全暂停";
+  if (modelMode(row.model_name) === "off") return "模型已关闭";
+  if (requests < policy.continuous.min_samples) return `样本不足 ${requests}/${policy.continuous.min_samples}`;
+  if (!state?.metric_ready) return "缺少完整 TTFT 数据";
+  return state.baseline_ready ? "已参与本轮计算" : "合格渠道不足 2 个";
+};
+const lastEvaluationAt = computed(() => activeRows.value.map(row => stateFor(row)?.updated_at).filter((value): value is string => !!value).sort().at(-1));
 
 async function load() {
   await filters.loadInstances(); if (!siteID.value) return;
@@ -44,6 +54,14 @@ async function load() {
     try { states.value = (await dashboard.tuningContinuousStates(siteID.value)).items ?? []; } catch { states.value = []; }
     dirty.value = false;
   } finally { loading.value = false; }
+}
+let refreshTimer: ReturnType<typeof setInterval> | undefined;
+async function refreshRuntime() {
+  if (!siteID.value || loading.value) return;
+  try {
+    const [s, r] = await Promise.all([dashboard.tuningContinuousStates(siteID.value), dashboard.tuningRecommendations(siteID.value, 300)]);
+    states.value = s.items ?? []; events.value = r.items ?? [];
+  } catch { /* Keep the last good state; the next poll retries. */ }
 }
 async function sync(kind: "weight" | "priority") {
   // Refresh overwrites base values with the CURRENT online values and saves
@@ -70,7 +88,9 @@ async function sync(kind: "weight" | "priority") {
   } finally { saving.value = false; }
 }
 async function save() { saving.value = true; try { bases.value = (await dashboard.saveTuningBaseValues(siteID.value, bases.value)).items ?? []; await dashboard.saveTuningPolicy(siteID.value, policy, mode.value); ElMessage.success("设置已保存，将在下一分钟生效"); await load(); } finally { saving.value = false; } }
-watch(() => filters.site_id, () => void load()); onMounted(() => void load());
+watch(() => filters.site_id, () => void load());
+onMounted(() => { void load(); refreshTimer = setInterval(() => void refreshRuntime(), 30000); });
+onBeforeUnmount(() => { if (refreshTimer) clearInterval(refreshTimer); });
 </script>
 
 <template><AppShell title="调权中心"><div v-loading="loading" class="page">
@@ -80,8 +100,8 @@ watch(() => filters.site_id, () => void load()); onMounted(() => void load());
         <el-empty v-if="!models.length" description="还没有渠道基础值"><el-button type="primary" @click="sync('weight')">立即从 new-api 读取</el-button></el-empty>
         <div v-else class="model-workspace">
           <aside class="model-nav"><el-input v-model="modelQuery" clearable placeholder="搜索模型"/><div class="model-list"><button v-for="model in visibleModels" :key="model" :class="{active:activeModel===model}" @click="activeModel=model"><span><b>{{ model }}</b><small>{{ bases.filter(x=>x.model_name===model).length }} 个渠道</small></span><span class="model-status"><el-badge v-if="modelAbnormal(model)" :value="modelAbnormal(model)" type="danger"/><el-tag :type="modeType(model)" effect="plain" size="small">{{ modeText(model) }}</el-tag></span></button><el-empty v-if="!visibleModels.length" :image-size="48" description="没有匹配模型"/></div></aside>
-          <section class="model-detail"><div class="model-head"><div><b>{{ activeModel }}</b><small>{{ activeRows.length }} 个渠道</small></div><el-radio-group v-if="activeModel" v-model="policy.dispatch_modes[activeModel]" size="small" @change="dirty=true"><el-radio-button value="off">关闭</el-radio-button><el-radio-button value="observe">只观察</el-radio-button><el-radio-button value="auto">自动执行</el-radio-button></el-radio-group></div>
-            <el-table :data="activeRows" size="small" height="calc(100vh - 230px)"><el-table-column prop="channel_name" label="渠道" min-width="190"/><el-table-column label="运行状态" min-width="170"><template #default="{row}"><el-tag :type="phaseType(stateFor(row))">{{ phaseText(stateFor(row)) }}</el-tag></template></el-table-column><el-table-column label="基础权重" width="122"><template #default="{row}"><el-input-number v-model="row.base_weight" :min="0" size="small" controls-position="right" @change="dirty=true"/></template></el-table-column><el-table-column width="105"><template #header><span class="column-help">计算权重<el-popover trigger="click" width="460"><template #reference><button class="help" aria-label="查看计算权重说明">i</button></template><div class="calc-details"><div class="calc-title"><b>计算权重说明</b><code>round(基础权重 × 综合倍率)</code></div><p class="formula">综合倍率 = min(1.500，速度 × 缓存 × 输出 × 错误)</p><dl><div><dt>速度</dt><dd>比较该渠道与同模型渠道的 TTFT P50/P90/P95，按 50%/30%/20% 加权；越快系数越高。<small>来源：Agent 采集 new-api 日志的首字耗时，汇总到 metric_1m。</small></dd></div><div><dt>缓存</dt><dd>渠道缓存命中率相对同模型平均值，按灵敏度换算。<small>来源：new-api 日志中的缓存 token ÷提示 token。</small></dd></div><div><dt>输出</dt><dd>渠道 OTPS 相对同模型平均值，受“最大加权倍数”限制。<small>来源：成功流式请求的输出 token ÷生成耗时。</small></dd></div><div><dt>错误</dt><dd>渠道侧错误会衰减系数，成功请求逐步恢复；用户自身错误不处罚渠道。<small>来源：new-api 请求状态，由配置的用户错误码规则分类。</small></dd></div></dl><p class="calc-note">至少需要 2 个达到最少请求数且有完整 TTFT 数据的同模型渠道；模型关闭或数据不足时倍率保持 1.000。</p></div></el-popover></span></template><template #default="{row}"><span>{{ stateFor(row)?.proposed_weight ?? "—" }}</span></template></el-table-column><el-table-column prop="current_weight" label="当前权重" width="100"/><el-table-column label="基础优先级" width="122"><template #default="{row}"><el-input-number v-model="row.base_priority" :min="0" size="small" controls-position="right" @change="dirty=true"/></template></el-table-column><el-table-column prop="current_priority" label="线上优先级" width="110"/></el-table>
+          <section class="model-detail"><div class="model-head"><div><b>{{ activeModel }}</b><small>{{ activeRows.length }} 个渠道</small><small v-if="lastEvaluationAt">最近评估 {{ formatTime(lastEvaluationAt) }} · 每 30 秒自动刷新</small></div><el-radio-group v-if="activeModel" v-model="policy.dispatch_modes[activeModel]" size="small" @change="dirty=true"><el-radio-button value="off">关闭</el-radio-button><el-radio-button value="observe">只观察</el-radio-button><el-radio-button value="auto">自动执行</el-radio-button></el-radio-group></div>
+            <el-table :data="activeRows" size="small" height="calc(100vh - 230px)"><el-table-column prop="channel_name" label="渠道" min-width="190"/><el-table-column label="评估状态" min-width="180"><template #default="{row}"><div class="evaluation"><span>{{ evaluationText(row) }}</span><small>窗口样本 {{ sampleText(row) }}</small></div></template></el-table-column><el-table-column label="评估系数" min-width="220"><template #default="{row}"><span class="factors">速度 {{ factor(stateFor(row)?.k_speed) }} · 缓存 {{ factor(stateFor(row)?.k_cache) }} · 输出 {{ factor(stateFor(row)?.k_otps) }} · 错误 {{ factor(stateFor(row)?.k_error) }}</span></template></el-table-column><el-table-column label="基础权重" width="122"><template #default="{row}"><el-input-number v-model="row.base_weight" :min="0" size="small" controls-position="right" @change="dirty=true"/></template></el-table-column><el-table-column width="105"><template #header><span class="column-help">计算权重<el-popover trigger="click" width="460"><template #reference><button class="help" aria-label="查看计算权重说明">i</button></template><div class="calc-details"><div class="calc-title"><b>计算权重说明</b><code>round(基础权重 × 综合倍率)</code></div><p class="formula">综合倍率 = min(1.500，速度 × 缓存 × 输出 × 错误)</p><dl><div><dt>速度</dt><dd>比较该渠道与同模型渠道的 TTFT P50/P90/P95，按 50%/30%/20% 加权；越快系数越高。<small>来源：Agent 采集 new-api 日志的首字耗时，汇总到 metric_1m。</small></dd></div><div><dt>缓存</dt><dd>渠道缓存命中率相对同模型平均值，按灵敏度换算。<small>来源：new-api 日志中的缓存 token ÷提示 token。</small></dd></div><div><dt>输出</dt><dd>渠道 OTPS 相对同模型平均值，受“最大加权倍数”限制。<small>来源：成功流式请求的输出 token ÷生成耗时。</small></dd></div><div><dt>错误</dt><dd>渠道侧错误会衰减系数，成功请求逐步恢复；用户自身错误不处罚渠道。<small>来源：new-api 请求状态，由配置的用户错误码规则分类。</small></dd></div></dl><p class="calc-note">至少需要 2 个达到最少请求数且有完整 TTFT 数据的同模型渠道；模型关闭或数据不足时倍率保持 1.000。</p></div></el-popover></span></template><template #default="{row}"><span>{{ stateFor(row)?.proposed_weight ?? "—" }}</span></template></el-table-column><el-table-column prop="current_weight" label="当前权重" width="100"/><el-table-column label="基础优先级" width="122"><template #default="{row}"><el-input-number v-model="row.base_priority" :min="0" size="small" controls-position="right" @change="dirty=true"/></template></el-table-column><el-table-column prop="current_priority" label="线上优先级" width="110"/></el-table>
           </section>
         </div>
       </el-card>
@@ -115,6 +135,12 @@ watch(() => filters.site_id, () => void load()); onMounted(() => void load());
       </dl><p class="help-note">修改规则后需点击“保存更改”，从下一次每分钟评估开始生效；不会立即重算已经完成的历史结果。</p></section>
       <section><h3>什么时候会修改线上</h3><p>只有模型处于“自动执行”且数据量达到要求时才会写入。关闭和只观察模式都不会修改当前权重。刚切换模式、写入排队或执行失败时，计算权重与当前权重可能暂时不同。</p></section>
       <section><h3>安全保护</h3><ul><li>数据不足时保持当前权重，不用不完整样本做决策。</li><li>检测到人工修改时自动暂停，优先尊重人工设置。</li><li>所有自动写入、熔断、探测和恢复都记录在“变更记录”。</li></ul></section>
+      <section><h3>四项评估系数公式</h3><dl class="factor-formulas">
+        <div><dt>速度系数</dt><dd><code>R = 0.5×(P50/平均P50) + 0.3×(P90/平均P90) + 0.2×(P95/平均P95)</code><br><code>速度 = (1/R)^(0.5×灵敏度)</code></dd></div>
+        <div><dt>缓存系数</dt><dd><code>缓存命中率 = 缓存Token / 提示Token</code><br><code>缓存 = min(1.5, (本渠道命中率/同模型平均命中率)^(0.5×灵敏度))</code></dd></div>
+        <div><dt>输出系数</dt><dd><code>OTPS = 输出Token / 生成耗时秒数</code><br><code>输出 = min(输出加权上限, (本渠道OTPS/同模型平均OTPS)^(0.5×灵敏度))</code></dd></div>
+        <div><dt>错误系数</dt><dd><code>新值 = clamp(旧值 × 0.8^渠道错误数 × 1.08^成功数, 0.001, 1)</code><br>用户自身错误不会计入渠道错误。</dd></div>
+      </dl><p class="help-note">同模型至少需要两个达到最少样本数且 TTFT 完整的渠道。未形成有效基线时不计算，系数保持中性值 1.000。</p></section>
     </div>
   </el-drawer>
 </div></AppShell></template>
@@ -132,4 +158,5 @@ watch(() => filters.site_id, () => void load()); onMounted(() => void load());
 :global(.calc-details){color:#3d4859}:global(.calc-title){display:flex;align-items:center;justify-content:space-between;gap:16px}:global(.calc-title code){padding:5px 8px;border-radius:5px;background:#f2f5fa;color:#245eea}:global(.calc-details .formula){margin:10px 0;padding:8px 10px;border-radius:6px;background:#f4f7fc;font-weight:600}:global(.calc-details dl){display:grid;gap:9px;margin:0}:global(.calc-details dl>div){display:grid;grid-template-columns:92px 1fr;gap:10px;padding-top:9px;border-top:1px solid #edf0f5}:global(.calc-details dt){display:flex;justify-content:space-between;font-weight:600}:global(.calc-details dt b){color:#245eea}:global(.calc-details dd){margin:0;line-height:1.45}:global(.calc-details dd small){display:block;margin-top:3px;color:#8491a5}:global(.calc-note){margin:10px 0 0;color:#7b5c24;font-size:12px}
 .help-guide{display:grid;gap:22px;color:#3d4859}.help-guide section{padding-bottom:18px;border-bottom:1px solid #e8edf4}.help-guide section:last-child{border-bottom:0}.help-guide h3{margin:0 0 9px;color:#17233b}.help-guide p,.help-guide li,.help-guide dd{line-height:1.7}.help-guide p,.help-guide ol,.help-guide ul,.help-guide dl{margin:0}.help-guide ol,.help-guide ul{padding-left:22px}.help-guide dl{display:grid;gap:8px}.help-guide dl>div{display:grid;grid-template-columns:90px 1fr;gap:12px}.help-guide dt{font-weight:600;color:#245eea}.help-guide dd{margin:0}
 .help-guide .parameter-guide{gap:0;border:1px solid #e5eaf2;border-radius:8px;overflow:hidden}.help-guide .parameter-guide>div{grid-template-columns:118px 1fr;padding:10px 12px;border-bottom:1px solid #edf1f6}.help-guide .parameter-guide>div:last-child{border-bottom:0}.help-guide .parameter-guide dt{color:#253858}.help-guide .help-note{margin-top:10px;padding:9px 11px;border-radius:6px;background:#f5f7fa;color:#606b7d;font-size:13px}
+.evaluation{display:flex;flex-direction:column;gap:2px}.evaluation small{color:#8491a5}.factors{color:#596579;font-size:12px;white-space:nowrap}
 </style>

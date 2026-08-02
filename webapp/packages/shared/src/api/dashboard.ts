@@ -344,7 +344,7 @@ export interface TuningPolicy {
 export interface ChannelBaseValue {
   instance_id: string; channel_id: number; channel_name: string; model_name: string;
   base_weight: number; base_priority: number; current_weight: number; current_priority: number;
-  updated_at?: string; updated_by?: string;
+  snapshot_at?: string; models?: string[]; updated_at?: string; updated_by?: string;
 }
 export interface TuningPolicyResponse {
   instance_id: string; site_id: string; policy: TuningPolicy; mode: "observe" | "confirm" | "auto";
@@ -376,8 +376,10 @@ export interface TuningContinuousState {
   proposed_weight: number;
   last_written_weight: number;
   last_write_at?: string;
-  success_count: number;
-  error_count: number;
+  last_observed_requests: number;
+  last_observed_errors: number;
+  metric_ready: boolean;
+  baseline_ready: boolean;
   paused_reason?: string;
   phase: "normal" | "circuit" | "probing" | "soft_start";
   circuit_opened_at?: string;

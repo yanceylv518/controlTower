@@ -178,6 +178,8 @@ type ContinuousState struct {
 	LastWriteAt          *time.Time `json:"last_write_at,omitempty"`
 	LastObservedRequests int64      `json:"last_observed_requests"`
 	LastObservedErrors   int64      `json:"last_observed_errors"`
+	MetricReady          bool       `json:"metric_ready"`
+	BaselineReady        bool       `json:"baseline_ready"`
 	// LastBucketAt is the newest metric bucket already folded into KError.
 	// Buckets arrive late (agent reports every ~30s), so the decay must walk
 	// complete buckets past this cursor instead of re-reading "the last

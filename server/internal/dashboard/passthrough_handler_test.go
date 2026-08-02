@@ -44,10 +44,11 @@ func TestPassthroughSummaryRedactsAndTruncates(t *testing.T) {
 	}
 }
 
-func TestPassthroughAdminScopeRequiresExplicitUserIDs(t *testing.T) {
+func TestPassthroughAdminScopeAllowsAllUsers(t *testing.T) {
 	r := httptest.NewRequest("GET", "/?site=cn", nil)
-	if _, _, err := passthroughScope(r); err == nil || err.Error() != "user_ids_required" {
-		t.Fatalf("error = %v", err)
+	site, ids, err := passthroughScope(r)
+	if err != nil || site != "cn" || len(ids) != 0 {
+		t.Fatalf("scope = %q,%v error = %v", site, ids, err)
 	}
 }
 
