@@ -252,3 +252,26 @@ func TestDisabledUserCannotLoginOrKeepSession(t *testing.T) {
 		t.Fatal("disabled user must not log in")
 	}
 }
+
+type loginAuditRecorder struct{ rows []storage.OperationAudit }
+
+func (r *loginAuditRecorder) InsertOperationAudit(a storage.OperationAudit) error {
+	r.rows = append(r.rows, a)
+	return nil
+}
+
+func TestViewerLoginWritesAudit(t *testing.T) {
+	m, _ := viewerSetup(t)
+	rec := &loginAuditRecorder{}
+	h := Handlers{M: m, Audit: rec}
+	body := strings.NewReader(`{"username":"viewer","password":"password1"}`)
+	r := httptest.NewRequest("POST", "/api/auth/login", body)
+	w := httptest.NewRecorder()
+	h.Login(w, r)
+	if w.Code != 200 {
+		t.Fatalf("login failed: %d %s", w.Code, w.Body.String())
+	}
+	if len(rec.rows) != 1 || rec.rows[0].OperationType != "auth.viewer_login" || rec.rows[0].InstanceID != "site-a" {
+		t.Fatalf("viewer login must be audited: %#v", rec.rows)
+	}
+}

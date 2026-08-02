@@ -31,6 +31,12 @@ func withUser(r *http.Request, u storage.User) *http.Request {
 type Handlers struct {
 	M       *Manager
 	Limiter *IPLimiter
+	// Audit receives viewer login events. Viewer accounts exist to give
+	// outsiders a window into customer data, so their sign-ins are part of
+	// the operation record (B1 spec item, delivered with B2).
+	Audit interface {
+		InsertOperationAudit(storage.OperationAudit) error
+	}
 }
 
 type IPLimiter struct {
@@ -105,6 +111,14 @@ func (h Handlers) Login(w http.ResponseWriter, r *http.Request) {
 	if e != nil {
 		write(w, 401, map[string]string{"error": "invalid_credentials"})
 		return
+	}
+	if h.Audit != nil && u.Role == "viewer" {
+		summary, _ := json.Marshal(map[string]any{"role": u.Role, "scope_site": u.ScopeSite, "ip": clientIP(r)})
+		_ = h.Audit.InsertOperationAudit(storage.OperationAudit{
+			ID: "login-" + s.ID, InstanceID: u.ScopeSite, OperationType: "auth.viewer_login",
+			TargetType: "user", TargetID: u.Username, ActorID: u.Username,
+			AfterSummary: string(summary), Status: "success", CreatedAt: time.Now().UTC(),
+		})
 	}
 	// Secure is intentionally not set: TLS terminates at the reverse proxy.
 	http.SetCookie(w, &http.Cookie{Name: "ct_session", Value: s.ID, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: int(h.M.TTL().Seconds())})

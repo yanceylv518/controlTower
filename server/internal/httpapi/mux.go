@@ -72,7 +72,7 @@ func NewMux(options Options) *http.ServeMux {
 		}
 		return dashboard.RequireBearerToken(options.DashboardToken, h)
 	}
-	a := ctauth.Handlers{M: options.AuthManager, Limiter: ctauth.NewIPLimiter()}
+	a := ctauth.Handlers{M: options.AuthManager, Limiter: ctauth.NewIPLimiter(), Audit: options.Store}
 	mux.HandleFunc("/api/auth/login", a.Login)
 	mux.HandleFunc("/api/auth/logout", a.Logout)
 	mux.HandleFunc("/api/auth/me", a.Me)
