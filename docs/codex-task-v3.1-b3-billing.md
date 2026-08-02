@@ -8,7 +8,7 @@
 
 ### 023 迁移：billing_daily + 两张计价配置表
 
-- `billing_daily(instance_id VARCHAR(64), user_id BIGINT, username VARCHAR(128), model_name VARCHAR(255), group_name VARCHAR(64), day DATE, request_count BIGINT, prompt_tokens BIGINT, completion_tokens BIGINT, cache_tokens BIGINT, quota BIGINT, updated_at DATETIME(6), PRIMARY KEY(instance_id, user_id, model_name, group_name, day), KEY idx_billing_daily_day(instance_id, day))`（分组维度=logs.group，空归 ''）；
+- `billing_daily(instance_id VARCHAR(64), user_id BIGINT, username VARCHAR(128), model_name VARCHAR(255), group_name VARCHAR(64), tier_from BIGINT NOT NULL DEFAULT 0, day DATE, request_count BIGINT, prompt_tokens BIGINT, completion_tokens BIGINT, cache_tokens BIGINT, quota BIGINT, updated_at DATETIME(6), PRIMARY KEY(instance_id, user_id, model_name, group_name, tier_from, day), KEY idx_billing_daily_day(instance_id, day))`（分组维度=logs.group，空归 ''；**tier_from=档位下限**，日切聚合时按单请求 prompt_tokens 与该日生效档位边界分类，无阶梯配置的模型恒 0——分档必须在聚合前完成，聚合后无法再分）；
 - `billing_prices(model_name VARCHAR(255), effective_from DATE, tier_from BIGINT NOT NULL DEFAULT 0, input_price DECIMAL(12,6), output_price DECIMAL(12,6), cache_price DECIMAL(12,6), updated_at, updated_by, PRIMARY KEY(model_name, effective_from, tier_from))`——**阶梯计价**：单档模型一行 tier_from=0，阶梯模型每档一行（如 0/128000），请求按 prompt_tokens ∈ [tier_from, 下一档) 落档整条计价；单价/1M tokens，货币无关（显示用系统货币符号）；
 - `billing_group_ratios(group_name VARCHAR(64) PRIMARY KEY, ratio DECIMAL(8,4) NOT NULL DEFAULT 1, updated_at, updated_by)`。
 全部纯增量+反向断言。
