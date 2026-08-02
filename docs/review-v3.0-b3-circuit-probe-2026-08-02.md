@@ -22,6 +22,12 @@
 
 结论：**通过，零缺陷**（-2552 行）。值班符号（evaluateActive/evaluateDynamicWeights/findBackup/scheduleTrials/criteriaFor 等）非测试代码零命中；duty_engine_test 与旧 TuningView.vue 删除；adopt/dismiss 与 ladders 路由移除；Policy 保留 window/min_samples/sparse/dispatch_modes/continuous、旧字段解码容忍；哨兵简化为按模型 auto 开关；tuning_dispatch_states 表与历史保留；验收方全部修正与回归测试（含 K_error 恢复下限）存活。全量测试 + typecheck 绿。**v3.0 全系列就此完结。**
 
+## 站点化收尾验收（2026-08-02 追加，dce5091 + ac744fe）
+
+结论：**通过，零缺陷**。连续调度整体从按实例改为按站点运转（ListEnabledSites、基础值/指标/快照查询按站点成员展开、页面直接以 site_id 为上下文）——渠道本是站点属性，这是正确的最终归位。**亮点：controlInstanceForSite 以"渠道快照最新 → 心跳最新 → id 字典序"三级证据选择控制机，取代 B4 以来的 `_1` 命名约定——那个记档已久的口子就此闭合**（命令与探针均路由至证据选出的控制机；哨兵同步按站点成员展开查询，无失明）。探针结果回写以 command_id 唯一匹配，安全。全量测试 + typecheck 绿。
+
+记档：未立项交付、无自查清单（惯例记录）；main 历史含一次重复清理提交与两次 merge（codex 分支基线陈旧所致，净变更正确，未 force push 合规）；遗留远端分支 codex/site-scoped-tuning 可删。
+
 ## 部署提示
 
-rc20 可打。上线开启顺序：先一键同步基础值 → 全模型 observe 观察因子与熔断事件 → 逐模型开 auto。部署时确认生产 new-api 版本的渠道测试接口路径与 agent channelcontrol.Probe 一致（交付说明缺失，记档）。
+**rc20（428ea1c）不含站点化收尾两笔**——调度状态/策略的键位语义在这两笔中从实例改为站点，若 rc20 尚未部署，建议直接打 rc21 从站点化版本起步（避免部署 rc20 后产生按实例键位的状态残留）。上线开启顺序：先一键同步基础值 → 全模型 observe 观察因子与熔断事件 → 逐模型开 auto。部署时确认生产 new-api 版本的渠道测试接口路径与 agent channelcontrol.Probe 一致（交付说明缺失，记档）。
