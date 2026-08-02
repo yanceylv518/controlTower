@@ -137,6 +137,9 @@ func NewMux(options Options) *http.ServeMux {
 		mux.Handle("/api/dashboard/billing/prices", protect(dashboard.BillingPricesHandler{Store: billingConfigStore}))
 		mux.Handle("/api/dashboard/billing/group-ratios", protect(dashboard.BillingGroupRatiosHandler{Store: billingConfigStore}))
 	}
+	if billingSummaryStore, ok := any(options.Store).(dashboard.BillingSummaryStore); ok {
+		mux.Handle("GET /api/dashboard/billing/summary", protect(dashboard.BillingSummaryHandler{Store: billingSummaryStore}))
+	}
 
 	if options.WebAppDir == "" {
 		options.WebAppDir = options.NextWebDir // Backward-compatible option name for one release cycle.

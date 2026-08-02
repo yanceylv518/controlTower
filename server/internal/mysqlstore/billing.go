@@ -3,10 +3,82 @@ package mysqlstore
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"time"
 
 	"controltower/server/internal/billing"
 )
+
+func (s Store) QueryBillingAggregates(ctx context.Context, instanceID string, from, to time.Time, userIDs []int64) ([]billing.AggregateRow, error) {
+	query := `SELECT instance_id,user_id,MAX(username),model_name,group_name,tier_from,day,SUM(request_count),SUM(prompt_tokens),SUM(completion_tokens),SUM(cache_tokens),SUM(quota) FROM billing_daily WHERE instance_id=? AND day>=? AND day<?`
+	args := []any{instanceID, from, to}
+	if len(userIDs) > 0 {
+		query += ` AND user_id IN (` + strings.TrimRight(strings.Repeat("?,", len(userIDs)), ",") + `)`
+		for _, id := range userIDs {
+			args = append(args, id)
+		}
+	}
+	query += ` GROUP BY instance_id,user_id,model_name,group_name,tier_from,day ORDER BY user_id,day,model_name,group_name,tier_from`
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []billing.AggregateRow
+	for rows.Next() {
+		var v billing.AggregateRow
+		if err = rows.Scan(&v.InstanceID, &v.UserID, &v.Username, &v.ModelName, &v.GroupName, &v.TierFrom, &v.Day, &v.RequestCount, &v.PromptTokens, &v.CompletionTokens, &v.CacheTokens, &v.Quota); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+func (s Store) BillingRatioSnapshots(ctx context.Context, instanceID string, from, to time.Time) (map[string]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT day,ratios_json FROM billing_ratio_snapshot WHERE instance_id=? AND day>=? AND day<?`, instanceID, from, to)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var day time.Time
+		var raw string
+		if err = rows.Scan(&day, &raw); err != nil {
+			return nil, err
+		}
+		out[day.Format("2006-01-02")] = raw
+	}
+	return out, rows.Err()
+}
+
+func (s Store) LatestBillingBalances(ctx context.Context, instanceID string, before time.Time, userIDs []int64) (map[int64]int64, error) {
+	filter := ""
+	args := []any{instanceID, before}
+	if len(userIDs) > 0 {
+		filter = ` AND user_id IN (` + strings.TrimRight(strings.Repeat("?,", len(userIDs)), ",") + `)`
+		for _, id := range userIDs {
+			args = append(args, id)
+		}
+	}
+	query := `SELECT b.user_id,b.balance FROM billing_balance_snapshot b JOIN (SELECT user_id,MAX(day) AS day FROM billing_balance_snapshot WHERE instance_id=? AND day<?` + filter + ` GROUP BY user_id) latest ON latest.user_id=b.user_id AND latest.day=b.day WHERE b.instance_id=?`
+	args = append(args, instanceID)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int64]int64{}
+	for rows.Next() {
+		var id, balance int64
+		if err = rows.Scan(&id, &balance); err != nil {
+			return nil, err
+		}
+		out[id] = balance
+	}
+	return out, rows.Err()
+}
 
 func (s Store) ListBillingSites(ctx context.Context) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT COALESCE(NULLIF(site_id,''),id) FROM instances WHERE enabled=1 AND logs_readonly_dsn<>'' ORDER BY COALESCE(NULLIF(site_id,''),id)`)
