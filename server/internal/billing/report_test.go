@@ -41,3 +41,19 @@ func TestBuildSummaryUsesCTThenSnapshotAndMarksUnpriced(t *testing.T) {
 		t.Fatalf("unexpected sources: %#v", items[0].PriceSources)
 	}
 }
+
+func TestBuildDetailsShowsSourceAndUnpriced(t *testing.T) {
+	day := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	rows := []AggregateRow{
+		{ModelName: "priced", Day: day, PromptTokens: 1_000_000},
+		{ModelName: "missing", Day: day, PromptTokens: 1},
+	}
+	prices := []PriceRecord{{ModelName: "priced", Price: Price{EffectiveFrom: day, Input: "2", Output: "2", Cache: "2"}}}
+	items := BuildDetails(rows, prices, nil, map[string]string{})
+	if len(items) != 2 || items[1].PriceSource != "ct" || items[1].Amount != "2.000000" {
+		t.Fatalf("unexpected priced item: %#v", items)
+	}
+	if !items[0].Unpriced || items[0].ModelName != "missing" {
+		t.Fatalf("unexpected unpriced item: %#v", items)
+	}
+}

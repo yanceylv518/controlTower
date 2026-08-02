@@ -31,6 +31,21 @@ type UserSummary struct {
 	UnpricedModels   []string `json:"unpriced_models"`
 	PriceSources     []string `json:"price_sources"`
 }
+
+type DetailItem struct {
+	Day              string `json:"day"`
+	ModelName        string `json:"model_name"`
+	GroupName        string `json:"group_name"`
+	TierFrom         int64  `json:"tier_from"`
+	RequestCount     int64  `json:"request_count"`
+	PromptTokens     int64  `json:"prompt_tokens"`
+	CompletionTokens int64  `json:"completion_tokens"`
+	CacheTokens      int64  `json:"cache_tokens"`
+	Quota            int64  `json:"quota"`
+	Amount           string `json:"amount"`
+	PriceSource      string `json:"price_source"`
+	Unpriced         bool   `json:"unpriced"`
+}
 type SummaryTotal struct {
 	Users            int    `json:"users"`
 	RequestCount     int64  `json:"request_count"`
@@ -225,6 +240,57 @@ func BuildSummary(rows []AggregateRow, prices []PriceRecord, ratios []GroupRatio
 	})
 	total.Amount = FormatAmount(totalAmount, 6)
 	return out, total
+}
+
+func BuildDetails(rows []AggregateRow, prices []PriceRecord, ratios []GroupRatio, snapshots map[string]string) []DetailItem {
+	priceByModel := map[string][]Price{}
+	for _, price := range prices {
+		priceByModel[price.ModelName] = append(priceByModel[price.ModelName], price.Price)
+	}
+	ratioByGroup := map[string]string{}
+	for _, ratio := range ratios {
+		ratioByGroup[ratio.GroupName] = ratio.Ratio
+	}
+	items := make([]DetailItem, 0, len(rows))
+	for _, row := range rows {
+		item := DetailItem{Day: row.Day.Format("2006-01-02"), ModelName: row.ModelName, GroupName: row.GroupName, TierFrom: row.TierFrom, RequestCount: row.RequestCount, PromptTokens: row.PromptTokens, CompletionTokens: row.CompletionTokens, CacheTokens: row.CacheTokens, Quota: row.Quota}
+		price, ok := selectPriceForTier(priceByModel[row.ModelName], row.Day, row.TierFrom)
+		ratio := "1"
+		item.PriceSource = "ct"
+		if ok {
+			if configured := ratioByGroup[row.GroupName]; configured != "" {
+				ratio = configured
+			}
+		} else {
+			snapshot, err := ParseRatioSnapshot(snapshots[item.Day])
+			if err == nil {
+				price, ratio, err = FallbackPrice(snapshot, row.ModelName, row.GroupName)
+			}
+			if err != nil {
+				item.Unpriced = true
+				items = append(items, item)
+				continue
+			}
+			item.PriceSource = "newapi"
+		}
+		amount, err := Amount(Usage{PromptTokens: row.PromptTokens, CompletionTokens: row.CompletionTokens, CacheTokens: row.CacheTokens}, price, ratio)
+		if err != nil {
+			item.Unpriced = true
+		} else {
+			item.Amount = FormatAmount(amount, 6)
+		}
+		items = append(items, item)
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Day != items[j].Day {
+			return items[i].Day > items[j].Day
+		}
+		if items[i].ModelName != items[j].ModelName {
+			return items[i].ModelName < items[j].ModelName
+		}
+		return items[i].GroupName < items[j].GroupName
+	})
+	return items
 }
 
 func selectPriceForTier(prices []Price, day time.Time, tier int64) (Price, bool) {
