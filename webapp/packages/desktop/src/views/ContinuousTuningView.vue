@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from "vue";
-import { ElMessage } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 import { type ChannelBaseValue, type TuningContinuousState, type TuningPolicy, type TuningRecommendation } from "@ct/shared";
 import { dashboard } from "../api";
 import AppShell from "../components/AppShell.vue";
@@ -46,6 +46,17 @@ async function load() {
   } finally { loading.value = false; }
 }
 async function sync(kind: "weight" | "priority") {
+  // Refresh overwrites base values with the CURRENT online values and saves
+  // immediately. With auto dispatch running, online weights are computed
+  // results (base x multiplier) - silently adopting them as the new anchor
+  // would compound the multiplier on itself round after round.
+  if (bases.value.length) {
+    await ElMessageBox.confirm(
+      "刷新会用线上当前值覆盖基础值并立即保存。若自动调度已运行，线上权重是计算结果——覆盖后它将成为新的调整基准。确认继续？",
+      "覆盖基础值",
+      { type: "warning", confirmButtonText: "覆盖并保存" },
+    );
+  }
   saving.value = true;
   try {
     const rows = (await dashboard.syncTuningBaseValues(siteID.value, models.value)).items ?? [];
