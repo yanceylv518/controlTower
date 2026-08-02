@@ -11,10 +11,11 @@ import { formatNumber, formatQuota } from '../utils/format'
 
 type LogExtra = Record<string, unknown>
 const auth = useAuthStore(), filters = useFiltersStore(), prefs = usePrefsStore()
-const userIDs = ref(''), tokenName = ref(''), modelName = ref(''), requestID = ref('')
+const username = ref(''), groupName = ref(''), tokenName = ref(''), modelName = ref(''), requestID = ref('')
 const channelID = ref<number>(), logType = ref<number>(), offset = ref(0), limit = 50
+const advancedOpen = ref(false)
 const timeRange = ref<[Date, Date]>([new Date(new Date().setHours(0, 0, 0, 0)), new Date()])
-const params = computed(() => ({ site: filters.site_id, user_ids: auth.user?.role === 'admin' ? userIDs.value : undefined, start_time: timeRange.value[0].toISOString(), end_time: timeRange.value[1].toISOString(), token_name: tokenName.value, model_name: modelName.value, request_id: requestID.value, channel_id: channelID.value, log_type: logType.value, limit, offset: offset.value }))
+const params = computed(() => ({ site: filters.site_id, username: auth.user?.role === 'admin' ? username.value : undefined, group: groupName.value, start_time: timeRange.value[0].toISOString(), end_time: timeRange.value[1].toISOString(), token_name: tokenName.value, model_name: modelName.value, request_id: requestID.value, channel_id: channelID.value, log_type: logType.value, limit, offset: offset.value }))
 const state = useAsyncData(() => passthrough.logs(params.value))
 const extraCache = new WeakMap<object, LogExtra>()
 function extra(row: ReadonlyLog): LogExtra { const cached = extraCache.get(row); if (cached) return cached; let value: LogExtra = {}; try { value = row.other ? JSON.parse(row.other) as LogExtra : {} } catch { value = {} }; extraCache.set(row, value); return value }
@@ -23,7 +24,7 @@ function numberValue(row: ReadonlyLog, ...keys: string[]) { const value = Number
 function textValue(row: ReadonlyLog, ...keys: string[]) { const value = first(row, ...keys); if (value === undefined) return ''; return typeof value === 'string' ? value : JSON.stringify(value) }
 const search = () => { offset.value = 0; void state.reload() }
 const page = (next: number) => { offset.value = Math.max(0, next); void state.reload() }
-const reset = () => { userIDs.value = ''; tokenName.value = ''; modelName.value = ''; requestID.value = ''; channelID.value = undefined; logType.value = undefined; timeRange.value = [new Date(new Date().setHours(0, 0, 0, 0)), new Date()]; search() }
+const reset = () => { username.value = ''; groupName.value = ''; tokenName.value = ''; modelName.value = ''; requestID.value = ''; channelID.value = undefined; logType.value = undefined; advancedOpen.value = false; timeRange.value = [new Date(new Date().setHours(0, 0, 0, 0)), new Date()]; search() }
 const typeMeta = (type: number) => ({ 1: ['充值', 'warning'], 2: ['消费', 'success'], 3: ['管理', 'info'], 4: ['系统', 'info'], 5: ['错误', 'danger'], 6: ['退款', 'warning'], 7: ['登录', 'info'] }[type] || [`类型 ${type}`, 'info']) as [string, 'success' | 'warning' | 'info' | 'danger']
 const money = (quota: number) => formatQuota(quota, prefs.quotaPerUnit, prefs.currencySymbol)
 const initial = (name: string) => name?.trim().slice(0, 1) || '用'
@@ -47,12 +48,23 @@ watch(() => filters.site_id, (site, previous) => {
 </script>
 <template><AppShell title="使用日志">
   <div class="filter-bar">
-    <el-date-picker v-model="timeRange" type="datetimerange" range-separator="~" start-placeholder="开始时间" end-placeholder="结束时间" :clearable="false" class="time-range"/>
-    <el-input v-model="tokenName" clearable prefix-icon="Search" placeholder="令牌名称"/><el-input v-model="modelName" clearable prefix-icon="Search" placeholder="模型名称"/>
-    <el-input v-if="auth.user?.role==='admin'" v-model="userIDs" clearable prefix-icon="Search" placeholder="用户 ID，多个用逗号分隔"/>
-    <el-input v-model="requestID" clearable prefix-icon="Search" placeholder="Request ID"/><el-input v-model.number="channelID" clearable prefix-icon="Search" placeholder="渠道 ID"/>
-    <el-select v-model="logType" clearable placeholder="全部类型"><el-option label="消费" :value="2"/><el-option label="错误" :value="5"/><el-option label="充值" :value="1"/><el-option label="管理" :value="3"/><el-option label="系统" :value="4"/><el-option label="退款" :value="6"/></el-select>
-    <div class="filter-actions"><el-button type="primary" @click="search">查询</el-button><el-button @click="reset">重置</el-button><el-button @click="state.reload">刷新</el-button></div>
+    <div class="filter-fields primary-filters">
+      <el-date-picker v-model="timeRange" type="datetimerange" range-separator="~" start-placeholder="开始时间" end-placeholder="结束时间" :clearable="false" class="time-range"/>
+      <el-input v-model="modelName" clearable prefix-icon="Search" placeholder="模型名称"/>
+      <el-input v-model="groupName" clearable prefix-icon="Search" placeholder="分组"/>
+      <el-select v-model="logType" clearable placeholder="全部类型"><el-option label="消费" :value="2"/><el-option label="错误" :value="5"/><el-option label="充值" :value="1"/><el-option label="管理" :value="3"/><el-option label="系统" :value="4"/><el-option label="退款" :value="6"/></el-select>
+    </div>
+    <div v-show="advancedOpen" class="filter-fields advanced-filters">
+      <el-input v-model="tokenName" clearable prefix-icon="Search" placeholder="令牌名称"/>
+      <el-input v-if="auth.user?.role==='admin'" v-model="username" clearable prefix-icon="Search" placeholder="用户名称"/>
+      <el-input v-model.number="channelID" clearable prefix-icon="Search" placeholder="渠道 ID"/>
+      <el-input v-model="requestID" clearable prefix-icon="Search" placeholder="Request ID"/>
+    </div>
+    <div class="filter-actions">
+      <el-button link @click="advancedOpen=!advancedOpen">{{advancedOpen?'收起高级筛选':'高级筛选'}}</el-button>
+      <el-button @click="reset">重置</el-button>
+      <el-button type="primary" :loading="state.loading.value" @click="search">查询</el-button>
+    </div>
   </div>
   <el-alert v-if="state.error.value" :title="state.error.value" type="error" show-icon :closable="false"><el-button link type="primary" @click="state.reload">重新加载</el-button></el-alert>
   <el-alert v-else-if="!state.loading.value && state.data.value && !state.data.value.configured" title="只读数据库尚未配置，当前暂无数据。配置后可直接在此查询。" type="info" show-icon :closable="false"/>
@@ -68,4 +80,4 @@ watch(() => filters.site_id, (site, previous) => {
   </div>
   <div class="pager"><el-button :disabled="offset===0" @click="page(offset-limit)">上一页</el-button><span>第 {{Math.floor(offset/limit)+1}} 页</span><el-button :disabled="(state.data.value?.items.length||0)<limit" @click="page(offset+limit)">下一页</el-button></div>
 </AppShell></template>
-<style scoped>.filter-bar{display:grid;grid-template-columns:minmax(440px,2fr) repeat(3,minmax(180px,1fr));gap:8px;padding:12px 16px;margin-bottom:12px;background:#fff;border:1px solid var(--el-border-color-light);border-radius:8px}.time-range{width:100%}.filter-actions{display:flex;justify-content:flex-end;gap:8px}.table-panel{height:calc(100vh - 245px);min-height:430px;background:#fff;border:1px solid var(--el-border-color-light);border-radius:8px;overflow:hidden}.pager{display:flex;justify-content:flex-end;align-items:center;gap:12px;margin-top:12px}.expanded{margin:0 12px 0 36px;padding:10px 18px;background:#f5f7fa;border-radius:4px}.detail-row{display:grid;grid-template-columns:100px minmax(0,1fr);gap:16px;min-height:28px;align-items:start;color:#303133}.detail-row>span{color:#73767a;text-align:right}.detail-row strong{font-weight:400;word-break:break-all}.detail-multiline>div{line-height:1.7}.pill{display:inline-block;max-width:100%;padding:3px 9px;border-radius:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pill-channel{background:#dff5f2;color:#087f73}.pill-token{background:#edf0f2;color:#303133}.pill-group{background:#fff4cc;color:#9a7200}.pill-model{background:#f1e8fb;color:#7134a3}.user-cell{display:flex;align-items:center;gap:7px}.user-cell i{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;background:#43c6b9;color:#fff;font-style:normal}.metric-pill,.stream-pill{display:inline-block;margin-right:4px;padding:2px 7px;border-radius:10px;background:#dff2dd;color:#237b34}.metric-pill.warm{background:#fff0d5;color:#a55d00}.stream-pill{background:#dfeaff;color:#2064b4}.table-panel small{display:block;color:#909399;white-space:nowrap}@media(max-width:1400px){.filter-bar{grid-template-columns:repeat(3,minmax(180px,1fr))}.time-range{grid-column:span 2}.filter-actions{grid-column:span 1}}</style>
+<style scoped>.filter-bar{padding:12px 16px;margin-bottom:12px;background:#fff;border:1px solid var(--el-border-color-light);border-radius:8px}.filter-fields{display:grid;grid-template-columns:minmax(360px,2fr) repeat(3,minmax(160px,1fr));gap:8px}.advanced-filters{grid-template-columns:repeat(4,minmax(180px,1fr));margin-top:8px}.time-range{width:100%}.filter-actions{display:flex;justify-content:flex-end;align-items:center;gap:8px;margin-top:10px;padding-top:10px;border-top:1px solid var(--el-border-color-lighter)}.table-panel{height:calc(100vh - 245px);min-height:430px;background:#fff;border:1px solid var(--el-border-color-light);border-radius:8px;overflow:hidden}.pager{display:flex;justify-content:flex-end;align-items:center;gap:12px;margin-top:12px}.expanded{margin:0 12px 0 36px;padding:10px 18px;background:#f5f7fa;border-radius:4px}.detail-row{display:grid;grid-template-columns:100px minmax(0,1fr);gap:16px;min-height:28px;align-items:start;color:#303133}.detail-row>span{color:#73767a;text-align:right}.detail-row strong{font-weight:400;word-break:break-all}.detail-multiline>div{line-height:1.7}.pill{display:inline-block;max-width:100%;padding:3px 9px;border-radius:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pill-channel{background:#dff5f2;color:#087f73}.pill-token{background:#edf0f2;color:#303133}.pill-group{background:#fff4cc;color:#9a7200}.pill-model{background:#f1e8fb;color:#7134a3}.user-cell{display:flex;align-items:center;gap:7px}.user-cell i{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;background:#43c6b9;color:#fff;font-style:normal}.metric-pill,.stream-pill{display:inline-block;margin-right:4px;padding:2px 7px;border-radius:10px;background:#dff2dd;color:#237b34}.metric-pill.warm{background:#fff0d5;color:#a55d00}.stream-pill{background:#dfeaff;color:#2064b4}.table-panel small{display:block;color:#909399;white-space:nowrap}@media(max-width:1200px){.filter-fields,.advanced-filters{grid-template-columns:repeat(2,minmax(180px,1fr))}.time-range{grid-column:span 2}}</style>

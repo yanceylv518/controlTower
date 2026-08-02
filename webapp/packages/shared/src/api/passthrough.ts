@@ -6,5 +6,5 @@ export interface ReadonlyResponse<T> { items: T[]; configured: boolean; total: n
 const query = (params: Record<string, string | number | undefined>) => { const out = new URLSearchParams(); Object.entries(params).forEach(([key, value]) => { if (value !== undefined && value !== '') out.set(key, String(value)) }); const text = out.toString(); return text ? `?${text}` : '' }
 export const passthroughApi = (client: ApiClient) => ({
   users: (params: { site?: string; user_ids?: string; keyword?: string; status?: number; limit?: number; offset?: number }) => client.request<ReadonlyResponse<ReadonlyUser>>(`/api/dashboard/passthrough/users${query(params)}`),
-  logs: (params: { site?: string; user_ids?: string; start_time?: string; end_time?: string; token_name?: string; model_name?: string; request_id?: string; channel_id?: number; log_type?: number; limit?: number; offset?: number }) => client.request<ReadonlyResponse<ReadonlyLog>>(`/api/dashboard/passthrough/logs${query(params)}`),
+  logs: (params: { site?: string; user_ids?: string; username?: string; group?: string; start_time?: string; end_time?: string; token_name?: string; model_name?: string; request_id?: string; channel_id?: number; log_type?: number; limit?: number; offset?: number }) => client.request<ReadonlyResponse<ReadonlyLog>>(`/api/dashboard/passthrough/logs${query(params)}`),
 })

@@ -422,7 +422,7 @@ func (h *PassthroughHandler) Logs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	filters := ""
-	for _, spec := range []struct{ param, column string }{{"token_name", "token_name"}, {"model_name", "model_name"}, {"request_id", "request_id"}} {
+	for _, spec := range []struct{ param, column string }{{"token_name", "token_name"}, {"username", "username"}, {"group", "`group`"}, {"model_name", "model_name"}, {"request_id", "request_id"}} {
 		if value := strings.TrimSpace(r.URL.Query().Get(spec.param)); value != "" {
 			filters += " AND " + spec.column + " LIKE ?"
 			args = append(args, "%"+value+"%")
