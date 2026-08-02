@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import AppShell from '../components/AppShell.vue'
 import AsyncPanel from '../components/AsyncPanel.vue'
 import { passthrough } from '../api'
@@ -7,10 +7,10 @@ import { useAuthStore } from '../stores/auth'
 import { useFiltersStore } from '../stores/filters'
 import { useAsyncData } from '../composables/useAsyncData'
 const auth=useAuthStore(), filters=useFiltersStore(), userIDs=ref('')
-await filters.loadInstances()
 const params=computed(()=>({site:filters.site_id,user_ids:auth.user?.role==='admin'?userIDs.value:undefined,limit:200}))
 const state=useAsyncData(()=>passthrough.users(params.value))
-onMounted(() => { if (auth.user?.role === 'viewer') void state.reload() })
+onMounted(async () => { await filters.loadInstances(); void state.reload() })
+watch(() => filters.site_id, () => void state.reload())
 </script>
 <template><AppShell title="用户资料（只读）">
   <template #tools><el-input v-if="auth.user?.role==='admin'" v-model="userIDs" placeholder="用户 ID，多个用逗号分隔" style="width:260px"/><el-button @click="state.reload">查询</el-button></template>

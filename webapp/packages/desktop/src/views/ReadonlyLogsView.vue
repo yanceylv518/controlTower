@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import AppShell from '../components/AppShell.vue'
 import AsyncPanel from '../components/AsyncPanel.vue'
 import { passthrough } from '../api'
@@ -7,12 +7,14 @@ import { useAuthStore } from '../stores/auth'
 import { useFiltersStore } from '../stores/filters'
 import { useAsyncData } from '../composables/useAsyncData'
 const auth=useAuthStore(),filters=useFiltersStore(),userIDs=ref(''),offset=ref(0),limit=50
-await filters.loadInstances()
 const end=ref(new Date()),start=ref(new Date(Date.now()-24*3600_000))
 const params=computed(()=>({site:filters.site_id,user_ids:auth.user?.role==='admin'?userIDs.value:undefined,start_time:start.value.toISOString(),end_time:end.value.toISOString(),limit,offset:offset.value}))
 const state=useAsyncData(()=>passthrough.logs(params.value))
 const search=()=>{offset.value=0;void state.reload()};const page=(next:number)=>{offset.value=Math.max(0,next);void state.reload()}
-onMounted(() => { if (auth.user?.role === 'viewer') void state.reload() })
+// No top-level await: an async setup component needs a <Suspense> boundary
+// this app does not have, and would silently render a blank page.
+onMounted(async () => { await filters.loadInstances(); void state.reload() })
+watch(() => filters.site_id, () => { offset.value = 0; void state.reload() })
 </script>
 <template><AppShell title="使用日志（只读）">
   <template #tools><el-input v-if="auth.user?.role==='admin'" v-model="userIDs" placeholder="用户 ID，多个用逗号分隔" style="width:240px"/><el-date-picker v-model="start" type="datetime" placeholder="开始时间"/><el-date-picker v-model="end" type="datetime" placeholder="结束时间"/><el-button type="primary" @click="search">查询</el-button></template>
