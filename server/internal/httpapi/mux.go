@@ -133,6 +133,10 @@ func NewMux(options Options) *http.ServeMux {
 		billingRollup := billing.RollupService{Source: dashboard.BillingReadonlySource{Handler: passthrough}, Store: billingStore}
 		mux.Handle("POST /api/dashboard/billing/backfill", protect(dashboard.BillingBackfillHandler{Rollup: billingRollup, Audit: options.Store}))
 	}
+	if billingConfigStore, ok := any(options.Store).(dashboard.BillingConfigStore); ok {
+		mux.Handle("/api/dashboard/billing/prices", protect(dashboard.BillingPricesHandler{Store: billingConfigStore}))
+		mux.Handle("/api/dashboard/billing/group-ratios", protect(dashboard.BillingGroupRatiosHandler{Store: billingConfigStore}))
+	}
 
 	if options.WebAppDir == "" {
 		options.WebAppDir = options.NextWebDir // Backward-compatible option name for one release cycle.

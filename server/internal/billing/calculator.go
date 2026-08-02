@@ -12,9 +12,31 @@ const tokensPerMillion int64 = 1_000_000
 
 type Usage struct{ PromptTokens, CompletionTokens, CacheTokens int64 }
 type Price struct {
-	EffectiveFrom        time.Time
-	TierFrom             int64
-	Input, Output, Cache string
+	EffectiveFrom time.Time `json:"effective_from"`
+	TierFrom      int64     `json:"tier_from"`
+	Input         string    `json:"input_price"`
+	Output        string    `json:"output_price"`
+	Cache         string    `json:"cache_price"`
+}
+
+func ValidateRatio(value string) error {
+	ratio, err := decimalRat(value)
+	if err != nil {
+		return err
+	}
+	if ratio.Cmp(big.NewRat(10000, 1)) > 0 {
+		return errors.New("ratio must not exceed 10000")
+	}
+	return nil
+}
+
+func ValidatePrice(price Price) error {
+	for _, value := range []string{price.Input, price.Output, price.Cache} {
+		if _, err := decimalRat(value); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 type PriceRecord struct {
