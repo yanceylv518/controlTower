@@ -1,6 +1,6 @@
 # Codex 任务：v3.1-B1——受限管理员账号模型与权限中间件
 
-背景：docs/design-v3.1-scoped-admin.md §1/§2。本批只建账号与权限骨架，直连与账单在 B2/B3。**依赖：rc20 基线。**
+背景：docs/design-v3.1-scoped-admin.md §1/§2。本批只建账号与权限骨架，直连与账单在 B2/B3。**依赖：rc21 基线（7c6a0bd 之后）。**
 
 **文末自查清单粘贴进 commit message；禁止 force push；Linux 跑全量测试 + `pnpm typecheck`。**
 
