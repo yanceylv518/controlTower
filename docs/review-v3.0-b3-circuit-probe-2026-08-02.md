@@ -18,6 +18,10 @@
 - **Commit 2 未交付**：值班引擎死代码、Policy 旧字段、adopt/dismiss、旧 TuningView.vue、页面全局模式隐藏——批次明确的第二 commit 整体缺失，**需补交后 v3.0 才算完结、方可打 rc20**。
 - 交付 commit 又未贴自查清单（连续第三次，记档）。
 
+## Commit 2 补交验收（2026-08-02 追加，9343e0c）
+
+结论：**通过，零缺陷**（-2552 行）。值班符号（evaluateActive/evaluateDynamicWeights/findBackup/scheduleTrials/criteriaFor 等）非测试代码零命中；duty_engine_test 与旧 TuningView.vue 删除；adopt/dismiss 与 ladders 路由移除；Policy 保留 window/min_samples/sparse/dispatch_modes/continuous、旧字段解码容忍；哨兵简化为按模型 auto 开关；tuning_dispatch_states 表与历史保留；验收方全部修正与回归测试（含 K_error 恢复下限）存活。全量测试 + typecheck 绿。**v3.0 全系列就此完结。**
+
 ## 部署提示
 
-rc20 等 Commit 2 补交验收后再打。上线开启顺序不变：全模型 observe 观察因子与熔断事件（observe 只记不动作）→ 逐模型开 auto。
+rc20 可打。上线开启顺序：先一键同步基础值 → 全模型 observe 观察因子与熔断事件 → 逐模型开 auto。部署时确认生产 new-api 版本的渠道测试接口路径与 agent channelcontrol.Probe 一致（交付说明缺失，记档）。
