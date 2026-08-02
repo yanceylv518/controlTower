@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { reactive, ref } from "vue";
+import { computed, reactive, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { ApiError, type InstanceItem } from "@ct/shared";
 import { client, dashboard } from "../api";
@@ -22,6 +22,7 @@ const readonlyTarget = ref<InstanceItem>();
 const readonlyDSN = ref("");
 type ReadonlyInstanceItem = InstanceItem & { logs_readonly_configured: boolean };
 const state = useAsyncData(async () => (await dashboard.instances()).items as ReadonlyInstanceItem[]);
+const activeInstances = computed(() => state.data.value?.filter(item => item.enabled) || []);
 
 function message(error: unknown) {
   if (error instanceof ApiError) {
@@ -84,6 +85,12 @@ function configureReadonly(item: InstanceItem) {
   readonlyDSN.value = "";
   readonlyOpen.value = true;
 }
+function siteID(item: InstanceItem) {
+  return item.site_id || item.instance_id;
+}
+function isFirstSiteRow(item: InstanceItem) {
+  return activeInstances.value.find(candidate => siteID(candidate) === siteID(item))?.instance_id === item.instance_id;
+}
 async function saveReadonly() {
   if (!readonlyTarget.value) return;
   try {
@@ -104,16 +111,16 @@ useAutoRefresh(state.reload);
 <template>
   <AppShell title="实例管理">
     <template #tools><el-button type="primary" @click="createOpen = true">创建实例</el-button></template>
-    <AsyncPanel :loading="state.loading.value" :error="state.error.value" :empty="!state.data.value?.length" @retry="state.reload">
-      <el-table :data="state.data.value" table-layout="fixed">
+    <AsyncPanel :loading="state.loading.value" :error="state.error.value" :empty="!activeInstances.length" @retry="state.reload">
+      <el-table :data="activeInstances" table-layout="fixed">
         <el-table-column prop="instance_id" label="实例 ID" min-width="160" show-overflow-tooltip />
         <el-table-column prop="site_id" label="站点" min-width="150" show-overflow-tooltip />
         <el-table-column prop="name" label="名称" min-width="150" show-overflow-tooltip />
         <el-table-column label="启用" width="90"><template #default="scope"><el-switch :model-value="scope.row.enabled" @change="toggle(scope.row, Boolean($event))" /></template></el-table-column>
         <el-table-column prop="created_at" label="创建时间" width="180"><template #default="scope">{{ new Date(scope.row.created_at).toLocaleString() }}</template></el-table-column>
         <el-table-column label="Agent" min-width="230"><template #default="scope"><div v-for="agent in scope.row.agents" :key="agent.id" class="agent-line"><StatusTag :value="agent.online ? 'online' : 'offline'" /><span>{{ agent.version }} · 积压 {{ agent.backlog_estimate }}</span></div><span v-if="!scope.row.agents.length">—</span></template></el-table-column>
-        <el-table-column label="只读查询" width="170"><template #default="scope"><div class="status-line"><StatusTag :value="scope.row.logs_readonly_configured ? 'online' : 'offline'" /><span>{{ scope.row.logs_readonly_configured ? '已配置' : '未配置' }}</span></div></template></el-table-column>
-        <el-table-column label="操作" width="250" align="right" header-align="right"><template #default="scope"><div class="action-line"><el-button size="small" @click="rotate(scope.row)">轮换 Token</el-button><el-button size="small" @click="configureReadonly(scope.row)">配置只读连接</el-button></div></template></el-table-column>
+        <el-table-column label="只读查询" width="170"><template #default="scope"><div v-if="isFirstSiteRow(scope.row)" class="status-line"><StatusTag :value="scope.row.logs_readonly_configured ? 'online' : 'offline'" /><span>{{ scope.row.logs_readonly_configured ? '已配置' : '未配置' }}</span></div><span v-else class="shared-hint">随站点共享</span></template></el-table-column>
+        <el-table-column label="操作" width="290" align="right" header-align="right"><template #default="scope"><div class="action-line"><el-button size="small" @click="rotate(scope.row)">轮换 Token</el-button><el-button v-if="isFirstSiteRow(scope.row)" size="small" @click="configureReadonly(scope.row)">配置站点连接</el-button></div></template></el-table-column>
       </el-table>
     </AsyncPanel>
     <el-dialog v-model="createOpen" title="创建实例" width="480px">
@@ -124,7 +131,7 @@ useAutoRefresh(state.reload);
       </el-form>
       <template #footer><el-button @click="createOpen = false">取消</el-button><el-button type="primary" @click="create">创建</el-button></template>
     </el-dialog>
-    <el-dialog v-model="readonlyOpen" title="配置站点只读查询" width="620px">
+    <el-dialog v-model="readonlyOpen" :title="`配置站点只读查询：${readonlyTarget ? siteID(readonlyTarget) : ''}`" width="620px">
       <el-alert type="warning" :closable="false" title="请使用仅允许 SELECT users、logs 表的 new-api 数据库账号。连接串只会加密保存，不会返回或展示。" />
       <el-form label-position="top" style="margin-top: 16px">
         <el-form-item label="MySQL DSN">
@@ -148,4 +155,5 @@ useAutoRefresh(state.reload);
   white-space: nowrap;
 }
 .action-line { justify-content: flex-end; gap: 8px; }
+.shared-hint { color: var(--ct-ink-3); font-size: 12px; }
 </style>
