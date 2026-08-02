@@ -136,6 +136,7 @@ func NewMux(options Options) *http.ServeMux {
 	if billingConfigStore, ok := any(options.Store).(dashboard.BillingConfigStore); ok {
 		mux.Handle("/api/dashboard/billing/prices", protect(dashboard.BillingPricesHandler{Store: billingConfigStore}))
 		mux.Handle("/api/dashboard/billing/group-ratios", protect(dashboard.BillingGroupRatiosHandler{Store: billingConfigStore}))
+		mux.Handle("GET /api/dashboard/billing/import-prices", protect(dashboard.BillingImportPricesHandler{Source: dashboard.BillingReadonlySource{Handler: passthrough}}))
 	}
 	if billingSummaryStore, ok := any(options.Store).(dashboard.BillingSummaryStore); ok {
 		mux.Handle("GET /api/dashboard/billing/summary", protect(dashboard.BillingSummaryHandler{Store: billingSummaryStore}))
