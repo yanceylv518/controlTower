@@ -101,6 +101,13 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 				}
 				probeMultiplier := successRatio * probeSpeed
 				if probeMultiplier >= p.RecoveryThreshold {
+					// The probes just proved the channel serves again, but KError
+					// still carries the crushed pre-circuit value. Without a floor
+					// the first normal cycle after soft start recomputes
+					// M ≈ KError < circuit threshold and re-opens the circuit in a
+					// probe/recover loop. Ten successful probes are success
+					// evidence; floor the decay state at the recovery bar.
+					state.KError = math.Max(state.KError, p.RecoveryThreshold)
 					state.Phase, state.SoftStartPending = "soft_start", true
 					state.Multiplier = p.SoftStartMultiplier
 					state.ProposedWeight = max(int64(1), int64(math.Round(float64(base.BaseWeight)*state.Multiplier)))
