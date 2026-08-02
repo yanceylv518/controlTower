@@ -108,6 +108,8 @@ func (h BillingSummaryHandler) writeResponse(w http.ResponseWriter, r *http.Requ
 		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 		w.Header().Set("Content-Disposition", `attachment; filename="billing-summary.csv"`)
 		_, _ = w.Write([]byte{0xef, 0xbb, 0xbf})
+		// UTF-8 BOM so Excel opens the file with correct CJK encoding.
+		_, _ = w.Write([]byte("\xef\xbb\xbf"))
 		writer := csv.NewWriter(w)
 		_ = writer.Write([]string{"用户ID", "用户名", "请求数", "输入Token", "输出Token", "缓存Token", "金额", "余额", "未定价模型", "价格来源"})
 		for _, item := range items {

@@ -73,6 +73,8 @@ func writeBillingDetailCSV(w http.ResponseWriter, items []billing.DetailItem) {
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 	w.Header().Set("Content-Disposition", `attachment; filename="billing-detail.csv"`)
 	_, _ = w.Write([]byte{0xef, 0xbb, 0xbf})
+	// UTF-8 BOM so Excel opens the file with correct CJK encoding.
+	_, _ = w.Write([]byte("\xef\xbb\xbf"))
 	writer := csv.NewWriter(w)
 	_ = writer.Write([]string{"日期", "模型", "分组", "阶梯起点", "请求数", "输入Token", "输出Token", "缓存Token", "金额", "价格来源", "未定价"})
 	for _, item := range items {

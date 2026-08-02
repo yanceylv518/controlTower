@@ -250,3 +250,11 @@ Instance tokens are stored only as `SHA-256(pepper + token)` hashes. A token may
 - `GET /api/dashboard/tuning/report?instance_id=&days=7|30` reports adoption and hit rates using only `demote` and `trial`.
 
 命令状态机固定为 `pending → delivered → succeeded|failed`，或 `pending → expired`。缺少人工确认返回 `400 confirm_required`，实例不存在返回 `404 instance_not_found`，空更新返回 `400 invalid_command`。
+
+## v3.1-B3 User Billing
+
+- `GET /api/dashboard/billing/summary?instance_id=&month=&page=&page_size=&search=&sort=&format=` monthly per-user consumption (amount via CT prices with newapi-ratio fallback, `price_sources`, unpriced model list, quota cross-check, balance snapshot). Viewer requests are pinned to their scope site and user set by the session gate. `format=csv` streams a BOM-prefixed CSV. Results are cached until the next daily rollup or price/ratio change.
+- `GET /api/dashboard/billing/detail?instance_id=&user_id=&month=&format=` per-user model/tier/day breakdown; same scope rules; CSV export supported.
+- `GET /api/dashboard/billing/import-prices?instance_id=` converts the site's current newapi ModelRatio config into editable CT price rows (form backfill only, saving goes through the prices API).
+- `GET|PUT /api/dashboard/billing/prices?instance_id=` and `GET|PUT /api/dashboard/billing/group-ratios?instance_id=` admin-only, effective-dated tiered price schedules and group ratios; changes are audited and invalidate the summary cache.
+- `POST /api/dashboard/billing/backfill {instance_id, from, to}` admin-only, day-segmented and rate-limited, audited.
