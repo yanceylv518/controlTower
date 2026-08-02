@@ -17,7 +17,7 @@ func setup(t *testing.T) (*Manager, *ingest.MemoryStore) {
 		t.Fatal(e)
 	}
 	n := time.Now().UTC()
-	_ = s.CreateUser(storage.User{Username: "admin", PasswordHash: h, Role: "admin", CreatedAt: n, UpdatedAt: n})
+	_ = s.CreateUser(storage.User{Username: "admin", PasswordHash: h, Role: "admin", Enabled: true, CreatedAt: n, UpdatedAt: n})
 	return NewManager(s, time.Hour), s
 }
 func TestPasswordHash(t *testing.T) {

@@ -69,7 +69,7 @@ func run() error {
 			return e
 		}
 		now := time.Now().UTC()
-		if e = store.CreateUser(storage.User{Username: cfg.AdminUsername, PasswordHash: hash, Role: "admin", CreatedAt: now, UpdatedAt: now}); e != nil {
+		if e = store.CreateUser(storage.User{Username: cfg.AdminUsername, PasswordHash: hash, Role: "admin", Enabled: true, CreatedAt: now, UpdatedAt: now}); e != nil {
 			return e
 		}
 		log.Printf("initial admin created; change the password after first login")

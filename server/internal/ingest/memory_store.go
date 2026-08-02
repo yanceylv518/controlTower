@@ -204,6 +204,24 @@ func (s *MemoryStore) CreateUser(u storage.User) error {
 	s.users[u.ID] = u
 	return nil
 }
+func (s *MemoryStore) ListUsers() ([]storage.User, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	items := make([]storage.User, 0, len(s.users))
+	for _, u := range s.users {
+		items = append(items, u)
+	}
+	return items, nil
+}
+func (s *MemoryStore) UpdateUser(u storage.User) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.users[u.ID]; !ok {
+		return nil
+	}
+	s.users[u.ID] = u
+	return nil
+}
 func (s *MemoryStore) UpdateUserPassword(id int64, h string, n time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

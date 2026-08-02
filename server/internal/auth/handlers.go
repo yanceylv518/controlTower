@@ -7,16 +7,25 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
 type actorKey struct{}
+type userKey struct{}
 
 func Actor(r *http.Request) string { v, _ := r.Context().Value(actorKey{}).(string); return v }
 func withActor(r *http.Request, v string) *http.Request {
 	return r.WithContext(context.WithValue(r.Context(), actorKey{}, v))
+}
+func CurrentUser(r *http.Request) (storage.User, bool) {
+	v, ok := r.Context().Value(userKey{}).(storage.User)
+	return v, ok
+}
+func withUser(r *http.Request, u storage.User) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), userKey{}, u))
 }
 
 type Handlers struct {
@@ -99,7 +108,7 @@ func (h Handlers) Login(w http.ResponseWriter, r *http.Request) {
 	}
 	// Secure is intentionally not set: TLS terminates at the reverse proxy.
 	http.SetCookie(w, &http.Cookie{Name: "ct_session", Value: s.ID, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: int(h.M.TTL().Seconds())})
-	write(w, 200, map[string]string{"username": u.Username, "role": u.Role})
+	write(w, 200, userResponse(u))
 }
 func (h Handlers) Logout(w http.ResponseWriter, r *http.Request) {
 	if h.M == nil {
@@ -129,7 +138,96 @@ func (h Handlers) Me(w http.ResponseWriter, r *http.Request) {
 		write(w, 401, map[string]string{"error": "unauthorized"})
 		return
 	}
-	write(w, 200, map[string]string{"username": u.Username, "role": u.Role})
+	write(w, 200, userResponse(u))
+}
+
+type userResponseDTO struct {
+	ID           int64   `json:"id,omitempty"`
+	Username     string  `json:"username"`
+	Role         string  `json:"role"`
+	ScopeSite    string  `json:"scope_site"`
+	ScopeUserIDs []int64 `json:"scope_user_ids"`
+	Enabled      bool    `json:"enabled"`
+}
+
+func userResponse(u storage.User) userResponseDTO {
+	return userResponseDTO{u.ID, u.Username, u.Role, u.ScopeSite, u.ScopeUserIDs, u.Enabled}
+}
+
+func (h Handlers) Users(w http.ResponseWriter, r *http.Request) {
+	u, _, ok := h.current(r)
+	if !ok {
+		write(w, 401, map[string]string{"error": "unauthorized"})
+		return
+	}
+	if u.Role != "admin" {
+		write(w, 403, map[string]string{"error": "forbidden"})
+		return
+	}
+	if r.Method == http.MethodGet {
+		items, err := h.M.ListUsers()
+		if err != nil {
+			write(w, 500, map[string]string{"error": "query_failed"})
+			return
+		}
+		out := make([]userResponseDTO, 0, len(items))
+		for _, item := range items {
+			out = append(out, userResponse(item))
+		}
+		write(w, 200, map[string]any{"items": out})
+		return
+	}
+	if r.Method == http.MethodPost {
+		if r.Header.Get("X-Requested-With") != "XMLHttpRequest" {
+			write(w, 403, map[string]string{"error": "csrf"})
+			return
+		}
+		var q struct {
+			Username     string  `json:"username"`
+			Password     string  `json:"password"`
+			Role         string  `json:"role"`
+			ScopeSite    string  `json:"scope_site"`
+			ScopeUserIDs []int64 `json:"scope_user_ids"`
+		}
+		if json.NewDecoder(r.Body).Decode(&q) != nil || h.M.CreateScopedUser(q.Username, q.Password, q.Role, q.ScopeSite, q.ScopeUserIDs, time.Now().UTC()) != nil {
+			write(w, 400, map[string]string{"error": "invalid_user"})
+			return
+		}
+		write(w, 201, map[string]bool{"ok": true})
+		return
+	}
+	write(w, 405, map[string]string{"error": "method_not_allowed"})
+}
+func (h Handlers) User(w http.ResponseWriter, r *http.Request) {
+	u, _, ok := h.current(r)
+	if !ok {
+		write(w, 401, map[string]string{"error": "unauthorized"})
+		return
+	}
+	if u.Role != "admin" {
+		write(w, 403, map[string]string{"error": "forbidden"})
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id == u.ID {
+		write(w, 400, map[string]string{"error": "invalid_user"})
+		return
+	}
+	if r.Header.Get("X-Requested-With") != "XMLHttpRequest" {
+		write(w, 403, map[string]string{"error": "csrf"})
+		return
+	}
+	var q struct {
+		Role         string  `json:"role"`
+		ScopeSite    string  `json:"scope_site"`
+		ScopeUserIDs []int64 `json:"scope_user_ids"`
+		Enabled      bool    `json:"enabled"`
+	}
+	if r.Method != http.MethodPut || json.NewDecoder(r.Body).Decode(&q) != nil || h.M.UpdateScopedUser(id, q.Role, q.ScopeSite, q.ScopeUserIDs, q.Enabled, time.Now().UTC()) != nil {
+		write(w, 400, map[string]string{"error": "invalid_user"})
+		return
+	}
+	write(w, 200, map[string]bool{"ok": true})
 }
 func (h Handlers) Password(w http.ResponseWriter, r *http.Request) {
 	u, c, ok := h.current(r)
@@ -157,7 +255,21 @@ func RequireSessionOrToken(m *Manager, token string, next http.Handler) http.Han
 					write(w, 403, map[string]string{"error": "csrf"})
 					return
 				}
-				next.ServeHTTP(w, withActor(r, u.Username))
+				if u.Role == "viewer" {
+					if r.Method != http.MethodGet || (r.URL.Path != "/api/dashboard/metrics" && r.URL.Path != "/api/dashboard/metric-history" && r.URL.Path != "/api/dashboard/instances") {
+						write(w, 403, map[string]string{"error": "forbidden"})
+						return
+					}
+					if r.URL.Path != "/api/dashboard/instances" && !strings.HasPrefix(r.URL.Query().Get("dimension_type"), "instance_user") {
+						write(w, 403, map[string]string{"error": "forbidden"})
+						return
+					}
+					q := r.URL.Query()
+					q.Set("site", u.ScopeSite)
+					q.Del("instance_id")
+					r.URL.RawQuery = q.Encode()
+				}
+				next.ServeHTTP(w, withUser(withActor(r, u.Username), u))
 				return
 			}
 		}

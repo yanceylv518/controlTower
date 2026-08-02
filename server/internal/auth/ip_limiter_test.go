@@ -15,7 +15,7 @@ func TestLoginIPLimiterIndependentAndWindow(t *testing.T) {
 	s := ingest.NewMemoryStore()
 	now := time.Now().UTC()
 	hash, _ := HashPassword("password1")
-	_ = s.CreateUser(storage.User{Username: "admin", PasswordHash: hash, Role: "admin", CreatedAt: now, UpdatedAt: now})
+	_ = s.CreateUser(storage.User{Username: "admin", PasswordHash: hash, Role: "admin", Enabled: true, CreatedAt: now, UpdatedAt: now})
 	m := NewManager(s, time.Hour)
 	limiter := NewIPLimiter()
 	clock := now

@@ -10,6 +10,7 @@ import (
 
 	"controltower/internal/latencyhist"
 	"controltower/server/internal/aggregator"
+	ctauth "controltower/server/internal/auth"
 	"controltower/server/internal/storage"
 )
 
@@ -119,6 +120,7 @@ func (h Handler) HandleMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	items := h.filterMetricItemsByInstances(metrics, query.Get("dimension_type"), query.Get("dimension_key"), instanceIDs)
+	items = filterScopedMetricItems(r, items)
 	writeDashboardJSON(w, http.StatusOK, MetricListResponse{Items: items})
 }
 
@@ -208,7 +210,7 @@ func (h Handler) HandleMetricHistory(w http.ResponseWriter, r *http.Request) {
 				merged = append(merged, metric)
 			}
 			sort.Slice(merged, func(i, j int) bool { return merged[i].DimensionKey < merged[j].DimensionKey })
-			writeDashboardJSON(w, http.StatusOK, MetricListResponse{Items: h.filterMetricItems(merged, dimensionType, "", query.Get("instance_id"))})
+			writeDashboardJSON(w, http.StatusOK, MetricListResponse{Items: filterScopedMetricItems(r, h.filterMetricItems(merged, dimensionType, "", query.Get("instance_id")))})
 			return
 		}
 		merged := metrics[0]
@@ -216,12 +218,36 @@ func (h Handler) HandleMetricHistory(w http.ResponseWriter, r *http.Request) {
 			merged = aggregator.MergeMetric(merged, metric)
 		}
 		merged.BucketTime = time.Now().UTC()
-		writeDashboardJSON(w, http.StatusOK, MetricListResponse{Items: h.filterMetricItems([]aggregator.Metric{merged}, dimensionType, dimensionKey, query.Get("instance_id"))})
+		writeDashboardJSON(w, http.StatusOK, MetricListResponse{Items: filterScopedMetricItems(r, h.filterMetricItems([]aggregator.Metric{merged}, dimensionType, dimensionKey, query.Get("instance_id")))})
 		return
 	}
 	items := h.filterMetricItems(metrics, "", "", query.Get("instance_id"))
+	items = filterScopedMetricItems(r, items)
 	sort.Slice(items, func(i, j int) bool { return items[i].BucketTime.Before(items[j].BucketTime) })
 	writeDashboardJSON(w, http.StatusOK, MetricListResponse{Items: items})
+}
+
+func filterScopedMetricItems(r *http.Request, items []MetricItem) []MetricItem {
+	u, ok := ctauth.CurrentUser(r)
+	if !ok || u.Role != "viewer" {
+		return items
+	}
+	allowed := make(map[int64]bool, len(u.ScopeUserIDs))
+	for _, id := range u.ScopeUserIDs {
+		allowed[id] = true
+	}
+	out := items[:0]
+	for _, item := range items {
+		parts := strings.Split(item.DimensionKey, ":")
+		if len(parts) == 0 {
+			continue
+		}
+		id, err := strconv.ParseInt(parts[len(parts)-1], 10, 64)
+		if err == nil && allowed[id] {
+			out = append(out, item)
+		}
+	}
+	return out
 }
 
 func filterMetricItems(metrics []aggregator.Metric, dimensionType string, dimensionKey string, instanceID ...string) []MetricItem {

@@ -50,6 +50,7 @@ const nav = [
       ["/audits", "操作审计", Operation],
       ["/tuning", "调权中心", TrendCharts],
       ["/settings", "设置", SetUp],
+      ["/access-users", "访问账号", User],
     ],
   },
 ] as const;
@@ -67,6 +68,7 @@ async function logout() {
           <div class="nav-group">{{ section.group }}</div>
           <router-link
             v-for="item in section.items"
+            v-show="auth.user?.role === 'admin' || item[0] === '/customers'"
             :key="item[0]"
             :to="item[0]"
           >

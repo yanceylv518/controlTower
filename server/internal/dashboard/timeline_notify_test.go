@@ -47,7 +47,7 @@ func TestAlertActionActorFromSession(t *testing.T) {
 	s := ingest.NewMemoryStore()
 	n := time.Now()
 	hash, _ := ctauth.HashPassword("password1")
-	_ = s.CreateUser(storage.User{Username: "admin", PasswordHash: hash, Role: "admin", CreatedAt: n, UpdatedAt: n})
+	_ = s.CreateUser(storage.User{Username: "admin", PasswordHash: hash, Role: "admin", Enabled: true, CreatedAt: n, UpdatedAt: n})
 	m := ctauth.NewManager(s, time.Hour)
 	_, session, e := m.Login("admin", "password1", n)
 	if e != nil {

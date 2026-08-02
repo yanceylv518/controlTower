@@ -4,13 +4,14 @@ import (
 	"context"
 	"controltower/server/internal/storage"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"time"
 )
 
 func (s Store) UserByUsername(name string) (storage.User, bool, error) {
 	var u storage.User
-	err := s.db.QueryRowContext(context.Background(), "SELECT id,username,password_hash,role,created_at,updated_at FROM users WHERE username=?", name).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.CreatedAt, &u.UpdatedAt)
+	err := scanUser(s.db.QueryRowContext(context.Background(), "SELECT id,username,password_hash,role,scope_site,scope_user_ids,enabled,created_at,updated_at FROM users WHERE username=?", name), &u)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return u, false, nil
@@ -21,7 +22,7 @@ func (s Store) UserByUsername(name string) (storage.User, bool, error) {
 }
 func (s Store) UserByID(id int64) (storage.User, bool, error) {
 	var u storage.User
-	err := s.db.QueryRow("SELECT id,username,password_hash,role,created_at,updated_at FROM users WHERE id=?", id).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.CreatedAt, &u.UpdatedAt)
+	err := scanUser(s.db.QueryRow("SELECT id,username,password_hash,role,scope_site,scope_user_ids,enabled,created_at,updated_at FROM users WHERE id=?", id), &u)
 	if errors.Is(err, sql.ErrNoRows) {
 		return u, false, nil
 	}
@@ -31,11 +32,46 @@ func (s Store) UserByID(id int64) (storage.User, bool, error) {
 	return u, true, nil
 }
 func (s Store) CreateUser(u storage.User) error {
-	r, e := s.db.Exec("INSERT INTO users(username,password_hash,role,created_at,updated_at) VALUES(?,?,?,?,?)", u.Username, u.PasswordHash, u.Role, u.CreatedAt, u.UpdatedAt)
+	scope, _ := json.Marshal(u.ScopeUserIDs)
+	r, e := s.db.Exec("INSERT INTO users(username,password_hash,role,scope_site,scope_user_ids,enabled,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)", u.Username, u.PasswordHash, u.Role, u.ScopeSite, scope, u.Enabled, u.CreatedAt, u.UpdatedAt)
 	if e == nil && u.ID == 0 {
 		_, _ = r.LastInsertId()
 	}
 	return e
+}
+
+type rowScanner interface{ Scan(...any) error }
+
+func scanUser(row rowScanner, u *storage.User) error {
+	var scope []byte
+	if err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.ScopeSite, &scope, &u.Enabled, &u.CreatedAt, &u.UpdatedAt); err != nil {
+		return err
+	}
+	if len(scope) > 0 {
+		_ = json.Unmarshal(scope, &u.ScopeUserIDs)
+	}
+	return nil
+}
+func (s Store) ListUsers() ([]storage.User, error) {
+	rows, err := s.db.Query("SELECT id,username,password_hash,role,scope_site,scope_user_ids,enabled,created_at,updated_at FROM users ORDER BY id")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []storage.User{}
+	for rows.Next() {
+		var u storage.User
+		if err = scanUser(rows, &u); err != nil {
+			return nil, err
+		}
+		items = append(items, u)
+	}
+	return items, rows.Err()
+}
+func (s Store) UpdateUser(u storage.User) error {
+	scope, _ := json.Marshal(u.ScopeUserIDs)
+	_, err := s.db.Exec("UPDATE users SET role=?,scope_site=?,scope_user_ids=?,enabled=?,updated_at=? WHERE id=?", u.Role, u.ScopeSite, scope, u.Enabled, u.UpdatedAt, u.ID)
+	return err
 }
 func (s Store) UpdateUserPassword(id int64, h string, now time.Time) error {
 	_, e := s.db.Exec("UPDATE users SET password_hash=?,updated_at=? WHERE id=?", h, now, id)

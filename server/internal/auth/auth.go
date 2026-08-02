@@ -26,6 +26,8 @@ type Store interface {
 	UserByID(int64) (storage.User, bool, error)
 	CreateUser(storage.User) error
 	UpdateUserPassword(int64, string, time.Time) error
+	ListUsers() ([]storage.User, error)
+	UpdateUser(storage.User) error
 	CountUsers() (int, error)
 	CreateSession(storage.Session) error
 	SessionByID(string) (storage.Session, bool, error)
@@ -89,7 +91,7 @@ func (m *Manager) Login(name, p string, now time.Time) (storage.User, storage.Se
 	if e != nil {
 		return u, storage.Session{}, e
 	}
-	if !ok || !VerifyPassword(u.PasswordHash, p) {
+	if !ok || !u.Enabled || !VerifyPassword(u.PasswordHash, p) {
 		m.mu.Lock()
 		a = m.attempts[name]
 		a.failures++
@@ -117,7 +119,36 @@ func (m *Manager) Validate(id string, now time.Time) (storage.User, bool) {
 		return storage.User{}, false
 	}
 	u, ok, e := m.store.UserByID(s.UserID)
-	return u, ok && e == nil
+	return u, ok && e == nil && u.Enabled
+}
+
+func (m *Manager) ListUsers() ([]storage.User, error) { return m.store.ListUsers() }
+func (m *Manager) CreateScopedUser(username, password, role, site string, userIDs []int64, now time.Time) error {
+	if strings.TrimSpace(username) == "" || len(password) < 8 || (role != "admin" && role != "viewer") {
+		return ErrInvalid
+	}
+	if role == "viewer" && (strings.TrimSpace(site) == "" || len(userIDs) == 0) {
+		return ErrInvalid
+	}
+	hash, err := HashPassword(password)
+	if err != nil {
+		return err
+	}
+	return m.store.CreateUser(storage.User{Username: strings.TrimSpace(username), PasswordHash: hash, Role: role, ScopeSite: strings.TrimSpace(site), ScopeUserIDs: userIDs, Enabled: true, CreatedAt: now, UpdatedAt: now})
+}
+func (m *Manager) UpdateScopedUser(id int64, role, site string, userIDs []int64, enabled bool, now time.Time) error {
+	u, ok, err := m.store.UserByID(id)
+	if err != nil || !ok {
+		return ErrInvalid
+	}
+	if role != "admin" && role != "viewer" {
+		return ErrInvalid
+	}
+	if role == "viewer" && (strings.TrimSpace(site) == "" || len(userIDs) == 0) {
+		return ErrInvalid
+	}
+	u.Role, u.ScopeSite, u.ScopeUserIDs, u.Enabled, u.UpdatedAt = role, strings.TrimSpace(site), userIDs, enabled, now
+	return m.store.UpdateUser(u)
 }
 func (m *Manager) Logout(id string) error { return m.store.DeleteSession(id) }
 func (m *Manager) ChangePassword(id int64, old, n string, now time.Time) error {

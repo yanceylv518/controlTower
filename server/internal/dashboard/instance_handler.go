@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	ctauth "controltower/server/internal/auth"
 	"controltower/server/internal/settings"
 	"controltower/server/internal/storage"
 	"crypto/rand"
@@ -83,11 +84,18 @@ func (i InstanceHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	items := make([]InstanceItem, 0, len(v))
+	current, scoped := ctauth.CurrentUser(r)
 	for _, instance := range v {
+		if scoped && current.Role == "viewer" && siteOf(instance) != current.ScopeSite {
+			continue
+		}
 		item, e := i.item(instance)
 		if e != nil {
 			writeDashboardError(w, 500, "query_failed")
 			return
+		}
+		if scoped && current.Role == "viewer" {
+			item.Agents = []InstanceAgent{}
 		}
 		items = append(items, item)
 	}

@@ -5,6 +5,9 @@ import "time"
 type User struct {
 	ID                           int64
 	Username, PasswordHash, Role string
+	ScopeSite                    string
+	ScopeUserIDs                 []int64
+	Enabled                      bool
 	CreatedAt, UpdatedAt         time.Time
 }
 type Session struct {
