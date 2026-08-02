@@ -271,17 +271,22 @@ func RequireSessionOrToken(m *Manager, token string, next http.Handler) http.Han
 				}
 				if u.Role == "viewer" {
 					passthrough := r.URL.Path == "/api/dashboard/passthrough/users" || r.URL.Path == "/api/dashboard/passthrough/logs"
-					if r.Method != http.MethodGet || (r.URL.Path != "/api/dashboard/metrics" && r.URL.Path != "/api/dashboard/metric-history" && r.URL.Path != "/api/dashboard/instances" && !passthrough) {
+					billing := r.URL.Path == "/api/dashboard/billing/summary" || r.URL.Path == "/api/dashboard/billing/detail"
+					if r.Method != http.MethodGet || (r.URL.Path != "/api/dashboard/metrics" && r.URL.Path != "/api/dashboard/metric-history" && r.URL.Path != "/api/dashboard/instances" && !passthrough && !billing) {
 						write(w, 403, map[string]string{"error": "forbidden"})
 						return
 					}
-					if r.URL.Path != "/api/dashboard/instances" && !passthrough && !strings.HasPrefix(r.URL.Query().Get("dimension_type"), "instance_user") {
+					if r.URL.Path != "/api/dashboard/instances" && !passthrough && !billing && !strings.HasPrefix(r.URL.Query().Get("dimension_type"), "instance_user") {
 						write(w, 403, map[string]string{"error": "forbidden"})
 						return
 					}
 					q := r.URL.Query()
 					q.Set("site", u.ScopeSite)
-					q.Del("instance_id")
+					if billing {
+						q.Set("instance_id", u.ScopeSite)
+					} else {
+						q.Del("instance_id")
+					}
 					r.URL.RawQuery = q.Encode()
 				}
 				next.ServeHTTP(w, withUser(withActor(r, u.Username), u))

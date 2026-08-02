@@ -217,6 +217,9 @@ func TestViewerGateWhitelistMatrix(t *testing.T) {
 		{"GET", "/api/dashboard/metrics?dimension_type=instance_user", 200},
 		{"GET", "/api/dashboard/metric-history?dimension_type=instance_user&instance_id=spoof", 200},
 		{"GET", "/api/dashboard/instances", 200},
+		{"GET", "/api/dashboard/billing/summary?instance_id=spoof&month=2026-08", 200},
+		{"GET", "/api/dashboard/billing/detail?instance_id=spoof&user_id=7&month=2026-08", 200},
+		{"POST", "/api/dashboard/billing/summary", 403},
 		{"GET", "/api/dashboard/metrics?dimension_type=instance_channel", 403},
 		{"GET", "/api/dashboard/tuning/policy", 403},
 		{"GET", "/api/dashboard/settings", 403},
@@ -233,6 +236,10 @@ func TestViewerGateWhitelistMatrix(t *testing.T) {
 	call("GET", "/api/dashboard/metric-history?dimension_type=instance_user&instance_id=spoof&site=other")
 	if !strings.Contains(gotQuery, "site=site-a") || strings.Contains(gotQuery, "instance_id=spoof") || strings.Contains(gotQuery, "site=other") {
 		t.Fatalf("scope injection failed: %q", gotQuery)
+	}
+	call("GET", "/api/dashboard/billing/detail?instance_id=spoof&user_id=7&month=2026-08")
+	if !strings.Contains(gotQuery, "instance_id=site-a") || strings.Contains(gotQuery, "instance_id=spoof") {
+		t.Fatalf("billing scope injection failed: %q", gotQuery)
 	}
 }
 
