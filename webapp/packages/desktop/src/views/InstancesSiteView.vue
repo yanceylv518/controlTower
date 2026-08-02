@@ -105,15 +105,15 @@ useAutoRefresh(state.reload);
   <AppShell title="实例管理">
     <template #tools><el-button type="primary" @click="createOpen = true">创建实例</el-button></template>
     <AsyncPanel :loading="state.loading.value" :error="state.error.value" :empty="!state.data.value?.length" @retry="state.reload">
-      <el-table :data="state.data.value">
-        <el-table-column prop="instance_id" label="实例 ID" />
-        <el-table-column prop="site_id" label="站点" />
-        <el-table-column prop="name" label="名称" />
-        <el-table-column label="启用"><template #default="scope"><el-switch :model-value="scope.row.enabled" @change="toggle(scope.row, Boolean($event))" /></template></el-table-column>
-        <el-table-column prop="created_at" label="创建时间"><template #default="scope">{{ new Date(scope.row.created_at).toLocaleString() }}</template></el-table-column>
-        <el-table-column label="Agent"><template #default="scope"><div v-for="agent in scope.row.agents" :key="agent.id"><StatusTag :value="agent.online ? 'online' : 'offline'" /> {{ agent.version }} · 积压 {{ agent.backlog_estimate }}</div><span v-if="!scope.row.agents.length">—</span></template></el-table-column>
-        <el-table-column label="只读查询"><template #default="scope"><StatusTag :value="scope.row.logs_readonly_configured ? 'online' : 'offline'" /> {{ scope.row.logs_readonly_configured ? '已配置' : '未配置' }}</template></el-table-column>
-        <el-table-column label="操作" min-width="220"><template #default="scope"><el-button size="small" @click="rotate(scope.row)">轮换 Token</el-button><el-button size="small" @click="configureReadonly(scope.row)">配置只读连接</el-button></template></el-table-column>
+      <el-table :data="state.data.value" table-layout="fixed">
+        <el-table-column prop="instance_id" label="实例 ID" min-width="160" show-overflow-tooltip />
+        <el-table-column prop="site_id" label="站点" min-width="150" show-overflow-tooltip />
+        <el-table-column prop="name" label="名称" min-width="150" show-overflow-tooltip />
+        <el-table-column label="启用" width="90"><template #default="scope"><el-switch :model-value="scope.row.enabled" @change="toggle(scope.row, Boolean($event))" /></template></el-table-column>
+        <el-table-column prop="created_at" label="创建时间" width="180"><template #default="scope">{{ new Date(scope.row.created_at).toLocaleString() }}</template></el-table-column>
+        <el-table-column label="Agent" min-width="230"><template #default="scope"><div v-for="agent in scope.row.agents" :key="agent.id" class="agent-line"><StatusTag :value="agent.online ? 'online' : 'offline'" /><span>{{ agent.version }} · 积压 {{ agent.backlog_estimate }}</span></div><span v-if="!scope.row.agents.length">—</span></template></el-table-column>
+        <el-table-column label="只读查询" width="170"><template #default="scope"><div class="status-line"><StatusTag :value="scope.row.logs_readonly_configured ? 'online' : 'offline'" /><span>{{ scope.row.logs_readonly_configured ? '已配置' : '未配置' }}</span></div></template></el-table-column>
+        <el-table-column label="操作" width="250" align="right" header-align="right"><template #default="scope"><div class="action-line"><el-button size="small" @click="rotate(scope.row)">轮换 Token</el-button><el-button size="small" @click="configureReadonly(scope.row)">配置只读连接</el-button></div></template></el-table-column>
       </el-table>
     </AsyncPanel>
     <el-dialog v-model="createOpen" title="创建实例" width="480px">
@@ -137,3 +137,15 @@ useAutoRefresh(state.reload);
     <TokenDialog v-model="tokenOpen" :token="token" :grace-until="grace" />
   </AppShell>
 </template>
+
+<style scoped>
+.agent-line,
+.status-line,
+.action-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.action-line { justify-content: flex-end; gap: 8px; }
+</style>
