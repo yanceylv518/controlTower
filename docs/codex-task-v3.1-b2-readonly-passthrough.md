@@ -11,7 +11,7 @@
 - **日志明细接口** `GET /api/dashboard/passthrough/logs`：参数 站点/用户（viewer 强制 scope 注入，admin 可查站点内任意用户）/**时间区间（必填，缺省最近 24 小时，单次区间上限 31 天——杜绝无区间全表扫）**/分页（上限 100/页）；SQL 强制 `user_id IN (...) AND created_at BETWEEN` 走 newapi 原生用户索引（部署时 EXPLAIN 验证记入交付说明）；返回字段对齐 newapi 日志页（时间/模型/渠道名/tokens/quota/耗时/内容摘要脱敏——复用 agent 侧 redact 正则的 server 版）。
 - **用户只读接口** `GET /api/dashboard/passthrough/users`：scope 内用户的 id/用户名/显示名/余额/状态/已用额度；同过滤规则。
 - **Web**：使用日志页（viewer 主页面之一，admin 也可用）+ 用户管理页（只读列表）；两页均带站点未开通降级态。
-- 审计：viewer 的直连查询记 operation_audits（查询参数摘要）。
+- 审计：viewer 的直连查询记 operation_audits（查询参数摘要）；**同批补上 B1 遗留的 viewer 登录审计**（B1 验收记档转入的硬项）。
 
 ## 验证要求
 
