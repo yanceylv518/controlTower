@@ -25,7 +25,7 @@ func (s *tuningStub) GetPolicy(string) (tuning.PolicyRecord, bool, error) {
 	return tuning.PolicyRecord{}, false, nil
 }
 func (s *tuningStub) PutPolicy(value tuning.PolicyRecord) error { s.saved = value; return nil }
-func (s *tuningStub) ListEnabledInstances() ([]string, error)   { return nil, nil }
+func (s *tuningStub) ListEnabledSites() ([]string, error)       { return nil, nil }
 func (s *tuningStub) QueryMetrics(string, time.Time, time.Time) ([]tuning.ChannelMetric, error) {
 	return nil, nil
 }
@@ -56,8 +56,8 @@ func TestTuningPolicyDefaultValidationAndMode(t *testing.T) {
 	s := &tuningStub{}
 	h := NewHandler(nil).WithTuningStore(s)
 	rr := httptest.NewRecorder()
-	h.HandleTuningPolicy(rr, httptest.NewRequest("GET", "/api/dashboard/tuning/policy?instance_id=i", nil))
-	if rr.Code != 200 || !bytes.Contains(rr.Body.Bytes(), []byte(`"isDefault":true`)) {
+	h.HandleTuningPolicy(rr, httptest.NewRequest("GET", "/api/dashboard/tuning/policy?site_id=site-a", nil))
+	if rr.Code != 200 || !bytes.Contains(rr.Body.Bytes(), []byte(`"isDefault":true`)) || !bytes.Contains(rr.Body.Bytes(), []byte(`"site_id":"site-a"`)) {
 		t.Fatalf("default: %d %s", rr.Code, rr.Body.String())
 	}
 	bad := `{"mode":"observe","policy":{"window_minutes":0}}`

@@ -49,8 +49,8 @@ type continuousFake struct {
 func (f *continuousFake) GetPolicy(string) (PolicyRecord, bool, error) {
 	return PolicyRecord{}, false, nil
 }
-func (f *continuousFake) PutPolicy(PolicyRecord) error            { return nil }
-func (f *continuousFake) ListEnabledInstances() ([]string, error) { return nil, nil }
+func (f *continuousFake) PutPolicy(PolicyRecord) error        { return nil }
+func (f *continuousFake) ListEnabledSites() ([]string, error) { return nil, nil }
 func (f *continuousFake) QueryMetrics(string, time.Time, time.Time) ([]ChannelMetric, error) {
 	return f.metrics, nil
 }

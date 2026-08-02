@@ -11,7 +11,7 @@ import (
 type Store interface {
 	GetPolicy(string) (PolicyRecord, bool, error)
 	PutPolicy(PolicyRecord) error
-	ListEnabledInstances() ([]string, error)
+	ListEnabledSites() ([]string, error)
 	QueryMetrics(string, time.Time, time.Time) ([]ChannelMetric, error)
 	QueryRecentChannelBuckets(string, int64, time.Time, int) ([]RecentChannelBucket, error)
 	InsertRecommendation(Recommendation) error
@@ -37,9 +37,9 @@ func (e *Engine) Run(ctx context.Context) error {
 }
 
 func (e *Engine) Tick(now time.Time) {
-	ids, err := e.store.ListEnabledInstances()
+	ids, err := e.store.ListEnabledSites()
 	if err != nil {
-		log.Printf("tuning list instances failed: %v", err)
+		log.Printf("tuning list sites failed: %v", err)
 		return
 	}
 	cs, ok := e.store.(continuousStore)
@@ -57,7 +57,7 @@ func (e *Engine) Tick(now time.Time) {
 		}
 		e.runAutoSentinel(&p, now)
 		n, c := e.evaluateContinuous(id, p, now, cs)
-		log.Printf("tuning continuous evaluation instance=%s active_channels=%d writes=%d", id, c, n)
+		log.Printf("tuning continuous evaluation site=%s active_channels=%d writes=%d", id, c, n)
 	}
 }
 

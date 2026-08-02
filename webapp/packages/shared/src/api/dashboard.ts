@@ -347,7 +347,7 @@ export interface ChannelBaseValue {
   updated_at?: string; updated_by?: string;
 }
 export interface TuningPolicyResponse {
-  instance_id: string; policy: TuningPolicy; mode: "observe" | "confirm" | "auto";
+  instance_id: string; site_id: string; policy: TuningPolicy; mode: "observe" | "confirm" | "auto";
   isDefault?: boolean; updated_at?: string; updated_by?: string;
 }
 export interface TuningRecommendation {
@@ -596,20 +596,20 @@ export const dashboardApi = (client: ApiClient) => ({
     client.request<ListResponse<NginxSlowSample>>(
       `/api/dashboard/nginx-timing/slow-samples${query(params)}`,
     ),
-  tuningPolicy: (instance_id: string) =>
-    client.request<TuningPolicyResponse>(`/api/dashboard/tuning/policy${query({ instance_id })}`),
-  saveTuningPolicy: (instance_id: string, policy: TuningPolicy, mode: "observe" | "confirm" | "auto") =>
-    client.request<TuningPolicyResponse>(`/api/dashboard/tuning/policy${query({ instance_id })}`, { method: "PUT", body: JSON.stringify({ policy, mode }) }),
-  tuningRecommendations: (instance_id: string, limit = 100, rule?: string) =>
-    client.request<ListResponse<TuningRecommendation>>(`/api/dashboard/tuning/recommendations${query({ instance_id, limit, rule })}`),
-  tuningReport: (instance_id: string, days: 7 | 30) =>
-    client.request<TuningReport>(`/api/dashboard/tuning/report${query({ instance_id, days })}`),
-  tuningBaseValues: (instance_id: string, model?: string) =>
-    client.request<ListResponse<ChannelBaseValue>>(`/api/dashboard/tuning/base-values${query({ instance_id, model })}`),
-  tuningContinuousStates: (instance_id: string) =>
-    client.request<ListResponse<TuningContinuousState>>(`/api/dashboard/tuning/continuous-states${query({ instance_id })}`),
-  saveTuningBaseValues: (instance_id: string, items: ChannelBaseValue[]) =>
-    client.request<ListResponse<ChannelBaseValue>>(`/api/dashboard/tuning/base-values${query({ instance_id })}`, { method: "PUT", body: JSON.stringify({ items }) }),
-  syncTuningBaseValues: (instance_id: string, models: string[]) =>
-    client.request<ListResponse<ChannelBaseValue>>(`/api/dashboard/tuning/base-values/sync${query({ instance_id })}`, { method: "POST", body: JSON.stringify({ models }) }),
+  tuningPolicy: (site_id: string) =>
+    client.request<TuningPolicyResponse>(`/api/dashboard/tuning/policy${query({ site_id })}`),
+  saveTuningPolicy: (site_id: string, policy: TuningPolicy, mode: "observe" | "confirm" | "auto") =>
+    client.request<TuningPolicyResponse>(`/api/dashboard/tuning/policy${query({ site_id })}`, { method: "PUT", body: JSON.stringify({ policy, mode }) }),
+  tuningRecommendations: (site_id: string, limit = 100, rule?: string) =>
+    client.request<ListResponse<TuningRecommendation>>(`/api/dashboard/tuning/recommendations${query({ site_id, limit, rule })}`),
+  tuningReport: (site_id: string, days: 7 | 30) =>
+    client.request<TuningReport>(`/api/dashboard/tuning/report${query({ site_id, days })}`),
+  tuningBaseValues: (site_id: string, model?: string) =>
+    client.request<ListResponse<ChannelBaseValue>>(`/api/dashboard/tuning/base-values${query({ site_id, model })}`),
+  tuningContinuousStates: (site_id: string) =>
+    client.request<ListResponse<TuningContinuousState>>(`/api/dashboard/tuning/continuous-states${query({ site_id })}`),
+  saveTuningBaseValues: (site_id: string, items: ChannelBaseValue[]) =>
+    client.request<ListResponse<ChannelBaseValue>>(`/api/dashboard/tuning/base-values${query({ site_id })}`, { method: "PUT", body: JSON.stringify({ items }) }),
+  syncTuningBaseValues: (site_id: string, models: string[]) =>
+    client.request<ListResponse<ChannelBaseValue>>(`/api/dashboard/tuning/base-values/sync${query({ site_id })}`, { method: "POST", body: JSON.stringify({ models }) }),
 });

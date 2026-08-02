@@ -10,7 +10,7 @@ func TestLatestChannelsSQLAggregatesSnapshotsOnce(t *testing.T) {
 	for _, fragment := range []string{
 		"JOIN (",
 		"MAX(captured_at) AS captured_at",
-		"WHERE instance_id=?",
+		"CASE WHEN i2.site_id='' THEN i2.id ELSE i2.site_id END=?",
 		"GROUP BY channel_id",
 		"latest.channel_id=c.channel_id",
 		"latest.captured_at=c.captured_at",
@@ -35,9 +35,10 @@ func TestTuningChannelMetricsSQLExtractsChannelIDFromDimensionKey(t *testing.T) 
 
 func TestTuningRecentChannelBucketsSQLUsesNewestNonEmptyBuckets(t *testing.T) {
 	for _, fragment := range []string{
-		"dimension_key=CONCAT(?,':channel:',?)",
+		"SUBSTRING_INDEX(dimension_key,':',-1)",
 		"bucket_time>=?",
 		"request_count>0",
+		"GROUP BY bucket_time",
 		"ORDER BY bucket_time DESC",
 		"LIMIT ?",
 	} {

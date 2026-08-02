@@ -21,10 +21,18 @@ type ContinuousStateStore interface {
 	ListContinuousStates(string) ([]tuning.ContinuousState, error)
 }
 
+func tuningSiteID(r *http.Request) string {
+	if id := strings.TrimSpace(r.URL.Query().Get("site_id")); id != "" {
+		return id
+	}
+	// Keep instance_id as a temporary compatibility alias for rc20 clients.
+	return strings.TrimSpace(r.URL.Query().Get("instance_id"))
+}
+
 func (h Handler) HandleTuningContinuousStates(w http.ResponseWriter, r *http.Request) {
-	id := r.URL.Query().Get("instance_id")
+	id := tuningSiteID(r)
 	if id == "" {
-		writeDashboardError(w, 400, "instance_id_required")
+		writeDashboardError(w, 400, "site_id_required")
 		return
 	}
 	store, ok := h.tuningStore.(ContinuousStateStore)
@@ -42,6 +50,7 @@ func (h Handler) HandleTuningContinuousStates(w http.ResponseWriter, r *http.Req
 
 type PolicyResponse struct {
 	InstanceID string        `json:"instance_id"`
+	SiteID     string        `json:"site_id"`
 	Policy     tuning.Policy `json:"policy"`
 	Mode       string        `json:"mode"`
 	IsDefault  bool          `json:"isDefault"`
@@ -50,9 +59,9 @@ type PolicyResponse struct {
 }
 
 func (h Handler) HandleTuningBaseValues(w http.ResponseWriter, r *http.Request) {
-	id := r.URL.Query().Get("instance_id")
+	id := tuningSiteID(r)
 	if id == "" {
-		writeDashboardError(w, 400, "instance_id_required")
+		writeDashboardError(w, 400, "site_id_required")
 		return
 	}
 	store, ok := h.tuningStore.(ChannelBaseValueStore)
@@ -104,9 +113,9 @@ func (h Handler) HandleTuningBaseValues(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h Handler) HandleTuningBaseValuesSync(w http.ResponseWriter, r *http.Request) {
-	id := r.URL.Query().Get("instance_id")
+	id := tuningSiteID(r)
 	if id == "" {
-		writeDashboardError(w, 400, "instance_id_required")
+		writeDashboardError(w, 400, "site_id_required")
 		return
 	}
 	store, ok := h.tuningStore.(ChannelBaseValueStore)
@@ -153,9 +162,9 @@ type RecommendationItem struct {
 
 func (h Handler) WithTuningStore(s TuningStore) Handler { h.tuningStore = s; return h }
 func (h Handler) HandleTuningPolicy(w http.ResponseWriter, r *http.Request) {
-	id := r.URL.Query().Get("instance_id")
+	id := tuningSiteID(r)
 	if id == "" {
-		writeDashboardError(w, 400, "instance_id_required")
+		writeDashboardError(w, 400, "site_id_required")
 		return
 	}
 	switch r.Method {
@@ -166,10 +175,10 @@ func (h Handler) HandleTuningPolicy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !ok {
-			writeDashboardJSON(w, 200, PolicyResponse{InstanceID: id, Policy: tuning.DefaultPolicy(), Mode: "observe", IsDefault: true})
+			writeDashboardJSON(w, 200, PolicyResponse{InstanceID: id, SiteID: id, Policy: tuning.DefaultPolicy(), Mode: "observe", IsDefault: true})
 			return
 		}
-		writeDashboardJSON(w, 200, PolicyResponse{InstanceID: id, Policy: rec.Policy, Mode: rec.Mode, UpdatedAt: &rec.UpdatedAt, UpdatedBy: rec.UpdatedBy})
+		writeDashboardJSON(w, 200, PolicyResponse{InstanceID: id, SiteID: id, Policy: rec.Policy, Mode: rec.Mode, UpdatedAt: &rec.UpdatedAt, UpdatedBy: rec.UpdatedBy})
 	case http.MethodPut:
 		var req struct {
 			Policy tuning.Policy `json:"policy"`
@@ -193,7 +202,7 @@ func (h Handler) HandleTuningPolicy(w http.ResponseWriter, r *http.Request) {
 			writeDashboardError(w, 500, "query_failed")
 			return
 		}
-		writeDashboardJSON(w, 200, PolicyResponse{InstanceID: id, Policy: req.Policy, Mode: req.Mode, UpdatedAt: &now, UpdatedBy: rec.UpdatedBy})
+		writeDashboardJSON(w, 200, PolicyResponse{InstanceID: id, SiteID: id, Policy: req.Policy, Mode: req.Mode, UpdatedAt: &now, UpdatedBy: rec.UpdatedBy})
 	default:
 		writeDashboardError(w, 405, "method_not_allowed")
 	}
@@ -203,9 +212,9 @@ func recommendationItem(r tuning.Recommendation) RecommendationItem {
 }
 
 func (h Handler) HandleTuningRecommendations(w http.ResponseWriter, r *http.Request) {
-	id := r.URL.Query().Get("instance_id")
+	id := tuningSiteID(r)
 	if id == "" {
-		writeDashboardError(w, 400, "instance_id_required")
+		writeDashboardError(w, 400, "site_id_required")
 		return
 	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
@@ -223,7 +232,7 @@ func (h Handler) HandleTuningRecommendations(w http.ResponseWriter, r *http.Requ
 	writeDashboardJSON(w, 200, map[string]any{"items": items})
 }
 func (h Handler) HandleTuningReport(w http.ResponseWriter, r *http.Request) {
-	id := r.URL.Query().Get("instance_id")
+	id := tuningSiteID(r)
 	days, _ := strconv.Atoi(r.URL.Query().Get("days"))
 	if id == "" || (days != 7 && days != 30) {
 		writeDashboardError(w, 400, "invalid_query")
