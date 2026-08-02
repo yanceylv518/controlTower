@@ -42,8 +42,8 @@ func (s Store) ListChannelBaseValues(instanceID, model string) ([]tuning.Channel
 	}
 	rows, err := s.db.QueryContext(context.Background(), `SELECT b.instance_id,b.channel_id,c.channel_name,b.model_name,b.base_weight,b.base_priority,c.weight,COALESCE(c.priority,0),c.captured_at,COALESCE(c.models_text,''),b.updated_at,b.updated_by
 FROM channel_base_values b
-JOIN (SELECT cs.* FROM channel_snapshots cs JOIN instances i ON i.id=cs.instance_id
-      JOIN (SELECT cs2.channel_id,MAX(cs2.captured_at) captured_at FROM channel_snapshots cs2 JOIN instances i2 ON i2.id=cs2.instance_id WHERE CASE WHEN i2.site_id='' THEN i2.id ELSE i2.site_id END=? AND i2.enabled=1 GROUP BY cs2.channel_id) x
+JOIN (SELECT cs.* FROM channel_current cs JOIN instances i ON i.id=cs.instance_id
+      JOIN (SELECT cs2.channel_id,MAX(cs2.captured_at) captured_at FROM channel_current cs2 JOIN instances i2 ON i2.id=cs2.instance_id WHERE CASE WHEN i2.site_id='' THEN i2.id ELSE i2.site_id END=? AND i2.enabled=1 GROUP BY cs2.channel_id) x
         ON x.channel_id=cs.channel_id AND x.captured_at=cs.captured_at
       WHERE CASE WHEN i.site_id='' THEN i.id ELSE i.site_id END=? AND i.enabled=1) c ON c.channel_id=b.channel_id
 WHERE b.instance_id=? AND LOWER(c.status) IN ('enabled','enable','active','normal','1')`+filter+` ORDER BY b.model_name,c.channel_name`, args...)
@@ -295,7 +295,7 @@ func controlInstanceForSite(tx tuningCommandTx, siteID string) (string, error) {
 	err := tx.QueryRow(`SELECT i.id
 FROM instances i
 WHERE i.enabled=1 AND CASE WHEN i.site_id='' THEN i.id ELSE i.site_id END=?
-ORDER BY (SELECT MAX(cs.captured_at) FROM channel_snapshots cs WHERE cs.instance_id=i.id) DESC,
+ORDER BY (SELECT MAX(cs.captured_at) FROM channel_current cs WHERE cs.instance_id=i.id) DESC,
          (SELECT MAX(a.last_seen_at) FROM agents a WHERE a.instance_id=i.id) DESC,
          i.id ASC
 LIMIT 1`, siteID).Scan(&id)
@@ -358,10 +358,10 @@ func (s Store) LatestChannels(id string) ([]tuning.Channel, error) {
 
 const latestChannelsSQL = `
 SELECT c.channel_id,c.channel_name,c.status,c.weight,c.models_text,COALESCE(c.priority,0)
-FROM channel_snapshots c
+FROM channel_current c
 JOIN (
   SELECT channel_id,MAX(captured_at) AS captured_at
-  FROM channel_snapshots cs2 JOIN instances i2 ON i2.id=cs2.instance_id
+  FROM channel_current cs2 JOIN instances i2 ON i2.id=cs2.instance_id
   WHERE i2.enabled=1 AND CASE WHEN i2.site_id='' THEN i2.id ELSE i2.site_id END=?
   GROUP BY channel_id
 ) latest

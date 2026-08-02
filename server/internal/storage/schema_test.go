@@ -100,3 +100,27 @@ func TestSystemSettingsMigrationIsAdditive(t *testing.T) {
 		t.Fatal("011 must not rebuild or alter existing tables")
 	}
 }
+
+func TestChannelCurrentMigrationPreservesLatestWithoutDestructiveDDL(t *testing.T) {
+	data, err := os.ReadFile("../../migrations/021_channel_current.sql")
+	if err != nil {
+		t.Fatalf("read migration: %v", err)
+	}
+	sql := strings.ToLower(string(data))
+	for _, required := range []string{
+		"create table if not exists channel_current",
+		"primary key (instance_id, channel_id)",
+		"max(captured_at)",
+		"from channel_snapshots",
+		"on duplicate key update",
+	} {
+		if !strings.Contains(sql, required) {
+			t.Fatalf("channel current migration missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{"truncate table", "drop table", "delete from channel_snapshots"} {
+		if strings.Contains(sql, forbidden) {
+			t.Fatalf("channel current migration performs unsafe startup cleanup %q", forbidden)
+		}
+	}
+}

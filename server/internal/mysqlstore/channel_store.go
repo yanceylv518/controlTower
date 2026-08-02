@@ -4,23 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"strings"
-	"time"
 
 	"controltower/server/internal/storage"
 )
 
 func (s Store) ChannelNames(instanceID string) (map[int64]string, error) {
-	// Grouped-join on the latest snapshot per channel: the previous
-	// GROUP_CONCAT ordered the entire snapshot history on every cache miss.
-	rows, err := s.db.QueryContext(context.Background(), `SELECT c.channel_id, c.channel_name
-FROM channel_snapshots c
-JOIN (
-  SELECT channel_id, MAX(captured_at) AS captured_at
-  FROM channel_snapshots
-  WHERE instance_id = ?
-  GROUP BY channel_id
-) latest ON latest.channel_id = c.channel_id AND latest.captured_at = c.captured_at
-WHERE c.instance_id = ?`, instanceID, instanceID)
+	rows, err := s.db.QueryContext(context.Background(), `SELECT channel_id, channel_name
+FROM channel_current
+WHERE instance_id = ?`, instanceID)
 	if err != nil {
 		return nil, err
 	}
@@ -87,35 +78,38 @@ func buildChannelSnapshotQuery(query storage.ChannelSnapshotQuery) (string, []an
 	}
 	args = append(args, limit, offset)
 	builder := strings.Builder{}
-	if query.LatestOnly {
-		// 先按 (instance_id, channel_id) 分组取最新 captured_at，再连接取整行，
-		// 复用 idx_channel_snapshots_instance_channel，避免对全量历史行
-		// （含较大的 models_text）做 filesort。
-		builder.WriteString(`SELECT s.id, s.instance_id, s.channel_id, s.channel_name, s.status, s.weight, s.models_text, s.group_name, s.priority, s.captured_at
-FROM channel_snapshots s
-JOIN (
-  SELECT instance_id, channel_id, MAX(captured_at) AS captured_at
-  FROM channel_snapshots`)
-		builder.WriteString(where)
-		builder.WriteString(`
-  GROUP BY instance_id, channel_id
-) latest
-  ON latest.instance_id = s.instance_id
- AND latest.channel_id = s.channel_id
- AND latest.captured_at = s.captured_at
-ORDER BY s.instance_id ASC, s.channel_id ASC
-LIMIT ? OFFSET ?`)
-		return builder.String(), args
-	}
 	builder.WriteString(`SELECT id, instance_id, channel_id, channel_name, status, weight, models_text, group_name, priority, captured_at
-FROM channel_snapshots`)
+FROM channel_current`)
 	builder.WriteString(where)
-	builder.WriteString(`
+	if query.LatestOnly {
+		builder.WriteString(`
+ORDER BY instance_id ASC, channel_id ASC
+LIMIT ? OFFSET ?`)
+	} else {
+		builder.WriteString(`
 ORDER BY captured_at DESC, channel_id ASC
 LIMIT ? OFFSET ?`)
+	}
 	return builder.String(), args
 }
-func (s Store) PruneChannelSnapshots(before time.Time) error {
-	_, err := s.db.ExecContext(context.Background(), "DELETE FROM channel_snapshots WHERE captured_at < ?", before)
-	return err
+func (s Store) DeleteChannelSnapshotHistoryBatch(limit int) (int64, error) {
+	if limit <= 0 {
+		return 0, nil
+	}
+	result, err := s.db.ExecContext(context.Background(), deleteChannelSnapshotHistoryBatchSQL, limit)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
+
+const deleteChannelSnapshotHistoryBatchSQL = `DELETE FROM channel_snapshots
+WHERE EXISTS (
+  SELECT 1
+  FROM channel_current
+  WHERE channel_current.instance_id = channel_snapshots.instance_id
+    AND channel_current.channel_id = channel_snapshots.channel_id
+    AND channel_current.captured_at >= channel_snapshots.captured_at
+)
+ORDER BY captured_at
+LIMIT ?`

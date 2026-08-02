@@ -6,46 +6,44 @@ import (
 )
 
 type Config struct {
-	ListenAddr                   string
-	PublicBaseURL                string
-	DatabaseDriver               string
-	DatabaseDSN                  string
-	MigrationPath                string
-	RedisAddr                    string
-	RedisPassword                string
-	AgentToken                   string
-	DashboardToken               string
-	AgentTokenPepper             string
-	AggregationIntervalSeconds   int
-	NotificationIntervalSeconds  int
-	ChannelSnapshotRetentionDays int
-	AdminUsername                string
-	AdminInitialPassword         string
-	SessionTTLHours              int
-	NotificationMaxAttempts      int
-	CommandExpiryMinutes         int
-	RetentionDetailDays          int
-	RetentionMetric5mDays        int
-	RetentionRuntimeDays         int
-	RetentionHealthHours         int
+	ListenAddr                  string
+	PublicBaseURL               string
+	DatabaseDriver              string
+	DatabaseDSN                 string
+	MigrationPath               string
+	RedisAddr                   string
+	RedisPassword               string
+	AgentToken                  string
+	DashboardToken              string
+	AgentTokenPepper            string
+	AggregationIntervalSeconds  int
+	NotificationIntervalSeconds int
+	AdminUsername               string
+	AdminInitialPassword        string
+	SessionTTLHours             int
+	NotificationMaxAttempts     int
+	CommandExpiryMinutes        int
+	RetentionDetailDays         int
+	RetentionMetric5mDays       int
+	RetentionRuntimeDays        int
+	RetentionHealthHours        int
 }
 
 func Load(values map[string]string) (Config, error) {
 	cfg := Config{
-		ListenAddr:                   valueOrDefault(values, "CT_SERVER_LISTEN_ADDR", "0.0.0.0:8080"),
-		PublicBaseURL:                values["CT_PUBLIC_BASE_URL"],
-		DatabaseDriver:               valueOrDefault(values, "CT_DATABASE_DRIVER", "mysql"),
-		DatabaseDSN:                  values["CT_DATABASE_DSN"],
-		MigrationPath:                valueOrDefault(values, "CT_MIGRATION_PATH", "server/migrations/001_init.sql"),
-		RedisAddr:                    values["CT_REDIS_ADDR"],
-		RedisPassword:                values["CT_REDIS_PASSWORD"],
-		AgentToken:                   values["CT_AGENT_TOKEN"],
-		DashboardToken:               values["CT_DASHBOARD_TOKEN"],
-		AgentTokenPepper:             values["CT_AGENT_TOKEN_PEPPER"],
-		AggregationIntervalSeconds:   intOrDefault(values, "CT_AGGREGATION_INTERVAL_SECONDS", 60),
-		NotificationIntervalSeconds:  intOrDefault(values, "CT_NOTIFICATION_INTERVAL_SECONDS", 30),
-		ChannelSnapshotRetentionDays: intOrDefault(values, "CT_CHANNEL_SNAPSHOT_RETENTION_DAYS", 30),
-		AdminUsername:                values["CT_ADMIN_USERNAME"], AdminInitialPassword: values["CT_ADMIN_INITIAL_PASSWORD"], SessionTTLHours: intOrDefault(values, "CT_SESSION_TTL_HOURS", 720),
+		ListenAddr:                  valueOrDefault(values, "CT_SERVER_LISTEN_ADDR", "0.0.0.0:8080"),
+		PublicBaseURL:               values["CT_PUBLIC_BASE_URL"],
+		DatabaseDriver:              valueOrDefault(values, "CT_DATABASE_DRIVER", "mysql"),
+		DatabaseDSN:                 values["CT_DATABASE_DSN"],
+		MigrationPath:               valueOrDefault(values, "CT_MIGRATION_PATH", "server/migrations/001_init.sql"),
+		RedisAddr:                   values["CT_REDIS_ADDR"],
+		RedisPassword:               values["CT_REDIS_PASSWORD"],
+		AgentToken:                  values["CT_AGENT_TOKEN"],
+		DashboardToken:              values["CT_DASHBOARD_TOKEN"],
+		AgentTokenPepper:            values["CT_AGENT_TOKEN_PEPPER"],
+		AggregationIntervalSeconds:  intOrDefault(values, "CT_AGGREGATION_INTERVAL_SECONDS", 60),
+		NotificationIntervalSeconds: intOrDefault(values, "CT_NOTIFICATION_INTERVAL_SECONDS", 30),
+		AdminUsername:               values["CT_ADMIN_USERNAME"], AdminInitialPassword: values["CT_ADMIN_INITIAL_PASSWORD"], SessionTTLHours: intOrDefault(values, "CT_SESSION_TTL_HOURS", 720),
 		NotificationMaxAttempts: intOrDefault(values, "CT_NOTIFICATION_MAX_ATTEMPTS", 8),
 		CommandExpiryMinutes:    intOrDefault(values, "CT_COMMAND_EXPIRY_MINUTES", 10),
 		RetentionDetailDays:     intOrDefault(values, "CT_RETENTION_DETAIL_DAYS", 30),
@@ -64,9 +62,6 @@ func Load(values map[string]string) (Config, error) {
 	}
 	if cfg.AggregationIntervalSeconds <= 0 {
 		return Config{}, errors.New("CT_AGGREGATION_INTERVAL_SECONDS must be positive")
-	}
-	if cfg.ChannelSnapshotRetentionDays < 1 || cfg.ChannelSnapshotRetentionDays > 3650 {
-		return Config{}, errors.New("CT_CHANNEL_SNAPSHOT_RETENTION_DAYS must be between 1 and 3650")
 	}
 	if cfg.SessionTTLHours < 1 || cfg.SessionTTLHours > 8760 {
 		return Config{}, errors.New("CT_SESSION_TTL_HOURS must be between 1 and 8760")
@@ -100,7 +95,6 @@ func Keys() []string {
 		"CT_AGENT_TOKEN_PEPPER",
 		"CT_AGGREGATION_INTERVAL_SECONDS",
 		"CT_NOTIFICATION_INTERVAL_SECONDS",
-		"CT_CHANNEL_SNAPSHOT_RETENTION_DAYS",
 		"CT_ADMIN_USERNAME", "CT_ADMIN_INITIAL_PASSWORD", "CT_SESSION_TTL_HOURS", "CT_NOTIFICATION_MAX_ATTEMPTS",
 		"CT_COMMAND_EXPIRY_MINUTES", "CT_RETENTION_DETAIL_DAYS", "CT_RETENTION_METRIC5M_DAYS", "CT_RETENTION_RUNTIME_DAYS", "CT_RETENTION_HEALTH_HOURS",
 		"CT_OFFLINE_ALERT_SECONDS", "CT_CPU_WARN_PERCENT", "CT_CPU_CRIT_PERCENT", "CT_MEMORY_WARN_PERCENT", "CT_MEMORY_CRIT_PERCENT", "CT_DISK_WARN_PERCENT", "CT_DISK_CRIT_PERCENT", "CT_ERROR_RATE_WARN_PERCENT", "CT_ERROR_RATE_CRIT_PERCENT", "CT_P95_WARN_SECONDS", "CT_P95_CRIT_SECONDS", "CT_NOTIFICATIONS_ENABLED",

@@ -188,7 +188,7 @@ func TestMetricBatchUpsertSQLAndArgs(t *testing.T) {
 	}
 }
 
-func TestBuildChannelSnapshotQueryLatestOnlyUsesGroupedJoin(t *testing.T) {
+func TestBuildChannelSnapshotQueryLatestOnlyUsesCurrentState(t *testing.T) {
 	sqlText, args := buildChannelSnapshotQuery(storage.ChannelSnapshotQuery{
 		InstanceID: "inst-1",
 		LatestOnly: true,
@@ -196,25 +196,24 @@ func TestBuildChannelSnapshotQueryLatestOnlyUsesGroupedJoin(t *testing.T) {
 	})
 
 	for _, fragment := range []string{
-		"MAX(captured_at) AS captured_at",
-		"GROUP BY instance_id, channel_id",
+		"FROM channel_current",
 		"instance_id = ?",
-		"ORDER BY s.instance_id ASC, s.channel_id ASC",
+		"ORDER BY instance_id ASC, channel_id ASC",
 		"LIMIT ? OFFSET ?",
 	} {
 		if !strings.Contains(sqlText, fragment) {
 			t.Fatalf("latest-only query missing %q: %s", fragment, sqlText)
 		}
 	}
-	if strings.Contains(sqlText, "ORDER BY captured_at DESC") {
-		t.Fatalf("latest-only query must not filesort full history: %s", sqlText)
+	if strings.Contains(sqlText, "GROUP BY") || strings.Contains(sqlText, "channel_snapshots") {
+		t.Fatalf("latest-only query must read only current state: %s", sqlText)
 	}
 	if len(args) != 3 {
 		t.Fatalf("args len = %d, want 3: %#v", len(args), args)
 	}
 }
 
-func TestBuildChannelSnapshotQueryHistoryKeepsTimeOrder(t *testing.T) {
+func TestBuildChannelSnapshotQueryLegacyHistoryModeReturnsCurrentState(t *testing.T) {
 	sqlText, args := buildChannelSnapshotQuery(storage.ChannelSnapshotQuery{
 		InstanceID: "inst-1",
 		ChannelID:  18,
@@ -222,13 +221,13 @@ func TestBuildChannelSnapshotQueryHistoryKeepsTimeOrder(t *testing.T) {
 	})
 
 	for _, fragment := range []string{
-		"FROM channel_snapshots",
+		"FROM channel_current",
 		"instance_id = ?",
 		"channel_id = ?",
 		"ORDER BY captured_at DESC, channel_id ASC",
 	} {
 		if !strings.Contains(sqlText, fragment) {
-			t.Fatalf("history query missing %q: %s", fragment, sqlText)
+			t.Fatalf("legacy history-mode query missing %q: %s", fragment, sqlText)
 		}
 	}
 	if strings.Contains(sqlText, "GROUP BY") {
@@ -236,5 +235,22 @@ func TestBuildChannelSnapshotQueryHistoryKeepsTimeOrder(t *testing.T) {
 	}
 	if len(args) != 4 {
 		t.Fatalf("args len = %d, want 4: %#v", len(args), args)
+	}
+}
+
+func TestChannelSnapshotHistoryCleanupOnlyDeletesMigratedRows(t *testing.T) {
+	for _, fragment := range []string{
+		"DELETE FROM channel_snapshots",
+		"EXISTS (",
+		"FROM channel_current",
+		"channel_current.instance_id = channel_snapshots.instance_id",
+		"channel_current.channel_id = channel_snapshots.channel_id",
+		"channel_current.captured_at >= channel_snapshots.captured_at",
+		"ORDER BY captured_at",
+		"LIMIT ?",
+	} {
+		if !strings.Contains(deleteChannelSnapshotHistoryBatchSQL, fragment) {
+			t.Fatalf("safe history cleanup missing %q: %s", fragment, deleteChannelSnapshotHistoryBatchSQL)
+		}
 	}
 }

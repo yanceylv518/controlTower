@@ -19,6 +19,12 @@ func TestLatestChannelsSQLAggregatesSnapshotsOnce(t *testing.T) {
 			t.Fatalf("latest channel query missing %q: %s", fragment, latestChannelsSQL)
 		}
 	}
+	if !strings.Contains(latestChannelsSQL, "FROM channel_current") {
+		t.Fatalf("latest channel query must read current state: %s", latestChannelsSQL)
+	}
+	if strings.Contains(latestChannelsSQL, "channel_snapshots") {
+		t.Fatalf("latest channel query must not read historical snapshots: %s", latestChannelsSQL)
+	}
 	if strings.Contains(latestChannelsSQL, "c2.instance_id=c.instance_id") {
 		t.Fatalf("latest channel query must not use the per-row correlated subquery: %s", latestChannelsSQL)
 	}

@@ -39,13 +39,20 @@ func run() error {
 	}
 	defer db.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := db.PingContext(ctx); err != nil {
+	pingCtx, cancelPing := context.WithTimeout(context.Background(), 10*time.Second)
+	if err := db.PingContext(pingCtx); err != nil {
+		cancelPing()
 		return fmt.Errorf("ping mysql: %w", err)
 	}
+	cancelPing()
 
-	if err := mysqlstore.ApplyDir(ctx, db, filepath.Dir(cfg.MigrationPath)); err != nil {
+	// rc20 performs a one-time indexed scan of the legacy channel history to
+	// preserve each channel's newest state before asynchronous cleanup starts.
+	// Keep that migration bounded, but do not reuse the short ping timeout.
+	migrationCtx, cancelMigration := context.WithTimeout(context.Background(), 30*time.Minute)
+	err = mysqlstore.ApplyDir(migrationCtx, db, filepath.Dir(cfg.MigrationPath))
+	cancelMigration()
+	if err != nil {
 		return fmt.Errorf("apply migration: %w", err)
 	}
 
@@ -79,7 +86,7 @@ func run() error {
 	}()
 	startAggregationRunner(store, time.Duration(cfg.AggregationIntervalSeconds)*time.Second)
 	startNotificationRunner(store, settingsProvider, time.Duration(cfg.NotificationIntervalSeconds)*time.Second)
-	startChannelSnapshotRetentionRunner(store, cfg.ChannelSnapshotRetentionDays)
+	startChannelSnapshotHistoryCleanup(store)
 	startRetentionRunner(store, settingsProvider)
 	startTuningRunner(store)
 
@@ -178,19 +185,26 @@ func startNotificationRunner(store mysqlstore.Store, provider *settings.Provider
 		}
 	}()
 }
-func startChannelSnapshotRetentionRunner(store mysqlstore.Store, retentionDays int) {
-	prune := func() {
-		cutoff := time.Now().UTC().Add(-time.Duration(retentionDays) * 24 * time.Hour)
-		if err := store.PruneChannelSnapshots(cutoff); err != nil {
-			log.Printf("channel snapshot retention failed: %v", err)
-		}
-	}
-	prune()
+func startChannelSnapshotHistoryCleanup(store mysqlstore.Store) {
+	const batchSize = 5000
+	const batchPause = 200 * time.Millisecond
 	go func() {
-		ticker := time.NewTicker(24 * time.Hour)
-		defer ticker.Stop()
-		for range ticker.C {
-			prune()
+		var deleted int64
+		for {
+			rows, err := store.DeleteChannelSnapshotHistoryBatch(batchSize)
+			if err != nil {
+				log.Printf("channel snapshot history cleanup stopped after rows=%d: %v", deleted, err)
+				return
+			}
+			deleted += rows
+			if rows == 0 {
+				log.Printf("channel snapshot history cleanup complete rows=%d", deleted)
+				return
+			}
+			if deleted%100000 == 0 {
+				log.Printf("channel snapshot history cleanup progress rows=%d", deleted)
+			}
+			time.Sleep(batchPause)
 		}
 	}()
 }

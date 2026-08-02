@@ -197,10 +197,11 @@ ON DUPLICATE KEY UPDATE
 
 func (s Store) InsertChannelSnapshot(snapshot storage.ChannelSnapshot) error {
 	_, err := s.db.ExecContext(context.Background(), `
-INSERT INTO channel_snapshots (
-  id, instance_id, channel_id, channel_name, status, weight, models_text, group_name, priority, captured_at
+INSERT INTO channel_current (
+  instance_id, channel_id, id, channel_name, status, weight, models_text, group_name, priority, captured_at
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON DUPLICATE KEY UPDATE
+  id = VALUES(id),
   channel_name = VALUES(channel_name),
   status = VALUES(status),
   weight = VALUES(weight),
@@ -208,9 +209,9 @@ ON DUPLICATE KEY UPDATE
   group_name = VALUES(group_name),
   priority = VALUES(priority),
   captured_at = VALUES(captured_at)`,
-		snapshot.ID,
 		snapshot.InstanceID,
 		snapshot.ChannelID,
+		snapshot.ID,
 		snapshot.ChannelName,
 		snapshot.Status,
 		snapshot.Weight,

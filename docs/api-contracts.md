@@ -177,7 +177,7 @@ Instance tokens are stored only as `SHA-256(pepper + token)` hashes. A token may
 | `GET /api/dashboard/server-metrics` | Query `instance_id,start_time,end_time,limit,offset` | `{"items":[{"cpu_percent":12.5}]}` |
 | `GET /api/dashboard/health-checks` | Query `instance_id,target,status,limit,offset` | `{"items":[{"target":"new-api","status":"healthy"}]}` |
 | `GET /api/dashboard/docker-statuses` | Query `instance_id,container_name,running,limit,offset` | `{"items":[{"container_name":"new-api","running":true}]}` |
-| `GET /api/dashboard/channel-snapshots` | Query `instance_id,channel_id,start_time,end_time,limit,offset` | `{"items":[{"channel_id":7,"status":"enabled"}]}` |
+| `GET /api/dashboard/channel-snapshots` | Query `instance_id,channel_id,start_time,end_time,limit,offset`; rc20 returns current channel state only | `{"items":[{"channel_id":7,"status":"enabled"}]}` |
 
 ### 告警与时间线
 
