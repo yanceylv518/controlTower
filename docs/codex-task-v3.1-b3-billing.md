@@ -1,6 +1,6 @@
 # Codex 任务：v3.1-B3——用户消费账单
 
-背景：docs/design-v3.1-scoped-admin.md §4。金额口径（用户定稿）：`金额 = (非缓存输入(prompt−cache)/1M×输入价 + 缓存 cache/1M×缓存价 + 输出 completion/1M×输出价) × 分组倍率`，示例：(298/1M×$2.10 + 8507/1M×$0.42 + 194/1M×$8.40)×1 = $0.005828。查询时计算；quota 换算（÷QuotaPerUnit）保留为对照列。**依赖：v3.1-B1/B2 已合入（scope 中间件、只读直连）。**
+背景：docs/design-v3.1-scoped-admin.md §4。金额口径（用户定稿）：`金额 = (非缓存输入(prompt−cache)/1M×输入价 + 缓存 cache/1M×缓存价 + 输出 completion/1M×输出价) × 分组倍率`，示例：(298/1M×$2.10 + 8507/1M×$0.42 + 194/1M×$8.40)×1 = $0.005828。查询时计算；quota 换算（÷QuotaPerUnit）保留为对照列。**依赖：rc23 基线（70f4e37 之后）——B1 scope 中间件与 B2 只读直连均已合入并部署。**
 
 **文末自查清单粘贴进 commit message；禁止 force push；Linux 跑全量测试 + `pnpm typecheck`。**
 
