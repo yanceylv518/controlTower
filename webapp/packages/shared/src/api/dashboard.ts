@@ -680,4 +680,8 @@ export const dashboardApi = (client: ApiClient) => ({
     client.request<ListResponse<BillingGroupRatioItem>>(`/api/dashboard/billing/group-ratios${query({ instance_id })}`),
   importBillingPrices: (instance_id: string) =>
     client.request<{ items: BillingPriceItem[]; quota_per_unit: string }>(`/api/dashboard/billing/import-prices${query({ instance_id })}`),
+  saveBillingPrice: (input: { instance_id: string; model_name: string; effective_from: string; tiers: Array<{ tier_from: number; input_price: string; output_price: string; cache_price: string }> }) =>
+    client.request<ListResponse<BillingPriceItem>>("/api/dashboard/billing/prices", { method: "PUT", body: JSON.stringify(input) }),
+  saveBillingGroupRatio: (input: { instance_id: string; group_name: string; ratio: string }) =>
+    client.request<BillingGroupRatioItem>("/api/dashboard/billing/group-ratios", { method: "PUT", body: JSON.stringify(input) }),
 });

@@ -52,6 +52,7 @@ const nav = [
       ["/instances", "实例管理", Management],
       ["/audits", "操作审计", Operation],
       ["/tuning", "调权中心", TrendCharts],
+      ["/billing/pricing", "账单计价", Coin],
       ["/settings", "设置", SetUp],
       ["/access-users", "访问账号", User],
     ],

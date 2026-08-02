@@ -8,9 +8,11 @@ import ListPager from "../components/ListPager.vue";
 import { useAsyncData } from "../composables/useAsyncData";
 import { useFiltersStore } from "../stores/filters";
 import { usePrefsStore } from "../stores/prefs";
+import { useAuthStore } from "../stores/auth";
 
 const filters = useFiltersStore();
 const prefs = usePrefsStore();
+const auth = useAuthStore();
 const month = ref(new Date().toISOString().slice(0, 7));
 const search = ref("");
 const page = ref(1);
@@ -31,7 +33,7 @@ void state.reload();
 </script>
 <template>
   <AppShell title="用户账单">
-    <template #tools><el-date-picker v-model="month" type="month" value-format="YYYY-MM" format="YYYY-MM" :clearable="false" /><el-input v-model="search" clearable placeholder="搜索用户名或用户 ID" style="width:220px" /><el-button tag="a" :href="exportURL">导出汇总 CSV</el-button></template>
+    <template #tools><el-date-picker v-model="month" type="month" value-format="YYYY-MM" format="YYYY-MM" :clearable="false" /><el-input v-model="search" clearable placeholder="搜索用户名或用户 ID" style="width:220px" /><el-button tag="a" :href="exportURL">导出汇总 CSV</el-button><el-button v-if="auth.user?.role === 'admin'" @click="$router.push('/billing/pricing')">计价配置</el-button></template>
     <div class="billing-note">账单每日凌晨更新，数据截至 {{ state.data.value?.data_through?.slice(0, 10) || "昨日" }}。金额按配置价格计算，Quota 为 new-api 实扣对照。</div>
     <AsyncPanel :loading="state.loading.value" :error="state.error.value" :empty="!state.data.value?.items.length" @retry="state.reload">
       <div class="billing-total" v-if="state.data.value?.summary"><span>用户 <b>{{ state.data.value.summary.users }}</b></span><span>请求 <b>{{ state.data.value.summary.request_count }}</b></span><span>合计 <b>{{ money(state.data.value.summary.amount) }}</b></span></div>
