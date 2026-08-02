@@ -9,17 +9,17 @@
 ### 023 迁移：billing_daily + 两张计价配置表
 
 - `billing_daily(instance_id VARCHAR(64), user_id BIGINT, username VARCHAR(128), model_name VARCHAR(255), group_name VARCHAR(64), tier_from BIGINT NOT NULL DEFAULT 0, day DATE, request_count BIGINT, prompt_tokens BIGINT, completion_tokens BIGINT, cache_tokens BIGINT, quota BIGINT, updated_at DATETIME(6), PRIMARY KEY(instance_id, user_id, model_name, group_name, tier_from, day), KEY idx_billing_daily_day(instance_id, day))`（分组维度=logs.group，空归 ''；**tier_from=档位下限**，日切聚合时按单请求 prompt_tokens 与该日生效档位边界分类，无阶梯配置的模型恒 0——分档必须在聚合前完成，聚合后无法再分）；
-- `billing_prices(model_name VARCHAR(255), effective_from DATE, tier_from BIGINT NOT NULL DEFAULT 0, input_price DECIMAL(12,6), output_price DECIMAL(12,6), cache_price DECIMAL(12,6), updated_at, updated_by, PRIMARY KEY(model_name, effective_from, tier_from))`——**阶梯计价**：单档模型一行 tier_from=0，阶梯模型每档一行（如 0/128000），请求按 prompt_tokens ∈ [tier_from, 下一档) 落档整条计价；单价/1M tokens，货币无关（显示用系统货币符号）；
-- `billing_group_ratios(group_name VARCHAR(64) PRIMARY KEY, ratio DECIMAL(8,4) NOT NULL DEFAULT 1, updated_at, updated_by)`；
+- `billing_prices(instance_id VARCHAR(64), model_name VARCHAR(255), effective_from DATE, tier_from BIGINT NOT NULL DEFAULT 0, input_price DECIMAL(12,6), output_price DECIMAL(12,6), cache_price DECIMAL(12,6), updated_at, updated_by, PRIMARY KEY(instance_id, model_name, effective_from, tier_from))`——**每站点独立计价（2026-08-02 用户指出各站点数据不同）**——**阶梯计价**：单档模型一行 tier_from=0，阶梯模型每档一行（如 0/128000），请求按 prompt_tokens ∈ [tier_from, 下一档) 落档整条计价；单价/1M tokens，货币无关（显示用系统货币符号）；
+- `billing_group_ratios(instance_id VARCHAR(64), group_name VARCHAR(64), ratio DECIMAL(8,4) NOT NULL DEFAULT 1, updated_at, updated_by, PRIMARY KEY(instance_id, group_name))`——每站点独立；
 - `billing_ratio_snapshot(instance_id VARCHAR(64), day DATE, ratios_json MEDIUMTEXT, PRIMARY KEY(instance_id, day))`——日切时从 newapi options 快照 ModelRatio/CompletionRatio/CacheRatio/GroupRatio；
 - `billing_balance_snapshot(instance_id VARCHAR(64), user_id BIGINT, day DATE, balance BIGINT, PRIMARY KEY(instance_id, user_id, day))`——日切时快照全站用户余额（千级行/日）。
 全部纯增量+反向断言。
 
 ### 金额计算（server 端统一函数，查询时算）
 
-对每条日切行：取该 day 生效、且 tier_from 匹配的价格行（effective_from ≤ day 的最新一套档位表中对应档）与分组倍率（缺省 1）——`amount = (max(prompt−cache,0)/1M×input + cache/1M×cache_price + completion/1M×output) × ratio`；**价格回退（2026-08-02 用户修正定稿：按 newapi 当前 ModelRatio 现算，非 quota）**：模型在 CT 计价表无有效价格 → 读 **CT 内的 ratio 快照**（billing_ratio_snapshot 取该 day 对应快照，账单查询零 newapi 接触——2026-08-02 用户定调）解析换算单价：输入价/1M = ratio×(1,000,000÷QuotaPerUnit)、输出价=输入价×CompletionRatio、缓存价=输入价×CacheRatio（无此配置则=输入价，与 newapi 行为一致）；金额=三段 tokens×单价 × **newapi GroupRatio**（不乘 CT 倍率，防重复）；语义注意：回退价=按**当前**倍率现算（倍率修正后历史账单随之修正——账单语义正确）；解析失败（版本格式不兼容）该模型标"无法取价"并页面提示（此时用导入或手工配价解决）。每行带 `price_source: ct|newapi`；quota 对照列保留（÷QuotaPerUnit，即当时实扣，与 newapi 现算价并列可见倍率变更影响）。计算用 decimal 或先乘后除避免浮点误差累积，展示保留 4 位小数。
+对每条日切行：取该 day 生效、且 tier_from 匹配的价格行（effective_from ≤ day 的最新一套档位表中对应档）与分组倍率（缺省 1）——`amount = (max(prompt−cache,0)/1M×input + cache/1M×cache_price + completion/1M×output) × ratio`；**价格回退（2026-08-02 用户修正定稿：按 newapi 当前 ModelRatio 现算，非 quota）**：模型在 CT 计价表无有效价格 → 读 **CT 内的 ratio 快照**（billing_ratio_snapshot 取该 day 对应快照，账单查询零 newapi 接触——2026-08-02 用户定调）解析换算单价：输入价/1M = ratio×(1,000,000÷**该站点 QuotaPerUnit**，取自该站点 ratio 快照——各站点 options 独立，不用 CT 全局设置)、输出价=输入价×CompletionRatio、缓存价=输入价×CacheRatio（无此配置则=输入价，与 newapi 行为一致）；金额=三段 tokens×单价 × **newapi GroupRatio**（不乘 CT 倍率，防重复）；语义注意：回退价=按**当前**倍率现算（倍率修正后历史账单随之修正——账单语义正确）；解析失败（版本格式不兼容）该模型标"无法取价"并页面提示（此时用导入或手工配价解决）。每行带 `price_source: ct|newapi`；quota 对照列保留（÷QuotaPerUnit，即当时实扣，与 newapi 现算价并列可见倍率变更影响）。计算用 decimal 或先乘后除避免浮点误差累积，展示保留 4 位小数。
 
-### 计价配置界面与接口
+### 计价配置界面与接口（全部带 instance_id 站点上下文）
 
 `GET/PUT /api/dashboard/billing/prices`（列表含生效历史与档位；调价/改档=新增一套生效日期行，不改旧行；档位编辑校验 tier_from 严格递增且首档为 0）与 `GET/PUT /api/dashboard/billing/group-ratios`；**"从 newapi 导入价格"按钮**（读当前 ModelRatio 换算单价，回填表单为 CT 计价行，保存生效——推荐日常路径，回退只兜新模型空窗）；仅 admin；修改写 operation_audits；账单页顶部列出走 newapi 价（未配 CT 价）的模型清单。
 
@@ -46,7 +46,7 @@
 
 ## 验证要求
 
-1. 全量测试 + typecheck；新增测试：日切聚合 SQL 契约（含分组维度）、upsert 幂等（同日重跑数值不翻倍）、回填分段与限速、scope 越权、CSV 格式（BOM/表头）、**金额公式（对用户示例 298/8507/194×$2.10/$0.42/$8.40=$0.005828 逐位断言）**、生效日期取价（调价前后两天各取各价）、**阶梯分档（边界两侧请求各落各档、首档 0 校验、改档新生效日期后历史分类不变）**、**价格回退（ratio 换算公式对拍、CacheRatio 缺省=输入价、不乘 CT 倍率、解析失败标"无法取价"、来源标注、混合汇总合计正确、快照取该日版本）**、导入价格换算正确、**summary 缓存命中与日切后失效、账单查询路径零 newapi 访问（断言直连仅在日切/回填/导入触发）**、分组倍率缺省 1、**分页与合计行独立（翻页合计不变）**。
+1. 全量测试 + typecheck；新增测试：日切聚合 SQL 契约（含分组维度）、upsert 幂等（同日重跑数值不翻倍）、回填分段与限速、scope 越权、CSV 格式（BOM/表头）、**金额公式（对用户示例 298/8507/194×$2.10/$0.42/$8.40=$0.005828 逐位断言）**、生效日期取价（调价前后两天各取各价）、**阶梯分档（边界两侧请求各落各档、首档 0 校验、改档新生效日期后历史分类不变）**、**价格回退（ratio 换算公式对拍、CacheRatio 缺省=输入价、不乘 CT 倍率、解析失败标"无法取价"、来源标注、混合汇总合计正确、快照取该日版本）**、导入价格换算正确、**summary 缓存命中与日切后失效、账单查询路径零 newapi 访问（断言直连仅在日切/回填/导入触发）**、分组倍率缺省 1、**站点隔离（两站点同名模型各自取价互不影响、QuotaPerUnit 按站点取快照值）**、**分页与合计行独立（翻页合计不变）**。
 2. 手工：配好价格表后回填近 3 个月 → 抽 2 个用户核对金额与 quota 对照列偏差在舍入误差内（偏差大=价格配置与 newapi 倍率不一致，正是对照列的用途）；viewer 登录仅见绑定用户账单；调价新增生效行 → 历史金额不变、新日期用新价。
 3. 交付说明记录：日切时区口径、回填耗时实测。
 
