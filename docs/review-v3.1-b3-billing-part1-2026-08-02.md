@@ -27,9 +27,20 @@
 - 测试覆盖三关键行为：24 段与判档先于聚合、幂等、站点隔离；全量测试 + typecheck + build 绿。
 - 记档（P3）：小时明细查询无行数上限（当前量级每小时万级行无碍，日志量若上一个数量级需加流式/分批，记录在案）；cache tokens 自 logs.other JSON 解析（与生产实测字段位置一致）。
 
-## 剩余（第三部分待续交）
+## 第三部分验收（2026-08-02 追加，4a4ab07/52752f1/403af91 + 7130e35）：API 内核通过
 
-账单 summary/detail API（结果缓存至下次日切、来源标注 ct|newapi、quota 对照、**零 newapi 读路径断言**）+ CSV 两档；中央闸白名单扩入账单 GET 路径 + viewer 越权测试；账单页面 + 计价配置界面（含"从 newapi 导入价格"）；api-contracts；自查清单随最终 commit 补贴。
+- **报表引擎**（billing/report.go）：CT 价优先、未配价按 ratio 快照现算（ModelRatio/Completion/Cache/GroupRatio + 站点 QuotaPerUnit，decimal 运算）、price_source 标注、未定价模型清单——回退链与设计一致；**读路径纯 CT 存储**（summary/detail 仅依赖 Store，结构上零 newapi）；
+- **summary/detail**：viewer scope 在 handler 层再次强制（站点匹配+用户集合，与闸构成双层）；分页/合计/data_through；CSV 两档在；
+- **计价/倍率配置 API** 就位；viewer 客户授权可编辑（7130e35）；全量测试 + typecheck + build 绿。
+
+## 剩余（第四部分待续交，收尾清单）
+
+1. **中央闸白名单扩入账单 GET 路径**（当前 viewer 被默认拒绝挡住——fail-closed 安全但功能不可用）+ viewer 越权测试；
+2. summary **结果缓存至下次日切**（现每请求现算）；
+3. CSV 补 **UTF-8 BOM**（防 Excel 乱码）；
+4. **"从 newapi 导入价格"** 接口与按钮；
+5. **账单页面 + 计价配置界面** + 菜单；
+6. api-contracts.md；自查清单随最终 commit 补贴。
 
 ## 部署
 
