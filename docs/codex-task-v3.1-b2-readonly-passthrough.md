@@ -6,7 +6,7 @@
 
 ## 设计
 
-- **022 迁移**：instances 表 `ADD COLUMN logs_readonly_dsn VARCHAR(512) NOT NULL DEFAULT ''`（站点级；实例管理页可填，仅 admin 可见可改，页面注明"只读账号，仅授 logs/users SELECT"）。未配置站点相关页面显示"未开通明细查询"。
+- **023 迁移**：instances 表 `ADD COLUMN logs_readonly_dsn VARCHAR(512) NOT NULL DEFAULT ''`（站点级；实例管理页可填，仅 admin 可见可改，页面注明"只读账号，仅授 logs/users SELECT"）。未配置站点相关页面显示"未开通明细查询"。
 - **直连管理**（server 新包）：按站点惰性建连接池（MaxOpenConns 2、查询超时 5s、只读会话）；DSN 变更热生效（每次取时比对）。
 - **日志明细接口** `GET /api/dashboard/passthrough/logs`：参数 站点/用户（viewer 强制 scope 注入，admin 可查站点内任意用户）/**时间区间（必填，缺省最近 24 小时，单次区间上限 31 天——杜绝无区间全表扫）**/分页（上限 100/页）；SQL 强制 `user_id IN (...) AND created_at BETWEEN` 走 newapi 原生用户索引（部署时 EXPLAIN 验证记入交付说明）；返回字段对齐 newapi 日志页（时间/模型/渠道名/tokens/quota/耗时/内容摘要脱敏——复用 agent 侧 redact 正则的 server 版）。
 - **用户只读接口** `GET /api/dashboard/passthrough/users`：scope 内用户的 id/用户名/显示名/余额/状态/已用额度；同过滤规则。
@@ -23,7 +23,7 @@
 - [ ] 直连仅两接口可达，采集/指标链路零改动
 - [ ] scope 注入有越权测试；分页/超时护栏有测试
 - [ ] 未配置 DSN 优雅降级；DSN 仅 admin 可见
-- [ ] 022 纯增量+反向断言；审计落库
+- [ ] 023 纯增量+反向断言；审计落库
 - [ ] 一个 commit：`feat(server,web): read-only newapi passthrough for logs and users (v3.1-B2)`
 
 ## 明确不做

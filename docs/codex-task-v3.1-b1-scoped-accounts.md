@@ -6,7 +6,7 @@
 
 ## 设计
 
-- **021 迁移**：users 表 `ADD COLUMN role VARCHAR(16) NOT NULL DEFAULT 'admin', ADD COLUMN scope_site VARCHAR(64) NOT NULL DEFAULT '', ADD COLUMN scope_user_ids TEXT NULL`（纯增量 1060 容忍+反向断言；存量账号自动 admin 零感知）。
+- **022 迁移**：users 表 `ADD COLUMN role VARCHAR(16) NOT NULL DEFAULT 'admin', ADD COLUMN scope_site VARCHAR(64) NOT NULL DEFAULT '', ADD COLUMN scope_user_ids TEXT NULL`（纯增量 1060 容忍+反向断言；存量账号自动 admin 零感知）。
 - **权限中间件**（server）：session 载 role/scope；`viewer` 仅放行白名单接口（客户监控相关 metrics（instance_user 维度）、B2 起的日志明细/用户只读、B3 起的账单），其余一律 403；放行接口强制注入 `站点=scope_site AND user ∈ scope_user_ids` 过滤（**过滤在 server 端 SQL/内存层执行，非前端**）；viewer 登录与关键查询写 operation_audits。
 - **超管维护界面**：CT 用户管理页支持创建 viewer（选站点+录入 newapi 用户 ID 集合，校验数字列表）、改 scope、停用；viewer 仅可自助改密。
 - **Web**：viewer 登录后菜单仅显客户监控（B2/B3 页面上线后自动出现）；auth store 带 role 供路由守卫。
@@ -21,7 +21,7 @@
 - [ ] 存量 admin 行为零变化（回归）
 - [ ] viewer 越权（直接拼接口）有测试且为 403/空
 - [ ] scope 过滤在 server 端强制，非仅菜单隐藏
-- [ ] 021 纯增量+反向断言；审计落库
+- [ ] 022 纯增量+反向断言；审计落库
 - [ ] 一个 commit：`feat(server,web): scoped viewer accounts and enforcement middleware (v3.1-B1)`
 
 ## 明确不做
