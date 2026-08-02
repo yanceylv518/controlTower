@@ -9,6 +9,7 @@ const items = ref<ScopedUser[]>([])
 const instances = ref<Awaited<ReturnType<typeof dashboard.instances>>['items']>([])
 const customers = ref<Array<{ id: number; name: string }>>([])
 const open = ref(false)
+const editing = ref<ScopedUser | null>(null)
 const saving = ref(false)
 const loadingCustomers = ref(false)
 const form = reactive({ username: '', password: '', scope_site: '', scope_user_ids: [] as number[] })
@@ -41,6 +42,15 @@ async function loadCustomers(keyword = '') {
   } finally { if (request === customerRequest) loadingCustomers.value = false }
 }
 
+async function loadSelectedCustomers(userIDs: number[]) {
+  if (!form.scope_site || !userIDs.length) return
+  const response = await passthrough.users({ site: form.scope_site, user_ids: userIDs.join(','), limit: Math.max(50, userIDs.length), offset: 0 })
+  const selected = response.items.map(item => ({ id: item.id, name: item.display_name || item.username || `客户 ${item.id}` }))
+  const byID = new Map(customers.value.map(item => [item.id, item]))
+  selected.forEach(item => byID.set(item.id, item))
+  customers.value = [...byID.values()]
+}
+
 function changeSite() {
   form.scope_user_ids = []
   customers.value = []
@@ -49,9 +59,19 @@ function changeSite() {
 
 async function showCreate() {
   if (!instances.value.length) await load()
+  editing.value = null
   Object.assign(form, { username: '', password: '', scope_site: sites.value[0] || '', scope_user_ids: [] })
   open.value = true
   await loadCustomers()
+}
+
+async function showEdit(row: ScopedUser) {
+  editing.value = row
+  Object.assign(form, { username: row.username, password: '', scope_site: row.scope_site, scope_user_ids: [...row.scope_user_ids] })
+  customers.value = []
+  open.value = true
+  await loadCustomers()
+  await loadSelectedCustomers(row.scope_user_ids)
 }
 
 async function create() {
@@ -64,6 +84,22 @@ async function create() {
     ElMessage.success('客户查看账号已创建')
   } finally { saving.value = false }
 }
+async function saveEdit() {
+  if (!editing.value || !form.scope_user_ids.length) { ElMessage.warning('请至少选择一个客户'); return }
+  saving.value = true
+  try {
+    await auth.updateUser(editing.value.id, {
+      role: editing.value.role,
+      scope_site: editing.value.scope_site,
+      scope_user_ids: [...form.scope_user_ids],
+      enabled: editing.value.enabled,
+    })
+    open.value = false
+    await load()
+    ElMessage.success('可查看客户已更新')
+  } finally { saving.value = false }
+}
+async function submit() { if (editing.value) await saveEdit(); else await create() }
 async function toggle(row: ScopedUser, enabled: boolean) { await auth.updateUser(row.id, { role: row.role, scope_site: row.scope_site, scope_user_ids: row.scope_user_ids, enabled }); await load() }
 void load()
 </script>
@@ -78,13 +114,14 @@ void load()
       <el-table-column prop="scope_site" label="可看站点"><template #default="s">{{ s.row.scope_site || '全部（管理员）' }}</template></el-table-column>
       <el-table-column label="可看客户 ID"><template #default="s">{{ s.row.scope_user_ids?.join('、') || '全部（管理员）' }}</template></el-table-column>
       <el-table-column label="状态"><template #default="s"><el-switch v-if="s.row.role !== 'admin'" :model-value="s.row.enabled" @change="toggle(s.row, Boolean($event))" /><el-tag v-else>启用</el-tag></template></el-table-column>
+      <el-table-column label="操作" width="110"><template #default="s"><el-button v-if="s.row.role !== 'admin'" link type="primary" @click="showEdit(s.row)">修改客户</el-button></template></el-table-column>
     </el-table>
-    <el-dialog v-model="open" title="创建客户查看账号" width="560px">
+    <el-dialog v-model="open" :title="editing ? '修改可查看客户' : '创建客户查看账号'" width="560px">
       <el-form label-width="100px">
-        <el-form-item label="登录账号"><el-input v-model="form.username" /></el-form-item>
-        <el-form-item label="初始密码"><el-input v-model="form.password" type="password" show-password /><div class="tip">至少 8 位，创建后请安全地交给客户。</div></el-form-item>
+        <el-form-item label="登录账号"><el-input v-model="form.username" :disabled="Boolean(editing)" /></el-form-item>
+        <el-form-item v-if="!editing" label="初始密码"><el-input v-model="form.password" type="password" show-password /><div class="tip">至少 8 位，创建后请安全地交给客户。</div></el-form-item>
         <el-form-item label="站点">
-          <el-select v-model="form.scope_site" filterable placeholder="请选择站点" style="width:100%" @change="changeSite">
+          <el-select v-model="form.scope_site" filterable :disabled="Boolean(editing)" placeholder="请选择站点" style="width:100%" @change="changeSite">
             <el-option v-for="site in sites" :key="site" :label="site" :value="site" />
           </el-select>
         </el-form-item>
@@ -95,7 +132,7 @@ void load()
           <div class="tip">默认显示前 50 个正常客户，可输入客户名称或 ID 继续搜索。</div>
         </el-form-item>
       </el-form>
-      <template #footer><el-button @click="open = false">取消</el-button><el-button type="primary" :loading="saving" @click="create">创建</el-button></template>
+      <template #footer><el-button @click="open = false">取消</el-button><el-button type="primary" :loading="saving" @click="submit">{{ editing ? '保存修改' : '创建' }}</el-button></template>
     </el-dialog>
   </AppShell>
 </template>
