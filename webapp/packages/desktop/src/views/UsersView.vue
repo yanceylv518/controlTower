@@ -2,7 +2,7 @@
 import { computed, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { siteOf, type ScopedUser } from '@ct/shared'
-import { auth, dashboard } from '../api'
+import { auth, dashboard, passthrough } from '../api'
 import AppShell from '../components/AppShell.vue'
 
 const items = ref<ScopedUser[]>([])
@@ -13,6 +13,8 @@ const saving = ref(false)
 const loadingCustomers = ref(false)
 const form = reactive({ username: '', password: '', scope_site: '', scope_user_ids: [] as number[] })
 const sites = computed(() => [...new Set(instances.value.filter(item => item.enabled).map(siteOf))].sort())
+const customerCache = new Map<string, { expires: number; items: Array<{ id: number; name: string }> }>()
+let customerRequest = 0
 
 async function load() {
   const [users, instanceResponse] = await Promise.all([auth.users(), dashboard.instances()])
@@ -20,30 +22,29 @@ async function load() {
   instances.value = instanceResponse.items
 }
 
-function customerID(key: string) {
-  const value = Number(key.split(':').pop())
-  return Number.isInteger(value) && value > 0 ? value : 0
-}
-
-async function loadCustomers() {
-  form.scope_user_ids = []
-  customers.value = []
+async function loadCustomers(keyword = '') {
   if (!form.scope_site) return
-  const instanceIDs = instances.value.filter(item => item.enabled && siteOf(item) === form.scope_site).map(item => item.instance_id)
+  const query = keyword.trim()
+  const cacheKey = `${form.scope_site}:${query.toLowerCase()}`
+  const cached = customerCache.get(cacheKey)
+  if (cached && cached.expires > Date.now()) { customers.value = cached.items; return }
+  const request = ++customerRequest
   loadingCustomers.value = true
   try {
-    const responses = await Promise.all(instanceIDs.map(id => dashboard.usage(720, id)))
-    const byID = new Map<number, { id: number; name: string }>()
-    for (const item of responses.flatMap(response => response.items)) {
-      if (item.dimension_type !== 'instance_user') continue
-      const id = customerID(item.dimension_key)
-      if (!id) continue
-      const name = item.display_name || item.display_key || `客户 ${id}`
-      const current = byID.get(id)
-      if (!current || current.name === `客户 ${id}`) byID.set(id, { id, name })
-    }
-    customers.value = [...byID.values()].sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
-  } finally { loadingCustomers.value = false }
+    const response = await passthrough.users({ site: form.scope_site, keyword: query, status: 1, limit: 50, offset: 0 })
+    const result = response.items.map(item => ({ id: item.id, name: item.display_name || item.username || `客户 ${item.id}` }))
+    customerCache.set(cacheKey, { expires: Date.now() + 5 * 60_000, items: result })
+    if (request === customerRequest) customers.value = result
+  } catch {
+    if (request === customerRequest) customers.value = []
+    ElMessage.error('客户列表加载失败，请检查站点只读连接')
+  } finally { if (request === customerRequest) loadingCustomers.value = false }
+}
+
+function changeSite() {
+  form.scope_user_ids = []
+  customers.value = []
+  void loadCustomers()
 }
 
 async function showCreate() {
@@ -83,15 +84,15 @@ void load()
         <el-form-item label="登录账号"><el-input v-model="form.username" /></el-form-item>
         <el-form-item label="初始密码"><el-input v-model="form.password" type="password" show-password /><div class="tip">至少 8 位，创建后请安全地交给客户。</div></el-form-item>
         <el-form-item label="站点">
-          <el-select v-model="form.scope_site" filterable placeholder="请选择站点" style="width:100%" @change="loadCustomers">
+          <el-select v-model="form.scope_site" filterable placeholder="请选择站点" style="width:100%" @change="changeSite">
             <el-option v-for="site in sites" :key="site" :label="site" :value="site" />
           </el-select>
         </el-form-item>
         <el-form-item label="客户">
-          <el-select v-model="form.scope_user_ids" multiple filterable collapse-tags collapse-tags-tooltip :max-collapse-tags="3" :loading="loadingCustomers" placeholder="请选择一个或多个客户" style="width:100%">
+          <el-select v-model="form.scope_user_ids" multiple filterable remote reserve-keyword collapse-tags collapse-tags-tooltip :max-collapse-tags="3" :loading="loadingCustomers" :remote-method="loadCustomers" placeholder="请选择或搜索客户" style="width:100%">
             <el-option v-for="customer in customers" :key="customer.id" :label="`${customer.name}（ID ${customer.id}）`" :value="customer.id" />
           </el-select>
-          <div class="tip">显示该站点近 30 天有监控记录的客户，可按客户名称或 ID 搜索。</div>
+          <div class="tip">默认显示前 50 个正常客户，可输入客户名称或 ID 继续搜索。</div>
         </el-form-item>
       </el-form>
       <template #footer><el-button @click="open = false">取消</el-button><el-button type="primary" :loading="saving" @click="create">创建</el-button></template>
