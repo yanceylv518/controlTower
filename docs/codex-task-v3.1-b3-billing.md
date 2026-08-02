@@ -15,11 +15,11 @@
 
 ### 金额计算（server 端统一函数，查询时算）
 
-对每条日切行：取该 day 生效、且 tier_from 匹配的价格行（effective_from ≤ day 的最新一套档位表中对应档）与分组倍率（缺省 1）——`amount = (max(prompt−cache,0)/1M×input + cache/1M×cache_price + completion/1M×output) × ratio`；模型无有效价格 → 行标 `unpriced:true`，金额区显示"未定价"并汇总提示（**不得静默按 0**）；quota 对照列 = quota÷QuotaPerUnit。计算用 decimal 或先乘后除避免浮点误差累积，展示保留 4 位小数。
+对每条日切行：取该 day 生效、且 tier_from 匹配的价格行（effective_from ≤ day 的最新一套档位表中对应档）与分组倍率（缺省 1）——`amount = (max(prompt−cache,0)/1M×input + cache/1M×cache_price + completion/1M×output) × ratio`；**价格回退（2026-08-02 用户拍板）**：模型在 CT 计价表无有效价格 → 金额回退为 `quota÷QuotaPerUnit`（quota 即 newapi 按其模型价格逐笔实扣的结果，天然含 newapi 分组倍率，**不再乘 CT 分组倍率**，防重复）；每行带金额来源标注 `price_source: ct|newapi`，账单页顶部列出走 newapi 价的模型清单（提示可配 CT 价，但不阻塞出账）。quota 对照列 = quota÷QuotaPerUnit（CT 价行用于校验偏差；newapi 价行两列相同）。计算用 decimal 或先乘后除避免浮点误差累积，展示保留 4 位小数。
 
 ### 计价配置界面与接口
 
-`GET/PUT /api/dashboard/billing/prices`（列表含生效历史与档位；调价/改档=新增一套生效日期行，不改旧行；档位编辑校验 tier_from 严格递增且首档为 0）与 `GET/PUT /api/dashboard/billing/group-ratios`；仅 admin；修改写 operation_audits；账单页顶部提示存在未定价模型时列出清单。
+`GET/PUT /api/dashboard/billing/prices`（列表含生效历史与档位；调价/改档=新增一套生效日期行，不改旧行；档位编辑校验 tier_from 严格递增且首档为 0）与 `GET/PUT /api/dashboard/billing/group-ratios`；仅 admin；修改写 operation_audits；账单页顶部列出走 newapi 价（未配 CT 价）的模型清单。
 
 ### 日切任务（server runner）
 
@@ -42,7 +42,7 @@
 
 ## 验证要求
 
-1. 全量测试 + typecheck；新增测试：日切聚合 SQL 契约（含分组维度）、upsert 幂等（同日重跑数值不翻倍）、回填分段与限速、scope 越权、CSV 格式（BOM/表头）、**金额公式（对用户示例 298/8507/194×$2.10/$0.42/$8.40=$0.005828 逐位断言）**、生效日期取价（调价前后两天各取各价）、**阶梯分档（边界两侧请求各落各档、首档 0 校验、改档新生效日期后历史分类不变）**、未定价标注、分组倍率缺省 1、**分页与合计行独立（翻页合计不变）**。
+1. 全量测试 + typecheck；新增测试：日切聚合 SQL 契约（含分组维度）、upsert 幂等（同日重跑数值不翻倍）、回填分段与限速、scope 越权、CSV 格式（BOM/表头）、**金额公式（对用户示例 298/8507/194×$2.10/$0.42/$8.40=$0.005828 逐位断言）**、生效日期取价（调价前后两天各取各价）、**阶梯分档（边界两侧请求各落各档、首档 0 校验、改档新生效日期后历史分类不变）**、**价格回退（未配 CT 价的模型金额=quota 换算、不乘 CT 倍率、来源标注正确、混合汇总合计正确）**、分组倍率缺省 1、**分页与合计行独立（翻页合计不变）**。
 2. 手工：配好价格表后回填近 3 个月 → 抽 2 个用户核对金额与 quota 对照列偏差在舍入误差内（偏差大=价格配置与 newapi 倍率不一致，正是对照列的用途）；viewer 登录仅见绑定用户账单；调价新增生效行 → 历史金额不变、新日期用新价。
 3. 交付说明记录：日切时区口径、回填耗时实测。
 
@@ -52,7 +52,7 @@
 - [ ] viewer 越权（summary/detail/csv 三处）均有测试
 - [ ] 账单无任何当日直连查询（数据截至昨日）；未配 DSN 降级不报错
 - [ ] 023 三表纯增量+反向断言；回填与价格/倍率修改均有审计
-- [ ] 金额公式对示例逐位断言通过；未定价不静默按 0
+- [ ] 金额公式对示例逐位断言通过；价格回退与来源标注有测试
 - [ ] 一个 commit：`feat(server,web): per-user consumption billing with daily rollup (v3.1-B3)`
 
 ## 明确不做
