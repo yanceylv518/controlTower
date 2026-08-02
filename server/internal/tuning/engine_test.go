@@ -13,7 +13,7 @@ type sentinelStore struct {
 
 func (s *sentinelStore) GetPolicy(string) (PolicyRecord, bool, error) { return s.policy, true, nil }
 func (s *sentinelStore) PutPolicy(p PolicyRecord) error               { s.policy = p; return nil }
-func (s *sentinelStore) ListEnabledInstances() ([]string, error)      { return nil, nil }
+func (s *sentinelStore) ListEnabledSites() ([]string, error)          { return nil, nil }
 func (s *sentinelStore) QueryMetrics(string, time.Time, time.Time) ([]ChannelMetric, error) {
 	return nil, nil
 }

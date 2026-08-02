@@ -34,7 +34,7 @@ func (s Store) PutPolicy(r tuning.PolicyRecord) error {
 }
 
 func (s Store) ListChannelBaseValues(instanceID, model string) ([]tuning.ChannelBaseValue, error) {
-	args := []any{instanceID, instanceID}
+	args := []any{instanceID, instanceID, instanceID}
 	filter := ""
 	if model != "" {
 		filter = " AND b.model_name=?"
@@ -42,8 +42,10 @@ func (s Store) ListChannelBaseValues(instanceID, model string) ([]tuning.Channel
 	}
 	rows, err := s.db.QueryContext(context.Background(), `SELECT b.instance_id,b.channel_id,c.channel_name,b.model_name,b.base_weight,b.base_priority,c.weight,COALESCE(c.priority,0),c.captured_at,COALESCE(c.models_text,''),b.updated_at,b.updated_by
 FROM channel_base_values b
-JOIN channel_snapshots c ON c.instance_id=b.instance_id AND c.channel_id=b.channel_id
-JOIN (SELECT channel_id,MAX(captured_at) captured_at FROM channel_snapshots WHERE instance_id=? GROUP BY channel_id) x ON x.channel_id=c.channel_id AND x.captured_at=c.captured_at
+JOIN (SELECT cs.* FROM channel_snapshots cs JOIN instances i ON i.id=cs.instance_id
+      JOIN (SELECT cs2.channel_id,MAX(cs2.captured_at) captured_at FROM channel_snapshots cs2 JOIN instances i2 ON i2.id=cs2.instance_id WHERE CASE WHEN i2.site_id='' THEN i2.id ELSE i2.site_id END=? AND i2.enabled=1 GROUP BY cs2.channel_id) x
+        ON x.channel_id=cs.channel_id AND x.captured_at=cs.captured_at
+      WHERE CASE WHEN i.site_id='' THEN i.id ELSE i.site_id END=? AND i.enabled=1) c ON c.channel_id=b.channel_id
 WHERE b.instance_id=? AND LOWER(c.status) IN ('enabled','enable','active','normal','1')`+filter+` ORDER BY b.model_name,c.channel_name`, args...)
 	if err != nil {
 		return nil, err
@@ -117,8 +119,8 @@ func (s Store) SyncChannelBaseValues(instanceID string, models []string) ([]tuni
 	}
 	return out, nil
 }
-func (s Store) ListEnabledInstances() ([]string, error) {
-	rows, e := s.db.QueryContext(context.Background(), `SELECT id FROM instances WHERE enabled=1`)
+func (s Store) ListEnabledSites() ([]string, error) {
+	rows, e := s.db.QueryContext(context.Background(), `SELECT DISTINCT CASE WHEN site_id='' THEN id ELSE site_id END FROM instances WHERE enabled=1`)
 	if e != nil {
 		return nil, e
 	}
@@ -147,8 +149,8 @@ COALESCE(MAX(ttft_p95_ms),0)/1000,
 CASE WHEN SUM(cache_prompt_tokens)>0 THEN SUM(cache_tokens_total)/SUM(cache_prompt_tokens) ELSE 0 END,
 CASE WHEN SUM(otps_duration_seconds)>0 THEN SUM(otps_output_tokens)/SUM(otps_duration_seconds) ELSE 0 END
 FROM metric_1m
-WHERE instance_id=? AND dimension_type='instance_channel' AND bucket_time>=? AND bucket_time<?
-GROUP BY dimension_key`
+WHERE instance_id IN (SELECT id FROM instances WHERE enabled=1 AND CASE WHEN site_id='' THEN id ELSE site_id END=?) AND dimension_type='instance_channel' AND bucket_time>=? AND bucket_time<?
+GROUP BY CAST(SUBSTRING_INDEX(dimension_key,':',-1) AS SIGNED)`
 
 func (s Store) QueryMetrics(id string, start, end time.Time) ([]tuning.ChannelMetric, error) {
 	rows, e := s.db.QueryContext(context.Background(), tuningChannelMetricsSQL, id, start, end)
@@ -227,6 +229,10 @@ func (s Store) CreateContinuousWeightChange(v tuning.Recommendation, actor strin
 		return "", err
 	}
 	defer tx.Rollback()
+	controlInstanceID, err := controlInstanceForSite(tx, v.InstanceID)
+	if err != nil {
+		return "", err
+	}
 	ev, _ := json.Marshal(v.Evidence)
 	commandID := randomCommandID()
 	payloadValues := map[string]any{"weight": v.ProposedWeight}
@@ -237,7 +243,7 @@ func (s Store) CreateContinuousWeightChange(v tuning.Recommendation, actor strin
 	if _, err = tx.Exec(`INSERT INTO tuning_recommendations(id,instance_id,channel_id,channel_name,created_at,rule,evidence_json,current_weight,proposed_weight,current_priority,proposed_priority,mode_at_creation,status,command_id,acted_by,acted_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, v.ID, v.InstanceID, v.ChannelID, v.ChannelName, v.CreatedAt, v.Rule, string(ev), v.CurrentWeight, v.ProposedWeight, v.CurrentPriority, v.ProposedPriority, v.ModeAtCreation, "auto_executed", commandID, actor, now); err != nil {
 		return "", err
 	}
-	if _, err = tx.Exec(`INSERT INTO channel_commands(id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at) VALUES(?,?,?,?,?,'pending',?,'',?,?)`, commandID, v.InstanceID, v.ChannelID, "channel.update", string(payload), actor, now, now); err != nil {
+	if _, err = tx.Exec(`INSERT INTO channel_commands(id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at) VALUES(?,?,?,?,?,'pending',?,'',?,?)`, commandID, controlInstanceID, v.ChannelID, "channel.update", string(payload), actor, now, now); err != nil {
 		return "", err
 	}
 	before := fmt.Sprintf(`{"weight":%d}`, v.CurrentWeight)
@@ -254,9 +260,13 @@ func (s Store) CreateContinuousProbe(v tuning.Recommendation, model string, coun
 		return "", err
 	}
 	defer tx.Rollback()
+	controlInstanceID, err := controlInstanceForSite(tx, v.InstanceID)
+	if err != nil {
+		return "", err
+	}
 	commandID := randomCommandID()
 	payload, _ := json.Marshal(map[string]any{"model": model, "probe_count": count, "probe_interval_seconds": interval})
-	_, err = tx.Exec(`INSERT INTO channel_commands(id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at) VALUES(?,?,?,?,?,'pending','system:auto','',?,?)`, commandID, v.InstanceID, v.ChannelID, "channel.probe", string(payload), now, now)
+	_, err = tx.Exec(`INSERT INTO channel_commands(id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at) VALUES(?,?,?,?,?,'pending','system:auto','',?,?)`, commandID, controlInstanceID, v.ChannelID, "channel.probe", string(payload), now, now)
 	if err != nil {
 		return "", err
 	}
@@ -272,8 +282,27 @@ func (s Store) CreateContinuousProbe(v tuning.Recommendation, model string, coun
 }
 
 func (s Store) RecordContinuousProbeResult(instanceID string, channelID int64, commandID string, attempts, successes int, duration float64, now time.Time) error {
-	_, err := s.db.ExecContext(context.Background(), `UPDATE tuning_continuous_states SET probe_command_id=NULL,probe_attempts=?,probe_successes=?,probe_duration_sum=?,updated_at=? WHERE instance_id=? AND channel_id=? AND probe_command_id=?`, attempts, successes, duration, now, instanceID, channelID, commandID)
+	_, err := s.db.ExecContext(context.Background(), `UPDATE tuning_continuous_states SET probe_command_id=NULL,probe_attempts=?,probe_successes=?,probe_duration_sum=?,updated_at=? WHERE channel_id=? AND probe_command_id=?`, attempts, successes, duration, now, channelID, commandID)
 	return err
+}
+
+type tuningCommandTx interface {
+	QueryRow(query string, args ...any) *sql.Row
+}
+
+func controlInstanceForSite(tx tuningCommandTx, siteID string) (string, error) {
+	var id string
+	err := tx.QueryRow(`SELECT i.id
+FROM instances i
+WHERE i.enabled=1 AND CASE WHEN i.site_id='' THEN i.id ELSE i.site_id END=?
+ORDER BY (SELECT MAX(cs.captured_at) FROM channel_snapshots cs WHERE cs.instance_id=i.id) DESC,
+         (SELECT MAX(a.last_seen_at) FROM agents a WHERE a.instance_id=i.id) DESC,
+         i.id ASC
+LIMIT 1`, siteID).Scan(&id)
+	if err == sql.ErrNoRows {
+		return "", fmt.Errorf("no enabled control instance for site %s", siteID)
+	}
+	return id, err
 }
 
 func randomCommandID() string {
@@ -283,15 +312,16 @@ func randomCommandID() string {
 }
 
 const tuningRecentChannelBucketsSQL = `SELECT
-bucket_time,request_count,error_count,user_error_count
+bucket_time,SUM(request_count),SUM(error_count),SUM(user_error_count)
 FROM metric_1m
-WHERE instance_id=? AND dimension_type='instance_channel'
-  AND dimension_key=CONCAT(?,':channel:',?) AND bucket_time>=? AND request_count>0
+WHERE instance_id IN (SELECT id FROM instances WHERE enabled=1 AND CASE WHEN site_id='' THEN id ELSE site_id END=?) AND dimension_type='instance_channel'
+  AND CAST(SUBSTRING_INDEX(dimension_key,':',-1) AS SIGNED)=? AND bucket_time>=? AND request_count>0
+GROUP BY bucket_time
 ORDER BY bucket_time DESC
 LIMIT ?`
 
 func (s Store) QueryRecentChannelBuckets(id string, channelID int64, since time.Time, limit int) ([]tuning.RecentChannelBucket, error) {
-	rows, err := s.db.QueryContext(context.Background(), tuningRecentChannelBucketsSQL, id, id, channelID, since, limit)
+	rows, err := s.db.QueryContext(context.Background(), tuningRecentChannelBucketsSQL, id, channelID, since, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -331,12 +361,13 @@ SELECT c.channel_id,c.channel_name,c.status,c.weight,c.models_text,COALESCE(c.pr
 FROM channel_snapshots c
 JOIN (
   SELECT channel_id,MAX(captured_at) AS captured_at
-  FROM channel_snapshots
-  WHERE instance_id=?
+  FROM channel_snapshots cs2 JOIN instances i2 ON i2.id=cs2.instance_id
+  WHERE i2.enabled=1 AND CASE WHEN i2.site_id='' THEN i2.id ELSE i2.site_id END=?
   GROUP BY channel_id
 ) latest
   ON latest.channel_id=c.channel_id AND latest.captured_at=c.captured_at
-WHERE c.instance_id=?`
+JOIN instances i ON i.id=c.instance_id
+WHERE i.enabled=1 AND CASE WHEN i.site_id='' THEN i.id ELSE i.site_id END=?`
 
 func (s Store) InsertRecommendation(r tuning.Recommendation) error {
 	ev, _ := json.Marshal(r.Evidence)
@@ -363,7 +394,7 @@ func parseChannelModels(raw string) []string {
 
 func (s Store) HasExpiredAutoCommands(id string, since time.Time) (bool, error) {
 	var found int
-	err := s.db.QueryRowContext(context.Background(), `SELECT EXISTS(SELECT 1 FROM channel_commands WHERE instance_id=? AND created_by='system:auto' AND status='expired' AND updated_at>=?)`, id, since).Scan(&found)
+	err := s.db.QueryRowContext(context.Background(), `SELECT EXISTS(SELECT 1 FROM channel_commands WHERE instance_id IN (SELECT id FROM instances WHERE CASE WHEN site_id='' THEN id ELSE site_id END=?) AND created_by='system:auto' AND status='expired' AND updated_at>=?)`, id, since).Scan(&found)
 	return found == 1, err
 }
 
