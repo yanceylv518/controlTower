@@ -23,13 +23,13 @@
 
 ### 日切任务（server runner）
 
-- 每日 02:00（服务器本地时区，交付说明注明口径）对每个配置了只读 DSN 的站点：直连聚合**昨日** `SELECT user_id, username, model_name, group, DATE(created_at), COUNT/SUM(tokens/cache/quota) FROM logs WHERE type=消费 GROUP BY 用户,模型,分组,日` upsert 入 billing_daily（幂等，重跑覆盖）；**分档聚合**：有阶梯配置的模型按该日生效边界用 CASE 分档单独聚合，其余模型一把聚合 tier_from=0；单站点失败不影响其他站点，失败日志+下轮重试；
+- 每日 02:00（服务器本地时区，交付说明注明口径）对每个配置了只读 DSN 的站点：直连聚合**昨日**日志 upsert 入 billing_daily（幂等，重跑覆盖）；**按小时分段执行（24 个小区间查询串行，段间 200ms，压平生产库峰值负载）**；**分档聚合**：有阶梯配置的模型按该日生效边界用 CASE 分档单独聚合，其余模型一把聚合 tier_from=0；单站点失败不影响其他站点，失败日志+下轮重试；
 - **回填**：admin 接口 `POST /api/dashboard/billing/backfill {instance_id, from, to}`——按天分段串行执行（每天一条聚合查询，段间 sleep 500ms 限速），进度写日志，operation_audits 记录触发；
-- 当日数据：账单接口对"今天"这一段实时直连聚合（单日轻查询，同规则分档），与 billing_daily 拼接返回。
+- **账单数据截至昨日（2026-08-02 用户定调"减少大数据查询"）**：不做当日实时直连拼接——那是每次页面刷新都扫生产库当天日志的最大查询源；页面标注"数据截至昨日，每日凌晨更新"，当日消费由客户监控页（CT 指标）承担。账单一天内数字稳定，也更符合账单语义。
 
 ### API（scope 中间件覆盖，viewer 自动限定绑定用户）
 
-- `GET /api/dashboard/billing/summary?instance_id=&month=&page=&page_size=&search=&sort=`：每用户一行（消费额=计价表金额、quota 对照额、请求数、prompt/completion/cache tokens、当前余额（直连 users，可缺省）、未定价标注）；**服务端分页（默认 50/页）、用户名搜索、默认按消费额降序**；响应含全站合计（SQL 聚合，与分页无关）；admin 全站，viewer 仅 scope；
+- `GET /api/dashboard/billing/summary?instance_id=&month=&page=&page_size=&search=&sort=`：每用户一行（消费额=计价表金额、quota 对照额、请求数、prompt/completion/cache tokens、当前余额（直连 users，**仅查当前页 50 个用户 ID 的批量查询**，可缺省）、未定价标注）；**服务端分页（默认 50/页）、用户名搜索、默认按消费额降序**；响应含全站合计（SQL 聚合，与分页无关）；admin 全站，viewer 仅 scope；
 - `GET /api/dashboard/billing/detail?instance_id=&user_id=&month=`：按模型分组合计 + 按日序列；viewer 越权 user_id → 403/空；
 - 导出两档（均 `format=csv`，Content-Disposition，UTF-8 BOM 防 Excel 乱码，支持 `from/to` 任意日期区间、缺省整月）：汇总导出（summary，每用户一行月合计，千级）与**单用户明细导出**（detail，日×模型×档位——账单交付以单用户为单位，用户确认无全站明细导出需求）；
 - api-contracts.md 更新。
@@ -38,11 +38,11 @@
 
 - 列表：月份选择（默认当月）+ 用户表格（分页/搜索/按消费额降序）+ 全站合计行 + 汇总导出按钮；金额用设置中心货币符号；
 - 详情：模型×档位分组表（单档模型不显示档位列）+ 按日消费曲线（复用图表组件与 chartRenderQueue）+ 导出；"查看日志"链到 B2 使用日志页（带用户与月份参数）；
-- 站点未配置 DSN 的降级提示与 B2 一致（billing_daily 有历史数据时仍可展示，仅当日段缺失标注）。
+- 站点未配置 DSN 的降级提示与 B2 一致（billing_daily 有历史数据时仍可展示）；页面显著标注"数据截至昨日"。
 
 ## 验证要求
 
-1. 全量测试 + typecheck；新增测试：日切聚合 SQL 契约（含分组维度）、upsert 幂等（同日重跑数值不翻倍）、回填分段与限速、当日拼接、scope 越权、CSV 格式（BOM/表头）、**金额公式（对用户示例 298/8507/194×$2.10/$0.42/$8.40=$0.005828 逐位断言）**、生效日期取价（调价前后两天各取各价）、**阶梯分档（边界两侧请求各落各档、首档 0 校验、改档新生效日期后历史分类不变）**、未定价标注、分组倍率缺省 1、**分页与合计行独立（翻页合计不变）**。
+1. 全量测试 + typecheck；新增测试：日切聚合 SQL 契约（含分组维度）、upsert 幂等（同日重跑数值不翻倍）、回填分段与限速、scope 越权、CSV 格式（BOM/表头）、**金额公式（对用户示例 298/8507/194×$2.10/$0.42/$8.40=$0.005828 逐位断言）**、生效日期取价（调价前后两天各取各价）、**阶梯分档（边界两侧请求各落各档、首档 0 校验、改档新生效日期后历史分类不变）**、未定价标注、分组倍率缺省 1、**分页与合计行独立（翻页合计不变）**。
 2. 手工：配好价格表后回填近 3 个月 → 抽 2 个用户核对金额与 quota 对照列偏差在舍入误差内（偏差大=价格配置与 newapi 倍率不一致，正是对照列的用途）；viewer 登录仅见绑定用户账单；调价新增生效行 → 历史金额不变、新日期用新价。
 3. 交付说明记录：日切时区口径、回填耗时实测。
 
@@ -50,7 +50,7 @@
 
 - [ ] 日切幂等有测试；单站点失败不阻塞其他站点
 - [ ] viewer 越权（summary/detail/csv 三处）均有测试
-- [ ] 当日段实时拼接正确；未配 DSN 降级不报错
+- [ ] 账单无任何当日直连查询（数据截至昨日）；未配 DSN 降级不报错
 - [ ] 023 三表纯增量+反向断言；回填与价格/倍率修改均有审计
 - [ ] 金额公式对示例逐位断言通过；未定价不静默按 0
 - [ ] 一个 commit：`feat(server,web): per-user consumption billing with daily rollup (v3.1-B3)`
