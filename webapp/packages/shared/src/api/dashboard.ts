@@ -404,6 +404,62 @@ const query = (
   return encoded ? `?${encoded}` : "";
 };
 
+export interface BillingUserSummary {
+  user_id: number;
+  username: string;
+  request_count: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  cache_tokens: number;
+  quota: number;
+  amount: string;
+  balance: number;
+  unpriced_models: string[];
+  price_sources: string[];
+}
+export interface BillingSummaryResponse {
+  items: BillingUserSummary[];
+  total: number;
+  page: number;
+  page_size: number;
+  summary: BillingUserSummary & { users: number };
+  data_through: string;
+}
+export interface BillingDetailItem {
+  day: string;
+  model_name: string;
+  group_name: string;
+  tier_from: number;
+  request_count: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  cache_tokens: number;
+  quota: number;
+  amount: string;
+  price_source: "ct" | "newapi" | "";
+  unpriced: boolean;
+}
+export interface BillingDetailResponse {
+  items: BillingDetailItem[];
+  user_id: number;
+  month: string;
+  data_through: string;
+}
+export interface BillingPriceItem {
+  instance_id: string;
+  model_name: string;
+  effective_from: string;
+  tier_from: number;
+  input_price: string;
+  output_price: string;
+  cache_price: string;
+}
+export interface BillingGroupRatioItem {
+  instance_id: string;
+  group_name: string;
+  ratio: string;
+}
+
 export const dashboardApi = (client: ApiClient) => ({
   instances: () =>
     client.request<ListResponse<InstanceItem>>("/api/dashboard/instances"),
@@ -614,4 +670,14 @@ export const dashboardApi = (client: ApiClient) => ({
     client.request<ListResponse<ChannelBaseValue>>(`/api/dashboard/tuning/base-values${query({ site_id })}`, { method: "PUT", body: JSON.stringify({ items }) }),
   syncTuningBaseValues: (site_id: string, models: string[]) =>
     client.request<ListResponse<ChannelBaseValue>>(`/api/dashboard/tuning/base-values/sync${query({ site_id })}`, { method: "POST", body: JSON.stringify({ models }) }),
+  billingSummary: (params: { instance_id: string; month: string; page?: number; page_size?: number; search?: string }) =>
+    client.request<BillingSummaryResponse>(`/api/dashboard/billing/summary${query(params)}`),
+  billingDetail: (params: { instance_id: string; user_id: number; month: string }) =>
+    client.request<BillingDetailResponse>(`/api/dashboard/billing/detail${query(params)}`),
+  billingPrices: (instance_id: string) =>
+    client.request<ListResponse<BillingPriceItem>>(`/api/dashboard/billing/prices${query({ instance_id })}`),
+  billingGroupRatios: (instance_id: string) =>
+    client.request<ListResponse<BillingGroupRatioItem>>(`/api/dashboard/billing/group-ratios${query({ instance_id })}`),
+  importBillingPrices: (instance_id: string) =>
+    client.request<{ items: BillingPriceItem[]; quota_per_unit: string }>(`/api/dashboard/billing/import-prices${query({ instance_id })}`),
 });
