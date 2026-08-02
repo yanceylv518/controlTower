@@ -132,6 +132,7 @@ func (s RollupService) RollupDay(ctx context.Context, instanceID string, day tim
 	if err = s.Store.PutBillingBalanceSnapshots(ctx, instanceID, startOfDay, balances); err != nil {
 		return result, fmt.Errorf("save balance snapshot: %w", err)
 	}
+	MonthlySummaryCache.InvalidateInstance(instanceID)
 	result.Rows = len(rows)
 	return result, nil
 }

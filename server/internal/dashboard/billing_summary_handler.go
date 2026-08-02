@@ -53,6 +53,11 @@ func (h BillingSummaryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 			return
 		}
 	}
+	cacheKey := billing.SummaryCacheKey(instanceID, month, userIDs)
+	if items, total, ok := billing.MonthlySummaryCache.Get(cacheKey); ok {
+		h.respondWithSearch(w, r, items, total, to)
+		return
+	}
 	rows, err := h.Store.QueryBillingAggregates(r.Context(), instanceID, from, to, userIDs)
 	if err != nil {
 		writeDashboardError(w, http.StatusInternalServerError, "billing_query_failed")
@@ -79,6 +84,11 @@ func (h BillingSummaryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	items, total := billing.BuildSummary(rows, prices, ratios, snapshots, balances)
+	billing.MonthlySummaryCache.Put(cacheKey, items, total)
+	h.respondWithSearch(w, r, items, total, to)
+}
+
+func (h BillingSummaryHandler) respondWithSearch(w http.ResponseWriter, r *http.Request, items []billing.UserSummary, total billing.SummaryTotal, to time.Time) {
 	search := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("search")))
 	if search != "" {
 		filtered := items[:0]

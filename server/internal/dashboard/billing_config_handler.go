@@ -102,6 +102,7 @@ func (h BillingPricesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 			writeDashboardError(w, 500, "update_failed")
 			return
 		}
+		billing.MonthlySummaryCache.InvalidateInstance(req.InstanceID)
 		billingConfigAudit(h.Store, r, req.InstanceID, "billing.price_update", req.ModelName, req)
 		writeDashboardJSON(w, 200, map[string]any{"items": records})
 	default:
@@ -146,6 +147,7 @@ func (h BillingGroupRatiosHandler) ServeHTTP(w http.ResponseWriter, r *http.Requ
 			writeDashboardError(w, 500, "update_failed")
 			return
 		}
+		billing.MonthlySummaryCache.InvalidateInstance(req.InstanceID)
 		billingConfigAudit(h.Store, r, req.InstanceID, "billing.group_ratio_update", req.GroupName, req)
 		writeDashboardJSON(w, 200, value)
 	default:

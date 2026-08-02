@@ -32,6 +32,7 @@ func (f fakeBillingSummaryStore) LatestBillingBalances(context.Context, string, 
 }
 
 func TestBillingSummaryPaginationDoesNotChangeTotals(t *testing.T) {
+	billing.MonthlySummaryCache.InvalidateInstance("site-a")
 	day := time.Date(2026, 8, 1, 0, 0, 0, 0, time.Local)
 	store := fakeBillingSummaryStore{rows: []billing.AggregateRow{
 		{UserID: 1, Username: "a", ModelName: "m", Day: day, PromptTokens: 1_000_000, RequestCount: 1},
@@ -46,6 +47,7 @@ func TestBillingSummaryPaginationDoesNotChangeTotals(t *testing.T) {
 }
 
 func TestBillingSummaryCSVIncludesAllRows(t *testing.T) {
+	billing.MonthlySummaryCache.InvalidateInstance("site-a")
 	day := time.Date(2026, 8, 1, 0, 0, 0, 0, time.Local)
 	store := fakeBillingSummaryStore{rows: []billing.AggregateRow{
 		{UserID: 1, Username: "alice", ModelName: "m", Day: day},
