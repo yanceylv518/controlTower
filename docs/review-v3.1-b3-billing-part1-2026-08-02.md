@@ -33,14 +33,16 @@
 - **summary/detail**：viewer scope 在 handler 层再次强制（站点匹配+用户集合，与闸构成双层）；分页/合计/data_through；CSV 两档在；
 - **计价/倍率配置 API** 就位；viewer 客户授权可编辑（7130e35）；全量测试 + typecheck + build 绿。
 
-## 剩余（第四部分待续交，收尾清单）
+## 第四部分验收（2026-08-02 追加，d75617b/589f65a/73c1c0e/c7709a6 + 四笔日志对齐）：通过
 
-1. **中央闸白名单扩入账单 GET 路径**（当前 viewer 被默认拒绝挡住——fail-closed 安全但功能不可用）+ viewer 越权测试；
-2. summary **结果缓存至下次日切**（现每请求现算）；
-3. CSV 补 **UTF-8 BOM**（防 Excel 乱码）；
-4. **"从 newapi 导入价格"** 接口与按钮；
-5. **账单页面 + 计价配置界面** + 菜单；
-6. api-contracts.md；自查清单随最终 commit 补贴。
+- **闸扩账单 GET 路径**：viewer 的 instance_id 被钉为 scope 站点（伪造参数失效）；codex 主动扩充了验收方先前补的越权矩阵测试（含伪造 instance_id 的 200 放行与 POST 403）——值得肯定；
+- **summary 缓存**：至下次日切失效，且**改价/改倍率同步失效**（正确的细节）；有按站点隔离与失效测试；
+- **价格导入接口**（import-prices，只回填不落库）；**账单页面**（/billing）menu/路由/viewer 守卫齐；四笔日志展示对齐修补通过；
+- 验收方顺手补齐两小件（23a85d5）：CSV 两处 **UTF-8 BOM**、api-contracts.md 账单章节。
+
+## 最终剩余（一件）
+
+**计价配置界面**：prices/group-ratios/import-prices 三个 API 就位、shared 客户端已有封装，但**桌面端无任何页面消费**——管理员目前无法在界面配价（只能调 API）。这是 B3 收官的最后一块；交付时随 commit 补贴整批自查清单（多轮分批交付均未贴，验收按批次文件逐项代核）。
 
 ## 部署
 
