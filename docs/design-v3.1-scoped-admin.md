@@ -25,7 +25,7 @@ CT users 表扩展（迁移，纯增量）：
 原约定"只有 agent 碰业务库"（server 部署位置灵活）。为获得**全量+含历史+实时**的日志明细（agent full_debug 路线被否：存储翻倍、无历史、改绑定要重启 agent），对开通此功能的站点破例：
 
 - 站点配置加可选 `logs_readonly_dsn`；未配置的站点 viewer 日志/用户页显示"未开通"，优雅降级；
-- 数据库账号**只读、只授 logs/users/options 三表 SELECT**（options 供账单价格回退读 ModelRatio）（需用户在 newapi 库手工建，是 CT 之外唯一动作）；泄露最大损失=日志可读，与 viewer 权限等价，无放大；
+- 数据库账号：**复用 agent 的整库只读账号**（2026-08-02 用户确认现状：整库 SELECT、无写权限——users/options 天然覆盖，免建新账号）。**泄露面如实记档**：整库只读含 channels（上游 key）与 tokens 表，高于最初"三表"设想；但与 agent 现状等价、无新增暴露，接受；将来要收紧可另建仅 logs/users/options 三表账号替换 DSN（记档可选项）。DSN 将存于 CT 站点配置，凭证存放面+1，轮换需同步改 agent CT_LOG_DSN 与站点 DSN 两处；
 - 查询强制走 `user_id + created_at` 索引（部署时 EXPLAIN 验证）、强制分页上限与查询超时——不得拖累生产库；
 - 直连仅服务于 viewer 明细/用户查询接口，CT 既有采集/指标链路不变。
 
