@@ -16,6 +16,7 @@ type Config struct {
 	AgentToken                  string
 	DashboardToken              string
 	AgentTokenPepper            string
+	SecretKey                   string
 	AggregationIntervalSeconds  int
 	NotificationIntervalSeconds int
 	AdminUsername               string
@@ -41,6 +42,7 @@ func Load(values map[string]string) (Config, error) {
 		AgentToken:                  values["CT_AGENT_TOKEN"],
 		DashboardToken:              values["CT_DASHBOARD_TOKEN"],
 		AgentTokenPepper:            values["CT_AGENT_TOKEN_PEPPER"],
+		SecretKey:                   values["CT_SECRET_KEY"],
 		AggregationIntervalSeconds:  intOrDefault(values, "CT_AGGREGATION_INTERVAL_SECONDS", 60),
 		NotificationIntervalSeconds: intOrDefault(values, "CT_NOTIFICATION_INTERVAL_SECONDS", 30),
 		AdminUsername:               values["CT_ADMIN_USERNAME"], AdminInitialPassword: values["CT_ADMIN_INITIAL_PASSWORD"], SessionTTLHours: intOrDefault(values, "CT_SESSION_TTL_HOURS", 720),
@@ -93,6 +95,7 @@ func Keys() []string {
 		"CT_AGENT_TOKEN",
 		"CT_DASHBOARD_TOKEN",
 		"CT_AGENT_TOKEN_PEPPER",
+		"CT_SECRET_KEY",
 		"CT_AGGREGATION_INTERVAL_SECONDS",
 		"CT_NOTIFICATION_INTERVAL_SECONDS",
 		"CT_ADMIN_USERNAME", "CT_ADMIN_INITIAL_PASSWORD", "CT_SESSION_TTL_HOURS", "CT_NOTIFICATION_MAX_ATTEMPTS",

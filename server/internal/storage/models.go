@@ -17,15 +17,16 @@ type Session struct {
 }
 
 type Instance struct {
-	ID        string
-	SiteID    string
-	Name      string
-	Env       string
-	Region    string
-	BaseURL   string
-	Enabled   bool
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID              string
+	SiteID          string
+	Name            string
+	Env             string
+	Region          string
+	BaseURL         string
+	LogsReadonlyDSN string
+	Enabled         bool
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 type InstanceToken struct {
 	ID                    int64

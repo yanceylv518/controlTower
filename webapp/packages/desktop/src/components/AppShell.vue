@@ -39,6 +39,8 @@ const nav = [
       ["/samples", "样本分析", Document],
       ["/usage", "用量统计", Coin],
       ["/latency", "延时分诊", DataLine],
+      ["/readonly-users", "用户资料（只读）", User],
+      ["/readonly-logs", "使用日志（只读）", Document],
     ],
   },
   {
@@ -68,7 +70,7 @@ async function logout() {
           <div class="nav-group">{{ section.group }}</div>
           <router-link
             v-for="item in section.items"
-            v-show="auth.user?.role === 'admin' || item[0] === '/customers'"
+            v-show="auth.user?.role === 'admin' || item[0] === '/customers' || item[0] === '/readonly-users' || item[0] === '/readonly-logs'"
             :key="item[0]"
             :to="item[0]"
           >

@@ -83,7 +83,7 @@ func TestLoadServerConfigRejectsInvalidAggregationInterval(t *testing.T) {
 
 func TestServerConfigKeysIncludesRequiredSecrets(t *testing.T) {
 	keys := Keys()
-	for _, want := range []string{"CT_DATABASE_DRIVER", "CT_DATABASE_DSN", "CT_AGENT_TOKEN", "CT_DASHBOARD_TOKEN", "CT_AGENT_TOKEN_PEPPER", "CT_AGGREGATION_INTERVAL_SECONDS"} {
+	for _, want := range []string{"CT_DATABASE_DRIVER", "CT_DATABASE_DSN", "CT_AGENT_TOKEN", "CT_DASHBOARD_TOKEN", "CT_AGENT_TOKEN_PEPPER", "CT_SECRET_KEY", "CT_AGGREGATION_INTERVAL_SECONDS"} {
 		found := false
 		for _, key := range keys {
 			if key == want {

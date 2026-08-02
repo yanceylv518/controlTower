@@ -19,7 +19,11 @@ import NotFoundView from './views/NotFoundView.vue'
 import LatencyView from './views/LatencyView.vue'
 import TuningView from './views/ContinuousTuningView.vue'
 import UsersView from './views/UsersView.vue'
+import ReadonlyUsersView from './views/ReadonlyUsersView.vue'
+import ReadonlyLogsView from './views/ReadonlyLogsView.vue'
 export const router = createRouter({ history: createWebHistory('/'), routes: [
+  { path: '/readonly-users', component: ReadonlyUsersView, meta: { title: '用户资料（只读）' } },
+  { path: '/readonly-logs', component: ReadonlyLogsView, meta: { title: '使用日志（只读）' } },
   { path: '/customers', component: CustomerMonitorView, meta: { title: '客户监控' } },
   { path: '/login', name: 'login', component: LoginView, meta: { title: '登录' } }, { path: '/', name: 'overview', component: OverviewView, meta: { title: '运行总览' } },
   { path: '/channels', component: DimensionView, props: { kind: 'channels' }, meta: { title: '渠道监控' } }, { path: '/models', component: DimensionView, props: { kind: 'models' }, meta: { title: '模型监控' } },
@@ -34,6 +38,6 @@ export const router = createRouter({ history: createWebHistory('/'), routes: [
   { path: '/access-users', component: UsersView, meta: { title: '访问账号', adminOnly: true } },
   { path: '/:pathMatch(.*)*', component: NotFoundView, meta: { title: '页面不存在' } },
 ] })
-router.beforeEach(async (to) => { const store = useAuthStore(); if (to.name === 'login') return true; try { if (!store.user) await store.load(); if (store.user?.role === 'viewer' && !to.path.startsWith('/customers')) return '/customers'; if (to.meta.adminOnly && store.user?.role !== 'admin') return '/customers'; return true } catch (error) { if (error instanceof ApiError && error.status === 401) return { name: 'login', query: { redirect: to.fullPath } }; throw error } })
+router.beforeEach(async (to) => { const store = useAuthStore(); if (to.name === 'login') return true; try { if (!store.user) await store.load(); if (store.user?.role === 'viewer' && !to.path.startsWith('/customers') && to.path !== '/readonly-users' && to.path !== '/readonly-logs') return '/customers'; if (to.meta.adminOnly && store.user?.role !== 'admin') return '/customers'; return true } catch (error) { if (error instanceof ApiError && error.status === 401) return { name: 'login', query: { redirect: to.fullPath } }; throw error } })
 setUnauthorizedHandler(() => { const store = useAuthStore(); store.user = null; if (router.currentRoute.value.name !== 'login') void router.replace({ name: 'login', query: { redirect: router.currentRoute.value.fullPath } }) })
 router.afterEach(to => { document.title = `${String(to.meta.title || 'Control Tower')} · Control Tower` })

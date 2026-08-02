@@ -24,6 +24,7 @@ type Options struct {
 	NextWebDir              string
 	AuthManager             *ctauth.Manager
 	AgentTokenPepper        string
+	SecretKey               string
 	NotificationMaxAttempts int
 	CommandExpiry           time.Duration
 	TuningStore             tuning.Store
@@ -106,7 +107,14 @@ func NewMux(options Options) *http.ServeMux {
 		mux.Handle("GET /api/dashboard/tuning/recommendations", protect(http.HandlerFunc(dashboardHandler.HandleTuningRecommendations)))
 		mux.Handle("GET /api/dashboard/tuning/report", protect(http.HandlerFunc(dashboardHandler.HandleTuningReport)))
 	}
-	instances := dashboard.InstanceHandler{Store: options.Store, Runtime: options.Store, Pepper: options.AgentTokenPepper, Settings: options.SettingsProvider}
+	instances := dashboard.InstanceHandler{Store: options.Store, Runtime: options.Store, Pepper: options.AgentTokenPepper, Settings: options.SettingsProvider, SecretKey: options.SecretKey}
+	if configStore, ok := any(options.Store).(dashboard.ReadonlyConfigStore); ok {
+		instances.ReadonlyConfig = configStore
+	}
+	passthrough := &dashboard.PassthroughHandler{SecretKey: options.SecretKey, Audit: options.Store}
+	if configStore, ok := any(options.Store).(dashboard.ReadonlyConfigStore); ok {
+		passthrough.Config = configStore
+	}
 	commands := (dashboard.CommandHandler{Store: options.Store, Instances: options.Store}).WithNameSource(options.Store)
 	mux.Handle("POST /api/dashboard/channels/{channelID}/commands", protect(http.HandlerFunc(commands.Create)))
 	mux.Handle("GET /api/dashboard/channel-commands", protect(http.HandlerFunc(commands.List)))
@@ -118,6 +126,8 @@ func NewMux(options Options) *http.ServeMux {
 	mux.Handle("POST /api/dashboard/instances", protect(http.HandlerFunc(instances.Create)))
 	mux.Handle("PUT /api/dashboard/instances/{id}", protect(http.HandlerFunc(instances.Update)))
 	mux.Handle("POST /api/dashboard/instances/{id}/rotate-token", protect(http.HandlerFunc(instances.Rotate)))
+	mux.Handle("GET /api/dashboard/passthrough/users", protect(http.HandlerFunc(passthrough.Users)))
+	mux.Handle("GET /api/dashboard/passthrough/logs", protect(http.HandlerFunc(passthrough.Logs)))
 
 	if options.WebAppDir == "" {
 		options.WebAppDir = options.NextWebDir // Backward-compatible option name for one release cycle.

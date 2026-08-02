@@ -256,11 +256,12 @@ func RequireSessionOrToken(m *Manager, token string, next http.Handler) http.Han
 					return
 				}
 				if u.Role == "viewer" {
-					if r.Method != http.MethodGet || (r.URL.Path != "/api/dashboard/metrics" && r.URL.Path != "/api/dashboard/metric-history" && r.URL.Path != "/api/dashboard/instances") {
+					passthrough := r.URL.Path == "/api/dashboard/passthrough/users" || r.URL.Path == "/api/dashboard/passthrough/logs"
+					if r.Method != http.MethodGet || (r.URL.Path != "/api/dashboard/metrics" && r.URL.Path != "/api/dashboard/metric-history" && r.URL.Path != "/api/dashboard/instances" && !passthrough) {
 						write(w, 403, map[string]string{"error": "forbidden"})
 						return
 					}
-					if r.URL.Path != "/api/dashboard/instances" && !strings.HasPrefix(r.URL.Query().Get("dimension_type"), "instance_user") {
+					if r.URL.Path != "/api/dashboard/instances" && !passthrough && !strings.HasPrefix(r.URL.Query().Get("dimension_type"), "instance_user") {
 						write(w, 403, map[string]string{"error": "forbidden"})
 						return
 					}

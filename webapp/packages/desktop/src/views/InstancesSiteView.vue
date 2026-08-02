@@ -2,7 +2,7 @@
 import { reactive, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { ApiError, type InstanceItem } from "@ct/shared";
-import { dashboard } from "../api";
+import { client, dashboard } from "../api";
 import AppShell from "../components/AppShell.vue";
 import AsyncPanel from "../components/AsyncPanel.vue";
 import StatusTag from "../components/StatusTag.vue";
@@ -17,7 +17,11 @@ const form = reactive({ instance_id: "", site_id: "", name: "" });
 const tokenOpen = ref(false);
 const token = ref("");
 const grace = ref<string>();
-const state = useAsyncData(async () => (await dashboard.instances()).items);
+const readonlyOpen = ref(false);
+const readonlyTarget = ref<InstanceItem>();
+const readonlyDSN = ref("");
+type ReadonlyInstanceItem = InstanceItem & { logs_readonly_configured: boolean };
+const state = useAsyncData(async () => (await dashboard.instances()).items as ReadonlyInstanceItem[]);
 
 function message(error: unknown) {
   if (error instanceof ApiError) {
@@ -75,6 +79,25 @@ async function toggle(item: InstanceItem, value: boolean) {
     await state.reload();
   }
 }
+function configureReadonly(item: InstanceItem) {
+  readonlyTarget.value = item;
+  readonlyDSN.value = "";
+  readonlyOpen.value = true;
+}
+async function saveReadonly() {
+  if (!readonlyTarget.value) return;
+  try {
+    await client.request(`/api/dashboard/instances/${encodeURIComponent(readonlyTarget.value.instance_id)}`, {
+      method: "PUT",
+      body: JSON.stringify({ logs_readonly_dsn: readonlyDSN.value.trim() }),
+    });
+    readonlyOpen.value = false;
+    await state.reload();
+    ElMessage.success(readonlyDSN.value.trim() ? "只读连接已加密保存" : "只读连接已清除");
+  } catch (error) {
+    ElMessage.error(message(error));
+  }
+}
 useAutoRefresh(state.reload);
 </script>
 
@@ -89,7 +112,8 @@ useAutoRefresh(state.reload);
         <el-table-column label="启用"><template #default="scope"><el-switch :model-value="scope.row.enabled" @change="toggle(scope.row, Boolean($event))" /></template></el-table-column>
         <el-table-column prop="created_at" label="创建时间"><template #default="scope">{{ new Date(scope.row.created_at).toLocaleString() }}</template></el-table-column>
         <el-table-column label="Agent"><template #default="scope"><div v-for="agent in scope.row.agents" :key="agent.id"><StatusTag :value="agent.online ? 'online' : 'offline'" /> {{ agent.version }} · 积压 {{ agent.backlog_estimate }}</div><span v-if="!scope.row.agents.length">—</span></template></el-table-column>
-        <el-table-column label="操作"><template #default="scope"><el-button size="small" @click="rotate(scope.row)">轮换 Token</el-button></template></el-table-column>
+        <el-table-column label="只读查询"><template #default="scope"><StatusTag :value="scope.row.logs_readonly_configured ? 'online' : 'offline'" /> {{ scope.row.logs_readonly_configured ? '已配置' : '未配置' }}</template></el-table-column>
+        <el-table-column label="操作" min-width="220"><template #default="scope"><el-button size="small" @click="rotate(scope.row)">轮换 Token</el-button><el-button size="small" @click="configureReadonly(scope.row)">配置只读连接</el-button></template></el-table-column>
       </el-table>
     </AsyncPanel>
     <el-dialog v-model="createOpen" title="创建实例" width="480px">
@@ -99,6 +123,16 @@ useAutoRefresh(state.reload);
         <el-form-item label="名称"><el-input v-model="form.name" /></el-form-item>
       </el-form>
       <template #footer><el-button @click="createOpen = false">取消</el-button><el-button type="primary" @click="create">创建</el-button></template>
+    </el-dialog>
+    <el-dialog v-model="readonlyOpen" title="配置站点只读查询" width="620px">
+      <el-alert type="warning" :closable="false" title="请使用仅允许 SELECT users、logs 表的 new-api 数据库账号。连接串只会加密保存，不会返回或展示。" />
+      <el-form label-position="top" style="margin-top: 16px">
+        <el-form-item label="MySQL DSN">
+          <el-input v-model="readonlyDSN" type="password" show-password autocomplete="new-password" placeholder="readonly_user:password@tcp(host:3306)/newapi?parseTime=true&loc=UTC" />
+          <div class="form-tip">同一站点的所有实例共用此连接；留空保存将清除配置。</div>
+        </el-form-item>
+      </el-form>
+      <template #footer><el-button @click="readonlyOpen = false">取消</el-button><el-button type="primary" @click="saveReadonly">加密保存</el-button></template>
     </el-dialog>
     <TokenDialog v-model="tokenOpen" :token="token" :grace-until="grace" />
   </AppShell>

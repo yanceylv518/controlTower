@@ -1,4 +1,5 @@
 export * from './client'
 export * from './api/auth'
 export * from './api/dashboard'
+export * from './api/passthrough'
 export * from './site'

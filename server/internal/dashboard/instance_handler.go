@@ -22,19 +22,26 @@ type InstanceStore interface {
 	ExpireInstanceTokens(string, time.Time, time.Time) error
 }
 type InstanceHandler struct {
-	Store    InstanceStore
-	Runtime  RuntimeStore
-	Pepper   string
-	Settings *settings.Provider
+	Store          InstanceStore
+	Runtime        RuntimeStore
+	Pepper         string
+	Settings       *settings.Provider
+	ReadonlyConfig ReadonlyConfigStore
+	SecretKey      string
+}
+type ReadonlyConfigStore interface {
+	ReadonlyDSNForSite(string) (string, error)
+	UpdateReadonlyDSNForSite(string, string, time.Time) error
 }
 type InstanceItem struct {
-	InstanceID string          `json:"instance_id"`
-	SiteID     string          `json:"site_id"`
-	Name       string          `json:"name"`
-	Enabled    bool            `json:"enabled"`
-	CreatedAt  time.Time       `json:"created_at"`
-	UpdatedAt  time.Time       `json:"updated_at"`
-	Agents     []InstanceAgent `json:"agents"`
+	InstanceID             string          `json:"instance_id"`
+	SiteID                 string          `json:"site_id"`
+	Name                   string          `json:"name"`
+	Enabled                bool            `json:"enabled"`
+	CreatedAt              time.Time       `json:"created_at"`
+	UpdatedAt              time.Time       `json:"updated_at"`
+	Agents                 []InstanceAgent `json:"agents"`
+	LogsReadonlyConfigured bool            `json:"logs_readonly_configured"`
 }
 type InstanceAgent struct {
 	ID              string    `json:"id"`
@@ -46,6 +53,13 @@ type InstanceAgent struct {
 
 func (i InstanceHandler) item(v storage.Instance) (InstanceItem, error) {
 	out := InstanceItem{InstanceID: v.ID, SiteID: siteOf(v), Name: v.Name, Enabled: v.Enabled, CreatedAt: v.CreatedAt, UpdatedAt: v.UpdatedAt, Agents: []InstanceAgent{}}
+	if i.ReadonlyConfig != nil {
+		encrypted, err := i.ReadonlyConfig.ReadonlyDSNForSite(siteOf(v))
+		if err != nil {
+			return out, err
+		}
+		out.LogsReadonlyConfigured = encrypted != ""
+	}
 	if i.Runtime != nil {
 		agents, e := i.Runtime.QueryAgents(storage.AgentQuery{InstanceID: v.ID, Limit: storage.MaxRuntimeQueryLimit})
 		if e != nil {
@@ -144,9 +158,10 @@ func (i InstanceHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var q struct {
-		SiteID  *string `json:"site_id"`
-		Name    *string `json:"name"`
-		Enabled *bool   `json:"enabled"`
+		SiteID          *string `json:"site_id"`
+		Name            *string `json:"name"`
+		Enabled         *bool   `json:"enabled"`
+		LogsReadonlyDSN *string `json:"logs_readonly_dsn"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&q)
 	if q.SiteID != nil {
@@ -162,10 +177,35 @@ func (i InstanceHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if q.Enabled != nil {
 		v.Enabled = *q.Enabled
 	}
+	var encryptedReadonlyDSN string
+	if q.LogsReadonlyDSN != nil {
+		if i.ReadonlyConfig == nil {
+			writeDashboardError(w, 501, "readonly_passthrough_unavailable")
+			return
+		}
+		if len(*q.LogsReadonlyDSN) > 512 {
+			writeDashboardError(w, 400, "invalid_logs_readonly_dsn")
+			return
+		}
+		if *q.LogsReadonlyDSN != "" {
+			var err error
+			encryptedReadonlyDSN, err = encryptSecret(i.SecretKey, *q.LogsReadonlyDSN)
+			if err != nil {
+				writeDashboardError(w, 503, "secret_key_not_configured")
+				return
+			}
+		}
+	}
 	v.UpdatedAt = time.Now().UTC()
 	if i.Store.UpdateInstance(id, v.SiteID, v.Name, v.Enabled, v.UpdatedAt) != nil {
 		writeDashboardError(w, 500, "query_failed")
 		return
+	}
+	if q.LogsReadonlyDSN != nil {
+		if err := i.ReadonlyConfig.UpdateReadonlyDSNForSite(siteOf(v), encryptedReadonlyDSN, v.UpdatedAt); err != nil {
+			writeDashboardError(w, 500, "query_failed")
+			return
+		}
 	}
 	item, e := i.item(v)
 	if e != nil {

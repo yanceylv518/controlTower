@@ -1,0 +1,64 @@
+package dashboard
+
+import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"errors"
+	"io"
+)
+
+var errSecretKeyMissing = errors.New("secret key is not configured")
+
+func encryptSecret(key, plaintext string) (string, error) {
+	if key == "" {
+		return "", errSecretKeyMissing
+	}
+	sum := sha256.Sum256([]byte(key))
+	block, err := aes.NewCipher(sum[:])
+	if err != nil {
+		return "", err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err = io.ReadFull(rand.Reader, nonce); err != nil {
+		return "", err
+	}
+	sealed := gcm.Seal(nonce, nonce, []byte(plaintext), nil)
+	return "v1:" + base64.RawStdEncoding.EncodeToString(sealed), nil
+}
+
+func decryptSecret(key, encoded string) (string, error) {
+	if encoded == "" {
+		return "", nil
+	}
+	if key == "" {
+		return "", errSecretKeyMissing
+	}
+	if len(encoded) < 4 || encoded[:3] != "v1:" {
+		return "", errors.New("unsupported encrypted secret")
+	}
+	raw, err := base64.RawStdEncoding.DecodeString(encoded[3:])
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256([]byte(key))
+	block, err := aes.NewCipher(sum[:])
+	if err != nil {
+		return "", err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+	if len(raw) < gcm.NonceSize() {
+		return "", errors.New("invalid encrypted secret")
+	}
+	plain, err := gcm.Open(nil, raw[:gcm.NonceSize()], raw[gcm.NonceSize():], nil)
+	return string(plain), err
+}
