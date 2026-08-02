@@ -173,3 +173,82 @@ func TestHandlerFlowsMeLogoutPasswordAndLock(t *testing.T) {
 		t.Fatalf("locked login must return 429, got %d", code)
 	}
 }
+
+func viewerSetup(t *testing.T) (*Manager, string) {
+	s := ingest.NewMemoryStore()
+	h, e := HashPassword("password1")
+	if e != nil {
+		t.Fatal(e)
+	}
+	n := time.Now().UTC()
+	_ = s.CreateUser(storage.User{Username: "viewer", PasswordHash: h, Role: "viewer",
+		ScopeSite: "site-a", ScopeUserIDs: []int64{7, 9}, Enabled: true, CreatedAt: n, UpdatedAt: n})
+	m := NewManager(s, time.Hour)
+	_, session, err := m.Login("viewer", "password1", n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m, session.ID
+}
+
+// The whitelist gate is the security boundary of v3.1-B1: everything a
+// viewer can reach must be enumerated here, and everything else must 403
+// regardless of what the frontend hides.
+func TestViewerGateWhitelistMatrix(t *testing.T) {
+	m, session := viewerSetup(t)
+	var gotQuery string
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		w.WriteHeader(200)
+	})
+	handler := RequireSessionOrToken(m, "", next)
+	call := func(method, target string) int {
+		r := httptest.NewRequest(method, target, nil)
+		r.AddCookie(&http.Cookie{Name: "ct_session", Value: session})
+		r.Header.Set("X-Requested-With", "XMLHttpRequest")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		return w.Code
+	}
+	cases := []struct {
+		method, target string
+		want           int
+	}{
+		{"GET", "/api/dashboard/metrics?dimension_type=instance_user", 200},
+		{"GET", "/api/dashboard/metric-history?dimension_type=instance_user&instance_id=spoof", 200},
+		{"GET", "/api/dashboard/instances", 200},
+		{"GET", "/api/dashboard/metrics?dimension_type=instance_channel", 403},
+		{"GET", "/api/dashboard/tuning/policy", 403},
+		{"GET", "/api/dashboard/settings", 403},
+		{"GET", "/api/dashboard/channel-snapshots", 403},
+		{"POST", "/api/dashboard/metrics?dimension_type=instance_user", 403},
+	}
+	for _, c := range cases {
+		if got := call(c.method, c.target); got != c.want {
+			t.Fatalf("%s %s: got %d want %d", c.method, c.target, got, c.want)
+		}
+	}
+	// Scope injection: the gate must pin site to the viewer's scope and strip
+	// any caller-provided instance_id.
+	call("GET", "/api/dashboard/metric-history?dimension_type=instance_user&instance_id=spoof&site=other")
+	if !strings.Contains(gotQuery, "site=site-a") || strings.Contains(gotQuery, "instance_id=spoof") || strings.Contains(gotQuery, "site=other") {
+		t.Fatalf("scope injection failed: %q", gotQuery)
+	}
+}
+
+func TestDisabledUserCannotLoginOrKeepSession(t *testing.T) {
+	m, session := viewerSetup(t)
+	u, ok := m.Validate(session, time.Now().UTC())
+	if !ok || u.Role != "viewer" {
+		t.Fatalf("session should validate before disable: %#v ok=%v", u, ok)
+	}
+	if err := m.UpdateScopedUser(u.ID, "viewer", "site-a", []int64{7}, false, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m.Validate(session, time.Now().UTC()); ok {
+		t.Fatal("disabled user must lose session access")
+	}
+	if _, _, err := m.Login("viewer", "password1", time.Now().UTC()); err == nil {
+		t.Fatal("disabled user must not log in")
+	}
+}
