@@ -20,21 +20,21 @@ func TestParseRatioSnapshotAndFallbackPrice(t *testing.T) {
 	}
 }
 
-func TestBuildSummaryUsesCTThenSnapshotAndMarksUnpriced(t *testing.T) {
+func TestBuildSummaryUsesCTThenActualQuota(t *testing.T) {
 	day := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
 	rows := []AggregateRow{
 		{UserID: 7, Username: "alice", ModelName: "priced", GroupName: "vip", Day: day, PromptTokens: 1_000_000},
-		{UserID: 7, Username: "alice", ModelName: "fallback", GroupName: "vip", Day: day, CompletionTokens: 1_000_000},
-		{UserID: 7, Username: "alice", ModelName: "missing", GroupName: "vip", Day: day, PromptTokens: 100},
+		{UserID: 7, Username: "alice", ModelName: "fallback", GroupName: "vip", Day: day, CompletionTokens: 1_000_000, Quota: 7_200_000},
+		{UserID: 7, Username: "alice", ModelName: "missing", GroupName: "vip", Day: day, PromptTokens: 100, Quota: 500_000},
 	}
 	prices := []PriceRecord{{ModelName: "priced", Price: Price{EffectiveFrom: day, TierFrom: 0, Input: "2", Output: "4", Cache: "1"}}}
 	ratios := []GroupRatio{{GroupName: "vip", Ratio: "1.5"}}
 	snapshots := map[string]string{"2026-08-01": `{"ModelRatio":"{\"fallback\":2}","CompletionRatio":"{\"fallback\":3}","GroupRatio":"{\"vip\":1.2}","QuotaPerUnit":500000}`}
 	items, total := BuildSummary(rows, prices, ratios, snapshots, map[int64]int64{7: 99})
-	if len(items) != 1 || items[0].Amount != "17.400000" || total.Amount != "17.400000" {
+	if len(items) != 1 || items[0].Amount != "18.400000" || total.Amount != "18.400000" {
 		t.Fatalf("unexpected summary: %#v total=%#v", items, total)
 	}
-	if len(items[0].UnpricedModels) != 1 || items[0].UnpricedModels[0] != "missing" {
+	if len(items[0].UnpricedModels) != 0 {
 		t.Fatalf("unexpected unpriced models: %#v", items[0].UnpricedModels)
 	}
 	if len(items[0].PriceSources) != 2 || items[0].PriceSources[0] != "ct" || items[0].PriceSources[1] != "newapi" {
@@ -42,18 +42,32 @@ func TestBuildSummaryUsesCTThenSnapshotAndMarksUnpriced(t *testing.T) {
 	}
 }
 
-func TestBuildDetailsShowsSourceAndUnpriced(t *testing.T) {
+func TestBuildDetailsShowsCTAndQuotaSources(t *testing.T) {
 	day := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
 	rows := []AggregateRow{
 		{ModelName: "priced", Day: day, PromptTokens: 1_000_000},
-		{ModelName: "missing", Day: day, PromptTokens: 1},
+		{ModelName: "missing", Day: day, PromptTokens: 1, Quota: 250_000},
 	}
 	prices := []PriceRecord{{ModelName: "priced", Price: Price{EffectiveFrom: day, Input: "2", Output: "2", Cache: "2"}}}
 	items := BuildDetails(rows, prices, nil, map[string]string{})
 	if len(items) != 2 || items[1].PriceSource != "ct" || items[1].Amount != "2.000000" {
 		t.Fatalf("unexpected priced item: %#v", items)
 	}
-	if !items[0].Unpriced || items[0].ModelName != "missing" {
-		t.Fatalf("unexpected unpriced item: %#v", items)
+	if items[0].Unpriced || items[0].ModelName != "missing" || items[0].PriceSource != "newapi" || items[0].Amount != "0.500000" {
+		t.Fatalf("unexpected quota item: %#v", items)
+	}
+}
+
+func TestParseRatioSnapshotDefaultsQuotaPerUnit(t *testing.T) {
+	quotaPerUnit, err := quotaPerUnitForReport("")
+	if err != nil || quotaPerUnit != defaultQuotaPerUnit {
+		t.Fatalf("unexpected quota per unit: %q err=%v", quotaPerUnit, err)
+	}
+}
+
+func TestAmountFromQuota(t *testing.T) {
+	amount, err := AmountFromQuota(1_250_000, "500000")
+	if err != nil || FormatAmount(amount, 6) != "2.500000" {
+		t.Fatalf("unexpected amount: %v err=%v", amount, err)
 	}
 }

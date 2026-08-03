@@ -6,8 +6,11 @@ import (
 	"math/big"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 )
+
+const defaultQuotaPerUnit = "500000"
 
 type AggregateRow struct {
 	InstanceID                                                       string
@@ -120,6 +123,35 @@ func ParseRatioSnapshot(raw string) (RatioSnapshot, error) {
 	return result, nil
 }
 
+func quotaPerUnitForReport(raw string) (string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return defaultQuotaPerUnit, nil
+	}
+	snapshot, err := ParseRatioSnapshot(raw)
+	if err != nil {
+		if err.Error() == "QuotaPerUnit missing" {
+			return defaultQuotaPerUnit, nil
+		}
+		return "", err
+	}
+	return snapshot.QuotaPerUnit, nil
+}
+
+// AmountFromQuota converts new-api's final deducted quota into the configured
+// currency amount. The quota already contains model, completion, cache and
+// group multipliers, so reconstructing those multipliers would be both less
+// accurate and unable to handle new-api's built-in defaults.
+func AmountFromQuota(quota int64, quotaPerUnit string) (*big.Rat, error) {
+	unit, err := decimalRat(quotaPerUnit)
+	if err != nil || unit.Sign() == 0 {
+		return nil, fmt.Errorf("invalid QuotaPerUnit")
+	}
+	if quota < 0 {
+		quota = 0
+	}
+	return new(big.Rat).Quo(new(big.Rat).SetInt64(quota), unit), nil
+}
+
 func FallbackPrice(snapshot RatioSnapshot, model, group string) (Price, string, error) {
 	modelRatio, ok := snapshot.ModelRatio[model]
 	if !ok {
@@ -190,15 +222,19 @@ func BuildSummary(rows []AggregateRow, prices []PriceRecord, ratios []GroupRatio
 				ratio = configured
 			}
 		} else {
-			snap, e := ParseRatioSnapshot(snapshots[row.Day.Format("2006-01-02")])
-			if e == nil {
-				price, ratio, e = FallbackPrice(snap, row.ModelName, row.GroupName)
-			}
+			quotaPerUnit, e := quotaPerUnitForReport(snapshots[row.Day.Format("2006-01-02")])
 			if e != nil {
 				a.unpriced[row.ModelName] = true
 				continue
 			}
-			source = "newapi"
+			amount, e := AmountFromQuota(row.Quota, quotaPerUnit)
+			if e != nil {
+				a.unpriced[row.ModelName] = true
+				continue
+			}
+			a.amount.Add(a.amount, amount)
+			a.sources["newapi"] = true
+			continue
 		}
 		amount, e := Amount(Usage{PromptTokens: row.PromptTokens, CompletionTokens: row.CompletionTokens, CacheTokens: row.CacheTokens}, price, ratio)
 		if e != nil {
@@ -262,16 +298,21 @@ func BuildDetails(rows []AggregateRow, prices []PriceRecord, ratios []GroupRatio
 				ratio = configured
 			}
 		} else {
-			snapshot, err := ParseRatioSnapshot(snapshots[item.Day])
-			if err == nil {
-				price, ratio, err = FallbackPrice(snapshot, row.ModelName, row.GroupName)
-			}
+			quotaPerUnit, err := quotaPerUnitForReport(snapshots[item.Day])
 			if err != nil {
 				item.Unpriced = true
 				items = append(items, item)
 				continue
 			}
 			item.PriceSource = "newapi"
+			amount, err := AmountFromQuota(row.Quota, quotaPerUnit)
+			if err != nil {
+				item.Unpriced = true
+			} else {
+				item.Amount = FormatAmount(amount, 6)
+			}
+			items = append(items, item)
+			continue
 		}
 		amount, err := Amount(Usage{PromptTokens: row.PromptTokens, CompletionTokens: row.CompletionTokens, CacheTokens: row.CacheTokens}, price, ratio)
 		if err != nil {
