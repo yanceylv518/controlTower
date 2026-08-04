@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import type { ReadonlyLog } from '@ct/shared'
 import AppShell from '../components/AppShell.vue'
 import { passthrough } from '../api'
@@ -11,6 +12,7 @@ import { formatNumber } from '../utils/format'
 
 type LogExtra = Record<string, unknown>
 const auth = useAuthStore(), filters = useFiltersStore(), prefs = usePrefsStore()
+const route = useRoute()
 const username = ref(''), tokenName = ref(''), modelName = ref(''), requestID = ref('')
 const logType = ref<number>(), offset = ref(0), limit = ref(100)
 const defaultTimeRange = (): [Date, Date] => {
@@ -176,7 +178,25 @@ function billingMode(row: ReadonlyLog) {
   return value && typeof value === 'object' && Boolean((value as LogExtra).local_count_tokens) ? '本地计费' : '上游返回'
 }
 async function load() { try { await Promise.all([filters.loadInstances(), prefs.load()]) } catch { /* content request reports its own error */ } await state.reload() }
-onMounted(() => { void load() })
+onMounted(() => {
+  // Deep links from the billing drawer carry username plus a month or an
+  // explicit from/to period matching the billing generation range.
+  const qUser = typeof route.query.username === 'string' ? route.query.username : ''
+  const qMonth = typeof route.query.month === 'string' ? route.query.month : ''
+  const qFrom = typeof route.query.from === 'string' ? route.query.from : ''
+  const qTo = typeof route.query.to === 'string' ? route.query.to : ''
+  if (qUser && auth.user?.role === 'admin') username.value = qUser
+  const cap = new Date(Date.now() + 60 * 60 * 1000)
+  if (qFrom && qTo && !Number.isNaN(Date.parse(qFrom)) && !Number.isNaN(Date.parse(qTo))) {
+    const start = new Date(qFrom); const end = new Date(qTo)
+    if (end > start) timeRange.value = [start, end < cap ? end : cap]
+  } else if (/^\d{4}-\d{2}$/.test(qMonth)) {
+    const start = new Date(`${qMonth}-01T00:00:00`)
+    const nextMonth = new Date(start); nextMonth.setMonth(start.getMonth() + 1)
+    timeRange.value = [start, nextMonth < cap ? nextMonth : cap]
+  }
+  void load()
+})
 watch(() => filters.site_id, (site, previous) => {
   if (site && site !== previous) {
     offset.value = 0
