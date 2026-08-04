@@ -59,6 +59,11 @@ const nav = [
     ],
   },
 ] as const;
+const viewerNav = [
+  ["/customers", "客户监控", User],
+  ["/readonly-users", "用户管理", User],
+  ["/readonly-logs", "使用日志", Document],
+] as const;
 async function logout() {
   await auth.logout();
   await router.replace("/login");
@@ -69,11 +74,16 @@ async function logout() {
     <aside class="sidebar">
       <div class="logo"><span>CT</span> Control Tower</div>
       <nav>
-        <section v-for="section in nav" :key="section.group">
+        <template v-if="auth.user?.role === 'viewer'">
+          <router-link v-for="item in viewerNav" :key="item[0]" :to="item[0]">
+            <el-icon><component :is="item[2]" /></el-icon>
+            <span>{{ item[1] }}</span>
+          </router-link>
+        </template>
+        <section v-else v-for="section in nav" :key="section.group">
           <div class="nav-group">{{ section.group }}</div>
           <router-link
             v-for="item in section.items"
-            v-show="auth.user?.role === 'admin' || item[0] === '/customers' || item[0] === '/readonly-users' || item[0] === '/readonly-logs' || item[0] === '/billing'"
             :key="item[0]"
             :to="item[0]"
           >
