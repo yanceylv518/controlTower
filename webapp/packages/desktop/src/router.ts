@@ -22,7 +22,7 @@ import UsersView from './views/UsersView.vue'
 import ReadonlyUsersView from './views/ReadonlyUsersView.vue'
 import ReadonlyLogsView from './views/ReadonlyLogsView.vue'
 import BillingView from './views/BillingView.vue'
-import ChannelBillingView from './views/ChannelBillingV3View.vue'
+import ChannelBillingView from './views/ChannelBillingV4View.vue'
 import BillingPricingView from './views/BillingPricingView.vue'
 export const router = createRouter({ history: createWebHistory('/'), routes: [
   { path: '/readonly-users', component: ReadonlyUsersView, meta: { title: '用户管理' } },

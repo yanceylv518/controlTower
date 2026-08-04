@@ -89,10 +89,15 @@ func (h *PassthroughHandler) DetailedLogsForBilling(ctx context.Context, site st
 // stable (created_at,id) keyset. It deliberately avoids OFFSET so later pages
 // do not rescan all preceding rows on large new-api log tables.
 func (h *PassthroughHandler) LogsPageForBilling(ctx context.Context, site string, start, end time.Time, cursor billing.LogCursor, limit int) ([]billing.PagedLogRecord, error) {
-	return h.logsPageForBilling(ctx,site,0,start,end,cursor,limit)
+	return h.logsPageForBilling(ctx, site, 0, 0, start, end, cursor, limit)
 }
-func(h *PassthroughHandler)DetailedLogsPageForBilling(ctx context.Context,site string,userID int64,start,end time.Time,cursor billing.LogCursor,limit int)([]billing.PagedLogRecord,error){return h.logsPageForBilling(ctx,site,userID,start,end,cursor,limit)}
-func (h *PassthroughHandler) logsPageForBilling(ctx context.Context, site string,userID int64, start, end time.Time, cursor billing.LogCursor, limit int) ([]billing.PagedLogRecord, error) {
+func (h *PassthroughHandler) DetailedLogsPageForBilling(ctx context.Context, site string, userID int64, start, end time.Time, cursor billing.LogCursor, limit int) ([]billing.PagedLogRecord, error) {
+	return h.logsPageForBilling(ctx, site, userID, 0, start, end, cursor, limit)
+}
+func (h *PassthroughHandler) ChannelLogsPageForBilling(ctx context.Context, site string, channelID int64, start, end time.Time, cursor billing.LogCursor, limit int) ([]billing.PagedLogRecord, error) {
+	return h.logsPageForBilling(ctx, site, 0, channelID, start, end, cursor, limit)
+}
+func (h *PassthroughHandler) logsPageForBilling(ctx context.Context, site string, userID, channelID int64, start, end time.Time, cursor billing.LogCursor, limit int) ([]billing.PagedLogRecord, error) {
 	db, configured, err := h.database(site)
 	if err != nil {
 		return nil, err
@@ -105,8 +110,19 @@ func (h *PassthroughHandler) logsPageForBilling(ctx context.Context, site string
 	}
 	queryCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	query:=`SELECT l.id,l.created_at,COALESCE(l.request_id,''),COALESCE(l.upstream_request_id,''),l.user_id,COALESCE(l.username,''),COALESCE(l.channel_id,0),COALESCE(c.name,''),COALESCE(l.model_name,''),COALESCE(l.`+"`group`"+`,''),l.prompt_tokens,l.completion_tokens,l.quota,COALESCE(l.other,'') FROM logs l LEFT JOIN channels c ON c.id=l.channel_id WHERE l.type=2 AND l.created_at>=? AND l.created_at<? AND (l.created_at>? OR (l.created_at=? AND l.id>?))`;args:=[]any{start.Unix(),end.Unix(),cursor.CreatedUnix,cursor.CreatedUnix,cursor.ID};if userID>0{query+=` AND l.user_id=?`;args=append(args,userID)};query+=` ORDER BY l.created_at,l.id LIMIT ?`;args=append(args,limit)
-	rows, err := db.QueryContext(queryCtx,query,args...)
+	query := `SELECT l.id,l.created_at,COALESCE(l.request_id,''),COALESCE(l.upstream_request_id,''),l.user_id,COALESCE(l.username,''),COALESCE(l.channel_id,0),COALESCE(c.name,''),COALESCE(l.model_name,''),COALESCE(l.` + "`group`" + `,''),l.prompt_tokens,l.completion_tokens,l.quota,COALESCE(l.other,'') FROM logs l LEFT JOIN channels c ON c.id=l.channel_id WHERE l.type=2 AND l.created_at>=? AND l.created_at<? AND (l.created_at>? OR (l.created_at=? AND l.id>?))`
+	args := []any{start.Unix(), end.Unix(), cursor.CreatedUnix, cursor.CreatedUnix, cursor.ID}
+	if userID > 0 {
+		query += ` AND l.user_id=?`
+		args = append(args, userID)
+	}
+	if channelID > 0 {
+		query += ` AND l.channel_id=?`
+		args = append(args, channelID)
+	}
+	query += ` ORDER BY l.created_at,l.id LIMIT ?`
+	args = append(args, limit)
+	rows, err := db.QueryContext(queryCtx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -198,6 +214,30 @@ func (h *PassthroughHandler) ConfiguredModelsForBilling(ctx context.Context, sit
 	return models, nil
 }
 
+func (h *PassthroughHandler) CurrentChannelsForBilling(ctx context.Context, site string) ([]billing.ConfiguredChannel, error) {
+	db, configured, err := h.database(site)
+	if err != nil {
+		return nil, err
+	}
+	if !configured {
+		return nil, fmt.Errorf("readonly database is not configured for %s", site)
+	}
+	rows, err := db.QueryContext(ctx, `SELECT id,COALESCE(name,''),status FROM channels ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []billing.ConfiguredChannel{}
+	for rows.Next() {
+		var item billing.ConfiguredChannel
+		if err = rows.Scan(&item.ChannelID, &item.ChannelName, &item.Status); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 func (h *PassthroughHandler) BalancesForBilling(ctx context.Context, site string) (map[int64]int64, error) {
 	db, configured, err := h.database(site)
 	if err != nil {
@@ -229,7 +269,12 @@ type BillingReadonlySource struct{ Handler *PassthroughHandler }
 func (s BillingReadonlySource) LogsPage(ctx context.Context, site string, start, end time.Time, cursor billing.LogCursor, limit int) ([]billing.PagedLogRecord, error) {
 	return s.Handler.LogsPageForBilling(ctx, site, start, end, cursor, limit)
 }
-func(s BillingReadonlySource)DetailedLogsPage(ctx context.Context,site string,userID int64,start,end time.Time,cursor billing.LogCursor,limit int)([]billing.PagedLogRecord,error){return s.Handler.DetailedLogsPageForBilling(ctx,site,userID,start,end,cursor,limit)}
+func (s BillingReadonlySource) DetailedLogsPage(ctx context.Context, site string, userID int64, start, end time.Time, cursor billing.LogCursor, limit int) ([]billing.PagedLogRecord, error) {
+	return s.Handler.DetailedLogsPageForBilling(ctx, site, userID, start, end, cursor, limit)
+}
+func (s BillingReadonlySource) ChannelLogsPage(ctx context.Context, site string, channelID int64, start, end time.Time, cursor billing.LogCursor, limit int) ([]billing.PagedLogRecord, error) {
+	return s.Handler.ChannelLogsPageForBilling(ctx, site, channelID, start, end, cursor, limit)
+}
 
 func (s BillingReadonlySource) Logs(ctx context.Context, site string, start, end time.Time) ([]billing.LogRecord, error) {
 	return s.Handler.LogsForBilling(ctx, site, start, end)
@@ -243,6 +288,9 @@ func (s BillingReadonlySource) RatioSnapshot(ctx context.Context, site string) (
 
 func (s BillingReadonlySource) ConfiguredModels(ctx context.Context, site string) ([]string, error) {
 	return s.Handler.ConfiguredModelsForBilling(ctx, site)
+}
+func (s BillingReadonlySource) CurrentChannels(ctx context.Context, site string) ([]billing.ConfiguredChannel, error) {
+	return s.Handler.CurrentChannelsForBilling(ctx, site)
 }
 func (s BillingReadonlySource) Balances(ctx context.Context, site string) (map[int64]int64, error) {
 	return s.Handler.BalancesForBilling(ctx, site)

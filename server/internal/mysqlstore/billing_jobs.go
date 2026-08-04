@@ -152,15 +152,16 @@ func (s Store) FinalizeBillingJob(ctx context.Context, j billing.Job) error {
 	}
 	defer tx.Rollback()
 	now := time.Now().UTC()
-	_, e = tx.ExecContext(ctx, `INSERT INTO billing_daily_versions(job_id,instance_id,user_id,username,model_name,group_name,tier_from,day,request_count,prompt_tokens,completion_tokens,cache_tokens,quota,updated_at) SELECT ?,instance_id,user_id,MAX(username),model_name,group_name,tier_from,DATE(hour_start),SUM(request_count),SUM(prompt_tokens),SUM(completion_tokens),SUM(cache_tokens),SUM(quota),? FROM billing_hourly WHERE job_id=? GROUP BY instance_id,user_id,model_name,group_name,tier_from,DATE(hour_start)`, j.ID, now, j.ID)
+	_, e = tx.ExecContext(ctx, `INSERT INTO billing_daily_versions(job_id,instance_id,user_id,username,model_name,group_name,tier_from,day,request_count,prompt_tokens,completion_tokens,cache_tokens,quota,updated_at) SELECT ?,instance_id,user_id,MAX(username),model_name,group_name,tier_from,DATE(CONVERT_TZ(hour_start,'+00:00','+08:00')),SUM(request_count),SUM(prompt_tokens),SUM(completion_tokens),SUM(cache_tokens),SUM(quota),? FROM billing_hourly WHERE job_id=? GROUP BY instance_id,user_id,model_name,group_name,tier_from,DATE(CONVERT_TZ(hour_start,'+00:00','+08:00'))`, j.ID, now, j.ID)
 	if e != nil {
 		return e
 	}
-	_, e = tx.ExecContext(ctx, `INSERT INTO billing_channel_daily_versions(job_id,instance_id,channel_id,channel_name,model_name,group_name,tier_from,day,request_count,prompt_tokens,completion_tokens,cache_tokens,quota,updated_at) SELECT ?,instance_id,channel_id,MAX(channel_name),model_name,group_name,tier_from,DATE(hour_start),SUM(request_count),SUM(prompt_tokens),SUM(completion_tokens),SUM(cache_tokens),SUM(quota),? FROM billing_channel_hourly WHERE job_id=? GROUP BY instance_id,channel_id,model_name,group_name,tier_from,DATE(hour_start)`, j.ID, now, j.ID)
+	_, e = tx.ExecContext(ctx, `INSERT INTO billing_channel_daily_versions(job_id,instance_id,channel_id,channel_name,model_name,group_name,tier_from,day,request_count,prompt_tokens,completion_tokens,cache_tokens,quota,updated_at) SELECT ?,instance_id,channel_id,MAX(channel_name),model_name,group_name,tier_from,DATE(CONVERT_TZ(hour_start,'+00:00','+08:00')),SUM(request_count),SUM(prompt_tokens),SUM(completion_tokens),SUM(cache_tokens),SUM(quota),? FROM billing_channel_hourly WHERE job_id=? GROUP BY instance_id,channel_id,model_name,group_name,tier_from,DATE(CONVERT_TZ(hour_start,'+00:00','+08:00'))`, j.ID, now, j.ID)
 	if e != nil {
 		return e
 	}
-	for d := dateAt(j.From); d.Before(j.To); d = d.AddDate(0, 0, 1) {
+	localFrom, localTo := j.From.In(time.Local), j.To.In(time.Local)
+	for d := dateAt(localFrom); d.Before(localTo); d = d.AddDate(0, 0, 1) {
 		if _, e = tx.ExecContext(ctx, `INSERT INTO billing_active_versions(instance_id,day,job_id,activated_at) VALUES(?,?,?,?) ON DUPLICATE KEY UPDATE job_id=VALUES(job_id),activated_at=VALUES(activated_at)`, j.InstanceID, d, j.ID, now); e != nil {
 			return e
 		}

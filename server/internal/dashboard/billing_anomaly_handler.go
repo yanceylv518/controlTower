@@ -20,14 +20,13 @@ func (h BillingAnomalyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	q := r.URL.Query()
 	site := q.Get("instance_id")
 	uid, _ := strconv.ParseInt(q.Get("user_id"), 10, 64)
-	channelID,_:=strconv.ParseInt(q.Get("channel_id"),10,64)
+	channelID, _ := strconv.ParseInt(q.Get("channel_id"), 10, 64)
 	if !billingSiteAllowed(r, site, uid) {
 		writeDashboardError(w, 403, "forbidden")
 		return
 	}
-	from, e1 := time.ParseInLocation("2006-01-02", q.Get("from"), time.Local)
-	through, e2 := time.ParseInLocation("2006-01-02", q.Get("to"), time.Local)
-	if e1 != nil || e2 != nil {
+	from, to, rangeErr := parseBillingInputRange(q.Get("from"), q.Get("to"))
+	if rangeErr != nil {
 		writeDashboardError(w, 400, "invalid_query")
 		return
 	}
@@ -40,31 +39,52 @@ func (h BillingAnomalyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	if limit <= 0 || limit > 5000 {
 		limit = 500
 	}
-	items, e := h.Store.QueryBillingAnomalies(r.Context(), site, uid, channelID, from, through.AddDate(0, 0, 1), cursorTime, cursorID, limit)
-	if e != nil {
-		writeDashboardError(w, 500, "billing_anomaly_query_failed")
-		return
-	}
 	if q.Get("format") == "csv" {
 		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
-		w.Header().Set("Content-Disposition", `attachment; filename="billing-anomalies.csv"`)
+		w.Header().Set("Content-Disposition", `attachment; filename="`+billingDownloadName("billing-anomalies", uid, channelID, from, to)+`.csv"`)
 		_, _ = w.Write([]byte{0xef, 0xbb, 0xbf})
 		cw := csv.NewWriter(w)
 		_ = cw.Write([]string{"模型名称", "Request ID", "上游 Request ID", "请求时间", "原始输入", "缓存 Token", "计费输入", "输出 Token", "模型上下文", "输入 Token 单价", "输出 Token 单价", "缓存 Token 单价", "输入 Token 费用", "输出 Token 费用", "缓存 Token 费用", "异常记录参考金额", "实际扣除 Quota", "异常原因"})
-		for _, v := range items {
-			billedInput := int64(0)
-			if v.PromptTokens.Valid {
-				billedInput = v.PromptTokens.Int64 - v.CacheTokens
-				if billedInput < 0 {
-					billedInput = v.PromptTokens.Int64
-				}
+		for {
+			items, e := h.Store.QueryBillingAnomalies(r.Context(), site, uid, channelID, from, to, cursorTime, cursorID, 5000)
+			if e != nil {
+				return
 			}
-			_ = cw.Write([]string{v.ModelName, v.RequestID, v.UpstreamRequestID, v.CreatedAt.Format("2006/01/02 15:04:05"), nullInt(v.PromptTokens), strconv.FormatInt(v.CacheTokens, 10), strconv.FormatInt(billedInput, 10), nullInt(v.CompletionTokens), strconv.FormatInt(v.MaxContextTokens, 10), v.InputPrice, v.OutputPrice, v.CachePrice, v.InputAmount, v.OutputAmount, v.CacheAmount, v.ReferenceAmount, strconv.FormatInt(v.Quota, 10), localizedReasons(v.Reasons)})
+			for _, v := range items {
+				billedInput := int64(0)
+				if v.PromptTokens.Valid {
+					billedInput = v.PromptTokens.Int64 - v.CacheTokens
+					if billedInput < 0 {
+						billedInput = v.PromptTokens.Int64
+					}
+				}
+				_ = cw.Write([]string{v.ModelName, v.RequestID, v.UpstreamRequestID, v.CreatedAt.Format("2006/01/02 15:04:05"), nullInt(v.PromptTokens), strconv.FormatInt(v.CacheTokens, 10), strconv.FormatInt(billedInput, 10), nullInt(v.CompletionTokens), strconv.FormatInt(v.MaxContextTokens, 10), v.InputPrice, v.OutputPrice, v.CachePrice, v.InputAmount, v.OutputAmount, v.CacheAmount, v.ReferenceAmount, strconv.FormatInt(v.Quota, 10), localizedReasons(v.Reasons)})
+			}
+			if len(items) < 5000 {
+				break
+			}
+			last := items[len(items)-1]
+			cursorTime, cursorID = last.CreatedAt, last.SourceLogID
 		}
 		cw.Flush()
 		return
 	}
+	items, e := h.Store.QueryBillingAnomalies(r.Context(), site, uid, channelID, from, to, cursorTime, cursorID, limit)
+	if e != nil {
+		writeDashboardError(w, 500, "billing_anomaly_query_failed")
+		return
+	}
 	writeDashboardJSON(w, 200, map[string]any{"items": items})
+}
+
+func billingDownloadName(prefix string, userID, channelID int64, from, to time.Time) string {
+	identity := "all"
+	if channelID > 0 {
+		identity = "channel-" + strconv.FormatInt(channelID, 10)
+	} else if userID > 0 {
+		identity = "user-" + strconv.FormatInt(userID, 10)
+	}
+	return prefix + "-" + identity + "-" + from.Format("20060102-150405") + "_" + to.Add(-time.Second).Format("20060102-150405")
 }
 func localizedReasons(raw string) string {
 	parts := strings.Split(raw, ",")

@@ -31,6 +31,7 @@ type billingBackfillRequest struct {
 	From       string `json:"from"`
 	To         string `json:"to"`
 	Force      bool   `json:"force"`
+	Scope      string `json:"scope"`
 }
 
 func (h BillingBackfillHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {

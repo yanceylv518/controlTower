@@ -93,7 +93,6 @@ func run() error {
 		startChannelSnapshotHistoryCleanup(store)
 		startRetentionRunner(store, settingsProvider)
 		startTuningRunner(store)
-		startBillingRunner(store, cfg.SecretKey)
 	}
 	startBillingJobRunner(store, cfg.SecretKey)
 
@@ -112,47 +111,6 @@ func startBillingJobRunner(store mysqlstore.Store, secretKey string) {
 	go func() {
 		if err := runner.Run(context.Background()); err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("billing job runner stopped: %v", err)
-		}
-	}()
-}
-
-func startBillingRunner(store mysqlstore.Store, secretKey string) {
-	readonly := &dashboard.PassthroughHandler{Config: store, SecretKey: secretKey}
-	service := billing.RollupService{Source: dashboard.BillingReadonlySource{Handler: readonly}, Store: store}
-	successfulDay := map[string]string{}
-	runDue := func(now time.Time) {
-		if now.Hour() < 2 {
-			return
-		}
-		day := time.Date(now.Year(), now.Month(), now.Day()-1, 0, 0, 0, 0, now.Location())
-		dayKey := day.Format("2006-01-02")
-		sites, err := store.ListBillingSites(context.Background())
-		if err != nil {
-			log.Printf("billing daily list sites failed: %v", err)
-			return
-		}
-		for _, site := range sites {
-			if successfulDay[site] == dayKey {
-				continue
-			}
-			result, rollupErr := service.RollupDay(context.Background(), site, day)
-			if rollupErr != nil {
-				log.Printf("billing daily failed site=%s day=%s: %v", site, dayKey, rollupErr)
-				continue
-			}
-			successfulDay[site] = dayKey
-			log.Printf("billing daily complete site=%s day=%s rows=%d", site, dayKey, result.Rows)
-		}
-	}
-	go func() {
-		timer := time.NewTimer(time.Minute)
-		defer timer.Stop()
-		<-timer.C
-		runDue(time.Now())
-		ticker := time.NewTicker(time.Hour)
-		defer ticker.Stop()
-		for now := range ticker.C {
-			runDue(now)
 		}
 	}()
 }

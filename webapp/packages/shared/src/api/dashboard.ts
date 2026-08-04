@@ -474,6 +474,10 @@ export interface BillingModelItem {
 export interface BillingJob {
   id: string;
   instance_id: string;
+  job_type?: string;
+  range_from?: string;
+  range_to?: string;
+  updated_at?: string;
   status: "pending" | "running" | "complete" | "failed";
   total_steps: number;
   completed_steps: number;
@@ -697,16 +701,16 @@ export const dashboardApi = (client: ApiClient) => ({
     client.request<ListResponse<ChannelBaseValue>>(`/api/dashboard/tuning/base-values${query({ site_id })}`, { method: "PUT", body: JSON.stringify({ items }) }),
   syncTuningBaseValues: (site_id: string, models: string[]) =>
     client.request<ListResponse<ChannelBaseValue>>(`/api/dashboard/tuning/base-values/sync${query({ site_id })}`, { method: "POST", body: JSON.stringify({ models }) }),
-  billingSummary: (params: { instance_id: string; month: string; page?: number; page_size?: number; search?: string }) =>
+  billingSummary: (params: { instance_id: string; month?: string; from?: string; to?: string; page?: number; page_size?: number; search?: string }) =>
     client.request<BillingSummaryResponse>(`/api/dashboard/billing/summary${query(params)}`),
-  billingDetail: (params: { instance_id: string; user_id: number; month: string }) =>
+  billingDetail: (params: { instance_id: string; user_id: number; month?: string; from?: string; to?: string }) =>
     client.request<BillingDetailResponse>(`/api/dashboard/billing/detail${query(params)}`),
-  generateBilling: (input: { instance_id: string; from: string; to: string; force?: boolean }) =>
+  generateBilling: (input: { instance_id: string; from: string; to: string; force?: boolean; scope?: "all" | "channel" }) =>
     client.request<{ accepted: boolean; reused: boolean; job: BillingJob }>("/api/dashboard/billing/backfill", { method: "POST", body: JSON.stringify(input) }),
   billingJob: (id: string) => client.request<BillingJob>(`/api/dashboard/billing/jobs${query({ id })}`),
   billingUserSettings: (instance_id: string) => client.request<{ items: Record<string, BillingUserSetting> }>(`/api/dashboard/billing/user-settings${query({ instance_id })}`),
   saveBillingUserSetting: (input: BillingUserSetting) => client.request<BillingUserSetting>("/api/dashboard/billing/user-settings", { method: "PUT", body: JSON.stringify(input) }),
-  billingChannels:(params:{instance_id:string;month:string;channel_id?:number})=>client.request<{items:BillingChannelSummary[];month:string}>(`/api/dashboard/billing/channels${query(params)}`),
+  billingChannels:(params:{instance_id:string;month?:string;from?:string;to?:string;channel_id?:number})=>client.request<{items:BillingChannelSummary[];period:string;generation_job?:BillingJob|null;warning?:string}>(`/api/dashboard/billing/channels${query(params)}`),
   saveBillingChannelDiscount:(input:{instance_id:string;channel_id:number;discount:string})=>client.request("/api/dashboard/billing/channels",{method:"PUT",body:JSON.stringify(input)}),
   billingPrices: (instance_id: string) =>
     client.request<ListResponse<BillingPriceItem>>(`/api/dashboard/billing/prices${query({ instance_id })}`),

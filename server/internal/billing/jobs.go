@@ -113,7 +113,7 @@ type JobStore interface {
 }
 
 func NewJob(instanceID string, from, to time.Time, requestedBy string) (Job, []JobStep, error) {
-	if strings.TrimSpace(instanceID) == "" || !to.After(from) || to.Sub(from) > 367*24*time.Hour {
+	if strings.TrimSpace(instanceID) == "" || !to.After(from) || to.Sub(from) > 60*24*time.Hour {
 		return Job{}, nil, fmt.Errorf("invalid billing range")
 	}
 	raw := make([]byte, 16)
@@ -122,13 +122,17 @@ func NewJob(instanceID string, from, to time.Time, requestedBy string) (Job, []J
 	job := Job{ID: hex.EncodeToString(raw), InstanceID: instanceID, JobType: "generate", From: from, To: to, Status: "pending", RequestedBy: requestedBy, CreatedAt: now, UpdatedAt: now}
 	steps := []JobStep{}
 	n := 0
-	for start := from; start.Before(to); start = start.Add(time.Hour) {
-		end := start.Add(time.Hour)
+	for start := from; start.Before(to); {
+		end := start.Truncate(time.Hour).Add(time.Hour)
+		if !end.After(start) {
+			end = start.Add(time.Hour)
+		}
 		if end.After(to) {
 			end = to
 		}
 		steps = append(steps, JobStep{JobID: job.ID, StepNo: n, From: start, To: end})
 		n++
+		start = end
 	}
 	job.TotalSteps = len(steps)
 	return job, steps, nil
@@ -325,6 +329,16 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 }
 
 func fillAnomalyAmounts(out *AnomalyOrder, log PagedLogRecord, prices []Price, ratio string, at time.Time, useTiers bool) {
+	// Unpriced anomalies are still valid anomaly records. MySQL DECIMAL columns
+	// cannot accept an empty string, so keep every monetary field numeric even
+	// when no matching model price exists.
+	out.InputPrice = "0"
+	out.OutputPrice = "0"
+	out.CachePrice = "0"
+	out.InputAmount = "0"
+	out.OutputAmount = "0"
+	out.CacheAmount = "0"
+	out.ReferenceAmount = "0"
 	if ratio == "" {
 		ratio = "1"
 	}

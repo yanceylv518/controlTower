@@ -12,6 +12,11 @@ type ChannelSetting struct {
 	UpdatedAt  time.Time `json:"updated_at"`
 	UpdatedBy  string    `json:"updated_by"`
 }
+type ConfiguredChannel struct {
+	ChannelID   int64  `json:"channel_id"`
+	ChannelName string `json:"channel_name"`
+	Status      int    `json:"status"`
+}
 type ChannelSummary struct {
 	ChannelID        int64    `json:"channel_id"`
 	ChannelName      string   `json:"channel_name"`

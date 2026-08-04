@@ -53,21 +53,30 @@ func (h BillingJobsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeDashboardError(w, 400, "invalid_request")
 		return
 	}
-	from, e1 := time.ParseInLocation("2006-01-02", req.From, time.Local)
-	through, e2 := time.ParseInLocation("2006-01-02", req.To, time.Local)
-	if e1 != nil || e2 != nil {
+	from, to, rangeErr := parseBillingInputRange(req.From, req.To)
+	if rangeErr != nil {
 		writeDashboardError(w, 400, "invalid_range")
 		return
 	}
-	to := through.AddDate(0, 0, 1)
-	requestKey := billingRequestKey(req.InstanceID, from, to)
+	scope := strings.TrimSpace(req.Scope)
+	if scope == "" {
+		scope = "all"
+	}
+	if scope != "all" && scope != "channel" {
+		writeDashboardError(w, 400, "invalid_scope")
+		return
+	}
+	requestKey := billingRequestKey(req.InstanceID, scope, from, to)
 	if !req.Force {
 		existing, findErr := h.Store.BillingJobByRequestKey(r.Context(), requestKey)
 		if findErr == nil {
-			writeDashboardJSON(w, http.StatusOK, map[string]any{"accepted": true, "reused": true, "job": existing})
-			return
+			if existing.Status != "failed" {
+				writeDashboardJSON(w, http.StatusOK, map[string]any{"accepted": true, "reused": true, "job": existing})
+				return
+			}
+			req.Force = true
 		}
-		if findErr != sql.ErrNoRows {
+		if findErr != nil && findErr != sql.ErrNoRows {
 			writeDashboardError(w, 500, "billing_job_query_failed")
 			return
 		}
@@ -76,6 +85,9 @@ func (h BillingJobsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeDashboardError(w, 400, "invalid_range")
 		return
+	}
+	if scope == "channel" {
+		job.JobType = "channel_generate"
 	}
 	if req.Force {
 		job.RequestKey = requestKey + ":force:" + job.ID
@@ -95,8 +107,35 @@ func (h BillingJobsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	writeDashboardJSON(w, http.StatusAccepted, map[string]any{"accepted": true, "reused": false, "job": job})
 }
 
-func billingRequestKey(instanceID string, from, to time.Time) string {
-	sum := sha256.Sum256([]byte(instanceID + "|generate|" + from.Format("2006-01-02") + "|" + to.Format("2006-01-02")))
+func parseBillingInputRange(fromRaw, toRaw string) (time.Time, time.Time, error) {
+	parse := func(raw string) (time.Time, bool, error) {
+		if value, err := time.ParseInLocation("2006-01-02 15:04:05", raw, time.Local); err == nil {
+			return value, true, nil
+		}
+		value, err := time.ParseInLocation("2006-01-02", raw, time.Local)
+		return value, false, err
+	}
+	from, _, fromErr := parse(strings.TrimSpace(fromRaw))
+	through, hasTime, toErr := parse(strings.TrimSpace(toRaw))
+	if fromErr != nil || toErr != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("invalid billing range")
+	}
+	to := through.AddDate(0, 0, 1)
+	if hasTime {
+		to = through.Add(time.Second)
+	}
+	if !to.After(from) || to.Sub(from) > 60*24*time.Hour {
+		return time.Time{}, time.Time{}, fmt.Errorf("invalid billing range")
+	}
+	return from, to, nil
+}
+
+func billingRequestKey(instanceID, scope string, from, to time.Time) string {
+	// Include the calculation version so a billing-rule correction invalidates
+	// previously completed jobs once, while identical jobs on the current
+	// algorithm are still reused.
+	const calculationVersion = "v2-local-day"
+	sum := sha256.Sum256([]byte(calculationVersion + "|" + instanceID + "|generate|" + scope + "|" + from.Format(time.RFC3339Nano) + "|" + to.Format(time.RFC3339Nano)))
 	return "billing:" + fmt.Sprintf("%x", sum[:16])
 }
 

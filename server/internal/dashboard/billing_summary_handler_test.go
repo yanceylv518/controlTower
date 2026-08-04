@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"context"
+	"database/sql"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -16,6 +17,12 @@ type fakeBillingSummaryStore struct {
 
 func (f fakeBillingSummaryStore) QueryBillingAggregates(context.Context, string, time.Time, time.Time, []int64) ([]billing.AggregateRow, error) {
 	return f.rows, nil
+}
+func (f fakeBillingSummaryStore) QueryBillingAggregatesForJob(context.Context, string, []int64) ([]billing.AggregateRow, error) {
+	return f.rows, nil
+}
+func (f fakeBillingSummaryStore) LatestBillingJob(context.Context, string, string, time.Time, time.Time) (billing.Job, error) {
+	return billing.Job{}, sql.ErrNoRows
 }
 func (f fakeBillingSummaryStore) ListBillingPrices(context.Context, string) ([]billing.PriceRecord, error) {
 	day := time.Date(2026, 8, 1, 0, 0, 0, 0, time.Local)

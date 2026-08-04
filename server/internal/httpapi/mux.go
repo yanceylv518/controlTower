@@ -143,7 +143,7 @@ func NewMux(options Options) *http.ServeMux {
 		mux.Handle("GET /api/dashboard/billing/anomalies", protect(dashboard.BillingAnomalyHandler{Store: anomalyStore}))
 	}
 	if channelStore, ok := any(options.Store).(dashboard.BillingChannelStore); ok {
-		mux.Handle("/api/dashboard/billing/channels", protect(dashboard.BillingChannelsHandler{Store: channelStore}))
+		mux.Handle("/api/dashboard/billing/channels", protect(dashboard.BillingChannelsHandler{Store: channelStore, Source: dashboard.BillingReadonlySource{Handler: passthrough}}))
 	}
 	if billingConfigStore, ok := any(options.Store).(dashboard.BillingConfigStore); ok {
 		mux.Handle("/api/dashboard/billing/prices", protect(dashboard.BillingPricesHandler{Store: billingConfigStore}))
@@ -158,7 +158,16 @@ func NewMux(options Options) *http.ServeMux {
 		mux.Handle("GET /api/dashboard/billing/detail", protect(dashboard.BillingDetailHandler{Store: billingSummaryStore}))
 		mux.Handle("GET /api/dashboard/billing/log-export", protect(dashboard.BillingLogExportHandler{Store: billingSummaryStore, Source: dashboard.BillingReadonlySource{Handler: passthrough}}))
 	}
-	if workbookStore,ok:=any(options.Store).(dashboard.BillingWorkbookStore);ok{mux.Handle("GET /api/dashboard/billing/workbook",protect(dashboard.BillingWorkbookHandler{Store:workbookStore,Source:dashboard.BillingReadonlySource{Handler:passthrough}}))}
+	if workbookStore, ok := any(options.Store).(dashboard.BillingWorkbookStore); ok {
+		workbook := dashboard.BillingWorkbookHandler{Store: workbookStore, Source: dashboard.BillingReadonlySource{Handler: passthrough}}
+		mux.Handle("GET /api/dashboard/billing/workbook", protect(workbook))
+		mux.Handle("/api/dashboard/billing/workbook-jobs", protect(dashboard.BillingExportJobHandler{Workbook: workbook, Kind: "user"}))
+	}
+	if channelWorkbookStore, ok := any(options.Store).(dashboard.BillingChannelWorkbookStore); ok {
+		workbook := dashboard.BillingChannelWorkbookHandler{Store: channelWorkbookStore, Source: dashboard.BillingReadonlySource{Handler: passthrough}}
+		mux.Handle("GET /api/dashboard/billing/channel-workbook", protect(workbook))
+		mux.Handle("/api/dashboard/billing/channel-workbook-jobs", protect(dashboard.BillingExportJobHandler{Workbook: workbook, Kind: "channel"}))
+	}
 
 	if options.WebAppDir == "" {
 		options.WebAppDir = options.NextWebDir // Backward-compatible option name for one release cycle.

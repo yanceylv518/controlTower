@@ -20,6 +20,30 @@ func TestNewJobSplitsRangeIntoHourlySteps(t *testing.T) {
 	}
 }
 
+func TestNewJobAlignsPartialStepsWithoutCrossingMidnight(t *testing.T) {
+	from := time.Date(2026, 8, 1, 23, 30, 0, 0, time.Local)
+	job, steps, err := NewJob("site-a", from, from.Add(time.Hour), "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.TotalSteps != 2 || len(steps) != 2 {
+		t.Fatalf("steps=%d total=%d", len(steps), job.TotalSteps)
+	}
+	if steps[0].To.Hour() != 0 || steps[0].To.Day() != 2 || !steps[0].To.Equal(steps[1].From) {
+		t.Fatalf("unexpected step boundary: %#v", steps)
+	}
+}
+
+func TestNewJobRejectsMoreThanSixtyDays(t *testing.T) {
+	from := time.Date(2026, 8, 1, 0, 0, 0, 0, time.Local)
+	if _, _, err := NewJob("site-a", from, from.AddDate(0, 0, 61), "admin"); err == nil {
+		t.Fatal("expected a range longer than 60 days to be rejected")
+	}
+	if _, steps, err := NewJob("site-a", from, from.AddDate(0, 0, 60), "admin"); err != nil || len(steps) != 60*24 {
+		t.Fatalf("60-day range should be accepted: steps=%d err=%v", len(steps), err)
+	}
+}
+
 func TestAnomalyReasons(t *testing.T) {
 	cases := []struct {
 		name string
@@ -55,5 +79,13 @@ func TestFillAnomalyAmountsSeparatesCachedInput(t *testing.T) {
 	fillAnomalyAmounts(&got, log, prices, "1", time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC), true)
 	if got.InputAmount != "0.000060" || got.OutputAmount != "0.000040" || got.CacheAmount != "0.000020" || got.ReferenceAmount != "0.000120" {
 		t.Fatalf("unexpected amounts: %+v", got)
+	}
+}
+
+func TestFillAnomalyAmountsUsesNumericZeroWithoutPrice(t *testing.T) {
+	var got AnomalyOrder
+	fillAnomalyAmounts(&got, PagedLogRecord{}, nil, "1", time.Now(), true)
+	if got.InputPrice != "0" || got.OutputPrice != "0" || got.CachePrice != "0" || got.InputAmount != "0" || got.OutputAmount != "0" || got.CacheAmount != "0" || got.ReferenceAmount != "0" {
+		t.Fatalf("unpriced anomaly contains non-numeric defaults: %+v", got)
 	}
 }

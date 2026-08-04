@@ -14,6 +14,8 @@ import (
 
 type BillingSummaryStore interface {
 	QueryBillingAggregates(context.Context, string, time.Time, time.Time, []int64) ([]billing.AggregateRow, error)
+	QueryBillingAggregatesForJob(context.Context, string, []int64) ([]billing.AggregateRow, error)
+	LatestBillingJob(context.Context, string, string, time.Time, time.Time) (billing.Job, error)
 	ListBillingPrices(context.Context, string) ([]billing.PriceRecord, error)
 	ListBillingGroupRatios(context.Context, string) ([]billing.GroupRatio, error)
 	BillingRatioSnapshots(context.Context, string, time.Time, time.Time) (map[string]string, error)
@@ -31,16 +33,11 @@ func (h BillingSummaryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	if instanceID == "" {
 		instanceID = strings.TrimSpace(r.URL.Query().Get("site"))
 	}
-	month := strings.TrimSpace(r.URL.Query().Get("month"))
-	if month == "" {
-		month = time.Now().Format("2006-01")
-	}
-	from, err := time.ParseInLocation("2006-01", month, time.Local)
+	from, to, period, err := billingPeriodQuery(r)
 	if err != nil || instanceID == "" {
 		writeDashboardError(w, http.StatusBadRequest, "invalid_query")
 		return
 	}
-	to := from.AddDate(0, 1, 0)
 	var userIDs []int64
 	if user, ok := ctauth.CurrentUser(r); ok && user.Role != "admin" {
 		if user.ScopeSite != instanceID {
@@ -53,12 +50,22 @@ func (h BillingSummaryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 			return
 		}
 	}
-	cacheKey := billing.SummaryCacheKey(instanceID, month, userIDs)
+	job, jobErr := h.Store.LatestBillingJob(r.Context(), instanceID, "generate", from, to)
+	jobID := ""
+	if jobErr == nil && job.Status == "complete" {
+		jobID = job.ID
+	}
+	cacheKey := billing.SummaryCacheKey(instanceID, period+":"+jobID, userIDs)
 	if items, total, ok := billing.MonthlySummaryCache.Get(cacheKey); ok {
 		h.respondWithSearch(w, r, items, total, to)
 		return
 	}
-	rows, err := h.Store.QueryBillingAggregates(r.Context(), instanceID, from, to, userIDs)
+	var rows []billing.AggregateRow
+	if jobID != "" {
+		rows, err = h.Store.QueryBillingAggregatesForJob(r.Context(), jobID, userIDs)
+	} else {
+		rows, err = h.Store.QueryBillingAggregates(r.Context(), instanceID, from, to, userIDs)
+	}
 	if err != nil {
 		writeDashboardError(w, http.StatusInternalServerError, "billing_query_failed")
 		return

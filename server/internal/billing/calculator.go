@@ -71,20 +71,22 @@ type DailyRow struct {
 	UpdatedAt        time.Time
 }
 
-// SelectPrice pins one effective price schedule before selecting its tier.
-func SelectPrice(prices []Price, day time.Time, promptTokens int64) (Price, bool) {
-	var effective time.Time
+// SelectPrice uses the most recently saved price schedule and then selects its
+// tier. Billing is priced when it is generated; the log date is intentionally
+// ignored and remains in the signature only for compatibility with callers.
+func SelectPrice(prices []Price, _ time.Time, promptTokens int64) (Price, bool) {
+	var current time.Time
 	for _, price := range prices {
-		if !price.EffectiveFrom.After(day) && (effective.IsZero() || price.EffectiveFrom.After(effective)) {
-			effective = price.EffectiveFrom
+		if current.IsZero() || price.EffectiveFrom.After(current) {
+			current = price.EffectiveFrom
 		}
 	}
-	if effective.IsZero() {
+	if current.IsZero() {
 		return Price{}, false
 	}
 	eligible := make([]Price, 0, len(prices))
 	for _, price := range prices {
-		if price.EffectiveFrom.Equal(effective) && price.TierFrom <= promptTokens {
+		if price.EffectiveFrom.Equal(current) && price.TierFrom <= promptTokens {
 			eligible = append(eligible, price)
 		}
 	}

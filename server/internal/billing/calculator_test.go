@@ -25,7 +25,7 @@ func TestAmountSubtractsCacheWhenItIsPartOfPrompt(t *testing.T) {
 	}
 }
 
-func TestSelectPricePinsEffectiveScheduleBeforeTier(t *testing.T) {
+func TestSelectPriceUsesCurrentScheduleRegardlessOfLogDate(t *testing.T) {
 	day1 := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 	day2 := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
 	prices := []Price{{EffectiveFrom: day1, TierFrom: 0, Input: "1"}, {EffectiveFrom: day1, TierFrom: 128000, Input: "2"}, {EffectiveFrom: day2, TierFrom: 0, Input: "3"}, {EffectiveFrom: day2, TierFrom: 128000, Input: "4"}}
@@ -34,7 +34,7 @@ func TestSelectPricePinsEffectiveScheduleBeforeTier(t *testing.T) {
 		t.Fatalf("selected %#v, ok=%v", price, ok)
 	}
 	price, ok = SelectPrice(prices, day1, 127999)
-	if !ok || price.Input != "1" {
+	if !ok || price.Input != "3" {
 		t.Fatalf("selected %#v, ok=%v", price, ok)
 	}
 }

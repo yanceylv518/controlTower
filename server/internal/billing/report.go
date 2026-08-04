@@ -499,18 +499,18 @@ func multipliedDecimal(value, ratio string) (string, error) {
 	return new(big.Rat).Mul(left, right).FloatString(6), nil
 }
 
-func selectPriceForTier(prices []Price, day time.Time, tier int64) (Price, bool) {
-	var effective time.Time
+func selectPriceForTier(prices []Price, _ time.Time, tier int64) (Price, bool) {
+	var current time.Time
 	for _, p := range prices {
-		if !p.EffectiveFrom.After(day) && (effective.IsZero() || p.EffectiveFrom.After(effective)) {
-			effective = p.EffectiveFrom
+		if current.IsZero() || p.EffectiveFrom.After(current) {
+			current = p.EffectiveFrom
 		}
 	}
-	if effective.IsZero() {
+	if current.IsZero() {
 		return Price{}, false
 	}
 	for _, p := range prices {
-		if p.TierFrom == tier && p.EffectiveFrom.Equal(effective) {
+		if p.TierFrom == tier && p.EffectiveFrom.Equal(current) {
 			return p, true
 		}
 	}

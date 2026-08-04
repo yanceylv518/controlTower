@@ -28,9 +28,8 @@ func (h BillingWorkbookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 	q := r.URL.Query()
 	site := q.Get("instance_id")
 	uid, e := strconv.ParseInt(q.Get("user_id"), 10, 64)
-	month := q.Get("month")
-	from, me := time.ParseInLocation("2006-01", month, time.Local)
-	if e != nil || me != nil || site == "" || uid <= 0 {
+	from, to, period, rangeErr := billingPeriodQuery(r)
+	if e != nil || rangeErr != nil || site == "" || uid <= 0 {
 		writeDashboardError(w, 400, "invalid_query")
 		return
 	}
@@ -38,8 +37,13 @@ func (h BillingWorkbookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 		writeDashboardError(w, 403, "forbidden")
 		return
 	}
-	to := from.AddDate(0, 1, 0)
-	rows, e := h.Store.QueryBillingAggregates(r.Context(), site, from, to, []int64{uid})
+	job, jobErr := h.Store.LatestBillingJob(r.Context(), site, "generate", from, to)
+	var rows []billing.AggregateRow
+	if jobErr == nil && job.Status == "complete" {
+		rows, e = h.Store.QueryBillingAggregatesForJob(r.Context(), job.ID, []int64{uid})
+	} else {
+		rows, e = h.Store.QueryBillingAggregates(r.Context(), site, from, to, []int64{uid})
+	}
 	if e != nil {
 		writeDashboardError(w, 500, "billing_query_failed")
 		return
@@ -65,18 +69,18 @@ func (h BillingWorkbookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 		return
 	}
 	book := xlsxwriter.New()
-	if e = writeOverview(book, uid, month, rows, prices, ratios, snapshots); e == nil {
-		e = writeDaily(book, uid, month, billing.BuildDetails(rows, prices, ratios, snapshots))
+	if e = writeOverview(book, uid, period, rows, prices, ratios, snapshots); e == nil {
+		e = writeDaily(book, uid, period, billing.BuildDetails(rows, prices, ratios, snapshots))
 	}
 	if e == nil {
-		e = writeRequests(r.Context(), book, h.Source, site, uid, month, from, to, prices, ratios, metadata)
+		e = writeRequests(r.Context(), book, h.Source, site, uid, period, from, to, prices, ratios, metadata)
 	}
 	if e != nil {
 		writeDashboardError(w, 500, "billing_xlsx_failed")
 		return
 	}
 	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="billing-%d-%s.xlsx"`, uid, month))
+	w.Header().Set("Content-Disposition", `attachment; filename="`+billingDownloadName("billing", uid, 0, from, to)+`.xlsx"`)
 	if e = book.Write(w); e != nil {
 		return
 	}
@@ -123,6 +127,11 @@ func writeDaily(book *xlsxwriter.Workbook, uid int64, month string, items []bill
 	return nil
 }
 func writeRequests(ctx context.Context, book *xlsxwriter.Workbook, source BillingWorkbookSource, site string, uid int64, month string, from, to time.Time, prices []billing.PriceRecord, ratios []billing.GroupRatio, metadata []billing.ModelMetadata) error {
+	return writeRequestPages(ctx, book, month, from, to, prices, ratios, metadata, func(cursor billing.LogCursor, limit int) ([]billing.PagedLogRecord, error) {
+		return source.DetailedLogsPage(ctx, site, uid, from, to, cursor, limit)
+	})
+}
+func writeRequestPages(ctx context.Context, book *xlsxwriter.Workbook, month string, from, to time.Time, prices []billing.PriceRecord, ratios []billing.GroupRatio, metadata []billing.ModelMetadata, readPage func(billing.LogCursor, int) ([]billing.PagedLogRecord, error)) error {
 	byModel := map[string][]billing.Price{}
 	for _, v := range prices {
 		byModel[v.ModelName] = append(byModel[v.ModelName], v.Price)
@@ -156,7 +165,7 @@ func writeRequests(ctx context.Context, book *xlsxwriter.Workbook, source Billin
 	}
 	cursor := billing.LogCursor{}
 	for {
-		logs, e := source.DetailedLogsPage(ctx, site, uid, from, to, cursor, billing.BillingPageSize)
+		logs, e := readPage(cursor, billing.BillingPageSize)
 		if e != nil {
 			return e
 		}

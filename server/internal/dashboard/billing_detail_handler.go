@@ -16,12 +16,8 @@ type BillingDetailHandler struct{ Store BillingSummaryStore }
 func (h BillingDetailHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	instanceID := strings.TrimSpace(r.URL.Query().Get("instance_id"))
 	userID, err := strconv.ParseInt(r.URL.Query().Get("user_id"), 10, 64)
-	month := strings.TrimSpace(r.URL.Query().Get("month"))
-	if month == "" {
-		month = time.Now().Format("2006-01")
-	}
-	from, monthErr := time.ParseInLocation("2006-01", month, time.Local)
-	if r.Method != http.MethodGet || instanceID == "" || err != nil || userID <= 0 || monthErr != nil {
+	from, to, period, rangeErr := billingPeriodQuery(r)
+	if r.Method != http.MethodGet || instanceID == "" || err != nil || userID <= 0 || rangeErr != nil {
 		writeDashboardError(w, http.StatusBadRequest, "invalid_query")
 		return
 	}
@@ -31,8 +27,13 @@ func (h BillingDetailHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	}
-	to := from.AddDate(0, 1, 0)
-	rows, err := h.Store.QueryBillingAggregates(r.Context(), instanceID, from, to, []int64{userID})
+	job, jobErr := h.Store.LatestBillingJob(r.Context(), instanceID, "generate", from, to)
+	var rows []billing.AggregateRow
+	if jobErr == nil && job.Status == "complete" {
+		rows, err = h.Store.QueryBillingAggregatesForJob(r.Context(), job.ID, []int64{userID})
+	} else {
+		rows, err = h.Store.QueryBillingAggregates(r.Context(), instanceID, from, to, []int64{userID})
+	}
 	if err != nil {
 		writeDashboardError(w, http.StatusInternalServerError, "billing_query_failed")
 		return
@@ -58,7 +59,7 @@ func (h BillingDetailHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 			writeDashboardError(w, http.StatusUnprocessableEntity, "invoice_failed")
 			return
 		}
-		writeBillingInvoiceCSV(w, userID, month, invoiceItems, invoiceTotal)
+		writeBillingInvoiceCSV(w, userID, period, invoiceItems, invoiceTotal)
 		return
 	}
 	items := billing.BuildDetails(rows, prices, ratios, snapshots)
@@ -66,7 +67,7 @@ func (h BillingDetailHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		writeBillingDetailCSV(w, items)
 		return
 	}
-	writeDashboardJSON(w, http.StatusOK, map[string]any{"items": items, "user_id": userID, "month": month, "data_through": to.Add(-time.Nanosecond)})
+	writeDashboardJSON(w, http.StatusOK, map[string]any{"items": items, "user_id": userID, "period": period, "data_through": to.Add(-time.Nanosecond)})
 }
 
 func writeBillingInvoiceCSV(w http.ResponseWriter, userID int64, month string, items []billing.InvoiceItem, total billing.InvoiceTotal) {
