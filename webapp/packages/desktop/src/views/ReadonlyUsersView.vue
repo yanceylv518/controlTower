@@ -63,7 +63,7 @@ watch(() => filters.site_id, (site, previous) => {
         <el-select v-model="status" clearable placeholder="全部状态" class="status-filter">
           <el-option label="正常" :value="1"/><el-option label="停用" :value="2"/>
         </el-select>
-        <el-input v-if="auth.user?.role==='admin'" v-model="userIDs" clearable placeholder="限定用户 ID，逗号分隔" class="user-filter"/>
+        <el-input v-if="auth.user?.role==='admin'" v-model="userIDs" clearable placeholder="限定用户 ID，逗号分隔" class="user-filter" @keyup.enter="search"/>
       </div>
       <div class="filter-actions">
         <el-button type="primary" :icon="Search" @click="search">查询</el-button>

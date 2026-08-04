@@ -9,6 +9,7 @@ import { useFiltersStore } from '../stores/filters'
 import { usePrefsStore } from '../stores/prefs'
 import { useAsyncData } from '../composables/useAsyncData'
 import { formatNumber } from '../utils/format'
+import { timeRangeShortcuts } from '../utils/billingRange'
 
 type LogExtra = Record<string, unknown>
 const auth = useAuthStore(), filters = useFiltersStore(), prefs = usePrefsStore()
@@ -212,7 +213,7 @@ watch(() => filters.site_id, (site, previous) => {
   </div>
   <div class="filter-bar">
     <div class="filter-fields">
-      <el-date-picker v-model="timeRange" type="datetimerange" range-separator="~" start-placeholder="开始时间" end-placeholder="结束时间" :clearable="false" class="time-range"/>
+      <el-date-picker v-model="timeRange" type="datetimerange" range-separator="~" start-placeholder="开始时间" end-placeholder="结束时间" :shortcuts="timeRangeShortcuts" unlink-panels :clearable="false" class="time-range"/>
       <el-input v-model="modelName" clearable prefix-icon="Search" placeholder="模型名称"/>
       <el-select v-model="logType" clearable placeholder="全部类型"><el-option label="消费" :value="2"/><el-option label="错误" :value="5"/><el-option label="充值" :value="1"/><el-option label="管理" :value="3"/><el-option label="系统" :value="4"/><el-option label="退款" :value="6"/></el-select>
       <el-input v-model="tokenName" clearable prefix-icon="Search" placeholder="令牌名称"/>

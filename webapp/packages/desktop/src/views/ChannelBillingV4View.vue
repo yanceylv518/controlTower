@@ -9,13 +9,10 @@ import ListPager from "../components/ListPager.vue";
 import { useAsyncData } from "../composables/useAsyncData";
 import { useFiltersStore } from "../stores/filters";
 import { usePrefsStore } from "../stores/prefs";
+import { formatNumber } from "../utils/format";
+import { formatDateTime, savedGenerationRange, timeRangeShortcuts, validateGenerationRange } from "../utils/billingRange";
 
-type PageData = { items: BillingChannelSummary[]; job: BillingJob | null; billingError: string; channelError: string };
-function formatDateTime(value: Date) { const y=value.getFullYear(),m=String(value.getMonth()+1).padStart(2,"0"),d=String(value.getDate()).padStart(2,"0"),h=String(value.getHours()).padStart(2,"0"),n=String(value.getMinutes()).padStart(2,"0"),s=String(value.getSeconds()).padStart(2,"0");return`${y}-${m}-${d} ${h}:${n}:${s}`; }
-function parseLocal(value:string){return new Date(value.replace(" ","T"));}
-function defaultGenerationRange(): [string, string] { const now=new Date();return[formatDateTime(new Date(now.getFullYear(),now.getMonth(),1)),formatDateTime(now)]; }
-function savedGenerationRange(key:string):[string,string]{try{const value=JSON.parse(localStorage.getItem(key)||"");if(Array.isArray(value)&&value.length===2&&value.every((v)=>typeof v==="string"&&v.length===19))return[value[0],value[1]]}catch{}return defaultGenerationRange()}
-const billingShortcuts=[{text:"今天",value:()=>{const now=new Date();return[new Date(now.getFullYear(),now.getMonth(),now.getDate()),now]}},{text:"近 7 天",value:()=>{const now=new Date(),start=new Date(now);start.setDate(start.getDate()-6);start.setHours(0,0,0,0);return[start,now]}},{text:"本周",value:()=>{const now=new Date(),start=new Date(now);start.setDate(start.getDate()-((start.getDay()+6)%7));start.setHours(0,0,0,0);return[start,now]}},{text:"近 30 天",value:()=>{const now=new Date(),start=new Date(now);start.setDate(start.getDate()-29);start.setHours(0,0,0,0);return[start,now]}},{text:"本月",value:()=>{const now=new Date();return[new Date(now.getFullYear(),now.getMonth(),1),now]}}];
+type PageData = { items: BillingChannelSummary[]; job: BillingJob | null; channelError: string };
 const filters = useFiltersStore(), prefs = usePrefsStore();
 const generating = ref(false), progress = ref(0), page = ref(1), pageSize = ref(20);
 const exporting = ref<Record<number, boolean>>({});
@@ -23,13 +20,12 @@ const generationRange = ref<[string, string]>(savedGenerationRange("ct.billing.c
 void prefs.load();
 const state = useAsyncData<PageData>(async () => {
   await filters.loadInstances();
-  if (!filters.site_id) return { items: [], job: null, billingError: "", channelError: "尚未选择站点" };
+  if (!filters.site_id) return { items: [], job: null, channelError: "" };
   const [from,to]=generationRange.value;
   const bill = await dashboard.billingChannels({ instance_id: filters.site_id, from, to });
   return {
     items: (bill.items || []).sort((a, b) => Number(b.amount) - Number(a.amount) || a.channel_id - b.channel_id),
     job: bill.generation_job || null,
-    billingError: "",
     channelError: bill.warning || "",
   };
 });
@@ -63,12 +59,9 @@ async function monitor(initial: BillingJob) {
 }
 async function generate(force=false) {
   if (generating.value || !filters.site_id) return;
-  const [from,to]=generationRange.value||[];
-  if(!from||!to){ElMessage.warning("请选择生成账单的开始和结束日期");return;}
-  const start=parseLocal(from),end=parseLocal(to),now=new Date();
-  if(start>now||end>now){ElMessage.warning("不能生成未来时间的账单");return;}
-  if(end<start){ElMessage.warning("结束时间不能早于开始时间");return;}
-  if(end.getTime()-start.getTime()>=60*86400000){ElMessage.warning("单次最多生成 60 天账单");return;}
+  const invalid=validateGenerationRange(generationRange.value);
+  if(invalid){ElMessage.warning(invalid);return;}
+  const [from,to]=generationRange.value;
   const result = await dashboard.generateBilling({ instance_id: filters.site_id, from, to, scope: "channel", force });
   if(result.job.status==="complete"){await state.reload();ElMessage.success(result.reused?"该区间已有渠道账单，已直接加载":"所选时间范围的渠道账单已经生成完成");return;}
   await monitor(result.job);
@@ -92,21 +85,20 @@ void state.reload();
 <template>
   <AppShell title="渠道账单">
     <template #tools>
-      <span class="period-label">账单周期</span><el-date-picker v-model="generationRange" type="datetimerange" value-format="YYYY-MM-DD HH:mm:ss" format="YYYY-MM-DD HH:mm:ss" range-separator="至" start-placeholder="开始时间" end-placeholder="结束时间" :shortcuts="billingShortcuts" unlink-panels style="width:420px" />
+      <span class="period-label">账单周期</span><el-date-picker v-model="generationRange" type="datetimerange" value-format="YYYY-MM-DD HH:mm:ss" format="YYYY-MM-DD HH:mm:ss" range-separator="至" start-placeholder="开始时间" end-placeholder="结束时间" :shortcuts="timeRangeShortcuts" unlink-panels style="width:420px" />
       <el-button type="primary" :loading="generating" @click="generate()">生成渠道账单</el-button><el-popconfirm title="强制重新生成会创建新的渠道账单版本，确定继续？" @confirm="generate(true)"><template #reference><el-button :disabled="generating">强制重新生成</el-button></template></el-popconfirm>
     </template>
     <div class="page">
-      <div class="period-summary">账单区间 <b>{{ generationRange[0] }} 至 {{ generationRange[1] }}</b><span>仅统计 type=2 消费日志，并排除异常订单</span></div>
+      <div class="period-summary">账单区间 <b>{{ generationRange[0] }} 至 {{ generationRange[1] }}</b><span>仅统计消费日志，并排除异常订单</span></div>
       <el-alert :type="status.type" :title="status.title" :description="status.text" :closable="false" show-icon />
-      <el-alert v-if="state.data.value?.billingError" type="error" title="账单数据加载失败" :description="state.data.value.billingError" :closable="false" show-icon />
       <el-alert v-if="state.data.value?.channelError" type="warning" title="部分渠道配置加载失败" :description="state.data.value.channelError" :closable="false" show-icon />
-      <AsyncPanel class="content" :loading="state.loading.value" :error="state.error.value" :empty="!items.length" empty-text="当前站点没有渠道配置" @retry="state.reload">
+      <AsyncPanel class="content" :loading="state.loading.value" :error="state.error.value" :empty="!items.length" :empty-text="filters.site_id ? '当前站点没有渠道配置' : '尚未选择站点'" @retry="state.reload">
         <div class="table-wrap"><el-table :data="pagedItems" height="100%">
           <el-table-column prop="channel_name" label="渠道" min-width="180"><template #default="scope"><b>{{ scope.row.channel_name || `渠道 ${scope.row.channel_id}` }}</b><small class="sub">ID {{ scope.row.channel_id }}</small></template></el-table-column>
-          <el-table-column prop="request_count" label="计费请求数" min-width="110" /><el-table-column prop="prompt_tokens" label="输入 Token" min-width="125" /><el-table-column prop="completion_tokens" label="输出 Token" min-width="125" /><el-table-column prop="cache_tokens" label="缓存 Token" min-width="125" />
-          <el-table-column label="账单原价" min-width="115"><template #default="scope">{{ money(scope.row.amount) }}</template></el-table-column>
+          <el-table-column prop="request_count" label="计费请求数" min-width="110" align="right"><template #default="scope">{{ formatNumber(scope.row.request_count) }}</template></el-table-column><el-table-column prop="prompt_tokens" label="输入 Token" min-width="125" align="right"><template #default="scope">{{ formatNumber(scope.row.prompt_tokens) }}</template></el-table-column><el-table-column prop="completion_tokens" label="输出 Token" min-width="125" align="right"><template #default="scope">{{ formatNumber(scope.row.completion_tokens) }}</template></el-table-column><el-table-column prop="cache_tokens" label="缓存 Token" min-width="125" align="right"><template #default="scope">{{ formatNumber(scope.row.cache_tokens) }}</template></el-table-column>
+          <el-table-column label="账单原价" min-width="115" align="right"><template #default="scope">{{ money(scope.row.amount) }}</template></el-table-column>
           <el-table-column label="折扣" width="140"><template #default="scope"><el-input-number :model-value="Number(scope.row.discount)" :min="0" :max="1" :step="0.01" :precision="2" size="small" @change="save(scope.row, String($event))" /></template></el-table-column>
-          <el-table-column label="折扣总金额" min-width="125"><template #default="scope"><b>{{ money(scope.row.discounted_amount) }}</b></template></el-table-column>
+          <el-table-column label="折扣总金额" min-width="125" align="right"><template #default="scope"><b>{{ money(scope.row.discounted_amount) }}</b></template></el-table-column>
           <el-table-column label="操作" width="180"><template #default="scope"><el-button link type="primary" :loading="exporting[scope.row.channel_id]" @click="exportChannel(scope.row)">导出账单</el-button><el-button link type="primary" tag="a" :href="anomaly(scope.row)">异常订单</el-button></template></el-table-column>
         </el-table></div>
         <ListPager v-model:page="page" v-model:page-size="pageSize" :item-count="pagedItems.length" :total="items.length" />
@@ -116,5 +108,5 @@ void state.reload();
 </template>
 
 <style scoped>
-.page{display:flex;height:calc(100vh - 78px);min-height:0;flex-direction:column;gap:10px;overflow:hidden}.period-summary{display:flex;align-items:center;padding:8px 12px;border:1px solid var(--el-border-color-lighter);border-radius:6px;background:var(--el-fill-color-blank);color:var(--el-text-color-secondary)}.period-summary b{margin-left:8px;color:var(--el-text-color-primary)}.period-summary span{margin-left:auto;font-size:12px}.content{min-height:0;flex:1}.table-wrap{height:calc(100% - 58px);min-height:240px}.sub{display:block;margin-top:3px;color:var(--el-text-color-secondary)}.period-label{color:var(--el-text-color-secondary);font-size:13px}
+.page{display:flex;height:calc(100vh - 78px);min-height:0;flex-direction:column;gap:10px;overflow:hidden}.period-summary{display:flex;align-items:center;padding:8px 12px;border:1px solid var(--el-border-color-lighter);border-radius:6px;background:var(--el-fill-color-blank);color:var(--el-text-color-secondary)}.period-summary b{margin-left:8px;color:var(--el-text-color-primary)}.period-summary span{margin-left:auto;font-size:12px}.content{min-height:0;flex:1}.table-wrap{height:calc(100% - 58px);min-height:240px}.table-wrap :deep(.cell){font-variant-numeric:tabular-nums}.sub{display:block;margin-top:3px;color:var(--el-text-color-secondary)}.period-label{color:var(--el-text-color-secondary);font-size:13px}
 </style>
