@@ -257,4 +257,18 @@ Instance tokens are stored only as `SHA-256(pepper + token)` hashes. A token may
 - `GET /api/dashboard/billing/detail?instance_id=&user_id=&month=&format=` per-user model/tier/day breakdown; same scope rules; CSV export supported.
 - `GET /api/dashboard/billing/import-prices?instance_id=` converts the site's current newapi ModelRatio config into editable CT price rows (form backfill only, saving goes through the prices API).
 - `GET|PUT /api/dashboard/billing/prices?instance_id=` and `GET|PUT /api/dashboard/billing/group-ratios?instance_id=` admin-only, effective-dated tiered price schedules and group ratios; changes are audited and invalidate the summary cache.
+- `GET|PUT /api/dashboard/billing/models?instance_id=` admin-only model catalog. The list merges models discovered from new-api ratios, CT price schedules, and CT model metadata; PUT maintains the per-site maximum context-token length.
 - `POST /api/dashboard/billing/backfill {instance_id, from, to}` admin-only, day-segmented and rate-limited, audited.
+## Billing background jobs
+
+- `POST /api/dashboard/billing/jobs` (also available at the compatibility path `POST /api/dashboard/billing/backfill`) creates an admin-only, hourly segmented billing job and returns HTTP 202 with the job record.
+- `GET /api/dashboard/billing/jobs?id=...` returns progress (`completed_steps / total_steps`), anomaly count, and terminal error. Scoped users may only read jobs for their site.
+- Each hour is read from new-api in pages of 2,000 using the `(created_at,id)` keyset. No billing generation query uses `OFFSET`.
+- Completed data is written as an immutable version. `billing_active_versions` is switched only after every step succeeds, so an interrupted generation never replaces the currently visible bill.
+- A failed step is resumed from its persisted cursor and retried up to three times.
+
+## Billing validation and user pricing
+
+- `GET|PUT /api/dashboard/billing/user-settings` controls `use_tiered_pricing` per site/user; writes are admin-only and default to enabled when no row exists.
+- `GET /api/dashboard/billing/anomalies` lists or exports (`format=csv`) rejected source orders by keyset cursor.
+- A source order is excluded when input or output tokens are NULL/zero, or input tokens exceed the configured model maximum context. Unknown/zero model maximum context skips only the context-limit validation.

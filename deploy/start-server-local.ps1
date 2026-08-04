@@ -36,6 +36,7 @@ $env:CT_NOTIFICATION_INTERVAL_SECONDS = [string]$NotificationIntervalSeconds
 $env:CT_AGENT_TOKEN = $AgentToken
 $env:CT_DASHBOARD_TOKEN = $DashboardToken
 $env:CT_AGENT_TOKEN_PEPPER = $AgentTokenPepper
+$env:CT_API_ONLY = "true"
 
 Push-Location (Join-Path $PSScriptRoot "..")
 try {
@@ -43,6 +44,7 @@ try {
     Write-Host "Dashboard token: $DashboardToken"
     Write-Host "Agent token: $AgentToken"
     Write-Host "MySQL DSN is set in-process and password is not printed."
+Write-Host "API-only mode: operational background runners are disabled; billing job worker remains enabled."
     & "C:\Program Files\Go\bin\go.exe" run ./server/cmd/control-tower-server
     if ($LASTEXITCODE -ne 0) {
         throw "go run exited with code $LASTEXITCODE"

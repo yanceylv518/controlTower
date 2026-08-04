@@ -129,19 +129,36 @@ func NewMux(options Options) *http.ServeMux {
 	mux.Handle("POST /api/dashboard/instances/{id}/rotate-token", protect(http.HandlerFunc(instances.Rotate)))
 	mux.Handle("GET /api/dashboard/passthrough/users", protect(http.HandlerFunc(passthrough.Users)))
 	mux.Handle("GET /api/dashboard/passthrough/logs", protect(http.HandlerFunc(passthrough.Logs)))
-	if billingStore, ok := any(options.Store).(billing.RollupStore); ok {
+	if jobs, ok := any(options.Store).(dashboard.BillingJobsStore); ok {
+		mux.Handle("/api/dashboard/billing/jobs", protect(dashboard.BillingJobsHandler{Store: jobs}))
+		mux.Handle("POST /api/dashboard/billing/backfill", protect(dashboard.BillingJobsHandler{Store: jobs}))
+	} else if billingStore, ok := any(options.Store).(billing.RollupStore); ok {
 		billingRollup := billing.RollupService{Source: dashboard.BillingReadonlySource{Handler: passthrough}, Store: billingStore}
 		mux.Handle("POST /api/dashboard/billing/backfill", protect(dashboard.BillingBackfillHandler{Rollup: billingRollup, Audit: options.Store}))
+	}
+	if settingsStore, ok := any(options.Store).(dashboard.BillingUserSettingsStore); ok {
+		mux.Handle("/api/dashboard/billing/user-settings", protect(dashboard.BillingUserSettingsHandler{Store: settingsStore}))
+	}
+	if anomalyStore, ok := any(options.Store).(dashboard.BillingAnomalyStore); ok {
+		mux.Handle("GET /api/dashboard/billing/anomalies", protect(dashboard.BillingAnomalyHandler{Store: anomalyStore}))
+	}
+	if channelStore, ok := any(options.Store).(dashboard.BillingChannelStore); ok {
+		mux.Handle("/api/dashboard/billing/channels", protect(dashboard.BillingChannelsHandler{Store: channelStore}))
 	}
 	if billingConfigStore, ok := any(options.Store).(dashboard.BillingConfigStore); ok {
 		mux.Handle("/api/dashboard/billing/prices", protect(dashboard.BillingPricesHandler{Store: billingConfigStore}))
 		mux.Handle("/api/dashboard/billing/group-ratios", protect(dashboard.BillingGroupRatiosHandler{Store: billingConfigStore}))
 		mux.Handle("GET /api/dashboard/billing/import-prices", protect(dashboard.BillingImportPricesHandler{Source: dashboard.BillingReadonlySource{Handler: passthrough}}))
 	}
+	if billingModelStore, ok := any(options.Store).(dashboard.BillingModelStore); ok {
+		mux.Handle("/api/dashboard/billing/models", protect(dashboard.BillingModelsHandler{Store: billingModelStore, Source: dashboard.BillingReadonlySource{Handler: passthrough}}))
+	}
 	if billingSummaryStore, ok := any(options.Store).(dashboard.BillingSummaryStore); ok {
 		mux.Handle("GET /api/dashboard/billing/summary", protect(dashboard.BillingSummaryHandler{Store: billingSummaryStore}))
 		mux.Handle("GET /api/dashboard/billing/detail", protect(dashboard.BillingDetailHandler{Store: billingSummaryStore}))
+		mux.Handle("GET /api/dashboard/billing/log-export", protect(dashboard.BillingLogExportHandler{Store: billingSummaryStore, Source: dashboard.BillingReadonlySource{Handler: passthrough}}))
 	}
+	if workbookStore,ok:=any(options.Store).(dashboard.BillingWorkbookStore);ok{mux.Handle("GET /api/dashboard/billing/workbook",protect(dashboard.BillingWorkbookHandler{Store:workbookStore,Source:dashboard.BillingReadonlySource{Handler:passthrough}}))}
 
 	if options.WebAppDir == "" {
 		options.WebAppDir = options.NextWebDir // Backward-compatible option name for one release cycle.

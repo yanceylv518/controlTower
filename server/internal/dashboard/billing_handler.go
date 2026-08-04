@@ -30,6 +30,7 @@ type billingBackfillRequest struct {
 	InstanceID string `json:"instance_id"`
 	From       string `json:"from"`
 	To         string `json:"to"`
+	Force      bool   `json:"force"`
 }
 
 func (h BillingBackfillHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {

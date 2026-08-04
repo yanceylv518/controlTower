@@ -162,7 +162,12 @@ func priceValuesForHandler(records []billing.PriceRecord) []billing.Price {
 	}
 	return values
 }
-func billingConfigAudit(store BillingConfigStore, r *http.Request, instanceID, operation, target string, after any) {
+
+type billingAuditStore interface {
+	InsertOperationAudit(storage.OperationAudit) error
+}
+
+func billingConfigAudit(store billingAuditStore, r *http.Request, instanceID, operation, target string, after any) {
 	raw := make([]byte, 16)
 	_, _ = rand.Read(raw)
 	body, _ := json.Marshal(after)

@@ -240,7 +240,7 @@ func validateReadonlyDSN(parent context.Context, dsn string) error {
 	}
 	for _, query := range []string{
 		"SELECT id,user_id,created_at,type,username,model_name,channel_id,token_name,prompt_tokens,completion_tokens,quota,use_time,request_id,content FROM logs LIMIT 0",
-		"SELECT id,username,display_name,quota,used_quota,status FROM users LIMIT 0",
+		"SELECT id,username,display_name,quota,used_quota,status,created_at,last_login_at FROM users LIMIT 0",
 	} {
 		rows, queryErr := db.QueryContext(ctx, query)
 		if queryErr != nil {

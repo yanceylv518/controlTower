@@ -61,7 +61,8 @@ func (c *SummaryCache) InvalidateInstance(instanceID string) {
 }
 
 func cloneSummaries(items []UserSummary) []UserSummary {
-	out := append([]UserSummary(nil), items...)
+	out := make([]UserSummary, len(items))
+	copy(out, items)
 	for i := range out {
 		out[i].UnpricedModels = append([]string(nil), out[i].UnpricedModels...)
 		out[i].PriceSources = append([]string(nil), out[i].PriceSources...)

@@ -436,6 +436,9 @@ export interface BillingDetailItem {
   cache_tokens: number;
   quota: number;
   amount: string;
+  input_price: string;
+  output_price: string;
+  cache_price: string;
   price_source: "ct" | "newapi" | "";
   unpriced: boolean;
 }
@@ -459,6 +462,30 @@ export interface BillingGroupRatioItem {
   group_name: string;
   ratio: string;
 }
+export interface BillingModelItem {
+  model_name: string;
+  max_context_tokens: number;
+  input_price: string;
+  output_price: string;
+  cache_price: string;
+  effective_from: string;
+  price_source: "ct" | "newapi" | "";
+}
+export interface BillingJob {
+  id: string;
+  instance_id: string;
+  status: "pending" | "running" | "complete" | "failed";
+  total_steps: number;
+  completed_steps: number;
+  abnormal_rows: number;
+  error_message?: string;
+}
+export interface BillingUserSetting {
+  instance_id: string;
+  user_id: number;
+  use_tiered_pricing: boolean;
+}
+export interface BillingChannelSummary { channel_id:number;channel_name:string;request_count:number;prompt_tokens:number;completion_tokens:number;cache_tokens:number;quota:number;amount:string;discount:string;discounted_amount:string;unpriced_models:string[] }
 
 export const dashboardApi = (client: ApiClient) => ({
   instances: () =>
@@ -674,8 +701,21 @@ export const dashboardApi = (client: ApiClient) => ({
     client.request<BillingSummaryResponse>(`/api/dashboard/billing/summary${query(params)}`),
   billingDetail: (params: { instance_id: string; user_id: number; month: string }) =>
     client.request<BillingDetailResponse>(`/api/dashboard/billing/detail${query(params)}`),
+  generateBilling: (input: { instance_id: string; from: string; to: string; force?: boolean }) =>
+    client.request<{ accepted: boolean; reused: boolean; job: BillingJob }>("/api/dashboard/billing/backfill", { method: "POST", body: JSON.stringify(input) }),
+  billingJob: (id: string) => client.request<BillingJob>(`/api/dashboard/billing/jobs${query({ id })}`),
+  billingUserSettings: (instance_id: string) => client.request<{ items: Record<string, BillingUserSetting> }>(`/api/dashboard/billing/user-settings${query({ instance_id })}`),
+  saveBillingUserSetting: (input: BillingUserSetting) => client.request<BillingUserSetting>("/api/dashboard/billing/user-settings", { method: "PUT", body: JSON.stringify(input) }),
+  billingChannels:(params:{instance_id:string;month:string;channel_id?:number})=>client.request<{items:BillingChannelSummary[];month:string}>(`/api/dashboard/billing/channels${query(params)}`),
+  saveBillingChannelDiscount:(input:{instance_id:string;channel_id:number;discount:string})=>client.request("/api/dashboard/billing/channels",{method:"PUT",body:JSON.stringify(input)}),
   billingPrices: (instance_id: string) =>
     client.request<ListResponse<BillingPriceItem>>(`/api/dashboard/billing/prices${query({ instance_id })}`),
+  billingModels: (instance_id: string) =>
+    client.request<{ items: BillingModelItem[]; warning?: string }>(`/api/dashboard/billing/models${query({ instance_id })}`),
+  syncBillingModels: (instance_id: string) =>
+    client.request<{ models: number; prices_changed: number }>(`/api/dashboard/billing/models${query({ instance_id })}`, { method: "POST" }),
+  saveBillingModel: (input: { instance_id: string; model_name: string; max_context_tokens: number }) =>
+    client.request(`/api/dashboard/billing/models`, { method: "PUT", body: JSON.stringify(input) }),
   billingGroupRatios: (instance_id: string) =>
     client.request<ListResponse<BillingGroupRatioItem>>(`/api/dashboard/billing/group-ratios${query({ instance_id })}`),
   importBillingPrices: (instance_id: string) =>

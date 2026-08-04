@@ -77,20 +77,25 @@ func run() error {
 	} else if count == 0 {
 		log.Printf("no users configured; legacy dashboard token authentication only")
 	}
-	go authManager.CleanupLoop(context.Background())
-	go func() {
-		ticker := time.NewTicker(time.Hour)
-		defer ticker.Stop()
-		for now := range ticker.C {
-			_, _ = store.DeleteExpiredInstanceTokens(now.UTC())
-		}
-	}()
-	startAggregationRunner(store, time.Duration(cfg.AggregationIntervalSeconds)*time.Second)
-	startNotificationRunner(store, settingsProvider, time.Duration(cfg.NotificationIntervalSeconds)*time.Second)
-	startChannelSnapshotHistoryCleanup(store)
-	startRetentionRunner(store, settingsProvider)
-	startTuningRunner(store)
-	startBillingRunner(store, cfg.SecretKey)
+	if cfg.APIOnly {
+		log.Printf("API-only mode enabled; operational runners are disabled (billing job worker remains enabled)")
+	} else {
+		go authManager.CleanupLoop(context.Background())
+		go func() {
+			ticker := time.NewTicker(time.Hour)
+			defer ticker.Stop()
+			for now := range ticker.C {
+				_, _ = store.DeleteExpiredInstanceTokens(now.UTC())
+			}
+		}()
+		startAggregationRunner(store, time.Duration(cfg.AggregationIntervalSeconds)*time.Second)
+		startNotificationRunner(store, settingsProvider, time.Duration(cfg.NotificationIntervalSeconds)*time.Second)
+		startChannelSnapshotHistoryCleanup(store)
+		startRetentionRunner(store, settingsProvider)
+		startTuningRunner(store)
+		startBillingRunner(store, cfg.SecretKey)
+	}
+	startBillingJobRunner(store, cfg.SecretKey)
 
 	server := &http.Server{
 		Addr:              cfg.ListenAddr,
@@ -99,6 +104,16 @@ func run() error {
 	}
 	log.Printf("control tower server listening on %s", cfg.ListenAddr)
 	return server.ListenAndServe()
+}
+
+func startBillingJobRunner(store mysqlstore.Store, secretKey string) {
+	readonly := &dashboard.PassthroughHandler{Config: store, SecretKey: secretKey}
+	runner := billing.JobRunner{Source: dashboard.BillingReadonlySource{Handler: readonly}, Store: store}
+	go func() {
+		if err := runner.Run(context.Background()); err != nil && !errors.Is(err, context.Canceled) {
+			log.Printf("billing job runner stopped: %v", err)
+		}
+	}()
 }
 
 func startBillingRunner(store mysqlstore.Store, secretKey string) {

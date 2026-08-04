@@ -10,8 +10,12 @@ import (
 )
 
 func (s Store) QueryBillingAggregates(ctx context.Context, instanceID string, from, to time.Time, userIDs []int64) ([]billing.AggregateRow, error) {
-	query := `SELECT instance_id,user_id,MAX(username),model_name,group_name,tier_from,day,SUM(request_count),SUM(prompt_tokens),SUM(completion_tokens),SUM(cache_tokens),SUM(quota) FROM billing_daily WHERE instance_id=? AND day>=? AND day<?`
-	args := []any{instanceID, from, to}
+	query := `SELECT instance_id,user_id,MAX(username),model_name,group_name,tier_from,day,SUM(request_count),SUM(prompt_tokens),SUM(completion_tokens),SUM(cache_tokens),SUM(quota) FROM (
+SELECT v.instance_id,v.user_id,v.username,v.model_name,v.group_name,v.tier_from,v.day,v.request_count,v.prompt_tokens,v.completion_tokens,v.cache_tokens,v.quota FROM billing_daily_versions v JOIN billing_active_versions a ON a.instance_id=v.instance_id AND a.day=v.day AND a.job_id=v.job_id WHERE v.instance_id=? AND v.day>=? AND v.day<?
+UNION ALL
+SELECT d.instance_id,d.user_id,d.username,d.model_name,d.group_name,d.tier_from,d.day,d.request_count,d.prompt_tokens,d.completion_tokens,d.cache_tokens,d.quota FROM billing_daily d LEFT JOIN billing_active_versions a ON a.instance_id=d.instance_id AND a.day=d.day WHERE d.instance_id=? AND d.day>=? AND d.day<? AND a.job_id IS NULL
+) billing_rows WHERE 1=1`
+	args := []any{instanceID, from, to, instanceID, from, to}
 	if len(userIDs) > 0 {
 		query += ` AND user_id IN (` + strings.TrimRight(strings.Repeat("?,", len(userIDs)), ",") + `)`
 		for _, id := range userIDs {
@@ -171,6 +175,47 @@ func (s Store) ListBillingGroupRatios(ctx context.Context, instanceID string) ([
 func (s Store) PutBillingGroupRatio(ctx context.Context, v billing.GroupRatio) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO billing_group_ratios(instance_id,group_name,ratio,updated_at,updated_by) VALUES(?,?,?,?,?) ON DUPLICATE KEY UPDATE ratio=VALUES(ratio),updated_at=VALUES(updated_at),updated_by=VALUES(updated_by)`, v.InstanceID, v.GroupName, v.Ratio, v.UpdatedAt, v.UpdatedBy)
 	return err
+}
+
+func (s Store) ListBillingModelMetadata(ctx context.Context, instanceID string) ([]billing.ModelMetadata, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT instance_id,model_name,max_context_tokens,available,updated_at,updated_by FROM billing_model_metadata WHERE instance_id=? ORDER BY model_name`, instanceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []billing.ModelMetadata
+	for rows.Next() {
+		var v billing.ModelMetadata
+		if err = rows.Scan(&v.InstanceID, &v.ModelName, &v.MaxContextTokens, &v.Available, &v.UpdatedAt, &v.UpdatedBy); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+func (s Store) PutBillingModelMetadata(ctx context.Context, v billing.ModelMetadata) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO billing_model_metadata(instance_id,model_name,max_context_tokens,available,updated_at,updated_by) VALUES(?,?,?,1,?,?) ON DUPLICATE KEY UPDATE max_context_tokens=VALUES(max_context_tokens),available=1,updated_at=VALUES(updated_at),updated_by=VALUES(updated_by)`, v.InstanceID, v.ModelName, v.MaxContextTokens, v.UpdatedAt, v.UpdatedBy)
+	return err
+}
+
+// UpsertBillingModels persists the catalog discovered from new-api while
+// preserving manually maintained maximum-context values and older entries.
+func (s Store) UpsertBillingModels(ctx context.Context, instanceID string, models []string, updatedAt time.Time, updatedBy string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `UPDATE billing_model_metadata SET available=0 WHERE instance_id=?`, instanceID); err != nil {
+		return err
+	}
+	for _, model := range models {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO billing_model_metadata(instance_id,model_name,max_context_tokens,available,updated_at,updated_by) VALUES(?,?,0,1,?,?) ON DUPLICATE KEY UPDATE available=1,updated_at=VALUES(updated_at),updated_by=VALUES(updated_by)`, instanceID, model, updatedAt, updatedBy); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (s Store) ReplaceBillingDay(ctx context.Context, instanceID string, day time.Time, rows []billing.DailyRow) error {

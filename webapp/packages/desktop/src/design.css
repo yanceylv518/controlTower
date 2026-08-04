@@ -474,17 +474,52 @@ body {
 .ct-pager {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  padding: 8px 4px 0;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 50px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--ct-line);
+  background: #fbfcfe;
 }
 .ct-pager-info {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--ct-ink-3);
   font-variant-numeric: tabular-nums;
 }
+.ct-pager-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.ct-pager-pages {
+  color: var(--ct-ink-2);
+  font-size: 12px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.ct-pager .el-pagination {
+  --el-pagination-button-bg-color: transparent;
+  --el-pagination-hover-color: var(--ct-accent);
+}
+.ct-pager .el-pager li,
+.ct-pager .btn-prev,
+.ct-pager .btn-next {
+  border-radius: 7px;
+}
+.ct-pager .el-pager li.is-active {
+  background: var(--ct-accent-weak);
+  color: var(--ct-accent);
+  font-weight: 600;
+}
 .ct-pager-size {
-  width: 92px;
+  width: 142px;
+}
+.ct-pager-size .el-select__wrapper {
+  min-height: 32px;
+  border-radius: 16px;
+  background: #f3f4f6;
+  box-shadow: none;
 }
 
 /* ============ 系统状态：机器卡 ============ */

@@ -46,8 +46,37 @@ type DetailItem struct {
 	CacheTokens      int64  `json:"cache_tokens"`
 	Quota            int64  `json:"quota"`
 	Amount           string `json:"amount"`
+	InputPrice       string `json:"input_price"`
+	OutputPrice      string `json:"output_price"`
+	CachePrice       string `json:"cache_price"`
 	PriceSource      string `json:"price_source"`
 	Unpriced         bool   `json:"unpriced"`
+}
+
+type InvoiceItem struct {
+	ModelName        string `json:"model_name"`
+	TierFrom         int64  `json:"tier_from"`
+	RequestCount     int64  `json:"request_count"`
+	PromptTokens     int64  `json:"prompt_tokens"`
+	CompletionTokens int64  `json:"completion_tokens"`
+	CacheTokens      int64  `json:"cache_tokens"`
+	InputPrice       string `json:"input_price"`
+	OutputPrice      string `json:"output_price"`
+	CachePrice       string `json:"cache_price"`
+	InputAmount      string `json:"input_amount"`
+	OutputAmount     string `json:"output_amount"`
+	CacheAmount      string `json:"cache_amount"`
+	Amount           string `json:"amount"`
+	Discount         string `json:"discount"`
+	DiscountedAmount string `json:"discounted_amount"`
+	PriceSource      string `json:"price_source"`
+	Unpriced         bool   `json:"unpriced"`
+}
+
+type InvoiceTotal struct {
+	Amount           string `json:"amount"`
+	Discount         string `json:"discount"`
+	DiscountedAmount string `json:"discounted_amount"`
 }
 type SummaryTotal struct {
 	Users            int    `json:"users"`
@@ -298,6 +327,11 @@ func BuildDetails(rows []AggregateRow, prices []PriceRecord, ratios []GroupRatio
 				ratio = configured
 			}
 		} else {
+			if snapshot, snapshotErr := ParseRatioSnapshot(snapshots[item.Day]); snapshotErr == nil {
+				if fallback, fallbackRatio, fallbackErr := FallbackPrice(snapshot, row.ModelName, row.GroupName); fallbackErr == nil {
+					price, ratio = fallback, fallbackRatio
+				}
+			}
 			quotaPerUnit, err := quotaPerUnitForReport(snapshots[item.Day])
 			if err != nil {
 				item.Unpriced = true
@@ -305,6 +339,9 @@ func BuildDetails(rows []AggregateRow, prices []PriceRecord, ratios []GroupRatio
 				continue
 			}
 			item.PriceSource = "newapi"
+			item.InputPrice, _ = multipliedDecimal(price.Input, ratio)
+			item.OutputPrice, _ = multipliedDecimal(price.Output, ratio)
+			item.CachePrice, _ = multipliedDecimal(price.Cache, ratio)
 			amount, err := AmountFromQuota(row.Quota, quotaPerUnit)
 			if err != nil {
 				item.Unpriced = true
@@ -314,6 +351,9 @@ func BuildDetails(rows []AggregateRow, prices []PriceRecord, ratios []GroupRatio
 			items = append(items, item)
 			continue
 		}
+		item.InputPrice, _ = multipliedDecimal(price.Input, ratio)
+		item.OutputPrice, _ = multipliedDecimal(price.Output, ratio)
+		item.CachePrice, _ = multipliedDecimal(price.Cache, ratio)
 		amount, err := Amount(Usage{PromptTokens: row.PromptTokens, CompletionTokens: row.CompletionTokens, CacheTokens: row.CacheTokens}, price, ratio)
 		if err != nil {
 			item.Unpriced = true
@@ -334,16 +374,145 @@ func BuildDetails(rows []AggregateRow, prices []PriceRecord, ratios []GroupRatio
 	return items
 }
 
+// BuildInvoice produces monthly model totals suitable for a customer invoice.
+// Rows with different tiers or effective unit prices remain separate so a
+// price change can never be hidden inside an apparently single-price row.
+func BuildInvoice(rows []AggregateRow, prices []PriceRecord, ratios []GroupRatio, snapshots map[string]string, discount string) ([]InvoiceItem, InvoiceTotal, error) {
+	discountRat, err := decimalRat(discount)
+	if err != nil || discountRat.Cmp(big.NewRat(1, 1)) > 0 {
+		return nil, InvoiceTotal{}, fmt.Errorf("invalid discount")
+	}
+	priceByModel := map[string][]Price{}
+	for _, price := range prices {
+		priceByModel[price.ModelName] = append(priceByModel[price.ModelName], price.Price)
+	}
+	ratioByGroup := map[string]string{}
+	for _, ratio := range ratios {
+		ratioByGroup[ratio.GroupName] = ratio.Ratio
+	}
+	type invoiceAcc struct {
+		item                        InvoiceItem
+		input, output, cache, total *big.Rat
+	}
+	itemsByKey := map[string]*invoiceAcc{}
+	for _, row := range rows {
+		price, ok := selectPriceForTier(priceByModel[row.ModelName], row.Day, row.TierFrom)
+		ratio, source := "1", "ct"
+		unpriced := false
+		if ok {
+			if configured := ratioByGroup[row.GroupName]; configured != "" {
+				ratio = configured
+			}
+		} else {
+			snapshot, parseErr := ParseRatioSnapshot(snapshots[row.Day.Format("2006-01-02")])
+			if parseErr == nil {
+				price, ratio, parseErr = FallbackPrice(snapshot, row.ModelName, row.GroupName)
+			}
+			if parseErr != nil {
+				unpriced = true
+				price = Price{Input: "0", Output: "0", Cache: "0"}
+				ratio = "1"
+			}
+			source = "newapi"
+		}
+		inputUnit, unitErr := multipliedDecimal(price.Input, ratio)
+		if unitErr != nil {
+			return nil, InvoiceTotal{}, unitErr
+		}
+		outputUnit, unitErr := multipliedDecimal(price.Output, ratio)
+		if unitErr != nil {
+			return nil, InvoiceTotal{}, unitErr
+		}
+		cacheUnit, unitErr := multipliedDecimal(price.Cache, ratio)
+		if unitErr != nil {
+			return nil, InvoiceTotal{}, unitErr
+		}
+		key := strings.Join([]string{row.ModelName, strconv.FormatInt(row.TierFrom, 10), inputUnit, outputUnit, cacheUnit, source, strconv.FormatBool(unpriced)}, "\x00")
+		a := itemsByKey[key]
+		if a == nil {
+			a = &invoiceAcc{item: InvoiceItem{ModelName: row.ModelName, TierFrom: row.TierFrom, InputPrice: inputUnit, OutputPrice: outputUnit, CachePrice: cacheUnit, Discount: discount, PriceSource: source, Unpriced: unpriced}, input: new(big.Rat), output: new(big.Rat), cache: new(big.Rat), total: new(big.Rat)}
+			itemsByKey[key] = a
+		}
+		a.item.RequestCount += row.RequestCount
+		a.item.PromptTokens += row.PromptTokens
+		a.item.CompletionTokens += row.CompletionTokens
+		a.item.CacheTokens += row.CacheTokens
+		if unpriced {
+			quotaPerUnit, quotaErr := quotaPerUnitForReport(snapshots[row.Day.Format("2006-01-02")])
+			if quotaErr != nil {
+				continue
+			}
+			quotaAmount, quotaErr := AmountFromQuota(row.Quota, quotaPerUnit)
+			if quotaErr == nil {
+				a.total.Add(a.total, quotaAmount)
+			}
+			continue
+		}
+		nonCache := row.PromptTokens - row.CacheTokens
+		if row.CacheTokens > row.PromptTokens {
+			nonCache = row.PromptTokens
+		}
+		inputPrice, _ := decimalRat(inputUnit)
+		outputPrice, _ := decimalRat(outputUnit)
+		cachePrice, _ := decimalRat(cacheUnit)
+		a.input.Add(a.input, tokenCost(nonCache, inputPrice))
+		a.output.Add(a.output, tokenCost(row.CompletionTokens, outputPrice))
+		a.cache.Add(a.cache, tokenCost(row.CacheTokens, cachePrice))
+	}
+	out := make([]InvoiceItem, 0, len(itemsByKey))
+	grand := new(big.Rat)
+	for _, a := range itemsByKey {
+		if !a.item.Unpriced {
+			a.total.Add(a.total, a.input)
+			a.total.Add(a.total, a.output)
+			a.total.Add(a.total, a.cache)
+		}
+		a.item.InputAmount = FormatAmount(a.input, 6)
+		a.item.OutputAmount = FormatAmount(a.output, 6)
+		a.item.CacheAmount = FormatAmount(a.cache, 6)
+		a.item.Amount = FormatAmount(a.total, 6)
+		a.item.DiscountedAmount = FormatAmount(new(big.Rat).Mul(a.total, discountRat), 6)
+		grand.Add(grand, a.total)
+		out = append(out, a.item)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].ModelName != out[j].ModelName {
+			return out[i].ModelName < out[j].ModelName
+		}
+		if out[i].TierFrom != out[j].TierFrom {
+			return out[i].TierFrom < out[j].TierFrom
+		}
+		return out[i].InputPrice < out[j].InputPrice
+	})
+	return out, InvoiceTotal{Amount: FormatAmount(grand, 6), Discount: discount, DiscountedAmount: FormatAmount(new(big.Rat).Mul(grand, discountRat), 6)}, nil
+}
+
+func multipliedDecimal(value, ratio string) (string, error) {
+	left, err := decimalRat(value)
+	if err != nil {
+		return "", err
+	}
+	right, err := decimalRat(ratio)
+	if err != nil {
+		return "", err
+	}
+	return new(big.Rat).Mul(left, right).FloatString(6), nil
+}
+
 func selectPriceForTier(prices []Price, day time.Time, tier int64) (Price, bool) {
 	var effective time.Time
-	var selected Price
-	ok := false
 	for _, p := range prices {
-		if p.TierFrom == tier && !p.EffectiveFrom.After(day) && (effective.IsZero() || p.EffectiveFrom.After(effective)) {
+		if !p.EffectiveFrom.After(day) && (effective.IsZero() || p.EffectiveFrom.After(effective)) {
 			effective = p.EffectiveFrom
-			selected = p
-			ok = true
 		}
 	}
-	return selected, ok
+	if effective.IsZero() {
+		return Price{}, false
+	}
+	for _, p := range prices {
+		if p.TierFrom == tier && p.EffectiveFrom.Equal(effective) {
+			return p, true
+		}
+	}
+	return Price{}, false
 }

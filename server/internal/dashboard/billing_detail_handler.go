@@ -52,12 +52,38 @@ func (h BillingDetailHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		writeDashboardError(w, http.StatusInternalServerError, "billing_query_failed")
 		return
 	}
+	if r.URL.Query().Get("format") == "invoice_csv" {
+		invoiceItems, invoiceTotal, invoiceErr := billing.BuildInvoice(rows, prices, ratios, snapshots, "1")
+		if invoiceErr != nil {
+			writeDashboardError(w, http.StatusUnprocessableEntity, "invoice_failed")
+			return
+		}
+		writeBillingInvoiceCSV(w, userID, month, invoiceItems, invoiceTotal)
+		return
+	}
 	items := billing.BuildDetails(rows, prices, ratios, snapshots)
 	if r.URL.Query().Get("format") == "csv" {
 		writeBillingDetailCSV(w, items)
 		return
 	}
 	writeDashboardJSON(w, http.StatusOK, map[string]any{"items": items, "user_id": userID, "month": month, "data_through": to.Add(-time.Nanosecond)})
+}
+
+func writeBillingInvoiceCSV(w http.ResponseWriter, userID int64, month string, items []billing.InvoiceItem, total billing.InvoiceTotal) {
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="billing-invoice.csv"`)
+	_, _ = w.Write([]byte{0xef, 0xbb, 0xbf})
+	writer := csv.NewWriter(w)
+	_ = writer.Write([]string{"用户ID", strconv.FormatInt(userID, 10)})
+	_ = writer.Write([]string{"账单月份", month})
+	_ = writer.Write([]string{})
+	_ = writer.Write([]string{"模型", "价格档位Token", "请求数", "输入Token", "缓存Token", "输出Token", "输入单价/1M", "缓存单价/1M", "输出单价/1M", "输入金额", "缓存金额", "输出金额", "小计", "未定价"})
+	for _, item := range items {
+		_ = writer.Write([]string{item.ModelName, strconv.FormatInt(item.TierFrom, 10), strconv.FormatInt(item.RequestCount, 10), strconv.FormatInt(item.PromptTokens, 10), strconv.FormatInt(item.CacheTokens, 10), strconv.FormatInt(item.CompletionTokens, 10), item.InputPrice, item.CachePrice, item.OutputPrice, item.InputAmount, item.CacheAmount, item.OutputAmount, item.Amount, strconv.FormatBool(item.Unpriced)})
+	}
+	_ = writer.Write([]string{})
+	_ = writer.Write([]string{"账单合计", total.Amount})
+	writer.Flush()
 }
 
 func containsBillingUser(ids []int64, target int64) bool {
@@ -76,9 +102,9 @@ func writeBillingDetailCSV(w http.ResponseWriter, items []billing.DetailItem) {
 	// UTF-8 BOM so Excel opens the file with correct CJK encoding.
 	_, _ = w.Write([]byte("\xef\xbb\xbf"))
 	writer := csv.NewWriter(w)
-	_ = writer.Write([]string{"日期", "模型", "分组", "阶梯起点", "请求数", "输入Token", "输出Token", "缓存Token", "金额", "价格来源", "未定价"})
+	_ = writer.Write([]string{"日期", "模型", "分组", "阶梯起点", "请求数", "输入Token", "输出Token", "缓存Token", "输入单价/1M", "缓存单价/1M", "输出单价/1M", "金额", "未定价"})
 	for _, item := range items {
-		_ = writer.Write([]string{item.Day, item.ModelName, item.GroupName, strconv.FormatInt(item.TierFrom, 10), strconv.FormatInt(item.RequestCount, 10), strconv.FormatInt(item.PromptTokens, 10), strconv.FormatInt(item.CompletionTokens, 10), strconv.FormatInt(item.CacheTokens, 10), item.Amount, item.PriceSource, strconv.FormatBool(item.Unpriced)})
+		_ = writer.Write([]string{item.Day, item.ModelName, item.GroupName, strconv.FormatInt(item.TierFrom, 10), strconv.FormatInt(item.RequestCount, 10), strconv.FormatInt(item.PromptTokens, 10), strconv.FormatInt(item.CompletionTokens, 10), strconv.FormatInt(item.CacheTokens, 10), item.InputPrice, item.CachePrice, item.OutputPrice, item.Amount, strconv.FormatBool(item.Unpriced)})
 	}
 	writer.Flush()
 }

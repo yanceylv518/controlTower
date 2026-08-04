@@ -6,6 +6,7 @@ import (
 )
 
 type Config struct {
+	APIOnly                     bool
 	ListenAddr                  string
 	PublicBaseURL               string
 	DatabaseDriver              string
@@ -32,6 +33,7 @@ type Config struct {
 
 func Load(values map[string]string) (Config, error) {
 	cfg := Config{
+		APIOnly:                     boolOrDefault(values, "CT_API_ONLY", false),
 		ListenAddr:                  valueOrDefault(values, "CT_SERVER_LISTEN_ADDR", "0.0.0.0:8080"),
 		PublicBaseURL:               values["CT_PUBLIC_BASE_URL"],
 		DatabaseDriver:              valueOrDefault(values, "CT_DATABASE_DRIVER", "mysql"),
@@ -85,6 +87,7 @@ func Load(values map[string]string) (Config, error) {
 
 func Keys() []string {
 	return []string{
+		"CT_API_ONLY",
 		"CT_SERVER_LISTEN_ADDR",
 		"CT_PUBLIC_BASE_URL",
 		"CT_DATABASE_DRIVER",
@@ -102,6 +105,17 @@ func Keys() []string {
 		"CT_COMMAND_EXPIRY_MINUTES", "CT_RETENTION_DETAIL_DAYS", "CT_RETENTION_METRIC5M_DAYS", "CT_RETENTION_RUNTIME_DAYS", "CT_RETENTION_HEALTH_HOURS",
 		"CT_OFFLINE_ALERT_SECONDS", "CT_CPU_WARN_PERCENT", "CT_CPU_CRIT_PERCENT", "CT_MEMORY_WARN_PERCENT", "CT_MEMORY_CRIT_PERCENT", "CT_DISK_WARN_PERCENT", "CT_DISK_CRIT_PERCENT", "CT_ERROR_RATE_WARN_PERCENT", "CT_ERROR_RATE_CRIT_PERCENT", "CT_P95_WARN_SECONDS", "CT_P95_CRIT_SECONDS", "CT_NOTIFICATIONS_ENABLED",
 	}
+}
+
+func boolOrDefault(values map[string]string, key string, fallback bool) bool {
+	if values[key] == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseBool(values[key])
+	if err != nil {
+		return fallback
+	}
+	return parsed
 }
 
 func valueOrDefault(values map[string]string, key, fallback string) string {

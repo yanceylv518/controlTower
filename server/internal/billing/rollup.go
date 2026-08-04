@@ -18,6 +18,20 @@ type LogRecord struct {
 	Quota            int64
 }
 
+type DetailedLogRecord struct {
+	ID               int64
+	CreatedAt        time.Time
+	RequestID        string
+	UserID           int64
+	Username         string
+	ModelName        string
+	GroupName        string
+	PromptTokens     int64
+	CompletionTokens int64
+	CacheTokens      int64
+	Quota            int64
+}
+
 type Source interface {
 	Logs(ctx context.Context, instanceID string, start, end time.Time) ([]LogRecord, error)
 	RatioSnapshot(ctx context.Context, instanceID string) (string, error)

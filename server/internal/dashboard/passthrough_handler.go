@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -54,6 +55,75 @@ func (h *PassthroughHandler) LogsForBilling(ctx context.Context, site string, st
 	return out, rows.Err()
 }
 
+func (h *PassthroughHandler) DetailedLogsForBilling(ctx context.Context, site string, userID int64, start, end time.Time) ([]billing.DetailedLogRecord, error) {
+	db, configured, err := h.database(site)
+	if err != nil {
+		return nil, err
+	}
+	if !configured {
+		return nil, fmt.Errorf("readonly database is not configured for %s", site)
+	}
+	queryCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	rows, err := db.QueryContext(queryCtx, `SELECT id,created_at,COALESCE(request_id,''),user_id,COALESCE(username,''),COALESCE(model_name,''),COALESCE(`+"`group`"+`,''),prompt_tokens,completion_tokens,quota,COALESCE(other,'') FROM logs WHERE created_at>=? AND created_at<? AND type=2 AND user_id=? ORDER BY id`, start.Unix(), end.Unix(), userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []billing.DetailedLogRecord{}
+	for rows.Next() {
+		var v billing.DetailedLogRecord
+		var created int64
+		var other string
+		if err = rows.Scan(&v.ID, &created, &v.RequestID, &v.UserID, &v.Username, &v.ModelName, &v.GroupName, &v.PromptTokens, &v.CompletionTokens, &v.Quota, &other); err != nil {
+			return nil, err
+		}
+		v.CreatedAt = time.Unix(created, 0).UTC()
+		v.CacheTokens = billingCacheTokens(other)
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+// LogsPageForBilling keeps every source query bounded and resumes with a
+// stable (created_at,id) keyset. It deliberately avoids OFFSET so later pages
+// do not rescan all preceding rows on large new-api log tables.
+func (h *PassthroughHandler) LogsPageForBilling(ctx context.Context, site string, start, end time.Time, cursor billing.LogCursor, limit int) ([]billing.PagedLogRecord, error) {
+	return h.logsPageForBilling(ctx,site,0,start,end,cursor,limit)
+}
+func(h *PassthroughHandler)DetailedLogsPageForBilling(ctx context.Context,site string,userID int64,start,end time.Time,cursor billing.LogCursor,limit int)([]billing.PagedLogRecord,error){return h.logsPageForBilling(ctx,site,userID,start,end,cursor,limit)}
+func (h *PassthroughHandler) logsPageForBilling(ctx context.Context, site string,userID int64, start, end time.Time, cursor billing.LogCursor, limit int) ([]billing.PagedLogRecord, error) {
+	db, configured, err := h.database(site)
+	if err != nil {
+		return nil, err
+	}
+	if !configured {
+		return nil, fmt.Errorf("readonly database is not configured for %s", site)
+	}
+	if limit <= 0 || limit > 5000 {
+		limit = billing.BillingPageSize
+	}
+	queryCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	query:=`SELECT l.id,l.created_at,COALESCE(l.request_id,''),COALESCE(l.upstream_request_id,''),l.user_id,COALESCE(l.username,''),COALESCE(l.channel_id,0),COALESCE(c.name,''),COALESCE(l.model_name,''),COALESCE(l.`+"`group`"+`,''),l.prompt_tokens,l.completion_tokens,l.quota,COALESCE(l.other,'') FROM logs l LEFT JOIN channels c ON c.id=l.channel_id WHERE l.type=2 AND l.created_at>=? AND l.created_at<? AND (l.created_at>? OR (l.created_at=? AND l.id>?))`;args:=[]any{start.Unix(),end.Unix(),cursor.CreatedUnix,cursor.CreatedUnix,cursor.ID};if userID>0{query+=` AND l.user_id=?`;args=append(args,userID)};query+=` ORDER BY l.created_at,l.id LIMIT ?`;args=append(args,limit)
+	rows, err := db.QueryContext(queryCtx,query,args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]billing.PagedLogRecord, 0, limit)
+	for rows.Next() {
+		var v billing.PagedLogRecord
+		var other string
+		if err = rows.Scan(&v.ID, &v.CreatedUnix, &v.RequestID, &v.UpstreamRequestID, &v.UserID, &v.Username, &v.ChannelID, &v.ChannelName, &v.ModelName, &v.GroupName, &v.PromptTokens, &v.CompletionTokens, &v.Quota, &other); err != nil {
+			return nil, err
+		}
+		v.CacheTokens = billingCacheTokens(other)
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
 func (h *PassthroughHandler) RatioSnapshotForBilling(ctx context.Context, site string) (string, error) {
 	db, configured, err := h.database(site)
 	if err != nil {
@@ -78,8 +148,54 @@ func (h *PassthroughHandler) RatioSnapshotForBilling(ctx context.Context, site s
 	if err = rows.Err(); err != nil {
 		return "", err
 	}
+	// new-api omits options that still use their built-in defaults. Billing
+	// price conversion nevertheless needs the effective QuotaPerUnit value.
+	if strings.TrimSpace(values["QuotaPerUnit"]) == "" {
+		values["QuotaPerUnit"] = "500000"
+	}
 	raw, err := json.Marshal(values)
 	return string(raw), err
+}
+
+func (h *PassthroughHandler) ConfiguredModelsForBilling(ctx context.Context, site string) ([]string, error) {
+	db, configured, err := h.database(site)
+	if err != nil {
+		return nil, err
+	}
+	if !configured {
+		return nil, fmt.Errorf("readonly database is not configured for %s", site)
+	}
+	rows, err := db.QueryContext(ctx, "SELECT models FROM channels WHERE status=1 AND models<>''")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	seen := map[string]bool{}
+	for rows.Next() {
+		var raw string
+		if err = rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		var models []string
+		if json.Unmarshal([]byte(raw), &models) != nil {
+			models = strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == '\n' })
+		}
+		for _, model := range models {
+			model = strings.TrimSpace(model)
+			if model != "" {
+				seen[model] = true
+			}
+		}
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	models := make([]string, 0, len(seen))
+	for model := range seen {
+		models = append(models, model)
+	}
+	sort.Strings(models)
+	return models, nil
 }
 
 func (h *PassthroughHandler) BalancesForBilling(ctx context.Context, site string) (map[int64]int64, error) {
@@ -110,11 +226,23 @@ func (h *PassthroughHandler) BalancesForBilling(ctx context.Context, site string
 // satisfying billing.Source through a small explicit wrapper.
 type BillingReadonlySource struct{ Handler *PassthroughHandler }
 
+func (s BillingReadonlySource) LogsPage(ctx context.Context, site string, start, end time.Time, cursor billing.LogCursor, limit int) ([]billing.PagedLogRecord, error) {
+	return s.Handler.LogsPageForBilling(ctx, site, start, end, cursor, limit)
+}
+func(s BillingReadonlySource)DetailedLogsPage(ctx context.Context,site string,userID int64,start,end time.Time,cursor billing.LogCursor,limit int)([]billing.PagedLogRecord,error){return s.Handler.DetailedLogsPageForBilling(ctx,site,userID,start,end,cursor,limit)}
+
 func (s BillingReadonlySource) Logs(ctx context.Context, site string, start, end time.Time) ([]billing.LogRecord, error) {
 	return s.Handler.LogsForBilling(ctx, site, start, end)
 }
+func (s BillingReadonlySource) DetailedLogs(ctx context.Context, site string, userID int64, start, end time.Time) ([]billing.DetailedLogRecord, error) {
+	return s.Handler.DetailedLogsForBilling(ctx, site, userID, start, end)
+}
 func (s BillingReadonlySource) RatioSnapshot(ctx context.Context, site string) (string, error) {
 	return s.Handler.RatioSnapshotForBilling(ctx, site)
+}
+
+func (s BillingReadonlySource) ConfiguredModels(ctx context.Context, site string) ([]string, error) {
+	return s.Handler.ConfiguredModelsForBilling(ctx, site)
 }
 func (s BillingReadonlySource) Balances(ctx context.Context, site string) (map[int64]int64, error) {
 	return s.Handler.BalancesForBilling(ctx, site)
@@ -173,6 +301,8 @@ type PassthroughUser struct {
 	Quota       int64  `json:"quota"`
 	UsedQuota   int64  `json:"used_quota"`
 	Status      int    `json:"status"`
+	CreatedAt   int64  `json:"created_at"`
+	LastLoginAt int64  `json:"last_login_at"`
 }
 type PassthroughLog struct {
 	ID               int64     `json:"id"`
@@ -193,6 +323,11 @@ type PassthroughLog struct {
 	IP               string    `json:"ip"`
 	IsStream         bool      `json:"is_stream"`
 	Other            string    `json:"other"`
+}
+type PassthroughLogSummary struct {
+	Quota int64 `json:"quota"`
+	RPM   int64 `json:"rpm"`
+	TPM   int64 `json:"tpm"`
 }
 
 func (h *PassthroughHandler) database(site string) (*sql.DB, bool, error) {
@@ -368,7 +503,7 @@ func (h *PassthroughHandler) Users(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pageArgs := append(append([]any{}, args...), limit, offset)
-	rows, err := tx.QueryContext(ctx, `SELECT id,username,COALESCE(display_name,''),quota,used_quota,status FROM users`+where+` ORDER BY id LIMIT ? OFFSET ?`, pageArgs...)
+	rows, err := tx.QueryContext(ctx, `SELECT id,username,COALESCE(display_name,''),quota,used_quota,status,COALESCE(created_at,0),COALESCE(last_login_at,0) FROM users`+where+` ORDER BY id LIMIT ? OFFSET ?`, pageArgs...)
 	if err != nil {
 		writeDashboardError(w, 502, "readonly_query_failed")
 		return
@@ -377,7 +512,7 @@ func (h *PassthroughHandler) Users(w http.ResponseWriter, r *http.Request) {
 	items := []PassthroughUser{}
 	for rows.Next() {
 		var v PassthroughUser
-		if rows.Scan(&v.ID, &v.Username, &v.DisplayName, &v.Quota, &v.UsedQuota, &v.Status) != nil {
+		if rows.Scan(&v.ID, &v.Username, &v.DisplayName, &v.Quota, &v.UsedQuota, &v.Status, &v.CreatedAt, &v.LastLoginAt) != nil {
 			writeDashboardError(w, 502, "readonly_query_failed")
 			return
 		}
@@ -408,7 +543,7 @@ func (h *PassthroughHandler) Logs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !configured {
-		writeDashboardJSON(w, 200, map[string]any{"items": []PassthroughLog{}, "configured": false, "total": 0})
+		writeDashboardJSON(w, 200, map[string]any{"items": []PassthroughLog{}, "configured": false, "total": 0, "summary": PassthroughLogSummary{}})
 		return
 	}
 	limit, offset := queryPage(r, 100)
@@ -446,7 +581,7 @@ func (h *PassthroughHandler) Logs(w http.ResponseWriter, r *http.Request) {
 		filters += " AND type = ?"
 		args = append(args, logType)
 	}
-	args = append(args, limit, offset)
+	pageArgs := append(append([]any{}, args...), limit, offset)
 	ctx, cancel := context.WithTimeout(r.Context(), readonlyQueryTimeout)
 	defer cancel()
 	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
@@ -455,7 +590,42 @@ func (h *PassthroughHandler) Logs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	rows, err := tx.QueryContext(ctx, `SELECT id,user_id,created_at,type,COALESCE(username,''),COALESCE(model_name,''),channel_id,COALESCE(token_name,''),prompt_tokens,completion_tokens,quota,use_time,COALESCE(request_id,''),COALESCE(content,''),COALESCE(`+"`group`"+`,''),COALESCE(ip,''),COALESCE(is_stream,0),COALESCE(other,'') FROM logs WHERE created_at BETWEEN ? AND ?`+userFilter+filters+` ORDER BY id DESC LIMIT ? OFFSET ?`, args...)
+	var total int64
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM logs WHERE created_at BETWEEN ? AND ?`+userFilter+filters, args...).Scan(&total); err != nil {
+		writeDashboardError(w, 502, "readonly_query_failed")
+		return
+	}
+	// Match new-api's /api/log/stat semantics: quota follows the selected time
+	// range, while RPM/TPM use a rolling 60-second window. Both always count
+	// consume logs and intentionally ignore the list's type/request-id filters.
+	statWhere := userFilter
+	statArgs := make([]any, 0, len(ids)+8)
+	for _, id := range ids {
+		statArgs = append(statArgs, id)
+	}
+	for _, spec := range []struct{ param, column string }{{"token_name", "token_name"}, {"username", "username"}, {"group", "`group`"}, {"model_name", "model_name"}} {
+		if value := strings.TrimSpace(r.URL.Query().Get(spec.param)); value != "" {
+			statWhere += " AND " + spec.column + " = ?"
+			statArgs = append(statArgs, value)
+		}
+	}
+	if value := strings.TrimSpace(r.URL.Query().Get("channel_id")); value != "" {
+		channelID, _ := strconv.ParseInt(value, 10, 64) // validated above
+		statWhere += " AND channel_id = ?"
+		statArgs = append(statArgs, channelID)
+	}
+	var summary PassthroughLogSummary
+	quotaArgs := append([]any{start.Unix(), end.Unix()}, statArgs...)
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(quota),0) FROM logs WHERE created_at>=? AND created_at<=? AND type=2`+statWhere, quotaArgs...).Scan(&summary.Quota); err != nil {
+		writeDashboardError(w, 502, "readonly_query_failed")
+		return
+	}
+	rateArgs := append([]any{time.Now().Add(-60 * time.Second).Unix()}, statArgs...)
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(SUM(prompt_tokens),0)+COALESCE(SUM(completion_tokens),0) FROM logs WHERE created_at>=? AND type=2`+statWhere, rateArgs...).Scan(&summary.RPM, &summary.TPM); err != nil {
+		writeDashboardError(w, 502, "readonly_query_failed")
+		return
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT id,user_id,created_at,type,COALESCE(username,''),COALESCE(model_name,''),channel_id,COALESCE(token_name,''),prompt_tokens,completion_tokens,quota,use_time,COALESCE(request_id,''),COALESCE(content,''),COALESCE(`+"`group`"+`,''),COALESCE(ip,''),COALESCE(is_stream,0),COALESCE(other,'') FROM logs WHERE created_at BETWEEN ? AND ?`+userFilter+filters+` ORDER BY id DESC LIMIT ? OFFSET ?`, pageArgs...)
 	if err != nil {
 		writeDashboardError(w, 502, "readonly_query_failed")
 		return
@@ -479,5 +649,5 @@ func (h *PassthroughHandler) Logs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.audit(r, site, "passthrough.logs", map[string]any{"user_ids": ids, "start_time": start, "end_time": end, "limit": limit, "offset": offset})
-	writeDashboardJSON(w, 200, map[string]any{"items": items, "configured": true, "total": offset + len(items)})
+	writeDashboardJSON(w, 200, map[string]any{"items": items, "configured": true, "total": total, "summary": summary})
 }

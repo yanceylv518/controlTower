@@ -42,6 +42,7 @@ const nav = [
       ["/readonly-users", "用户管理", User],
       ["/readonly-logs", "使用日志", Document],
       ["/billing", "用户账单", Coin],
+      ["/billing/channels", "渠道账单", Coin],
     ],
   },
   {
@@ -52,7 +53,7 @@ const nav = [
       ["/instances", "实例管理", Management],
       ["/audits", "操作审计", Operation],
       ["/tuning", "调权中心", TrendCharts],
-      ["/billing/pricing", "账单计价", Coin],
+      ["/models/manage", "模型管理", Coin],
       ["/settings", "设置", SetUp],
       ["/access-users", "访问账号", User],
     ],

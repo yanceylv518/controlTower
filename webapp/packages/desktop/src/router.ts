@@ -22,12 +22,14 @@ import UsersView from './views/UsersView.vue'
 import ReadonlyUsersView from './views/ReadonlyUsersView.vue'
 import ReadonlyLogsView from './views/ReadonlyLogsView.vue'
 import BillingView from './views/BillingView.vue'
+import ChannelBillingView from './views/ChannelBillingV3View.vue'
 import BillingPricingView from './views/BillingPricingView.vue'
 export const router = createRouter({ history: createWebHistory('/'), routes: [
   { path: '/readonly-users', component: ReadonlyUsersView, meta: { title: '用户管理' } },
   { path: '/readonly-logs', component: ReadonlyLogsView, meta: { title: '使用日志' } },
   { path: '/billing', component: BillingView, meta: { title: '用户账单' } },
-  { path: '/billing/pricing', component: BillingPricingView, meta: { title: '账单计价', adminOnly: true } },
+  { path: '/billing/channels', component: ChannelBillingView, meta: { title: '渠道账单', adminOnly: true } },
+  { path: '/models/manage', alias: '/billing/pricing', component: BillingPricingView, meta: { title: '模型管理', adminOnly: true } },
   { path: '/customers', component: CustomerMonitorView, meta: { title: '客户监控' } },
   { path: '/login', name: 'login', component: LoginView, meta: { title: '登录' } }, { path: '/', name: 'overview', component: OverviewView, meta: { title: '运行总览' } },
   { path: '/channels', component: DimensionView, props: { kind: 'channels' }, meta: { title: '渠道监控' } }, { path: '/models', component: DimensionView, props: { kind: 'models' }, meta: { title: '模型监控' } },
