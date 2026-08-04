@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import type { ReadonlyLog } from '@ct/shared'
 import AppShell from '../components/AppShell.vue'
 import { passthrough } from '../api'
@@ -11,6 +12,7 @@ import { formatNumber } from '../utils/format'
 
 type LogExtra = Record<string, unknown>
 const auth = useAuthStore(), filters = useFiltersStore(), prefs = usePrefsStore()
+const route = useRoute()
 const username = ref(''), tokenName = ref(''), modelName = ref(''), requestID = ref('')
 const logType = ref<number>(), offset = ref(0), limit = 50
 const defaultTimeRange = (): [Date, Date] => {
@@ -139,7 +141,19 @@ function billingLines(row: ReadonlyLog) {
   return values
 }
 async function load() { try { await Promise.all([filters.loadInstances(), prefs.load()]) } catch { /* content request reports its own error */ } await state.reload() }
-onMounted(() => { void load() })
+onMounted(() => {
+  // Deep links from the billing drawer carry username/month context.
+  const qUser = typeof route.query.username === 'string' ? route.query.username : ''
+  const qMonth = typeof route.query.month === 'string' ? route.query.month : ''
+  if (qUser && auth.user?.role === 'admin') username.value = qUser
+  if (/^\d{4}-\d{2}$/.test(qMonth)) {
+    const start = new Date(`${qMonth}-01T00:00:00`)
+    const nextMonth = new Date(start); nextMonth.setMonth(start.getMonth() + 1)
+    const cap = new Date(Date.now() + 60 * 60 * 1000)
+    timeRange.value = [start, nextMonth < cap ? nextMonth : cap]
+  }
+  void load()
+})
 watch(() => filters.site_id, (site, previous) => {
   if (site && site !== previous) {
     offset.value = 0
