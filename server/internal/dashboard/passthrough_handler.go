@@ -555,7 +555,7 @@ func (h *PassthroughHandler) Users(w http.ResponseWriter, r *http.Request) {
 		writeDashboardError(w, 502, "readonly_query_failed")
 		return
 	}
-	pageArgs := append(append([]any{}, args...), limit+1, offset)
+	pageArgs := append(append([]any{}, args...), limit, offset)
 	rows, err := tx.QueryContext(ctx, `SELECT id,username,COALESCE(display_name,''),quota,used_quota,status,COALESCE(created_at,0),COALESCE(last_login_at,0) FROM users`+where+` ORDER BY id LIMIT ? OFFSET ?`, pageArgs...)
 	if err != nil {
 		writeDashboardError(w, 502, "readonly_query_failed")
@@ -634,7 +634,7 @@ func (h *PassthroughHandler) Logs(w http.ResponseWriter, r *http.Request) {
 		filters += " AND type = ?"
 		args = append(args, logType)
 	}
-	pageArgs := append(append([]any{}, args...), limit, offset)
+	pageArgs := append(append([]any{}, args...), limit+1, offset)
 	ctx, cancel := context.WithTimeout(r.Context(), readonlyLogQueryTimeout)
 	defer cancel()
 	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})

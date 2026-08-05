@@ -15,6 +15,12 @@ import (
 const (
 	readonlyLogRollupBatchSize = 5000
 	readonlyLogRollupBackfill  = 7 * 24 * time.Hour
+	// Rows younger than this lag are left for the next pass. Auto-increment
+	// ids become visible out of commit order, so chasing the live head can
+	// advance the cursor past a not-yet-committed lower id and lose that row
+	// forever. Bounding each pass to a settled head id closes that gap for
+	// any insert that commits within the lag.
+	readonlyLogRollupSafetyLag = 10 * time.Second
 )
 
 type ReadonlyLogRollupStore interface {
@@ -42,7 +48,10 @@ type readonlySourceLog struct {
 	Quota            int64
 }
 
-func (h *PassthroughHandler) readonlyLogInitialCursor(ctx context.Context, site string, cutoff time.Time) (int64, error) {
+// readonlyLogLastIDBefore returns the highest log id whose created_at is
+// strictly before cutoff (0 when none). Used both for the initial cursor and
+// as the settled-head bound of each sync pass.
+func (h *PassthroughHandler) readonlyLogLastIDBefore(ctx context.Context, site string, cutoff time.Time) (int64, error) {
 	db, configured, err := h.database(site)
 	if err != nil || !configured {
 		return 0, err
@@ -54,14 +63,14 @@ func (h *PassthroughHandler) readonlyLogInitialCursor(ctx context.Context, site 
 	return id, err
 }
 
-func (h *PassthroughHandler) readonlyLogBatch(ctx context.Context, site string, afterID int64, limit int) ([]readonlySourceLog, error) {
+func (h *PassthroughHandler) readonlyLogBatch(ctx context.Context, site string, afterID, maxID int64, limit int) ([]readonlySourceLog, error) {
 	db, configured, err := h.database(site)
 	if err != nil || !configured {
 		return nil, err
 	}
 	queryCtx, cancel := context.WithTimeout(ctx, readonlyLogQueryTimeout)
 	defer cancel()
-	rows, err := db.QueryContext(queryCtx, `SELECT id,created_at,type,user_id,COALESCE(username,''),COALESCE(channel_id,0),COALESCE(model_name,''),COALESCE(token_name,''),COALESCE(`+"`group`"+`,''),prompt_tokens,completion_tokens,quota FROM logs WHERE id>? ORDER BY id LIMIT ?`, afterID, limit)
+	rows, err := db.QueryContext(queryCtx, `SELECT id,created_at,type,user_id,COALESCE(username,''),COALESCE(channel_id,0),COALESCE(model_name,''),COALESCE(token_name,''),COALESCE(`+"`group`"+`,''),prompt_tokens,completion_tokens,quota FROM logs WHERE id>? AND id<=? ORDER BY id LIMIT ?`, afterID, maxID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -77,8 +86,13 @@ func (h *PassthroughHandler) readonlyLogBatch(ctx context.Context, site string, 
 	return items, rows.Err()
 }
 
+type readonlyLogSource interface {
+	readonlyLogLastIDBefore(ctx context.Context, site string, cutoff time.Time) (int64, error)
+	readonlyLogBatch(ctx context.Context, site string, afterID, maxID int64, limit int) ([]readonlySourceLog, error)
+}
+
 type ReadonlyLogRollupRunner struct {
-	Source   *PassthroughHandler
+	Source   readonlyLogSource
 	Store    ReadonlyLogRollupStore
 	Interval time.Duration
 }
@@ -137,7 +151,7 @@ func (r ReadonlyLogRollupRunner) syncSite(ctx context.Context, site string) erro
 	}
 	if !cursor.Initialized {
 		coverageFrom := time.Now().UTC().Add(-readonlyLogRollupBackfill)
-		initial, initErr := r.Source.readonlyLogInitialCursor(ctx, site, coverageFrom)
+		initial, initErr := r.Source.readonlyLogLastIDBefore(ctx, site, coverageFrom)
 		if initErr != nil {
 			return initErr
 		}
@@ -146,10 +160,17 @@ func (r ReadonlyLogRollupRunner) syncSite(ctx context.Context, site string) erro
 		}
 		cursor.LastLogID = initial
 	}
+	safeHead, err := r.Source.readonlyLogLastIDBefore(ctx, site, time.Now().Add(-readonlyLogRollupSafetyLag))
+	if err != nil {
+		return err
+	}
+	if safeHead <= cursor.LastLogID {
+		return r.Store.MarkReadonlyLogRollupCaughtUp(ctx, site, time.Now().UTC())
+	}
 	// Bound each pass so a historical backfill cannot monopolize the readonly
 	// pool. Subsequent passes continue from the durable source-id cursor.
 	for batch := 0; batch < 10; batch++ {
-		items, batchErr := r.Source.readonlyLogBatch(ctx, site, cursor.LastLogID, readonlyLogRollupBatchSize)
+		items, batchErr := r.Source.readonlyLogBatch(ctx, site, cursor.LastLogID, safeHead, readonlyLogRollupBatchSize)
 		if batchErr != nil {
 			return batchErr
 		}
