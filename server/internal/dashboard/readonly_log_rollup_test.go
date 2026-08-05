@@ -2,6 +2,9 @@ package dashboard
 
 import (
 	"context"
+	"os"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -44,11 +47,18 @@ type fakeRollupSource struct {
 	lastSeen int64
 }
 
+// Mirrors the real query's semantics — ORDER BY created_at DESC, id DESC
+// LIMIT 1 — i.e. the id of the most recently created qualifying row, NOT the
+// maximum qualifying id. The two differ when id order and created_at order
+// invert; the inversion test below depends on this distinction.
 func (f *fakeRollupSource) readonlyLogLastIDBefore(_ context.Context, _ string, cutoff time.Time) (int64, error) {
-	var id int64
+	var id, createdAt int64
 	for _, item := range f.logs {
-		if item.CreatedAt < cutoff.Unix() && item.ID > id {
-			id = item.ID
+		if item.CreatedAt >= cutoff.Unix() {
+			continue
+		}
+		if item.CreatedAt > createdAt || (item.CreatedAt == createdAt && item.ID > id) {
+			id, createdAt = item.ID, item.CreatedAt
 		}
 	}
 	return id, nil
@@ -130,5 +140,63 @@ func TestSyncSiteStopsAtSettledHead(t *testing.T) {
 	}
 	if store.cursor.LastLogID != 3 || !store.caughtUp {
 		t.Fatalf("late row not synced: cursor=%d caughtUp=%v", store.cursor.LastLogID, store.caughtUp)
+	}
+}
+
+// An id whose created_at is older than a later-inserted lower id (id order
+// and time order inverted) sits above the settled head temporarily. It must
+// be picked up once a newer settled row raises the head — delayed is fine,
+// lost is not.
+func TestSyncSiteToleratesIDOrderInversion(t *testing.T) {
+	now := time.Now().Unix()
+	source := &fakeRollupSource{logs: []readonlySourceLog{
+		{ID: 1, CreatedAt: now - 500, LogType: 2, UserID: 1, Quota: 1},
+		{ID: 3, CreatedAt: now - 400, LogType: 2, UserID: 1, Quota: 2},
+		{ID: 2, CreatedAt: now - 100, LogType: 2, UserID: 1, Quota: 4},
+	}}
+	store := &fakeRollupStore{}
+	runner := ReadonlyLogRollupRunner{Source: source, Store: store}
+	if err := runner.syncSite(context.Background(), "cn"); err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+	// Settled head is id 2 (latest created_at), so id 3 stays unread for now.
+	if store.cursor.LastLogID != 2 {
+		t.Fatalf("cursor = %d, want settled head 2", store.cursor.LastLogID)
+	}
+	source.logs = append(source.logs, readonlySourceLog{ID: 4, CreatedAt: now - 50, LogType: 2, UserID: 1, Quota: 8})
+	if err := runner.syncSite(context.Background(), "cn"); err != nil {
+		t.Fatalf("second pass: %v", err)
+	}
+	if store.cursor.LastLogID != 4 {
+		t.Fatalf("cursor = %d, want 4", store.cursor.LastLogID)
+	}
+	var quota int64
+	for _, value := range store.applied {
+		quota += value.QuotaSum
+	}
+	if quota != 15 {
+		t.Fatalf("applied quota = %d, want 15 (row 3 must not be lost)", quota)
+	}
+}
+
+// Source-text SQL contract, same pattern as mysqlstore/*_contract_test.go:
+// the fakes above model these queries, so their ordering and bounds must not
+// drift silently.
+func TestReadonlyLogRollupSQLContract(t *testing.T) {
+	_, file, _, _ := runtime.Caller(0)
+	data, err := os.ReadFile(strings.TrimSuffix(file, "_test.go") + ".go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, required := range []string{
+		// settled head: id of the most recently created row before cutoff
+		"WHERE created_at<? ORDER BY created_at DESC,id DESC LIMIT 1",
+		// batch: strictly cursor-bounded on both sides, scanned in id order
+		"WHERE id>? AND id<=? ORDER BY id LIMIT ?",
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("missing SQL contract %q", required)
+		}
 	}
 }

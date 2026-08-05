@@ -28,6 +28,10 @@
 - **P2 游标追表头会永久丢行**：MySQL 自增 id 的可见顺序≠提交顺序；runner 追到活表头时，若低 id 行尚未提交而高 id 行已读走，游标一旦越过，该行永久漏计（统计永久少计且无法自愈）。修复：每轮先取"created_at 早于 now-10s 的最大 id"作安全水位，批量查询加 `id<=水位` 上界，年轻行留给下一轮。补契约测试（fake source/store：首轮止步水位、晚到行次轮补齐）。残余假设：单条日志插入事务耗时不超过 10s——newapi 自动提交场景成立。
 - **测试缺口**：/logs/count 进白名单但越权矩阵没跟（/logs/stat 当时的同款遗漏），补 GET 200 / POST 403 两例。
 
+### 跟进（同日，回应 codex 对修正的评审）
+
+codex 指出契约测试的 fake 用"取最大 id"建模安全水位，与真实 SQL（`ORDER BY created_at DESC,id DESC LIMIT 1` = 取最新 created_at 那行的 id）语义不同，测不出 SQL 排序写错的回归。已补强：① fake 改为精确镜像真实 SQL 语义；② 新增 id/created_at 倒挂场景测试（倒挂行暂留水位之上，新 settled 行抬升水位后补齐——延迟可接受、丢失不可接受）；③ 按 mysqlstore/*_contract_test.go 既有模式加源码文本 SQL 契约测试，锁死两条查询的排序与边界写法。倒挂下真实行为核验：水位取"最新 created_at 行的 id"意味着更高 id 但更旧 created_at 的行会晚一轮同步，不会丢；极端情况（倒挂行之后站点长期无新日志）该行会一直悬着，属理论边角，记档不处理。
+
 ## 行为变更与记档
 
 - **日志页 username 筛选对 viewer 开放**（原 admin 专属，含账单深链的 username 参数）：服务端 scope 仍强制 IN(user_ids)，viewer 筛自己范围外的用户名只会得到空结果，无泄露；属 UX 放开，记档。
