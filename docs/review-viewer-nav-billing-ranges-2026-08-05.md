@@ -31,7 +31,7 @@
 
 ## 问题与记档
 
-- **P2 待拍板：viewer 的用户账单入口被移除**。设计文档 §4 明确 viewer 可见其授权用户的账单页，7e3d30b 将 /billing 从 viewer 路由与导航中移除，但服务端白名单仍放行 billing/summary+detail GET（矩阵测试仍在）。前后端现在不一致：是有意收紧（则建议同步收掉服务端白名单）还是疏漏（则导航加回）？
+- **P2 已闭环（2026-08-05 用户拍板："现在不让 viewer 看用户账单了"）**：确认为有意收紧。验收方同步收掉服务端白名单的 billing/summary+detail 放行，矩阵测试改断言 403，设计文档 §4 记录决定。viewer 可见范围最终定格为客户监控、用户管理、使用日志三页。
 - P3：导出任务把 workbook 的 409 原因折叠为通用 "export generation failed"，用户看到的是"导出任务失败"而非"该区间账单尚未生成"；
 - P3：time.Local 残留四处未随本次统一——billing_config_handler（价格生效日期）、billing_log_export_handler（month）、billing_models_handler（当日零点）、billing_handler（旧 Rollup 回填，本身是清理候选）。UTC 容器上价格生效日边界会偏 8 小时，配价功能上线前建议统一到 BusinessLocation；
 - P3：QueryBillingAggregates / QueryBillingChannelAggregates 的区间版本已无 handler 调用（仅测试 fake 依赖接口），清理候选。
