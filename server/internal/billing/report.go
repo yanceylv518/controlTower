@@ -22,6 +22,13 @@ type AggregateRow struct {
 	CacheWriteTokens, CacheWrite5mTokens, CacheWrite1hTokens         int64
 }
 
+type AnomalyCount struct {
+	UserID, ChannelID    int64
+	Day                  time.Time
+	ModelName, GroupName string
+	Count                int64
+}
+
 type UserSummary struct {
 	UserID           int64    `json:"user_id"`
 	Username         string   `json:"username"`
@@ -30,6 +37,7 @@ type UserSummary struct {
 	CompletionTokens int64    `json:"completion_tokens"`
 	CacheTokens      int64    `json:"cache_tokens"`
 	CacheWriteTokens int64    `json:"cache_write_tokens"`
+	AbnormalRows     int64    `json:"abnormal_rows"`
 	Quota            int64    `json:"quota"`
 	Amount           string   `json:"amount"`
 	Balance          int64    `json:"balance"`
@@ -49,6 +57,7 @@ type DetailItem struct {
 	CacheWriteTokens   int64  `json:"cache_write_tokens"`
 	CacheWrite5mTokens int64  `json:"cache_write_5m_tokens"`
 	CacheWrite1hTokens int64  `json:"cache_write_1h_tokens"`
+	AbnormalRows       int64  `json:"abnormal_rows"`
 	Quota              int64  `json:"quota"`
 	Amount             string `json:"amount"`
 	InputPrice         string `json:"input_price"`
@@ -94,6 +103,7 @@ type SummaryTotal struct {
 	CompletionTokens int64  `json:"completion_tokens"`
 	CacheTokens      int64  `json:"cache_tokens"`
 	CacheWriteTokens int64  `json:"cache_write_tokens"`
+	AbnormalRows     int64  `json:"abnormal_rows"`
 	Quota            int64  `json:"quota"`
 	Amount           string `json:"amount"`
 }
@@ -111,6 +121,7 @@ func SummarizeUsers(items []UserSummary) SummaryTotal {
 		if value, err := decimalRat(item.Amount); err == nil {
 			amount.Add(amount, value)
 		}
+		total.AbnormalRows += item.AbnormalRows
 	}
 	total.Amount = FormatAmount(amount, 6)
 	return total

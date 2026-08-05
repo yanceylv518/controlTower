@@ -413,6 +413,7 @@ export interface BillingUserSummary {
   completion_tokens: number;
   cache_tokens: number;
   cache_write_tokens: number;
+  abnormal_rows: number;
   quota: number;
   amount: string;
   balance: number;
@@ -439,6 +440,7 @@ export interface BillingDetailItem {
   cache_write_tokens: number;
   cache_write_5m_tokens: number;
   cache_write_1h_tokens: number;
+  abnormal_rows: number;
   quota: number;
   amount: string;
   input_price: string;
@@ -498,7 +500,7 @@ export interface BillingUserSetting {
   user_id: number;
   use_tiered_pricing: boolean;
 }
-export interface BillingChannelSummary { channel_id:number;channel_name:string;request_count:number;prompt_tokens:number;completion_tokens:number;cache_tokens:number;cache_write_tokens?:number;quota:number;amount:string;discount:string;discounted_amount:string;unpriced_models:string[] }
+export interface BillingChannelSummary { channel_id:number;channel_name:string;request_count:number;abnormal_rows:number;prompt_tokens:number;completion_tokens:number;cache_tokens:number;cache_write_tokens?:number;quota:number;amount:string;discount:string;discounted_amount:string;unpriced_models:string[] }
 
 export const dashboardApi = (client: ApiClient) => ({
   instances: () =>

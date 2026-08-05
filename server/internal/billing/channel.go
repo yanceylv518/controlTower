@@ -25,6 +25,7 @@ type ChannelSummary struct {
 	CompletionTokens int64    `json:"completion_tokens"`
 	CacheTokens      int64    `json:"cache_tokens"`
 	CacheWriteTokens int64    `json:"cache_write_tokens"`
+	AbnormalRows     int64    `json:"abnormal_rows"`
 	Quota            int64    `json:"quota"`
 	Amount           string   `json:"amount"`
 	Discount         string   `json:"discount"`

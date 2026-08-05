@@ -97,8 +97,18 @@ func (h BillingChannelsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 	}
 	billed := billing.BuildChannelSummary(rows, prices, ratios, snapshots, settings)
 	details := []billing.DetailItem{}
+	counts := []billing.AnomalyCount{}
+	if jobErr == nil && job.Status == "complete" {
+		counts, e = anomalyCounts(h.Store, r.Context(), job.ID)
+		if e != nil {
+			writeDashboardError(w, 500, "billing_channel_query_failed")
+			return
+		}
+		applyChannelAnomalyCounts(billed, counts)
+	}
 	if channelID > 0 {
 		details = billing.BuildDetails(rows, prices, ratios, snapshots)
+		applyDetailAnomalyCounts(details, counts, 0, channelID)
 	}
 	items := billed
 	warning := ""

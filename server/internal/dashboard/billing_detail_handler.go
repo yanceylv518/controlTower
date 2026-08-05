@@ -61,6 +61,14 @@ func (h BillingDetailHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	items := billing.BuildDetails(rows, prices, ratios, snapshots)
+	if jobErr == nil && job.Status == "complete" {
+		counts, countErr := anomalyCounts(h.Store, r.Context(), job.ID)
+		if countErr != nil {
+			writeDashboardError(w, http.StatusInternalServerError, "billing_query_failed")
+			return
+		}
+		applyDetailAnomalyCounts(items, counts, userID, 0)
+	}
 	if r.URL.Query().Get("format") == "csv" {
 		writeBillingDetailCSV(w, items)
 		return
@@ -101,9 +109,9 @@ func writeBillingDetailCSV(w http.ResponseWriter, items []billing.DetailItem) {
 	// UTF-8 BOM so Excel opens the file with correct CJK encoding.
 	_, _ = w.Write([]byte("\xef\xbb\xbf"))
 	writer := csv.NewWriter(w)
-	_ = writer.Write([]string{"日期", "模型", "分组", "阶梯起点", "请求数", "普通输入Token", "输出Token", "缓存读取Token", "缓存写入Token", "输入单价/1M", "缓存读取单价/1M", "缓存写入单价/1M", "输出单价/1M", "金额", "未定价"})
+	_ = writer.Write([]string{"日期", "模型", "分组", "阶梯起点", "请求数", "异常订单数", "普通输入Token", "输出Token", "缓存读取Token", "缓存写入Token", "输入单价/1M", "缓存读取单价/1M", "缓存写入单价/1M", "输出单价/1M", "金额", "未定价"})
 	for _, item := range items {
-		_ = writer.Write([]string{item.Day, item.ModelName, item.GroupName, strconv.FormatInt(item.TierFrom, 10), strconv.FormatInt(item.RequestCount, 10), strconv.FormatInt(item.PromptTokens, 10), strconv.FormatInt(item.CompletionTokens, 10), strconv.FormatInt(item.CacheTokens, 10), strconv.FormatInt(item.CacheWriteTokens, 10), item.InputPrice, item.CachePrice, item.CacheWritePrice, item.OutputPrice, item.Amount, strconv.FormatBool(item.Unpriced)})
+		_ = writer.Write([]string{item.Day, item.ModelName, item.GroupName, strconv.FormatInt(item.TierFrom, 10), strconv.FormatInt(item.RequestCount, 10), strconv.FormatInt(item.AbnormalRows, 10), strconv.FormatInt(item.PromptTokens, 10), strconv.FormatInt(item.CompletionTokens, 10), strconv.FormatInt(item.CacheTokens, 10), strconv.FormatInt(item.CacheWriteTokens, 10), item.InputPrice, item.CachePrice, item.CacheWritePrice, item.OutputPrice, item.Amount, strconv.FormatBool(item.Unpriced)})
 	}
 	writer.Flush()
 }
