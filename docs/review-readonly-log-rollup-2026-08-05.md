@@ -1,0 +1,46 @@
+# 验收记录：使用日志查询优化——小时聚合缓存（2026-08-05）
+
+范围：4eb6efd（codex 自主交付，无批次文件）。验收环境：Linux，Go 全量 vet+test、vue-tsc、desktop build 全绿。
+
+## 结论：通过，验收修正三处（两处缺陷 + 一处测试缺口）
+
+## 交付内容核验
+
+架构：新增 `readonly_log_stats_hourly` 小时聚合表 + `readonly_log_rollup_cursors` 游标表（033 迁移，纯增量、幂等），后台 runner 每 30s 按站点从 newapi logs 表以 id 游标增量拉取（每轮 ≤10 批 × 5000 行），按 (站点,小时,类型,用户,渠道,模型,令牌,分组) 聚合累加进 CT 自库。查询侧：
+
+- **列表去掉 COUNT(\*)**：/passthrough/logs 不再每页对生产库做全量计数（本批最大的减负点），改多取一行判 `has_more`；
+- **精确总数拆到新端点 /logs/count**：完整小时段读 CT 聚合表，头尾零头小时回落生产库小范围原始查询；聚合未就绪（覆盖不足/滞后>2min/带 request_id 筛选)时整段回落原始 COUNT；前端异步加载，显示"总数统计中…/暂不可用"，不阻塞列表；
+- **/logs/stat 的 quota 汇总同样走聚合+零头拼接**；RPM/TPM 仍查生产库最近 60s（廉价）；
+- 就绪判据正确：`coverage_from` 之前的区间不用聚合；`caught_up_at` 超过 2 分钟视为滞后回落原始查询——不会拿半新不旧的数据充当全量。
+
+逐项核验过的正确性要点：
+
+- **ApplyReadonlyLogRollups 事务性幂等**：游标行 FOR UPDATE + `current >= lastLogID` 短路，聚合累加与游标推进同事务提交——重试/并发不会双计；
+- 维度哈希 = SHA-256(站点+小时+全维度 \x00 拼接)，主键唯一，聚合正确性有单测（跨小时/跨类型分桶）；
+- 小时桶按 UTC 截断，上海时区为整小时偏移，与账单/日志页的半开区间语义兼容；`completeHourWindow` 有单测；
+- 聚合表筛选与列表的精确匹配语义一致（username/model/token/group/channel_id/type 均等值）；
+- /logs/count 已进 viewer 白名单，viewer scope（user_ids IN）在聚合路径与原始路径都强制注入，无越权面；
+- mux 经类型断言接线 Rollups，mysqlstore 实现齐全；runner 随 server 启动，复用站点已配置的 logs_readonly_dsn，无新配置项。
+
+## 验收修正（我直接修）
+
+- **P1 分页 limit+1 张冠李戴**：`limit+1` 误加在 Users 处理器（且未截断——用户管理页每页多显一行、跨页首尾重复），而依赖它的 Logs 处理器却没加，导致 `has_more` 恒为 false——一旦 /logs/count 失败，前端兜底 total=当前页行数，翻页按钮失效。已对调：Users 恢复 `limit`（其仍有 COUNT total），Logs 改 `limit+1`。
+- **P2 游标追表头会永久丢行**：MySQL 自增 id 的可见顺序≠提交顺序；runner 追到活表头时，若低 id 行尚未提交而高 id 行已读走，游标一旦越过，该行永久漏计（统计永久少计且无法自愈）。修复：每轮先取"created_at 早于 now-10s 的最大 id"作安全水位，批量查询加 `id<=水位` 上界，年轻行留给下一轮。补契约测试（fake source/store：首轮止步水位、晚到行次轮补齐）。残余假设：单条日志插入事务耗时不超过 10s——newapi 自动提交场景成立。
+- **测试缺口**：/logs/count 进白名单但越权矩阵没跟（/logs/stat 当时的同款遗漏），补 GET 200 / POST 403 两例。
+
+## 行为变更与记档
+
+- **日志页 username 筛选对 viewer 开放**（原 admin 专属，含账单深链的 username 参数）：服务端 scope 仍强制 IN(user_ids)，viewer 筛自己范围外的用户名只会得到空结果，无泄露；属 UX 放开，记档。
+- **列表 total 语义变更**：/passthrough/logs 的 total 不再是精确总数（= offset+本页行数），精确值由 /logs/count 提供；已核对 api-contracts.md 未收录 passthrough 端点，无需更新。
+- **超时 15s→120s**（列表/统计/count 共用一个常量）：与"少慢 SQL 打生产库"原则有张力，靠连接池上限兜底（HTTP 侧每站点 2 连接 + runner 独立 Handler 再 2 连接，合计 4）。可接受，但若生产观察到 count 回落路径拖 120s 满，建议把列表与 count 的超时拆开。
+- **统计新鲜度**：聚合路径下 quota 汇总/总数最多滞后约 2.5 分钟（30s 同步周期 + 2min 就绪阈值 + 10s 安全水位）；列表始终实时，两者可能有秒级出入。
+- **覆盖窗口只从部署时点回补 7 天**、向前只增：部署初期整月区间查询仍整段回落生产库原始 COUNT/SUM（约 23 天后整月查询才能全走聚合）。回补速度 ≤10 万行/分钟/站点，大表首次追平需数小时，期间 count 均走原始路径。
+- P3：区间端点语义不一致——聚合路径头尾零头用半开 `[start,end)`，原始回落路径与列表仍是 BETWEEN 闭区间，end 整秒上的行两条路径相差 1 行。与 83ac4d3 的半开统一方向不符，建议下次顺手统一。
+- P3：runner 在 main.go 另建了一个 PassthroughHandler（独立连接池），与 HTTP 侧不共享——多一份连接配额，行为正确，仅记档。
+- 流程记档：无批次文件的自主交付，自查清单继续缺席。
+
+## 部署
+
+- 033 迁移纯增量（两张新表），无销毁性操作；无新配置项、agent 不动。
+- **rc27（5ba84d1）不含本批**：需要上线时在验收修正后的 main 重打 rc28。
+- 部署后观察：`readonly_log_rollup_cursors` 的 last_error/caught_up_at（追平前 count 走原始路径属预期）；EXPLAIN 确认 `logs` 上 `created_at` 索引支撑水位查询（与既有 stat 查询同型）。
