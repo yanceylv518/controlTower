@@ -69,4 +69,3 @@ func TestRequireBearerTokenAllowsValidToken(t *testing.T) {
 		t.Fatal("next handler was not called")
 	}
 }
-

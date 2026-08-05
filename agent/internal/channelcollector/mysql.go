@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"fmt"
 	"strconv"
 	"strings"
 	"sync"
@@ -51,7 +52,7 @@ func (c *MySQLCollector) Collect(ctx context.Context, limit int) ([]Snapshot, er
 	if limit <= 0 || limit > 5000 {
 		limit = 1000
 	}
-	rows, err := c.db.QueryContext(ctx, collectChannelsSQL(), limit)
+	rows, err := c.db.QueryContext(ctx, collectChannelsSQL(), limit+1)
 	if err != nil {
 		return nil, err
 	}
@@ -68,6 +69,9 @@ func (c *MySQLCollector) Collect(ctx context.Context, limit int) ([]Snapshot, er
 		item.ModelsText = strings.TrimSpace(item.ModelsText)
 		item.CapturedAt = capturedAt
 		items = append(items, item)
+	}
+	if len(items) > limit {
+		return nil, fmt.Errorf("channel snapshot exceeds limit %d", limit)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

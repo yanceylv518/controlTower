@@ -27,4 +27,3 @@ func validDashboardBearerToken(r *http.Request, expectedToken string) bool {
 	}
 	return subtle.ConstantTimeCompare([]byte(actual), []byte(expectedToken)) == 1
 }
-

@@ -10,13 +10,19 @@ import (
 
 const tokensPerMillion int64 = 1_000_000
 
-type Usage struct{ PromptTokens, CompletionTokens, CacheTokens int64 }
+// Usage contains already-normalized billing lanes. PromptTokens is ordinary
+// (non-cache) input; cache reads and writes are never included in it.
+type Usage struct {
+	PromptTokens, CompletionTokens, CacheTokens              int64
+	CacheWriteTokens, CacheWrite5mTokens, CacheWrite1hTokens int64
+}
 type Price struct {
 	EffectiveFrom time.Time `json:"effective_from"`
 	TierFrom      int64     `json:"tier_from"`
 	Input         string    `json:"input_price"`
 	Output        string    `json:"output_price"`
 	Cache         string    `json:"cache_price"`
+	CacheWrite    string    `json:"cache_write_price"`
 }
 
 func ValidateRatio(value string) error {
@@ -31,7 +37,7 @@ func ValidateRatio(value string) error {
 }
 
 func ValidatePrice(price Price) error {
-	for _, value := range []string{price.Input, price.Output, price.Cache} {
+	for _, value := range []string{price.Input, price.Output, price.Cache, decimalOrZero(price.CacheWrite)} {
 		if _, err := decimalRat(value); err != nil {
 			return err
 		}
@@ -56,19 +62,22 @@ type GroupRatio struct {
 }
 
 type DailyRow struct {
-	InstanceID       string
-	UserID           int64
-	Username         string
-	ModelName        string
-	GroupName        string
-	TierFrom         int64
-	Day              time.Time
-	RequestCount     int64
-	PromptTokens     int64
-	CompletionTokens int64
-	CacheTokens      int64
-	Quota            int64
-	UpdatedAt        time.Time
+	InstanceID         string
+	UserID             int64
+	Username           string
+	ModelName          string
+	GroupName          string
+	TierFrom           int64
+	Day                time.Time
+	RequestCount       int64
+	PromptTokens       int64
+	CompletionTokens   int64
+	CacheTokens        int64
+	CacheWriteTokens   int64
+	CacheWrite5mTokens int64
+	CacheWrite1hTokens int64
+	Quota              int64
+	UpdatedAt          time.Time
 }
 
 // SelectPrice uses the most recently saved price schedule and then selects its
@@ -117,9 +126,8 @@ func ValidateTierSchedule(prices []Price) error {
 	return nil
 }
 
-// Amount returns an exact rational amount. When cache tokens exceed prompt
-// tokens (a shape emitted by some new-api versions), prompt is already the
-// non-cache component and must not be erased by subtraction.
+// Amount mirrors new-api's normalized lanes. The configured cache-write price
+// is the 5-minute/default price; 1-hour writes cost 1.6 times that price.
 func Amount(usage Usage, price Price, ratio string) (*big.Rat, error) {
 	inputPrice, err := decimalRat(price.Input)
 	if err != nil {
@@ -133,22 +141,34 @@ func Amount(usage Usage, price Price, ratio string) (*big.Rat, error) {
 	if err != nil {
 		return nil, err
 	}
+	cacheWritePrice, err := decimalRat(decimalOrZero(price.CacheWrite))
+	if err != nil {
+		return nil, err
+	}
 	groupRatio, err := decimalRat(ratio)
 	if err != nil {
 		return nil, err
 	}
-	nonCache := usage.PromptTokens
-	if usage.CacheTokens <= usage.PromptTokens {
-		nonCache -= usage.CacheTokens
-	}
-	if nonCache < 0 {
-		nonCache = 0
+	write5m, write1h := usage.CacheWrite5mTokens, usage.CacheWrite1hTokens
+	remainingWrite := usage.CacheWriteTokens - write5m - write1h
+	if remainingWrite < 0 {
+		remainingWrite = 0
 	}
 	total := new(big.Rat)
-	total.Add(total, tokenCost(nonCache, inputPrice))
+	total.Add(total, tokenCost(usage.PromptTokens, inputPrice))
 	total.Add(total, tokenCost(usage.CacheTokens, cachePrice))
+	total.Add(total, tokenCost(write5m+remainingWrite, cacheWritePrice))
+	oneHourPrice := new(big.Rat).Mul(cacheWritePrice, big.NewRat(8, 5))
+	total.Add(total, tokenCost(write1h, oneHourPrice))
 	total.Add(total, tokenCost(usage.CompletionTokens, outputPrice))
 	return total.Mul(total, groupRatio), nil
+}
+
+func decimalOrZero(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "0"
+	}
+	return value
 }
 
 func FormatAmount(amount *big.Rat, places int) string {

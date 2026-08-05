@@ -68,7 +68,7 @@ func (h BillingLogExportHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 	w.Header().Set("Content-Disposition", `attachment; filename="billing-log-details.csv"`)
 	_, _ = w.Write([]byte{0xef, 0xbb, 0xbf})
 	writer := csv.NewWriter(w)
-	_ = writer.Write([]string{"日志ID", "时间", "请求ID", "用户ID", "用户名", "模型", "分组", "输入Token", "缓存Token", "输出Token", "输入单价/1M", "缓存单价/1M", "输出单价/1M", "分组倍率", "金额"})
+	_ = writer.Write([]string{"日志ID", "时间", "请求ID", "用户名", "模型", "普通输入Token", "缓存读取Token", "缓存写入Token", "5m缓存写入Token", "1h缓存写入Token", "输出Token", "输入单价/1M", "缓存读取单价/1M", "缓存写入单价/1M", "输出单价/1M", "分组倍率", "金额"})
 	for _, log := range logs {
 		price, ok := billing.SelectPrice(byModel[log.ModelName], log.CreatedAt, log.PromptTokens)
 		ratio := byGroup[log.GroupName]
@@ -83,11 +83,18 @@ func (h BillingLogExportHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 			}
 		}
 		if ok {
-			if value, e := billing.Amount(billing.Usage{PromptTokens: log.PromptTokens, CompletionTokens: log.CompletionTokens, CacheTokens: log.CacheTokens}, price, ratio); e == nil {
+			if value, e := billing.Amount(billing.Usage{PromptTokens: log.PromptTokens, CompletionTokens: log.CompletionTokens, CacheTokens: log.CacheTokens, CacheWriteTokens: log.CacheWriteTokens, CacheWrite5mTokens: log.CacheWrite5mTokens, CacheWrite1hTokens: log.CacheWrite1hTokens}, price, ratio); e == nil {
 				amount = billing.FormatAmount(value, 6)
 			}
 		}
-		_ = writer.Write([]string{strconv.FormatInt(log.ID, 10), log.CreatedAt.Format(time.RFC3339), log.RequestID, strconv.FormatInt(log.UserID, 10), log.Username, log.ModelName, log.GroupName, strconv.FormatInt(log.PromptTokens, 10), strconv.FormatInt(log.CacheTokens, 10), strconv.FormatInt(log.CompletionTokens, 10), price.Input, price.Cache, price.Output, ratio, amount})
+		_ = writer.Write([]string{
+			strconv.FormatInt(log.ID, 10), log.CreatedAt.Format(time.RFC3339), log.RequestID,
+			log.Username, log.ModelName,
+			strconv.FormatInt(log.PromptTokens, 10), strconv.FormatInt(log.CacheTokens, 10),
+			strconv.FormatInt(log.CacheWriteTokens, 10), strconv.FormatInt(log.CacheWrite5mTokens, 10),
+			strconv.FormatInt(log.CacheWrite1hTokens, 10), strconv.FormatInt(log.CompletionTokens, 10),
+			price.Input, price.Cache, price.CacheWrite, price.Output, ratio, amount,
+		})
 	}
 	writer.Flush()
 }

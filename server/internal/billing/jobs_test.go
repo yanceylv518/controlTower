@@ -89,7 +89,7 @@ func TestFillAnomalyAmountsSeparatesCachedInput(t *testing.T) {
 	prices := []Price{{EffectiveFrom: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC), TierFrom: 0, Input: "1", Output: "2", Cache: "0.5"}}
 	var got AnomalyOrder
 	fillAnomalyAmounts(&got, log, prices, "1", time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC), true)
-	if got.InputAmount != "0.000060" || got.OutputAmount != "0.000040" || got.CacheAmount != "0.000020" || got.ReferenceAmount != "0.000120" {
+	if got.InputAmount != "0.000100" || got.OutputAmount != "0.000040" || got.CacheAmount != "0.000020" || got.ReferenceAmount != "0.000160" {
 		t.Fatalf("unexpected amounts: %+v", got)
 	}
 }

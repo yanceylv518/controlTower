@@ -15,13 +15,27 @@ func TestAmountMatchesAcceptedExampleDigitForDigit(t *testing.T) {
 	}
 }
 
-func TestAmountSubtractsCacheWhenItIsPartOfPrompt(t *testing.T) {
+func TestAmountUsesAlreadyNormalizedInputLane(t *testing.T) {
 	amount, err := Amount(Usage{PromptTokens: 1000, CacheTokens: 400}, Price{Input: "2", Cache: "1", Output: "0"}, "1.5")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := FormatAmount(amount, 6); got != "0.002400" {
-		t.Fatalf("amount = %s, want 0.002400", got)
+	if got := FormatAmount(amount, 6); got != "0.003600" {
+		t.Fatalf("amount = %s, want 0.003600", got)
+	}
+}
+
+func TestAmountPricesCacheWritesAndOneHourMultiplier(t *testing.T) {
+	amount, err := Amount(Usage{PromptTokens: 2, CacheTokens: 75841, CacheWriteTokens: 753, CacheWrite5mTokens: 753, CompletionTokens: 820}, Price{Input: "10", Cache: "1", CacheWrite: "12.5", Output: "50"}, "1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := FormatAmount(amount, 6); got != "0.126274" {
+		t.Fatalf("amount=%s", got)
+	}
+	oneHour, err := Amount(Usage{CacheWriteTokens: 1000000, CacheWrite1hTokens: 1000000}, Price{Input: "0", Output: "0", Cache: "0", CacheWrite: "10"}, "1")
+	if err != nil || FormatAmount(oneHour, 6) != "16.000000" {
+		t.Fatalf("1h amount=%v err=%v", oneHour, err)
 	}
 }
 

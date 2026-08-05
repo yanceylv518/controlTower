@@ -38,6 +38,7 @@ type billingModelItem struct {
 	Input            string `json:"input_price"`
 	Output           string `json:"output_price"`
 	Cache            string `json:"cache_price"`
+	CacheWrite       string `json:"cache_write_price"`
 	EffectiveFrom    string `json:"effective_from"`
 	PriceSource      string `json:"price_source"`
 }
@@ -107,6 +108,7 @@ func (h BillingModelsHandler) list(w http.ResponseWriter, r *http.Request) {
 			item.Input = p.Input
 			item.Output = p.Output
 			item.Cache = p.Cache
+			item.CacheWrite = p.CacheWrite
 			item.EffectiveFrom = day
 			item.PriceSource = "ct"
 		}
@@ -171,7 +173,7 @@ func (h BillingModelsHandler) sync(w http.ResponseWriter, r *http.Request) {
 		if priceErr != nil || sameCurrentBasePrice(current, model, now, price) {
 			continue
 		}
-		record := billing.PriceRecord{InstanceID: instanceID, ModelName: model, Price: billing.Price{EffectiveFrom: billingSyncDay(now), TierFrom: 0, Input: price.Input, Output: price.Output, Cache: price.Cache}, UpdatedAt: now, UpdatedBy: actor}
+		record := billing.PriceRecord{InstanceID: instanceID, ModelName: model, Price: billing.Price{EffectiveFrom: billingSyncDay(now), TierFrom: 0, Input: price.Input, Output: price.Output, Cache: price.Cache, CacheWrite: price.CacheWrite}, UpdatedAt: now, UpdatedBy: actor}
 		if err = h.Store.PutBillingPriceSchedule(r.Context(), []billing.PriceRecord{record}); err != nil {
 			writeDashboardError(w, 500, "price_sync_failed")
 			return
@@ -200,5 +202,12 @@ func sameCurrentBasePrice(records []billing.PriceRecord, model string, now time.
 			latest = r
 		}
 	}
-	return latest != nil && latest.Input == price.Input && latest.Output == price.Output && latest.Cache == price.Cache
+	return latest != nil && latest.Input == price.Input && latest.Output == price.Output && latest.Cache == price.Cache && decimalOrZeroModel(latest.CacheWrite) == decimalOrZeroModel(price.CacheWrite)
+}
+
+func decimalOrZeroModel(value string) string {
+	if value == "" {
+		return "0"
+	}
+	return value
 }

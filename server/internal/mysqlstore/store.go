@@ -222,6 +222,53 @@ ON DUPLICATE KEY UPDATE
 	)
 	return err
 }
+func (s Store) SyncChannelSnapshots(instanceID string, snapshots []storage.ChannelSnapshot) error {
+	tx, err := s.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var siteID string
+	if err = tx.QueryRow(`SELECT CASE WHEN site_id='' THEN id ELSE site_id END FROM instances WHERE id=?`, instanceID).Scan(&siteID); err != nil {
+		return err
+	}
+	channelIDs := make([]int64, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		if _, err = tx.Exec(`INSERT INTO channel_current (instance_id,channel_id,id,channel_name,status,weight,models_text,group_name,priority,captured_at)
+VALUES (?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE id=VALUES(id),channel_name=VALUES(channel_name),status=VALUES(status),weight=VALUES(weight),models_text=VALUES(models_text),group_name=VALUES(group_name),priority=VALUES(priority),captured_at=VALUES(captured_at)`,
+			snapshot.InstanceID, snapshot.ChannelID, snapshot.ID, snapshot.ChannelName, snapshot.Status, snapshot.Weight, snapshot.ModelsText, nullString(snapshot.GroupName), nullInt64(snapshot.Priority), snapshot.CapturedAt); err != nil {
+			return err
+		}
+		channelIDs = append(channelIDs, snapshot.ChannelID)
+		models := parseChannelModels(snapshot.ModelsText)
+		if len(models) == 1 {
+			priority := int64(0)
+			if snapshot.Priority != nil {
+				priority = *snapshot.Priority
+			}
+			if _, err = tx.Exec(`INSERT IGNORE INTO channel_base_values(instance_id,channel_id,model_name,base_weight,base_priority,updated_at,updated_by) VALUES(?,?,?,?,?,?,?)`, siteID, snapshot.ChannelID, models[0], snapshot.Weight, priority, snapshot.CapturedAt, "system:snapshot"); err != nil {
+				return err
+			}
+		}
+	}
+	if len(channelIDs) == 0 {
+		if _, err = tx.Exec(`DELETE FROM channel_current WHERE instance_id=?`, instanceID); err != nil {
+			return err
+		}
+	} else {
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(channelIDs)), ",")
+		args := make([]any, 0, len(channelIDs)+1)
+		args = append(args, instanceID)
+		for _, id := range channelIDs {
+			args = append(args, id)
+		}
+		if _, err = tx.Exec(`DELETE FROM channel_current WHERE instance_id=? AND channel_id NOT IN (`+placeholders+`)`, args...); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
 func (s Store) UpdateLogOffset(instanceID string, lastLogID int64) error {
 	_, err := s.db.ExecContext(context.Background(), `
 INSERT INTO log_offsets (instance_id, last_log_id, updated_at)

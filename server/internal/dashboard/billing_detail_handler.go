@@ -76,9 +76,9 @@ func writeBillingInvoiceCSV(w http.ResponseWriter, userID int64, month string, i
 	_ = writer.Write([]string{"用户ID", strconv.FormatInt(userID, 10)})
 	_ = writer.Write([]string{"账单月份", month})
 	_ = writer.Write([]string{})
-	_ = writer.Write([]string{"模型", "价格档位Token", "请求数", "输入Token", "缓存Token", "输出Token", "输入单价/1M", "缓存单价/1M", "输出单价/1M", "输入金额", "缓存金额", "输出金额", "小计", "未定价"})
+	_ = writer.Write([]string{"模型", "价格档位Token", "请求数", "普通输入Token", "缓存读取Token", "缓存写入Token", "输出Token", "输入单价/1M", "缓存读取单价/1M", "缓存写入单价/1M", "输出单价/1M", "输入金额", "缓存读取金额", "缓存写入金额", "输出金额", "小计", "未定价"})
 	for _, item := range items {
-		_ = writer.Write([]string{item.ModelName, strconv.FormatInt(item.TierFrom, 10), strconv.FormatInt(item.RequestCount, 10), strconv.FormatInt(item.PromptTokens, 10), strconv.FormatInt(item.CacheTokens, 10), strconv.FormatInt(item.CompletionTokens, 10), item.InputPrice, item.CachePrice, item.OutputPrice, item.InputAmount, item.CacheAmount, item.OutputAmount, item.Amount, strconv.FormatBool(item.Unpriced)})
+		_ = writer.Write([]string{item.ModelName, strconv.FormatInt(item.TierFrom, 10), strconv.FormatInt(item.RequestCount, 10), strconv.FormatInt(item.PromptTokens, 10), strconv.FormatInt(item.CacheTokens, 10), strconv.FormatInt(item.CacheWriteTokens, 10), strconv.FormatInt(item.CompletionTokens, 10), item.InputPrice, item.CachePrice, item.CacheWritePrice, item.OutputPrice, item.InputAmount, item.CacheAmount, item.CacheWriteAmount, item.OutputAmount, item.Amount, strconv.FormatBool(item.Unpriced)})
 	}
 	_ = writer.Write([]string{})
 	_ = writer.Write([]string{"账单合计", total.Amount})
@@ -101,9 +101,9 @@ func writeBillingDetailCSV(w http.ResponseWriter, items []billing.DetailItem) {
 	// UTF-8 BOM so Excel opens the file with correct CJK encoding.
 	_, _ = w.Write([]byte("\xef\xbb\xbf"))
 	writer := csv.NewWriter(w)
-	_ = writer.Write([]string{"日期", "模型", "分组", "阶梯起点", "请求数", "输入Token", "输出Token", "缓存Token", "输入单价/1M", "缓存单价/1M", "输出单价/1M", "金额", "未定价"})
+	_ = writer.Write([]string{"日期", "模型", "分组", "阶梯起点", "请求数", "普通输入Token", "输出Token", "缓存读取Token", "缓存写入Token", "输入单价/1M", "缓存读取单价/1M", "缓存写入单价/1M", "输出单价/1M", "金额", "未定价"})
 	for _, item := range items {
-		_ = writer.Write([]string{item.Day, item.ModelName, item.GroupName, strconv.FormatInt(item.TierFrom, 10), strconv.FormatInt(item.RequestCount, 10), strconv.FormatInt(item.PromptTokens, 10), strconv.FormatInt(item.CompletionTokens, 10), strconv.FormatInt(item.CacheTokens, 10), item.InputPrice, item.CachePrice, item.OutputPrice, item.Amount, strconv.FormatBool(item.Unpriced)})
+		_ = writer.Write([]string{item.Day, item.ModelName, item.GroupName, strconv.FormatInt(item.TierFrom, 10), strconv.FormatInt(item.RequestCount, 10), strconv.FormatInt(item.PromptTokens, 10), strconv.FormatInt(item.CompletionTokens, 10), strconv.FormatInt(item.CacheTokens, 10), strconv.FormatInt(item.CacheWriteTokens, 10), item.InputPrice, item.CachePrice, item.CacheWritePrice, item.OutputPrice, item.Amount, strconv.FormatBool(item.Unpriced)})
 	}
 	writer.Flush()
 }

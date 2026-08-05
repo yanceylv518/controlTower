@@ -44,25 +44,26 @@ type ChannelCommandResult struct {
 	Successes       int       `json:"successes,omitempty"`
 }
 type AgentReportRequest struct {
-	InstanceID         string                     `json:"instance_id"`
-	AgentID            string                     `json:"agent_id"`
-	AgentVersion       string                     `json:"agent_version"`
-	ReportedAt         time.Time                  `json:"reported_at"`
-	Sequence           int64                      `json:"sequence"`
-	LastLogID          int64                      `json:"last_log_id"`
-	SourceLatestLogID  int64                      `json:"source_latest_log_id,omitempty"`
-	BacklogEstimate    int64                      `json:"backlog_estimate,omitempty"`
-	MetricBatchID      string                     `json:"metric_batch_id,omitempty"`
-	LogEvents          []LogEventPayload          `json:"log_events"`
-	LogSamples         []LogSamplePayload         `json:"log_samples"`
-	AggregatedMetrics  []AggregatedMetricPayload  `json:"aggregated_metrics"`
-	ServerMetrics      []ServerMetricPayload      `json:"server_metrics"`
-	DockerStatuses     []DockerStatusPayload      `json:"docker_statuses"`
-	HealthChecks       []HealthCheckPayload       `json:"health_checks"`
-	ChannelSnapshots   []ChannelSnapshotPayload   `json:"channel_snapshots"`
-	CommandResults     []ChannelCommandResult     `json:"command_results"`
-	NginxTimingBuckets []NginxTimingBucketPayload `json:"nginx_timing_buckets,omitempty"`
-	NginxSlowSamples   []NginxSlowSamplePayload   `json:"nginx_slow_samples,omitempty"`
+	InstanceID              string                     `json:"instance_id"`
+	AgentID                 string                     `json:"agent_id"`
+	AgentVersion            string                     `json:"agent_version"`
+	ReportedAt              time.Time                  `json:"reported_at"`
+	Sequence                int64                      `json:"sequence"`
+	LastLogID               int64                      `json:"last_log_id"`
+	SourceLatestLogID       int64                      `json:"source_latest_log_id,omitempty"`
+	BacklogEstimate         int64                      `json:"backlog_estimate,omitempty"`
+	MetricBatchID           string                     `json:"metric_batch_id,omitempty"`
+	LogEvents               []LogEventPayload          `json:"log_events"`
+	LogSamples              []LogSamplePayload         `json:"log_samples"`
+	AggregatedMetrics       []AggregatedMetricPayload  `json:"aggregated_metrics"`
+	ServerMetrics           []ServerMetricPayload      `json:"server_metrics"`
+	DockerStatuses          []DockerStatusPayload      `json:"docker_statuses"`
+	HealthChecks            []HealthCheckPayload       `json:"health_checks"`
+	ChannelSnapshots        []ChannelSnapshotPayload   `json:"channel_snapshots"`
+	ChannelSnapshotComplete bool                       `json:"channel_snapshot_complete,omitempty"`
+	CommandResults          []ChannelCommandResult     `json:"command_results"`
+	NginxTimingBuckets      []NginxTimingBucketPayload `json:"nginx_timing_buckets,omitempty"`
+	NginxSlowSamples        []NginxSlowSamplePayload   `json:"nginx_slow_samples,omitempty"`
 }
 
 type NginxTimingBucketPayload struct {

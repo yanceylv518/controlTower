@@ -425,30 +425,33 @@ func buildReport(ctx context.Context, cfg config.Config, reportedAt time.Time, s
 		dockerStatuses = dockerCollector.Collect(ctx)
 	}
 	channelSnapshots := []reporter.ChannelSnapshotPayload(nil)
+	channelSnapshotComplete := false
 	if channelCollector != nil {
 		if snapshots, err := channelCollector.Collect(ctx, cfg.ChannelSnapshotLimit); err != nil {
 			log.Printf("control tower channel snapshot collection failed: %v", err)
 		} else {
 			channelSnapshots = toChannelSnapshotPayloads(snapshots)
+			channelSnapshotComplete = snapshots != nil
 		}
 	}
 	report := reporter.AgentReportRequest{
-		InstanceID:        cfg.InstanceID,
-		AgentID:           cfg.AgentID,
-		AgentVersion:      agentVersion,
-		ReportedAt:        reportedAt,
-		Sequence:          sequence,
-		LastLogID:         lastLogID,
-		SourceLatestLogID: backlog.SourceLatestLogID,
-		BacklogEstimate:   backlog.BacklogEstimate,
-		MetricBatchID:     metricBatchID(cfg.AgentID, events),
-		LogEvents:         toPayloads(selectLogEventsForReport(cfg, events)),
-		LogSamples:        selectLogSamplesForReport(cfg, events),
-		AggregatedMetrics: metricaggregator.Aggregate(cfg.InstanceID, events, cfg.CacheHitMinPromptTokens, cfg.UserErrorCodes),
-		ServerMetrics:     serverMetrics,
-		DockerStatuses:    dockerStatuses,
-		HealthChecks:      healthChecks,
-		ChannelSnapshots:  channelSnapshots,
+		InstanceID:              cfg.InstanceID,
+		AgentID:                 cfg.AgentID,
+		AgentVersion:            agentVersion,
+		ReportedAt:              reportedAt,
+		Sequence:                sequence,
+		LastLogID:               lastLogID,
+		SourceLatestLogID:       backlog.SourceLatestLogID,
+		BacklogEstimate:         backlog.BacklogEstimate,
+		MetricBatchID:           metricBatchID(cfg.AgentID, events),
+		LogEvents:               toPayloads(selectLogEventsForReport(cfg, events)),
+		LogSamples:              selectLogSamplesForReport(cfg, events),
+		AggregatedMetrics:       metricaggregator.Aggregate(cfg.InstanceID, events, cfg.CacheHitMinPromptTokens, cfg.UserErrorCodes),
+		ServerMetrics:           serverMetrics,
+		DockerStatuses:          dockerStatuses,
+		HealthChecks:            healthChecks,
+		ChannelSnapshots:        channelSnapshots,
+		ChannelSnapshotComplete: channelSnapshotComplete,
 	}
 	if activeNginxTiming != nil {
 		buckets, slowSamples := activeNginxTiming.Snapshot()
@@ -500,7 +503,7 @@ func selectLogSamplesForReport(cfg config.Config, events []logcollector.Event) [
 	return samples.Select(events, cfg.LogSampleLimit, cfg.SlowLogThresholdSeconds)
 }
 func reportIsEmpty(report reporter.AgentReportRequest) bool {
-	return len(report.LogEvents) == 0 && len(report.AggregatedMetrics) == 0 && len(report.ServerMetrics) == 0 && len(report.DockerStatuses) == 0 && len(report.HealthChecks) == 0 && len(report.ChannelSnapshots) == 0 && len(report.CommandResults) == 0 && len(report.NginxTimingBuckets) == 0 && len(report.NginxSlowSamples) == 0
+	return len(report.LogEvents) == 0 && len(report.AggregatedMetrics) == 0 && len(report.ServerMetrics) == 0 && len(report.DockerStatuses) == 0 && len(report.HealthChecks) == 0 && len(report.ChannelSnapshots) == 0 && !report.ChannelSnapshotComplete && len(report.CommandResults) == 0 && len(report.NginxTimingBuckets) == 0 && len(report.NginxSlowSamples) == 0
 }
 
 func toPayloads(events []logcollector.Event) []reporter.LogEventPayload {

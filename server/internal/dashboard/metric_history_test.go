@@ -117,7 +117,7 @@ func TestUsageValidatesHoursAndReturnsTotals(t *testing.T) {
 
 func TestMetricUserIDSupportsCrossDimensions(t *testing.T) {
 	for key, want := range map[string]int64{
-		"inst:user:9":                 9,
+		"inst:user:9":                9,
 		"inst:user:9:model:glm-5.2":  9,
 		"inst:model:glm-5.2:user:12": 12,
 	} {

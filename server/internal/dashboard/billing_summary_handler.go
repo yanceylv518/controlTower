@@ -116,9 +116,9 @@ func (h BillingSummaryHandler) writeResponse(w http.ResponseWriter, r *http.Requ
 		// UTF-8 BOM so Excel opens the file with correct CJK encoding.
 		_, _ = w.Write([]byte("\xef\xbb\xbf"))
 		writer := csv.NewWriter(w)
-		_ = writer.Write([]string{"用户ID", "用户名", "请求数", "输入Token", "输出Token", "缓存Token", "金额", "余额", "未定价模型", "价格来源"})
+		_ = writer.Write([]string{"用户ID", "用户名", "请求数", "普通输入Token", "输出Token", "缓存读取Token", "缓存写入Token", "金额", "余额", "未定价模型", "价格来源"})
 		for _, item := range items {
-			_ = writer.Write([]string{strconv.FormatInt(item.UserID, 10), item.Username, strconv.FormatInt(item.RequestCount, 10), strconv.FormatInt(item.PromptTokens, 10), strconv.FormatInt(item.CompletionTokens, 10), strconv.FormatInt(item.CacheTokens, 10), item.Amount, strconv.FormatInt(item.Balance, 10), strings.Join(item.UnpricedModels, ","), strings.Join(item.PriceSources, ",")})
+			_ = writer.Write([]string{strconv.FormatInt(item.UserID, 10), item.Username, strconv.FormatInt(item.RequestCount, 10), strconv.FormatInt(item.PromptTokens, 10), strconv.FormatInt(item.CompletionTokens, 10), strconv.FormatInt(item.CacheTokens, 10), strconv.FormatInt(item.CacheWriteTokens, 10), item.Amount, strconv.FormatInt(item.Balance, 10), strings.Join(item.UnpricedModels, ","), strings.Join(item.PriceSources, ",")})
 		}
 		writer.Flush()
 		return

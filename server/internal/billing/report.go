@@ -19,6 +19,7 @@ type AggregateRow struct {
 	TierFrom                                                         int64
 	Day                                                              time.Time
 	RequestCount, PromptTokens, CompletionTokens, CacheTokens, Quota int64
+	CacheWriteTokens, CacheWrite5mTokens, CacheWrite1hTokens         int64
 }
 
 type UserSummary struct {
@@ -28,6 +29,7 @@ type UserSummary struct {
 	PromptTokens     int64    `json:"prompt_tokens"`
 	CompletionTokens int64    `json:"completion_tokens"`
 	CacheTokens      int64    `json:"cache_tokens"`
+	CacheWriteTokens int64    `json:"cache_write_tokens"`
 	Quota            int64    `json:"quota"`
 	Amount           string   `json:"amount"`
 	Balance          int64    `json:"balance"`
@@ -36,21 +38,25 @@ type UserSummary struct {
 }
 
 type DetailItem struct {
-	Day              string `json:"day"`
-	ModelName        string `json:"model_name"`
-	GroupName        string `json:"group_name"`
-	TierFrom         int64  `json:"tier_from"`
-	RequestCount     int64  `json:"request_count"`
-	PromptTokens     int64  `json:"prompt_tokens"`
-	CompletionTokens int64  `json:"completion_tokens"`
-	CacheTokens      int64  `json:"cache_tokens"`
-	Quota            int64  `json:"quota"`
-	Amount           string `json:"amount"`
-	InputPrice       string `json:"input_price"`
-	OutputPrice      string `json:"output_price"`
-	CachePrice       string `json:"cache_price"`
-	PriceSource      string `json:"price_source"`
-	Unpriced         bool   `json:"unpriced"`
+	Day                string `json:"day"`
+	ModelName          string `json:"model_name"`
+	GroupName          string `json:"group_name"`
+	TierFrom           int64  `json:"tier_from"`
+	RequestCount       int64  `json:"request_count"`
+	PromptTokens       int64  `json:"prompt_tokens"`
+	CompletionTokens   int64  `json:"completion_tokens"`
+	CacheTokens        int64  `json:"cache_tokens"`
+	CacheWriteTokens   int64  `json:"cache_write_tokens"`
+	CacheWrite5mTokens int64  `json:"cache_write_5m_tokens"`
+	CacheWrite1hTokens int64  `json:"cache_write_1h_tokens"`
+	Quota              int64  `json:"quota"`
+	Amount             string `json:"amount"`
+	InputPrice         string `json:"input_price"`
+	OutputPrice        string `json:"output_price"`
+	CachePrice         string `json:"cache_price"`
+	CacheWritePrice    string `json:"cache_write_price"`
+	PriceSource        string `json:"price_source"`
+	Unpriced           bool   `json:"unpriced"`
 }
 
 type InvoiceItem struct {
@@ -60,12 +66,15 @@ type InvoiceItem struct {
 	PromptTokens     int64  `json:"prompt_tokens"`
 	CompletionTokens int64  `json:"completion_tokens"`
 	CacheTokens      int64  `json:"cache_tokens"`
+	CacheWriteTokens int64  `json:"cache_write_tokens"`
 	InputPrice       string `json:"input_price"`
 	OutputPrice      string `json:"output_price"`
 	CachePrice       string `json:"cache_price"`
+	CacheWritePrice  string `json:"cache_write_price"`
 	InputAmount      string `json:"input_amount"`
 	OutputAmount     string `json:"output_amount"`
 	CacheAmount      string `json:"cache_amount"`
+	CacheWriteAmount string `json:"cache_write_amount"`
 	Amount           string `json:"amount"`
 	Discount         string `json:"discount"`
 	DiscountedAmount string `json:"discounted_amount"`
@@ -84,6 +93,7 @@ type SummaryTotal struct {
 	PromptTokens     int64  `json:"prompt_tokens"`
 	CompletionTokens int64  `json:"completion_tokens"`
 	CacheTokens      int64  `json:"cache_tokens"`
+	CacheWriteTokens int64  `json:"cache_write_tokens"`
 	Quota            int64  `json:"quota"`
 	Amount           string `json:"amount"`
 }
@@ -96,6 +106,7 @@ func SummarizeUsers(items []UserSummary) SummaryTotal {
 		total.PromptTokens += item.PromptTokens
 		total.CompletionTokens += item.CompletionTokens
 		total.CacheTokens += item.CacheTokens
+		total.CacheWriteTokens += item.CacheWriteTokens
 		total.Quota += item.Quota
 		if value, err := decimalRat(item.Amount); err == nil {
 			amount.Add(amount, value)
@@ -106,8 +117,8 @@ func SummarizeUsers(items []UserSummary) SummaryTotal {
 }
 
 type RatioSnapshot struct {
-	ModelRatio, CompletionRatio, CacheRatio, GroupRatio map[string]string
-	QuotaPerUnit                                        string
+	ModelRatio, CompletionRatio, CacheRatio, CreateCacheRatio, GroupRatio map[string]string
+	QuotaPerUnit                                                          string
 }
 
 func ParseRatioSnapshot(raw string) (RatioSnapshot, error) {
@@ -115,8 +126,8 @@ func ParseRatioSnapshot(raw string) (RatioSnapshot, error) {
 	if err := json.Unmarshal([]byte(raw), &outer); err != nil {
 		return RatioSnapshot{}, err
 	}
-	result := RatioSnapshot{ModelRatio: map[string]string{}, CompletionRatio: map[string]string{}, CacheRatio: map[string]string{}, GroupRatio: map[string]string{}}
-	for key, target := range map[string]*map[string]string{"ModelRatio": &result.ModelRatio, "CompletionRatio": &result.CompletionRatio, "CacheRatio": &result.CacheRatio, "GroupRatio": &result.GroupRatio} {
+	result := RatioSnapshot{ModelRatio: map[string]string{}, CompletionRatio: map[string]string{}, CacheRatio: map[string]string{}, CreateCacheRatio: map[string]string{}, GroupRatio: map[string]string{}}
+	for key, target := range map[string]*map[string]string{"ModelRatio": &result.ModelRatio, "CompletionRatio": &result.CompletionRatio, "CacheRatio": &result.CacheRatio, "CreateCacheRatio": &result.CreateCacheRatio, "GroupRatio": &result.GroupRatio} {
 		value := outer[key]
 		if len(value) == 0 {
 			continue
@@ -211,11 +222,19 @@ func FallbackPrice(snapshot RatioSnapshot, model, group string) (Price, string, 
 	if e != nil {
 		return Price{}, "", e
 	}
+	cacheWrite := snapshot.CreateCacheRatio[model]
+	if cacheWrite == "" {
+		cacheWrite = "1"
+	}
+	cwr, e := decimalRat(cacheWrite)
+	if e != nil {
+		return Price{}, "", e
+	}
 	groupRatio := snapshot.GroupRatio[group]
 	if groupRatio == "" {
 		groupRatio = "1"
 	}
-	return Price{Input: input.FloatString(12), Output: new(big.Rat).Mul(input, cr).FloatString(12), Cache: new(big.Rat).Mul(input, car).FloatString(12)}, groupRatio, nil
+	return Price{Input: input.FloatString(12), Output: new(big.Rat).Mul(input, cr).FloatString(12), Cache: new(big.Rat).Mul(input, car).FloatString(12), CacheWrite: new(big.Rat).Mul(input, cwr).FloatString(12)}, groupRatio, nil
 }
 
 func BuildSummary(rows []AggregateRow, prices []PriceRecord, ratios []GroupRatio, snapshots map[string]string, balances map[int64]int64) ([]UserSummary, SummaryTotal) {
@@ -243,6 +262,7 @@ func BuildSummary(rows []AggregateRow, prices []PriceRecord, ratios []GroupRatio
 		a.value.PromptTokens += row.PromptTokens
 		a.value.CompletionTokens += row.CompletionTokens
 		a.value.CacheTokens += row.CacheTokens
+		a.value.CacheWriteTokens += row.CacheWriteTokens
 		a.value.Quota += row.Quota
 		price, ok := selectPriceForTier(priceByModel[row.ModelName], row.Day, row.TierFrom)
 		ratio, source := "1", "ct"
@@ -265,7 +285,7 @@ func BuildSummary(rows []AggregateRow, prices []PriceRecord, ratios []GroupRatio
 			a.sources["newapi"] = true
 			continue
 		}
-		amount, e := Amount(Usage{PromptTokens: row.PromptTokens, CompletionTokens: row.CompletionTokens, CacheTokens: row.CacheTokens}, price, ratio)
+		amount, e := Amount(usageFromAggregate(row), price, ratio)
 		if e != nil {
 			a.unpriced[row.ModelName] = true
 			continue
@@ -291,6 +311,7 @@ func BuildSummary(rows []AggregateRow, prices []PriceRecord, ratios []GroupRatio
 		total.PromptTokens += a.value.PromptTokens
 		total.CompletionTokens += a.value.CompletionTokens
 		total.CacheTokens += a.value.CacheTokens
+		total.CacheWriteTokens += a.value.CacheWriteTokens
 		total.Quota += a.value.Quota
 		totalAmount.Add(totalAmount, a.amount)
 	}
@@ -318,7 +339,7 @@ func BuildDetails(rows []AggregateRow, prices []PriceRecord, ratios []GroupRatio
 	}
 	items := make([]DetailItem, 0, len(rows))
 	for _, row := range rows {
-		item := DetailItem{Day: row.Day.Format("2006-01-02"), ModelName: row.ModelName, GroupName: row.GroupName, TierFrom: row.TierFrom, RequestCount: row.RequestCount, PromptTokens: row.PromptTokens, CompletionTokens: row.CompletionTokens, CacheTokens: row.CacheTokens, Quota: row.Quota}
+		item := DetailItem{Day: row.Day.Format("2006-01-02"), ModelName: row.ModelName, GroupName: row.GroupName, TierFrom: row.TierFrom, RequestCount: row.RequestCount, PromptTokens: row.PromptTokens, CompletionTokens: row.CompletionTokens, CacheTokens: row.CacheTokens, CacheWriteTokens: row.CacheWriteTokens, CacheWrite5mTokens: row.CacheWrite5mTokens, CacheWrite1hTokens: row.CacheWrite1hTokens, Quota: row.Quota}
 		price, ok := selectPriceForTier(priceByModel[row.ModelName], row.Day, row.TierFrom)
 		ratio := "1"
 		item.PriceSource = "ct"
@@ -342,6 +363,7 @@ func BuildDetails(rows []AggregateRow, prices []PriceRecord, ratios []GroupRatio
 			item.InputPrice, _ = multipliedDecimal(price.Input, ratio)
 			item.OutputPrice, _ = multipliedDecimal(price.Output, ratio)
 			item.CachePrice, _ = multipliedDecimal(price.Cache, ratio)
+			item.CacheWritePrice, _ = multipliedDecimal(decimalOrZero(price.CacheWrite), ratio)
 			amount, err := AmountFromQuota(row.Quota, quotaPerUnit)
 			if err != nil {
 				item.Unpriced = true
@@ -354,7 +376,8 @@ func BuildDetails(rows []AggregateRow, prices []PriceRecord, ratios []GroupRatio
 		item.InputPrice, _ = multipliedDecimal(price.Input, ratio)
 		item.OutputPrice, _ = multipliedDecimal(price.Output, ratio)
 		item.CachePrice, _ = multipliedDecimal(price.Cache, ratio)
-		amount, err := Amount(Usage{PromptTokens: row.PromptTokens, CompletionTokens: row.CompletionTokens, CacheTokens: row.CacheTokens}, price, ratio)
+		item.CacheWritePrice, _ = multipliedDecimal(decimalOrZero(price.CacheWrite), ratio)
+		amount, err := Amount(usageFromAggregate(row), price, ratio)
 		if err != nil {
 			item.Unpriced = true
 		} else {
@@ -391,8 +414,8 @@ func BuildInvoice(rows []AggregateRow, prices []PriceRecord, ratios []GroupRatio
 		ratioByGroup[ratio.GroupName] = ratio.Ratio
 	}
 	type invoiceAcc struct {
-		item                        InvoiceItem
-		input, output, cache, total *big.Rat
+		item                                    InvoiceItem
+		input, output, cache, cacheWrite, total *big.Rat
 	}
 	itemsByKey := map[string]*invoiceAcc{}
 	for _, row := range rows {
@@ -410,7 +433,7 @@ func BuildInvoice(rows []AggregateRow, prices []PriceRecord, ratios []GroupRatio
 			}
 			if parseErr != nil {
 				unpriced = true
-				price = Price{Input: "0", Output: "0", Cache: "0"}
+				price = Price{Input: "0", Output: "0", Cache: "0", CacheWrite: "0"}
 				ratio = "1"
 			}
 			source = "newapi"
@@ -427,16 +450,21 @@ func BuildInvoice(rows []AggregateRow, prices []PriceRecord, ratios []GroupRatio
 		if unitErr != nil {
 			return nil, InvoiceTotal{}, unitErr
 		}
-		key := strings.Join([]string{row.ModelName, strconv.FormatInt(row.TierFrom, 10), inputUnit, outputUnit, cacheUnit, source, strconv.FormatBool(unpriced)}, "\x00")
+		cacheWriteUnit, unitErr := multipliedDecimal(decimalOrZero(price.CacheWrite), ratio)
+		if unitErr != nil {
+			return nil, InvoiceTotal{}, unitErr
+		}
+		key := strings.Join([]string{row.ModelName, strconv.FormatInt(row.TierFrom, 10), inputUnit, outputUnit, cacheUnit, cacheWriteUnit, source, strconv.FormatBool(unpriced)}, "\x00")
 		a := itemsByKey[key]
 		if a == nil {
-			a = &invoiceAcc{item: InvoiceItem{ModelName: row.ModelName, TierFrom: row.TierFrom, InputPrice: inputUnit, OutputPrice: outputUnit, CachePrice: cacheUnit, Discount: discount, PriceSource: source, Unpriced: unpriced}, input: new(big.Rat), output: new(big.Rat), cache: new(big.Rat), total: new(big.Rat)}
+			a = &invoiceAcc{item: InvoiceItem{ModelName: row.ModelName, TierFrom: row.TierFrom, InputPrice: inputUnit, OutputPrice: outputUnit, CachePrice: cacheUnit, CacheWritePrice: cacheWriteUnit, Discount: discount, PriceSource: source, Unpriced: unpriced}, input: new(big.Rat), output: new(big.Rat), cache: new(big.Rat), cacheWrite: new(big.Rat), total: new(big.Rat)}
 			itemsByKey[key] = a
 		}
 		a.item.RequestCount += row.RequestCount
 		a.item.PromptTokens += row.PromptTokens
 		a.item.CompletionTokens += row.CompletionTokens
 		a.item.CacheTokens += row.CacheTokens
+		a.item.CacheWriteTokens += row.CacheWriteTokens
 		if unpriced {
 			quotaPerUnit, quotaErr := quotaPerUnitForReport(snapshots[row.Day.Format("2006-01-02")])
 			if quotaErr != nil {
@@ -448,16 +476,19 @@ func BuildInvoice(rows []AggregateRow, prices []PriceRecord, ratios []GroupRatio
 			}
 			continue
 		}
-		nonCache := row.PromptTokens - row.CacheTokens
-		if row.CacheTokens > row.PromptTokens {
-			nonCache = row.PromptTokens
-		}
 		inputPrice, _ := decimalRat(inputUnit)
 		outputPrice, _ := decimalRat(outputUnit)
 		cachePrice, _ := decimalRat(cacheUnit)
-		a.input.Add(a.input, tokenCost(nonCache, inputPrice))
+		cacheWritePrice, _ := decimalRat(cacheWriteUnit)
+		a.input.Add(a.input, tokenCost(row.PromptTokens, inputPrice))
 		a.output.Add(a.output, tokenCost(row.CompletionTokens, outputPrice))
 		a.cache.Add(a.cache, tokenCost(row.CacheTokens, cachePrice))
+		remainingWrite := row.CacheWriteTokens - row.CacheWrite5mTokens - row.CacheWrite1hTokens
+		if remainingWrite < 0 {
+			remainingWrite = 0
+		}
+		a.cacheWrite.Add(a.cacheWrite, tokenCost(row.CacheWrite5mTokens+remainingWrite, cacheWritePrice))
+		a.cacheWrite.Add(a.cacheWrite, tokenCost(row.CacheWrite1hTokens, new(big.Rat).Mul(cacheWritePrice, big.NewRat(8, 5))))
 	}
 	out := make([]InvoiceItem, 0, len(itemsByKey))
 	grand := new(big.Rat)
@@ -466,10 +497,12 @@ func BuildInvoice(rows []AggregateRow, prices []PriceRecord, ratios []GroupRatio
 			a.total.Add(a.total, a.input)
 			a.total.Add(a.total, a.output)
 			a.total.Add(a.total, a.cache)
+			a.total.Add(a.total, a.cacheWrite)
 		}
 		a.item.InputAmount = FormatAmount(a.input, 6)
 		a.item.OutputAmount = FormatAmount(a.output, 6)
 		a.item.CacheAmount = FormatAmount(a.cache, 6)
+		a.item.CacheWriteAmount = FormatAmount(a.cacheWrite, 6)
 		a.item.Amount = FormatAmount(a.total, 6)
 		a.item.DiscountedAmount = FormatAmount(new(big.Rat).Mul(a.total, discountRat), 6)
 		grand.Add(grand, a.total)
@@ -485,6 +518,10 @@ func BuildInvoice(rows []AggregateRow, prices []PriceRecord, ratios []GroupRatio
 		return out[i].InputPrice < out[j].InputPrice
 	})
 	return out, InvoiceTotal{Amount: FormatAmount(grand, 6), Discount: discount, DiscountedAmount: FormatAmount(new(big.Rat).Mul(grand, discountRat), 6)}, nil
+}
+
+func usageFromAggregate(row AggregateRow) Usage {
+	return Usage{PromptTokens: row.PromptTokens, CompletionTokens: row.CompletionTokens, CacheTokens: row.CacheTokens, CacheWriteTokens: row.CacheWriteTokens, CacheWrite5mTokens: row.CacheWrite5mTokens, CacheWrite1hTokens: row.CacheWrite1hTokens}
 }
 
 func multipliedDecimal(value, ratio string) (string, error) {

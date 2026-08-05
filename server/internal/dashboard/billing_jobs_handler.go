@@ -133,7 +133,7 @@ func billingRequestKey(instanceID, scope string, from, to time.Time) string {
 	// Include the calculation version so a billing-rule correction invalidates
 	// previously completed jobs once, while identical jobs on the current
 	// algorithm are still reused.
-	const calculationVersion = "v3-shanghai-hour"
+	const calculationVersion = "v4-cache-semantics"
 	sum := sha256.Sum256([]byte(calculationVersion + "|" + instanceID + "|generate|" + scope + "|" + from.Format(time.RFC3339Nano) + "|" + to.Format(time.RFC3339Nano)))
 	return "billing:" + fmt.Sprintf("%x", sum[:16])
 }

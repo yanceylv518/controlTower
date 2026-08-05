@@ -8,28 +8,34 @@ import (
 )
 
 type LogRecord struct {
-	UserID           int64
-	Username         string
-	ModelName        string
-	GroupName        string
-	PromptTokens     int64
-	CompletionTokens int64
-	CacheTokens      int64
-	Quota            int64
+	UserID             int64
+	Username           string
+	ModelName          string
+	GroupName          string
+	PromptTokens       int64
+	CompletionTokens   int64
+	CacheTokens        int64
+	CacheWriteTokens   int64
+	CacheWrite5mTokens int64
+	CacheWrite1hTokens int64
+	Quota              int64
 }
 
 type DetailedLogRecord struct {
-	ID               int64
-	CreatedAt        time.Time
-	RequestID        string
-	UserID           int64
-	Username         string
-	ModelName        string
-	GroupName        string
-	PromptTokens     int64
-	CompletionTokens int64
-	CacheTokens      int64
-	Quota            int64
+	ID                 int64
+	CreatedAt          time.Time
+	RequestID          string
+	UserID             int64
+	Username           string
+	ModelName          string
+	GroupName          string
+	PromptTokens       int64
+	CompletionTokens   int64
+	CacheTokens        int64
+	CacheWriteTokens   int64
+	CacheWrite5mTokens int64
+	CacheWrite1hTokens int64
+	Quota              int64
 }
 
 type Source interface {
@@ -103,6 +109,9 @@ func (s RollupService) RollupDay(ctx context.Context, instanceID string, day tim
 			row.PromptTokens += log.PromptTokens
 			row.CompletionTokens += log.CompletionTokens
 			row.CacheTokens += log.CacheTokens
+			row.CacheWriteTokens += log.CacheWriteTokens
+			row.CacheWrite5mTokens += log.CacheWrite5mTokens
+			row.CacheWrite1hTokens += log.CacheWrite1hTokens
 			row.Quota += log.Quota
 			row.UpdatedAt = s.now().UTC()
 			aggregated[k] = row

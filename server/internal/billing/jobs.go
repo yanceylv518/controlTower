@@ -19,6 +19,9 @@ var BusinessLocation = time.FixedZone("Asia/Shanghai", 8*60*60)
 
 type PagedLogRecord struct {
 	ID, CreatedUnix, UserID, ChannelID, CacheTokens, Quota       int64
+	CacheWriteTokens, CacheWrite5mTokens, CacheWrite1hTokens     int64
+	ContextTokens                                                int64
+	UsageSemantic                                                string
 	RequestID, UpstreamRequestID, Username, ModelName, GroupName string
 	ChannelName                                                  string
 	PromptTokens, CompletionTokens                               sql.NullInt64
@@ -78,28 +81,29 @@ type ChannelDailyRow struct {
 	TierFrom                                                         int64
 	Day                                                              time.Time
 	RequestCount, PromptTokens, CompletionTokens, CacheTokens, Quota int64
+	CacheWriteTokens, CacheWrite5mTokens, CacheWrite1hTokens         int64
 	UpdatedAt                                                        time.Time
 }
 
 type AnomalyOrder struct {
-	InstanceID                                              string    `json:"instance_id"`
-	SourceLogID                                             int64     `json:"source_log_id"`
-	JobID                                                   string    `json:"job_id"`
-	CreatedAt                                               time.Time `json:"created_at"`
-	RequestID                                               string    `json:"request_id"`
-	UpstreamRequestID                                       string    `json:"upstream_request_id"`
-	UserID                                                  int64     `json:"user_id"`
-	Username                                                string    `json:"username"`
-	ChannelID                                               int64     `json:"channel_id"`
-	ChannelName                                             string    `json:"channel_name"`
-	ModelName                                               string    `json:"model_name"`
-	GroupName                                               string    `json:"group_name"`
-	PromptTokens, CompletionTokens                          sql.NullInt64
-	CacheTokens, Quota, MaxContextTokens                    int64
-	InputPrice, OutputPrice, CachePrice                     string
-	InputAmount, OutputAmount, CacheAmount, ReferenceAmount string
-	Reasons                                                 string    `json:"reasons"`
-	DetectedAt                                              time.Time `json:"detected_at"`
+	InstanceID                                                                                     string    `json:"instance_id"`
+	SourceLogID                                                                                    int64     `json:"source_log_id"`
+	JobID                                                                                          string    `json:"job_id"`
+	CreatedAt                                                                                      time.Time `json:"created_at"`
+	RequestID                                                                                      string    `json:"request_id"`
+	UpstreamRequestID                                                                              string    `json:"upstream_request_id"`
+	UserID                                                                                         int64     `json:"user_id"`
+	Username                                                                                       string    `json:"username"`
+	ChannelID                                                                                      int64     `json:"channel_id"`
+	ChannelName                                                                                    string    `json:"channel_name"`
+	ModelName                                                                                      string    `json:"model_name"`
+	GroupName                                                                                      string    `json:"group_name"`
+	PromptTokens, CompletionTokens                                                                 sql.NullInt64
+	CacheTokens, CacheWriteTokens, CacheWrite5mTokens, CacheWrite1hTokens, Quota, MaxContextTokens int64
+	InputPrice, OutputPrice, CachePrice, CacheWritePrice                                           string
+	InputAmount, OutputAmount, CacheAmount, CacheWriteAmount, ReferenceAmount                      string
+	Reasons                                                                                        string    `json:"reasons"`
+	DetectedAt                                                                                     time.Time `json:"detected_at"`
 }
 
 type JobStore interface {
@@ -239,14 +243,14 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 			useTiers := !configured || setting.UseTieredPricing
 			reasons := anomalyReasons(log, maxByModel[log.ModelName])
 			if len(reasons) > 0 {
-				item := AnomalyOrder{InstanceID: job.InstanceID, SourceLogID: log.ID, JobID: job.ID, CreatedAt: time.Unix(log.CreatedUnix, 0), RequestID: log.RequestID, UpstreamRequestID: log.UpstreamRequestID, UserID: log.UserID, Username: log.Username, ChannelID: log.ChannelID, ChannelName: log.ChannelName, ModelName: log.ModelName, GroupName: log.GroupName, PromptTokens: log.PromptTokens, CompletionTokens: log.CompletionTokens, CacheTokens: log.CacheTokens, Quota: log.Quota, MaxContextTokens: maxByModel[log.ModelName], Reasons: strings.Join(reasons, ","), DetectedAt: time.Now().UTC()}
+				item := AnomalyOrder{InstanceID: job.InstanceID, SourceLogID: log.ID, JobID: job.ID, CreatedAt: time.Unix(log.CreatedUnix, 0), RequestID: log.RequestID, UpstreamRequestID: log.UpstreamRequestID, UserID: log.UserID, Username: log.Username, ChannelID: log.ChannelID, ChannelName: log.ChannelName, ModelName: log.ModelName, GroupName: log.GroupName, PromptTokens: log.PromptTokens, CompletionTokens: log.CompletionTokens, CacheTokens: log.CacheTokens, CacheWriteTokens: log.CacheWriteTokens, CacheWrite5mTokens: log.CacheWrite5mTokens, CacheWrite1hTokens: log.CacheWrite1hTokens, Quota: log.Quota, MaxContextTokens: maxByModel[log.ModelName], Reasons: strings.Join(reasons, ","), DetectedAt: time.Now().UTC()}
 				fillAnomalyAmounts(&item, log, priceByModel[log.ModelName], ratioByGroup[log.GroupName], step.From, useTiers)
 				anomalies = append(anomalies, item)
 				continue
 			}
 			tier := int64(0)
 			if useTiers {
-				if p, found := SelectPrice(priceByModel[log.ModelName], step.From, log.PromptTokens.Int64); found {
+				if p, found := SelectPrice(priceByModel[log.ModelName], step.From, log.ContextTokens); found {
 					tier = p.TierFrom
 				}
 			}
@@ -263,6 +267,9 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 			row.PromptTokens += log.PromptTokens.Int64
 			row.CompletionTokens += log.CompletionTokens.Int64
 			row.CacheTokens += log.CacheTokens
+			row.CacheWriteTokens += log.CacheWriteTokens
+			row.CacheWrite5mTokens += log.CacheWrite5mTokens
+			row.CacheWrite1hTokens += log.CacheWrite1hTokens
 			row.Quota += log.Quota
 			row.UpdatedAt = time.Now().UTC()
 			acc[k] = row
@@ -279,6 +286,9 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 			cr.PromptTokens += log.PromptTokens.Int64
 			cr.CompletionTokens += log.CompletionTokens.Int64
 			cr.CacheTokens += log.CacheTokens
+			cr.CacheWriteTokens += log.CacheWriteTokens
+			cr.CacheWrite5mTokens += log.CacheWrite5mTokens
+			cr.CacheWrite1hTokens += log.CacheWrite1hTokens
 			cr.Quota += log.Quota
 			cr.UpdatedAt = time.Now().UTC()
 			channelAcc[ck] = cr
@@ -339,9 +349,11 @@ func fillAnomalyAmounts(out *AnomalyOrder, log PagedLogRecord, prices []Price, r
 	out.InputPrice = "0"
 	out.OutputPrice = "0"
 	out.CachePrice = "0"
+	out.CacheWritePrice = "0"
 	out.InputAmount = "0"
 	out.OutputAmount = "0"
 	out.CacheAmount = "0"
+	out.CacheWriteAmount = "0"
 	out.ReferenceAmount = "0"
 	if ratio == "" {
 		ratio = "1"
@@ -364,18 +376,27 @@ func fillAnomalyAmounts(out *AnomalyOrder, log PagedLogRecord, prices []Price, r
 	out.InputPrice, _ = multipliedDecimal(price.Input, ratio)
 	out.OutputPrice, _ = multipliedDecimal(price.Output, ratio)
 	out.CachePrice, _ = multipliedDecimal(price.Cache, ratio)
-	nonCache := prompt - log.CacheTokens
-	if nonCache < 0 {
-		nonCache = prompt
-	}
-	input, _ := Amount(Usage{PromptTokens: nonCache}, Price{Input: price.Input, Output: "0", Cache: "0"}, ratio)
-	output, _ := Amount(Usage{CompletionTokens: completion}, Price{Input: "0", Output: price.Output, Cache: "0"}, ratio)
-	cache, _ := Amount(Usage{PromptTokens: log.CacheTokens, CacheTokens: log.CacheTokens}, Price{Input: "0", Output: "0", Cache: price.Cache}, ratio)
+	out.CacheWritePrice, _ = multipliedDecimal(decimalOrZero(price.CacheWrite), ratio)
+	zeroPrice := Price{Input: "0", Output: "0", Cache: "0", CacheWrite: "0"}
+	inputPrice := zeroPrice
+	inputPrice.Input = price.Input
+	outputPrice := zeroPrice
+	outputPrice.Output = price.Output
+	cachePrice := zeroPrice
+	cachePrice.Cache = price.Cache
+	writePrice := zeroPrice
+	writePrice.CacheWrite = price.CacheWrite
+	input, _ := Amount(Usage{PromptTokens: prompt}, inputPrice, ratio)
+	output, _ := Amount(Usage{CompletionTokens: completion}, outputPrice, ratio)
+	cache, _ := Amount(Usage{CacheTokens: log.CacheTokens}, cachePrice, ratio)
+	write, _ := Amount(Usage{CacheWriteTokens: log.CacheWriteTokens, CacheWrite5mTokens: log.CacheWrite5mTokens, CacheWrite1hTokens: log.CacheWrite1hTokens}, writePrice, ratio)
 	out.InputAmount = FormatAmount(input, 6)
 	out.OutputAmount = FormatAmount(output, 6)
 	out.CacheAmount = FormatAmount(cache, 6)
+	out.CacheWriteAmount = FormatAmount(write, 6)
 	total := new(big.Rat).Add(input, output)
 	total.Add(total, cache)
+	total.Add(total, write)
 	out.ReferenceAmount = FormatAmount(total, 6)
 }
 
@@ -391,7 +412,11 @@ func anomalyReasons(log PagedLogRecord, maxContext int64) []string {
 	} else if log.CompletionTokens.Int64 <= 0 {
 		r = append(r, "output_token_zero")
 	}
-	if log.PromptTokens.Valid && maxContext > 0 && log.PromptTokens.Int64 > maxContext {
+	contextTokens := log.ContextTokens
+	if contextTokens == 0 && log.PromptTokens.Valid {
+		contextTokens = log.PromptTokens.Int64
+	}
+	if log.PromptTokens.Valid && maxContext > 0 && contextTokens > maxContext {
 		r = append(r, "context_limit_exceeded")
 	}
 	return r

@@ -11,10 +11,10 @@ import (
 
 func (s Store) QueryBillingAggregates(ctx context.Context, instanceID string, from, to time.Time, userIDs []int64) ([]billing.AggregateRow, error) {
 	dayFrom, dayTo := billingDayBounds(from, to)
-	query := `SELECT instance_id,user_id,MAX(username),model_name,group_name,tier_from,day,SUM(request_count),SUM(prompt_tokens),SUM(completion_tokens),SUM(cache_tokens),SUM(quota) FROM (
-SELECT v.instance_id,v.user_id,v.username,v.model_name,v.group_name,v.tier_from,v.day,v.request_count,v.prompt_tokens,v.completion_tokens,v.cache_tokens,v.quota FROM billing_daily_versions v JOIN billing_active_versions a ON a.instance_id=v.instance_id AND a.day=v.day AND a.job_id=v.job_id WHERE v.instance_id=? AND v.day>=? AND v.day<?
+	query := `SELECT instance_id,user_id,MAX(username),model_name,group_name,tier_from,day,SUM(request_count),SUM(prompt_tokens),SUM(completion_tokens),SUM(cache_tokens),SUM(cache_write_tokens),SUM(cache_write_5m_tokens),SUM(cache_write_1h_tokens),SUM(quota) FROM (
+SELECT v.instance_id,v.user_id,v.username,v.model_name,v.group_name,v.tier_from,v.day,v.request_count,v.prompt_tokens,v.completion_tokens,v.cache_tokens,v.cache_write_tokens,v.cache_write_5m_tokens,v.cache_write_1h_tokens,v.quota FROM billing_daily_versions v JOIN billing_active_versions a ON a.instance_id=v.instance_id AND a.day=v.day AND a.job_id=v.job_id WHERE v.instance_id=? AND v.day>=? AND v.day<?
 UNION ALL
-SELECT d.instance_id,d.user_id,d.username,d.model_name,d.group_name,d.tier_from,d.day,d.request_count,d.prompt_tokens,d.completion_tokens,d.cache_tokens,d.quota FROM billing_daily d LEFT JOIN billing_active_versions a ON a.instance_id=d.instance_id AND a.day=d.day WHERE d.instance_id=? AND d.day>=? AND d.day<? AND a.job_id IS NULL
+SELECT d.instance_id,d.user_id,d.username,d.model_name,d.group_name,d.tier_from,d.day,d.request_count,d.prompt_tokens,d.completion_tokens,d.cache_tokens,d.cache_write_tokens,d.cache_write_5m_tokens,d.cache_write_1h_tokens,d.quota FROM billing_daily d LEFT JOIN billing_active_versions a ON a.instance_id=d.instance_id AND a.day=d.day WHERE d.instance_id=? AND d.day>=? AND d.day<? AND a.job_id IS NULL
 ) billing_rows WHERE 1=1`
 	args := []any{instanceID, dayFrom, dayTo, instanceID, dayFrom, dayTo}
 	if len(userIDs) > 0 {
@@ -32,7 +32,7 @@ SELECT d.instance_id,d.user_id,d.username,d.model_name,d.group_name,d.tier_from,
 	var out []billing.AggregateRow
 	for rows.Next() {
 		var v billing.AggregateRow
-		if err = rows.Scan(&v.InstanceID, &v.UserID, &v.Username, &v.ModelName, &v.GroupName, &v.TierFrom, &v.Day, &v.RequestCount, &v.PromptTokens, &v.CompletionTokens, &v.CacheTokens, &v.Quota); err != nil {
+		if err = rows.Scan(&v.InstanceID, &v.UserID, &v.Username, &v.ModelName, &v.GroupName, &v.TierFrom, &v.Day, &v.RequestCount, &v.PromptTokens, &v.CompletionTokens, &v.CacheTokens, &v.CacheWriteTokens, &v.CacheWrite5mTokens, &v.CacheWrite1hTokens, &v.Quota); err != nil {
 			return nil, err
 		}
 		out = append(out, v)
@@ -41,7 +41,7 @@ SELECT d.instance_id,d.user_id,d.username,d.model_name,d.group_name,d.tier_from,
 }
 
 func (s Store) QueryBillingAggregatesForJob(ctx context.Context, jobID string, userIDs []int64) ([]billing.AggregateRow, error) {
-	query := `SELECT instance_id,user_id,MAX(username),model_name,group_name,tier_from,day,SUM(request_count),SUM(prompt_tokens),SUM(completion_tokens),SUM(cache_tokens),SUM(quota) FROM billing_daily_versions WHERE job_id=?`
+	query := `SELECT instance_id,user_id,MAX(username),model_name,group_name,tier_from,day,SUM(request_count),SUM(prompt_tokens),SUM(completion_tokens),SUM(cache_tokens),SUM(cache_write_tokens),SUM(cache_write_5m_tokens),SUM(cache_write_1h_tokens),SUM(quota) FROM billing_daily_versions WHERE job_id=?`
 	args := []any{jobID}
 	if len(userIDs) > 0 {
 		query += ` AND user_id IN (` + strings.TrimRight(strings.Repeat("?,", len(userIDs)), ",") + `)`
@@ -58,7 +58,7 @@ func (s Store) QueryBillingAggregatesForJob(ctx context.Context, jobID string, u
 	var out []billing.AggregateRow
 	for rows.Next() {
 		var v billing.AggregateRow
-		if err = rows.Scan(&v.InstanceID, &v.UserID, &v.Username, &v.ModelName, &v.GroupName, &v.TierFrom, &v.Day, &v.RequestCount, &v.PromptTokens, &v.CompletionTokens, &v.CacheTokens, &v.Quota); err != nil {
+		if err = rows.Scan(&v.InstanceID, &v.UserID, &v.Username, &v.ModelName, &v.GroupName, &v.TierFrom, &v.Day, &v.RequestCount, &v.PromptTokens, &v.CompletionTokens, &v.CacheTokens, &v.CacheWriteTokens, &v.CacheWrite5mTokens, &v.CacheWrite1hTokens, &v.Quota); err != nil {
 			return nil, err
 		}
 		out = append(out, v)
@@ -134,7 +134,7 @@ func (s Store) ListBillingSites(ctx context.Context) ([]string, error) {
 }
 
 func (s Store) ListBillingPrices(ctx context.Context, instanceID string) ([]billing.PriceRecord, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT instance_id,model_name,effective_from,tier_from,input_price,output_price,cache_price,updated_at,updated_by FROM billing_prices WHERE instance_id=? ORDER BY model_name,effective_from DESC,tier_from`, instanceID)
+	rows, err := s.db.QueryContext(ctx, `SELECT instance_id,model_name,effective_from,tier_from,input_price,output_price,cache_price,cache_write_price,updated_at,updated_by FROM billing_prices WHERE instance_id=? ORDER BY model_name,effective_from DESC,tier_from`, instanceID)
 	if err != nil {
 		return nil, err
 	}
@@ -142,7 +142,7 @@ func (s Store) ListBillingPrices(ctx context.Context, instanceID string) ([]bill
 	var out []billing.PriceRecord
 	for rows.Next() {
 		var v billing.PriceRecord
-		if err = rows.Scan(&v.InstanceID, &v.ModelName, &v.EffectiveFrom, &v.TierFrom, &v.Input, &v.Output, &v.Cache, &v.UpdatedAt, &v.UpdatedBy); err != nil {
+		if err = rows.Scan(&v.InstanceID, &v.ModelName, &v.EffectiveFrom, &v.TierFrom, &v.Input, &v.Output, &v.Cache, &v.CacheWrite, &v.UpdatedAt, &v.UpdatedBy); err != nil {
 			return nil, err
 		}
 		out = append(out, v)
@@ -172,7 +172,7 @@ func (s Store) PutBillingPriceSchedule(ctx context.Context, records []billing.Pr
 		if v.InstanceID != first.InstanceID || v.ModelName != first.ModelName || !v.EffectiveFrom.Equal(first.EffectiveFrom) {
 			return sql.ErrNoRows
 		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO billing_prices(instance_id,model_name,effective_from,tier_from,input_price,output_price,cache_price,updated_at,updated_by) VALUES(?,?,?,?,?,?,?,?,?)`, v.InstanceID, v.ModelName, v.EffectiveFrom, v.TierFrom, v.Input, v.Output, v.Cache, v.UpdatedAt, v.UpdatedBy); err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO billing_prices(instance_id,model_name,effective_from,tier_from,input_price,output_price,cache_price,cache_write_price,updated_at,updated_by) VALUES(?,?,?,?,?,?,?,?,?,?)`, v.InstanceID, v.ModelName, v.EffectiveFrom, v.TierFrom, v.Input, v.Output, v.Cache, v.CacheWrite, v.UpdatedAt, v.UpdatedBy); err != nil {
 			return err
 		}
 	}
@@ -263,7 +263,7 @@ func (s Store) ReplaceBillingDay(ctx context.Context, instanceID string, day tim
 		if v.InstanceID != instanceID || !sameDate(v.Day, day) {
 			return sql.ErrNoRows
 		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO billing_daily(instance_id,user_id,username,model_name,group_name,tier_from,day,request_count,prompt_tokens,completion_tokens,cache_tokens,quota,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, v.InstanceID, v.UserID, v.Username, v.ModelName, v.GroupName, v.TierFrom, v.Day, v.RequestCount, v.PromptTokens, v.CompletionTokens, v.CacheTokens, v.Quota, v.UpdatedAt)
+		_, err = tx.ExecContext(ctx, `INSERT INTO billing_daily(instance_id,user_id,username,model_name,group_name,tier_from,day,request_count,prompt_tokens,completion_tokens,cache_tokens,cache_write_tokens,cache_write_5m_tokens,cache_write_1h_tokens,quota,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, v.InstanceID, v.UserID, v.Username, v.ModelName, v.GroupName, v.TierFrom, v.Day, v.RequestCount, v.PromptTokens, v.CompletionTokens, v.CacheTokens, v.CacheWriteTokens, v.CacheWrite5mTokens, v.CacheWrite1hTokens, v.Quota, v.UpdatedAt)
 		if err != nil {
 			return err
 		}

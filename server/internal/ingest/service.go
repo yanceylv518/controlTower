@@ -34,6 +34,9 @@ type Store interface {
 	InsertOperationAudit(storage.OperationAudit) error
 }
 
+type channelSnapshotBatchStore interface {
+	SyncChannelSnapshots(instanceID string, snapshots []storage.ChannelSnapshot) error
+}
 type Service struct {
 	store         Store
 	commandExpiry time.Duration
@@ -262,24 +265,35 @@ func (s Service) SaveReport(req agentgateway.AgentReportRequest) error {
 		}
 	}
 
+	channelSnapshots := make([]storage.ChannelSnapshot, 0, len(req.ChannelSnapshots))
 	for _, payload := range req.ChannelSnapshots {
 		capturedAt := payload.CapturedAt
 		if capturedAt.IsZero() {
 			capturedAt = req.ReportedAt
 		}
-		if err := s.store.InsertChannelSnapshot(storage.ChannelSnapshot{
-			ID:          channelSnapshotID(req.InstanceID, payload.ChannelID, capturedAt),
-			InstanceID:  req.InstanceID,
-			ChannelID:   payload.ChannelID,
-			ChannelName: payload.ChannelName,
-			Status:      payload.Status,
-			Weight:      payload.Weight,
-			ModelsText:  payload.ModelsText,
-			GroupName:   payload.GroupName,
-			Priority:    payload.Priority,
-			CapturedAt:  capturedAt,
-		}); err != nil {
-			return err
+		channelSnapshots = append(channelSnapshots, storage.ChannelSnapshot{
+			ID: channelSnapshotID(req.InstanceID, payload.ChannelID, capturedAt), InstanceID: req.InstanceID,
+			ChannelID: payload.ChannelID, ChannelName: payload.ChannelName, Status: payload.Status, Weight: payload.Weight,
+			ModelsText: payload.ModelsText, GroupName: payload.GroupName, Priority: payload.Priority, CapturedAt: capturedAt,
+		})
+	}
+	if req.ChannelSnapshotComplete {
+		if batchStore, ok := s.store.(channelSnapshotBatchStore); ok {
+			if err := batchStore.SyncChannelSnapshots(req.InstanceID, channelSnapshots); err != nil {
+				return err
+			}
+		} else {
+			for _, snapshot := range channelSnapshots {
+				if err := s.store.InsertChannelSnapshot(snapshot); err != nil {
+					return err
+				}
+			}
+		}
+	} else {
+		for _, snapshot := range channelSnapshots {
+			if err := s.store.InsertChannelSnapshot(snapshot); err != nil {
+				return err
+			}
 		}
 	}
 	for _, payload := range req.NginxTimingBuckets {

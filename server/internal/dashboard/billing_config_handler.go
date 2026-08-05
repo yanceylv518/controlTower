@@ -26,10 +26,11 @@ type BillingPricesHandler struct{ Store BillingConfigStore }
 type BillingGroupRatiosHandler struct{ Store BillingConfigStore }
 
 type billingTierRequest struct {
-	TierFrom int64  `json:"tier_from"`
-	Input    string `json:"input_price"`
-	Output   string `json:"output_price"`
-	Cache    string `json:"cache_price"`
+	TierFrom   int64  `json:"tier_from"`
+	Input      string `json:"input_price"`
+	Output     string `json:"output_price"`
+	Cache      string `json:"cache_price"`
+	CacheWrite string `json:"cache_write_price"`
 }
 type billingPriceRequest struct {
 	InstanceID    string               `json:"instance_id"`
@@ -87,7 +88,7 @@ func (h BillingPricesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		}
 		records := make([]billing.PriceRecord, 0, len(req.Tiers))
 		for _, tier := range req.Tiers {
-			price := billing.Price{EffectiveFrom: day, TierFrom: tier.TierFrom, Input: tier.Input, Output: tier.Output, Cache: tier.Cache}
+			price := billing.Price{EffectiveFrom: day, TierFrom: tier.TierFrom, Input: tier.Input, Output: tier.Output, Cache: tier.Cache, CacheWrite: tier.CacheWrite}
 			if billing.ValidatePrice(price) != nil {
 				writeDashboardError(w, 400, "invalid_price")
 				return

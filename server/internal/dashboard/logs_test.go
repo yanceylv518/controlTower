@@ -11,21 +11,21 @@ func TestFilterLogsByInstanceModelAndType(t *testing.T) {
 	base := time.Date(2026, 7, 2, 13, 0, 0, 0, time.UTC)
 	logs := FilterLogs([]storage.LogEvent{
 		{
-			InstanceID:   "inst-1",
+			InstanceID:  "inst-1",
 			SourceLogID: 1,
 			CreatedAt:   base,
 			LogType:     "consume",
 			ModelName:   "gpt-4o",
 		},
 		{
-			InstanceID:   "inst-1",
+			InstanceID:  "inst-1",
 			SourceLogID: 2,
 			CreatedAt:   base.Add(time.Minute),
 			LogType:     "error",
 			ModelName:   "gpt-4o",
 		},
 		{
-			InstanceID:   "inst-2",
+			InstanceID:  "inst-2",
 			SourceLogID: 3,
 			CreatedAt:   base.Add(2 * time.Minute),
 			LogType:     "error",
@@ -70,7 +70,7 @@ func TestFilterLogsCapsLimit(t *testing.T) {
 	var events []storage.LogEvent
 	for i := int64(1); i <= 250; i++ {
 		events = append(events, storage.LogEvent{
-			InstanceID:   "inst-1",
+			InstanceID:  "inst-1",
 			SourceLogID: i,
 			CreatedAt:   base.Add(time.Duration(i) * time.Second),
 		})
@@ -81,4 +81,3 @@ func TestFilterLogsCapsLimit(t *testing.T) {
 		t.Fatalf("limit should be capped at 200, got %d", len(logs))
 	}
 }
-

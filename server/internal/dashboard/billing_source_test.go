@@ -16,3 +16,10 @@ func TestBillingCacheTokensUnderstandsKnownNewAPIShapes(t *testing.T) {
 		}
 	}
 }
+
+func TestParseBillingCacheUsageDoesNotDoubleCountAliases(t *testing.T) {
+	v := parseBillingCacheUsage(`{"usage_semantic":"anthropic","cache_tokens":75841,"cache_creation_tokens":753,"cache_write_tokens":753,"cache_creation_tokens_5m":753}`)
+	if v.Semantic != "anthropic" || v.Read != 75841 || v.Write != 753 || v.Write5m != 753 || v.Write1h != 0 {
+		t.Fatalf("unexpected: %#v", v)
+	}
+}

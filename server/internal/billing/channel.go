@@ -24,6 +24,7 @@ type ChannelSummary struct {
 	PromptTokens     int64    `json:"prompt_tokens"`
 	CompletionTokens int64    `json:"completion_tokens"`
 	CacheTokens      int64    `json:"cache_tokens"`
+	CacheWriteTokens int64    `json:"cache_write_tokens"`
 	Quota            int64    `json:"quota"`
 	Amount           string   `json:"amount"`
 	Discount         string   `json:"discount"`
@@ -42,7 +43,7 @@ func BuildChannelSummary(rows []AggregateRow, prices []PriceRecord, ratios []Gro
 		amount, _ := decimalRat(v.Amount)
 		d, _ := decimalRat(discount)
 		discounted := new(big.Rat).Mul(amount, d)
-		out = append(out, ChannelSummary{ChannelID: v.UserID, ChannelName: v.Username, RequestCount: v.RequestCount, PromptTokens: v.PromptTokens, CompletionTokens: v.CompletionTokens, CacheTokens: v.CacheTokens, Quota: v.Quota, Amount: v.Amount, Discount: discount, DiscountedAmount: FormatAmount(discounted, 6), UnpricedModels: v.UnpricedModels})
+		out = append(out, ChannelSummary{ChannelID: v.UserID, ChannelName: v.Username, RequestCount: v.RequestCount, PromptTokens: v.PromptTokens, CompletionTokens: v.CompletionTokens, CacheTokens: v.CacheTokens, CacheWriteTokens: v.CacheWriteTokens, Quota: v.Quota, Amount: v.Amount, Discount: discount, DiscountedAmount: FormatAmount(discounted, 6), UnpricedModels: v.UnpricedModels})
 	}
 	return out
 }

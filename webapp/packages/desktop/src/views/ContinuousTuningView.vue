@@ -69,8 +69,20 @@ let refreshTimer: ReturnType<typeof setInterval> | undefined;
 async function refreshRuntime() {
   if (!siteID.value || loading.value) return;
   try {
-    const [s, r] = await Promise.all([dashboard.tuningContinuousStates(siteID.value), dashboard.tuningRecommendations(siteID.value, 300)]);
+    const [s, r, b] = await Promise.all([dashboard.tuningContinuousStates(siteID.value), dashboard.tuningRecommendations(siteID.value, 300), dashboard.tuningBaseValues(siteID.value)]);
     states.value = s.items ?? []; events.value = r.items ?? [];
+    const refreshed = b.items ?? [];
+    if (dirty.value) {
+      const local = new Map(bases.value.map(row => [`${row.channel_id}:${row.model_name}`, row]));
+      bases.value = refreshed.map(row => {
+        const edited = local.get(`${row.channel_id}:${row.model_name}`);
+        return edited ? { ...row, base_weight: edited.base_weight, base_priority: edited.base_priority } : row;
+      });
+    } else {
+      bases.value = refreshed;
+    }
+    for (const model of models.value) policy.dispatch_modes[model] ||= "off";
+    if (!models.value.includes(activeModel.value)) activeModel.value = models.value[0] || "";
   } catch { /* Keep the last good state; the next poll retries. */ }
 }
 async function sync(kind: "weight" | "priority") {

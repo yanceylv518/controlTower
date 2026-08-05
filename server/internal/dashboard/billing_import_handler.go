@@ -22,6 +22,7 @@ type billingImportedPrice struct {
 	Input         string `json:"input_price"`
 	Output        string `json:"output_price"`
 	Cache         string `json:"cache_price"`
+	CacheWrite    string `json:"cache_write_price"`
 }
 
 func (h BillingImportPricesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -59,7 +60,7 @@ func (h BillingImportPricesHandler) ServeHTTP(w http.ResponseWriter, r *http.Req
 		if priceErr != nil {
 			continue
 		}
-		items = append(items, billingImportedPrice{ModelName: model, EffectiveFrom: time.Now().Format("2006-01-02"), Input: price.Input, Output: price.Output, Cache: price.Cache})
+		items = append(items, billingImportedPrice{ModelName: model, EffectiveFrom: time.Now().Format("2006-01-02"), Input: price.Input, Output: price.Output, Cache: price.Cache, CacheWrite: price.CacheWrite})
 	}
 	writeDashboardJSON(w, http.StatusOK, map[string]any{"items": items, "instance_id": instanceID, "quota_per_unit": snapshot.QuotaPerUnit})
 }

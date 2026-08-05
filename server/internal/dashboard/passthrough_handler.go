@@ -49,7 +49,14 @@ func (h *PassthroughHandler) LogsForBilling(ctx context.Context, site string, st
 		if err = rows.Scan(&v.UserID, &v.Username, &v.ModelName, &v.GroupName, &v.PromptTokens, &v.CompletionTokens, &v.Quota, &other); err != nil {
 			return nil, err
 		}
-		v.CacheTokens = billingCacheTokens(other)
+		cache := parseBillingCacheUsage(other)
+		v.CacheTokens, v.CacheWriteTokens, v.CacheWrite5mTokens, v.CacheWrite1hTokens = cache.Read, cache.Write, cache.Write5m, cache.Write1h
+		if cache.Semantic != "anthropic" {
+			v.PromptTokens -= cache.Read + cache.Write
+			if v.PromptTokens < 0 {
+				v.PromptTokens = 0
+			}
+		}
 		out = append(out, v)
 	}
 	return out, rows.Err()
@@ -79,7 +86,14 @@ func (h *PassthroughHandler) DetailedLogsForBilling(ctx context.Context, site st
 			return nil, err
 		}
 		v.CreatedAt = time.Unix(created, 0).UTC()
-		v.CacheTokens = billingCacheTokens(other)
+		cache := parseBillingCacheUsage(other)
+		v.CacheTokens, v.CacheWriteTokens, v.CacheWrite5mTokens, v.CacheWrite1hTokens = cache.Read, cache.Write, cache.Write5m, cache.Write1h
+		if cache.Semantic != "anthropic" {
+			v.PromptTokens -= cache.Read + cache.Write
+			if v.PromptTokens < 0 {
+				v.PromptTokens = 0
+			}
+		}
 		out = append(out, v)
 	}
 	return out, rows.Err()
@@ -134,7 +148,22 @@ func (h *PassthroughHandler) logsPageForBilling(ctx context.Context, site string
 		if err = rows.Scan(&v.ID, &v.CreatedUnix, &v.RequestID, &v.UpstreamRequestID, &v.UserID, &v.Username, &v.ChannelID, &v.ChannelName, &v.ModelName, &v.GroupName, &v.PromptTokens, &v.CompletionTokens, &v.Quota, &other); err != nil {
 			return nil, err
 		}
-		v.CacheTokens = billingCacheTokens(other)
+		cache := parseBillingCacheUsage(other)
+		v.CacheTokens, v.CacheWriteTokens = cache.Read, cache.Write
+		v.CacheWrite5mTokens, v.CacheWrite1hTokens = cache.Write5m, cache.Write1h
+		v.UsageSemantic = cache.Semantic
+		if v.PromptTokens.Valid {
+			rawPrompt := v.PromptTokens.Int64
+			if cache.Semantic == "anthropic" {
+				v.ContextTokens = rawPrompt + cache.Read + cache.Write
+			} else {
+				v.ContextTokens = rawPrompt
+				v.PromptTokens.Int64 = rawPrompt - cache.Read - cache.Write
+				if v.PromptTokens.Int64 < 0 {
+					v.PromptTokens.Int64 = 0
+				}
+			}
+		}
 		out = append(out, v)
 	}
 	return out, rows.Err()
@@ -148,7 +177,7 @@ func (h *PassthroughHandler) RatioSnapshotForBilling(ctx context.Context, site s
 	if !configured {
 		return "", fmt.Errorf("readonly database is not configured for %s", site)
 	}
-	rows, err := db.QueryContext(ctx, "SELECT `key`,value FROM options WHERE `key` IN ('ModelRatio','CompletionRatio','CacheRatio','GroupRatio','QuotaPerUnit')")
+	rows, err := db.QueryContext(ctx, "SELECT `key`,value FROM options WHERE `key` IN ('ModelRatio','CompletionRatio','CacheRatio','CreateCacheRatio','GroupRatio','QuotaPerUnit')")
 	if err != nil {
 		return "", err
 	}
@@ -297,28 +326,69 @@ func (s BillingReadonlySource) Balances(ctx context.Context, site string) (map[i
 }
 
 func billingCacheTokens(other string) int64 {
+	return parseBillingCacheUsage(other).Read
+}
+
+type billingCacheUsage struct {
+	Read, Write, Write5m, Write1h int64
+	Semantic                      string
+}
+
+func parseBillingCacheUsage(other string) billingCacheUsage {
 	if strings.TrimSpace(other) == "" {
-		return 0
+		return billingCacheUsage{Semantic: "openai"}
 	}
 	var values map[string]any
 	if json.Unmarshal([]byte(other), &values) != nil {
-		return 0
+		return billingCacheUsage{Semantic: "openai"}
 	}
-	for _, key := range []string{"cache_tokens", "cached_tokens", "cache_read_input_tokens", "prompt_cache_hit_tokens"} {
-		if value, ok := values[key]; ok {
-			switch typed := value.(type) {
-			case float64:
-				return int64(typed)
-			case json.Number:
-				parsed, _ := typed.Int64()
-				return parsed
-			case string:
-				parsed, _ := strconv.ParseInt(typed, 10, 64)
-				return parsed
+	number := func(keys ...string) int64 {
+		for _, key := range keys {
+			if value, ok := values[key]; ok {
+				switch typed := value.(type) {
+				case float64:
+					if typed > 0 {
+						return int64(typed)
+					}
+				case json.Number:
+					parsed, _ := typed.Int64()
+					if parsed > 0 {
+						return parsed
+					}
+				case string:
+					parsed, _ := strconv.ParseInt(typed, 10, 64)
+					if parsed > 0 {
+						return parsed
+					}
+				}
 			}
 		}
+		return 0
 	}
-	return 0
+	numberMax := func(keys ...string) int64 {
+		var max int64
+		for _, key := range keys {
+			if value := number(key); value > max {
+				max = value
+			}
+		}
+		return max
+	}
+	read := number("cache_tokens", "cached_tokens", "cache_read_input_tokens", "prompt_cache_hit_tokens")
+	write5m := number("cache_creation_tokens_5m", "claude_cache_creation_5_m_tokens")
+	write1h := number("cache_creation_tokens_1h", "claude_cache_creation_1_h_tokens")
+	write := numberMax("cache_creation_tokens", "cache_write_tokens", "cached_creation_tokens")
+	if split := write5m + write1h; split > write {
+		write = split
+	}
+	semantic := "openai"
+	if raw, ok := values["usage_semantic"].(string); ok && strings.EqualFold(raw, "anthropic") {
+		semantic = "anthropic"
+	}
+	if claude, ok := values["claude"].(bool); ok && claude {
+		semantic = "anthropic"
+	}
+	return billingCacheUsage{Read: read, Write: write, Write5m: write5m, Write1h: write1h, Semantic: semantic}
 }
 
 type passthroughPool struct {

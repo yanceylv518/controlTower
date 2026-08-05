@@ -14,7 +14,7 @@ func (s Store) LatestBillingJob(ctx context.Context, site, jobType string, from,
 
 func (s Store) QueryBillingChannelAggregates(ctx context.Context, site string, from, to time.Time, channelID int64) ([]billing.AggregateRow, error) {
 	dayFrom, dayTo := billingDayBounds(from, to)
-	q := `SELECT v.instance_id,v.channel_id,MAX(v.channel_name),v.model_name,v.group_name,v.tier_from,v.day,SUM(v.request_count),SUM(v.prompt_tokens),SUM(v.completion_tokens),SUM(v.cache_tokens),SUM(v.quota) FROM billing_channel_daily_versions v JOIN billing_active_versions a ON a.instance_id=v.instance_id AND a.day=v.day AND a.job_id=v.job_id WHERE v.instance_id=? AND v.day>=? AND v.day<?`
+	q := `SELECT v.instance_id,v.channel_id,MAX(v.channel_name),v.model_name,v.group_name,v.tier_from,v.day,SUM(v.request_count),SUM(v.prompt_tokens),SUM(v.completion_tokens),SUM(v.cache_tokens),SUM(v.cache_write_tokens),SUM(v.cache_write_5m_tokens),SUM(v.cache_write_1h_tokens),SUM(v.quota) FROM billing_channel_daily_versions v JOIN billing_active_versions a ON a.instance_id=v.instance_id AND a.day=v.day AND a.job_id=v.job_id WHERE v.instance_id=? AND v.day>=? AND v.day<?`
 	args := []any{site, dayFrom, dayTo}
 	if channelID > 0 {
 		q += ` AND v.channel_id=?`
@@ -29,7 +29,7 @@ func (s Store) QueryBillingChannelAggregates(ctx context.Context, site string, f
 	out := []billing.AggregateRow{}
 	for rows.Next() {
 		var v billing.AggregateRow
-		if e = rows.Scan(&v.InstanceID, &v.UserID, &v.Username, &v.ModelName, &v.GroupName, &v.TierFrom, &v.Day, &v.RequestCount, &v.PromptTokens, &v.CompletionTokens, &v.CacheTokens, &v.Quota); e != nil {
+		if e = rows.Scan(&v.InstanceID, &v.UserID, &v.Username, &v.ModelName, &v.GroupName, &v.TierFrom, &v.Day, &v.RequestCount, &v.PromptTokens, &v.CompletionTokens, &v.CacheTokens, &v.CacheWriteTokens, &v.CacheWrite5mTokens, &v.CacheWrite1hTokens, &v.Quota); e != nil {
 			return nil, e
 		}
 		out = append(out, v)
@@ -37,7 +37,7 @@ func (s Store) QueryBillingChannelAggregates(ctx context.Context, site string, f
 	return out, rows.Err()
 }
 func (s Store) QueryBillingChannelAggregatesForJob(ctx context.Context, jobID string, channelID int64) ([]billing.AggregateRow, error) {
-	q := `SELECT instance_id,channel_id,MAX(channel_name),model_name,group_name,tier_from,day,SUM(request_count),SUM(prompt_tokens),SUM(completion_tokens),SUM(cache_tokens),SUM(quota) FROM billing_channel_daily_versions WHERE job_id=?`
+	q := `SELECT instance_id,channel_id,MAX(channel_name),model_name,group_name,tier_from,day,SUM(request_count),SUM(prompt_tokens),SUM(completion_tokens),SUM(cache_tokens),SUM(cache_write_tokens),SUM(cache_write_5m_tokens),SUM(cache_write_1h_tokens),SUM(quota) FROM billing_channel_daily_versions WHERE job_id=?`
 	args := []any{jobID}
 	if channelID > 0 {
 		q += ` AND channel_id=?`
@@ -52,7 +52,7 @@ func (s Store) QueryBillingChannelAggregatesForJob(ctx context.Context, jobID st
 	out := []billing.AggregateRow{}
 	for rows.Next() {
 		var v billing.AggregateRow
-		if err = rows.Scan(&v.InstanceID, &v.UserID, &v.Username, &v.ModelName, &v.GroupName, &v.TierFrom, &v.Day, &v.RequestCount, &v.PromptTokens, &v.CompletionTokens, &v.CacheTokens, &v.Quota); err != nil {
+		if err = rows.Scan(&v.InstanceID, &v.UserID, &v.Username, &v.ModelName, &v.GroupName, &v.TierFrom, &v.Day, &v.RequestCount, &v.PromptTokens, &v.CompletionTokens, &v.CacheTokens, &v.CacheWriteTokens, &v.CacheWrite5mTokens, &v.CacheWrite1hTokens, &v.Quota); err != nil {
 			return nil, err
 		}
 		out = append(out, v)

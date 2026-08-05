@@ -104,13 +104,13 @@ func writeChannelOverview(book *xlsxwriter.Workbook, name, month, discount strin
 	if err != nil {
 		return err
 	}
-	titleRows(s, fmt.Sprintf("%s · %s 渠道对账单", name, month), month, []string{"序号", "模型名称", "请求数", "输入Token单价/1M", "输入Token", "输入Token总价", "输出Token单价/1M", "输出Token", "输出Token总价", "缓存Token单价/1M", "缓存Token", "缓存Token总价", "账单总金额", "折扣", "折扣后总金额"})
+	titleRows(s, fmt.Sprintf("%s · %s 渠道对账单", name, month), month, []string{"序号", "模型名称", "请求数", "输入Token单价/1M", "普通输入Token", "输入Token总价", "输出Token单价/1M", "输出Token", "输出Token总价", "缓存读取单价/1M", "缓存读取Token", "缓存读取总价", "缓存写入单价/1M", "缓存写入Token", "缓存写入总价", "账单总金额", "折扣", "折扣后总金额"})
 	for i, item := range items {
 		model := item.ModelName
 		if item.TierFrom > 0 {
 			model += fmt.Sprintf("（≥%d Token）", item.TierFrom)
 		}
-		s.Row([]xlsxwriter.Cell{n(i + 1), t(model), n64(item.RequestCount), d(item.InputPrice), n64(item.PromptTokens - item.CacheTokens), d(item.InputAmount), d(item.OutputPrice), n64(item.CompletionTokens), d(item.OutputAmount), d(item.CachePrice), n64(item.CacheTokens), d(item.CacheAmount), d(item.Amount), d(item.Discount), d(item.DiscountedAmount)})
+		s.Row([]xlsxwriter.Cell{n(i + 1), t(model), n64(item.RequestCount), d(item.InputPrice), n64(item.PromptTokens), d(item.InputAmount), d(item.OutputPrice), n64(item.CompletionTokens), d(item.OutputAmount), d(item.CachePrice), n64(item.CacheTokens), d(item.CacheAmount), d(item.CacheWritePrice), n64(item.CacheWriteTokens), d(item.CacheWriteAmount), d(item.Amount), d(item.Discount), d(item.DiscountedAmount)})
 	}
 	s.Row([]xlsxwriter.Cell{t("合计"), t(""), t(""), t(""), t(""), t(""), t(""), t(""), t(""), t(""), t(""), t(""), d(total.Amount), d(total.Discount), d(total.DiscountedAmount)})
 	return nil
