@@ -328,7 +328,8 @@ type passthroughPool struct {
 
 const (
 	readonlyQueryTimeout    = 5 * time.Second
-	readonlyLogQueryTimeout = 15 * time.Second
+	readonlyLogQueryTimeout = 120 * time.Second
+	readonlyLogCountTimeout = 120 * time.Second
 )
 
 func configureReadonlyDB(db *sql.DB) {
@@ -340,6 +341,7 @@ func configureReadonlyDB(db *sql.DB) {
 type PassthroughHandler struct {
 	Config    ReadonlyConfigStore
 	Audit     PassthroughAuditStore
+	Rollups   ReadonlyLogRollupStore
 	SecretKey string
 	mu        sync.Mutex
 	pools     map[string]passthroughPool
@@ -553,7 +555,7 @@ func (h *PassthroughHandler) Users(w http.ResponseWriter, r *http.Request) {
 		writeDashboardError(w, 502, "readonly_query_failed")
 		return
 	}
-	pageArgs := append(append([]any{}, args...), limit, offset)
+	pageArgs := append(append([]any{}, args...), limit+1, offset)
 	rows, err := tx.QueryContext(ctx, `SELECT id,username,COALESCE(display_name,''),quota,used_quota,status,COALESCE(created_at,0),COALESCE(last_login_at,0) FROM users`+where+` ORDER BY id LIMIT ? OFFSET ?`, pageArgs...)
 	if err != nil {
 		writeDashboardError(w, 502, "readonly_query_failed")
@@ -641,11 +643,6 @@ func (h *PassthroughHandler) Logs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	var total int64
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM logs WHERE created_at BETWEEN ? AND ?`+userFilter+filters, args...).Scan(&total); err != nil {
-		writeDashboardError(w, 502, "readonly_query_failed")
-		return
-	}
 	rows, err := tx.QueryContext(ctx, `SELECT id,user_id,created_at,type,COALESCE(username,''),COALESCE(model_name,''),channel_id,COALESCE(token_name,''),prompt_tokens,completion_tokens,quota,use_time,COALESCE(request_id,''),COALESCE(content,''),COALESCE(`+"`group`"+`,''),COALESCE(ip,''),COALESCE(is_stream,0),COALESCE(other,'') FROM logs WHERE created_at BETWEEN ? AND ?`+userFilter+filters+` ORDER BY id DESC LIMIT ? OFFSET ?`, pageArgs...)
 	if err != nil {
 		writeDashboardError(w, 502, "readonly_query_failed")
@@ -669,8 +666,12 @@ func (h *PassthroughHandler) Logs(w http.ResponseWriter, r *http.Request) {
 		writeDashboardError(w, 502, "readonly_query_failed")
 		return
 	}
+	hasMore := len(items) > limit
+	if hasMore {
+		items = items[:limit]
+	}
 	h.audit(r, site, "passthrough.logs", map[string]any{"user_ids": ids, "start_time": start, "end_time": end, "limit": limit, "offset": offset})
-	writeDashboardJSON(w, 200, map[string]any{"items": items, "configured": true, "total": total})
+	writeDashboardJSON(w, 200, map[string]any{"items": items, "configured": true, "total": offset + len(items), "has_more": hasMore})
 }
 
 func (h *PassthroughHandler) LogStat(w http.ResponseWriter, r *http.Request) {
@@ -707,22 +708,51 @@ func (h *PassthroughHandler) LogStat(w http.ResponseWriter, r *http.Request) {
 			args = append(args, value)
 		}
 	}
+	var channelID *int64
 	if value := strings.TrimSpace(r.URL.Query().Get("channel_id")); value != "" {
-		channelID, parseErr := strconv.ParseInt(value, 10, 64)
+		parsedChannelID, parseErr := strconv.ParseInt(value, 10, 64)
 		if parseErr != nil {
 			writeDashboardError(w, 400, "invalid_channel_id")
 			return
 		}
 		where += " AND channel_id = ?"
-		args = append(args, channelID)
+		args = append(args, parsedChannelID)
+		channelID = &parsedChannelID
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), readonlyLogQueryTimeout)
 	defer cancel()
 	var summary PassthroughLogSummary
-	quotaArgs := append([]any{start.Unix(), end.Unix()}, args...)
-	if err := db.QueryRowContext(ctx, `SELECT COALESCE(SUM(quota),0) FROM logs WHERE created_at>=? AND created_at<=? AND type=2`+where, quotaArgs...).Scan(&summary.Quota); err != nil {
+	quotaFrom, quotaTo, useRollup := completeHourWindow(start, end)
+	if useRollup && h.readonlyRollupReady(ctx, site, quotaFrom) {
+		consumeType := 2
+		queryValues := map[string]string{"username": strings.TrimSpace(r.URL.Query().Get("username")), "model_name": strings.TrimSpace(r.URL.Query().Get("model_name")), "token_name": strings.TrimSpace(r.URL.Query().Get("token_name")), "group": strings.TrimSpace(r.URL.Query().Get("group"))}
+		local, localErr := h.Rollups.QueryReadonlyLogRollup(ctx, readonlyRollupFilter(site, ids, quotaFrom, quotaTo, queryValues, &consumeType, channelID))
+		if localErr != nil {
+			writeDashboardError(w, 502, "readonly_query_failed")
+			return
+		}
+		summary.Quota = local.QuotaSum
+		if start.Before(quotaFrom) {
+			value, rawErr := queryRawQuota(ctx, db, start, minTime(end, quotaFrom), where, args)
+			if rawErr != nil {
+				writeDashboardError(w, 502, "readonly_query_failed")
+				return
+			}
+			summary.Quota += value
+		}
+		if quotaTo.Before(end) {
+			value, rawErr := queryRawQuota(ctx, db, maxTime(start, quotaTo), end, where, args)
+			if rawErr != nil {
+				writeDashboardError(w, 502, "readonly_query_failed")
+				return
+			}
+			summary.Quota += value
+		}
+	} else if value, rawErr := queryRawQuota(ctx, db, start, end, where, args); rawErr != nil {
 		writeDashboardError(w, 502, "readonly_query_failed")
 		return
+	} else {
+		summary.Quota = value
 	}
 	rateArgs := append([]any{time.Now().Add(-60 * time.Second).Unix()}, args...)
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(SUM(prompt_tokens),0)+COALESCE(SUM(completion_tokens),0) FROM logs WHERE created_at>=? AND type=2`+where, rateArgs...).Scan(&summary.RPM, &summary.TPM); err != nil {
@@ -731,4 +761,139 @@ func (h *PassthroughHandler) LogStat(w http.ResponseWriter, r *http.Request) {
 	}
 	h.audit(r, site, "passthrough.logs.stat", map[string]any{"user_ids": ids, "start_time": start, "end_time": end})
 	writeDashboardJSON(w, 200, map[string]any{"configured": true, "summary": summary})
+}
+
+func (h *PassthroughHandler) LogCount(w http.ResponseWriter, r *http.Request) {
+	site, ids, err := passthroughScope(r)
+	if err != nil {
+		writeDashboardError(w, 400, err.Error())
+		return
+	}
+	start, end, err := queryWindow(r)
+	if err != nil {
+		writeDashboardError(w, 400, "invalid_time_range")
+		return
+	}
+	db, configured, err := h.database(site)
+	if err != nil {
+		writeDashboardError(w, 502, "readonly_connection_failed")
+		return
+	}
+	if !configured {
+		writeDashboardJSON(w, 200, map[string]any{"configured": false, "total": 0})
+		return
+	}
+	where := ""
+	args := []any{start.Unix(), end.Unix()}
+	if len(ids) > 0 {
+		where += " AND user_id IN (" + placeholders(len(ids)) + ")"
+		for _, id := range ids {
+			args = append(args, id)
+		}
+	}
+	for _, spec := range []struct{ param, column string }{{"token_name", "token_name"}, {"username", "username"}, {"group", "`group`"}, {"model_name", "model_name"}, {"request_id", "request_id"}} {
+		if value := strings.TrimSpace(r.URL.Query().Get(spec.param)); value != "" {
+			where += " AND " + spec.column + " = ?"
+			args = append(args, value)
+		}
+	}
+	var channelID *int64
+	if value := strings.TrimSpace(r.URL.Query().Get("channel_id")); value != "" {
+		parsedChannelID, parseErr := strconv.ParseInt(value, 10, 64)
+		if parseErr != nil {
+			writeDashboardError(w, 400, "invalid_channel_id")
+			return
+		}
+		where += " AND channel_id = ?"
+		args = append(args, parsedChannelID)
+		channelID = &parsedChannelID
+	}
+	var logType *int
+	if value := strings.TrimSpace(r.URL.Query().Get("log_type")); value != "" {
+		parsedLogType, parseErr := strconv.Atoi(value)
+		if parseErr != nil {
+			writeDashboardError(w, 400, "invalid_log_type")
+			return
+		}
+		where += " AND type = ?"
+		args = append(args, parsedLogType)
+		logType = &parsedLogType
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), readonlyLogCountTimeout)
+	defer cancel()
+	var total int64
+	rollupFrom, rollupTo, useRollup := completeHourWindow(start, end)
+	requestID := strings.TrimSpace(r.URL.Query().Get("request_id"))
+	if useRollup && requestID == "" && h.readonlyRollupReady(ctx, site, rollupFrom) {
+		queryValues := map[string]string{"username": strings.TrimSpace(r.URL.Query().Get("username")), "model_name": strings.TrimSpace(r.URL.Query().Get("model_name")), "token_name": strings.TrimSpace(r.URL.Query().Get("token_name")), "group": strings.TrimSpace(r.URL.Query().Get("group"))}
+		local, localErr := h.Rollups.QueryReadonlyLogRollup(ctx, readonlyRollupFilter(site, ids, rollupFrom, rollupTo, queryValues, logType, channelID))
+		if localErr != nil {
+			writeDashboardError(w, 502, "readonly_query_failed")
+			return
+		}
+		total = local.RequestCount
+		if start.Before(rollupFrom) {
+			value, rawErr := queryRawCount(ctx, db, start, minTime(end, rollupFrom), where, args[2:])
+			if rawErr != nil {
+				writeDashboardError(w, 502, "readonly_query_failed")
+				return
+			}
+			total += value
+		}
+		if rollupTo.Before(end) {
+			value, rawErr := queryRawCount(ctx, db, maxTime(start, rollupTo), end, where, args[2:])
+			if rawErr != nil {
+				writeDashboardError(w, 502, "readonly_query_failed")
+				return
+			}
+			total += value
+		}
+	} else if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM logs WHERE created_at BETWEEN ? AND ?`+where, args...).Scan(&total); err != nil {
+		writeDashboardError(w, 502, "readonly_query_failed")
+		return
+	}
+	h.audit(r, site, "passthrough.logs.count", map[string]any{"user_ids": ids, "start_time": start, "end_time": end, "total": total})
+	writeDashboardJSON(w, 200, map[string]any{"configured": true, "total": total})
+}
+
+func (h *PassthroughHandler) readonlyRollupReady(ctx context.Context, site string, from time.Time) bool {
+	if h.Rollups == nil {
+		return false
+	}
+	cursor, err := h.Rollups.ReadonlyLogRollupCursor(ctx, site)
+	return err == nil && cursor.Initialized && cursor.CoverageFrom != nil && !from.Before(*cursor.CoverageFrom) && cursor.CaughtUpAt != nil && time.Since(*cursor.CaughtUpAt) < 2*time.Minute
+}
+
+func queryRawQuota(ctx context.Context, db *sql.DB, start, end time.Time, where string, filterArgs []any) (int64, error) {
+	if !start.Before(end) {
+		return 0, nil
+	}
+	args := append([]any{start.Unix(), end.Unix()}, filterArgs...)
+	var value int64
+	err := db.QueryRowContext(ctx, `SELECT COALESCE(SUM(quota),0) FROM logs WHERE created_at>=? AND created_at<? AND type=2`+where, args...).Scan(&value)
+	return value, err
+}
+
+func queryRawCount(ctx context.Context, db *sql.DB, start, end time.Time, where string, filterArgs []any) (int64, error) {
+	if !start.Before(end) {
+		return 0, nil
+	}
+	args := append([]any{start.Unix(), end.Unix()}, filterArgs...)
+	var value int64
+	err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM logs WHERE created_at>=? AND created_at<?`+where, args...).Scan(&value)
+	return value, err
+}
+
+func minTime(a, b time.Time) time.Time {
+	if a.Before(b) {
+		return a
+	}
+	return b
+}
+
+func maxTime(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
 }

@@ -116,6 +116,9 @@ func NewMux(options Options) *http.ServeMux {
 	if configStore, ok := any(options.Store).(dashboard.ReadonlyConfigStore); ok {
 		passthrough.Config = configStore
 	}
+	if rollupStore, ok := any(options.Store).(dashboard.ReadonlyLogRollupStore); ok {
+		passthrough.Rollups = rollupStore
+	}
 	commands := (dashboard.CommandHandler{Store: options.Store, Instances: options.Store}).WithNameSource(options.Store)
 	mux.Handle("POST /api/dashboard/channels/{channelID}/commands", protect(http.HandlerFunc(commands.Create)))
 	mux.Handle("GET /api/dashboard/channel-commands", protect(http.HandlerFunc(commands.List)))
@@ -130,6 +133,7 @@ func NewMux(options Options) *http.ServeMux {
 	mux.Handle("GET /api/dashboard/passthrough/users", protect(http.HandlerFunc(passthrough.Users)))
 	mux.Handle("GET /api/dashboard/passthrough/logs", protect(http.HandlerFunc(passthrough.Logs)))
 	mux.Handle("GET /api/dashboard/passthrough/logs/stat", protect(http.HandlerFunc(passthrough.LogStat)))
+	mux.Handle("GET /api/dashboard/passthrough/logs/count", protect(http.HandlerFunc(passthrough.LogCount)))
 	if jobs, ok := any(options.Store).(dashboard.BillingJobsStore); ok {
 		mux.Handle("/api/dashboard/billing/jobs", protect(dashboard.BillingJobsHandler{Store: jobs}))
 		mux.Handle("POST /api/dashboard/billing/backfill", protect(dashboard.BillingJobsHandler{Store: jobs}))

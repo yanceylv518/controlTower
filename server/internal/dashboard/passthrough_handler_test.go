@@ -84,7 +84,10 @@ func TestPassthroughPoolAndTimeoutGuards(t *testing.T) {
 	if readonlyQueryTimeout != 5*time.Second {
 		t.Fatalf("readonlyQueryTimeout = %s", readonlyQueryTimeout)
 	}
-	if readonlyLogQueryTimeout != 15*time.Second {
+	if readonlyLogQueryTimeout != 120*time.Second {
 		t.Fatalf("readonlyLogQueryTimeout = %s", readonlyLogQueryTimeout)
+	}
+	if readonlyLogCountTimeout != 120*time.Second {
+		t.Fatalf("readonlyLogCountTimeout = %s", readonlyLogCountTimeout)
 	}
 }

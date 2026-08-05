@@ -95,6 +95,7 @@ func run() error {
 		startTuningRunner(store)
 	}
 	startBillingJobRunner(store, cfg.SecretKey)
+	startReadonlyLogRollupRunner(store, cfg.SecretKey)
 
 	server := &http.Server{
 		Addr:              cfg.ListenAddr,
@@ -111,6 +112,16 @@ func startBillingJobRunner(store mysqlstore.Store, secretKey string) {
 	go func() {
 		if err := runner.Run(context.Background()); err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("billing job runner stopped: %v", err)
+		}
+	}()
+}
+
+func startReadonlyLogRollupRunner(store mysqlstore.Store, secretKey string) {
+	source := &dashboard.PassthroughHandler{Config: store, SecretKey: secretKey}
+	runner := dashboard.ReadonlyLogRollupRunner{Source: source, Store: store, Interval: 30 * time.Second}
+	go func() {
+		if err := runner.Run(context.Background()); err != nil && !errors.Is(err, context.Canceled) {
+			log.Printf("readonly log rollup runner stopped: %v", err)
 		}
 	}()
 }

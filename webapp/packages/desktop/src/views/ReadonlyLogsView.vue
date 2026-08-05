@@ -4,7 +4,6 @@ import { useRoute } from 'vue-router'
 import type { ReadonlyLog } from '@ct/shared'
 import AppShell from '../components/AppShell.vue'
 import { passthrough } from '../api'
-import { useAuthStore } from '../stores/auth'
 import { useFiltersStore } from '../stores/filters'
 import { usePrefsStore } from '../stores/prefs'
 import { useAsyncData } from '../composables/useAsyncData'
@@ -12,7 +11,7 @@ import { formatNumber } from '../utils/format'
 import { timeRangeShortcuts } from '../utils/billingRange'
 
 type LogExtra = Record<string, unknown>
-const auth = useAuthStore(), filters = useFiltersStore(), prefs = usePrefsStore()
+const filters = useFiltersStore(), prefs = usePrefsStore()
 const route = useRoute()
 const username = ref(''), tokenName = ref(''), modelName = ref(''), requestID = ref('')
 const logType = ref<number>(), offset = ref(0), limit = ref(100)
@@ -23,20 +22,24 @@ const defaultTimeRange = (): [Date, Date] => {
   return [start, new Date(now.getTime() + 60 * 60 * 1000)]
 }
 const timeRange = ref<[Date, Date]>(defaultTimeRange())
-const params = computed(() => ({ site: filters.site_id, username: auth.user?.role === 'admin' ? username.value : undefined, start_time: timeRange.value[0].toISOString(), end_time: timeRange.value[1].toISOString(), token_name: tokenName.value, model_name: modelName.value, request_id: requestID.value, log_type: logType.value, limit: limit.value, offset: offset.value }))
-const statParams = computed(() => ({ site: filters.site_id, username: auth.user?.role === 'admin' ? username.value : undefined, start_time: timeRange.value[0].toISOString(), end_time: timeRange.value[1].toISOString(), token_name: tokenName.value, model_name: modelName.value }))
+const params = computed(() => ({ site: filters.site_id, username: username.value, start_time: timeRange.value[0].toISOString(), end_time: timeRange.value[1].toISOString(), token_name: tokenName.value, model_name: modelName.value, request_id: requestID.value, log_type: logType.value, limit: limit.value, offset: offset.value }))
+const statParams = computed(() => ({ site: filters.site_id, username: username.value, start_time: timeRange.value[0].toISOString(), end_time: timeRange.value[1].toISOString(), token_name: tokenName.value, model_name: modelName.value }))
+const countParams = computed(() => { const { limit: _limit, offset: _offset, ...rest } = params.value; return rest })
 const state = useAsyncData(() => passthrough.logs(params.value))
 const statState = useAsyncData(() => passthrough.logStat(statParams.value))
+const countState = useAsyncData(() => passthrough.logCount(countParams.value))
 const extraCache = new WeakMap<object, LogExtra>()
 function extra(row: ReadonlyLog): LogExtra { const cached = extraCache.get(row); if (cached) return cached; let value: LogExtra = {}; try { value = row.other ? JSON.parse(row.other) as LogExtra : {} } catch { value = {} }; extraCache.set(row, value); return value }
 function first(row: ReadonlyLog, ...keys: string[]) { const data = extra(row); for (const key of keys) { const value = data[key]; if (value !== undefined && value !== null && value !== '') return value } return undefined }
 function numberValue(row: ReadonlyLog, ...keys: string[]) { const value = Number(first(row, ...keys)); return Number.isFinite(value) ? value : undefined }
 function textValue(row: ReadonlyLog, ...keys: string[]) { const value = first(row, ...keys); if (value === undefined) return ''; return typeof value === 'string' ? value : JSON.stringify(value) }
-const search = () => { offset.value = 0; void Promise.allSettled([state.reload(), statState.reload()]) }
+const search = () => { offset.value = 0; void Promise.allSettled([state.reload(), statState.reload(), countState.reload()]) }
+const fallbackTotal = computed(() => offset.value + (state.data.value?.items.length || 0) + (state.data.value?.has_more ? 1 : 0))
+const effectiveTotal = computed(() => !countState.loading.value && !countState.error.value && countState.data.value ? countState.data.value.total : fallbackTotal.value)
 const currentPage = computed(() => Math.floor(offset.value / limit.value) + 1)
-const totalPages = computed(() => Math.max(1, Math.ceil((state.data.value?.total || 0) / limit.value)))
-const rangeStart = computed(() => state.data.value?.total ? offset.value + 1 : 0)
-const rangeEnd = computed(() => Math.min(offset.value + (state.data.value?.items.length || 0), state.data.value?.total || 0))
+const totalPages = computed(() => Math.max(1, Math.ceil(effectiveTotal.value / limit.value)))
+const rangeStart = computed(() => state.data.value?.items.length ? offset.value + 1 : 0)
+const rangeEnd = computed(() => offset.value + (state.data.value?.items.length || 0))
 const changePage = (page: number) => { offset.value = (page - 1) * limit.value; void state.reload() }
 const changePageSize = (size: number) => { limit.value = size; offset.value = 0; void state.reload() }
 const reset = () => { username.value = ''; tokenName.value = ''; modelName.value = ''; requestID.value = ''; logType.value = undefined; timeRange.value = defaultTimeRange(); search() }
@@ -180,7 +183,7 @@ function billingMode(row: ReadonlyLog) {
   const value = first(row, 'admin_info')
   return value && typeof value === 'object' && Boolean((value as LogExtra).local_count_tokens) ? '本地计费' : '上游返回'
 }
-async function load() { try { await Promise.all([filters.loadInstances(), prefs.load()]) } catch { /* content request reports its own error */ } await Promise.allSettled([state.reload(), statState.reload()]) }
+async function load() { try { await Promise.all([filters.loadInstances(), prefs.load()]) } catch { /* content request reports its own error */ } await Promise.allSettled([state.reload(), statState.reload(), countState.reload()]) }
 onMounted(() => {
   // Deep links from the billing drawer carry username plus a month or an
   // explicit from/to period matching the billing generation range.
@@ -188,7 +191,7 @@ onMounted(() => {
   const qMonth = typeof route.query.month === 'string' ? route.query.month : ''
   const qFrom = typeof route.query.from === 'string' ? route.query.from : ''
   const qTo = typeof route.query.to === 'string' ? route.query.to : ''
-  if (qUser && auth.user?.role === 'admin') username.value = qUser
+  if (qUser) username.value = qUser
   const cap = new Date(Date.now() + 60 * 60 * 1000)
   if (qFrom && qTo && !Number.isNaN(Date.parse(qFrom)) && !Number.isNaN(Date.parse(qTo))) {
     const start = new Date(qFrom); const end = new Date(qTo)
@@ -203,7 +206,7 @@ onMounted(() => {
 watch(() => filters.site_id, (site, previous) => {
   if (site && site !== previous) {
     offset.value = 0
-    void Promise.allSettled([state.reload(), statState.reload()])
+    void Promise.allSettled([state.reload(), statState.reload(), countState.reload()])
   }
 })
 </script>
@@ -220,12 +223,12 @@ watch(() => filters.site_id, (site, previous) => {
       <el-input v-model="modelName" clearable prefix-icon="Search" placeholder="模型名称"/>
       <el-select v-model="logType" clearable placeholder="全部类型"><el-option label="消费" :value="2"/><el-option label="错误" :value="5"/><el-option label="充值" :value="1"/><el-option label="管理" :value="3"/><el-option label="系统" :value="4"/><el-option label="退款" :value="6"/></el-select>
       <el-input v-model="tokenName" clearable prefix-icon="Search" placeholder="令牌名称"/>
-      <el-input v-if="auth.user?.role==='admin'" v-model="username" clearable prefix-icon="Search" placeholder="用户名称"/>
+      <el-input v-model="username" clearable prefix-icon="Search" placeholder="用户名称"/>
       <el-input v-model="requestID" clearable prefix-icon="Search" placeholder="Request ID"/>
     </div>
     <div class="filter-actions">
       <el-button @click="reset">重置</el-button>
-      <el-button type="primary" :loading="state.loading.value || statState.loading.value" @click="search">查询</el-button>
+      <el-button type="primary" :loading="state.loading.value" @click="search">查询</el-button>
     </div>
   </div>
   <el-alert v-if="state.error.value" :title="state.error.value" type="error" show-icon :closable="false"><el-button link type="primary" @click="state.reload">重新加载</el-button></el-alert>
@@ -253,8 +256,8 @@ watch(() => filters.site_id, (site, previous) => {
     </el-table>
   </div>
   <div class="pager">
-    <span style="white-space:nowrap">显示第 {{rangeStart}} 条 - 第 {{rangeEnd}} 条，共 {{formatNumber(state.data.value?.total || 0)}} 条</span>
-    <div class="pager-controls" style="flex:none"><span style="white-space:nowrap">总页数：{{formatNumber(totalPages)}}</span><el-pagination background :current-page="currentPage" :page-size="limit" :total="state.data.value?.total || 0" layout="prev, pager, next" @current-change="changePage"/><el-select :model-value="limit" style="width:142px;flex:none" @change="changePageSize"><el-option v-for="size in [20,50,100]" :key="size" :label="`每页条数：${size}`" :value="size"/></el-select></div>
+    <span style="white-space:nowrap">显示第 {{rangeStart}} 条 - 第 {{rangeEnd}} 条<span v-if="countState.loading.value">，总数统计中…</span><span v-else-if="countState.error.value">，总数暂不可用</span><span v-else>，共 {{formatNumber(effectiveTotal)}} 条</span></span>
+    <div class="pager-controls" style="flex:none"><span style="white-space:nowrap">总页数：{{countState.loading.value || countState.error.value ? '—' : formatNumber(totalPages)}}</span><el-pagination background :current-page="currentPage" :page-size="limit" :total="effectiveTotal" layout="prev, pager, next" @current-change="changePage"/><el-select :model-value="limit" style="width:142px;flex:none" @change="changePageSize"><el-option v-for="size in [20,50,100]" :key="size" :label="`每页条数：${size}`" :value="size"/></el-select></div>
   </div>
 </AppShell></template>
 <style scoped>.summary-bar{display:flex;align-items:center;gap:8px;padding:10px 12px;margin-bottom:10px;background:#fff;border:1px solid var(--el-border-color-light);border-radius:8px}.summary-chip{padding:5px 11px;border-radius:8px;font-size:13px;white-space:nowrap}.summary-chip.quota{background:#e7f0ff;color:#2266bd}.summary-chip.rpm{background:#ffe6ef;color:#b51f56}.summary-chip.tpm{background:#f2f3f5;color:#303133}.filter-bar{padding:12px 16px;margin-bottom:12px;background:#fff;border:1px solid var(--el-border-color-light);border-radius:8px}.filter-fields{display:grid;grid-template-columns:minmax(360px,1.8fr) repeat(5,minmax(140px,1fr));align-items:center;gap:8px}.time-range{width:100%}.filter-actions{display:flex;justify-content:flex-end;align-items:center;gap:8px;margin-top:10px;padding-top:10px;border-top:1px solid var(--el-border-color-lighter)}.table-panel{height:calc(100vh - 350px);min-height:380px;background:#fff;border:1px solid var(--el-border-color-light);border-radius:8px;overflow:hidden}.pager{display:flex;justify-content:space-between;align-items:center;gap:18px;min-height:48px;padding:8px 12px;color:#606266;font-size:13px;background:#fff;border:1px solid var(--el-border-color-light);border-top:0;border-radius:0 0 8px 8px;box-sizing:border-box}.pager-controls{display:flex;align-items:center;gap:14px;min-width:0}.pager :deep(.el-pagination){flex-wrap:nowrap}.expanded{margin:0 12px 0 18px;padding:10px 18px;background:#f5f7fa}.detail-row{display:grid;grid-template-columns:100px minmax(0,1fr);gap:16px;min-height:28px;align-items:start;color:#303133}.detail-row>span{color:#73767a;text-align:right}.detail-row strong{font-weight:400;word-break:break-word}.detail-multiline{white-space:pre-line;line-height:1.55}.billing-summary{line-height:1.45}.pill{display:inline-block;max-width:100%;padding:3px 9px;border-radius:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pill-token{background:#edf0f2;color:#303133}.pill-model{background:#f1e8fb;color:#7134a3}.user-cell{display:flex;align-items:center;gap:7px}.user-cell i{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;background:#43c6b9;color:#fff;font-style:normal}.timing-cell{display:flex;align-items:center;gap:4px;white-space:nowrap}.metric-pill{display:inline-block;padding:2px 7px;border-radius:10px;background:#dff2dd;color:#237b34;white-space:nowrap}.metric-pill.warm{background:#fff0d5;color:#a55d00}.stream-label{display:inline-block;padding:2px 7px;border-radius:10px;background:#dce9ff;color:#2468c9;font-size:12px;line-height:18px;white-space:nowrap}.stream-label.unknown{background:#f0f2f5;color:#909399}.table-panel small{display:block;color:#909399;white-space:nowrap}@media(max-width:1200px){.filter-fields{grid-template-columns:repeat(2,minmax(180px,1fr))}.time-range{grid-column:span 2}.table-panel{height:calc(100vh - 405px)}.pager{align-items:flex-start;flex-direction:column;height:auto}.pager-controls{width:100%;justify-content:flex-end}}</style>

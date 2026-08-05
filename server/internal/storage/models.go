@@ -103,6 +103,55 @@ type LogSample struct {
 	CacheTokens       *int64
 	CacheFieldPresent bool
 }
+
+// ReadonlyLogRollup is an hourly aggregate copied incrementally from a
+// configured new-api logs database into Control Tower's own database.
+type ReadonlyLogRollup struct {
+	DimensionHash    []byte
+	SiteID           string
+	HourStart        time.Time
+	LogType          int
+	UserID           int64
+	Username         string
+	ChannelID        int64
+	ModelName        string
+	TokenName        string
+	GroupName        string
+	RequestCount     int64
+	PromptTokens     int64
+	CompletionTokens int64
+	QuotaSum         int64
+}
+
+type ReadonlyLogRollupCursor struct {
+	SiteID       string
+	LastLogID    int64
+	Initialized  bool
+	CoverageFrom *time.Time
+	LastSyncedAt *time.Time
+	CaughtUpAt   *time.Time
+	LastError    string
+}
+
+type ReadonlyLogRollupFilter struct {
+	SiteID    string
+	Start     time.Time
+	End       time.Time
+	LogType   *int
+	UserIDs   []int64
+	Username  string
+	ChannelID *int64
+	ModelName string
+	TokenName string
+	GroupName string
+}
+
+type ReadonlyLogRollupSummary struct {
+	RequestCount     int64
+	PromptTokens     int64
+	CompletionTokens int64
+	QuotaSum         int64
+}
 type ServerMetric struct {
 	InstanceID              string
 	CollectedAt             time.Time
