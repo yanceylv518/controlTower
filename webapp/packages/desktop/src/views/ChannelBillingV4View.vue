@@ -31,15 +31,16 @@ const state = useAsyncData<PageData>(async () => {
 });
 
 const items = computed(() => state.data.value?.items || []), job = computed(() => state.data.value?.job || null);
+const actualPeriod = computed(() => job.value?.status === "complete" ? jobRange(job.value) : "尚未生成，下方仅显示渠道配置");
 const pagedItems = computed(() => items.value.slice((page.value - 1) * pageSize.value, page.value * pageSize.value));
 const currency = computed(() => prefs.currencySymbol || "$");
 const money = (value: string) => `${currency.value}${Number(value || 0).toFixed(4)}`;
-function jobRange(value: BillingJob | null) { if(!value?.range_from||!value.range_to)return"";const end=new Date(value.range_to);end.setSeconds(end.getSeconds()-1);return`${formatDateTime(new Date(value.range_from))} 至 ${formatDateTime(end)}`; }
+function jobRange(value: BillingJob | null) { if(!value?.range_from||!value.range_to)return"";return`[${formatDateTime(new Date(value.range_from))}, ${formatDateTime(new Date(value.range_to))})`; }
 const status = computed(() => {
   if (generating.value || ["pending", "running"].includes(job.value?.status || "")) return { type: "info" as const, title: `渠道账单生成中（${progress.value}%）`, text: `${jobRange(job.value)}；后台正在按小时分段扫描日志，页面会自动刷新进度。` };
   if (job.value?.status === "failed") return { type: "error" as const, title: "渠道账单生成失败", text: `${jobRange(job.value)}；${job.value.error_message || "可以重新创建任务。"}` };
   if (job.value?.status === "complete") return { type: "success" as const, title: "渠道账单生成完成", text: `${jobRange(job.value)}；数据截至 ${job.value.updated_at ? new Date(job.value.updated_at).toLocaleString() : "任务完成时间"}；共完成 ${job.value.total_steps} 个小时步骤，异常订单 ${job.value.abnormal_rows} 条。` };
-  return { type: "warning" as const, title: "该月渠道账单尚未生成", text: "下方先显示当前渠道配置；生成后才会出现请求量、Token 和金额。" };
+  return { type: "warning" as const, title: "所选区间的渠道账单尚未生成", text: "下方仅显示当前渠道配置，所有数量和金额均为 0；生成后才会显示该区间的账单数据。" };
 });
 
 async function monitor(initial: BillingJob) {
@@ -89,7 +90,7 @@ void state.reload();
       <el-button type="primary" :loading="generating" @click="generate()">生成渠道账单</el-button><el-popconfirm title="强制重新生成会创建新的渠道账单版本，确定继续？" @confirm="generate(true)"><template #reference><el-button :disabled="generating">强制重新生成</el-button></template></el-popconfirm>
     </template>
     <div class="page">
-      <div class="period-summary">账单区间 <b>{{ generationRange[0] }} 至 {{ generationRange[1] }}</b><span>仅统计消费日志，并排除异常订单</span></div>
+      <div class="period-summary"><span>选择区间</span><b>[{{ generationRange[0] }}, {{ generationRange[1] }})</b><span class="actual-period">下方数据区间 <strong>{{ actualPeriod }}</strong></span></div>
       <el-alert :type="status.type" :title="status.title" :description="status.text" :closable="false" show-icon />
       <el-alert v-if="state.data.value?.channelError" type="warning" title="部分渠道配置加载失败" :description="state.data.value.channelError" :closable="false" show-icon />
       <AsyncPanel class="content" :loading="state.loading.value" :error="state.error.value" :empty="!items.length" :empty-text="filters.site_id ? '当前站点没有渠道配置' : '尚未选择站点'" @retry="state.reload">
@@ -108,5 +109,5 @@ void state.reload();
 </template>
 
 <style scoped>
-.page{display:flex;height:calc(100vh - 78px);min-height:0;flex-direction:column;gap:10px;overflow:hidden}.period-summary{display:flex;align-items:center;padding:8px 12px;border:1px solid var(--el-border-color-lighter);border-radius:6px;background:var(--el-fill-color-blank);color:var(--el-text-color-secondary)}.period-summary b{margin-left:8px;color:var(--el-text-color-primary)}.period-summary span{margin-left:auto;font-size:12px}.content{min-height:0;flex:1}.table-wrap{height:calc(100% - 58px);min-height:240px}.table-wrap :deep(.cell){font-variant-numeric:tabular-nums}.sub{display:block;margin-top:3px;color:var(--el-text-color-secondary)}.period-label{color:var(--el-text-color-secondary);font-size:13px}
+.page{display:flex;height:calc(100vh - 78px);min-height:0;flex-direction:column;gap:10px;overflow:hidden}.period-summary{display:flex;align-items:center;padding:8px 12px;border:1px solid var(--el-border-color-lighter);border-radius:6px;background:var(--el-fill-color-blank);color:var(--el-text-color-secondary)}.period-summary b{margin-left:8px;color:var(--el-text-color-primary)}.actual-period{margin-left:auto;font-size:12px}.actual-period strong{margin-left:6px;color:var(--el-text-color-primary)}.content{min-height:0;flex:1}.table-wrap{height:calc(100% - 58px);min-height:240px}.table-wrap :deep(.cell){font-variant-numeric:tabular-nums}.sub{display:block;margin-top:3px;color:var(--el-text-color-secondary)}.period-label{color:var(--el-text-color-secondary);font-size:13px}
 </style>

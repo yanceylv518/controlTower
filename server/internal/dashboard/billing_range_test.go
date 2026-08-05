@@ -5,13 +5,17 @@ import (
 	"time"
 )
 
-func TestParseBillingInputRangeUsesInclusiveSecond(t *testing.T) {
+func TestParseBillingInputRangeIsHalfOpen(t *testing.T) {
 	from, to, err := parseBillingInputRange("2026-08-04 00:00:00", "2026-08-04 19:16:21")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := to.Sub(from); got != 19*time.Hour+16*time.Minute+22*time.Second {
+	if got := to.Sub(from); got != 19*time.Hour+16*time.Minute+21*time.Second {
 		t.Fatalf("range duration=%s", got)
+	}
+	_, offset := from.Zone()
+	if offset != 8*60*60 {
+		t.Fatalf("billing timezone offset=%d, want +08:00", offset)
 	}
 }
 

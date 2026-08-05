@@ -343,6 +343,7 @@ export interface TuningPolicy {
 }
 export interface ChannelBaseValue {
   instance_id: string; channel_id: number; channel_name: string; model_name: string;
+  group_name: string;
   base_weight: number; base_priority: number; current_weight: number; current_priority: number;
   snapshot_at?: string; models?: string[]; updated_at?: string; updated_by?: string;
 }

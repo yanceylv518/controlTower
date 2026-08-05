@@ -129,6 +129,7 @@ func NewMux(options Options) *http.ServeMux {
 	mux.Handle("POST /api/dashboard/instances/{id}/rotate-token", protect(http.HandlerFunc(instances.Rotate)))
 	mux.Handle("GET /api/dashboard/passthrough/users", protect(http.HandlerFunc(passthrough.Users)))
 	mux.Handle("GET /api/dashboard/passthrough/logs", protect(http.HandlerFunc(passthrough.Logs)))
+	mux.Handle("GET /api/dashboard/passthrough/logs/stat", protect(http.HandlerFunc(passthrough.LogStat)))
 	if jobs, ok := any(options.Store).(dashboard.BillingJobsStore); ok {
 		mux.Handle("/api/dashboard/billing/jobs", protect(dashboard.BillingJobsHandler{Store: jobs}))
 		mux.Handle("POST /api/dashboard/billing/backfill", protect(dashboard.BillingJobsHandler{Store: jobs}))

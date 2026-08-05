@@ -114,3 +114,19 @@ func TestUsageValidatesHoursAndReturnsTotals(t *testing.T) {
 		t.Fatalf("response=%s", ok.Body.String())
 	}
 }
+
+func TestMetricUserIDSupportsCrossDimensions(t *testing.T) {
+	for key, want := range map[string]int64{
+		"inst:user:9":                 9,
+		"inst:user:9:model:glm-5.2":  9,
+		"inst:model:glm-5.2:user:12": 12,
+	} {
+		got, ok := metricUserID(key)
+		if !ok || got != want {
+			t.Fatalf("metricUserID(%q) = %d,%v; want %d,true", key, got, ok, want)
+		}
+	}
+	if _, ok := metricUserID("inst:model:glm-5.2"); ok {
+		t.Fatal("model-only dimension must not expose a user id")
+	}
+}

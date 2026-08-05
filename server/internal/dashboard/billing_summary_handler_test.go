@@ -12,7 +12,8 @@ import (
 )
 
 type fakeBillingSummaryStore struct {
-	rows []billing.AggregateRow
+	rows       []billing.AggregateRow
+	missingJob bool
 }
 
 func (f fakeBillingSummaryStore) QueryBillingAggregates(context.Context, string, time.Time, time.Time, []int64) ([]billing.AggregateRow, error) {
@@ -22,7 +23,21 @@ func (f fakeBillingSummaryStore) QueryBillingAggregatesForJob(context.Context, s
 	return f.rows, nil
 }
 func (f fakeBillingSummaryStore) LatestBillingJob(context.Context, string, string, time.Time, time.Time) (billing.Job, error) {
-	return billing.Job{}, sql.ErrNoRows
+	if f.missingJob {
+		return billing.Job{}, sql.ErrNoRows
+	}
+	return billing.Job{ID: "job-1", Status: "complete"}, nil
+}
+
+func TestBillingSummaryDoesNotFallBackToAnotherInterval(t *testing.T) {
+	billing.MonthlySummaryCache.InvalidateInstance("site-no-job")
+	store := fakeBillingSummaryStore{missingJob: true, rows: []billing.AggregateRow{{UserID: 1, RequestCount: 99}}}
+	req := httptest.NewRequest("GET", "/api/dashboard/billing/summary?instance_id=site-no-job&month=2026-08", nil)
+	w := httptest.NewRecorder()
+	BillingSummaryHandler{Store: store}.ServeHTTP(w, req)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"items":[]`) || !strings.Contains(w.Body.String(), `"request_count":0`) {
+		t.Fatalf("unexpected response: %d %s", w.Code, w.Body.String())
+	}
 }
 func (f fakeBillingSummaryStore) ListBillingPrices(context.Context, string) ([]billing.PriceRecord, error) {
 	day := time.Date(2026, 8, 1, 0, 0, 0, 0, time.Local)

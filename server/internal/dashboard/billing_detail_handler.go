@@ -31,8 +31,6 @@ func (h BillingDetailHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	var rows []billing.AggregateRow
 	if jobErr == nil && job.Status == "complete" {
 		rows, err = h.Store.QueryBillingAggregatesForJob(r.Context(), job.ID, []int64{userID})
-	} else {
-		rows, err = h.Store.QueryBillingAggregates(r.Context(), instanceID, from, to, []int64{userID})
 	}
 	if err != nil {
 		writeDashboardError(w, http.StatusInternalServerError, "billing_query_failed")

@@ -96,13 +96,13 @@ func (s Store) AppendBillingHour(ctx context.Context, j billing.Job, st billing.
 	defer tx.Rollback()
 	now := time.Now().UTC()
 	for _, v := range items {
-		_, e = tx.ExecContext(ctx, `INSERT INTO billing_hourly(job_id,instance_id,hour_start,user_id,username,model_name,group_name,tier_from,request_count,prompt_tokens,completion_tokens,cache_tokens,quota,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE username=VALUES(username),request_count=request_count+VALUES(request_count),prompt_tokens=prompt_tokens+VALUES(prompt_tokens),completion_tokens=completion_tokens+VALUES(completion_tokens),cache_tokens=cache_tokens+VALUES(cache_tokens),quota=quota+VALUES(quota),updated_at=VALUES(updated_at)`, j.ID, j.InstanceID, st.From, v.UserID, v.Username, v.ModelName, v.GroupName, v.TierFrom, v.RequestCount, v.PromptTokens, v.CompletionTokens, v.CacheTokens, v.Quota, now)
+		_, e = tx.ExecContext(ctx, `INSERT INTO billing_hourly(job_id,instance_id,hour_start,user_id,username,model_name,group_name,tier_from,request_count,prompt_tokens,completion_tokens,cache_tokens,quota,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE username=VALUES(username),request_count=request_count+VALUES(request_count),prompt_tokens=prompt_tokens+VALUES(prompt_tokens),completion_tokens=completion_tokens+VALUES(completion_tokens),cache_tokens=cache_tokens+VALUES(cache_tokens),quota=quota+VALUES(quota),updated_at=VALUES(updated_at)`, j.ID, j.InstanceID, st.From.UTC(), v.UserID, v.Username, v.ModelName, v.GroupName, v.TierFrom, v.RequestCount, v.PromptTokens, v.CompletionTokens, v.CacheTokens, v.Quota, now)
 		if e != nil {
 			return e
 		}
 	}
 	for _, v := range channels {
-		_, e = tx.ExecContext(ctx, `INSERT INTO billing_channel_hourly(job_id,instance_id,hour_start,channel_id,channel_name,model_name,group_name,tier_from,request_count,prompt_tokens,completion_tokens,cache_tokens,quota,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE channel_name=VALUES(channel_name),request_count=request_count+VALUES(request_count),prompt_tokens=prompt_tokens+VALUES(prompt_tokens),completion_tokens=completion_tokens+VALUES(completion_tokens),cache_tokens=cache_tokens+VALUES(cache_tokens),quota=quota+VALUES(quota),updated_at=VALUES(updated_at)`, j.ID, j.InstanceID, st.From, v.ChannelID, v.ChannelName, v.ModelName, v.GroupName, v.TierFrom, v.RequestCount, v.PromptTokens, v.CompletionTokens, v.CacheTokens, v.Quota, now)
+		_, e = tx.ExecContext(ctx, `INSERT INTO billing_channel_hourly(job_id,instance_id,hour_start,channel_id,channel_name,model_name,group_name,tier_from,request_count,prompt_tokens,completion_tokens,cache_tokens,quota,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE channel_name=VALUES(channel_name),request_count=request_count+VALUES(request_count),prompt_tokens=prompt_tokens+VALUES(prompt_tokens),completion_tokens=completion_tokens+VALUES(completion_tokens),cache_tokens=cache_tokens+VALUES(cache_tokens),quota=quota+VALUES(quota),updated_at=VALUES(updated_at)`, j.ID, j.InstanceID, st.From.UTC(), v.ChannelID, v.ChannelName, v.ModelName, v.GroupName, v.TierFrom, v.RequestCount, v.PromptTokens, v.CompletionTokens, v.CacheTokens, v.Quota, now)
 		if e != nil {
 			return e
 		}
@@ -160,7 +160,7 @@ func (s Store) FinalizeBillingJob(ctx context.Context, j billing.Job) error {
 	if e != nil {
 		return e
 	}
-	localFrom, localTo := j.From.In(time.Local), j.To.In(time.Local)
+	localFrom, localTo := j.From.In(billing.BusinessLocation), j.To.In(billing.BusinessLocation)
 	for d := dateAt(localFrom); d.Before(localTo); d = d.AddDate(0, 0, 1) {
 		if _, e = tx.ExecContext(ctx, `INSERT INTO billing_active_versions(instance_id,day,job_id,activated_at) VALUES(?,?,?,?) ON DUPLICATE KEY UPDATE job_id=VALUES(job_id),activated_at=VALUES(activated_at)`, j.InstanceID, d, j.ID, now); e != nil {
 			return e

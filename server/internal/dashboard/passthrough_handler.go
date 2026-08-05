@@ -326,7 +326,10 @@ type passthroughPool struct {
 	db        *sql.DB
 }
 
-const readonlyQueryTimeout = 5 * time.Second
+const (
+	readonlyQueryTimeout    = 5 * time.Second
+	readonlyLogQueryTimeout = 15 * time.Second
+)
 
 func configureReadonlyDB(db *sql.DB) {
 	db.SetMaxOpenConns(2)
@@ -607,8 +610,8 @@ func (h *PassthroughHandler) Logs(w http.ResponseWriter, r *http.Request) {
 	filters := ""
 	for _, spec := range []struct{ param, column string }{{"token_name", "token_name"}, {"username", "username"}, {"group", "`group`"}, {"model_name", "model_name"}, {"request_id", "request_id"}} {
 		if value := strings.TrimSpace(r.URL.Query().Get(spec.param)); value != "" {
-			filters += " AND " + spec.column + " LIKE ?"
-			args = append(args, "%"+value+"%")
+			filters += " AND " + spec.column + " = ?"
+			args = append(args, value)
 		}
 	}
 	if value := strings.TrimSpace(r.URL.Query().Get("channel_id")); value != "" {
@@ -630,7 +633,7 @@ func (h *PassthroughHandler) Logs(w http.ResponseWriter, r *http.Request) {
 		args = append(args, logType)
 	}
 	pageArgs := append(append([]any{}, args...), limit, offset)
-	ctx, cancel := context.WithTimeout(r.Context(), readonlyQueryTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), readonlyLogQueryTimeout)
 	defer cancel()
 	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
@@ -640,36 +643,6 @@ func (h *PassthroughHandler) Logs(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback()
 	var total int64
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM logs WHERE created_at BETWEEN ? AND ?`+userFilter+filters, args...).Scan(&total); err != nil {
-		writeDashboardError(w, 502, "readonly_query_failed")
-		return
-	}
-	// Match new-api's /api/log/stat semantics: quota follows the selected time
-	// range, while RPM/TPM use a rolling 60-second window. Both always count
-	// consume logs and intentionally ignore the list's type/request-id filters.
-	statWhere := userFilter
-	statArgs := make([]any, 0, len(ids)+8)
-	for _, id := range ids {
-		statArgs = append(statArgs, id)
-	}
-	for _, spec := range []struct{ param, column string }{{"token_name", "token_name"}, {"username", "username"}, {"group", "`group`"}, {"model_name", "model_name"}} {
-		if value := strings.TrimSpace(r.URL.Query().Get(spec.param)); value != "" {
-			statWhere += " AND " + spec.column + " = ?"
-			statArgs = append(statArgs, value)
-		}
-	}
-	if value := strings.TrimSpace(r.URL.Query().Get("channel_id")); value != "" {
-		channelID, _ := strconv.ParseInt(value, 10, 64) // validated above
-		statWhere += " AND channel_id = ?"
-		statArgs = append(statArgs, channelID)
-	}
-	var summary PassthroughLogSummary
-	quotaArgs := append([]any{start.Unix(), end.Unix()}, statArgs...)
-	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(quota),0) FROM logs WHERE created_at>=? AND created_at<=? AND type=2`+statWhere, quotaArgs...).Scan(&summary.Quota); err != nil {
-		writeDashboardError(w, 502, "readonly_query_failed")
-		return
-	}
-	rateArgs := append([]any{time.Now().Add(-60 * time.Second).Unix()}, statArgs...)
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(SUM(prompt_tokens),0)+COALESCE(SUM(completion_tokens),0) FROM logs WHERE created_at>=? AND type=2`+statWhere, rateArgs...).Scan(&summary.RPM, &summary.TPM); err != nil {
 		writeDashboardError(w, 502, "readonly_query_failed")
 		return
 	}
@@ -697,5 +670,65 @@ func (h *PassthroughHandler) Logs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.audit(r, site, "passthrough.logs", map[string]any{"user_ids": ids, "start_time": start, "end_time": end, "limit": limit, "offset": offset})
-	writeDashboardJSON(w, 200, map[string]any{"items": items, "configured": true, "total": total, "summary": summary})
+	writeDashboardJSON(w, 200, map[string]any{"items": items, "configured": true, "total": total})
+}
+
+func (h *PassthroughHandler) LogStat(w http.ResponseWriter, r *http.Request) {
+	site, ids, err := passthroughScope(r)
+	if err != nil {
+		writeDashboardError(w, 400, err.Error())
+		return
+	}
+	start, end, err := queryWindow(r)
+	if err != nil {
+		writeDashboardError(w, 400, "invalid_time_range")
+		return
+	}
+	db, configured, err := h.database(site)
+	if err != nil {
+		writeDashboardError(w, 502, "readonly_connection_failed")
+		return
+	}
+	if !configured {
+		writeDashboardJSON(w, 200, map[string]any{"configured": false, "summary": PassthroughLogSummary{}})
+		return
+	}
+	where := ""
+	args := make([]any, 0, len(ids)+6)
+	if len(ids) > 0 {
+		where += " AND user_id IN (" + placeholders(len(ids)) + ")"
+		for _, id := range ids {
+			args = append(args, id)
+		}
+	}
+	for _, spec := range []struct{ param, column string }{{"token_name", "token_name"}, {"username", "username"}, {"group", "`group`"}, {"model_name", "model_name"}} {
+		if value := strings.TrimSpace(r.URL.Query().Get(spec.param)); value != "" {
+			where += " AND " + spec.column + " = ?"
+			args = append(args, value)
+		}
+	}
+	if value := strings.TrimSpace(r.URL.Query().Get("channel_id")); value != "" {
+		channelID, parseErr := strconv.ParseInt(value, 10, 64)
+		if parseErr != nil {
+			writeDashboardError(w, 400, "invalid_channel_id")
+			return
+		}
+		where += " AND channel_id = ?"
+		args = append(args, channelID)
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), readonlyLogQueryTimeout)
+	defer cancel()
+	var summary PassthroughLogSummary
+	quotaArgs := append([]any{start.Unix(), end.Unix()}, args...)
+	if err := db.QueryRowContext(ctx, `SELECT COALESCE(SUM(quota),0) FROM logs WHERE created_at>=? AND created_at<=? AND type=2`+where, quotaArgs...).Scan(&summary.Quota); err != nil {
+		writeDashboardError(w, 502, "readonly_query_failed")
+		return
+	}
+	rateArgs := append([]any{time.Now().Add(-60 * time.Second).Unix()}, args...)
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(SUM(prompt_tokens),0)+COALESCE(SUM(completion_tokens),0) FROM logs WHERE created_at>=? AND type=2`+where, rateArgs...).Scan(&summary.RPM, &summary.TPM); err != nil {
+		writeDashboardError(w, 502, "readonly_query_failed")
+		return
+	}
+	h.audit(r, site, "passthrough.logs.stat", map[string]any{"user_ids": ids, "start_time": start, "end_time": end})
+	writeDashboardJSON(w, 200, map[string]any{"configured": true, "summary": summary})
 }

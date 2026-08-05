@@ -13,6 +13,10 @@ import (
 
 const BillingPageSize = 2000
 
+// BusinessLocation is explicit because production containers normally run
+// in UTC while new-api billing periods are defined in China Standard Time.
+var BusinessLocation = time.FixedZone("Asia/Shanghai", 8*60*60)
+
 type PagedLogRecord struct {
 	ID, CreatedUnix, UserID, ChannelID, CacheTokens, Quota       int64
 	RequestID, UpstreamRequestID, Username, ModelName, GroupName string

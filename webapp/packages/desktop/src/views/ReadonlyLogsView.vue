@@ -24,13 +24,15 @@ const defaultTimeRange = (): [Date, Date] => {
 }
 const timeRange = ref<[Date, Date]>(defaultTimeRange())
 const params = computed(() => ({ site: filters.site_id, username: auth.user?.role === 'admin' ? username.value : undefined, start_time: timeRange.value[0].toISOString(), end_time: timeRange.value[1].toISOString(), token_name: tokenName.value, model_name: modelName.value, request_id: requestID.value, log_type: logType.value, limit: limit.value, offset: offset.value }))
+const statParams = computed(() => ({ site: filters.site_id, username: auth.user?.role === 'admin' ? username.value : undefined, start_time: timeRange.value[0].toISOString(), end_time: timeRange.value[1].toISOString(), token_name: tokenName.value, model_name: modelName.value }))
 const state = useAsyncData(() => passthrough.logs(params.value))
+const statState = useAsyncData(() => passthrough.logStat(statParams.value))
 const extraCache = new WeakMap<object, LogExtra>()
 function extra(row: ReadonlyLog): LogExtra { const cached = extraCache.get(row); if (cached) return cached; let value: LogExtra = {}; try { value = row.other ? JSON.parse(row.other) as LogExtra : {} } catch { value = {} }; extraCache.set(row, value); return value }
 function first(row: ReadonlyLog, ...keys: string[]) { const data = extra(row); for (const key of keys) { const value = data[key]; if (value !== undefined && value !== null && value !== '') return value } return undefined }
 function numberValue(row: ReadonlyLog, ...keys: string[]) { const value = Number(first(row, ...keys)); return Number.isFinite(value) ? value : undefined }
 function textValue(row: ReadonlyLog, ...keys: string[]) { const value = first(row, ...keys); if (value === undefined) return ''; return typeof value === 'string' ? value : JSON.stringify(value) }
-const search = () => { offset.value = 0; void state.reload() }
+const search = () => { offset.value = 0; void Promise.allSettled([state.reload(), statState.reload()]) }
 const currentPage = computed(() => Math.floor(offset.value / limit.value) + 1)
 const totalPages = computed(() => Math.max(1, Math.ceil((state.data.value?.total || 0) / limit.value)))
 const rangeStart = computed(() => state.data.value?.total ? offset.value + 1 : 0)
@@ -43,7 +45,7 @@ const money = (quota: number) => {
   const amount = quota / (prefs.quotaPerUnit || 500000)
   return `${prefs.currencySymbol}${amount >= 1 ? amount.toFixed(2) : amount.toFixed(6)}`
 }
-const logSummary = computed(() => state.data.value?.summary)
+const logSummary = computed(() => statState.data.value?.summary)
 const billingPrice = (value: number) => `${prefs.currencySymbol}${value.toFixed(6)}`
 const initial = (name: string) => name?.trim().slice(0, 1) || '用'
 const requestPath = (row: ReadonlyLog) => textValue(row, 'request_path') || '—'
@@ -178,7 +180,7 @@ function billingMode(row: ReadonlyLog) {
   const value = first(row, 'admin_info')
   return value && typeof value === 'object' && Boolean((value as LogExtra).local_count_tokens) ? '本地计费' : '上游返回'
 }
-async function load() { try { await Promise.all([filters.loadInstances(), prefs.load()]) } catch { /* content request reports its own error */ } await state.reload() }
+async function load() { try { await Promise.all([filters.loadInstances(), prefs.load()]) } catch { /* content request reports its own error */ } await Promise.allSettled([state.reload(), statState.reload()]) }
 onMounted(() => {
   // Deep links from the billing drawer carry username plus a month or an
   // explicit from/to period matching the billing generation range.
@@ -201,7 +203,7 @@ onMounted(() => {
 watch(() => filters.site_id, (site, previous) => {
   if (site && site !== previous) {
     offset.value = 0
-    void state.reload()
+    void Promise.allSettled([state.reload(), statState.reload()])
   }
 })
 </script>
@@ -211,6 +213,7 @@ watch(() => filters.site_id, (site, previous) => {
     <span class="summary-chip rpm">RPM：{{formatNumber(logSummary?.rpm || 0)}}</span>
     <span class="summary-chip tpm">TPM：{{formatNumber(logSummary?.tpm || 0)}}</span>
   </div>
+  <el-alert v-if="statState.error.value" title="统计数据加载失败，日志列表仍可正常查询" type="warning" show-icon :closable="false"><el-button link type="primary" @click="statState.reload">重新加载统计</el-button></el-alert>
   <div class="filter-bar">
     <div class="filter-fields">
       <el-date-picker v-model="timeRange" type="datetimerange" range-separator="~" start-placeholder="开始时间" end-placeholder="结束时间" :shortcuts="timeRangeShortcuts" unlink-panels :clearable="false" class="time-range"/>
@@ -222,7 +225,7 @@ watch(() => filters.site_id, (site, previous) => {
     </div>
     <div class="filter-actions">
       <el-button @click="reset">重置</el-button>
-      <el-button type="primary" :loading="state.loading.value" @click="search">查询</el-button>
+      <el-button type="primary" :loading="state.loading.value || statState.loading.value" @click="search">查询</el-button>
     </div>
   </div>
   <el-alert v-if="state.error.value" :title="state.error.value" type="error" show-icon :closable="false"><el-button link type="primary" @click="state.reload">重新加载</el-button></el-alert>

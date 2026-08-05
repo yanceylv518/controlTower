@@ -70,8 +70,6 @@ func (h BillingChannelsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 	var rows []billing.AggregateRow
 	if jobErr == nil && job.Status == "complete" {
 		rows, e = h.Store.QueryBillingChannelAggregatesForJob(r.Context(), job.ID, channelID)
-	} else {
-		rows, e = h.Store.QueryBillingChannelAggregates(r.Context(), site, from, to, channelID)
 	}
 	if e != nil {
 		writeDashboardError(w, 500, "billing_channel_query_failed")
@@ -148,7 +146,7 @@ func billingPeriodQuery(r *http.Request) (time.Time, time.Time, string, error) {
 		return from, to, q.Get("from") + "_" + q.Get("to"), nil
 	}
 	month := q.Get("month")
-	from, err := time.ParseInLocation("2006-01", month, time.Local)
+	from, err := time.ParseInLocation("2006-01", month, billing.BusinessLocation)
 	if err != nil {
 		return time.Time{}, time.Time{}, "", err
 	}

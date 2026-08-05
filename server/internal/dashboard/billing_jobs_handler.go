@@ -109,21 +109,20 @@ func (h BillingJobsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func parseBillingInputRange(fromRaw, toRaw string) (time.Time, time.Time, error) {
 	parse := func(raw string) (time.Time, bool, error) {
-		if value, err := time.ParseInLocation("2006-01-02 15:04:05", raw, time.Local); err == nil {
+		if value, err := time.ParseInLocation("2006-01-02 15:04:05", raw, billing.BusinessLocation); err == nil {
 			return value, true, nil
 		}
-		value, err := time.ParseInLocation("2006-01-02", raw, time.Local)
+		value, err := time.ParseInLocation("2006-01-02", raw, billing.BusinessLocation)
 		return value, false, err
 	}
 	from, _, fromErr := parse(strings.TrimSpace(fromRaw))
-	through, hasTime, toErr := parse(strings.TrimSpace(toRaw))
+	through, _, toErr := parse(strings.TrimSpace(toRaw))
 	if fromErr != nil || toErr != nil {
 		return time.Time{}, time.Time{}, fmt.Errorf("invalid billing range")
 	}
-	to := through.AddDate(0, 0, 1)
-	if hasTime {
-		to = through.Add(time.Second)
-	}
+	// Billing ranges are consistently half-open: [from, to). The selected end
+	// instant is never included in generation, reports, or anomaly exports.
+	to := through
 	if !to.After(from) || to.Sub(from) > 60*24*time.Hour {
 		return time.Time{}, time.Time{}, fmt.Errorf("invalid billing range")
 	}
@@ -134,7 +133,7 @@ func billingRequestKey(instanceID, scope string, from, to time.Time) string {
 	// Include the calculation version so a billing-rule correction invalidates
 	// previously completed jobs once, while identical jobs on the current
 	// algorithm are still reused.
-	const calculationVersion = "v2-local-day"
+	const calculationVersion = "v3-shanghai-hour"
 	sum := sha256.Sum256([]byte(calculationVersion + "|" + instanceID + "|generate|" + scope + "|" + from.Format(time.RFC3339Nano) + "|" + to.Format(time.RFC3339Nano)))
 	return "billing:" + fmt.Sprintf("%x", sum[:16])
 }

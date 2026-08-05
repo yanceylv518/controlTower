@@ -20,6 +20,18 @@ func TestNewJobSplitsRangeIntoHourlySteps(t *testing.T) {
 	}
 }
 
+func TestNewJobPreservesShanghaiRangeAsUTCInstants(t *testing.T) {
+	from := time.Date(2026, 7, 1, 0, 0, 0, 0, BusinessLocation)
+	_, steps, err := NewJob("site-a", from, from.Add(time.Hour), "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := time.Date(2026, 6, 30, 16, 0, 0, 0, time.UTC)
+	if !steps[0].From.UTC().Equal(want) {
+		t.Fatalf("step UTC start=%s, want %s", steps[0].From.UTC(), want)
+	}
+}
+
 func TestNewJobAlignsPartialStepsWithoutCrossingMidnight(t *testing.T) {
 	from := time.Date(2026, 8, 1, 23, 30, 0, 0, time.Local)
 	job, steps, err := NewJob("site-a", from, from.Add(time.Hour), "admin")

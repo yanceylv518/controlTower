@@ -238,16 +238,23 @@ func filterScopedMetricItems(r *http.Request, items []MetricItem) []MetricItem {
 	}
 	out := items[:0]
 	for _, item := range items {
-		parts := strings.Split(item.DimensionKey, ":")
-		if len(parts) == 0 {
-			continue
-		}
-		id, err := strconv.ParseInt(parts[len(parts)-1], 10, 64)
-		if err == nil && allowed[id] {
+		if id, ok := metricUserID(item.DimensionKey); ok && allowed[id] {
 			out = append(out, item)
 		}
 	}
 	return out
+}
+
+func metricUserID(dimensionKey string) (int64, bool) {
+	parts := strings.Split(dimensionKey, ":")
+	for i := 0; i+1 < len(parts); i++ {
+		if parts[i] != "user" {
+			continue
+		}
+		id, err := strconv.ParseInt(parts[i+1], 10, 64)
+		return id, err == nil && id > 0
+	}
+	return 0, false
 }
 
 func filterMetricItems(metrics []aggregator.Metric, dimensionType string, dimensionKey string, instanceID ...string) []MetricItem {

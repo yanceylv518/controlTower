@@ -5,6 +5,7 @@ import { ArrowLeft, ArrowRight } from "@element-plus/icons-vue";
 import type { AlertItem, ChannelSnapshot, LogSample, MetricItem } from "@ct/shared";
 import { dashboard } from "../api";
 import { usePrefsStore } from "../stores/prefs";
+import { useAuthStore } from "../stores/auth";
 import { useAsyncData } from "../composables/useAsyncData";
 import { useAutoRefresh } from "../composables/useAutoRefresh";
 import AppShell from "../components/AppShell.vue";
@@ -23,6 +24,7 @@ const props = defineProps<{
 }>();
 const router = useRouter();
 const prefs = usePrefsStore();
+const auth = useAuthStore();
 onMounted(() => void prefs.load());
 
 const hours = ref(1);
@@ -77,7 +79,9 @@ const state = useAsyncData(async () => {
           limit: 500,
         })
       : Promise.resolve({ items: [] as ChannelSnapshot[] }),
-    dashboard.alerts({ limit: 200 }),
+    auth.user?.role === "admin"
+      ? dashboard.alerts({ limit: 200 })
+      : Promise.resolve({ items: [] as AlertItem[] }),
   ]);
   snapshots.value = channelData.items;
   alerts.value = alertData.items.filter(
@@ -488,7 +492,7 @@ const firingCount = computed(
               </el-table>
             </div>
           </el-tab-pane>
-          <el-tab-pane label="慢样本" name="samples">
+          <el-tab-pane v-if="auth.user?.role === 'admin'" label="慢样本" name="samples">
             <div v-loading="samplesLoading" class="dim-table">
               <el-table :data="samples" :max-height="480">
                 <el-table-column label="时间" width="160">
@@ -536,7 +540,7 @@ const firingCount = computed(
               />
             </div>
           </el-tab-pane>
-          <el-tab-pane name="alerts">
+          <el-tab-pane v-if="auth.user?.role === 'admin'" name="alerts">
             <template #label>
               告警<span v-if="firingCount" class="tab-badge">{{
                 firingCount

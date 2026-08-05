@@ -42,7 +42,8 @@ func (h BillingWorkbookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 	if jobErr == nil && job.Status == "complete" {
 		rows, e = h.Store.QueryBillingAggregatesForJob(r.Context(), job.ID, []int64{uid})
 	} else {
-		rows, e = h.Store.QueryBillingAggregates(r.Context(), site, from, to, []int64{uid})
+		writeDashboardError(w, http.StatusConflict, "billing_not_generated")
+		return
 	}
 	if e != nil {
 		writeDashboardError(w, 500, "billing_query_failed")

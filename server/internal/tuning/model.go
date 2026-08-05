@@ -133,6 +133,7 @@ type ChannelBaseValue struct {
 	InstanceID      string `json:"instance_id"`
 	ChannelID       int64  `json:"channel_id"`
 	ChannelName     string `json:"channel_name"`
+	GroupName       string `json:"group_name"`
 	ModelName       string `json:"model_name"`
 	BaseWeight      int64  `json:"base_weight"`
 	BasePriority    int64  `json:"base_priority"`
@@ -220,6 +221,7 @@ func (m ChannelMetric) TotalErrorRate() float64 {
 type Channel struct {
 	ID           int64
 	Name, Status string
+	GroupName    string
 	Weight       int64
 	Models       []string
 	Priority     int64

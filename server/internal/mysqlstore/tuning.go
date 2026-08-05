@@ -40,7 +40,7 @@ func (s Store) ListChannelBaseValues(instanceID, model string) ([]tuning.Channel
 		filter = " AND b.model_name=?"
 		args = append(args, model)
 	}
-	rows, err := s.db.QueryContext(context.Background(), `SELECT b.instance_id,b.channel_id,c.channel_name,b.model_name,b.base_weight,b.base_priority,c.weight,COALESCE(c.priority,0),c.captured_at,COALESCE(c.models_text,''),b.updated_at,b.updated_by
+	rows, err := s.db.QueryContext(context.Background(), `SELECT b.instance_id,b.channel_id,c.channel_name,COALESCE(c.group_name,''),b.model_name,b.base_weight,b.base_priority,c.weight,COALESCE(c.priority,0),c.captured_at,COALESCE(c.models_text,''),b.updated_at,b.updated_by
 FROM channel_base_values b
 JOIN (SELECT cs.* FROM channel_current cs JOIN instances i ON i.id=cs.instance_id
       JOIN (SELECT cs2.channel_id,MAX(cs2.captured_at) captured_at FROM channel_current cs2 JOIN instances i2 ON i2.id=cs2.instance_id WHERE CASE WHEN i2.site_id='' THEN i2.id ELSE i2.site_id END=? AND i2.enabled=1 GROUP BY cs2.channel_id) x
@@ -55,7 +55,7 @@ WHERE b.instance_id=? AND LOWER(c.status) IN ('enabled','enable','active','norma
 	for rows.Next() {
 		var v tuning.ChannelBaseValue
 		var modelsText string
-		if err = rows.Scan(&v.InstanceID, &v.ChannelID, &v.ChannelName, &v.ModelName, &v.BaseWeight, &v.BasePriority, &v.CurrentWeight, &v.CurrentPriority, &v.SnapshotAt, &modelsText, &v.UpdatedAt, &v.UpdatedBy); err != nil {
+		if err = rows.Scan(&v.InstanceID, &v.ChannelID, &v.ChannelName, &v.GroupName, &v.ModelName, &v.BaseWeight, &v.BasePriority, &v.CurrentWeight, &v.CurrentPriority, &v.SnapshotAt, &modelsText, &v.UpdatedAt, &v.UpdatedBy); err != nil {
 			return nil, err
 		}
 		v.Models = parseChannelModels(modelsText)
@@ -115,7 +115,7 @@ func (s Store) SyncChannelBaseValues(instanceID string, models []string) ([]tuni
 		if len(wanted) > 0 && !wanted[m] {
 			continue
 		}
-		out = append(out, tuning.ChannelBaseValue{InstanceID: instanceID, ChannelID: c.ID, ChannelName: c.Name, ModelName: m, BaseWeight: c.Weight, BasePriority: c.Priority, CurrentWeight: c.Weight, CurrentPriority: c.Priority})
+		out = append(out, tuning.ChannelBaseValue{InstanceID: instanceID, ChannelID: c.ID, ChannelName: c.Name, GroupName: c.GroupName, ModelName: m, BaseWeight: c.Weight, BasePriority: c.Priority, CurrentWeight: c.Weight, CurrentPriority: c.Priority})
 	}
 	return out, nil
 }
@@ -347,7 +347,7 @@ func (s Store) LatestChannels(id string) ([]tuning.Channel, error) {
 	for rows.Next() {
 		var c tuning.Channel
 		var models string
-		if e = rows.Scan(&c.ID, &c.Name, &c.Status, &c.Weight, &models, &c.Priority); e != nil {
+		if e = rows.Scan(&c.ID, &c.Name, &c.Status, &c.Weight, &models, &c.GroupName, &c.Priority); e != nil {
 			return nil, e
 		}
 		c.Models = parseChannelModels(models)
@@ -357,7 +357,7 @@ func (s Store) LatestChannels(id string) ([]tuning.Channel, error) {
 }
 
 const latestChannelsSQL = `
-SELECT c.channel_id,c.channel_name,c.status,c.weight,c.models_text,COALESCE(c.priority,0)
+SELECT c.channel_id,c.channel_name,c.status,c.weight,c.models_text,COALESCE(c.group_name,''),COALESCE(c.priority,0)
 FROM channel_current c
 JOIN (
   SELECT channel_id,MAX(captured_at) AS captured_at
