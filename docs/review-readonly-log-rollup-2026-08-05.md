@@ -32,6 +32,8 @@
 
 codex 指出契约测试的 fake 用"取最大 id"建模安全水位，与真实 SQL（`ORDER BY created_at DESC,id DESC LIMIT 1` = 取最新 created_at 那行的 id）语义不同，测不出 SQL 排序写错的回归。已补强：① fake 改为精确镜像真实 SQL 语义；② 新增 id/created_at 倒挂场景测试（倒挂行暂留水位之上，新 settled 行抬升水位后补齐——延迟可接受、丢失不可接受）；③ 按 mysqlstore/*_contract_test.go 既有模式加源码文本 SQL 契约测试，锁死两条查询的排序与边界写法。倒挂下真实行为核验：水位取"最新 created_at 行的 id"意味着更高 id 但更旧 created_at 的行会晚一轮同步，不会丢；极端情况（倒挂行之后站点长期无新日志）该行会一直悬着，属理论边角，记档不处理。
 
+后续复核推翻了上述“理论边角可接受”的判断：quiet site 会持续刷新 `caught_up_at`，使查询端在倒挂行未入聚合时仍使用本地统计，形成静默少计。现已拆分首次回填游标与运行期水位：首次游标取覆盖窗口内最小 id 的前一位（空窗口取当前表头）；运行期先捕获最大可见 id，等待 10 秒沉淀后仅处理到该上界，使较低 id 的短事务有时间提交，同时不依赖 created_at 顺序。倒挂且无后续日志的测试要求同一轮追平。
+
 ## 行为变更与记档
 
 - **日志页 username 筛选对 viewer 开放**（原 admin 专属，含账单深链的 username 参数）：服务端 scope 仍强制 IN(user_ids)，viewer 筛自己范围外的用户名只会得到空结果，无泄露；属 UX 放开，记档。

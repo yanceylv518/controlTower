@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -45,33 +46,55 @@ func TestCompleteHourWindow(t *testing.T) {
 type fakeRollupSource struct {
 	logs     []readonlySourceLog
 	lastSeen int64
+	head     int64
 }
 
-// Mirrors the real query's semantics — ORDER BY created_at DESC, id DESC
-// LIMIT 1 — i.e. the id of the most recently created qualifying row, NOT the
-// maximum qualifying id. The two differ when id order and created_at order
-// invert; the inversion test below depends on this distinction.
-func (f *fakeRollupSource) readonlyLogLastIDBefore(_ context.Context, _ string, cutoff time.Time) (int64, error) {
-	var id, createdAt int64
+// The initial cursor starts immediately before the minimum id in the
+// coverage window; the captured head independently uses the greatest visible
+// source id.
+func (f *fakeRollupSource) readonlyLogInitialCursor(_ context.Context, _ string, cutoff time.Time) (int64, error) {
+	var minimum, maximum int64
 	for _, item := range f.logs {
-		if item.CreatedAt >= cutoff.Unix() {
-			continue
+		if item.ID > maximum {
+			maximum = item.ID
 		}
-		if item.CreatedAt > createdAt || (item.CreatedAt == createdAt && item.ID > id) {
-			id, createdAt = item.ID, item.CreatedAt
+		if item.CreatedAt >= cutoff.Unix() && (minimum == 0 || item.ID < minimum) {
+			minimum = item.ID
 		}
 	}
-	return id, nil
+	if minimum == 0 {
+		return maximum, nil
+	}
+	return minimum - 1, nil
+}
+
+func (f *fakeRollupSource) readonlyLogHead(context.Context, string) (int64, error) {
+	if f.head > 0 {
+		return f.head, nil
+	}
+	var maximum int64
+	for _, item := range f.logs {
+		if item.ID > maximum {
+			maximum = item.ID
+		}
+	}
+	return maximum, nil
 }
 
 func (f *fakeRollupSource) readonlyLogBatch(_ context.Context, _ string, afterID, maxID int64, limit int) ([]readonlySourceLog, error) {
 	items := []readonlySourceLog{}
 	for _, item := range f.logs {
-		if item.ID > afterID && item.ID <= maxID && len(items) < limit {
+		if item.ID > afterID && item.ID <= maxID {
 			items = append(items, item)
-			if item.ID > f.lastSeen {
-				f.lastSeen = item.ID
-			}
+		}
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	for _, item := range items {
+		if item.ID > f.lastSeen {
+			f.lastSeen = item.ID
 		}
 	}
 	return items, nil
@@ -112,13 +135,13 @@ func (f *fakeRollupStore) QueryReadonlyLogRollup(context.Context, storage.Readon
 // commits late cannot be skipped forever.
 func TestSyncSiteStopsAtSettledHead(t *testing.T) {
 	now := time.Now().Unix()
-	source := &fakeRollupSource{logs: []readonlySourceLog{
+	source := &fakeRollupSource{head: 2, logs: []readonlySourceLog{
 		{ID: 1, CreatedAt: now - 3600, LogType: 2, UserID: 1, Quota: 5},
 		{ID: 2, CreatedAt: now - 3600, LogType: 2, UserID: 1, Quota: 7},
 		{ID: 3, CreatedAt: now - 2, LogType: 2, UserID: 1, Quota: 11},
 	}}
 	store := &fakeRollupStore{}
-	runner := ReadonlyLogRollupRunner{Source: source, Store: store}
+	runner := ReadonlyLogRollupRunner{Source: source, Store: store, SettleDelay: -1}
 	if err := runner.syncSite(context.Background(), "cn"); err != nil {
 		t.Fatalf("first pass: %v", err)
 	}
@@ -132,9 +155,9 @@ func TestSyncSiteStopsAtSettledHead(t *testing.T) {
 	if quota != 12 {
 		t.Fatalf("applied quota = %d, want 12", quota)
 	}
-	// Second pass with the young row now older than the lag: it must be
-	// picked up rather than skipped.
+	// The next pass captures the new source head and must pick up the row.
 	source.logs[2].CreatedAt = now - 3600
+	source.head = 3
 	if err := runner.syncSite(context.Background(), "cn"); err != nil {
 		t.Fatalf("second pass: %v", err)
 	}
@@ -143,11 +166,9 @@ func TestSyncSiteStopsAtSettledHead(t *testing.T) {
 	}
 }
 
-// An id whose created_at is older than a later-inserted lower id (id order
-// and time order inverted) sits above the settled head temporarily. It must
-// be picked up once a newer settled row raises the head — delayed is fine,
-// lost is not.
-func TestSyncSiteToleratesIDOrderInversion(t *testing.T) {
+// An id whose created_at is older than a lower id must be consumed even if
+// the site becomes quiet and no future row arrives to raise the water mark.
+func TestSyncSiteToleratesIDOrderInversionWithoutFutureLogs(t *testing.T) {
 	now := time.Now().Unix()
 	source := &fakeRollupSource{logs: []readonlySourceLog{
 		{ID: 1, CreatedAt: now - 500, LogType: 2, UserID: 1, Quota: 1},
@@ -155,27 +176,19 @@ func TestSyncSiteToleratesIDOrderInversion(t *testing.T) {
 		{ID: 2, CreatedAt: now - 100, LogType: 2, UserID: 1, Quota: 4},
 	}}
 	store := &fakeRollupStore{}
-	runner := ReadonlyLogRollupRunner{Source: source, Store: store}
+	runner := ReadonlyLogRollupRunner{Source: source, Store: store, SettleDelay: -1}
 	if err := runner.syncSite(context.Background(), "cn"); err != nil {
 		t.Fatalf("first pass: %v", err)
 	}
-	// Settled head is id 2 (latest created_at), so id 3 stays unread for now.
-	if store.cursor.LastLogID != 2 {
-		t.Fatalf("cursor = %d, want settled head 2", store.cursor.LastLogID)
-	}
-	source.logs = append(source.logs, readonlySourceLog{ID: 4, CreatedAt: now - 50, LogType: 2, UserID: 1, Quota: 8})
-	if err := runner.syncSite(context.Background(), "cn"); err != nil {
-		t.Fatalf("second pass: %v", err)
-	}
-	if store.cursor.LastLogID != 4 {
-		t.Fatalf("cursor = %d, want 4", store.cursor.LastLogID)
+	if store.cursor.LastLogID != 3 || !store.caughtUp {
+		t.Fatalf("cursor = %d caughtUp=%v, want settled head 3", store.cursor.LastLogID, store.caughtUp)
 	}
 	var quota int64
 	for _, value := range store.applied {
 		quota += value.QuotaSum
 	}
-	if quota != 15 {
-		t.Fatalf("applied quota = %d, want 15 (row 3 must not be lost)", quota)
+	if quota != 7 {
+		t.Fatalf("applied quota = %d, want 7 (row 3 must not be stranded)", quota)
 	}
 }
 
@@ -190,8 +203,10 @@ func TestReadonlyLogRollupSQLContract(t *testing.T) {
 	}
 	text := string(data)
 	for _, required := range []string{
-		// settled head: id of the most recently created row before cutoff
-		"WHERE created_at<? ORDER BY created_at DESC,id DESC LIMIT 1",
+		// initial cursor: immediately before the minimum id in coverage
+		"GREATEST(MIN(id)-1,0) FROM logs WHERE created_at>=?",
+		// captured source head is independent of created_at ordering
+		"SELECT COALESCE(MAX(id),0) FROM logs",
 		// batch: strictly cursor-bounded on both sides, scanned in id order
 		"WHERE id>? AND id<=? ORDER BY id LIMIT ?",
 	} {

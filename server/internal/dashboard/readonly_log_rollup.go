@@ -15,12 +15,10 @@ import (
 const (
 	readonlyLogRollupBatchSize = 5000
 	readonlyLogRollupBackfill  = 7 * 24 * time.Hour
-	// Rows younger than this lag are left for the next pass. Auto-increment
-	// ids become visible out of commit order, so chasing the live head can
-	// advance the cursor past a not-yet-committed lower id and lose that row
-	// forever. Bounding each pass to a settled head id closes that gap for
-	// any insert that commits within the lag.
-	readonlyLogRollupSafetyLag = 10 * time.Second
+	// A captured source head is allowed to settle before its id range is read.
+	// This lets lower auto-increment ids that commit out of order become visible
+	// without coupling the water mark to created_at ordering.
+	readonlyLogRollupSettleDelay = 10 * time.Second
 )
 
 type ReadonlyLogRollupStore interface {
@@ -48,10 +46,10 @@ type readonlySourceLog struct {
 	Quota            int64
 }
 
-// readonlyLogLastIDBefore returns the highest log id whose created_at is
-// strictly before cutoff (0 when none). Used both for the initial cursor and
-// as the settled-head bound of each sync pass.
-func (h *PassthroughHandler) readonlyLogLastIDBefore(ctx context.Context, site string, cutoff time.Time) (int64, error) {
+// readonlyLogInitialCursor returns the id immediately before the smallest id
+// in the requested backfill window. If the window is empty it starts at the
+// current table head, so old history is not scanned unnecessarily.
+func (h *PassthroughHandler) readonlyLogInitialCursor(ctx context.Context, site string, cutoff time.Time) (int64, error) {
 	db, configured, err := h.database(site)
 	if err != nil || !configured {
 		return 0, err
@@ -59,7 +57,19 @@ func (h *PassthroughHandler) readonlyLogLastIDBefore(ctx context.Context, site s
 	queryCtx, cancel := context.WithTimeout(ctx, readonlyLogQueryTimeout)
 	defer cancel()
 	var id int64
-	err = db.QueryRowContext(queryCtx, `SELECT COALESCE((SELECT id FROM logs WHERE created_at<? ORDER BY created_at DESC,id DESC LIMIT 1),0)`, cutoff.Unix()).Scan(&id)
+	err = db.QueryRowContext(queryCtx, `SELECT COALESCE((SELECT GREATEST(MIN(id)-1,0) FROM logs WHERE created_at>=?),(SELECT COALESCE(MAX(id),0) FROM logs))`, cutoff.Unix()).Scan(&id)
+	return id, err
+}
+
+func (h *PassthroughHandler) readonlyLogHead(ctx context.Context, site string) (int64, error) {
+	db, configured, err := h.database(site)
+	if err != nil || !configured {
+		return 0, err
+	}
+	queryCtx, cancel := context.WithTimeout(ctx, readonlyLogQueryTimeout)
+	defer cancel()
+	var id int64
+	err = db.QueryRowContext(queryCtx, `SELECT COALESCE(MAX(id),0) FROM logs`).Scan(&id)
 	return id, err
 }
 
@@ -87,14 +97,16 @@ func (h *PassthroughHandler) readonlyLogBatch(ctx context.Context, site string, 
 }
 
 type readonlyLogSource interface {
-	readonlyLogLastIDBefore(ctx context.Context, site string, cutoff time.Time) (int64, error)
+	readonlyLogInitialCursor(ctx context.Context, site string, cutoff time.Time) (int64, error)
+	readonlyLogHead(ctx context.Context, site string) (int64, error)
 	readonlyLogBatch(ctx context.Context, site string, afterID, maxID int64, limit int) ([]readonlySourceLog, error)
 }
 
 type ReadonlyLogRollupRunner struct {
-	Source   readonlyLogSource
-	Store    ReadonlyLogRollupStore
-	Interval time.Duration
+	Source      readonlyLogSource
+	Store       ReadonlyLogRollupStore
+	Interval    time.Duration
+	SettleDelay time.Duration
 }
 
 func (r ReadonlyLogRollupRunner) Run(ctx context.Context) error {
@@ -151,7 +163,7 @@ func (r ReadonlyLogRollupRunner) syncSite(ctx context.Context, site string) erro
 	}
 	if !cursor.Initialized {
 		coverageFrom := time.Now().UTC().Add(-readonlyLogRollupBackfill)
-		initial, initErr := r.Source.readonlyLogLastIDBefore(ctx, site, coverageFrom)
+		initial, initErr := r.Source.readonlyLogInitialCursor(ctx, site, coverageFrom)
 		if initErr != nil {
 			return initErr
 		}
@@ -160,12 +172,25 @@ func (r ReadonlyLogRollupRunner) syncSite(ctx context.Context, site string) erro
 		}
 		cursor.LastLogID = initial
 	}
-	safeHead, err := r.Source.readonlyLogLastIDBefore(ctx, site, time.Now().Add(-readonlyLogRollupSafetyLag))
+	safeHead, err := r.Source.readonlyLogHead(ctx, site)
 	if err != nil {
 		return err
 	}
 	if safeHead <= cursor.LastLogID {
 		return r.Store.MarkReadonlyLogRollupCaughtUp(ctx, site, time.Now().UTC())
+	}
+	settleDelay := r.SettleDelay
+	if settleDelay == 0 {
+		settleDelay = readonlyLogRollupSettleDelay
+	}
+	if settleDelay > 0 {
+		timer := time.NewTimer(settleDelay)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+		}
 	}
 	// Bound each pass so a historical backfill cannot monopolize the readonly
 	// pool. Subsequent passes continue from the durable source-id cursor.
