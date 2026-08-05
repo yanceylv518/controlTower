@@ -49,7 +49,7 @@ func (h *PassthroughHandler) LogsForBilling(ctx context.Context, site string, st
 		if err = rows.Scan(&v.UserID, &v.Username, &v.ModelName, &v.GroupName, &v.PromptTokens, &v.CompletionTokens, &v.Quota, &other); err != nil {
 			return nil, err
 		}
-		cache := parseBillingCacheUsage(other)
+		cache := resolveBillingCacheSemantic(parseBillingCacheUsage(other), v.PromptTokens)
 		v.CacheTokens, v.CacheWriteTokens, v.CacheWrite5mTokens, v.CacheWrite1hTokens = cache.Read, cache.Write, cache.Write5m, cache.Write1h
 		if cache.Semantic != "anthropic" {
 			v.PromptTokens -= cache.Read + cache.Write
@@ -86,7 +86,7 @@ func (h *PassthroughHandler) DetailedLogsForBilling(ctx context.Context, site st
 			return nil, err
 		}
 		v.CreatedAt = time.Unix(created, 0).UTC()
-		cache := parseBillingCacheUsage(other)
+		cache := resolveBillingCacheSemantic(parseBillingCacheUsage(other), v.PromptTokens)
 		v.CacheTokens, v.CacheWriteTokens, v.CacheWrite5mTokens, v.CacheWrite1hTokens = cache.Read, cache.Write, cache.Write5m, cache.Write1h
 		if cache.Semantic != "anthropic" {
 			v.PromptTokens -= cache.Read + cache.Write
@@ -149,6 +149,9 @@ func (h *PassthroughHandler) logsPageForBilling(ctx context.Context, site string
 			return nil, err
 		}
 		cache := parseBillingCacheUsage(other)
+		if v.PromptTokens.Valid {
+			cache = resolveBillingCacheSemantic(cache, v.PromptTokens.Int64)
+		}
 		v.CacheTokens, v.CacheWriteTokens = cache.Read, cache.Write
 		v.CacheWrite5mTokens, v.CacheWrite1hTokens = cache.Write5m, cache.Write1h
 		v.UsageSemantic = cache.Semantic
@@ -389,6 +392,18 @@ func parseBillingCacheUsage(other string) billingCacheUsage {
 		semantic = "anthropic"
 	}
 	return billingCacheUsage{Read: read, Write: write, Write5m: write5m, Write1h: write1h, Semantic: semantic}
+}
+
+// OpenAI-style usage counts cache reads inside prompt_tokens, so cache lanes
+// can never exceed prompt there. A row whose cache lanes exceed prompt is
+// Anthropic-shaped even without an explicit marker — production new-api
+// versions emit this shape with no usage_semantic field, and subtracting
+// would zero the input lane.
+func resolveBillingCacheSemantic(cache billingCacheUsage, promptTokens int64) billingCacheUsage {
+	if cache.Semantic != "anthropic" && cache.Read+cache.Write > promptTokens {
+		cache.Semantic = "anthropic"
+	}
+	return cache
 }
 
 type passthroughPool struct {

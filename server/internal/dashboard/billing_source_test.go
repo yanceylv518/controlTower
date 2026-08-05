@@ -23,3 +23,18 @@ func TestParseBillingCacheUsageDoesNotDoubleCountAliases(t *testing.T) {
 		t.Fatalf("unexpected: %#v", v)
 	}
 }
+
+// The accepted production example (prompt=298 already non-cache, cache=8507)
+// carries no usage_semantic marker on some new-api versions. OpenAI-style
+// cache is a subset of prompt, so cache exceeding prompt proves the row is
+// Anthropic-shaped; without this guard the input lane would be zeroed.
+func TestUnmarkedAnthropicShapeKeepsInputLane(t *testing.T) {
+	cache := resolveBillingCacheSemantic(parseBillingCacheUsage(`{"cache_tokens":8507}`), 298)
+	if cache.Semantic != "anthropic" || cache.Read != 8507 {
+		t.Fatalf("unexpected: %#v", cache)
+	}
+	marked := resolveBillingCacheSemantic(parseBillingCacheUsage(`{"cached_tokens":400}`), 1000)
+	if marked.Semantic != "openai" {
+		t.Fatalf("subset cache must stay openai: %#v", marked)
+	}
+}
