@@ -224,7 +224,10 @@ func FallbackPrice(snapshot RatioSnapshot, model, group string) (Price, string, 
 	}
 	cacheWrite := snapshot.CreateCacheRatio[model]
 	if cacheWrite == "" {
-		cacheWrite = "1"
+		// new-api's GetCreateCacheRatio uses 1.25 when a model has no
+		// explicit CreateCacheRatio entry. Keep CT's imported price aligned
+		// with the amount new-api actually deducts.
+		cacheWrite = "1.25"
 	}
 	cwr, e := decimalRat(cacheWrite)
 	if e != nil {

@@ -39,6 +39,7 @@ type billingModelItem struct {
 	Output           string `json:"output_price"`
 	Cache            string `json:"cache_price"`
 	CacheWrite       string `json:"cache_write_price"`
+	CacheWriteSet    bool   `json:"cache_write_price_configured"`
 	EffectiveFrom    string `json:"effective_from"`
 	PriceSource      string `json:"price_source"`
 }
@@ -96,6 +97,16 @@ func (h BillingModelsHandler) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	items := map[string]*billingModelItem{}
+	configuredCacheWrite := map[string]bool{}
+	if h.Source != nil {
+		if raw, sourceErr := h.Source.RatioSnapshot(r.Context(), instanceID); sourceErr == nil {
+			if snapshot, parseErr := billing.ParseRatioSnapshot(raw); parseErr == nil {
+				for model := range snapshot.CreateCacheRatio {
+					configuredCacheWrite[model] = true
+				}
+			}
+		}
+	}
 	today := time.Now().Format("2006-01-02")
 	for _, p := range prices {
 		item := items[p.ModelName]
@@ -109,6 +120,7 @@ func (h BillingModelsHandler) list(w http.ResponseWriter, r *http.Request) {
 			item.Output = p.Output
 			item.Cache = p.Cache
 			item.CacheWrite = p.CacheWrite
+			item.CacheWriteSet = configuredCacheWrite[p.ModelName]
 			item.EffectiveFrom = day
 			item.PriceSource = "ct"
 		}

@@ -476,6 +476,7 @@ export interface BillingModelItem {
   output_price: string;
   cache_price: string;
   cache_write_price: string;
+  cache_write_price_configured: boolean;
   effective_from: string;
   price_source: "ct" | "newapi" | "";
 }
@@ -718,7 +719,7 @@ export const dashboardApi = (client: ApiClient) => ({
   billingJob: (id: string) => client.request<BillingJob>(`/api/dashboard/billing/jobs${query({ id })}`),
   billingUserSettings: (instance_id: string) => client.request<{ items: Record<string, BillingUserSetting> }>(`/api/dashboard/billing/user-settings${query({ instance_id })}`),
   saveBillingUserSetting: (input: BillingUserSetting) => client.request<BillingUserSetting>("/api/dashboard/billing/user-settings", { method: "PUT", body: JSON.stringify(input) }),
-  billingChannels:(params:{instance_id:string;month?:string;from?:string;to?:string;channel_id?:number})=>client.request<{items:BillingChannelSummary[];period:string;generation_job?:BillingJob|null;warning?:string}>(`/api/dashboard/billing/channels${query(params)}`),
+  billingChannels:(params:{instance_id:string;month?:string;from?:string;to?:string;channel_id?:number})=>client.request<{items:BillingChannelSummary[];details:BillingDetailItem[];period:string;generation_job?:BillingJob|null;warning?:string}>(`/api/dashboard/billing/channels${query(params)}`),
   saveBillingChannelDiscount:(input:{instance_id:string;channel_id:number;discount:string})=>client.request("/api/dashboard/billing/channels",{method:"PUT",body:JSON.stringify(input)}),
   billingPrices: (instance_id: string) =>
     client.request<ListResponse<BillingPriceItem>>(`/api/dashboard/billing/prices${query({ instance_id })}`),

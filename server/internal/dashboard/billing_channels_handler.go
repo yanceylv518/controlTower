@@ -96,6 +96,10 @@ func (h BillingChannelsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 		return
 	}
 	billed := billing.BuildChannelSummary(rows, prices, ratios, snapshots, settings)
+	details := []billing.DetailItem{}
+	if channelID > 0 {
+		details = billing.BuildDetails(rows, prices, ratios, snapshots)
+	}
 	items := billed
 	warning := ""
 	if h.Source != nil {
@@ -133,7 +137,7 @@ func (h BillingChannelsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 	if jobErr == nil {
 		generationJob = job
 	}
-	writeDashboardJSON(w, 200, map[string]any{"items": items, "period": period, "generation_job": generationJob, "warning": warning})
+	writeDashboardJSON(w, 200, map[string]any{"items": items, "details": details, "period": period, "generation_job": generationJob, "warning": warning})
 }
 
 func billingPeriodQuery(r *http.Request) (time.Time, time.Time, string, error) {
