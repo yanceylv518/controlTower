@@ -17,7 +17,7 @@
 
 **无标记 anthropic 形态会被清零输入泳道**。新代码只认显式标记；但用户钉死的生产实例（prompt=298 非缓存、cache=8507）正是"prompt 已不含缓存"的形态——若生产 other JSON 无 usage_semantic/claude 标记（旧版 new-api 完全可能），按 openai 减法会把 298 减成 0，输入项系统性消失。旧代码的形态守卫（cache>prompt 则不减）这次被删。而 **OpenAI 语义下缓存必为 prompt 子集、不可能超过 prompt**，故守卫是零代价纯保护：恢复为 `resolveBillingCacheSemantic`（读+写 > prompt 且未标记 → 按 anthropic 处理），应用于三处解析点（聚合/明细/分页含 ContextTokens），回归测试用 298/8507 形态钉死。
 
-**守卫覆盖不到的残余**：anthropic 语义 + 缓存 ≤ prompt + 无标记的行（小缓存读的 claude 请求）仍会被误减。**部署后校准必做**：抽样 claude 渠道日志的 other JSON，确认 usage_semantic/claude 标记是否实际存在——存在则残余为零；不存在则需按渠道类型补充判定（记档为潜在跟进批次）。
+**守卫覆盖不到的残余**：anthropic 语义 + 缓存 ≤ prompt + 无标记的行（小缓存读的 claude 请求）仍会被误减。~~部署后校准必做~~ **→ 同日已用生产样本闭环**：用户提供真实 other JSON——`usage_semantic:"anthropic"` 与 `claude:true` 双标记确实存在，语义检测主路径成立；样本内 `cache_creation_ratio:1.25` / `cache_creation_ratio_1h:2` 之比 = 1.6，硬编码倍率与 newapi 实际定价严格一致；解析器逐字段核对正确（read=43268、write=2382 取 max 不双计、全量落 1h 档、负数哨兵忽略），样本已钉成回归测试。残余缩小为：**当前 new-api 版本升级之前产生的历史日志**若无标记且缓存 ≤ prompt 仍会误减——回填生成历史月份账单时留意，形态守卫兜住其中缓存 > prompt 的部分。另一稳健性质经样本推演确认：未识别键名的 5m 写入落 remainingWrite 按 5m 价（即默认价）计，不会错价——只有 1h 检测依赖键名，且 1h 键名已被样本证实。
 
 ## 记档
 

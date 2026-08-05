@@ -38,3 +38,17 @@ func TestUnmarkedAnthropicShapeKeepsInputLane(t *testing.T) {
 		t.Fatalf("subset cache must stay openai: %#v", marked)
 	}
 }
+
+// Verbatim production sample (2026-08-05, user-provided) — the calibration
+// evidence: both anthropic markers exist, all creation is 1h here, and the
+// in-log ratios (1.25 vs 2) confirm the hardcoded 1.6 one-hour multiplier.
+func TestParseBillingCacheUsageOnProductionSample(t *testing.T) {
+	sample := `{"admin_info":{"use_channel":["10"]},"billing_source":"wallet","cache_creation_ratio":1.25,"cache_creation_ratio_1h":2,"cache_creation_tokens":2382,"cache_creation_tokens_1h":2382,"cache_ratio":0.1,"cache_tokens":43268,"cache_write_tokens":2382,"claude":true,"completion_ratio":5,"frt":10010,"group_ratio":1,"model_price":-1,"model_ratio":2.5,"request_conversion":["OpenAI Compatible","Claude Messages"],"request_path":"/v1/chat/completions","stream_status":{"end_reason":"eof","status":"ok"},"usage_semantic":"anthropic","user_group_ratio":-1}`
+	v := parseBillingCacheUsage(sample)
+	if v.Semantic != "anthropic" {
+		t.Fatalf("semantic = %q", v.Semantic)
+	}
+	if v.Read != 43268 || v.Write != 2382 || v.Write5m != 0 || v.Write1h != 2382 {
+		t.Fatalf("lanes = %#v", v)
+	}
+}
