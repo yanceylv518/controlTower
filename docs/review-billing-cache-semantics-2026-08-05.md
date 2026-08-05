@@ -12,6 +12,7 @@
 - 逐位钉死的 $0.005828 断言测试原样保留且通过；新增缓存写计价与 1h 倍率测试、别名字段不双计测试；
 - 语义检测：`other.usage_semantic=="anthropic"` 或 `other.claude==true` → anthropic（prompt 已不含缓存，不减）；否则 openai（prompt 含缓存读写，减去归入缓存泳道）。判档 ContextTokens 同步分流（anthropic=prompt+读+写，openai=原始 prompt）——与"判档含缓存"决策一致；
 - **搭车改动（与账单无关，记档）**：agent 上报合约新增 `channel_snapshot_complete`（omitempty 加法字段），server 收到 true 时走新 `SyncChannelSnapshots` 全量同步 channel_current（清掉已删渠道的幽灵行）；**旧 agent（rc22）不发该字段 → false → 原逐行插入路径不变，向后兼容核验过**。要吃到幽灵行清理需升级 agent，不升级无损。agent 侧渠道采集加 limit+1 超限报错守卫。
+- **搭车改动之二（初次验收漏记，2026-08-05 用户问询后补录）**：调权中心（ContinuousTuningView）把渠道×模型基础值列表挂进既有 30s 运行时轮询——渠道列表/权重变化免手动刷新即可跟上；带脏数据保护（正在编辑未保存的行不被轮询覆盖），模型下拉与 dispatch_modes 随列表补齐。与上一条合成"调权中心渠道列表定时检测"完整功能：**新增/变更检测旧 agent 即可用（channel_current 逐行上插本就在跑）；删除检测需 agent 升 rc29（仅新 agent 声明全量，server 才敢删行）**。
 
 ## 验收修正（P1 风险，我直接修）
 
