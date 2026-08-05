@@ -66,6 +66,7 @@ func TestAnomalyReasons(t *testing.T) {
 		{"missing", PagedLogRecord{}, 100, "input_token_missing,output_token_missing"},
 		{"zero", PagedLogRecord{PromptTokens: sql.NullInt64{Valid: true}, CompletionTokens: sql.NullInt64{Valid: true}}, 100, "input_token_zero,output_token_zero"},
 		{"context", PagedLogRecord{PromptTokens: sql.NullInt64{Valid: true, Int64: 101}, CompletionTokens: sql.NullInt64{Valid: true, Int64: 1}}, 100, "context_limit_exceeded"},
+		{"fully cached input remains valid", PagedLogRecord{SourcePromptTokens: sql.NullInt64{Valid: true, Int64: 100}, PromptTokens: sql.NullInt64{Valid: true, Int64: 0}, CompletionTokens: sql.NullInt64{Valid: true, Int64: 1}, ContextTokens: 100}, 100, ""},
 		{"unknown context accepted", PagedLogRecord{PromptTokens: sql.NullInt64{Valid: true, Int64: 1000000}, CompletionTokens: sql.NullInt64{Valid: true, Int64: 1}}, 0, ""},
 	}
 	for _, tc := range cases {

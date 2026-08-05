@@ -24,7 +24,9 @@ type PagedLogRecord struct {
 	UsageSemantic                                                string
 	RequestID, UpstreamRequestID, Username, ModelName, GroupName string
 	ChannelName                                                  string
-	PromptTokens, CompletionTokens                               sql.NullInt64
+	// SourcePromptTokens preserves logs.prompt_tokens before the billing
+	// source separates cache reads/writes from ordinary input tokens.
+	SourcePromptTokens, PromptTokens, CompletionTokens sql.NullInt64
 }
 
 type LogCursor struct{ CreatedUnix, ID int64 }
@@ -243,7 +245,7 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 			useTiers := !configured || setting.UseTieredPricing
 			reasons := anomalyReasons(log, maxByModel[log.ModelName])
 			if len(reasons) > 0 {
-				item := AnomalyOrder{InstanceID: job.InstanceID, SourceLogID: log.ID, JobID: job.ID, CreatedAt: time.Unix(log.CreatedUnix, 0), RequestID: log.RequestID, UpstreamRequestID: log.UpstreamRequestID, UserID: log.UserID, Username: log.Username, ChannelID: log.ChannelID, ChannelName: log.ChannelName, ModelName: log.ModelName, GroupName: log.GroupName, PromptTokens: log.PromptTokens, CompletionTokens: log.CompletionTokens, CacheTokens: log.CacheTokens, CacheWriteTokens: log.CacheWriteTokens, CacheWrite5mTokens: log.CacheWrite5mTokens, CacheWrite1hTokens: log.CacheWrite1hTokens, Quota: log.Quota, MaxContextTokens: maxByModel[log.ModelName], Reasons: strings.Join(reasons, ","), DetectedAt: time.Now().UTC()}
+				item := AnomalyOrder{InstanceID: job.InstanceID, SourceLogID: log.ID, JobID: job.ID, CreatedAt: time.Unix(log.CreatedUnix, 0), RequestID: log.RequestID, UpstreamRequestID: log.UpstreamRequestID, UserID: log.UserID, Username: log.Username, ChannelID: log.ChannelID, ChannelName: log.ChannelName, ModelName: log.ModelName, GroupName: log.GroupName, PromptTokens: sourcePromptTokens(log), CompletionTokens: log.CompletionTokens, CacheTokens: log.CacheTokens, CacheWriteTokens: log.CacheWriteTokens, CacheWrite5mTokens: log.CacheWrite5mTokens, CacheWrite1hTokens: log.CacheWrite1hTokens, Quota: log.Quota, MaxContextTokens: maxByModel[log.ModelName], Reasons: strings.Join(reasons, ","), DetectedAt: time.Now().UTC()}
 				fillAnomalyAmounts(&item, log, priceByModel[log.ModelName], ratioByGroup[log.GroupName], step.From, useTiers)
 				anomalies = append(anomalies, item)
 				continue
@@ -402,9 +404,10 @@ func fillAnomalyAmounts(out *AnomalyOrder, log PagedLogRecord, prices []Price, r
 
 func anomalyReasons(log PagedLogRecord, maxContext int64) []string {
 	r := []string{}
-	if !log.PromptTokens.Valid {
+	inputTokens := sourcePromptTokens(log)
+	if !inputTokens.Valid {
 		r = append(r, "input_token_missing")
-	} else if log.PromptTokens.Int64 <= 0 {
+	} else if inputTokens.Int64 <= 0 {
 		r = append(r, "input_token_zero")
 	}
 	if !log.CompletionTokens.Valid {
@@ -420,4 +423,11 @@ func anomalyReasons(log PagedLogRecord, maxContext int64) []string {
 		r = append(r, "context_limit_exceeded")
 	}
 	return r
+}
+
+func sourcePromptTokens(log PagedLogRecord) sql.NullInt64 {
+	if log.SourcePromptTokens.Valid {
+		return log.SourcePromptTokens
+	}
+	return log.PromptTokens
 }

@@ -149,6 +149,7 @@ func (h *PassthroughHandler) logsPageForBilling(ctx context.Context, site string
 			return nil, err
 		}
 		cache := parseBillingCacheUsage(other)
+		v.SourcePromptTokens = v.PromptTokens
 		if v.PromptTokens.Valid {
 			cache = resolveBillingCacheSemantic(cache, v.PromptTokens.Int64)
 		}
