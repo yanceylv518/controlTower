@@ -416,6 +416,8 @@ const (
 	readonlyQueryTimeout    = 5 * time.Second
 	readonlyLogQueryTimeout = 120 * time.Second
 	readonlyLogCountTimeout = 120 * time.Second
+	readonlyLogsListQuery   = `SELECT id,user_id,created_at,type,COALESCE(username,''),COALESCE(model_name,''),channel_id,COALESCE(token_name,''),prompt_tokens,completion_tokens,quota,use_time,COALESCE(request_id,''),COALESCE(content,''),COALESCE(` + "`group`" + `,''),COALESCE(ip,''),COALESCE(is_stream,0),COALESCE(other,'') FROM logs WHERE created_at>=? AND created_at<?`
+	readonlyLogsListOrder   = ` ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?`
 )
 
 func configureReadonlyDB(db *sql.DB) {
@@ -729,7 +731,7 @@ func (h *PassthroughHandler) Logs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	rows, err := tx.QueryContext(ctx, `SELECT id,user_id,created_at,type,COALESCE(username,''),COALESCE(model_name,''),channel_id,COALESCE(token_name,''),prompt_tokens,completion_tokens,quota,use_time,COALESCE(request_id,''),COALESCE(content,''),COALESCE(`+"`group`"+`,''),COALESCE(ip,''),COALESCE(is_stream,0),COALESCE(other,'') FROM logs WHERE created_at BETWEEN ? AND ?`+userFilter+filters+` ORDER BY id DESC LIMIT ? OFFSET ?`, pageArgs...)
+	rows, err := tx.QueryContext(ctx, readonlyLogsListQuery+userFilter+filters+readonlyLogsListOrder, pageArgs...)
 	if err != nil {
 		writeDashboardError(w, 502, "readonly_query_failed")
 		return
@@ -934,7 +936,7 @@ func (h *PassthroughHandler) LogCount(w http.ResponseWriter, r *http.Request) {
 			}
 			total += value
 		}
-	} else if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM logs WHERE created_at BETWEEN ? AND ?`+where, args...).Scan(&total); err != nil {
+	} else if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM logs WHERE created_at>=? AND created_at<?`+where, args...).Scan(&total); err != nil {
 		writeDashboardError(w, 502, "readonly_query_failed")
 		return
 	}

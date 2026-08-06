@@ -91,3 +91,15 @@ func TestPassthroughPoolAndTimeoutGuards(t *testing.T) {
 		t.Fatalf("readonlyLogCountTimeout = %s", readonlyLogCountTimeout)
 	}
 }
+
+func TestReadonlyLogsListQueryUsesTimeIndexOrder(t *testing.T) {
+	if !strings.Contains(readonlyLogsListQuery, "created_at>=? AND created_at<?") {
+		t.Fatalf("list query must use a half-open time range: %s", readonlyLogsListQuery)
+	}
+	if strings.Contains(readonlyLogsListQuery, "BETWEEN") {
+		t.Fatalf("list query must not use an inclusive time range: %s", readonlyLogsListQuery)
+	}
+	if readonlyLogsListOrder != " ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?" {
+		t.Fatalf("list query order does not match idx_created_at_id: %s", readonlyLogsListOrder)
+	}
+}
