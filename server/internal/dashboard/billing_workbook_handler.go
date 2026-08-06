@@ -73,7 +73,7 @@ func (h BillingWorkbookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 	if e = writeOverview(book, uid, period, rows, prices, ratios, snapshots); e == nil {
 		e = writeDaily(book, uid, period, billing.BuildDetails(rows, prices, ratios, snapshots))
 	}
-	if e == nil {
+	if e == nil && r.URL.Query().Get("include_requests") != "0" {
 		e = writeRequests(r.Context(), book, h.Source, site, uid, period, from, to, prices, ratios, metadata)
 	}
 	if e != nil {

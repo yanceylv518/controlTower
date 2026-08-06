@@ -67,6 +67,7 @@ func (h BillingExportJobHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 		query += "&channel_id=" + urlQuery(q["channel_id"])
 	} else {
 		query += "&user_id=" + urlQuery(q["user_id"])
+		query += "&include_requests=" + urlQuery(q["include_requests"])
 	}
 	sum := sha256.Sum256([]byte(ctauth.Actor(r) + "|" + h.Kind + "|" + query))
 	id := hex.EncodeToString(sum[:12])
