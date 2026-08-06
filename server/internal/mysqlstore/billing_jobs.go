@@ -207,7 +207,7 @@ func (s Store) QueryBillingAnomalies(ctx context.Context, site, jobID string, us
 }
 
 func (s Store) BillingAnomalyCountsForJob(ctx context.Context, jobID string) ([]billing.AnomalyCount, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT user_id,channel_id,DATE(CONVERT_TZ(created_at,'+00:00','+08:00')),model_name,group_name,COUNT(*) FROM billing_anomaly_orders WHERE job_id=? GROUP BY user_id,channel_id,DATE(CONVERT_TZ(created_at,'+00:00','+08:00')),model_name,group_name`, jobID)
+	rows, err := s.db.QueryContext(ctx, `SELECT user_id,channel_id,DATE(CONVERT_TZ(created_at,'+00:00','+08:00')),model_name,group_name,COUNT(*),COALESCE(SUM(reference_amount),0) FROM billing_anomaly_orders WHERE job_id=? GROUP BY user_id,channel_id,DATE(CONVERT_TZ(created_at,'+00:00','+08:00')),model_name,group_name`, jobID)
 	if err != nil {
 		return nil, err
 	}
@@ -215,7 +215,7 @@ func (s Store) BillingAnomalyCountsForJob(ctx context.Context, jobID string) ([]
 	items := []billing.AnomalyCount{}
 	for rows.Next() {
 		var item billing.AnomalyCount
-		if err = rows.Scan(&item.UserID, &item.ChannelID, &item.Day, &item.ModelName, &item.GroupName, &item.Count); err != nil {
+		if err = rows.Scan(&item.UserID, &item.ChannelID, &item.Day, &item.ModelName, &item.GroupName, &item.Count, &item.Amount); err != nil {
 			return nil, err
 		}
 		items = append(items, item)

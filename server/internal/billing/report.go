@@ -27,6 +27,7 @@ type AnomalyCount struct {
 	Day                  time.Time
 	ModelName, GroupName string
 	Count                int64
+	Amount               string
 }
 
 type UserSummary struct {
@@ -38,6 +39,7 @@ type UserSummary struct {
 	CacheTokens      int64    `json:"cache_tokens"`
 	CacheWriteTokens int64    `json:"cache_write_tokens"`
 	AbnormalRows     int64    `json:"abnormal_rows"`
+	AbnormalAmount   string   `json:"abnormal_amount"`
 	Quota            int64    `json:"quota"`
 	Amount           string   `json:"amount"`
 	Balance          int64    `json:"balance"`
@@ -58,6 +60,7 @@ type DetailItem struct {
 	CacheWrite5mTokens int64  `json:"cache_write_5m_tokens"`
 	CacheWrite1hTokens int64  `json:"cache_write_1h_tokens"`
 	AbnormalRows       int64  `json:"abnormal_rows"`
+	AbnormalAmount     string `json:"abnormal_amount"`
 	Quota              int64  `json:"quota"`
 	Amount             string `json:"amount"`
 	InputPrice         string `json:"input_price"`
