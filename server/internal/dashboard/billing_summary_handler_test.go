@@ -63,7 +63,7 @@ func TestBillingSummaryPaginationDoesNotChangeTotals(t *testing.T) {
 	req := httptest.NewRequest("GET", "/api/dashboard/billing/summary?instance_id=site-a&month=2026-08&page=2&page_size=1", nil)
 	w := httptest.NewRecorder()
 	BillingSummaryHandler{Store: store}.ServeHTTP(w, req)
-	if w.Code != 200 || !strings.Contains(w.Body.String(), `"total":2`) || !strings.Contains(w.Body.String(), `"amount":"3.000000"`) {
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"total":2`) || !strings.Contains(w.Body.String(), `"amount":"3.000000"`) || !strings.Contains(w.Body.String(), `"generation_job":{"id":"job-1"`) {
 		t.Fatalf("unexpected response: %d %s", w.Code, w.Body.String())
 	}
 }

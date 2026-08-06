@@ -428,6 +428,7 @@ export interface BillingSummaryResponse {
   page_size: number;
   summary: BillingUserSummary & { users: number };
   data_through: string;
+  generation_job?: BillingJob | null;
 }
 export interface BillingDetailItem {
   day: string;

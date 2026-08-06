@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onUnmounted, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
-import type { BillingUserSummary } from "@ct/shared";
+import type { BillingJob, BillingUserSummary } from "@ct/shared";
 import { dashboard, passthrough } from "../api";
 import AppShell from "../components/AppShell.vue";
 import AsyncPanel from "../components/AsyncPanel.vue";
@@ -26,6 +26,8 @@ const generating = ref(false);
 const tierSettings = ref<Record<string, { instance_id: string; user_id: number; use_tiered_pricing: boolean }>>({});
 const jobProgress = ref(0);
 const exporting = ref<Record<number, boolean>>({});
+let monitorVersion=0;
+onUnmounted(()=>{monitorVersion++;});
 void prefs.load();
 const state = useAsyncData(async () => {
   await filters.loadInstances(); if (!filters.site_id) return undefined;
@@ -53,10 +55,17 @@ const dailyExportURL = computed(() => {const[from,to]=generationRange.value;retu
 const anomalyExportURL = computed(() => {const[from,to]=generationRange.value;return selected.value?`/api/dashboard/billing/anomalies?instance_id=${encodeURIComponent(filters.site_id)}&user_id=${selected.value.user_id}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&format=csv`:"#"});
 async function exportUser(row: BillingUserSummary){exporting.value={...exporting.value,[row.user_id]:true};try{const[from,to]=generationRange.value;const res=await fetch("/api/dashboard/billing/workbook-jobs",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({instance_id:filters.site_id,user_id:String(row.user_id),from,to})});if(!res.ok)throw new Error("创建导出任务失败");let task=await res.json();while(task.status==="pending"||task.status==="running"){await new Promise(r=>setTimeout(r,1500));task=await(await fetch(`/api/dashboard/billing/workbook-jobs?id=${task.id}`,{credentials:"same-origin"})).json()}if(task.status!=="complete")throw new Error(task.error||"导出任务失败");window.location.assign(`/api/dashboard/billing/workbook-jobs?id=${task.id}&download=1`)}catch(e){ElMessage.error(e instanceof Error?e.message:"导出失败")}finally{exporting.value={...exporting.value,[row.user_id]:false}}}
 function openDetail(row: BillingUserSummary) { selected.value = row; detailOpen.value = true; void detail.reload(); }
+async function monitorJob(initial: BillingJob, reused=false){
+  if(generating.value)return;const version=++monitorVersion;generating.value=true;let job=initial;
+  try{while(job.status==="pending"||job.status==="running"){jobProgress.value=job.total_steps?Math.round(job.completed_steps*100/job.total_steps):0;await new Promise(resolve=>setTimeout(resolve,1500));if(version!==monitorVersion)return;job=await dashboard.billingJob(job.id)}if(job.status==="failed")throw new Error(job.error_message||"账单任务失败");jobProgress.value=100;ElMessage.success(reused?"该区间已有账单，已直接加载":`账单生成完成，排除异常订单 ${job.abnormal_rows} 条`);await state.reload();}
+  catch(error){ElMessage.error(error instanceof Error?error.message:"账单任务失败");}
+  finally{if(version===monitorVersion)generating.value=false;}
+}
 async function generateBill(force=false){
-  const invalid=validateGenerationRange(generationRange.value);if(invalid){ElMessage.warning(invalid);return;}generating.value=true;jobProgress.value=0;
-  try{const [from,to]=generationRange.value;const result=await dashboard.generateBilling({instance_id:filters.site_id,from,to,force});let job=result.job;while(job.status==="pending"||job.status==="running"){jobProgress.value=job.total_steps?Math.round(job.completed_steps*100/job.total_steps):0;await new Promise(resolve=>setTimeout(resolve,1500));job=await dashboard.billingJob(job.id)}if(job.status==="failed")throw new Error(job.error_message||"账单任务失败");jobProgress.value=100;ElMessage.success(result.reused?"该区间已有账单，已直接加载":`账单生成完成，排除异常订单 ${job.abnormal_rows} 条`);await state.reload();}
-  finally{generating.value=false;}
+  const invalid=validateGenerationRange(generationRange.value);if(invalid){ElMessage.warning(invalid);return;}
+  const [from,to]=generationRange.value;const result=await dashboard.generateBilling({instance_id:filters.site_id,from,to,force});
+  if(result.job.status==="complete"){jobProgress.value=100;await state.reload();ElMessage.success(result.reused?"该区间已有账单，已直接加载":"账单生成完成");return;}
+  await monitorJob(result.job,result.reused);
 }
 function useTiered(userID:number){return tierSettings.value[String(userID)]?.use_tiered_pricing!==false}
 async function changeTiered(userID:number,value:boolean){await dashboard.saveBillingUserSetting({instance_id:filters.site_id,user_id:userID,use_tiered_pricing:value});tierSettings.value={...tierSettings.value,[String(userID)]:{instance_id:filters.site_id,user_id:userID,use_tiered_pricing:value}};ElMessage.success("阶梯计价设置已保存，下次生成账单时生效")}
@@ -65,6 +74,7 @@ let searchTimer: ReturnType<typeof setTimeout> | undefined;
 watch(search, () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { page.value = 1; void state.reload(); }, 400); });
 watch([generationRange, () => filters.site_id, pageSize], () => { page.value = 1; void state.reload(); if(detailOpen.value)void detail.reload(); });
 watch(page, () => void state.reload());
+watch(() => state.data.value?.generation_job?.id, () => {const job=state.data.value?.generation_job;if(job&&(job.status==="pending"||job.status==="running"))void monitorJob(job);});
 void state.reload();
 </script>
 <template>
