@@ -22,6 +22,14 @@ func (s Store) CreateBillingJob(ctx context.Context, j billing.Job, steps []bill
 			return e
 		}
 	}
+	// User 0 is a marker proving that the snapshot exists even when the site
+	// has no explicit per-user overrides. Actual new-api user IDs are positive.
+	if _, e = tx.ExecContext(ctx, `INSERT INTO billing_job_user_settings(job_id,user_id,use_tiered_pricing) VALUES(?,0,1)`, j.ID); e != nil {
+		return e
+	}
+	if _, e = tx.ExecContext(ctx, `INSERT INTO billing_job_user_settings(job_id,user_id,use_tiered_pricing) SELECT ?,user_id,use_tiered_pricing FROM billing_user_settings WHERE instance_id=?`, j.ID, j.InstanceID); e != nil {
+		return e
+	}
 	return tx.Commit()
 }
 func nullBillingRequestKey(value string) any {
@@ -77,6 +85,23 @@ func (s Store) ListBillingUserSettings(ctx context.Context, site string) (map[in
 	for rows.Next() {
 		var v billing.UserSetting
 		if e = rows.Scan(&v.InstanceID, &v.UserID, &v.UseTieredPricing, &v.UpdatedAt, &v.UpdatedBy); e != nil {
+			return nil, e
+		}
+		out[v.UserID] = v
+	}
+	return out, rows.Err()
+}
+
+func (s Store) BillingUserSettingsForJob(ctx context.Context, jobID string) (map[int64]billing.UserSetting, error) {
+	rows, e := s.db.QueryContext(ctx, `SELECT user_id,use_tiered_pricing FROM billing_job_user_settings WHERE job_id=?`, jobID)
+	if e != nil {
+		return nil, e
+	}
+	defer rows.Close()
+	out := map[int64]billing.UserSetting{}
+	for rows.Next() {
+		var v billing.UserSetting
+		if e = rows.Scan(&v.UserID, &v.UseTieredPricing); e != nil {
 			return nil, e
 		}
 		out[v.UserID] = v

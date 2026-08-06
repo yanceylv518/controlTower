@@ -122,6 +122,10 @@ type JobStore interface {
 	FinalizeBillingJob(context.Context, Job) error
 }
 
+type JobUserSettingsSnapshotStore interface {
+	BillingUserSettingsForJob(context.Context, string) (map[int64]UserSetting, error)
+}
+
 func NewJob(instanceID string, from, to time.Time, requestedBy string) (Job, []JobStep, error) {
 	if strings.TrimSpace(instanceID) == "" || !to.After(from) || to.Sub(from) > 60*24*time.Hour {
 		return Job{}, nil, fmt.Errorf("invalid billing range")
@@ -204,6 +208,18 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 	settings, err := r.Store.ListBillingUserSettings(ctx, job.InstanceID)
 	if err != nil {
 		return err
+	}
+	if snapshotStore, ok := r.Store.(JobUserSettingsSnapshotStore); ok {
+		snapshot, snapshotErr := snapshotStore.BillingUserSettingsForJob(ctx, job.ID)
+		if snapshotErr != nil {
+			return snapshotErr
+		}
+		// New jobs always contain user 0 as a snapshot marker. Jobs created
+		// before this feature have no marker and retain the legacy fallback.
+		if _, snapshotted := snapshot[0]; snapshotted {
+			delete(snapshot, 0)
+			settings = snapshot
+		}
 	}
 	priceByModel := map[string][]Price{}
 	for _, p := range prices {
@@ -367,7 +383,10 @@ func fillAnomalyAmounts(out *AnomalyOrder, log PagedLogRecord, prices []Price, r
 	if log.CompletionTokens.Valid {
 		completion = log.CompletionTokens.Int64
 	}
-	priceContext := prompt
+	priceContext := log.ContextTokens
+	if priceContext == 0 {
+		priceContext = prompt
+	}
 	if !useTiers {
 		priceContext = 0
 	}

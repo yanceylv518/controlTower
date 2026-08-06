@@ -95,6 +95,25 @@ func TestFillAnomalyAmountsSeparatesCachedInput(t *testing.T) {
 	}
 }
 
+func TestFillAnomalyAmountsUsesContextTokensForTier(t *testing.T) {
+	at := time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC)
+	log := PagedLogRecord{
+		PromptTokens:     sql.NullInt64{Valid: true, Int64: 100},
+		CompletionTokens: sql.NullInt64{Valid: true, Int64: 1},
+		CacheTokens:      900,
+		ContextTokens:    1000,
+	}
+	prices := []Price{
+		{EffectiveFrom: at, TierFrom: 0, Input: "1", Output: "1", Cache: "1"},
+		{EffectiveFrom: at, TierFrom: 1000, Input: "2", Output: "2", Cache: "2"},
+	}
+	var got AnomalyOrder
+	fillAnomalyAmounts(&got, log, prices, "1", at, true)
+	if got.InputPrice != "2.000000" || got.CachePrice != "2.000000" {
+		t.Fatalf("anomaly selected the wrong context tier: %+v", got)
+	}
+}
+
 func TestFillAnomalyAmountsUsesNumericZeroWithoutPrice(t *testing.T) {
 	var got AnomalyOrder
 	fillAnomalyAmounts(&got, PagedLogRecord{}, nil, "1", time.Now(), true)
