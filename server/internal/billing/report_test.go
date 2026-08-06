@@ -15,8 +15,19 @@ func TestParseRatioSnapshotAndFallbackPrice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if price.Input != "4.000000000000" || price.Output != "12.000000000000" || price.Cache != "2.000000000000" || price.CacheWrite != "5.000000000000" || ratio != "1.2" {
+	if price.Input != "4.000000000000" || price.Output != "12.000000000000" || price.Cache != "2.000000000000" || price.CacheWrite != "0.000000000000" || ratio != "1.2" {
 		t.Fatalf("unexpected fallback: %#v ratio=%s", price, ratio)
+	}
+}
+
+func TestFallbackPriceDoesNotDefaultCacheWritePrice(t *testing.T) {
+	snapshot, err := ParseRatioSnapshot(`{"ModelRatio":"{\"gpt-test\":2}","QuotaPerUnit":500000}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	price, _, err := FallbackPrice(snapshot, "gpt-test", "")
+	if err != nil || price.CacheWrite != "0.000000000000" {
+		t.Fatalf("unexpected unconfigured cache write price: %#v err=%v", price, err)
 	}
 }
 
