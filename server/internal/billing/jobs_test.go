@@ -72,7 +72,7 @@ func TestAnomalyReasons(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got := ""
-			for i, v := range anomalyReasons(tc.log, tc.max) {
+			for i, v := range AnomalyReasons(tc.log, tc.max) {
 				if i > 0 {
 					got += ","
 				}
@@ -92,6 +92,27 @@ func TestFillAnomalyAmountsSeparatesCachedInput(t *testing.T) {
 	fillAnomalyAmounts(&got, log, prices, "1", time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC), true)
 	if got.InputAmount != "0.000100" || got.OutputAmount != "0.000040" || got.CacheAmount != "0.000020" || got.ReferenceAmount != "0.000160" {
 		t.Fatalf("unexpected amounts: %+v", got)
+	}
+}
+
+func TestRequestContextTokensKeepsNormalizedLanesSeparate(t *testing.T) {
+	log := PagedLogRecord{
+		PromptTokens:  sql.NullInt64{Valid: true, Int64: 2},
+		CacheTokens:   75841,
+		ContextTokens: 76596,
+	}
+	if got := RequestContextTokens(log); got != 76596 {
+		t.Fatalf("context tokens=%d", got)
+	}
+	if got := log.PromptTokens.Int64; got != 2 {
+		t.Fatalf("ordinary input tokens changed to %d", got)
+	}
+}
+
+func TestFormatBusinessTimeUsesBillingLocation(t *testing.T) {
+	unix := time.Date(2026, 6, 30, 16, 0, 0, 0, time.UTC).Unix()
+	if got := FormatBusinessTime(unix); got != "2026-07-01 00:00:00" {
+		t.Fatalf("formatted time=%q", got)
 	}
 }
 

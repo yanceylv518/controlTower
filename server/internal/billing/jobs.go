@@ -259,16 +259,16 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 		for _, log := range logs {
 			setting, configured := settings[log.UserID]
 			useTiers := !configured || setting.UseTieredPricing
-			reasons := anomalyReasons(log, maxByModel[log.ModelName])
+			reasons := AnomalyReasons(log, maxByModel[log.ModelName])
 			if len(reasons) > 0 {
-				item := AnomalyOrder{InstanceID: job.InstanceID, SourceLogID: log.ID, JobID: job.ID, CreatedAt: time.Unix(log.CreatedUnix, 0), RequestID: log.RequestID, UpstreamRequestID: log.UpstreamRequestID, UserID: log.UserID, Username: log.Username, ChannelID: log.ChannelID, ChannelName: log.ChannelName, ModelName: log.ModelName, GroupName: log.GroupName, PromptTokens: sourcePromptTokens(log), CompletionTokens: log.CompletionTokens, CacheTokens: log.CacheTokens, CacheWriteTokens: log.CacheWriteTokens, CacheWrite5mTokens: log.CacheWrite5mTokens, CacheWrite1hTokens: log.CacheWrite1hTokens, Quota: log.Quota, MaxContextTokens: maxByModel[log.ModelName], Reasons: strings.Join(reasons, ","), DetectedAt: time.Now().UTC()}
+				item := AnomalyOrder{InstanceID: job.InstanceID, SourceLogID: log.ID, JobID: job.ID, CreatedAt: time.Unix(log.CreatedUnix, 0), RequestID: log.RequestID, UpstreamRequestID: log.UpstreamRequestID, UserID: log.UserID, Username: log.Username, ChannelID: log.ChannelID, ChannelName: log.ChannelName, ModelName: log.ModelName, GroupName: log.GroupName, PromptTokens: SourcePromptTokens(log), CompletionTokens: log.CompletionTokens, CacheTokens: log.CacheTokens, CacheWriteTokens: log.CacheWriteTokens, CacheWrite5mTokens: log.CacheWrite5mTokens, CacheWrite1hTokens: log.CacheWrite1hTokens, Quota: log.Quota, MaxContextTokens: maxByModel[log.ModelName], Reasons: strings.Join(reasons, ","), DetectedAt: time.Now().UTC()}
 				fillAnomalyAmounts(&item, log, priceByModel[log.ModelName], ratioByGroup[log.GroupName], step.From, useTiers)
 				anomalies = append(anomalies, item)
 				continue
 			}
 			tier := int64(0)
 			if useTiers {
-				if p, found := SelectPrice(priceByModel[log.ModelName], step.From, log.ContextTokens); found {
+				if p, found := SelectPrice(priceByModel[log.ModelName], step.From, RequestContextTokens(log)); found {
 					tier = p.TierFrom
 				}
 			}
@@ -421,9 +421,12 @@ func fillAnomalyAmounts(out *AnomalyOrder, log PagedLogRecord, prices []Price, r
 	out.ReferenceAmount = FormatAmount(total, 6)
 }
 
-func anomalyReasons(log PagedLogRecord, maxContext int64) []string {
+// AnomalyReasons classifies a normalized source log using the same rules as
+// billing generation. Callers such as exports must use this instead of
+// reimplementing token validation.
+func AnomalyReasons(log PagedLogRecord, maxContext int64) []string {
 	r := []string{}
-	inputTokens := sourcePromptTokens(log)
+	inputTokens := SourcePromptTokens(log)
 	if !inputTokens.Valid {
 		r = append(r, "input_token_missing")
 	} else if inputTokens.Int64 <= 0 {
@@ -434,19 +437,35 @@ func anomalyReasons(log PagedLogRecord, maxContext int64) []string {
 	} else if log.CompletionTokens.Int64 <= 0 {
 		r = append(r, "output_token_zero")
 	}
-	contextTokens := log.ContextTokens
-	if contextTokens == 0 && log.PromptTokens.Valid {
-		contextTokens = log.PromptTokens.Int64
-	}
+	contextTokens := RequestContextTokens(log)
 	if log.PromptTokens.Valid && maxContext > 0 && contextTokens > maxContext {
 		r = append(r, "context_limit_exceeded")
 	}
 	return r
 }
 
-func sourcePromptTokens(log PagedLogRecord) sql.NullInt64 {
+// SourcePromptTokens returns logs.prompt_tokens before cache-lane
+// normalization. It is the value used to determine whether input was present.
+func SourcePromptTokens(log PagedLogRecord) sql.NullInt64 {
 	if log.SourcePromptTokens.Valid {
 		return log.SourcePromptTokens
 	}
 	return log.PromptTokens
+}
+
+// RequestContextTokens is the total input context used for model-limit checks
+// and tier selection. PromptTokens is already normalized to ordinary input.
+func RequestContextTokens(log PagedLogRecord) int64 {
+	if log.ContextTokens != 0 {
+		return log.ContextTokens
+	}
+	if log.PromptTokens.Valid {
+		return log.PromptTokens.Int64
+	}
+	return 0
+}
+
+// FormatBusinessTime renders a source-log timestamp in the billing timezone.
+func FormatBusinessTime(unix int64) string {
+	return time.Unix(unix, 0).In(BusinessLocation).Format("2006-01-02 15:04:05")
 }

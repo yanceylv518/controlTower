@@ -179,10 +179,10 @@ func writeRequestPages(ctx context.Context, book *xlsxwriter.Workbook, month str
 			break
 		}
 		for _, v := range logs {
-			if !v.PromptTokens.Valid || v.PromptTokens.Int64 <= 0 || !v.CompletionTokens.Valid || v.CompletionTokens.Int64 <= 0 || (maxContext[v.ModelName] > 0 && v.PromptTokens.Int64 > maxContext[v.ModelName]) {
+			if len(billing.AnomalyReasons(v, maxContext[v.ModelName])) != 0 {
 				continue
 			}
-			price, ok := billing.SelectPrice(byModel[v.ModelName], time.Unix(v.CreatedUnix, 0), v.PromptTokens.Int64)
+			price, ok := billing.SelectPrice(byModel[v.ModelName], time.Unix(v.CreatedUnix, 0), billing.RequestContextTokens(v))
 			if !ok {
 				continue
 			}
@@ -193,7 +193,7 @@ func writeRequestPages(ctx context.Context, book *xlsxwriter.Workbook, month str
 					return e
 				}
 			}
-			s.Row([]xlsxwriter.Cell{t(time.Unix(v.CreatedUnix, 0).Format("2006-01-02 15:04:05")), t(v.RequestID), t(v.Username), t(v.ModelName), n64(v.PromptTokens.Int64), n64(v.CacheTokens), n64(v.CacheWriteTokens), n64(v.CompletionTokens.Int64), d(charge.InputPrice), d(charge.OutputPrice), d(charge.CachePrice), d(charge.CacheWritePrice), d(charge.InputAmount), d(charge.OutputAmount), d(charge.CacheAmount), d(charge.CacheWriteAmount), d(charge.Total), n64(v.Quota)})
+			s.Row([]xlsxwriter.Cell{t(billing.FormatBusinessTime(v.CreatedUnix)), t(v.RequestID), t(v.Username), t(v.ModelName), n64(v.PromptTokens.Int64), n64(v.CacheTokens), n64(v.CacheWriteTokens), n64(v.CompletionTokens.Int64), d(charge.InputPrice), d(charge.OutputPrice), d(charge.CachePrice), d(charge.CacheWritePrice), d(charge.InputAmount), d(charge.OutputAmount), d(charge.CacheAmount), d(charge.CacheWriteAmount), d(charge.Total), n64(v.Quota)})
 			rowNo++
 		}
 		last := logs[len(logs)-1]
