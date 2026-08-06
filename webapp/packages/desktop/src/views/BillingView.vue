@@ -59,7 +59,7 @@ async function exportUser(row: BillingUserSummary) {
   try {
     const [from, to] = generationRange.value;
     const createResponse = await fetch("/api/dashboard/billing/workbook-jobs", {
-      method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
+      method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", "X-Requested-With": "XMLHttpRequest" },
       body: JSON.stringify({ instance_id: filters.site_id, user_id: String(row.user_id), from, to }),
     });
     if (!createResponse.ok) throw await httpError(createResponse, "创建导出任务失败");
