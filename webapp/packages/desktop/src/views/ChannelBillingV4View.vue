@@ -11,6 +11,7 @@ import { useFiltersStore } from "../stores/filters";
 import { usePrefsStore } from "../stores/prefs";
 import { formatNumber } from "../utils/format";
 import { formatDateTime, savedGenerationRange, timeRangeShortcuts, validateGenerationRange } from "../utils/billingRange";
+import { httpError } from "../utils/httpError";
 
 type PageData = { items: BillingChannelSummary[]; job: BillingJob | null; channelError: string };
 const filters = useFiltersStore(), prefs = usePrefsStore();
@@ -85,7 +86,30 @@ function openDetail(row: BillingChannelSummary) { selected.value = row; detailOp
 function anomaly(row: BillingChannelSummary) { const [from,to]=generationRange.value;return `/api/dashboard/billing/anomalies?instance_id=${encodeURIComponent(filters.site_id)}&channel_id=${row.channel_id}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&format=csv`; }
 function dailyBill(row: BillingChannelSummary) { const [from,to]=generationRange.value;return `/api/dashboard/billing/channels?instance_id=${encodeURIComponent(filters.site_id)}&channel_id=${row.channel_id}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&format=csv`; }
 function channelWorkbook(row: BillingChannelSummary) { const [from,to]=generationRange.value;return `/api/dashboard/billing/channel-workbook?instance_id=${encodeURIComponent(filters.site_id)}&channel_id=${row.channel_id}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`; }
-async function exportChannel(row:BillingChannelSummary){exporting.value={...exporting.value,[row.channel_id]:true};try{const[from,to]=generationRange.value;const res=await fetch("/api/dashboard/billing/channel-workbook-jobs",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({instance_id:filters.site_id,channel_id:String(row.channel_id),from,to})});if(!res.ok)throw new Error("创建导出任务失败");let task=await res.json();while(task.status==="pending"||task.status==="running"){await new Promise(r=>setTimeout(r,1500));task=await(await fetch(`/api/dashboard/billing/channel-workbook-jobs?id=${task.id}`,{credentials:"same-origin"})).json()}if(task.status!=="complete")throw new Error(task.error||"导出任务失败");window.location.assign(`/api/dashboard/billing/channel-workbook-jobs?id=${task.id}&download=1`)}catch(e){ElMessage.error(e instanceof Error?e.message:"导出失败")}finally{exporting.value={...exporting.value,[row.channel_id]:false}}}
+async function exportChannel(row: BillingChannelSummary) {
+  exporting.value = { ...exporting.value, [row.channel_id]: true };
+  try {
+    const [from, to] = generationRange.value;
+    const createResponse = await fetch("/api/dashboard/billing/channel-workbook-jobs", {
+      method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ instance_id: filters.site_id, channel_id: String(row.channel_id), from, to }),
+    });
+    if (!createResponse.ok) throw await httpError(createResponse, "创建导出任务失败");
+    let task = await createResponse.json();
+    while (task.status === "pending" || task.status === "running") {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      const statusResponse = await fetch(`/api/dashboard/billing/channel-workbook-jobs?id=${task.id}`, { credentials: "same-origin" });
+      if (!statusResponse.ok) throw await httpError(statusResponse, "查询导出任务失败");
+      task = await statusResponse.json();
+    }
+    if (task.status !== "complete") throw new Error(task.error || "导出任务失败");
+    window.location.assign(`/api/dashboard/billing/channel-workbook-jobs?id=${task.id}&download=1`);
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "导出失败");
+  } finally {
+    exporting.value = { ...exporting.value, [row.channel_id]: false };
+  }
+}
 watch(generationRange,(value)=>localStorage.setItem("ct.billing.channel.range",JSON.stringify(value)),{deep:true});
 watch([generationRange, () => filters.site_id], () => { page.value = 1; void state.reload(); if (detailOpen.value) void detail.reload(); });
 watch(pageSize, () => { page.value = 1; });

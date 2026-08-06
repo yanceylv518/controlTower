@@ -12,6 +12,7 @@ import { usePrefsStore } from "../stores/prefs";
 import { useAuthStore } from "../stores/auth";
 import { formatNumber, formatQuota } from "../utils/format";
 import { savedGenerationRange, timeRangeShortcuts, validateGenerationRange } from "../utils/billingRange";
+import { httpError } from "../utils/httpError";
 
 const filters = useFiltersStore();
 const prefs = usePrefsStore();
@@ -53,7 +54,30 @@ const periodText = computed(() => `[${generationRange.value[0]}, ${generationRan
 const exportURL = computed(() => {const[from,to]=generationRange.value;return`/api/dashboard/billing/summary?instance_id=${encodeURIComponent(filters.site_id)}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&search=${encodeURIComponent(search.value)}&format=csv`;});
 const dailyExportURL = computed(() => {const[from,to]=generationRange.value;return selected.value?`/api/dashboard/billing/detail?instance_id=${encodeURIComponent(filters.site_id)}&user_id=${selected.value.user_id}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&format=csv`:"#";});
 const anomalyExportURL = computed(() => {const[from,to]=generationRange.value;return selected.value?`/api/dashboard/billing/anomalies?instance_id=${encodeURIComponent(filters.site_id)}&user_id=${selected.value.user_id}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&format=csv`:"#"});
-async function exportUser(row: BillingUserSummary){exporting.value={...exporting.value,[row.user_id]:true};try{const[from,to]=generationRange.value;const res=await fetch("/api/dashboard/billing/workbook-jobs",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({instance_id:filters.site_id,user_id:String(row.user_id),from,to})});if(!res.ok)throw new Error("创建导出任务失败");let task=await res.json();while(task.status==="pending"||task.status==="running"){await new Promise(r=>setTimeout(r,1500));task=await(await fetch(`/api/dashboard/billing/workbook-jobs?id=${task.id}`,{credentials:"same-origin"})).json()}if(task.status!=="complete")throw new Error(task.error||"导出任务失败");window.location.assign(`/api/dashboard/billing/workbook-jobs?id=${task.id}&download=1`)}catch(e){ElMessage.error(e instanceof Error?e.message:"导出失败")}finally{exporting.value={...exporting.value,[row.user_id]:false}}}
+async function exportUser(row: BillingUserSummary) {
+  exporting.value = { ...exporting.value, [row.user_id]: true };
+  try {
+    const [from, to] = generationRange.value;
+    const createResponse = await fetch("/api/dashboard/billing/workbook-jobs", {
+      method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ instance_id: filters.site_id, user_id: String(row.user_id), from, to }),
+    });
+    if (!createResponse.ok) throw await httpError(createResponse, "创建导出任务失败");
+    let task = await createResponse.json();
+    while (task.status === "pending" || task.status === "running") {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      const statusResponse = await fetch(`/api/dashboard/billing/workbook-jobs?id=${task.id}`, { credentials: "same-origin" });
+      if (!statusResponse.ok) throw await httpError(statusResponse, "查询导出任务失败");
+      task = await statusResponse.json();
+    }
+    if (task.status !== "complete") throw new Error(task.error || "导出任务失败");
+    window.location.assign(`/api/dashboard/billing/workbook-jobs?id=${task.id}&download=1`);
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "导出失败");
+  } finally {
+    exporting.value = { ...exporting.value, [row.user_id]: false };
+  }
+}
 function openDetail(row: BillingUserSummary) { selected.value = row; detailOpen.value = true; void detail.reload(); }
 async function monitorJob(initial: BillingJob, reused=false){
   if(generating.value)return;const version=++monitorVersion;generating.value=true;let job=initial;
