@@ -61,3 +61,25 @@ func TestIgnorableMigrationErrorAllowsDuplicateColumnName(t *testing.T) {
 		t.Fatal("duplicate column error should be ignored during idempotent migration")
 	}
 }
+
+// A PK swap always "succeeds", so a bare one replays on every startup and
+// rebuilds the table each time (migration 010's lesson). Riding a sentinel
+// ADD COLUMN in the same ALTER makes replays fail atomically with tolerated
+// error 1060 instead.
+func TestAnomalyJobPKMigrationGuardsReplay(t *testing.T) {
+	data, err := os.ReadFile("../../migrations/035_billing_anomaly_job_versions.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// No comment filtering here: ApplySQL executes every split part verbatim,
+	// so a semicolon inside a comment would ship a comment-only "statement"
+	// that MySQL rejects (1065) and abort startup. Exactly one statement.
+	statements := splitSQLStatements(string(data))
+	if len(statements) != 1 {
+		t.Fatalf("PK swap must split into exactly one statement, got %d", len(statements))
+	}
+	s := strings.ToLower(statements[0])
+	if !strings.Contains(s, "add column") || !strings.Contains(s, "drop primary key") {
+		t.Fatal("PK swap must ride with a sentinel ADD COLUMN in the same ALTER; a bare DROP/ADD PRIMARY KEY rebuilds the table on every startup replay")
+	}
+}
