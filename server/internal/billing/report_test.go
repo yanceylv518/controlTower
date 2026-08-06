@@ -42,6 +42,28 @@ func TestFallbackPriceUsesConfiguredCreateCacheRatio(t *testing.T) {
 	}
 }
 
+func TestBuildDetailsZerosHistoricalCacheWriteWithoutExplicitRatio(t *testing.T) {
+	day := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	rows := []AggregateRow{{ModelName: "priced", Day: day, CacheWriteTokens: 1_000_000}}
+	prices := []PriceRecord{{ModelName: "priced", Price: Price{EffectiveFrom: day, Input: "10", Output: "20", Cache: "1", CacheWrite: "12.5"}}}
+	snapshots := map[string]string{"2026-08-01": `{"ModelRatio":"{\"priced\":2}","QuotaPerUnit":500000}`}
+	items := BuildDetails(rows, prices, nil, snapshots)
+	if len(items) != 1 || items[0].CacheWritePrice != "0.000000" || items[0].Amount != "0.000000" {
+		t.Fatalf("unexpected cache write fallback: %#v", items)
+	}
+}
+
+func TestBuildDetailsKeepsCacheWriteWithExplicitRatio(t *testing.T) {
+	day := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	rows := []AggregateRow{{ModelName: "priced", Day: day, CacheWriteTokens: 1_000_000}}
+	prices := []PriceRecord{{ModelName: "priced", Price: Price{EffectiveFrom: day, Input: "10", Output: "20", Cache: "1", CacheWrite: "12.5"}}}
+	snapshots := map[string]string{"2026-08-01": `{"ModelRatio":"{\"priced\":2}","CreateCacheRatio":"{\"priced\":1.25}","QuotaPerUnit":500000}`}
+	items := BuildDetails(rows, prices, nil, snapshots)
+	if len(items) != 1 || items[0].CacheWritePrice != "12.500000" || items[0].Amount != "12.500000" {
+		t.Fatalf("unexpected configured cache write: %#v", items)
+	}
+}
+
 func TestBuildSummaryUsesCTThenActualQuota(t *testing.T) {
 	day := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
 	rows := []AggregateRow{

@@ -254,6 +254,24 @@ func FallbackPrice(snapshot RatioSnapshot, model, group string) (Price, string, 
 	return Price{Input: input.FloatString(12), Output: new(big.Rat).Mul(input, cr).FloatString(12), Cache: new(big.Rat).Mul(input, car).FloatString(12), CacheWrite: new(big.Rat).Mul(input, cwr).FloatString(12)}, groupRatio, nil
 }
 
+// priceWithSnapshotCacheWrite keeps CT's stored price schedule aligned with
+// the new-api configuration frozen for the generated bill. Historical CT
+// rows may contain the old implicit input-price fallback; when the snapshot
+// has no explicit CreateCacheRatio for the model, cache writes are free.
+func priceWithSnapshotCacheWrite(price Price, raw, model string) Price {
+	if strings.TrimSpace(raw) == "" {
+		return price
+	}
+	snapshot, err := ParseRatioSnapshot(raw)
+	if err != nil {
+		return price
+	}
+	if _, configured := snapshot.CreateCacheRatio[model]; !configured {
+		price.CacheWrite = "0"
+	}
+	return price
+}
+
 func BuildSummary(rows []AggregateRow, prices []PriceRecord, ratios []GroupRatio, snapshots map[string]string, balances map[int64]int64) ([]UserSummary, SummaryTotal) {
 	priceByModel := map[string][]Price{}
 	for _, p := range prices {
@@ -284,6 +302,7 @@ func BuildSummary(rows []AggregateRow, prices []PriceRecord, ratios []GroupRatio
 		price, ok := selectPriceForTier(priceByModel[row.ModelName], row.Day, row.TierFrom)
 		ratio, source := "1", "ct"
 		if ok {
+			price = priceWithSnapshotCacheWrite(price, snapshots[row.Day.Format("2006-01-02")], row.ModelName)
 			if configured := ratioByGroup[row.GroupName]; configured != "" {
 				ratio = configured
 			}
@@ -361,6 +380,7 @@ func BuildDetails(rows []AggregateRow, prices []PriceRecord, ratios []GroupRatio
 		ratio := "1"
 		item.PriceSource = "ct"
 		if ok {
+			price = priceWithSnapshotCacheWrite(price, snapshots[item.Day], row.ModelName)
 			if configured := ratioByGroup[row.GroupName]; configured != "" {
 				ratio = configured
 			}
@@ -440,6 +460,7 @@ func BuildInvoice(rows []AggregateRow, prices []PriceRecord, ratios []GroupRatio
 		ratio, source := "1", "ct"
 		unpriced := false
 		if ok {
+			price = priceWithSnapshotCacheWrite(price, snapshots[row.Day.Format("2006-01-02")], row.ModelName)
 			if configured := ratioByGroup[row.GroupName]; configured != "" {
 				ratio = configured
 			}
