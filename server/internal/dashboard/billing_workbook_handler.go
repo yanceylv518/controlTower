@@ -113,7 +113,12 @@ func writeOverview(book *xlsxwriter.Workbook, uid int64, month string, rows []bi
 		}
 		s.Row([]xlsxwriter.Cell{n(i + 1), t(name), n64(v.RequestCount), d(v.InputPrice), n64(v.PromptTokens), d(v.InputAmount), d(v.OutputPrice), n64(v.CompletionTokens), d(v.OutputAmount), d(v.CachePrice), n64(v.CacheTokens), d(v.CacheAmount), d(v.CacheWritePrice), n64(v.CacheWriteTokens), d(v.CacheWriteAmount), d(v.Amount), t(""), t("")})
 	}
-	s.Row([]xlsxwriter.Cell{t("合计"), t(""), t(""), t(""), t(""), t(""), t(""), t(""), t(""), t(""), t(""), t(""), d(total.Amount)})
+	totalRow := make([]xlsxwriter.Cell, 18)
+	totalRow[0] = t("合计")
+	totalRow[15] = d(total.Amount)
+	totalRow[16] = t("")
+	totalRow[17] = t("")
+	s.Row(totalRow)
 	return nil
 }
 func writeDaily(book *xlsxwriter.Workbook, uid int64, month string, items []billing.DetailItem) error {

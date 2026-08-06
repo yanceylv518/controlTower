@@ -112,6 +112,11 @@ func writeChannelOverview(book *xlsxwriter.Workbook, name, month, discount strin
 		}
 		s.Row([]xlsxwriter.Cell{n(i + 1), t(model), n64(item.RequestCount), d(item.InputPrice), n64(item.PromptTokens), d(item.InputAmount), d(item.OutputPrice), n64(item.CompletionTokens), d(item.OutputAmount), d(item.CachePrice), n64(item.CacheTokens), d(item.CacheAmount), d(item.CacheWritePrice), n64(item.CacheWriteTokens), d(item.CacheWriteAmount), d(item.Amount), d(item.Discount), d(item.DiscountedAmount)})
 	}
-	s.Row([]xlsxwriter.Cell{t("合计"), t(""), t(""), t(""), t(""), t(""), t(""), t(""), t(""), t(""), t(""), t(""), d(total.Amount), d(total.Discount), d(total.DiscountedAmount)})
+	totalRow := make([]xlsxwriter.Cell, 18)
+	totalRow[0] = t("合计")
+	totalRow[15] = d(total.Amount)
+	totalRow[16] = d(total.Discount)
+	totalRow[17] = d(total.DiscountedAmount)
+	s.Row(totalRow)
 	return nil
 }
