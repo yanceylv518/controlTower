@@ -51,7 +51,7 @@ func (h BillingAnomalyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 				return
 			}
 			for _, v := range items {
-				_ = cw.Write([]string{v.ModelName, v.RequestID, v.UpstreamRequestID, v.CreatedAt.Format("2006/01/02 15:04:05"), nullInt(v.PromptTokens), strconv.FormatInt(v.CacheTokens, 10), strconv.FormatInt(v.CacheWriteTokens, 10), nullInt(v.CompletionTokens), strconv.FormatInt(v.MaxContextTokens, 10), v.InputPrice, v.OutputPrice, v.CachePrice, v.CacheWritePrice, v.InputAmount, v.OutputAmount, v.CacheAmount, v.CacheWriteAmount, v.ReferenceAmount, strconv.FormatInt(v.Quota, 10), localizedReasons(v.Reasons)})
+				_ = cw.Write([]string{v.ModelName, v.RequestID, v.UpstreamRequestID, v.CreatedAt.In(billing.BusinessLocation).Format("2006/01/02 15:04:05"), nullInt(v.PromptTokens), strconv.FormatInt(v.CacheTokens, 10), strconv.FormatInt(v.CacheWriteTokens, 10), nullInt(v.CompletionTokens), strconv.FormatInt(v.MaxContextTokens, 10), v.InputPrice, v.OutputPrice, v.CachePrice, v.CacheWritePrice, v.InputAmount, v.OutputAmount, v.CacheAmount, v.CacheWriteAmount, v.ReferenceAmount, strconv.FormatInt(v.Quota, 10), localizedReasons(v.Reasons)})
 			}
 			if len(items) < 5000 {
 				break
