@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -20,7 +21,16 @@ type BillingJobsStore interface {
 	BillingJobByRequestKey(context.Context, string) (billing.Job, error)
 }
 
-type BillingJobsHandler struct{ Store BillingJobsStore }
+type BillingJobsPreflightStore interface {
+	UpsertBillingModels(context.Context, string, []string, time.Time, string) error
+	ListBillingModelMetadata(context.Context, string) ([]billing.ModelMetadata, error)
+}
+
+type BillingJobsHandler struct {
+	Store     BillingJobsStore
+	Preflight BillingJobsPreflightStore
+	Source    BillingModelSource
+}
 
 func (h BillingJobsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
@@ -81,6 +91,41 @@ func (h BillingJobsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if h.Preflight != nil && h.Source != nil {
+		models, syncErr := h.Source.ConfiguredModels(r.Context(), req.InstanceID)
+		if syncErr != nil {
+			writeDashboardError(w, 502, "newapi_models_query_failed")
+			return
+		}
+		actor := ctauth.Actor(r)
+		if actor == "" {
+			actor = "legacy-admin"
+		}
+		if syncErr = h.Preflight.UpsertBillingModels(r.Context(), req.InstanceID, models, time.Now().UTC(), actor); syncErr != nil {
+			writeDashboardError(w, 500, "model_sync_failed")
+			return
+		}
+		metadata, metadataErr := h.Preflight.ListBillingModelMetadata(r.Context(), req.InstanceID)
+		if metadataErr != nil {
+			writeDashboardError(w, 500, "model_metadata_query_failed")
+			return
+		}
+		maxByModel := make(map[string]int64, len(metadata))
+		for _, item := range metadata {
+			maxByModel[item.ModelName] = item.MaxContextTokens
+		}
+		missing := make([]string, 0)
+		for _, model := range models {
+			if maxByModel[model] <= 0 {
+				missing = append(missing, model)
+			}
+		}
+		sort.Strings(missing)
+		if len(missing) > 0 {
+			writeDashboardJSON(w, http.StatusConflict, map[string]any{"error": "billing_model_context_missing", "models": missing})
+			return
+		}
+	}
 	job, steps, err := billing.NewJob(req.InstanceID, from, to, ctauth.Actor(r))
 	if err != nil {
 		writeDashboardError(w, 400, "invalid_range")
@@ -133,7 +178,7 @@ func billingRequestKey(instanceID, scope string, from, to time.Time) string {
 	// Include the calculation version so a billing-rule correction invalidates
 	// previously completed jobs once, while identical jobs on the current
 	// algorithm are still reused.
-	const calculationVersion = "v5-explicit-cache-write-price"
+	const calculationVersion = "v6-anomaly-actual-amount"
 	sum := sha256.Sum256([]byte(calculationVersion + "|" + instanceID + "|generate|" + scope + "|" + from.Format(time.RFC3339Nano) + "|" + to.Format(time.RFC3339Nano)))
 	return "billing:" + fmt.Sprintf("%x", sum[:16])
 }

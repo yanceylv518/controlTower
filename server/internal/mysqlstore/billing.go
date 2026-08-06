@@ -210,7 +210,7 @@ func (s Store) PutBillingGroupRatio(ctx context.Context, v billing.GroupRatio) e
 }
 
 func (s Store) ListBillingModelMetadata(ctx context.Context, instanceID string) ([]billing.ModelMetadata, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT instance_id,model_name,max_context_tokens,available,updated_at,updated_by FROM billing_model_metadata WHERE instance_id=? ORDER BY model_name`, instanceID)
+	rows, err := s.db.QueryContext(ctx, `SELECT m.instance_id,m.model_name,COALESCE(g.max_context_tokens,0),m.available,COALESCE(g.updated_at,m.updated_at),COALESCE(g.updated_by,m.updated_by) FROM billing_model_metadata m LEFT JOIN billing_global_model_metadata g ON g.model_name=m.model_name WHERE m.instance_id=? ORDER BY m.model_name`, instanceID)
 	if err != nil {
 		return nil, err
 	}
@@ -227,8 +227,18 @@ func (s Store) ListBillingModelMetadata(ctx context.Context, instanceID string) 
 }
 
 func (s Store) PutBillingModelMetadata(ctx context.Context, v billing.ModelMetadata) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO billing_model_metadata(instance_id,model_name,max_context_tokens,available,updated_at,updated_by) VALUES(?,?,?,1,?,?) ON DUPLICATE KEY UPDATE max_context_tokens=VALUES(max_context_tokens),available=1,updated_at=VALUES(updated_at),updated_by=VALUES(updated_by)`, v.InstanceID, v.ModelName, v.MaxContextTokens, v.UpdatedAt, v.UpdatedBy)
-	return err
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `INSERT INTO billing_model_metadata(instance_id,model_name,max_context_tokens,available,updated_at,updated_by) VALUES(?,?,0,1,?,?) ON DUPLICATE KEY UPDATE available=1,updated_at=VALUES(updated_at),updated_by=VALUES(updated_by)`, v.InstanceID, v.ModelName, v.UpdatedAt, v.UpdatedBy); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO billing_global_model_metadata(model_name,max_context_tokens,updated_at,updated_by) VALUES(?,?,?,?) ON DUPLICATE KEY UPDATE max_context_tokens=VALUES(max_context_tokens),updated_at=VALUES(updated_at),updated_by=VALUES(updated_by)`, v.ModelName, v.MaxContextTokens, v.UpdatedAt, v.UpdatedBy); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // UpsertBillingModels persists the catalog discovered from new-api while

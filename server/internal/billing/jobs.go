@@ -104,6 +104,7 @@ type AnomalyOrder struct {
 	CacheTokens, CacheWriteTokens, CacheWrite5mTokens, CacheWrite1hTokens, Quota, MaxContextTokens int64
 	InputPrice, OutputPrice, CachePrice, CacheWritePrice                                           string
 	InputAmount, OutputAmount, CacheAmount, CacheWriteAmount, ReferenceAmount                      string
+	ActualAmount                                                                                   string    `json:"actual_amount"`
 	Reasons                                                                                        string    `json:"reasons"`
 	DetectedAt                                                                                     time.Time `json:"detected_at"`
 }
@@ -120,6 +121,10 @@ type JobStore interface {
 	CompleteBillingStep(context.Context, Job, JobStep, int64, int64) error
 	FailBillingStep(context.Context, Job, JobStep, error) error
 	FinalizeBillingJob(context.Context, Job) error
+}
+
+type anomalyActualAmountStore interface {
+	UpdateBillingAnomalyActualAmounts(context.Context, string, string) error
 }
 
 type JobUserSettingsSnapshotStore interface {
@@ -257,6 +262,9 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 		channelAcc := map[channelKey]ChannelDailyRow{}
 		anomalies := []AnomalyOrder{}
 		for _, log := range logs {
+			if maxByModel[log.ModelName] <= 0 {
+				return fmt.Errorf("billing model context missing: %s", log.ModelName)
+			}
 			setting, configured := settings[log.UserID]
 			useTiers := !configured || setting.UseTieredPricing
 			reasons := AnomalyReasons(log, maxByModel[log.ModelName])
@@ -353,6 +361,15 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 						return snapshotErr
 					}
 				}
+				quotaPerUnit, quotaErr := quotaPerUnitForReport(raw)
+				if quotaErr != nil {
+					return quotaErr
+				}
+				if anomalyStore, ok := r.Store.(anomalyActualAmountStore); ok {
+					if snapshotErr = anomalyStore.UpdateBillingAnomalyActualAmounts(ctx, job.ID, quotaPerUnit); snapshotErr != nil {
+						return snapshotErr
+					}
+				}
 			}
 		}
 		return r.Store.FinalizeBillingJob(ctx, latest)
@@ -373,6 +390,7 @@ func fillAnomalyAmounts(out *AnomalyOrder, log PagedLogRecord, prices []Price, r
 	out.CacheAmount = "0"
 	out.CacheWriteAmount = "0"
 	out.ReferenceAmount = "0"
+	out.ActualAmount = "0"
 	if ratio == "" {
 		ratio = "1"
 	}

@@ -135,8 +135,10 @@ func NewMux(options Options) *http.ServeMux {
 	mux.Handle("GET /api/dashboard/passthrough/logs/stat", protect(http.HandlerFunc(passthrough.LogStat)))
 	mux.Handle("GET /api/dashboard/passthrough/logs/count", protect(http.HandlerFunc(passthrough.LogCount)))
 	if jobs, ok := any(options.Store).(dashboard.BillingJobsStore); ok {
-		mux.Handle("/api/dashboard/billing/jobs", protect(dashboard.BillingJobsHandler{Store: jobs}))
-		mux.Handle("POST /api/dashboard/billing/backfill", protect(dashboard.BillingJobsHandler{Store: jobs}))
+		preflight, _ := any(options.Store).(dashboard.BillingJobsPreflightStore)
+		jobsHandler := dashboard.BillingJobsHandler{Store: jobs, Preflight: preflight, Source: dashboard.BillingReadonlySource{Handler: passthrough}}
+		mux.Handle("/api/dashboard/billing/jobs", protect(jobsHandler))
+		mux.Handle("POST /api/dashboard/billing/backfill", protect(jobsHandler))
 	} else if billingStore, ok := any(options.Store).(billing.RollupStore); ok {
 		billingRollup := billing.RollupService{Source: dashboard.BillingReadonlySource{Handler: passthrough}, Store: billingStore}
 		mux.Handle("POST /api/dashboard/billing/backfill", protect(dashboard.BillingBackfillHandler{Rollup: billingRollup, Audit: options.Store}))
