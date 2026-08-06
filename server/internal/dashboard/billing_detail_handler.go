@@ -70,7 +70,7 @@ func (h BillingDetailHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		applyDetailAnomalyCounts(items, counts, userID, 0)
 	}
 	if r.URL.Query().Get("format") == "csv" {
-		writeBillingDetailCSV(w, items)
+		writeBillingDetailCSV(w, billingDownloadName("billing-daily", userID, 0, from, to)+".csv", items)
 		return
 	}
 	writeDashboardJSON(w, http.StatusOK, map[string]any{"items": items, "user_id": userID, "period": period, "data_through": to.Add(-time.Nanosecond)})
@@ -102,10 +102,9 @@ func containsBillingUser(ids []int64, target int64) bool {
 	return false
 }
 
-func writeBillingDetailCSV(w http.ResponseWriter, items []billing.DetailItem) {
+func writeBillingDetailCSV(w http.ResponseWriter, filename string, items []billing.DetailItem) {
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
-	w.Header().Set("Content-Disposition", `attachment; filename="billing-detail.csv"`)
-	_, _ = w.Write([]byte{0xef, 0xbb, 0xbf})
+	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
 	// UTF-8 BOM so Excel opens the file with correct CJK encoding.
 	_, _ = w.Write([]byte("\xef\xbb\xbf"))
 	writer := csv.NewWriter(w)

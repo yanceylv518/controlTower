@@ -110,6 +110,14 @@ func (h BillingChannelsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 		details = billing.BuildDetails(rows, prices, ratios, snapshots)
 		applyDetailAnomalyCounts(details, counts, 0, channelID)
 	}
+	if r.URL.Query().Get("format") == "csv" {
+		if channelID <= 0 {
+			writeDashboardError(w, 400, "channel_id_required")
+			return
+		}
+		writeBillingDetailCSV(w, billingDownloadName("billing-channel-daily", 0, channelID, from, to)+".csv", details)
+		return
+	}
 	items := billed
 	warning := ""
 	if h.Source != nil {
