@@ -14,8 +14,12 @@ type anomalyExportStore struct {
 	items []billing.AnomalyOrder
 }
 
-func (s anomalyExportStore) QueryBillingAnomalies(context.Context, string, int64, int64, time.Time, time.Time, time.Time, int64, int) ([]billing.AnomalyOrder, error) {
+func (s anomalyExportStore) QueryBillingAnomalies(context.Context, string, string, int64, int64, time.Time, time.Time, time.Time, int64, int) ([]billing.AnomalyOrder, error) {
 	return s.items, nil
+}
+
+func (s anomalyExportStore) LatestBillingJob(context.Context, string, string, time.Time, time.Time) (billing.Job, error) {
+	return billing.Job{ID: "job-1", Status: "complete"}, nil
 }
 
 func TestBillingAnomalyCSVUsesBusinessTimezone(t *testing.T) {

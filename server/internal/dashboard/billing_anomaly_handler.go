@@ -12,7 +12,8 @@ import (
 )
 
 type BillingAnomalyStore interface {
-	QueryBillingAnomalies(context.Context, string, int64, int64, time.Time, time.Time, time.Time, int64, int) ([]billing.AnomalyOrder, error)
+	QueryBillingAnomalies(context.Context, string, string, int64, int64, time.Time, time.Time, time.Time, int64, int) ([]billing.AnomalyOrder, error)
+	LatestBillingJob(context.Context, string, string, time.Time, time.Time) (billing.Job, error)
 }
 type BillingAnomalyHandler struct{ Store BillingAnomalyStore }
 
@@ -30,6 +31,15 @@ func (h BillingAnomalyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		writeDashboardError(w, 400, "invalid_query")
 		return
 	}
+	jobType := "generate"
+	if channelID > 0 {
+		jobType = "channel_generate"
+	}
+	job, jobErr := h.Store.LatestBillingJob(r.Context(), site, jobType, from, to)
+	jobID := ""
+	if jobErr == nil && job.Status == "complete" {
+		jobID = job.ID
+	}
 	cursorTime := time.Unix(0, 0)
 	if raw := q.Get("cursor_time"); raw != "" {
 		cursorTime, _ = time.Parse(time.RFC3339, raw)
@@ -46,7 +56,7 @@ func (h BillingAnomalyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		cw := csv.NewWriter(w)
 		_ = cw.Write([]string{"模型名称", "Request ID", "上游 Request ID", "请求时间", "普通输入", "缓存读取 Token", "缓存写入 Token", "输出 Token", "模型上下文", "输入 Token 单价", "输出 Token 单价", "缓存读取单价", "缓存写入单价", "输入 Token 费用", "输出 Token 费用", "缓存读取费用", "缓存写入费用", "异常记录参考金额", "实际扣除 Quota", "异常原因"})
 		for {
-			items, e := h.Store.QueryBillingAnomalies(r.Context(), site, uid, channelID, from, to, cursorTime, cursorID, 5000)
+			items, e := h.Store.QueryBillingAnomalies(r.Context(), site, jobID, uid, channelID, from, to, cursorTime, cursorID, 5000)
 			if e != nil {
 				return
 			}
@@ -62,7 +72,7 @@ func (h BillingAnomalyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		cw.Flush()
 		return
 	}
-	items, e := h.Store.QueryBillingAnomalies(r.Context(), site, uid, channelID, from, to, cursorTime, cursorID, limit)
+	items, e := h.Store.QueryBillingAnomalies(r.Context(), site, jobID, uid, channelID, from, to, cursorTime, cursorID, limit)
 	if e != nil {
 		writeDashboardError(w, 500, "billing_anomaly_query_failed")
 		return
