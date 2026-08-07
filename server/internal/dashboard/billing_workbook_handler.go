@@ -37,7 +37,7 @@ func (h BillingWorkbookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 		writeDashboardError(w, 403, "forbidden")
 		return
 	}
-	job, jobErr := h.Store.LatestBillingJob(r.Context(), site, "generate", from, to)
+	job, jobErr := billingJobForRead(r, h.Store, site, "generate", from, to)
 	var rows []billing.AggregateRow
 	if jobErr == nil && job.Status == "complete" {
 		rows, e = h.Store.QueryBillingAggregatesForJob(r.Context(), job.ID, []int64{uid})

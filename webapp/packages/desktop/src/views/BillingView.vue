@@ -45,7 +45,7 @@ const state = useAsyncData(async () => {
   return {...bill,items,total:users.total,summary:{...bill.summary,users:users.total},generated:false};
 });
 const generated = computed(() => state.data.value?.generated !== false);
-const detail = useAsyncData(async () => {const[from,to]=generationRange.value;return selected.value ? dashboard.billingDetail({ instance_id: filters.site_id, user_id: selected.value.user_id, from, to }) : undefined;});
+const detail = useAsyncData(async () => {const[from,to]=generationRange.value;return selected.value ? dashboard.billingDetail({ instance_id: filters.site_id, user_id: selected.value.user_id, from, to, job_id: state.data.value?.generation_job?.id }) : undefined;});
 const currency = computed(() => prefs.currencySymbol || "$");
 const money = (value: string | number | undefined) => `${currency.value}${Number(value || 0).toFixed(4)}`;
 const balanceMoney = (quota: number | undefined) => formatQuota(quota ?? 0, prefs.quotaPerUnit, currency.value);
@@ -60,7 +60,7 @@ async function exportUser(row: BillingUserSummary, includeRequests = false) {
     const [from, to] = generationRange.value;
     const createResponse = await fetch("/api/dashboard/billing/workbook-jobs", {
       method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", "X-Requested-With": "XMLHttpRequest" },
-      body: JSON.stringify({ instance_id: filters.site_id, user_id: String(row.user_id), from, to, include_requests: includeRequests ? "1" : "0" }),
+      body: JSON.stringify({ instance_id: filters.site_id, user_id: String(row.user_id), from, to, job_id: state.data.value?.generation_job?.id || "", include_requests: includeRequests ? "1" : "0" }),
     });
     if (!createResponse.ok) throw await httpError(createResponse, "创建导出任务失败");
     let task = await createResponse.json();
@@ -71,7 +71,17 @@ async function exportUser(row: BillingUserSummary, includeRequests = false) {
       task = await statusResponse.json();
     }
     if (task.status !== "complete") throw new Error(task.error || "导出任务失败");
-    window.location.assign(`/api/dashboard/billing/workbook-jobs?id=${task.id}&download=1`);
+    const downloadResponse = await fetch(`/api/dashboard/billing/workbook-jobs?id=${task.id}&download=1`, { credentials: "same-origin" });
+    if (!downloadResponse.ok) throw await httpError(downloadResponse, "下载账单失败");
+    const blob = await downloadResponse.blob();
+    const href = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = href;
+    link.download = `billing-${row.user_id}-${from.replaceAll(":", "-")}-${to.replaceAll(":", "-")}.xlsx`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(href);
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : "导出失败");
   } finally {

@@ -28,6 +28,12 @@ func (f fakeBillingSummaryStore) LatestBillingJob(context.Context, string, strin
 	}
 	return billing.Job{ID: "job-1", Status: "complete"}, nil
 }
+func (f fakeBillingSummaryStore) BillingJob(context.Context, string) (billing.Job, error) {
+	if f.missingJob {
+		return billing.Job{}, sql.ErrNoRows
+	}
+	return billing.Job{ID: "job-1", InstanceID: "site-a", JobType: "generate", Status: "complete"}, nil
+}
 
 func TestBillingSummaryDoesNotFallBackToAnotherInterval(t *testing.T) {
 	billing.MonthlySummaryCache.InvalidateInstance("site-no-job")

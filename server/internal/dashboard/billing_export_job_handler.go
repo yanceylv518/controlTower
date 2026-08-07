@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"bytes"
 	"context"
 	ctauth "controltower/server/internal/auth"
 	"crypto/sha256"
@@ -63,6 +64,9 @@ func (h BillingExportJobHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	query := "instance_id=" + urlQuery(q["instance_id"]) + "&from=" + urlQuery(q["from"]) + "&to=" + urlQuery(q["to"])
+	if q["job_id"] != "" {
+		query += "&job_id=" + urlQuery(q["job_id"])
+	}
 	if h.Kind == "channel" {
 		query += "&channel_id=" + urlQuery(q["channel_id"])
 	} else {
@@ -91,7 +95,7 @@ func (h BillingExportJobHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 			h.Workbook.ServeHTTP(rw, req)
 			err = rw.err
 			if rw.status >= 400 {
-				err = errExportFailed
+				err = rw.responseError()
 			}
 			out.Close()
 		}
@@ -116,6 +120,7 @@ type fileDownloadWriter struct {
 	file   *os.File
 	status int
 	err    error
+	body   bytes.Buffer
 }
 
 func (w *fileDownloadWriter) Header() http.Header { return w.header }
@@ -124,9 +129,19 @@ func (w *fileDownloadWriter) Write(p []byte) (int, error) {
 	if w.status == 0 {
 		w.status = 200
 	}
+	if w.status >= 400 {
+		return w.body.Write(p)
+	}
 	n, e := w.file.Write(p)
 	w.err = e
 	return n, e
+}
+func (w *fileDownloadWriter) responseError() error {
+	var payload struct{ Error string `json:"error"` }
+	if json.Unmarshal(w.body.Bytes(), &payload) == nil && payload.Error != "" {
+		return &exportError{payload.Error}
+	}
+	return errExportFailed
 }
 func billingExportPath(id string) string {
 	return filepath.Join(os.TempDir(), "control-tower-billing-"+id+".xlsx")

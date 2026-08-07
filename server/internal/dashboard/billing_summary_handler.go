@@ -16,6 +16,7 @@ type BillingSummaryStore interface {
 	QueryBillingAggregates(context.Context, string, time.Time, time.Time, []int64) ([]billing.AggregateRow, error)
 	QueryBillingAggregatesForJob(context.Context, string, []int64) ([]billing.AggregateRow, error)
 	LatestBillingJob(context.Context, string, string, time.Time, time.Time) (billing.Job, error)
+	BillingJob(context.Context, string) (billing.Job, error)
 	ListBillingPrices(context.Context, string) ([]billing.PriceRecord, error)
 	ListBillingGroupRatios(context.Context, string) ([]billing.GroupRatio, error)
 	BillingRatioSnapshots(context.Context, string, time.Time, time.Time) (map[string]string, error)

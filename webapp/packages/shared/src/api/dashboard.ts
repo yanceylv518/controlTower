@@ -717,7 +717,7 @@ export const dashboardApi = (client: ApiClient) => ({
     client.request<ListResponse<ChannelBaseValue>>(`/api/dashboard/tuning/base-values/sync${query({ site_id })}`, { method: "POST", body: JSON.stringify({ models }) }),
   billingSummary: (params: { instance_id: string; month?: string; from?: string; to?: string; page?: number; page_size?: number; search?: string }) =>
     client.request<BillingSummaryResponse>(`/api/dashboard/billing/summary${query(params)}`),
-  billingDetail: (params: { instance_id: string; user_id: number; month?: string; from?: string; to?: string }) =>
+  billingDetail: (params: { instance_id: string; user_id: number; month?: string; from?: string; to?: string; job_id?: string }) =>
     client.request<BillingDetailResponse>(`/api/dashboard/billing/detail${query(params)}`),
   generateBilling: (input: { instance_id: string; from: string; to: string; force?: boolean; scope?: "all" | "channel" }) =>
     client.request<{ accepted: boolean; reused: boolean; job: BillingJob }>("/api/dashboard/billing/backfill", { method: "POST", body: JSON.stringify(input) }),
