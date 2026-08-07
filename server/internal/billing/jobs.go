@@ -18,12 +18,16 @@ const BillingPageSize = 2000
 var BusinessLocation = time.FixedZone("Asia/Shanghai", 8*60*60)
 
 type PagedLogRecord struct {
-	ID, CreatedUnix, UserID, ChannelID, CacheTokens, Quota       int64
-	CacheWriteTokens, CacheWrite5mTokens, CacheWrite1hTokens     int64
-	ContextTokens                                                int64
-	UsageSemantic                                                string
-	RequestID, UpstreamRequestID, Username, ModelName, GroupName string
-	ChannelName                                                  string
+	ID, CreatedUnix, UserID, ChannelID, CacheTokens, Quota   int64
+	CacheWriteTokens, CacheWrite5mTokens, CacheWrite1hTokens int64
+	ContextTokens                                            int64
+	UsageSemantic                                            string
+	// Per-request ratios are copied from new-api logs.other. They preserve the
+	// pricing that was actually used for this request; an empty value means the
+	// legacy log did not record that ratio.
+	ModelRatio, CompletionRatio, CacheRatio, CacheCreationRatio, GroupRatio string
+	RequestID, UpstreamRequestID, Username, ModelName, GroupName            string
+	ChannelName                                                             string
 	// SourcePromptTokens preserves logs.prompt_tokens before the billing
 	// source separates cache reads/writes from ordinary input tokens.
 	SourcePromptTokens, PromptTokens, CompletionTokens sql.NullInt64

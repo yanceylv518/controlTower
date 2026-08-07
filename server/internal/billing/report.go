@@ -222,7 +222,7 @@ func FallbackPrice(snapshot RatioSnapshot, model, group string) (Price, string, 
 	input := new(big.Rat).Quo(new(big.Rat).Mul(mr, big.NewRat(tokensPerMillion, 1)), q)
 	completion := snapshot.CompletionRatio[model]
 	if completion == "" {
-		completion = "1"
+		completion = defaultCompletionRatio(model)
 	}
 	cr, e := decimalRat(completion)
 	if e != nil {
@@ -252,6 +252,37 @@ func FallbackPrice(snapshot RatioSnapshot, model, group string) (Price, string, 
 		groupRatio = "1"
 	}
 	return Price{Input: input.FloatString(12), Output: new(big.Rat).Mul(input, cr).FloatString(12), Cache: new(big.Rat).Mul(input, car).FloatString(12), CacheWrite: new(big.Rat).Mul(input, cwr).FloatString(12)}, groupRatio, nil
+}
+
+// defaultCompletionRatio mirrors new-api's built-in completion multipliers.
+// Those values are resolved in new-api code and therefore are absent from the
+// options.CompletionRatio JSON returned by a read-only database connection.
+func defaultCompletionRatio(model string) string {
+	name := strings.ToLower(strings.TrimSpace(model))
+	switch {
+	case strings.HasPrefix(name, "gpt-4o-mini-tts"):
+		return "20"
+	case strings.HasPrefix(name, "gpt-4o"):
+		return "4"
+	case strings.HasPrefix(name, "gpt-5.4-nano"):
+		return "6.25"
+	case strings.HasPrefix(name, "gpt-5.4"), strings.HasPrefix(name, "gpt-5.5"):
+		return "6"
+	case strings.HasPrefix(name, "gpt-5") && !strings.Contains(name, "."):
+		return "8"
+	case strings.Contains(name, "claude-3"), strings.Contains(name, "claude-sonnet-4"), strings.Contains(name, "claude-opus-4"), strings.Contains(name, "claude-haiku-4"):
+		return "5"
+	case strings.HasPrefix(name, "o1"), strings.HasPrefix(name, "o3"):
+		return "4"
+	case strings.HasPrefix(name, "gpt-4.5-preview"):
+		return "2"
+	case strings.HasPrefix(name, "gpt-4-turbo"):
+		return "3"
+	case strings.HasPrefix(name, "gpt-4"):
+		return "2"
+	default:
+		return "1"
+	}
 }
 
 // priceWithSnapshotCacheWrite keeps CT's stored price schedule aligned with

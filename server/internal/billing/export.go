@@ -7,6 +7,32 @@ type RequestCharge struct {
 	Unpriced                                                                                                              bool
 }
 
+// RequestPrice applies ratios captured by new-api on the individual log row.
+// The model table remains the fallback for legacy rows that predate these
+// fields, but a recorded ratio always wins because it reflects actual billing.
+func RequestPrice(log PagedLogRecord, fallback Price) (Price, string) {
+	price := fallback
+	if log.CompletionRatio != "" {
+		if value, err := multipliedDecimal(fallback.Input, log.CompletionRatio); err == nil {
+			price.Output = value
+		}
+	}
+	if log.CacheRatio != "" {
+		if value, err := multipliedDecimal(fallback.Input, log.CacheRatio); err == nil {
+			price.Cache = value
+		}
+	}
+	// Cache-write price has no implicit default. Only a ratio explicitly
+	// recorded by new-api may derive it from the input price.
+	if log.CacheCreationRatio != "" {
+		if value, err := multipliedDecimal(fallback.Input, log.CacheCreationRatio); err == nil {
+			price.CacheWrite = value
+		}
+	}
+	ratio := log.GroupRatio
+	return price, ratio
+}
+
 func PriceRequest(log PagedLogRecord, price Price, ratio string) RequestCharge {
 	if ratio == "" {
 		ratio = "1"

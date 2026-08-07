@@ -186,7 +186,11 @@ func writeRequestPages(ctx context.Context, book *xlsxwriter.Workbook, month str
 			if !ok {
 				continue
 			}
-			charge := billing.PriceRequest(v, price, byGroup[v.GroupName])
+			price, logGroupRatio := billing.RequestPrice(v, price)
+			if logGroupRatio == "" {
+				logGroupRatio = byGroup[v.GroupName]
+			}
+			charge := billing.PriceRequest(v, price, logGroupRatio)
 			if rowNo >= 1_000_000 {
 				sheetNo++
 				if e = newSheet(); e != nil {

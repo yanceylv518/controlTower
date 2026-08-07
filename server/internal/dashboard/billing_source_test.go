@@ -40,6 +40,13 @@ func TestParseBillingCacheUsageDoesNotDoubleCountAliases(t *testing.T) {
 	}
 }
 
+func TestParseBillingCacheUsagePreservesPerRequestRatios(t *testing.T) {
+	v := parseBillingCacheUsage(`{"model_ratio":2.5,"completion_ratio":4,"cache_ratio":0.5,"cache_creation_ratio":1.25,"group_ratio":1}`)
+	if v.ModelRatio != "2.5" || v.CompletionRatio != "4" || v.CacheRatio != "0.5" || v.CacheCreationRatio != "1.25" || v.GroupRatio != "1" {
+		t.Fatalf("unexpected ratios: %#v", v)
+	}
+}
+
 // The accepted production example (prompt=298 already non-cache, cache=8507)
 // carries no usage_semantic marker on some new-api versions. OpenAI-style
 // cache is a subset of prompt, so cache exceeding prompt proves the row is

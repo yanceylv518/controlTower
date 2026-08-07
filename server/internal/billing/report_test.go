@@ -31,6 +31,19 @@ func TestFallbackPriceDoesNotDefaultCacheWritePrice(t *testing.T) {
 	}
 }
 
+func TestFallbackPriceUsesNewAPIBuiltInCompletionRatio(t *testing.T) {
+	snapshot, err := ParseRatioSnapshot(`{"ModelRatio":"{\"gpt-4o\":1.25,\"gpt-5.5\":2.5,\"claude-opus-4-8\":2.5}","QuotaPerUnit":500000}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for model, want := range map[string]string{"gpt-4o": "10.000000000000", "gpt-5.5": "30.000000000000", "claude-opus-4-8": "25.000000000000"} {
+		price, _, priceErr := FallbackPrice(snapshot, model, "")
+		if priceErr != nil || price.Output != want {
+			t.Fatalf("%s output=%s err=%v want=%s", model, price.Output, priceErr, want)
+		}
+	}
+}
+
 func TestFallbackPriceUsesConfiguredCreateCacheRatio(t *testing.T) {
 	snapshot, err := ParseRatioSnapshot(`{"ModelRatio":"{\"gpt-test\":2}","CreateCacheRatio":"{\"gpt-test\":1.4}","QuotaPerUnit":500000}`)
 	if err != nil {
