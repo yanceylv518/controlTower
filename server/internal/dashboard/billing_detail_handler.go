@@ -1,8 +1,10 @@
 package dashboard
 
 import (
+	"context"
 	"database/sql"
 	"encoding/csv"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -33,7 +35,7 @@ func (h BillingDetailHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	if jobErr == nil && job.Status == "complete" {
 		rows, err = h.Store.QueryBillingAggregatesForJob(r.Context(), job.ID, []int64{userID})
 	} else {
-		writeDashboardError(w, http.StatusConflict, "billing_not_generated")
+		writeBillingReadConflict(w, jobErr)
 		return
 	}
 	if err != nil {
@@ -80,16 +82,49 @@ func (h BillingDetailHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	writeDashboardJSON(w, http.StatusOK, map[string]any{"items": items, "user_id": userID, "period": period, "data_through": to.Add(-time.Nanosecond)})
 }
 
-func billingJobForRead(r *http.Request, store BillingSummaryStore, instanceID, jobType string, from, to time.Time) (billing.Job, error) {
+type billingJobReadStore interface {
+	LatestBillingJob(context.Context, string, string, time.Time, time.Time) (billing.Job, error)
+	BillingJob(context.Context, string) (billing.Job, error)
+}
+
+type billingGeneratingError struct{ job billing.Job }
+
+func (e *billingGeneratingError) Error() string { return "billing_generating" }
+
+func billingJobForRead(r *http.Request, store billingJobReadStore, instanceID, jobType string, from, to time.Time) (billing.Job, error) {
 	jobID := strings.TrimSpace(r.URL.Query().Get("job_id"))
+	var job billing.Job
+	var err error
 	if jobID == "" {
-		return store.LatestBillingJob(r.Context(), instanceID, jobType, from, to)
+		job, err = store.LatestBillingJob(r.Context(), instanceID, jobType, from, to)
+	} else {
+		job, err = store.BillingJob(r.Context(), jobID)
+		if err == nil && (job.InstanceID != instanceID || job.JobType != jobType || !job.From.Equal(from) || !job.To.Equal(to)) {
+			err = sql.ErrNoRows
+		}
 	}
-	job, err := store.BillingJob(r.Context(), jobID)
-	if err != nil || job.InstanceID != instanceID || job.JobType != jobType || !job.From.Equal(from) || !job.To.Equal(to) {
-		return billing.Job{}, sql.ErrNoRows
+	if err != nil {
+		return billing.Job{}, err
+	}
+	if job.Status == "pending" || job.Status == "running" {
+		return job, &billingGeneratingError{job: job}
 	}
 	return job, nil
+}
+
+func writeBillingReadConflict(w http.ResponseWriter, err error) {
+	var generating *billingGeneratingError
+	if errors.As(err, &generating) {
+		progress := 0
+		if generating.job.TotalSteps > 0 {
+			progress = generating.job.CompletedSteps * 100 / generating.job.TotalSteps
+		}
+		writeDashboardJSON(w, http.StatusConflict, map[string]any{
+			"error": "billing_generating", "progress": progress, "job_id": generating.job.ID,
+		})
+		return
+	}
+	writeDashboardError(w, http.StatusConflict, "billing_not_generated")
 }
 
 func writeBillingInvoiceCSV(w http.ResponseWriter, userID int64, month string, items []billing.InvoiceItem, total billing.InvoiceTotal) {

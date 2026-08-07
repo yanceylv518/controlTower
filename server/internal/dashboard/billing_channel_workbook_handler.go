@@ -31,13 +31,13 @@ func (h BillingChannelWorkbookHandler) ServeHTTP(w http.ResponseWriter, r *http.
 		writeDashboardError(w, 400, "invalid_query")
 		return
 	}
-	job, jobErr := h.Store.LatestBillingJob(r.Context(), site, "channel_generate", from, to)
+	job, jobErr := billingJobForRead(r, h.Store, site, "channel_generate", from, to)
 	var rows []billing.AggregateRow
 	var err error
 	if jobErr == nil && job.Status == "complete" {
 		rows, err = h.Store.QueryBillingChannelAggregatesForJob(r.Context(), job.ID, channelID)
 	} else {
-		writeDashboardError(w, http.StatusConflict, "billing_not_generated")
+		writeBillingReadConflict(w, jobErr)
 		return
 	}
 	if err != nil {

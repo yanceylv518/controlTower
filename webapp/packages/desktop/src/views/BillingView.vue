@@ -12,7 +12,7 @@ import { usePrefsStore } from "../stores/prefs";
 import { useAuthStore } from "../stores/auth";
 import { formatNumber, formatQuota } from "../utils/format";
 import { savedGenerationRange, timeRangeShortcuts, validateGenerationRange } from "../utils/billingRange";
-import { httpError } from "../utils/httpError";
+import { billingReadErrorMessage, downloadBillingFile, httpError } from "../utils/httpError";
 
 const filters = useFiltersStore();
 const prefs = usePrefsStore();
@@ -55,8 +55,21 @@ const balanceMoney = (quota: number | undefined) => formatQuota(quota ?? 0, pref
 const unitPrice = (value: string | undefined) => value ? `${currency.value}${(Number(value) * currencyRate.value).toFixed(4)}` : "—";
 const periodText = computed(() => `[${generationRange.value[0]}, ${generationRange.value[1]})`);
 const exportURL = computed(() => {const[from,to]=generationRange.value;return`/api/dashboard/billing/summary?instance_id=${encodeURIComponent(filters.site_id)}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&search=${encodeURIComponent(search.value)}&format=csv`;});
-const dailyExportURL = computed(() => {const[from,to]=generationRange.value;return selected.value?`/api/dashboard/billing/detail?instance_id=${encodeURIComponent(filters.site_id)}&user_id=${selected.value.user_id}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&format=csv`:"#";});
-const anomalyExportURL = computed(() => {const[from,to]=generationRange.value;return selected.value?`/api/dashboard/billing/anomalies?instance_id=${encodeURIComponent(filters.site_id)}&user_id=${selected.value.user_id}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&format=csv`:"#"});
+function userReadURL(path: string, row: BillingUserSummary, format = "csv") {
+  const [from, to] = generationRange.value;
+  const params = new URLSearchParams({ instance_id: filters.site_id, user_id: String(row.user_id), from, to, format });
+  const jobID = state.data.value?.generation_job?.id;
+  if (jobID) params.set("job_id", jobID);
+  return `${path}?${params.toString()}`;
+}
+async function exportDaily(row: BillingUserSummary) {
+  try { await downloadBillingFile(userReadURL("/api/dashboard/billing/detail", row), "导出日账单失败"); }
+  catch (error) { ElMessage.error(billingReadErrorMessage(error, "导出日账单失败")); }
+}
+async function exportAnomalies(row: BillingUserSummary) {
+  try { await downloadBillingFile(userReadURL("/api/dashboard/billing/anomalies", row), "导出异常订单失败"); }
+  catch (error) { ElMessage.error(billingReadErrorMessage(error, "导出异常订单失败")); }
+}
 async function exportUser(row: BillingUserSummary, includeRequests = false) {
   exporting.value = { ...exporting.value, [row.user_id]: true };
   try {
@@ -74,19 +87,9 @@ async function exportUser(row: BillingUserSummary, includeRequests = false) {
       task = await statusResponse.json();
     }
     if (task.status !== "complete") throw new Error(task.error || "导出任务失败");
-    const downloadResponse = await fetch(`/api/dashboard/billing/workbook-jobs?id=${task.id}&download=1`, { credentials: "same-origin" });
-    if (!downloadResponse.ok) throw await httpError(downloadResponse, "下载账单失败");
-    const blob = await downloadResponse.blob();
-    const href = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = href;
-    link.download = `billing-${row.user_id}-${from.replaceAll(":", "-")}-${to.replaceAll(":", "-")}.xlsx`;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(href);
+    await downloadBillingFile(`/api/dashboard/billing/workbook-jobs?id=${task.id}&download=1`, "下载账单失败", `billing-${row.user_id}-${from.replaceAll(":", "-")}-${to.replaceAll(":", "-")}.xlsx`);
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : "导出失败");
+    ElMessage.error(billingReadErrorMessage(error, "导出失败"));
   } finally {
     exporting.value = { ...exporting.value, [row.user_id]: false };
   }
@@ -127,8 +130,9 @@ void state.reload();
       </el-table><ListPager v-model:page="page" v-model:page-size="pageSize" :item-count="state.data.value?.items?.length || 0" :total="state.data.value?.total || 0" />
     </AsyncPanel>
     <el-drawer v-model="detailOpen" :title="`${selected?.username || '用户'} · ${generationRange[0]} 至 ${generationRange[1]}`" size="78%">
-      <div class="drawer-actions"><el-button :loading="Boolean(selected && exporting[selected.user_id])" @click="selected && exportUser(selected, true)">{{ selected && exporting[selected.user_id] ? "后台生成中" : "导出完整账单 Excel" }}</el-button><el-button tag="a" :href="dailyExportURL">导出日账单</el-button><el-button tag="a" :href="anomalyExportURL">导出异常订单</el-button><router-link :to="`/readonly-logs?username=${encodeURIComponent(selected?.username || '')}&from=${generationRange[0]}&to=${generationRange[1]}`"><el-button>查看使用日志</el-button></router-link></div>
-      <AsyncPanel :loading="detail.loading.value" :error="detail.error.value" :empty="!detail.data.value?.items?.length" @retry="detail.reload"><el-table :data="detail.data.value?.items || []" class="billing-detail-table" table-layout="fixed"><el-table-column prop="day" label="日期" width="105" /><el-table-column label="模型信息" min-width="165"><template #default="s"><b class="cell-primary">{{ s.row.model_name }}</b><small class="cell-secondary">{{ s.row.group_name || "默认分组" }} · {{ s.row.tier_from > 0 ? `档位 ≥${formatNumber(s.row.tier_from)}` : "基础价" }}</small></template></el-table-column><el-table-column label="订单" min-width="125"><template #default="s"><div class="metric-pairs"><span>总数</span><b>{{ formatNumber(s.row.request_count + s.row.abnormal_rows) }}</b><span>计费</span><b>{{ formatNumber(s.row.request_count) }}</b><span>异常</span><b :class="{ danger: s.row.abnormal_rows > 0 }">{{ formatNumber(s.row.abnormal_rows) }}</b></div></template></el-table-column><el-table-column label="Token 用量" min-width="230"><template #default="s"><div class="metric-grid"><span>普通</span><b>{{ formatNumber(s.row.prompt_tokens) }}</b><span>读取</span><b>{{ formatNumber(s.row.cache_tokens) }}</b><span>写入</span><b>{{ formatNumber(s.row.cache_write_tokens) }}</b><span>输出</span><b>{{ formatNumber(s.row.completion_tokens) }}</b></div></template></el-table-column><el-table-column label="单价 / 1M" min-width="205"><template #default="s"><div class="metric-grid"><span>输入</span><b>{{ unitPrice(s.row.input_price) }}</b><span>读取</span><b>{{ unitPrice(s.row.cache_price) }}</b><span>写入</span><b>{{ unitPrice(s.row.cache_write_price) }}</b><span>输出</span><b>{{ unitPrice(s.row.output_price) }}</b></div></template></el-table-column><el-table-column prop="amount" label="金额" min-width="125" align="right"><template #default="s"><b>{{ s.row.unpriced ? "无法取价" : money(s.row.amount) }}</b><small class="cell-secondary">异常 {{ money(s.row.abnormal_amount) }}</small></template></el-table-column></el-table></AsyncPanel>
+      <div class="drawer-actions"><el-button :loading="Boolean(selected && exporting[selected.user_id])" @click="selected && exportUser(selected, true)">{{ selected && exporting[selected.user_id] ? "后台生成中" : "导出完整账单 Excel" }}</el-button><el-button :disabled="!selected" @click="selected && exportDaily(selected)">导出日账单</el-button><el-button :disabled="!selected" @click="selected && exportAnomalies(selected)">导出异常订单</el-button><router-link :to="`/readonly-logs?username=${encodeURIComponent(selected?.username || '')}&from=${generationRange[0]}&to=${generationRange[1]}`"><el-button>查看使用日志</el-button></router-link></div>
+      <el-alert v-if="detail.error.value" class="pending-alert" type="info" :title="detail.error.value" :closable="false" show-icon />
+      <AsyncPanel :loading="detail.loading.value" :error="''" :empty="!detail.error.value && !detail.data.value?.items?.length" @retry="detail.reload"><el-table :data="detail.data.value?.items || []" class="billing-detail-table" table-layout="fixed"><el-table-column prop="day" label="日期" width="105" /><el-table-column label="模型信息" min-width="165"><template #default="s"><b class="cell-primary">{{ s.row.model_name }}</b><small class="cell-secondary">{{ s.row.group_name || "默认分组" }} · {{ s.row.tier_from > 0 ? `档位 ≥${formatNumber(s.row.tier_from)}` : "基础价" }}</small></template></el-table-column><el-table-column label="订单" min-width="125"><template #default="s"><div class="metric-pairs"><span>总数</span><b>{{ formatNumber(s.row.request_count + s.row.abnormal_rows) }}</b><span>计费</span><b>{{ formatNumber(s.row.request_count) }}</b><span>异常</span><b :class="{ danger: s.row.abnormal_rows > 0 }">{{ formatNumber(s.row.abnormal_rows) }}</b></div></template></el-table-column><el-table-column label="Token 用量" min-width="230"><template #default="s"><div class="metric-grid"><span>普通</span><b>{{ formatNumber(s.row.prompt_tokens) }}</b><span>读取</span><b>{{ formatNumber(s.row.cache_tokens) }}</b><span>写入</span><b>{{ formatNumber(s.row.cache_write_tokens) }}</b><span>输出</span><b>{{ formatNumber(s.row.completion_tokens) }}</b></div></template></el-table-column><el-table-column label="单价 / 1M" min-width="205"><template #default="s"><div class="metric-grid"><span>输入</span><b>{{ unitPrice(s.row.input_price) }}</b><span>读取</span><b>{{ unitPrice(s.row.cache_price) }}</b><span>写入</span><b>{{ unitPrice(s.row.cache_write_price) }}</b><span>输出</span><b>{{ unitPrice(s.row.output_price) }}</b></div></template></el-table-column><el-table-column prop="amount" label="金额" min-width="125" align="right"><template #default="s"><b>{{ s.row.unpriced ? "无法取价" : money(s.row.amount) }}</b><small class="cell-secondary">异常 {{ money(s.row.abnormal_amount) }}</small></template></el-table-column></el-table></AsyncPanel>
     </el-drawer>
   </AppShell>
 </template>

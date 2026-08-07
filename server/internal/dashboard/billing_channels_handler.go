@@ -4,7 +4,6 @@ import (
 	"context"
 	ctauth "controltower/server/internal/auth"
 	"controltower/server/internal/billing"
-	"database/sql"
 	"encoding/json"
 	"math/big"
 	"net/http"
@@ -22,6 +21,7 @@ type BillingChannelStore interface {
 	ListBillingGroupRatios(context.Context, string) ([]billing.GroupRatio, error)
 	BillingRatioSnapshots(context.Context, string, time.Time, time.Time) (map[string]string, error)
 	LatestBillingJob(context.Context, string, string, time.Time, time.Time) (billing.Job, error)
+	BillingJob(context.Context, string) (billing.Job, error)
 }
 type BillingChannelSource interface {
 	CurrentChannels(context.Context, string) ([]billing.ConfiguredChannel, error)
@@ -66,10 +66,20 @@ func (h BillingChannelsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 		return
 	}
 	channelID, _ := strconv.ParseInt(r.URL.Query().Get("channel_id"), 10, 64)
-	job, jobErr := h.Store.LatestBillingJob(r.Context(), site, "channel_generate", from, to)
+	strictRead := channelID > 0 || r.URL.Query().Get("format") == "csv" || strings.TrimSpace(r.URL.Query().Get("job_id")) != ""
+	var job billing.Job
+	var jobErr error
+	if strictRead {
+		job, jobErr = billingJobForRead(r, h.Store, site, "channel_generate", from, to)
+	} else {
+		job, jobErr = h.Store.LatestBillingJob(r.Context(), site, "channel_generate", from, to)
+	}
 	var rows []billing.AggregateRow
 	if jobErr == nil && job.Status == "complete" {
 		rows, e = h.Store.QueryBillingChannelAggregatesForJob(r.Context(), job.ID, channelID)
+	} else if strictRead {
+		writeBillingReadConflict(w, jobErr)
+		return
 	}
 	if e != nil {
 		writeDashboardError(w, 500, "billing_channel_query_failed")
@@ -146,10 +156,6 @@ func (h BillingChannelsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 				items = append(items, item)
 			}
 		}
-	}
-	if jobErr != nil && jobErr != sql.ErrNoRows {
-		writeDashboardError(w, 500, "billing_channel_query_failed")
-		return
 	}
 	var generationJob any
 	if jobErr == nil {

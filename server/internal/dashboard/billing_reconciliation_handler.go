@@ -29,7 +29,7 @@ func (h BillingReconciliationHandler) ServeHTTP(w http.ResponseWriter, r *http.R
 	}
 	job, err := billingJobForRead(r, h.Store, instanceID, "generate", from, to)
 	if err != nil || job.Status != "complete" {
-		writeDashboardError(w, http.StatusConflict, "billing_not_generated")
+		writeBillingReadConflict(w, err)
 		return
 	}
 	var userIDs []int64
@@ -130,7 +130,7 @@ func (h BillingReconciliationRequestsHandler) ServeHTTP(w http.ResponseWriter, r
 	}
 	job, err := billingJobForRead(r, h.Store, instanceID, "generate", from, to)
 	if err != nil || job.Status != "complete" {
-		writeDashboardError(w, http.StatusConflict, "billing_not_generated")
+		writeBillingReadConflict(w, err)
 		return
 	}
 	dayEnd := day.Add(24 * time.Hour)

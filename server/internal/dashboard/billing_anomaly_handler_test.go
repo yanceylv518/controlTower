@@ -19,7 +19,11 @@ func (s anomalyExportStore) QueryBillingAnomalies(context.Context, string, strin
 }
 
 func (s anomalyExportStore) LatestBillingJob(context.Context, string, string, time.Time, time.Time) (billing.Job, error) {
-	return billing.Job{ID: "job-1", Status: "complete"}, nil
+	return billing.Job{ID: "job-1", InstanceID: "demo", JobType: "generate", Status: "complete"}, nil
+}
+
+func (s anomalyExportStore) BillingJob(context.Context, string) (billing.Job, error) {
+	return billing.Job{ID: "job-1", InstanceID: "demo", JobType: "generate", Status: "complete"}, nil
 }
 
 func TestBillingAnomalyCSVUsesBusinessTimezone(t *testing.T) {

@@ -14,6 +14,7 @@ import (
 type BillingAnomalyStore interface {
 	QueryBillingAnomalies(context.Context, string, string, int64, int64, time.Time, time.Time, time.Time, int64, int) ([]billing.AnomalyOrder, error)
 	LatestBillingJob(context.Context, string, string, time.Time, time.Time) (billing.Job, error)
+	BillingJob(context.Context, string) (billing.Job, error)
 }
 type BillingAnomalyHandler struct{ Store BillingAnomalyStore }
 
@@ -35,11 +36,12 @@ func (h BillingAnomalyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	if channelID > 0 {
 		jobType = "channel_generate"
 	}
-	job, jobErr := h.Store.LatestBillingJob(r.Context(), site, jobType, from, to)
-	jobID := ""
-	if jobErr == nil && job.Status == "complete" {
-		jobID = job.ID
+	job, jobErr := billingJobForRead(r, h.Store, site, jobType, from, to)
+	if jobErr != nil || job.Status != "complete" {
+		writeBillingReadConflict(w, jobErr)
+		return
 	}
+	jobID := job.ID
 	cursorTime := time.Unix(0, 0)
 	if raw := q.Get("cursor_time"); raw != "" {
 		cursorTime, _ = time.Parse(time.RFC3339, raw)
