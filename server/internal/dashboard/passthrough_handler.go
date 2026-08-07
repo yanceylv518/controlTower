@@ -124,7 +124,10 @@ func (h *PassthroughHandler) logsPageForBilling(ctx context.Context, site string
 	}
 	queryCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	query := `SELECT l.id,l.created_at,COALESCE(l.request_id,''),COALESCE(l.upstream_request_id,''),l.user_id,COALESCE(l.username,''),COALESCE(l.channel_id,0),COALESCE(c.name,''),COALESCE(l.model_name,''),COALESCE(l.` + "`group`" + `,''),l.prompt_tokens,l.completion_tokens,l.quota,COALESCE(l.other,'') FROM logs l LEFT JOIN channels c ON c.id=l.channel_id WHERE l.type=2 AND l.created_at>=? AND l.created_at<? AND (l.created_at>? OR (l.created_at=? AND l.id>?))`
+	// `other` can contain large provider diagnostics. Billing only needs the
+	// cache-usage fields below, so project a compact JSON value inside MySQL
+	// instead of transferring the complete payload over the RDS connection.
+	query := `SELECT l.id,l.created_at,COALESCE(l.request_id,''),COALESCE(l.upstream_request_id,''),l.user_id,COALESCE(l.username,''),COALESCE(l.channel_id,0),COALESCE(c.name,''),COALESCE(l.model_name,''),COALESCE(l.` + "`group`" + `,''),l.prompt_tokens,l.completion_tokens,l.quota,` + billingOtherProjection + ` FROM logs l LEFT JOIN channels c ON c.id=l.channel_id WHERE l.type=2 AND l.created_at>=? AND l.created_at<? AND (l.created_at>? OR (l.created_at=? AND l.id>?))`
 	args := []any{start.Unix(), end.Unix(), cursor.CreatedUnix, cursor.CreatedUnix, cursor.ID}
 	if userID > 0 {
 		query += ` AND l.user_id=?`
@@ -172,6 +175,21 @@ func (h *PassthroughHandler) logsPageForBilling(ctx context.Context, site string
 	}
 	return out, rows.Err()
 }
+
+const billingOtherProjection = `CASE WHEN JSON_VALID(l.other) THEN JSON_OBJECT(` +
+	`'usage_semantic',JSON_EXTRACT(l.other,'$.usage_semantic'),` +
+	`'claude',JSON_EXTRACT(l.other,'$.claude'),` +
+	`'cache_tokens',JSON_EXTRACT(l.other,'$.cache_tokens'),` +
+	`'cached_tokens',JSON_EXTRACT(l.other,'$.cached_tokens'),` +
+	`'cache_read_input_tokens',JSON_EXTRACT(l.other,'$.cache_read_input_tokens'),` +
+	`'prompt_cache_hit_tokens',JSON_EXTRACT(l.other,'$.prompt_cache_hit_tokens'),` +
+	`'cache_creation_tokens',JSON_EXTRACT(l.other,'$.cache_creation_tokens'),` +
+	`'cache_write_tokens',JSON_EXTRACT(l.other,'$.cache_write_tokens'),` +
+	`'cached_creation_tokens',JSON_EXTRACT(l.other,'$.cached_creation_tokens'),` +
+	`'cache_creation_tokens_5m',JSON_EXTRACT(l.other,'$.cache_creation_tokens_5m'),` +
+	`'claude_cache_creation_5_m_tokens',JSON_EXTRACT(l.other,'$.claude_cache_creation_5_m_tokens'),` +
+	`'cache_creation_tokens_1h',JSON_EXTRACT(l.other,'$.cache_creation_tokens_1h'),` +
+	`'claude_cache_creation_1_h_tokens',JSON_EXTRACT(l.other,'$.claude_cache_creation_1_h_tokens')) ELSE '{}' END`
 
 func (h *PassthroughHandler) RatioSnapshotForBilling(ctx context.Context, site string) (string, error) {
 	db, configured, err := h.database(site)

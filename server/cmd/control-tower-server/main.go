@@ -94,7 +94,7 @@ func run() error {
 		startRetentionRunner(store, settingsProvider)
 		startTuningRunner(store)
 	}
-	startBillingJobRunner(store, cfg.SecretKey)
+	startBillingJobRunner(store, cfg.SecretKey, time.Duration(cfg.BillingPagePauseMilliseconds)*time.Millisecond)
 	startReadonlyLogRollupRunner(store, cfg.SecretKey)
 
 	server := &http.Server{
@@ -106,9 +106,9 @@ func run() error {
 	return server.ListenAndServe()
 }
 
-func startBillingJobRunner(store mysqlstore.Store, secretKey string) {
+func startBillingJobRunner(store mysqlstore.Store, secretKey string, pagePause time.Duration) {
 	readonly := &dashboard.PassthroughHandler{Config: store, SecretKey: secretKey}
-	runner := billing.JobRunner{Source: dashboard.BillingReadonlySource{Handler: readonly}, Store: store}
+	runner := billing.JobRunner{Source: dashboard.BillingReadonlySource{Handler: readonly}, Store: store, PagePause: pagePause}
 	go func() {
 		if err := runner.Run(context.Background()); err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("billing job runner stopped: %v", err)

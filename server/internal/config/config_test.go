@@ -25,6 +25,9 @@ func TestLoadServerConfig(t *testing.T) {
 	if cfg.AggregationIntervalSeconds != 60 {
 		t.Fatalf("AggregationIntervalSeconds = %d", cfg.AggregationIntervalSeconds)
 	}
+	if cfg.BillingPagePauseMilliseconds != 500 {
+		t.Fatalf("BillingPagePauseMilliseconds = %d", cfg.BillingPagePauseMilliseconds)
+	}
 }
 
 func TestLoadServerConfigAllowsAggregationIntervalOverride(t *testing.T) {
@@ -83,7 +86,7 @@ func TestLoadServerConfigRejectsInvalidAggregationInterval(t *testing.T) {
 
 func TestServerConfigKeysIncludesRequiredSecrets(t *testing.T) {
 	keys := Keys()
-	for _, want := range []string{"CT_DATABASE_DRIVER", "CT_DATABASE_DSN", "CT_AGENT_TOKEN", "CT_DASHBOARD_TOKEN", "CT_AGENT_TOKEN_PEPPER", "CT_SECRET_KEY", "CT_AGGREGATION_INTERVAL_SECONDS"} {
+	for _, want := range []string{"CT_DATABASE_DRIVER", "CT_DATABASE_DSN", "CT_AGENT_TOKEN", "CT_DASHBOARD_TOKEN", "CT_AGENT_TOKEN_PEPPER", "CT_SECRET_KEY", "CT_AGGREGATION_INTERVAL_SECONDS", "CT_BILLING_PAGE_PAUSE_MILLISECONDS"} {
 		found := false
 		for _, key := range keys {
 			if key == want {

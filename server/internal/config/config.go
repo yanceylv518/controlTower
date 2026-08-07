@@ -6,29 +6,30 @@ import (
 )
 
 type Config struct {
-	APIOnly                     bool
-	ListenAddr                  string
-	PublicBaseURL               string
-	DatabaseDriver              string
-	DatabaseDSN                 string
-	MigrationPath               string
-	RedisAddr                   string
-	RedisPassword               string
-	AgentToken                  string
-	DashboardToken              string
-	AgentTokenPepper            string
-	SecretKey                   string
-	AggregationIntervalSeconds  int
-	NotificationIntervalSeconds int
-	AdminUsername               string
-	AdminInitialPassword        string
-	SessionTTLHours             int
-	NotificationMaxAttempts     int
-	CommandExpiryMinutes        int
-	RetentionDetailDays         int
-	RetentionMetric5mDays       int
-	RetentionRuntimeDays        int
-	RetentionHealthHours        int
+	APIOnly                      bool
+	ListenAddr                   string
+	PublicBaseURL                string
+	DatabaseDriver               string
+	DatabaseDSN                  string
+	MigrationPath                string
+	RedisAddr                    string
+	RedisPassword                string
+	AgentToken                   string
+	DashboardToken               string
+	AgentTokenPepper             string
+	SecretKey                    string
+	AggregationIntervalSeconds   int
+	NotificationIntervalSeconds  int
+	AdminUsername                string
+	AdminInitialPassword         string
+	SessionTTLHours              int
+	NotificationMaxAttempts      int
+	CommandExpiryMinutes         int
+	RetentionDetailDays          int
+	RetentionMetric5mDays        int
+	RetentionRuntimeDays         int
+	RetentionHealthHours         int
+	BillingPagePauseMilliseconds int
 }
 
 func Load(values map[string]string) (Config, error) {
@@ -48,12 +49,13 @@ func Load(values map[string]string) (Config, error) {
 		AggregationIntervalSeconds:  intOrDefault(values, "CT_AGGREGATION_INTERVAL_SECONDS", 60),
 		NotificationIntervalSeconds: intOrDefault(values, "CT_NOTIFICATION_INTERVAL_SECONDS", 30),
 		AdminUsername:               values["CT_ADMIN_USERNAME"], AdminInitialPassword: values["CT_ADMIN_INITIAL_PASSWORD"], SessionTTLHours: intOrDefault(values, "CT_SESSION_TTL_HOURS", 720),
-		NotificationMaxAttempts: intOrDefault(values, "CT_NOTIFICATION_MAX_ATTEMPTS", 8),
-		CommandExpiryMinutes:    intOrDefault(values, "CT_COMMAND_EXPIRY_MINUTES", 10),
-		RetentionDetailDays:     intOrDefault(values, "CT_RETENTION_DETAIL_DAYS", 30),
-		RetentionMetric5mDays:   intOrDefault(values, "CT_RETENTION_METRIC5M_DAYS", 90),
-		RetentionRuntimeDays:    intOrDefault(values, "CT_RETENTION_RUNTIME_DAYS", 7),
-		RetentionHealthHours:    intOrDefault(values, "CT_RETENTION_HEALTH_HOURS", 6),
+		NotificationMaxAttempts:      intOrDefault(values, "CT_NOTIFICATION_MAX_ATTEMPTS", 8),
+		CommandExpiryMinutes:         intOrDefault(values, "CT_COMMAND_EXPIRY_MINUTES", 10),
+		RetentionDetailDays:          intOrDefault(values, "CT_RETENTION_DETAIL_DAYS", 30),
+		RetentionMetric5mDays:        intOrDefault(values, "CT_RETENTION_METRIC5M_DAYS", 90),
+		RetentionRuntimeDays:         intOrDefault(values, "CT_RETENTION_RUNTIME_DAYS", 7),
+		RetentionHealthHours:         intOrDefault(values, "CT_RETENTION_HEALTH_HOURS", 6),
+		BillingPagePauseMilliseconds: intOrDefault(values, "CT_BILLING_PAGE_PAUSE_MILLISECONDS", 500),
 	}
 	if cfg.PublicBaseURL == "" || cfg.DatabaseDSN == "" || cfg.AgentToken == "" || cfg.DashboardToken == "" || cfg.AgentTokenPepper == "" {
 		return Config{}, errors.New("missing required control tower server config")
@@ -82,6 +84,9 @@ func Load(values map[string]string) (Config, error) {
 	if cfg.RetentionDetailDays < 0 || cfg.RetentionMetric5mDays < 0 || cfg.RetentionRuntimeDays < 0 || cfg.RetentionHealthHours < 1 || cfg.RetentionHealthHours > 168 {
 		return Config{}, errors.New("retention settings are outside the allowed range")
 	}
+	if cfg.BillingPagePauseMilliseconds < 0 || cfg.BillingPagePauseMilliseconds > 10000 {
+		return Config{}, errors.New("CT_BILLING_PAGE_PAUSE_MILLISECONDS must be between 0 and 10000")
+	}
 	return cfg, nil
 }
 
@@ -103,6 +108,7 @@ func Keys() []string {
 		"CT_NOTIFICATION_INTERVAL_SECONDS",
 		"CT_ADMIN_USERNAME", "CT_ADMIN_INITIAL_PASSWORD", "CT_SESSION_TTL_HOURS", "CT_NOTIFICATION_MAX_ATTEMPTS",
 		"CT_COMMAND_EXPIRY_MINUTES", "CT_RETENTION_DETAIL_DAYS", "CT_RETENTION_METRIC5M_DAYS", "CT_RETENTION_RUNTIME_DAYS", "CT_RETENTION_HEALTH_HOURS",
+		"CT_BILLING_PAGE_PAUSE_MILLISECONDS",
 		"CT_OFFLINE_ALERT_SECONDS", "CT_CPU_WARN_PERCENT", "CT_CPU_CRIT_PERCENT", "CT_MEMORY_WARN_PERCENT", "CT_MEMORY_CRIT_PERCENT", "CT_DISK_WARN_PERCENT", "CT_DISK_CRIT_PERCENT", "CT_ERROR_RATE_WARN_PERCENT", "CT_ERROR_RATE_CRIT_PERCENT", "CT_P95_WARN_SECONDS", "CT_P95_CRIT_SECONDS", "CT_NOTIFICATIONS_ENABLED",
 	}
 }

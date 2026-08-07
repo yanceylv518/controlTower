@@ -1,6 +1,22 @@
 package dashboard
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+func TestBillingOtherProjectionOnlyTransfersBillingFields(t *testing.T) {
+	for _, want := range []string{"usage_semantic", "cache_tokens", "cache_creation_tokens_5m", "cache_creation_tokens_1h"} {
+		if !strings.Contains(billingOtherProjection, want) {
+			t.Fatalf("projection missing %q", want)
+		}
+	}
+	for _, unwanted := range []string{"request_path", "stream_status", "admin_info"} {
+		if strings.Contains(billingOtherProjection, unwanted) {
+			t.Fatalf("projection unexpectedly transfers %q", unwanted)
+		}
+	}
+}
 
 func TestBillingCacheTokensUnderstandsKnownNewAPIShapes(t *testing.T) {
 	for raw, want := range map[string]int64{

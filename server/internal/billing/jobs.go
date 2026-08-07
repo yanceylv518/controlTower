@@ -158,9 +158,10 @@ func NewJob(instanceID string, from, to time.Time, requestedBy string) (Job, []J
 }
 
 type JobRunner struct {
-	Source PageSource
-	Store  JobStore
-	Poll   time.Duration
+	Source    PageSource
+	Store     JobStore
+	Poll      time.Duration
+	PagePause time.Duration
 }
 
 func (r JobRunner) Run(ctx context.Context) error {
@@ -336,6 +337,15 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 		}
 		if len(logs) < BillingPageSize {
 			break
+		}
+		if r.PagePause > 0 {
+			timer := time.NewTimer(r.PagePause)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			case <-timer.C:
+			}
 		}
 	}
 	if err = r.Store.CompleteBillingStep(ctx, job, step, processed, abnormal); err != nil {
