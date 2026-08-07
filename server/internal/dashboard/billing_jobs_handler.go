@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"sort"
 	"strings"
 	"time"
 
@@ -97,6 +96,10 @@ func (h BillingJobsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeDashboardError(w, 502, "newapi_models_query_failed")
 			return
 		}
+		if len(models) == 0 {
+			writeDashboardError(w, http.StatusConflict, "billing_models_missing")
+			return
+		}
 		actor := ctauth.Actor(r)
 		if actor == "" {
 			actor = "legacy-admin"
@@ -105,24 +108,8 @@ func (h BillingJobsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeDashboardError(w, 500, "model_sync_failed")
 			return
 		}
-		metadata, metadataErr := h.Preflight.ListBillingModelMetadata(r.Context(), req.InstanceID)
-		if metadataErr != nil {
+		if _, metadataErr := h.Preflight.ListBillingModelMetadata(r.Context(), req.InstanceID); metadataErr != nil {
 			writeDashboardError(w, 500, "model_metadata_query_failed")
-			return
-		}
-		maxByModel := make(map[string]int64, len(metadata))
-		for _, item := range metadata {
-			maxByModel[item.ModelName] = item.MaxContextTokens
-		}
-		missing := make([]string, 0)
-		for _, model := range models {
-			if maxByModel[model] <= 0 {
-				missing = append(missing, model)
-			}
-		}
-		sort.Strings(missing)
-		if len(missing) > 0 {
-			writeDashboardJSON(w, http.StatusConflict, map[string]any{"error": "billing_model_context_missing", "models": missing})
 			return
 		}
 	}

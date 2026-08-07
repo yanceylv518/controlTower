@@ -263,9 +263,6 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 		channelAcc := map[channelKey]ChannelDailyRow{}
 		anomalies := []AnomalyOrder{}
 		for _, log := range logs {
-			if maxByModel[log.ModelName] <= 0 {
-				return fmt.Errorf("billing model context missing: %s", log.ModelName)
-			}
 			setting, configured := settings[log.UserID]
 			useTiers := !configured || setting.UseTieredPricing
 			reasons := AnomalyReasons(log, maxByModel[log.ModelName])

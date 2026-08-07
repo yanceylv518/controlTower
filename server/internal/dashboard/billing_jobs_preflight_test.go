@@ -3,7 +3,6 @@ package dashboard
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -45,9 +44,10 @@ func (s preflightModelSource) ConfiguredModels(context.Context, string) ([]strin
 	return s.models, nil
 }
 
-// Generation must refuse with the missing-model list while any configured
-// model lacks a context limit, and proceed once every model has one.
-func TestBillingJobPreflightBlocksMissingModelContext(t *testing.T) {
+// Generation only requires a successfully synchronized, non-empty model
+// list. Context limits are optional; without one, the worker skips only the
+// context-limit anomaly rule.
+func TestBillingJobPreflightAllowsMissingModelContext(t *testing.T) {
 	store := &preflightJobsStore{}
 	handler := BillingJobsHandler{
 		Store:     store,
@@ -58,27 +58,18 @@ func TestBillingJobPreflightBlocksMissingModelContext(t *testing.T) {
 	req := httptest.NewRequest("POST", "/api/dashboard/billing/jobs", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != 409 {
-		t.Fatalf("code = %d, want 409", rec.Code)
-	}
-	var payload struct {
-		Error  string   `json:"error"`
-		Models []string `json:"models"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
-		t.Fatal(err)
-	}
-	if payload.Error != "billing_model_context_missing" || len(payload.Models) != 1 || payload.Models[0] != "glm-5-air" {
-		t.Fatalf("payload = %+v", payload)
-	}
-	if store.created {
-		t.Fatal("job must not be created when context metadata is missing")
-	}
-
-	handler.Preflight = preflightMetadataStore{contexts: map[string]int64{"glm-5.2": 128000, "glm-5-air": 128000}}
-	rec = httptest.NewRecorder()
-	handler.ServeHTTP(rec, httptest.NewRequest("POST", "/api/dashboard/billing/jobs", strings.NewReader(body)))
 	if rec.Code != 202 || !store.created {
 		t.Fatalf("code = %d created=%v, want 202 with job created", rec.Code, store.created)
+	}
+}
+
+func TestBillingJobPreflightBlocksEmptyModelList(t *testing.T) {
+	store := &preflightJobsStore{}
+	handler := BillingJobsHandler{Store: store, Preflight: preflightMetadataStore{}, Source: preflightModelSource{}}
+	body := `{"instance_id":"demo","from":"2026-08-01 00:00:00","to":"2026-08-02 00:00:00"}`
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest("POST", "/api/dashboard/billing/jobs", strings.NewReader(body)))
+	if rec.Code != 409 || !strings.Contains(rec.Body.String(), "billing_models_missing") || store.created {
+		t.Fatalf("code=%d created=%v body=%s", rec.Code, store.created, rec.Body.String())
 	}
 }
