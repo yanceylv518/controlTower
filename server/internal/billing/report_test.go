@@ -122,6 +122,28 @@ func TestParseRatioSnapshotDefaultsQuotaPerUnit(t *testing.T) {
 	}
 }
 
+func TestParseRatioSnapshotCurrencyDisplay(t *testing.T) {
+	raw := `{"QuotaPerUnit":"500000","USDExchangeRate":"7.2","general_setting":"{\"quota_display_type\":\"CNY\",\"custom_currency_symbol\":\"¤\",\"custom_currency_exchange_rate\":1}"}`
+	snapshot, err := ParseRatioSnapshot(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Currency.Type != "CNY" || snapshot.Currency.Symbol != "¥" || snapshot.Currency.ExchangeRate != "7.2" {
+		t.Fatalf("unexpected currency: %#v", snapshot.Currency)
+	}
+}
+
+func TestCurrencyDisplayForSnapshotsUsesNewestDay(t *testing.T) {
+	snapshots := map[string]string{
+		"2026-08-01": `{"QuotaPerUnit":"500000","general_setting":"{\"quota_display_type\":\"CNY\"}"}`,
+		"2026-08-02": `{"QuotaPerUnit":"500000","general_setting":"{\"quota_display_type\":\"CUSTOM\",\"custom_currency_symbol\":\"HK$\",\"custom_currency_exchange_rate\":7.8}"}`,
+	}
+	currency := CurrencyDisplayForSnapshots(snapshots)
+	if currency.Type != "CUSTOM" || currency.Symbol != "HK$" || currency.ExchangeRate != "7.8" {
+		t.Fatalf("unexpected currency: %#v", currency)
+	}
+}
+
 func TestAmountFromQuota(t *testing.T) {
 	amount, err := AmountFromQuota(1_250_000, "500000")
 	if err != nil || FormatAmount(amount, 6) != "2.500000" {

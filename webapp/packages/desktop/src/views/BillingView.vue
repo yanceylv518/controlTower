@@ -46,7 +46,7 @@ const state = useAsyncData(async () => {
 });
 const generated = computed(() => state.data.value?.generated !== false);
 const detail = useAsyncData(async () => {const[from,to]=generationRange.value;return selected.value ? dashboard.billingDetail({ instance_id: filters.site_id, user_id: selected.value.user_id, from, to, job_id: state.data.value?.generation_job?.id }) : undefined;});
-const currency = computed(() => prefs.currencySymbol || "$");
+const currency = computed(() => state.data.value?.currency ? state.data.value.currency.symbol : (prefs.currencySymbol || "$"));
 const money = (value: string | number | undefined) => `${currency.value}${Number(value || 0).toFixed(4)}`;
 const balanceMoney = (quota: number | undefined) => formatQuota(quota ?? 0, prefs.quotaPerUnit, currency.value);
 const unitPrice = (value: string | undefined) => value ? `${currency.value}${Number(value).toFixed(4)}` : "—";

@@ -155,7 +155,7 @@ func (h BillingChannelsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 	if jobErr == nil {
 		generationJob = job
 	}
-	writeDashboardJSON(w, 200, map[string]any{"items": items, "details": details, "period": period, "generation_job": generationJob, "warning": warning})
+	writeDashboardJSON(w, 200, map[string]any{"items": items, "details": details, "period": period, "generation_job": generationJob, "warning": warning, "currency": billing.CurrencyDisplayForSnapshots(snapshots)})
 }
 
 func billingPeriodQuery(r *http.Request) (time.Time, time.Time, string, error) {

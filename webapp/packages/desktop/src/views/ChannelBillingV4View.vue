@@ -13,7 +13,7 @@ import { formatNumber } from "../utils/format";
 import { formatDateTime, savedGenerationRange, timeRangeShortcuts, validateGenerationRange } from "../utils/billingRange";
 import { httpError } from "../utils/httpError";
 
-type PageData = { items: BillingChannelSummary[]; job: BillingJob | null; channelError: string };
+type PageData = { items: BillingChannelSummary[]; job: BillingJob | null; channelError: string; currencySymbol: string };
 const filters = useFiltersStore(), prefs = usePrefsStore();
 const generating = ref(false), progress = ref(0), page = ref(1), pageSize = ref(20);
 const exporting = ref<Record<number, boolean>>({});
@@ -22,13 +22,14 @@ const generationRange = ref<[string, string]>(savedGenerationRange("ct.billing.c
 void prefs.load();
 const state = useAsyncData<PageData>(async () => {
   await filters.loadInstances();
-  if (!filters.site_id) return { items: [], job: null, channelError: "" };
+  if (!filters.site_id) return { items: [], job: null, channelError: "", currencySymbol: "" };
   const [from,to]=generationRange.value;
   const bill = await dashboard.billingChannels({ instance_id: filters.site_id, from, to });
   return {
     items: (bill.items || []).sort((a, b) => Number(b.amount) - Number(a.amount) || a.channel_id - b.channel_id),
     job: bill.generation_job || null,
     channelError: bill.warning || "",
+    currencySymbol: bill.currency?.type ? bill.currency.symbol : (prefs.currencySymbol || "$"),
   };
 });
 
@@ -40,7 +41,7 @@ const detail = useAsyncData(async () => {
 });
 const actualPeriod = computed(() => job.value?.status === "complete" ? jobRange(job.value) : "尚未生成，下方仅显示渠道配置");
 const pagedItems = computed(() => items.value.slice((page.value - 1) * pageSize.value, page.value * pageSize.value));
-const currency = computed(() => prefs.currencySymbol || "$");
+const currency = computed(() => state.data.value ? state.data.value.currencySymbol : (prefs.currencySymbol || "$"));
 const money = (value: string) => `${currency.value}${Number(value || 0).toFixed(4)}`;
 const unitPrice = (value: string | undefined) => value ? `${currency.value}${Number(value).toFixed(4)}` : "—";
 const discountedMoney = (value: string | undefined) => money(String(Number(value || 0) * Number(selected.value?.discount || 1)));

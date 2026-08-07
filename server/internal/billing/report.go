@@ -133,6 +133,13 @@ func SummarizeUsers(items []UserSummary) SummaryTotal {
 type RatioSnapshot struct {
 	ModelRatio, CompletionRatio, CacheRatio, CreateCacheRatio, GroupRatio map[string]string
 	QuotaPerUnit                                                          string
+	Currency                                                              CurrencyDisplay
+}
+
+type CurrencyDisplay struct {
+	Type         string `json:"type"`
+	Symbol       string `json:"symbol"`
+	ExchangeRate string `json:"exchange_rate"`
 }
 
 func ParseRatioSnapshot(raw string) (RatioSnapshot, error) {
@@ -174,7 +181,80 @@ func ParseRatioSnapshot(raw string) (RatioSnapshot, error) {
 	if result.QuotaPerUnit == "" {
 		return result, fmt.Errorf("QuotaPerUnit missing")
 	}
+	result.Currency = parseCurrencyDisplay(outer)
 	return result, nil
+}
+
+func parseCurrencyDisplay(outer map[string]json.RawMessage) CurrencyDisplay {
+	result := CurrencyDisplay{Type: "USD", Symbol: "$", ExchangeRate: "1"}
+	var encoded string
+	if raw := outer["general_setting"]; len(raw) > 0 && json.Unmarshal(raw, &encoded) == nil {
+		var setting struct {
+			QuotaDisplayType           string      `json:"quota_display_type"`
+			CustomCurrencySymbol       string      `json:"custom_currency_symbol"`
+			CustomCurrencyExchangeRate json.Number `json:"custom_currency_exchange_rate"`
+		}
+		if json.Unmarshal([]byte(encoded), &setting) == nil {
+			result.Type = strings.ToUpper(strings.TrimSpace(setting.QuotaDisplayType))
+			switch result.Type {
+			case "CNY":
+				result.Symbol = "¥"
+				result.ExchangeRate = rawJSONNumber(outer["USDExchangeRate"], "1")
+			case "CUSTOM":
+				result.Symbol = strings.TrimSpace(setting.CustomCurrencySymbol)
+				if result.Symbol == "" {
+					result.Symbol = "¤"
+				}
+				result.ExchangeRate = setting.CustomCurrencyExchangeRate.String()
+				if result.ExchangeRate == "" {
+					result.ExchangeRate = "1"
+				}
+			case "TOKENS":
+				result.Symbol = ""
+				result.ExchangeRate = "1"
+			default:
+				result.Type, result.Symbol, result.ExchangeRate = "USD", "$", "1"
+			}
+			return result
+		}
+	}
+	// Older new-api versions only expose this compatibility flag. Currency
+	// display meant USD there; disabled means raw quota/tokens.
+	if raw := outer["DisplayInCurrencyEnabled"]; len(raw) > 0 {
+		var value string
+		if json.Unmarshal(raw, &value) == nil && strings.EqualFold(strings.TrimSpace(value), "false") {
+			return CurrencyDisplay{Type: "TOKENS", Symbol: "", ExchangeRate: "1"}
+		}
+	}
+	return result
+}
+
+func rawJSONNumber(raw json.RawMessage, fallback string) string {
+	var value string
+	if json.Unmarshal(raw, &value) == nil && strings.TrimSpace(value) != "" {
+		return value
+	}
+	var number json.Number
+	if json.Unmarshal(raw, &number) == nil && number.String() != "" {
+		return number.String()
+	}
+	return fallback
+}
+
+// CurrencyDisplayForSnapshots returns the site display currency captured from
+// new-api. The newest day wins because settings can change between bill runs.
+func CurrencyDisplayForSnapshots(snapshots map[string]string) CurrencyDisplay {
+	keys := make([]string, 0, len(snapshots))
+	for key := range snapshots {
+		keys = append(keys, key)
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(keys)))
+	for _, key := range keys {
+		if snapshot, err := ParseRatioSnapshot(snapshots[key]); err == nil {
+			return snapshot.Currency
+		}
+	}
+	return CurrencyDisplay{}
 }
 
 func quotaPerUnitForReport(raw string) (string, error) {

@@ -60,9 +60,15 @@ func (h BillingSummaryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	if jobErr == nil && job.Status == "complete" {
 		jobID = job.ID
 	}
+	snapshots, err := h.Store.BillingRatioSnapshots(r.Context(), instanceID, from, to)
+	if err != nil {
+		writeDashboardError(w, http.StatusInternalServerError, "billing_query_failed")
+		return
+	}
+	currency := billing.CurrencyDisplayForSnapshots(snapshots)
 	cacheKey := billing.SummaryCacheKey(instanceID, period+":"+jobID, userIDs)
 	if items, total, ok := billing.MonthlySummaryCache.Get(cacheKey); ok {
-		h.respondWithSearch(w, r, items, total, to, generationJob)
+		h.respondWithSearch(w, r, items, total, to, generationJob, currency)
 		return
 	}
 	var rows []billing.AggregateRow
@@ -83,11 +89,6 @@ func (h BillingSummaryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		writeDashboardError(w, http.StatusInternalServerError, "billing_query_failed")
 		return
 	}
-	snapshots, err := h.Store.BillingRatioSnapshots(r.Context(), instanceID, from, to)
-	if err != nil {
-		writeDashboardError(w, http.StatusInternalServerError, "billing_query_failed")
-		return
-	}
 	balances, err := h.Store.LatestBillingBalances(r.Context(), instanceID, to, userIDs)
 	if err != nil {
 		writeDashboardError(w, http.StatusInternalServerError, "billing_query_failed")
@@ -102,10 +103,10 @@ func (h BillingSummaryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	applyUserAnomalyCounts(items, counts)
 	total = billing.SummarizeUsers(items)
 	billing.MonthlySummaryCache.Put(cacheKey, items, total)
-	h.respondWithSearch(w, r, items, total, to, generationJob)
+	h.respondWithSearch(w, r, items, total, to, generationJob, currency)
 }
 
-func (h BillingSummaryHandler) respondWithSearch(w http.ResponseWriter, r *http.Request, items []billing.UserSummary, total billing.SummaryTotal, to time.Time, generationJob *billing.Job) {
+func (h BillingSummaryHandler) respondWithSearch(w http.ResponseWriter, r *http.Request, items []billing.UserSummary, total billing.SummaryTotal, to time.Time, generationJob *billing.Job, currency ...billing.CurrencyDisplay) {
 	search := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("search")))
 	if search != "" {
 		filtered := items[:0]
@@ -117,10 +118,14 @@ func (h BillingSummaryHandler) respondWithSearch(w http.ResponseWriter, r *http.
 		items = filtered
 		total = billing.SummarizeUsers(items)
 	}
-	h.writeResponse(w, r, items, total, to.Add(-time.Nanosecond), generationJob)
+	display := billing.CurrencyDisplay{}
+	if len(currency) > 0 {
+		display = currency[0]
+	}
+	h.writeResponse(w, r, items, total, to.Add(-time.Nanosecond), generationJob, display)
 }
 
-func (h BillingSummaryHandler) writeResponse(w http.ResponseWriter, r *http.Request, items []billing.UserSummary, total billing.SummaryTotal, through time.Time, generationJob *billing.Job) {
+func (h BillingSummaryHandler) writeResponse(w http.ResponseWriter, r *http.Request, items []billing.UserSummary, total billing.SummaryTotal, through time.Time, generationJob *billing.Job, currency ...billing.CurrencyDisplay) {
 	if r.URL.Query().Get("format") == "csv" {
 		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 		w.Header().Set("Content-Disposition", `attachment; filename="billing-summary.csv"`)
@@ -149,7 +154,11 @@ func (h BillingSummaryHandler) writeResponse(w http.ResponseWriter, r *http.Requ
 	if end > count {
 		end = count
 	}
-	writeDashboardJSON(w, http.StatusOK, map[string]any{"items": items[start:end], "total": count, "page": page, "page_size": pageSize, "summary": total, "data_through": through, "generation_job": generationJob})
+	display := billing.CurrencyDisplay{}
+	if len(currency) > 0 {
+		display = currency[0]
+	}
+	writeDashboardJSON(w, http.StatusOK, map[string]any{"items": items[start:end], "total": count, "page": page, "page_size": pageSize, "summary": total, "data_through": through, "generation_job": generationJob, "currency": display})
 }
 
 func positiveInt(raw string, fallback int) int {
