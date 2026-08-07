@@ -30,6 +30,7 @@ type Options struct {
 	CommandExpiry           time.Duration
 	TuningStore             tuning.Store
 	SettingsProvider        *settings.Provider
+	BillingPagePause        time.Duration
 }
 
 type Store interface {
@@ -164,6 +165,8 @@ func NewMux(options Options) *http.ServeMux {
 		mux.Handle("GET /api/dashboard/billing/summary", protect(dashboard.BillingSummaryHandler{Store: billingSummaryStore}))
 		mux.Handle("GET /api/dashboard/billing/detail", protect(dashboard.BillingDetailHandler{Store: billingSummaryStore}))
 		mux.Handle("GET /api/dashboard/billing/log-export", protect(dashboard.BillingLogExportHandler{Store: billingSummaryStore, Source: dashboard.BillingReadonlySource{Handler: passthrough}}))
+		mux.Handle("GET /api/dashboard/billing/reconciliation", protect(dashboard.BillingReconciliationHandler{Store: billingSummaryStore}))
+		mux.Handle("GET /api/dashboard/billing/reconciliation/requests", protect(dashboard.BillingReconciliationRequestsHandler{Store: billingSummaryStore, Source: dashboard.BillingReadonlySource{Handler: passthrough}, PagePause: options.BillingPagePause}))
 	}
 	if workbookStore, ok := any(options.Store).(dashboard.BillingWorkbookStore); ok {
 		workbook := dashboard.BillingWorkbookHandler{Store: workbookStore, Source: dashboard.BillingReadonlySource{Handler: passthrough}}

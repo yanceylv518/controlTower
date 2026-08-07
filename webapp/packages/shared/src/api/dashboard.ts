@@ -506,6 +506,55 @@ export interface BillingUserSetting {
   use_tiered_pricing: boolean;
 }
 export interface BillingChannelSummary { channel_id:number;channel_name:string;request_count:number;abnormal_rows:number;abnormal_amount?:string;prompt_tokens:number;completion_tokens:number;cache_tokens:number;cache_write_tokens?:number;quota:number;amount:string;discount:string;discounted_amount:string;unpriced_models:string[] }
+export interface BillingReconciliationBreakdown { anomaly: string; cache_write_policy: string; residual: string }
+export interface BillingReconciliationRow {
+  user_id: number;
+  username: string;
+  day?: string;
+  model_name?: string;
+  group_name?: string;
+  request_count: number;
+  abnormal_rows: number;
+  ct_amount: string;
+  actual_amount: string;
+  diff_amount: string;
+  diff_rate: string;
+  fallback_priced: boolean;
+  classification: "anomaly" | "cache_write_policy" | "residual";
+  breakdown: BillingReconciliationBreakdown;
+}
+export interface BillingReconciliationResponse {
+  items: BillingReconciliationRow[];
+  totals: { ct_amount: string; actual_amount: string; diff_amount: string; breakdown: BillingReconciliationBreakdown };
+  job: BillingJob;
+  range_from: string;
+  range_to: string;
+}
+export interface BillingRequestReconciliation {
+  log_id: number;
+  request_id: string;
+  created_at: string;
+  actual_amount: string;
+  rebuilt_amount: string;
+  ct_amount: string;
+  diff_amount: string;
+  input_diff: string;
+  output_diff: string;
+  cache_read_diff: string;
+  cache_write_diff: string;
+  group_diff: string;
+  unexplained: boolean;
+  fallback_priced: boolean;
+}
+export interface BillingRequestReconciliationResponse {
+  items: BillingRequestReconciliation[];
+  scanned: number;
+  matched: number;
+  truncated: boolean;
+  rebuild_residual: string;
+  component_diffs: { input: string; output: string; cache_read: string; cache_write: string; group: string };
+  uninformative: boolean;
+}
 
 export const dashboardApi = (client: ApiClient) => ({
   instances: () =>
@@ -719,6 +768,10 @@ export const dashboardApi = (client: ApiClient) => ({
     client.request<ListResponse<ChannelBaseValue>>(`/api/dashboard/tuning/base-values/sync${query({ site_id })}`, { method: "POST", body: JSON.stringify({ models }) }),
   billingSummary: (params: { instance_id: string; month?: string; from?: string; to?: string; page?: number; page_size?: number; search?: string }) =>
     client.request<BillingSummaryResponse>(`/api/dashboard/billing/summary${query(params)}`),
+  billingReconciliation: (params: { instance_id: string; from: string; to: string; job_id?: string; user_id?: number }) =>
+    client.request<BillingReconciliationResponse>(`/api/dashboard/billing/reconciliation${query(params)}`),
+  billingReconciliationRequests: (params: { instance_id: string; from: string; to: string; job_id: string; user_id: number; day: string; model_name: string }) =>
+    client.request<BillingRequestReconciliationResponse>(`/api/dashboard/billing/reconciliation/requests${query(params)}`),
   billingDetail: (params: { instance_id: string; user_id: number; month?: string; from?: string; to?: string; job_id?: string }) =>
     client.request<BillingDetailResponse>(`/api/dashboard/billing/detail${query(params)}`),
   generateBilling: (input: { instance_id: string; from: string; to: string; force?: boolean; scope?: "all" | "channel" }) =>

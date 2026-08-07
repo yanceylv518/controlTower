@@ -43,6 +43,7 @@ const nav = [
       ["/readonly-logs", "使用日志", Document],
       ["/billing", "用户账单", Coin],
       ["/billing/channels", "渠道账单", Coin],
+      ["/billing-reconciliation", "账单核对", DataAnalysis],
     ],
   },
   {

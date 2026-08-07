@@ -24,11 +24,13 @@ import ReadonlyLogsView from './views/ReadonlyLogsView.vue'
 import BillingView from './views/BillingView.vue'
 import ChannelBillingView from './views/ChannelBillingV4View.vue'
 import BillingPricingView from './views/BillingPricingView.vue'
+import BillingReconciliationView from './views/BillingReconciliationView.vue'
 export const router = createRouter({ history: createWebHistory('/'), routes: [
   { path: '/readonly-users', component: ReadonlyUsersView, meta: { title: '用户管理' } },
   { path: '/readonly-logs', component: ReadonlyLogsView, meta: { title: '使用日志' } },
   { path: '/billing', component: BillingView, meta: { title: '用户账单' } },
   { path: '/billing/channels', component: ChannelBillingView, meta: { title: '渠道账单', adminOnly: true } },
+  { path: '/billing-reconciliation', component: BillingReconciliationView, meta: { title: '账单核对', adminOnly: true } },
   { path: '/models/manage', alias: '/billing/pricing', component: BillingPricingView, meta: { title: '模型管理', adminOnly: true } },
   { path: '/customers', component: CustomerMonitorView, meta: { title: '客户监控' } },
   { path: '/login', name: 'login', component: LoginView, meta: { title: '登录' } }, { path: '/', name: 'overview', component: OverviewView, meta: { title: '运行总览' } },
