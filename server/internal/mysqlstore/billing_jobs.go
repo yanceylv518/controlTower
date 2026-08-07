@@ -13,24 +13,76 @@ func (s Store) CreateBillingJob(ctx context.Context, j billing.Job, steps []bill
 		return e
 	}
 	defer tx.Rollback()
-	_, e = tx.ExecContext(ctx, `INSERT INTO billing_jobs(id,request_key,instance_id,job_type,user_id,range_from,range_to,status,total_steps,requested_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, j.ID, nullBillingRequestKey(j.RequestKey), j.InstanceID, j.JobType, j.UserID, j.From, j.To, j.Status, j.TotalSteps, j.RequestedBy, j.CreatedAt, j.UpdatedAt)
+	e = createBillingJobTx(ctx, tx, j, steps)
 	if e != nil {
 		return e
 	}
+	return tx.Commit()
+}
+
+func createBillingJobTx(ctx context.Context, tx *sql.Tx, j billing.Job, steps []billing.JobStep) error {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO billing_jobs(id,request_key,instance_id,job_type,user_id,range_from,range_to,status,total_steps,requested_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, j.ID, nullBillingRequestKey(j.RequestKey), j.InstanceID, j.JobType, j.UserID, j.From, j.To, j.Status, j.TotalSteps, j.RequestedBy, j.CreatedAt, j.UpdatedAt); err != nil {
+		return err
+	}
 	for _, v := range steps {
-		if _, e = tx.ExecContext(ctx, `INSERT INTO billing_job_steps(job_id,step_no,range_from,range_to,status,updated_at) VALUES(?,?,?,?,?,?)`, v.JobID, v.StepNo, v.From, v.To, "pending", j.UpdatedAt); e != nil {
-			return e
+		if _, err := tx.ExecContext(ctx, `INSERT INTO billing_job_steps(job_id,step_no,range_from,range_to,status,updated_at) VALUES(?,?,?,?,?,?)`, v.JobID, v.StepNo, v.From, v.To, "pending", j.UpdatedAt); err != nil {
+			return err
 		}
 	}
 	// User 0 is a marker proving that the snapshot exists even when the site
 	// has no explicit per-user overrides. Actual new-api user IDs are positive.
-	if _, e = tx.ExecContext(ctx, `INSERT INTO billing_job_user_settings(job_id,user_id,use_tiered_pricing) VALUES(?,0,1)`, j.ID); e != nil {
-		return e
+	if _, err := tx.ExecContext(ctx, `INSERT INTO billing_job_user_settings(job_id,user_id,use_tiered_pricing) VALUES(?,0,1)`, j.ID); err != nil {
+		return err
 	}
-	if _, e = tx.ExecContext(ctx, `INSERT INTO billing_job_user_settings(job_id,user_id,use_tiered_pricing) SELECT ?,user_id,use_tiered_pricing FROM billing_user_settings WHERE instance_id=?`, j.ID, j.InstanceID); e != nil {
-		return e
+	if _, err := tx.ExecContext(ctx, `INSERT INTO billing_job_user_settings(job_id,user_id,use_tiered_pricing) SELECT ?,user_id,use_tiered_pricing FROM billing_user_settings WHERE instance_id=?`, j.ID, j.InstanceID); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s Store) CreateBillingVerificationJob(ctx context.Context, j billing.Job, steps []billing.JobStep, sourceJobID string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	// Serialize creation on the immutable source job. This closes the race
+	// between two clients that both observed "no verification job".
+	var lockedSourceID string
+	if err = tx.QueryRowContext(ctx, `SELECT id FROM billing_jobs WHERE id=? FOR UPDATE`, sourceJobID).Scan(&lockedSourceID); err != nil {
+		return err
+	}
+	var existingID string
+	err = tx.QueryRowContext(ctx, `SELECT v.job_id FROM billing_verification_jobs v JOIN billing_jobs j ON j.id=v.job_id WHERE v.source_job_id=? AND j.status<>'failed' ORDER BY j.created_at DESC LIMIT 1`, sourceJobID).Scan(&existingID)
+	if err == nil {
+		return billing.ErrVerificationAlreadyExists
+	}
+	if err != sql.ErrNoRows {
+		return err
+	}
+	if err = createBillingJobTx(ctx, tx, j, steps); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO billing_verification_jobs(job_id,source_job_id) VALUES(?,?)`, j.ID, sourceJobID); err != nil {
+		return err
 	}
 	return tx.Commit()
+}
+
+func (s Store) VerificationSourceJob(ctx context.Context, jobID string) (billing.Job, error) {
+	var sourceID string
+	if err := s.db.QueryRowContext(ctx, `SELECT source_job_id FROM billing_verification_jobs WHERE job_id=?`, jobID).Scan(&sourceID); err != nil {
+		return billing.Job{}, err
+	}
+	return s.BillingJob(ctx, sourceID)
+}
+
+func (s Store) LatestBillingVerificationJob(ctx context.Context, sourceJobID string) (billing.Job, error) {
+	var id string
+	if err := s.db.QueryRowContext(ctx, `SELECT v.job_id FROM billing_verification_jobs v JOIN billing_jobs j ON j.id=v.job_id WHERE v.source_job_id=? ORDER BY j.created_at DESC LIMIT 1`, sourceJobID).Scan(&id); err != nil {
+		return billing.Job{}, err
+	}
+	return s.BillingJob(ctx, id)
 }
 func nullBillingRequestKey(value string) any {
 	if value == "" {
@@ -143,6 +195,82 @@ func (s Store) AppendBillingHour(ctx context.Context, j billing.Job, st billing.
 		return e
 	}
 	return tx.Commit()
+}
+
+func (s Store) AppendBillingVerificationPage(ctx context.Context, j billing.Job, st billing.JobStep, items []billing.VerificationRow, c billing.LogCursor, pageRows int64) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := time.Now().UTC()
+	day := st.From.In(billing.BusinessLocation).Format("2006-01-02")
+	for _, v := range items {
+		_, err = tx.ExecContext(ctx, `INSERT INTO billing_verification_hourly(job_id,bill_day,user_id,username,model_name,group_name,source_rows,normal_rows,abnormal_rows,source_quota,normal_quota,abnormal_quota,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE username=VALUES(username),source_rows=source_rows+VALUES(source_rows),normal_rows=normal_rows+VALUES(normal_rows),abnormal_rows=abnormal_rows+VALUES(abnormal_rows),source_quota=source_quota+VALUES(source_quota),normal_quota=normal_quota+VALUES(normal_quota),abnormal_quota=abnormal_quota+VALUES(abnormal_quota),updated_at=VALUES(updated_at)`, j.ID, day, v.UserID, v.Username, v.ModelName, v.GroupName, v.SourceRows, v.NormalRows, v.AbnormalRows, v.SourceQuota, v.NormalQuota, v.AbnormalQuota, now)
+		if err != nil {
+			return err
+		}
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE billing_job_steps SET cursor_created_at=?,cursor_id=?,processed_rows=processed_rows+?,updated_at=? WHERE job_id=? AND step_no=?`, c.CreatedUnix, c.ID, pageRows, now, j.ID, st.StepNo)
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s Store) FinalizeBillingVerification(ctx context.Context, j billing.Job, source billing.Job) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := time.Now().UTC()
+	if _, err = tx.ExecContext(ctx, `DELETE FROM billing_verification_results WHERE job_id=?`, j.ID); err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO billing_verification_results(job_id,source_job_id,day,user_id,username,model_name,group_name,source_rows,verified_normal_rows,billed_normal_rows,verified_abnormal_rows,billed_abnormal_rows,source_quota,verified_normal_quota,billed_normal_quota,verified_abnormal_quota,billed_abnormal_quota,status,created_at)
+WITH v AS (SELECT bill_day day,user_id,MAX(username) username,model_name,group_name,SUM(source_rows) source_rows,SUM(normal_rows) normal_rows,SUM(abnormal_rows) abnormal_rows,SUM(source_quota) source_quota,SUM(normal_quota) normal_quota,SUM(abnormal_quota) abnormal_quota FROM billing_verification_hourly WHERE job_id=? GROUP BY bill_day,user_id,model_name,group_name),
+b AS (SELECT day,user_id,MAX(username) username,model_name,group_name,SUM(request_count) normal_rows,SUM(quota) normal_quota FROM billing_daily_versions WHERE job_id=? GROUP BY day,user_id,model_name,group_name),
+a AS (SELECT DATE(CONVERT_TZ(created_at,'+00:00','+08:00')) day,user_id,MAX(username) username,model_name,group_name,COUNT(*) abnormal_rows,COALESCE(SUM(quota),0) abnormal_quota FROM billing_anomaly_orders WHERE job_id=? GROUP BY day,user_id,model_name,group_name),
+k AS (SELECT day,user_id,model_name,group_name FROM v UNION SELECT day,user_id,model_name,group_name FROM b UNION SELECT day,user_id,model_name,group_name FROM a)
+SELECT ?,?,k.day,k.user_id,COALESCE(v.username,b.username,a.username,''),k.model_name,k.group_name,COALESCE(v.source_rows,0),COALESCE(v.normal_rows,0),COALESCE(b.normal_rows,0),COALESCE(v.abnormal_rows,0),COALESCE(a.abnormal_rows,0),COALESCE(v.source_quota,0),COALESCE(v.normal_quota,0),COALESCE(b.normal_quota,0),COALESCE(v.abnormal_quota,0),COALESCE(a.abnormal_quota,0),IF(COALESCE(v.normal_rows,0)=COALESCE(b.normal_rows,0) AND COALESCE(v.normal_quota,0)=COALESCE(b.normal_quota,0) AND COALESCE(v.abnormal_rows,0)=COALESCE(a.abnormal_rows,0) AND COALESCE(v.abnormal_quota,0)=COALESCE(a.abnormal_quota,0) AND COALESCE(v.source_rows,0)=COALESCE(v.normal_rows,0)+COALESCE(v.abnormal_rows,0) AND COALESCE(v.source_quota,0)=COALESCE(v.normal_quota,0)+COALESCE(v.abnormal_quota,0),'matched','mismatch'),?
+FROM k LEFT JOIN v USING(day,user_id,model_name,group_name) LEFT JOIN b USING(day,user_id,model_name,group_name) LEFT JOIN a USING(day,user_id,model_name,group_name)`, j.ID, source.ID, source.ID, j.ID, source.ID, now)
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE billing_jobs SET status='complete',finished_at=?,updated_at=? WHERE id=? AND completed_steps>=total_steps`, now, now, j.ID)
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s Store) BillingVerificationResults(ctx context.Context, jobID string, mismatchesOnly bool, limit, offset int) ([]billing.VerificationResult, billing.VerificationSummary, int, error) {
+	where := ` WHERE job_id=?`
+	if mismatchesOnly {
+		where += ` AND status='mismatch'`
+	}
+	var total int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM billing_verification_results`+where, jobID).Scan(&total); err != nil {
+		return nil, billing.VerificationSummary{}, 0, err
+	}
+	q := `SELECT day,user_id,username,model_name,group_name,source_rows,verified_normal_rows,billed_normal_rows,verified_abnormal_rows,billed_abnormal_rows,source_quota,verified_normal_quota,billed_normal_quota,verified_abnormal_quota,billed_abnormal_quota,status FROM billing_verification_results` + where + ` ORDER BY day,user_id,model_name,group_name LIMIT ? OFFSET ?`
+	rows, err := s.db.QueryContext(ctx, q, jobID, limit, offset)
+	if err != nil {
+		return nil, billing.VerificationSummary{}, 0, err
+	}
+	defer rows.Close()
+	items := []billing.VerificationResult{}
+	for rows.Next() {
+		var v billing.VerificationResult
+		if err = rows.Scan(&v.Day, &v.UserID, &v.Username, &v.ModelName, &v.GroupName, &v.SourceRows, &v.VerifiedNormalRows, &v.BilledNormalRows, &v.VerifiedAbnormalRows, &v.BilledAbnormalRows, &v.SourceQuota, &v.VerifiedNormalQuota, &v.BilledNormalQuota, &v.VerifiedAbnormalQuota, &v.BilledAbnormalQuota, &v.Status); err != nil {
+			return nil, billing.VerificationSummary{}, 0, err
+		}
+		items = append(items, v)
+	}
+	var summary billing.VerificationSummary
+	err = s.db.QueryRowContext(ctx, `SELECT COALESCE(SUM(source_rows),0),COALESCE(SUM(verified_normal_rows),0),COALESCE(SUM(billed_normal_rows),0),COALESCE(SUM(verified_abnormal_rows),0),COALESCE(SUM(billed_abnormal_rows),0),COALESCE(SUM(source_quota),0),COALESCE(SUM(verified_normal_quota),0),COALESCE(SUM(billed_normal_quota),0),COALESCE(SUM(verified_abnormal_quota),0),COALESCE(SUM(billed_abnormal_quota),0),COALESCE(SUM(status='matched'),0),COALESCE(SUM(status='mismatch'),0) FROM billing_verification_results WHERE job_id=?`, jobID).Scan(&summary.SourceRows, &summary.VerifiedNormalRows, &summary.BilledNormalRows, &summary.VerifiedAbnormalRows, &summary.BilledAbnormalRows, &summary.SourceQuota, &summary.VerifiedNormalQuota, &summary.BilledNormalQuota, &summary.VerifiedAbnormalQuota, &summary.BilledAbnormalQuota, &summary.MatchedRows, &summary.MismatchedRows)
+	return items, summary, total, err
 }
 func (s Store) CompleteBillingStep(ctx context.Context, j billing.Job, st billing.JobStep, processed, bad int64) error {
 	tx, e := s.db.BeginTx(ctx, nil)

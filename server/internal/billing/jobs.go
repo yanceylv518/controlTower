@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math/big"
 	"strings"
@@ -12,6 +13,8 @@ import (
 )
 
 const BillingPageSize = 2000
+
+var ErrVerificationAlreadyExists = errors.New("billing verification already exists")
 
 // BusinessLocation is explicit because production containers normally run
 // in UTC while new-api billing periods are defined in China Standard Time.
@@ -80,6 +83,47 @@ type JobStep struct {
 	From, To time.Time
 	Cursor   LogCursor
 }
+
+type VerificationRow struct {
+	UserID                                  int64
+	Username, ModelName, GroupName          string
+	SourceRows, NormalRows, AbnormalRows    int64
+	SourceQuota, NormalQuota, AbnormalQuota int64
+}
+
+type VerificationResult struct {
+	Day                   string `json:"day"`
+	UserID                int64  `json:"user_id"`
+	Username              string `json:"username"`
+	ModelName             string `json:"model_name"`
+	GroupName             string `json:"group_name"`
+	SourceRows            int64  `json:"source_rows"`
+	VerifiedNormalRows    int64  `json:"verified_normal_rows"`
+	BilledNormalRows      int64  `json:"billed_normal_rows"`
+	VerifiedAbnormalRows  int64  `json:"verified_abnormal_rows"`
+	BilledAbnormalRows    int64  `json:"billed_abnormal_rows"`
+	SourceQuota           int64  `json:"source_quota"`
+	VerifiedNormalQuota   int64  `json:"verified_normal_quota"`
+	BilledNormalQuota     int64  `json:"billed_normal_quota"`
+	VerifiedAbnormalQuota int64  `json:"verified_abnormal_quota"`
+	BilledAbnormalQuota   int64  `json:"billed_abnormal_quota"`
+	Status                string `json:"status"`
+}
+
+type VerificationSummary struct {
+	SourceRows            int64 `json:"source_rows"`
+	VerifiedNormalRows    int64 `json:"verified_normal_rows"`
+	BilledNormalRows      int64 `json:"billed_normal_rows"`
+	VerifiedAbnormalRows  int64 `json:"verified_abnormal_rows"`
+	BilledAbnormalRows    int64 `json:"billed_abnormal_rows"`
+	SourceQuota           int64 `json:"source_quota"`
+	VerifiedNormalQuota   int64 `json:"verified_normal_quota"`
+	BilledNormalQuota     int64 `json:"billed_normal_quota"`
+	VerifiedAbnormalQuota int64 `json:"verified_abnormal_quota"`
+	BilledAbnormalQuota   int64 `json:"billed_abnormal_quota"`
+	MatchedRows           int64 `json:"matched_rows"`
+	MismatchedRows        int64 `json:"mismatched_rows"`
+}
 type ChannelDailyRow struct {
 	InstanceID                                                       string
 	ChannelID                                                        int64
@@ -127,6 +171,12 @@ type JobStore interface {
 	FinalizeBillingJob(context.Context, Job) error
 }
 
+type VerificationJobStore interface {
+	VerificationSourceJob(context.Context, string) (Job, error)
+	AppendBillingVerificationPage(context.Context, Job, JobStep, []VerificationRow, LogCursor, int64) error
+	FinalizeBillingVerification(context.Context, Job, Job) error
+}
+
 type anomalyActualAmountStore interface {
 	UpdateBillingAnomalyActualAmounts(context.Context, string, string) error
 }
@@ -158,6 +208,15 @@ func NewJob(instanceID string, from, to time.Time, requestedBy string) (Job, []J
 		start = end
 	}
 	job.TotalSteps = len(steps)
+	return job, steps, nil
+}
+
+func NewVerificationJob(source Job, requestedBy string) (Job, []JobStep, error) {
+	job, steps, err := NewJob(source.InstanceID, source.From, source.To, requestedBy)
+	if err != nil {
+		return Job{}, nil, err
+	}
+	job.JobType = "verify"
 	return job, steps, nil
 }
 
@@ -203,6 +262,9 @@ func (r JobRunner) RunOnce(ctx context.Context) (bool, error) {
 }
 
 func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error {
+	if job.JobType == "verify" {
+		return r.processVerificationStep(ctx, job, step)
+	}
 	prices, err := r.Store.ListBillingPrices(ctx, job.InstanceID)
 	if err != nil {
 		return err
@@ -386,6 +448,91 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 		return r.Store.FinalizeBillingJob(ctx, latest)
 	}
 	return err
+}
+
+func (r JobRunner) processVerificationStep(ctx context.Context, job Job, step JobStep) error {
+	store, ok := r.Store.(VerificationJobStore)
+	if !ok {
+		return fmt.Errorf("billing verification store unavailable")
+	}
+	sourceJob, err := store.VerificationSourceJob(ctx, job.ID)
+	if err != nil {
+		return err
+	}
+	metadata, err := r.Store.ListBillingModelMetadata(ctx, job.InstanceID)
+	if err != nil {
+		return err
+	}
+	maxByModel := map[string]int64{}
+	for _, m := range metadata {
+		maxByModel[m.ModelName] = m.MaxContextTokens
+	}
+	cursor := step.Cursor
+	var processed, abnormal int64
+	for {
+		logs, pageErr := r.Source.LogsPage(ctx, job.InstanceID, step.From, step.To, cursor, BillingPageSize)
+		if pageErr != nil {
+			return pageErr
+		}
+		if len(logs) == 0 {
+			break
+		}
+		type key struct {
+			user         int64
+			model, group string
+		}
+		acc := map[key]VerificationRow{}
+		for _, log := range logs {
+			k := key{log.UserID, log.ModelName, log.GroupName}
+			v := acc[k]
+			v.UserID = log.UserID
+			v.Username, v.ModelName, v.GroupName = log.Username, log.ModelName, log.GroupName
+			v.SourceRows++
+			v.SourceQuota += log.Quota
+			if len(AnomalyReasons(log, maxByModel[log.ModelName])) > 0 {
+				v.AbnormalRows++
+				v.AbnormalQuota += log.Quota
+				abnormal++
+			} else {
+				v.NormalRows++
+				v.NormalQuota += log.Quota
+			}
+			acc[k] = v
+		}
+		rows := make([]VerificationRow, 0, len(acc))
+		for _, v := range acc {
+			rows = append(rows, v)
+		}
+		last := logs[len(logs)-1]
+		cursor = LogCursor{last.CreatedUnix, last.ID}
+		processed += int64(len(logs))
+		if err = store.AppendBillingVerificationPage(ctx, job, step, rows, cursor, int64(len(logs))); err != nil {
+			return err
+		}
+		if len(logs) < BillingPageSize {
+			break
+		}
+		if r.PagePause > 0 {
+			timer := time.NewTimer(r.PagePause)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			case <-timer.C:
+			}
+		}
+	}
+	if err = r.Store.CompleteBillingStep(ctx, job, step, processed, abnormal); err != nil {
+		return err
+	}
+	latest, err := r.Store.BillingJob(ctx, job.ID)
+	if err != nil {
+		return err
+	}
+	if latest.CompletedSteps >= latest.TotalSteps {
+		return store.FinalizeBillingVerification(ctx, latest, sourceJob)
+	}
+	return nil
 }
 
 func fillAnomalyAmounts(out *AnomalyOrder, log PagedLogRecord, prices []Price, ratio string, at time.Time, useTiers bool) {

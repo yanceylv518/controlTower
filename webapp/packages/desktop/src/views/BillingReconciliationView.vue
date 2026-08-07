@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
 import type { BillingReconciliationRow } from "@ct/shared";
 import { dashboard } from "../api";
@@ -16,6 +16,9 @@ const selectedUser = ref<BillingReconciliationRow>();
 const selectedScope = ref<BillingReconciliationRow>();
 const detailOpen = ref(false);
 const requestsOpen = ref(false);
+const verificationPage = ref(1);
+const verificationJobID = ref("");
+let verificationTimer: ReturnType<typeof setTimeout> | undefined;
 
 const report = useAsyncData(async () => {
   await filters.loadInstances();
@@ -48,6 +51,16 @@ const requests = useAsyncData(async () => {
     model_name: row.model_name,
   });
 });
+const verification = useAsyncData(async () => {
+  const sourceJobID = report.data.value?.job.id;
+  if (!sourceJobID) return undefined;
+  return dashboard.billingVerification({ source_job_id: sourceJobID, job_id: verificationJobID.value || undefined, page: verificationPage.value, page_size: 50, mismatches_only: true });
+});
+const verificationProgress = computed(() => {
+  const job = verification.data.value?.job;
+  return job?.total_steps ? Math.min(100, Math.round(job.completed_steps * 100 / job.total_steps)) : 0;
+});
+const verificationStatusText = (status?: string) => ({ pending: "等待中", running: "核验中", complete: "已完成", failed: "失败" }[status || ""] || status || "");
 
 const csvURL = computed(() => {
   const [from, to] = range.value;
@@ -75,9 +88,36 @@ async function openRequests(row: BillingReconciliationRow) {
   requestsOpen.value = true;
   await requests.reload();
 }
+function scheduleVerificationPoll() {
+  if (verificationTimer) clearTimeout(verificationTimer);
+  const status = verification.data.value?.job?.status;
+  if (status === "pending" || status === "running") verificationTimer = setTimeout(async () => { await verification.refresh(); scheduleVerificationPoll(); }, 2000);
+}
+async function loadVerification() {
+  verificationJobID.value = "";
+  verificationPage.value = 1;
+  await verification.reload();
+  verificationJobID.value = verification.data.value?.job?.id || "";
+  scheduleVerificationPoll();
+}
+async function startVerification() {
+  const sourceJobID = report.data.value?.job.id;
+  if (!sourceJobID) return;
+  try {
+    const result = await dashboard.startBillingVerification(sourceJobID);
+    verificationJobID.value = result.job.id;
+    verificationPage.value = 1;
+    await verification.reload();
+    scheduleVerificationPoll();
+    ElMessage.success(result.reused ? "已恢复现有全量核验任务" : "全量核验任务已启动");
+  } catch { ElMessage.error("全量核验任务创建失败"); }
+}
 
 watch(range, value => localStorage.setItem("ct.billing.reconciliation.range", JSON.stringify(value)), { deep: true });
 watch(() => filters.site_id, () => { selectedUser.value = undefined; detailOpen.value = false; void report.reload(); });
+watch(() => report.data.value?.job.id, value => { if (value) void loadVerification(); });
+watch(verificationPage, () => { void verification.reload(); });
+onBeforeUnmount(() => { if (verificationTimer) clearTimeout(verificationTimer); });
 void report.reload();
 </script>
 
@@ -87,6 +127,7 @@ void report.reload();
       <span class="period-label">核对区间</span>
       <el-date-picker v-model="range" type="datetimerange" value-format="YYYY-MM-DD HH:mm:ss" format="YYYY-MM-DD HH:mm:ss" range-separator="至" :shortcuts="timeRangeShortcuts" unlink-panels style="width:420px" />
       <el-button type="primary" :loading="report.loading.value" @click="reconcile">核对账单</el-button>
+      <el-button v-if="report.data.value?.job.id" :loading="verification.loading.value || ['pending','running'].includes(verification.data.value?.job?.status || '')" @click="startVerification">全量核验</el-button>
       <el-button v-if="report.data.value" tag="a" :href="csvURL">导出核对 CSV</el-button>
     </template>
 
@@ -115,6 +156,39 @@ void report.reload();
         <el-table-column label="操作" width="90" fixed="right"><template #default="s"><el-button link type="primary" @click="openDetail(s.row)">下钻</el-button></template></el-table-column>
       </el-table>
     </AsyncPanel>
+
+    <section v-if="report.data.value" class="verification-panel">
+      <div class="verification-heading">
+        <div><h3>后台全量核验</h3><p>分页复扫该生成批次的 new-api 消费日志，并与 CT 正常账单、异常订单逐日核对。</p></div>
+        <el-tag v-if="verification.data.value?.job" :type="verification.data.value.job.status === 'complete' ? (verification.data.value.summary.mismatched_rows ? 'danger' : 'success') : verification.data.value.job.status === 'failed' ? 'danger' : 'warning'">
+          {{ verificationStatusText(verification.data.value.job.status) }}
+        </el-tag>
+      </div>
+      <el-progress v-if="['pending','running'].includes(verification.data.value?.job?.status || '')" :percentage="verificationProgress" :stroke-width="10" />
+      <el-alert v-if="verification.data.value?.job?.status === 'failed'" type="error" :closable="false" :title="verification.data.value.job.error_message || '全量核验失败，可重新启动任务'" />
+      <el-empty v-else-if="!verification.data.value?.job" description="尚未启动全量核验" :image-size="80" />
+      <template v-else-if="verification.data.value.job.status === 'complete'">
+        <div class="verification-cards">
+          <span>原始日志 <b>{{ formatNumber(verification.data.value.summary.source_rows) }}</b></span>
+          <span>正常 复扫/账单 <b>{{ formatNumber(verification.data.value.summary.verified_normal_rows) }} / {{ formatNumber(verification.data.value.summary.billed_normal_rows) }}</b></span>
+          <span>异常 复扫/落库 <b>{{ formatNumber(verification.data.value.summary.verified_abnormal_rows) }} / {{ formatNumber(verification.data.value.summary.billed_abnormal_rows) }}</b></span>
+          <span>匹配维度 <b>{{ formatNumber(verification.data.value.summary.matched_rows) }}</b></span>
+          <span>差异维度 <b class="danger-text">{{ formatNumber(verification.data.value.summary.mismatched_rows) }}</b></span>
+        </div>
+        <el-alert v-if="!verification.data.value.summary.mismatched_rows" type="success" :closable="false" title="全量核验通过：原始日志、正常账单和异常订单一致" />
+        <el-table v-else :data="verification.data.value.items" class="verification-table">
+          <el-table-column prop="day" label="日期" width="110" />
+          <el-table-column label="用户" min-width="150"><template #default="s">{{ s.row.username || `用户 ${s.row.user_id}` }}</template></el-table-column>
+          <el-table-column prop="model_name" label="模型" min-width="150" />
+          <el-table-column prop="group_name" label="分组" min-width="90" />
+          <el-table-column label="原始日志" width="105" align="right"><template #default="s">{{ formatNumber(s.row.source_rows) }}</template></el-table-column>
+          <el-table-column label="正常 复扫/账单" min-width="150" align="right"><template #default="s">{{ formatNumber(s.row.verified_normal_rows) }} / {{ formatNumber(s.row.billed_normal_rows) }}</template></el-table-column>
+          <el-table-column label="异常 复扫/落库" min-width="150" align="right"><template #default="s">{{ formatNumber(s.row.verified_abnormal_rows) }} / {{ formatNumber(s.row.billed_abnormal_rows) }}</template></el-table-column>
+          <el-table-column label="Quota 原始/正常复扫/正常账单/异常复扫/异常落库" min-width="390" align="right"><template #default="s">{{ formatNumber(s.row.source_quota) }} / {{ formatNumber(s.row.verified_normal_quota) }} / {{ formatNumber(s.row.billed_normal_quota) }} / {{ formatNumber(s.row.verified_abnormal_quota) }} / {{ formatNumber(s.row.billed_abnormal_quota) }}</template></el-table-column>
+        </el-table>
+        <el-pagination v-if="verification.data.value.total > verification.data.value.page_size" v-model:current-page="verificationPage" :page-size="verification.data.value.page_size" :total="verification.data.value.total" layout="total, prev, pager, next" />
+      </template>
+    </section>
 
     <el-drawer v-model="detailOpen" :title="`${selectedUser?.username || '用户'} · L2 日/模型/分组核对`" size="86%">
       <AsyncPanel :loading="detail.loading.value" :error="detail.error.value" :empty="!detail.data.value?.items.length" @retry="detail.reload">
@@ -155,4 +229,5 @@ void report.reload();
 <style scoped>
 .period-label,.range-note,small{color:var(--el-text-color-secondary);font-size:12px}.range-note{padding:2px 2px 10px}.range-note b{color:var(--el-text-color-primary)}
 .cards{display:grid;grid-template-columns:repeat(6,minmax(150px,1fr));gap:10px;margin-bottom:14px}.cards>div{border:1px solid var(--el-border-color);border-radius:8px;padding:12px;background:var(--el-fill-color-blank)}.cards .danger-card{border-color:var(--el-color-danger-light-5);background:var(--el-color-danger-light-9)}.cards .danger-card b{color:var(--el-color-danger)}.cards span{display:block;color:var(--el-text-color-secondary);font-size:12px}.cards b{display:block;margin-top:6px;font-size:17px;font-variant-numeric:tabular-nums}.lane-totals{display:flex;gap:24px;padding:12px 2px;color:var(--el-text-color-secondary)}.lane-totals b{color:var(--el-text-color-primary);font-variant-numeric:tabular-nums}.el-table small{display:block;margin-top:3px}.request-table{margin-top:4px}:deep(.fallback-row){opacity:.55}:deep(.el-table .cell){font-variant-numeric:tabular-nums}@media(max-width:1400px){.cards{grid-template-columns:repeat(3,1fr)}}
+.verification-panel{margin-top:18px;padding:16px;border:1px solid var(--el-border-color);border-radius:8px;background:var(--el-fill-color-blank)}.verification-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}.verification-heading h3{margin:0 0 5px}.verification-heading p{margin:0 0 14px;color:var(--el-text-color-secondary);font-size:12px}.verification-cards{display:flex;flex-wrap:wrap;gap:12px 30px;margin:14px 0}.verification-cards span{color:var(--el-text-color-secondary)}.verification-cards b{color:var(--el-text-color-primary);font-variant-numeric:tabular-nums}.verification-cards .danger-text{color:var(--el-color-danger)}.verification-table{margin-top:12px}.verification-panel .el-pagination{justify-content:flex-end;margin-top:12px}
 </style>

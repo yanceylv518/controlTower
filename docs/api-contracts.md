@@ -267,6 +267,14 @@ Instance tokens are stored only as `SHA-256(pepper + token)` hashes. A token may
 - Completed data is written as an immutable version. `billing_active_versions` is switched only after every step succeeds, so an interrupted generation never replaces the currently visible bill.
 - A failed step is resumed from its persisted cursor and retried up to three times.
 
+## Billing full verification
+
+- `POST /api/dashboard/billing/verification` accepts `{ "source_job_id": "..." }` for a completed `generate` job. It creates an admin-only background verification job and returns HTTP 202. Repeated or concurrent submissions reuse the existing non-failed job and return `reused=true`.
+- `GET /api/dashboard/billing/verification?source_job_id=&job_id=&page=&page_size=&mismatches_only=` returns resumable progress and, after completion, paginated comparison results. `job_id` is optional but must belong to the supplied source job. Results default to mismatches only; `mismatches_only=false` includes matched dimensions.
+- Verification rescans new-api consumption logs through the same hourly, 2,000-row keyset pages as generation. It applies the billing anomaly rules again, then compares `(business day, user, model, group)` across source logs, immutable normal bill rows, and immutable anomaly rows.
+- A dimension is matched only when normal count/quota, anomaly count/quota, and the source decomposition (`source = normal + anomaly`) all agree. Keys found only in CT or only in the source are retained as mismatches.
+- Verification tables are isolated from active bill versions. Starting or failing a verification never changes billing totals, anomaly orders, discounts, or exports.
+
 ## Billing validation and user pricing
 
 - `GET|PUT /api/dashboard/billing/user-settings` controls `use_tiered_pricing` per site/user; writes are admin-only and default to enabled when no row exists.

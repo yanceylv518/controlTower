@@ -168,6 +168,9 @@ func NewMux(options Options) *http.ServeMux {
 		mux.Handle("GET /api/dashboard/billing/reconciliation", protect(dashboard.BillingReconciliationHandler{Store: billingSummaryStore}))
 		mux.Handle("GET /api/dashboard/billing/reconciliation/requests", protect(dashboard.BillingReconciliationRequestsHandler{Store: billingSummaryStore, Source: dashboard.BillingReadonlySource{Handler: passthrough}, PagePause: options.BillingPagePause}))
 	}
+	if verificationStore, ok := any(options.Store).(dashboard.BillingVerificationStore); ok {
+		mux.Handle("/api/dashboard/billing/verification", protect(dashboard.BillingVerificationHandler{Store: verificationStore}))
+	}
 	if workbookStore, ok := any(options.Store).(dashboard.BillingWorkbookStore); ok {
 		workbook := dashboard.BillingWorkbookHandler{Store: workbookStore, Source: dashboard.BillingReadonlySource{Handler: passthrough}}
 		mux.Handle("GET /api/dashboard/billing/workbook", protect(workbook))

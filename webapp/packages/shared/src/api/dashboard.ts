@@ -555,6 +555,46 @@ export interface BillingRequestReconciliationResponse {
   component_diffs: { input: string; output: string; cache_read: string; cache_write: string; group: string };
   uninformative: boolean;
 }
+export interface BillingVerificationResult {
+  day: string;
+  user_id: number;
+  username: string;
+  model_name: string;
+  group_name: string;
+  source_rows: number;
+  verified_normal_rows: number;
+  billed_normal_rows: number;
+  verified_abnormal_rows: number;
+  billed_abnormal_rows: number;
+  source_quota: number;
+  verified_normal_quota: number;
+  billed_normal_quota: number;
+  verified_abnormal_quota: number;
+  billed_abnormal_quota: number;
+  status: "matched" | "mismatch";
+}
+export interface BillingVerificationSummary {
+  source_rows: number;
+  verified_normal_rows: number;
+  billed_normal_rows: number;
+  verified_abnormal_rows: number;
+  billed_abnormal_rows: number;
+  source_quota: number;
+  verified_normal_quota: number;
+  billed_normal_quota: number;
+  verified_abnormal_quota: number;
+  billed_abnormal_quota: number;
+  matched_rows: number;
+  mismatched_rows: number;
+}
+export interface BillingVerificationResponse {
+  job?: BillingJob | null;
+  items: BillingVerificationResult[];
+  summary: BillingVerificationSummary;
+  total: number;
+  page: number;
+  page_size: number;
+}
 
 export const dashboardApi = (client: ApiClient) => ({
   instances: () =>
@@ -772,6 +812,10 @@ export const dashboardApi = (client: ApiClient) => ({
     client.request<BillingReconciliationResponse>(`/api/dashboard/billing/reconciliation${query(params)}`),
   billingReconciliationRequests: (params: { instance_id: string; from: string; to: string; job_id: string; user_id: number; day: string; model_name: string }) =>
     client.request<BillingRequestReconciliationResponse>(`/api/dashboard/billing/reconciliation/requests${query(params)}`),
+  billingVerification: (params: { source_job_id: string; job_id?: string; page?: number; page_size?: number; mismatches_only?: boolean }) =>
+    client.request<BillingVerificationResponse>(`/api/dashboard/billing/verification${query(params)}`),
+  startBillingVerification: (source_job_id: string) =>
+    client.request<{ accepted: boolean; reused: boolean; job: BillingJob }>("/api/dashboard/billing/verification", { method: "POST", body: JSON.stringify({ source_job_id }) }),
   billingDetail: (params: { instance_id: string; user_id: number; month?: string; from?: string; to?: string; job_id?: string }) =>
     client.request<BillingDetailResponse>(`/api/dashboard/billing/detail${query(params)}`),
   generateBilling: (input: { instance_id: string; from: string; to: string; force?: boolean; scope?: "all" | "channel" }) =>
