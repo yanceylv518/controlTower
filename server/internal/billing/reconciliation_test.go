@@ -57,3 +57,47 @@ func TestBuildReconciliationResidualFormula(t *testing.T) {
 		t.Fatalf("unexpected reconciliation: %+v", row)
 	}
 }
+
+// When both new-api (CreateCacheRatio configured) and CT (write price kept by
+// the snapshot alignment) bill cache writes, the policy component must be the
+// gap between them - near zero - not the full new-api write cost dragging the
+// residual negative.
+func TestBuildReconciliationCacheWriteComponentIsGapNotFullCost(t *testing.T) {
+	day := time.Date(2026, 8, 6, 0, 0, 0, 0, time.UTC)
+	rows := []AggregateRow{{UserID: 7, Username: "alice", ModelName: "m", Day: day, RequestCount: 1, CacheWrite1hTokens: 1_000_000, CacheWriteTokens: 1_000_000, Quota: 10_000_000}}
+	prices := []PriceRecord{{ModelName: "m", Price: Price{EffectiveFrom: day, Input: "10", Output: "0", Cache: "0", CacheWrite: "12.5"}}}
+	snapshots := map[string]string{"2026-08-06": `{"ModelRatio":"{\"m\":5}","CreateCacheRatio":"{\"m\":1.25}","QuotaPerUnit":"500000"}`}
+	report := BuildReconciliation(rows, prices, nil, snapshots, nil, false)
+	if len(report.Rows) != 1 {
+		t.Fatalf("rows = %d", len(report.Rows))
+	}
+	// new-api estimate: input 10/1M, 1h price 20/1M -> 20; CT charged: 12.5*1.6 = 20/1M -> 20. Gap = 0.
+	if report.Rows[0].Breakdown.CacheWritePolicy != "0.000000" {
+		t.Fatalf("cache write component = %s, want 0.000000 (gap, not full cost)", report.Rows[0].Breakdown.CacheWritePolicy)
+	}
+}
+
+// Signed diffs must survive parsing: the rebuild self-check counts mismatches
+// on BOTH sides, negative lane diffs reach the component totals, and rows
+// with negative diffs sort by magnitude instead of collapsing to zero.
+func TestReconcileRequestsHandlesNegativeDiffs(t *testing.T) {
+	day := time.Date(2026, 8, 6, 0, 0, 0, 0, time.UTC)
+	logs := []PagedLogRecord{{
+		ID: 1, CreatedUnix: day.Unix(), ModelName: "m", GroupName: "default",
+		Quota:      1_000_000, // actual 2.0 with qpu 500000
+		ModelRatio: "2.5", CompletionRatio: "1", CacheRatio: "1", CacheCreationRatio: "", GroupRatio: "1",
+		SourcePromptTokens: sql.NullInt64{Valid: true, Int64: 1_000_000},
+		PromptTokens:       sql.NullInt64{Valid: true, Int64: 1_000_000},
+		CompletionTokens:   sql.NullInt64{Valid: true, Int64: 0},
+	}}
+	// CT input price 10 > rebuilt input price 5: input lane diff is negative.
+	prices := []PriceRecord{{ModelName: "m", Price: Price{EffectiveFrom: day, Input: "10", Output: "10", Cache: "10"}}}
+	result := ReconcileRequests(logs, "m", day, prices, nil, `{"ModelRatio":"{\"m\":2.5}","QuotaPerUnit":"500000"}`)
+	if result.ComponentDiffs.Input != "-5.000000" {
+		t.Fatalf("input component = %s, want -5.000000 (negative must not be dropped)", result.ComponentDiffs.Input)
+	}
+	// actual 2.0 vs rebuilt 5.0: mismatch is on the negative side and must count.
+	if result.RebuildResidual != "3.000000" {
+		t.Fatalf("rebuild residual = %s, want 3.000000", result.RebuildResidual)
+	}
+}

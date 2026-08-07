@@ -2,6 +2,7 @@ package billing
 
 import (
 	"database/sql"
+	"errors"
 	"math/big"
 	"sort"
 	"strconv"
@@ -135,7 +136,13 @@ func BuildReconciliation(rows []AggregateRow, prices []PriceRecord, ratios []Gro
 	}
 	for _, row := range rows {
 		day := row.Day.In(BusinessLocation).Format("2006-01-02")
-		a := ensure(row.UserID, row.Username, day, row.ModelName, row.GroupName)
+		labelDay, labelModel, labelGroup := day, row.ModelName, row.GroupName
+		if !detail {
+			// User-level rows must not carry the first-seen day/model as if
+			// it summarized the whole user.
+			labelDay, labelModel, labelGroup = "", "", ""
+		}
+		a := ensure(row.UserID, row.Username, labelDay, labelModel, labelGroup)
 		a.row.RequestCount += row.RequestCount
 		quotaPerUnit, qerr := quotaPerUnitForReport(snapshots[day])
 		actual, aerr := AmountFromQuota(row.Quota, quotaPerUnit)
@@ -159,11 +166,21 @@ func BuildReconciliation(rows []AggregateRow, prices []PriceRecord, ratios []Gro
 		if amount, err := Amount(usageFromAggregate(row), price, ratio); err == nil {
 			a.ct.Add(a.ct, amount)
 		}
-		a.cacheWrite.Add(a.cacheWrite, estimatedCacheWritePolicy(row, snapshots[day]))
+		// The policy component is what new-api charged BEYOND CT for cache
+		// writes. Subtracting CT's own write charge keeps the component at
+		// zero when both sides bill writes (model with CreateCacheRatio
+		// configured), instead of double-counting and dragging the residual
+		// negative by the full write cost.
+		policy := new(big.Rat).Sub(estimatedCacheWritePolicy(row, snapshots[day]), ctCacheWriteCharged(row, price, ratio))
+		a.cacheWrite.Add(a.cacheWrite, policy)
 	}
 	for _, anomaly := range anomalies {
 		day := anomaly.Day.In(BusinessLocation).Format("2006-01-02")
-		a := ensure(anomaly.UserID, "", day, anomaly.ModelName, anomaly.GroupName)
+		labelDay, labelModel, labelGroup := day, anomaly.ModelName, anomaly.GroupName
+		if !detail {
+			labelDay, labelModel, labelGroup = "", "", ""
+		}
+		a := ensure(anomaly.UserID, "", labelDay, labelModel, labelGroup)
 		a.row.AbnormalRows += anomaly.Count
 		if value, err := decimalRat(decimalOrZero(anomaly.Amount)); err == nil {
 			a.actual.Add(a.actual, value)
@@ -194,8 +211,8 @@ func BuildReconciliation(rows []AggregateRow, prices []PriceRecord, ratios []Gro
 		if report.Rows[i].FallbackPriced != report.Rows[j].FallbackPriced {
 			return !report.Rows[i].FallbackPriced
 		}
-		left, _ := decimalRat(report.Rows[i].DiffAmount)
-		right, _ := decimalRat(report.Rows[j].DiffAmount)
+		left, _ := signedRat(report.Rows[i].DiffAmount)
+		right, _ := signedRat(report.Rows[j].DiffAmount)
 		if cmp := absRat(left).Cmp(absRat(right)); cmp != 0 {
 			return cmp > 0
 		}
@@ -208,6 +225,31 @@ func BuildReconciliation(rows []AggregateRow, prices []PriceRecord, ratios []Gro
 	totalResidual := new(big.Rat).Sub(new(big.Rat).Sub(totalDiff, totalAnomaly), totalCache)
 	report.Totals = ReconciliationTotals{CTAmount: FormatAmount(totalCT, 6), ActualAmount: FormatAmount(totalActual, 6), DiffAmount: FormatAmount(totalDiff, 6), Breakdown: ReconciliationBreakdown{Anomaly: FormatAmount(totalAnomaly, 6), CacheWritePolicy: FormatAmount(totalCache, 6), Residual: FormatAmount(totalResidual, 6)}}
 	return report
+}
+
+// ctCacheWriteCharged mirrors Amount()'s cache-write lanes (5m/default at the
+// configured write price, 1h at 1.6x) so the policy component measures only
+// the gap between new-api and CT, not the full new-api write cost.
+func ctCacheWriteCharged(row AggregateRow, price Price, ratio string) *big.Rat {
+	result := new(big.Rat)
+	if row.CacheWriteTokens <= 0 {
+		return result
+	}
+	writePrice, err := decimalRat(decimalOrZero(price.CacheWrite))
+	if err != nil || writePrice.Sign() == 0 {
+		return result
+	}
+	groupRatio, err := decimalRat(ratio)
+	if err != nil {
+		groupRatio = big.NewRat(1, 1)
+	}
+	remaining := row.CacheWriteTokens - row.CacheWrite5mTokens - row.CacheWrite1hTokens
+	if remaining < 0 {
+		remaining = 0
+	}
+	result.Add(result, tokenCost(row.CacheWrite5mTokens+remaining, writePrice))
+	result.Add(result, tokenCost(row.CacheWrite1hTokens, new(big.Rat).Mul(writePrice, big.NewRat(8, 5))))
+	return result.Mul(result, groupRatio)
 }
 
 func estimatedCacheWritePolicy(row AggregateRow, raw string) *big.Rat {
@@ -345,14 +387,14 @@ func ReconcileRequests(logs []PagedLogRecord, model string, day time.Time, price
 		addDecimal(cacheReadTotal, row.CacheReadDiff)
 		addDecimal(cacheWriteTotal, row.CacheWriteDiff)
 		addDecimal(groupTotal, row.GroupDiff)
-		if rr, err := decimalRat(subtractDecimal(row.ActualAmount, row.RebuiltAmount)); err == nil {
+		if rr, err := signedRat(subtractDecimal(row.ActualAmount, row.RebuiltAmount)); err == nil {
 			residual.Add(residual, absRat(rr))
 		}
 		result.Items = append(result.Items, row)
 	}
 	sort.Slice(result.Items, func(i, j int) bool {
-		left, _ := decimalRat(decimalOrZero(result.Items[i].DiffAmount))
-		right, _ := decimalRat(decimalOrZero(result.Items[j].DiffAmount))
+		left, _ := signedRat(decimalOrZero(result.Items[i].DiffAmount))
+		right, _ := signedRat(decimalOrZero(result.Items[j].DiffAmount))
 		return absRat(left).Cmp(absRat(right)) > 0
 	})
 	if len(result.Items) > 20 {
@@ -370,9 +412,24 @@ func ReconcileRequests(logs []PagedLogRecord, model string, day time.Time, price
 }
 
 func addDecimal(total *big.Rat, value string) {
-	if parsed, err := decimalRat(decimalOrZero(value)); err == nil {
+	if parsed, err := signedRat(decimalOrZero(value)); err == nil {
 		total.Add(total, parsed)
 	}
+}
+
+// signedRat parses a decimal that may legitimately be negative. decimalRat
+// is a validation parser that rejects negatives; using it on signed diffs
+// silently drops one side of every comparison.
+func signedRat(value string) (*big.Rat, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, errors.New("empty decimal")
+	}
+	result, ok := new(big.Rat).SetString(value)
+	if !ok {
+		return nil, errors.New("invalid decimal: " + value)
+	}
+	return result, nil
 }
 
 func quotaPerUnitOrDefault(raw string) string {
@@ -394,8 +451,8 @@ func multiplyRatString(base *big.Rat, multiplier string) string {
 }
 
 func subtractDecimal(left, right string) string {
-	l, lerr := decimalRat(decimalOrZero(left))
-	r, rerr := decimalRat(decimalOrZero(right))
+	l, lerr := signedRat(decimalOrZero(left))
+	r, rerr := signedRat(decimalOrZero(right))
 	if lerr != nil || rerr != nil {
 		return "0.000000"
 	}
