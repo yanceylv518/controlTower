@@ -47,9 +47,12 @@ const state = useAsyncData(async () => {
 const generated = computed(() => state.data.value?.generated !== false);
 const detail = useAsyncData(async () => {const[from,to]=generationRange.value;return selected.value ? dashboard.billingDetail({ instance_id: filters.site_id, user_id: selected.value.user_id, from, to, job_id: state.data.value?.generation_job?.id }) : undefined;});
 const currency = computed(() => state.data.value?.currency ? state.data.value.currency.symbol : (prefs.currencySymbol || "$"));
-const money = (value: string | number | undefined) => `${currency.value}${Number(value || 0).toFixed(4)}`;
+// Amounts are USD-based (quota / QuotaPerUnit); a non-USD site display must
+// convert with the site exchange rate, not just swap the symbol.
+const currencyRate = computed(() => { const rate = Number(state.data.value?.currency?.exchange_rate); return Number.isFinite(rate) && rate > 0 ? rate : 1; });
+const money = (value: string | number | undefined) => `${currency.value}${(Number(value || 0) * currencyRate.value).toFixed(4)}`;
 const balanceMoney = (quota: number | undefined) => formatQuota(quota ?? 0, prefs.quotaPerUnit, currency.value);
-const unitPrice = (value: string | undefined) => value ? `${currency.value}${Number(value).toFixed(4)}` : "—";
+const unitPrice = (value: string | undefined) => value ? `${currency.value}${(Number(value) * currencyRate.value).toFixed(4)}` : "—";
 const periodText = computed(() => `[${generationRange.value[0]}, ${generationRange.value[1]})`);
 const exportURL = computed(() => {const[from,to]=generationRange.value;return`/api/dashboard/billing/summary?instance_id=${encodeURIComponent(filters.site_id)}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&search=${encodeURIComponent(search.value)}&format=csv`;});
 const dailyExportURL = computed(() => {const[from,to]=generationRange.value;return selected.value?`/api/dashboard/billing/detail?instance_id=${encodeURIComponent(filters.site_id)}&user_id=${selected.value.user_id}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&format=csv`:"#";});
