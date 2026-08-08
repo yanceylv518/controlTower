@@ -7,10 +7,12 @@ import AppShell from "../components/AppShell.vue";
 import AsyncPanel from "../components/AsyncPanel.vue";
 import { useAsyncData } from "../composables/useAsyncData";
 import { useFiltersStore } from "../stores/filters";
+import { usePrefsStore } from "../stores/prefs";
 import { savedGenerationRange, timeRangeShortcuts, validateGenerationRange } from "../utils/billingRange";
 import { formatNumber } from "../utils/format";
 
 const filters = useFiltersStore();
+const prefs = usePrefsStore();
 const range = ref<[string, string]>(savedGenerationRange("ct.billing.reconciliation.range"));
 const selectedUser = ref<BillingReconciliationRow>();
 const selectedScope = ref<BillingReconciliationRow>();
@@ -68,7 +70,12 @@ const csvURL = computed(() => {
   if (report.data.value?.job.id) params.set("job_id", report.data.value.job.id);
   return `/api/dashboard/billing/reconciliation?${params}`;
 });
-const money = (value?: string) => `$${Number(value || 0).toFixed(6)}`;
+const currency = computed(() => report.data.value?.currency?.symbol || prefs.currencySymbol || "$");
+const currencyRate = computed(() => {
+  const rate = Number(report.data.value?.currency?.exchange_rate);
+  return Number.isFinite(rate) && rate > 0 ? rate : 1;
+});
+const money = (value?: string) => `${currency.value}${(Number(value || 0) * currencyRate.value).toFixed(6)}`;
 const percent = (value?: string) => `${(Number(value || 0) * 100).toFixed(3)}%`;
 const classText = (value: string) => ({ anomaly: "异常订单", cache_write_policy: "缓存写策略", residual: "剩余差额" }[value] || value);
 const reconciliationRowClass = ({ row }: { row: BillingReconciliationRow }) => row.fallback_priced ? "fallback-row" : "";

@@ -529,6 +529,7 @@ export interface BillingReconciliationResponse {
   job: BillingJob;
   range_from: string;
   range_to: string;
+  currency?: BillingCurrencyDisplay;
 }
 export interface BillingRequestReconciliation {
   log_id: number;

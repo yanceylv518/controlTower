@@ -13,7 +13,8 @@ import (
 )
 
 type BillingReconciliationHandler struct {
-	Store BillingSummaryStore
+	Store  BillingSummaryStore
+	Source BillingCurrencySource
 }
 
 func (h BillingReconciliationHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -76,7 +77,14 @@ func (h BillingReconciliationHandler) ServeHTTP(w http.ResponseWriter, r *http.R
 		return
 	}
 	report := billing.BuildReconciliation(rows, prices, ratios, snapshots, anomalies, userID > 0)
-	writeDashboardJSON(w, http.StatusOK, map[string]any{"items": report.Rows, "totals": report.Totals, "job": job, "range_from": from, "range_to": to})
+	currency, currencyErr := currentBillingCurrency(r.Context(), h.Source, instanceID)
+	if currencyErr != nil {
+		currency = billing.CurrencyDisplayForSnapshots(snapshots)
+		if currency.Type == "" {
+			currency = billing.CurrencyDisplay{Type: "USD", Symbol: "$", ExchangeRate: "1"}
+		}
+	}
+	writeDashboardJSON(w, http.StatusOK, map[string]any{"items": report.Rows, "totals": report.Totals, "job": job, "range_from": from, "range_to": to, "currency": currency})
 }
 
 func billingReconciliationAdmin(r *http.Request) bool {

@@ -75,6 +75,18 @@ func TestBillingReconciliationCSVHasExpectedColumns(t *testing.T) {
 	}
 }
 
+func TestBillingReconciliationUsesCurrentNewAPICurrency(t *testing.T) {
+	job := reconciliationJob()
+	store := reconciliationHandlerStore{job: job}
+	source := fakeBillingLiveSource{ratio: `{"QuotaPerUnit":"500000","USDExchangeRate":"7.2","general_setting":"{\"quota_display_type\":\"CNY\"}"}`}
+	req := httptest.NewRequest("GET", "/api/dashboard/billing/reconciliation?instance_id=site-a&from=2026-08-01+00:00:00&to=2026-08-02+00:00:00&job_id=job-r1", nil)
+	w := httptest.NewRecorder()
+	BillingReconciliationHandler{Store: store, Source: source}.ServeHTTP(w, req)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"currency":{"type":"CNY"`) || !strings.Contains(w.Body.String(), `"exchange_rate":"7.2"`) {
+		t.Fatalf("unexpected response: %d %s", w.Code, w.Body.String())
+	}
+}
+
 type fullPageReconciliationSource struct{ calls int }
 
 func (s *fullPageReconciliationSource) DetailedLogsPage(context.Context, string, int64, time.Time, time.Time, billing.LogCursor, int) ([]billing.PagedLogRecord, error) {
