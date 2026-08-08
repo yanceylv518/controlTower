@@ -143,6 +143,9 @@ void report.reload();
         <div><span>缓存写策略差额（估算）</span><b>{{ money(report.data.value.totals.breakdown.cache_write_policy) }}</b></div>
         <div :class="{ 'danger-card': Number(report.data.value.totals.breakdown.residual) !== 0 }"><span>剩余差额</span><b>{{ money(report.data.value.totals.breakdown.residual) }}</b></div>
       </div>
+      <p v-if="report.data.value" class="breakdown-note">
+        剩余差额 = 总差额 - 异常订单差额 - 缓存写策略差额；下表“剩余差额”列合计与顶部一致。
+      </p>
 
       <el-table :data="report.data.value?.items || []" :row-class-name="reconciliationRowClass">
         <el-table-column label="用户" min-width="180"><template #default="s"><b>{{ s.row.username || `用户 ${s.row.user_id}` }}</b><small>ID {{ s.row.user_id }}</small></template></el-table-column>
@@ -150,9 +153,10 @@ void report.reload();
         <el-table-column prop="abnormal_rows" label="异常订单" min-width="105" align="right"><template #default="s">{{ formatNumber(s.row.abnormal_rows) }}</template></el-table-column>
         <el-table-column label="CT 金额" min-width="130" align="right"><template #default="s">{{ money(s.row.ct_amount) }}</template></el-table-column>
         <el-table-column label="new-api 实扣" min-width="140" align="right"><template #default="s">{{ money(s.row.actual_amount) }}</template></el-table-column>
-        <el-table-column label="差额" min-width="125" align="right"><template #default="s"><b>{{ money(s.row.diff_amount) }}</b></template></el-table-column>
+        <el-table-column label="总差额" min-width="125" align="right"><template #default="s"><b>{{ money(s.row.diff_amount) }}</b></template></el-table-column>
+        <el-table-column label="剩余差额" min-width="125" align="right"><template #default="s"><b>{{ money(s.row.breakdown.residual) }}</b></template></el-table-column>
         <el-table-column label="差额率" min-width="100" align="right"><template #default="s">{{ percent(s.row.diff_rate) }}</template></el-table-column>
-        <el-table-column label="主要分类" min-width="145"><template #default="s"><el-tag v-if="s.row.fallback_priced" type="info">回退计价（差额无参考性）</el-tag><el-tag v-else :type="s.row.classification === 'residual' ? 'danger' : 'warning'">{{ classText(s.row.classification) }}</el-tag></template></el-table-column>
+        <el-table-column label="主要原因" min-width="145"><template #default="s"><el-tag v-if="s.row.fallback_priced" type="info">回退计价（差额无参考性）</el-tag><el-tag v-else :type="s.row.classification === 'residual' ? 'danger' : 'warning'">{{ classText(s.row.classification) }}</el-tag></template></el-table-column>
         <el-table-column label="操作" width="90" fixed="right"><template #default="s"><el-button link type="primary" @click="openDetail(s.row)">下钻</el-button></template></el-table-column>
       </el-table>
     </AsyncPanel>
@@ -228,6 +232,6 @@ void report.reload();
 
 <style scoped>
 .period-label,.range-note,small{color:var(--el-text-color-secondary);font-size:12px}.range-note{padding:2px 2px 10px}.range-note b{color:var(--el-text-color-primary)}
-.cards{display:grid;grid-template-columns:repeat(6,minmax(150px,1fr));gap:10px;margin-bottom:14px}.cards>div{border:1px solid var(--el-border-color);border-radius:8px;padding:12px;background:var(--el-fill-color-blank)}.cards .danger-card{border-color:var(--el-color-danger-light-5);background:var(--el-color-danger-light-9)}.cards .danger-card b{color:var(--el-color-danger)}.cards span{display:block;color:var(--el-text-color-secondary);font-size:12px}.cards b{display:block;margin-top:6px;font-size:17px;font-variant-numeric:tabular-nums}.lane-totals{display:flex;gap:24px;padding:12px 2px;color:var(--el-text-color-secondary)}.lane-totals b{color:var(--el-text-color-primary);font-variant-numeric:tabular-nums}.el-table small{display:block;margin-top:3px}.request-table{margin-top:4px}:deep(.fallback-row){opacity:.55}:deep(.el-table .cell){font-variant-numeric:tabular-nums}@media(max-width:1400px){.cards{grid-template-columns:repeat(3,1fr)}}
+.cards{display:grid;grid-template-columns:repeat(6,minmax(150px,1fr));gap:10px;margin-bottom:8px}.cards>div{border:1px solid var(--el-border-color);border-radius:8px;padding:12px;background:var(--el-fill-color-blank)}.cards .danger-card{border-color:var(--el-color-danger-light-5);background:var(--el-color-danger-light-9)}.cards .danger-card b{color:var(--el-color-danger)}.cards span{display:block;color:var(--el-text-color-secondary);font-size:12px}.cards b{display:block;margin-top:6px;font-size:17px;font-variant-numeric:tabular-nums}.breakdown-note{margin:0 2px 10px;color:var(--el-text-color-secondary);font-size:12px}.lane-totals{display:flex;gap:24px;padding:12px 2px;color:var(--el-text-color-secondary)}.lane-totals b{color:var(--el-text-color-primary);font-variant-numeric:tabular-nums}.el-table small{display:block;margin-top:3px}.request-table{margin-top:4px}:deep(.fallback-row){opacity:.55}:deep(.el-table .cell){font-variant-numeric:tabular-nums}@media(max-width:1400px){.cards{grid-template-columns:repeat(3,1fr)}}
 .verification-panel{margin-top:18px;padding:16px;border:1px solid var(--el-border-color);border-radius:8px;background:var(--el-fill-color-blank)}.verification-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}.verification-heading h3{margin:0 0 5px}.verification-heading p{margin:0 0 14px;color:var(--el-text-color-secondary);font-size:12px}.verification-cards{display:flex;flex-wrap:wrap;gap:12px 30px;margin:14px 0}.verification-cards span{color:var(--el-text-color-secondary)}.verification-cards b{color:var(--el-text-color-primary);font-variant-numeric:tabular-nums}.verification-cards .danger-text{color:var(--el-color-danger)}.verification-table{margin-top:12px}.verification-panel .el-pagination{justify-content:flex-end;margin-top:12px}
 </style>
