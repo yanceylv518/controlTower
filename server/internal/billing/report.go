@@ -353,10 +353,10 @@ func FallbackPrice(snapshot RatioSnapshot, model, group string) (Price, string, 
 	}
 	cacheWrite := snapshot.CreateCacheRatio[model]
 	if cacheWrite == "" {
-		// Cache writes are only billable when the model has an explicit
-		// CreateCacheRatio. Do not invent a default price for models that do
-		// not expose a cache-write price in new-api.
-		cacheWrite = "0"
+		// new-api's GetCreateCacheRatio falls back to 1.25 when a model has
+		// no explicit CreateCacheRatio entry. Runtime billing ignores the
+		// accompanying "configured" boolean and charges this effective rate.
+		cacheWrite = "1.25"
 	}
 	cwr, e := decimalRat(cacheWrite)
 	if e != nil {
@@ -402,8 +402,8 @@ func defaultCompletionRatio(model string) string {
 
 // priceWithSnapshotCacheWrite keeps CT's stored price schedule aligned with
 // the new-api configuration frozen for the generated bill. Historical CT
-// rows may contain the old implicit input-price fallback; when the snapshot
-// has no explicit CreateCacheRatio for the model, cache writes are free.
+// rows may contain the old zero write price; when the snapshot has no
+// explicit CreateCacheRatio, new-api still charges input price * 1.25.
 func priceWithSnapshotCacheWrite(price Price, raw, model string) Price {
 	if strings.TrimSpace(raw) == "" {
 		return price
@@ -413,7 +413,10 @@ func priceWithSnapshotCacheWrite(price Price, raw, model string) Price {
 		return price
 	}
 	if _, configured := snapshot.CreateCacheRatio[model]; !configured {
-		price.CacheWrite = "0"
+		input, inputErr := decimalRat(price.Input)
+		if inputErr == nil {
+			price.CacheWrite = new(big.Rat).Mul(input, big.NewRat(5, 4)).FloatString(12)
+		}
 	}
 	return price
 }

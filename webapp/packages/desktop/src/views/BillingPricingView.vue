@@ -44,7 +44,7 @@ void state.reload();
         <el-table-column label="最大上下文长度" min-width="160"><template #default="s"><span :class="{muted:!s.row.max_context_tokens}">{{ formatTokens(s.row.max_context_tokens) }}</span></template></el-table-column>
         <el-table-column label="输入价格" min-width="125"><template #default="s">{{ formatPrice(s.row.input_price) }}</template></el-table-column>
         <el-table-column label="缓存读取价格" min-width="125"><template #default="s">{{ formatPrice(s.row.cache_price) }}</template></el-table-column>
-        <el-table-column label="缓存写入价格" min-width="125"><template #default="s">{{ s.row.cache_write_price_configured ? formatPrice(s.row.cache_write_price) : "—" }}</template></el-table-column>
+        <el-table-column label="缓存写入价格" min-width="125"><template #default="s">{{ s.row.cache_write_price ? formatPrice(s.row.cache_write_price) : "—" }}</template></el-table-column>
         <el-table-column label="输出价格" min-width="125"><template #default="s">{{ formatPrice(s.row.output_price) }}</template></el-table-column>
         <el-table-column label="价格来源" width="125"><template #default="s"><el-tag v-if="s.row.price_source" :type="s.row.price_source==='ct'?'success':'info'">{{ s.row.price_source==='ct'?'CT 配置':'new-api' }}</el-tag><el-tag v-else type="warning">未配置</el-tag></template></el-table-column>
         <el-table-column label="生效日期" width="120"><template #default="s">{{ s.row.effective_from || '—' }}</template></el-table-column>

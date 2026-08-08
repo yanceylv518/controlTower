@@ -15,18 +15,18 @@ func TestParseRatioSnapshotAndFallbackPrice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if price.Input != "4.000000000000" || price.Output != "12.000000000000" || price.Cache != "2.000000000000" || price.CacheWrite != "0.000000000000" || ratio != "1.2" {
+	if price.Input != "4.000000000000" || price.Output != "12.000000000000" || price.Cache != "2.000000000000" || price.CacheWrite != "5.000000000000" || ratio != "1.2" {
 		t.Fatalf("unexpected fallback: %#v ratio=%s", price, ratio)
 	}
 }
 
-func TestFallbackPriceDoesNotDefaultCacheWritePrice(t *testing.T) {
+func TestFallbackPriceUsesNewAPIDefaultCacheWritePrice(t *testing.T) {
 	snapshot, err := ParseRatioSnapshot(`{"ModelRatio":"{\"gpt-test\":2}","QuotaPerUnit":500000}`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	price, _, err := FallbackPrice(snapshot, "gpt-test", "")
-	if err != nil || price.CacheWrite != "0.000000000000" {
+	if err != nil || price.CacheWrite != "5.000000000000" {
 		t.Fatalf("unexpected unconfigured cache write price: %#v err=%v", price, err)
 	}
 }
@@ -55,13 +55,13 @@ func TestFallbackPriceUsesConfiguredCreateCacheRatio(t *testing.T) {
 	}
 }
 
-func TestBuildDetailsZerosHistoricalCacheWriteWithoutExplicitRatio(t *testing.T) {
+func TestBuildDetailsUsesNewAPIDefaultCacheWriteWithoutExplicitRatio(t *testing.T) {
 	day := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
 	rows := []AggregateRow{{ModelName: "priced", Day: day, CacheWriteTokens: 1_000_000}}
 	prices := []PriceRecord{{ModelName: "priced", Price: Price{EffectiveFrom: day, Input: "10", Output: "20", Cache: "1", CacheWrite: "12.5"}}}
 	snapshots := map[string]string{"2026-08-01": `{"ModelRatio":"{\"priced\":2}","QuotaPerUnit":500000}`}
 	items := BuildDetails(rows, prices, nil, snapshots)
-	if len(items) != 1 || items[0].CacheWritePrice != "0.000000" || items[0].Amount != "0.000000" {
+	if len(items) != 1 || items[0].CacheWritePrice != "12.500000" || items[0].Amount != "12.500000" {
 		t.Fatalf("unexpected cache write fallback: %#v", items)
 	}
 }

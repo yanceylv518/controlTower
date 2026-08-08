@@ -77,6 +77,20 @@ func TestBuildReconciliationCacheWriteComponentIsGapNotFullCost(t *testing.T) {
 	}
 }
 
+func TestBuildReconciliationDefaultCacheWriteMatchesNewAPI(t *testing.T) {
+	day := time.Date(2026, 8, 6, 0, 0, 0, 0, time.UTC)
+	rows := []AggregateRow{{UserID: 7, Username: "alice", ModelName: "m", Day: day, RequestCount: 1, CacheWriteTokens: 1_000_000, Quota: 6_250_000}}
+	prices := []PriceRecord{{ModelName: "m", Price: Price{EffectiveFrom: day, Input: "10", Output: "0", Cache: "0", CacheWrite: "0"}}}
+	snapshots := map[string]string{"2026-08-06": `{"ModelRatio":"{\"m\":5}","QuotaPerUnit":"500000"}`}
+	report := BuildReconciliation(rows, prices, nil, snapshots, nil, false)
+	if len(report.Rows) != 1 {
+		t.Fatalf("rows = %d", len(report.Rows))
+	}
+	if report.Rows[0].CTAmount != "12.500000" || report.Rows[0].Breakdown.CacheWritePolicy != "0.000000" || report.Rows[0].DiffAmount != "0.000000" {
+		t.Fatalf("default cache write did not match new-api: %+v", report.Rows[0])
+	}
+}
+
 // Signed diffs must survive parsing: the rebuild self-check counts mismatches
 // on BOTH sides, negative lane diffs reach the component totals, and rows
 // with negative diffs sort by magnitude instead of collapsing to zero.
