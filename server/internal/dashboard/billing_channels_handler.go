@@ -5,6 +5,7 @@ import (
 	ctauth "controltower/server/internal/auth"
 	"controltower/server/internal/billing"
 	"encoding/json"
+	"errors"
 	"math/big"
 	"net/http"
 	"strconv"
@@ -25,6 +26,7 @@ type BillingChannelStore interface {
 }
 type BillingChannelSource interface {
 	CurrentChannels(context.Context, string) ([]billing.ConfiguredChannel, error)
+	RatioSnapshot(context.Context, string) (string, error)
 }
 type BillingChannelsHandler struct {
 	Store  BillingChannelStore
@@ -100,6 +102,11 @@ func (h BillingChannelsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 		writeDashboardError(w, 500, "billing_channel_query_failed")
 		return
 	}
+	currency, e := currentBillingCurrency(r.Context(), h.Source, site)
+	if e != nil {
+		writeDashboardError(w, 500, "billing_currency_query_failed")
+		return
+	}
 	settings, e := h.Store.ListBillingChannelSettings(r.Context(), site)
 	if e != nil {
 		writeDashboardError(w, 500, "billing_channel_query_failed")
@@ -161,7 +168,22 @@ func (h BillingChannelsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 	if jobErr == nil {
 		generationJob = job
 	}
-	writeDashboardJSON(w, 200, map[string]any{"items": items, "details": details, "period": period, "generation_job": generationJob, "warning": warning, "currency": billing.CurrencyDisplayForSnapshots(snapshots)})
+	writeDashboardJSON(w, 200, map[string]any{"items": items, "details": details, "period": period, "generation_job": generationJob, "warning": warning, "currency": currency})
+}
+
+func currentBillingCurrency(ctx context.Context, source BillingCurrencySource, instanceID string) (billing.CurrencyDisplay, error) {
+	if source == nil {
+		return billing.CurrencyDisplay{}, errors.New("billing currency source is not configured")
+	}
+	raw, err := source.RatioSnapshot(ctx, instanceID)
+	if err != nil {
+		return billing.CurrencyDisplay{}, err
+	}
+	snapshot, err := billing.ParseRatioSnapshot(raw)
+	if err != nil {
+		return billing.CurrencyDisplay{}, err
+	}
+	return snapshot.Currency, nil
 }
 
 func billingPeriodQuery(r *http.Request) (time.Time, time.Time, string, error) {

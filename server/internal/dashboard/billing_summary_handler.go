@@ -23,7 +23,14 @@ type BillingSummaryStore interface {
 	LatestBillingBalances(context.Context, string, time.Time, []int64) (map[int64]int64, error)
 }
 
-type BillingSummaryHandler struct{ Store BillingSummaryStore }
+type BillingCurrencySource interface {
+	RatioSnapshot(context.Context, string) (string, error)
+}
+
+type BillingSummaryHandler struct {
+	Store  BillingSummaryStore
+	Source BillingCurrencySource
+}
 
 func (h BillingSummaryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -65,7 +72,11 @@ func (h BillingSummaryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		writeDashboardError(w, http.StatusInternalServerError, "billing_query_failed")
 		return
 	}
-	currency := billing.CurrencyDisplayForSnapshots(snapshots)
+	currency, err := currentBillingCurrency(r.Context(), h.Source, instanceID)
+	if err != nil {
+		writeDashboardError(w, http.StatusInternalServerError, "billing_currency_query_failed")
+		return
+	}
 	cacheKey := billing.SummaryCacheKey(instanceID, period+":"+jobID, userIDs)
 	if items, total, ok := billing.MonthlySummaryCache.Get(cacheKey); ok {
 		h.respondWithSearch(w, r, items, total, to, generationJob, currency)

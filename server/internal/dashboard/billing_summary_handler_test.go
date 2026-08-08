@@ -16,6 +16,21 @@ type fakeBillingSummaryStore struct {
 	missingJob bool
 }
 
+type fakeBillingLiveSource struct {
+	ratio string
+}
+
+func (f fakeBillingLiveSource) RatioSnapshot(context.Context, string) (string, error) {
+	if f.ratio != "" {
+		return f.ratio, nil
+	}
+	return `{"QuotaPerUnit":"500000","general_setting":"{\"quota_display_type\":\"USD\"}"}`, nil
+}
+
+func (f fakeBillingLiveSource) CurrentChannels(context.Context, string) ([]billing.ConfiguredChannel, error) {
+	return nil, nil
+}
+
 func (f fakeBillingSummaryStore) QueryBillingAggregates(context.Context, string, time.Time, time.Time, []int64) ([]billing.AggregateRow, error) {
 	return f.rows, nil
 }
@@ -40,7 +55,7 @@ func TestBillingSummaryDoesNotFallBackToAnotherInterval(t *testing.T) {
 	store := fakeBillingSummaryStore{missingJob: true, rows: []billing.AggregateRow{{UserID: 1, RequestCount: 99}}}
 	req := httptest.NewRequest("GET", "/api/dashboard/billing/summary?instance_id=site-no-job&month=2026-08", nil)
 	w := httptest.NewRecorder()
-	BillingSummaryHandler{Store: store}.ServeHTTP(w, req)
+	BillingSummaryHandler{Store: store, Source: fakeBillingLiveSource{}}.ServeHTTP(w, req)
 	if w.Code != 200 || !strings.Contains(w.Body.String(), `"items":[]`) || !strings.Contains(w.Body.String(), `"request_count":0`) {
 		t.Fatalf("unexpected response: %d %s", w.Code, w.Body.String())
 	}
@@ -68,7 +83,7 @@ func TestBillingSummaryPaginationDoesNotChangeTotals(t *testing.T) {
 	}}
 	req := httptest.NewRequest("GET", "/api/dashboard/billing/summary?instance_id=site-a&month=2026-08&page=2&page_size=1", nil)
 	w := httptest.NewRecorder()
-	BillingSummaryHandler{Store: store}.ServeHTTP(w, req)
+	BillingSummaryHandler{Store: store, Source: fakeBillingLiveSource{}}.ServeHTTP(w, req)
 	if w.Code != 200 || !strings.Contains(w.Body.String(), `"total":2`) || !strings.Contains(w.Body.String(), `"amount":"3.000000"`) || !strings.Contains(w.Body.String(), `"generation_job":{"id":"job-1"`) {
 		t.Fatalf("unexpected response: %d %s", w.Code, w.Body.String())
 	}
@@ -83,8 +98,20 @@ func TestBillingSummaryCSVIncludesAllRows(t *testing.T) {
 	}}
 	req := httptest.NewRequest("GET", "/api/dashboard/billing/summary?instance_id=site-a&month=2026-08&format=csv&page_size=1", nil)
 	w := httptest.NewRecorder()
-	BillingSummaryHandler{Store: store}.ServeHTTP(w, req)
+	BillingSummaryHandler{Store: store, Source: fakeBillingLiveSource{}}.ServeHTTP(w, req)
 	if w.Code != 200 || !strings.Contains(w.Body.String(), "alice") || !strings.Contains(w.Body.String(), "bob") {
 		t.Fatalf("unexpected CSV: %d %q", w.Code, w.Body.String())
+	}
+}
+
+func TestBillingSummaryUsesCurrentNewAPICurrency(t *testing.T) {
+	billing.MonthlySummaryCache.InvalidateInstance("site-a")
+	store := fakeBillingSummaryStore{}
+	source := fakeBillingLiveSource{ratio: `{"QuotaPerUnit":"500000","USDExchangeRate":"7.2","general_setting":"{\"quota_display_type\":\"CNY\"}"}`}
+	req := httptest.NewRequest("GET", "/api/dashboard/billing/summary?instance_id=site-a&month=2026-08", nil)
+	w := httptest.NewRecorder()
+	BillingSummaryHandler{Store: store, Source: source}.ServeHTTP(w, req)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"currency":{"type":"CNY","symbol":"¥","exchange_rate":"7.2"}`) {
+		t.Fatalf("unexpected response: %d %s", w.Code, w.Body.String())
 	}
 }

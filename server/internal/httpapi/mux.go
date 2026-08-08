@@ -162,7 +162,7 @@ func NewMux(options Options) *http.ServeMux {
 		mux.Handle("/api/dashboard/billing/models", protect(dashboard.BillingModelsHandler{Store: billingModelStore, Source: dashboard.BillingReadonlySource{Handler: passthrough}}))
 	}
 	if billingSummaryStore, ok := any(options.Store).(dashboard.BillingSummaryStore); ok {
-		mux.Handle("GET /api/dashboard/billing/summary", protect(dashboard.BillingSummaryHandler{Store: billingSummaryStore}))
+		mux.Handle("GET /api/dashboard/billing/summary", protect(dashboard.BillingSummaryHandler{Store: billingSummaryStore, Source: dashboard.BillingReadonlySource{Handler: passthrough}}))
 		mux.Handle("GET /api/dashboard/billing/detail", protect(dashboard.BillingDetailHandler{Store: billingSummaryStore}))
 		mux.Handle("GET /api/dashboard/billing/log-export", protect(dashboard.BillingLogExportHandler{Store: billingSummaryStore, Source: dashboard.BillingReadonlySource{Handler: passthrough}}))
 		mux.Handle("GET /api/dashboard/billing/reconciliation", protect(dashboard.BillingReconciliationHandler{Store: billingSummaryStore}))

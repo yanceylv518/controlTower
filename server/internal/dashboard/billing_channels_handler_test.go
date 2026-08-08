@@ -69,7 +69,7 @@ func runChannelRead(t *testing.T, store *fakeBillingChannelReadStore, jobID, for
 		query += "&format=" + format
 	}
 	recorder := httptest.NewRecorder()
-	BillingChannelsHandler{Store: store}.ServeHTTP(recorder, httptest.NewRequest("GET", query, nil))
+	BillingChannelsHandler{Store: store, Source: fakeBillingLiveSource{}}.ServeHTTP(recorder, httptest.NewRequest("GET", query, nil))
 	return recorder
 }
 
@@ -120,5 +120,18 @@ func TestBillingChannelsCSVUsesRequestedJobVersion(t *testing.T) {
 	}
 	if store.queriedJobID != "requested" || !strings.Contains(recorder.Body.String(), ",37,") || strings.Contains(recorder.Body.String(), ",99,") {
 		t.Fatalf("queried job=%q csv=%s", store.queriedJobID, recorder.Body.String())
+	}
+}
+
+func TestBillingChannelsUsesCurrentNewAPICurrency(t *testing.T) {
+	from, _ := time.ParseInLocation("2006-01-02 15:04:05", "2026-07-01 00:00:00", billing.BusinessLocation)
+	to := from.AddDate(0, 1, 0)
+	store := &fakeBillingChannelReadStore{latest: channelReadJob("latest", "complete", from, to), rowsByJob: map[string][]billing.AggregateRow{"latest": {}}}
+	source := fakeBillingLiveSource{ratio: `{"QuotaPerUnit":"500000","USDExchangeRate":"7.2","general_setting":"{\"quota_display_type\":\"CNY\"}"}`}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest("GET", "/api/dashboard/billing/channels?instance_id=site-a&from=2026-07-01+00%3A00%3A00&to=2026-08-01+00%3A00%3A00", nil)
+	BillingChannelsHandler{Store: store, Source: source}.ServeHTTP(recorder, request)
+	if recorder.Code != 200 || !strings.Contains(recorder.Body.String(), `"currency":{"type":"CNY","symbol":"¥","exchange_rate":"7.2"}`) {
+		t.Fatalf("unexpected response: %d %s", recorder.Code, recorder.Body.String())
 	}
 }
