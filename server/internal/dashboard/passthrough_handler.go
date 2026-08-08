@@ -206,7 +206,7 @@ func (h *PassthroughHandler) RatioSnapshotForBilling(ctx context.Context, site s
 	if !configured {
 		return "", fmt.Errorf("readonly database is not configured for %s", site)
 	}
-	rows, err := db.QueryContext(ctx, "SELECT `key`,value FROM options WHERE `key` IN ('ModelRatio','CompletionRatio','CacheRatio','CreateCacheRatio','GroupRatio','QuotaPerUnit','USDExchangeRate','DisplayInCurrencyEnabled','general_setting')")
+	rows, err := db.QueryContext(ctx, "SELECT `key`,value FROM options WHERE `key` IN ('ModelRatio','CompletionRatio','CacheRatio','CreateCacheRatio','GroupRatio','QuotaPerUnit','USDExchangeRate','DisplayInCurrencyEnabled','general_setting','general_setting.quota_display_type','general_setting.custom_currency_symbol','general_setting.custom_currency_exchange_rate')")
 	if err != nil {
 		return "", err
 	}

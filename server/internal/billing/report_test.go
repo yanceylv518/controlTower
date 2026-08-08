@@ -150,3 +150,33 @@ func TestAmountFromQuota(t *testing.T) {
 		t.Fatalf("unexpected amount: %v err=%v", amount, err)
 	}
 }
+
+// The authoritative storage shape, verified against new-api source
+// (setting/config/config.go SaveToDB): one dotted option key per field with
+// bare values. There is no single "general_setting" JSON blob in options.
+func TestParseRatioSnapshotCurrencyFromDottedKeys(t *testing.T) {
+	raw := `{"QuotaPerUnit":"500000","USDExchangeRate":"7.2","general_setting.quota_display_type":"CNY"}`
+	snapshot, err := ParseRatioSnapshot(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Currency.Type != "CNY" || snapshot.Currency.Symbol != "¥" || snapshot.Currency.ExchangeRate != "7.2" {
+		t.Fatalf("unexpected CNY currency: %#v", snapshot.Currency)
+	}
+	custom := `{"QuotaPerUnit":"500000","general_setting.quota_display_type":"CUSTOM","general_setting.custom_currency_symbol":"HK$","general_setting.custom_currency_exchange_rate":"7.8"}`
+	snapshot, err = ParseRatioSnapshot(custom)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Currency.Type != "CUSTOM" || snapshot.Currency.Symbol != "HK$" || snapshot.Currency.ExchangeRate != "7.8" {
+		t.Fatalf("unexpected custom currency: %#v", snapshot.Currency)
+	}
+	tokens := `{"QuotaPerUnit":"500000","general_setting.quota_display_type":"TOKENS"}`
+	snapshot, err = ParseRatioSnapshot(tokens)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Currency.Type != "TOKENS" || snapshot.Currency.Symbol != "" {
+		t.Fatalf("unexpected tokens display: %#v", snapshot.Currency)
+	}
+}

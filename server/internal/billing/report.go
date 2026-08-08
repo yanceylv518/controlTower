@@ -187,6 +187,30 @@ func ParseRatioSnapshot(raw string) (RatioSnapshot, error) {
 
 func parseCurrencyDisplay(outer map[string]json.RawMessage) CurrencyDisplay {
 	result := CurrencyDisplay{Type: "USD", Symbol: "$", ExchangeRate: "1"}
+	// new-api's config manager persists GeneralSetting as one dotted option
+	// key per field with bare values (config.SaveToDB: name+"."+key), NOT as
+	// a single JSON blob. The dotted keys are the authoritative source; the
+	// blob branch below is kept only as a compatibility fallback.
+	if displayType := rawJSONString(outer["general_setting.quota_display_type"]); displayType != "" {
+		result.Type = strings.ToUpper(strings.TrimSpace(displayType))
+		switch result.Type {
+		case "CNY":
+			result.Symbol = "¥"
+			result.ExchangeRate = rawJSONNumber(outer["USDExchangeRate"], "7.3")
+		case "CUSTOM":
+			result.Symbol = strings.TrimSpace(rawJSONString(outer["general_setting.custom_currency_symbol"]))
+			if result.Symbol == "" {
+				result.Symbol = "¤"
+			}
+			result.ExchangeRate = rawJSONNumber(outer["general_setting.custom_currency_exchange_rate"], "1")
+		case "TOKENS":
+			result.Symbol = ""
+			result.ExchangeRate = "1"
+		default:
+			result.Type, result.Symbol, result.ExchangeRate = "USD", "$", "1"
+		}
+		return result
+	}
 	var encoded string
 	if raw := outer["general_setting"]; len(raw) > 0 && json.Unmarshal(raw, &encoded) == nil {
 		var setting struct {
@@ -227,6 +251,17 @@ func parseCurrencyDisplay(outer map[string]json.RawMessage) CurrencyDisplay {
 		}
 	}
 	return result
+}
+
+func rawJSONString(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var value string
+	if json.Unmarshal(raw, &value) == nil {
+		return value
+	}
+	return ""
 }
 
 func rawJSONNumber(raw json.RawMessage, fallback string) string {
