@@ -115,3 +115,22 @@ func TestBillingSummaryUsesCurrentNewAPICurrency(t *testing.T) {
 		t.Fatalf("unexpected response: %d %s", w.Code, w.Body.String())
 	}
 }
+
+type failingBillingCurrencySource struct{}
+
+func (failingBillingCurrencySource) RatioSnapshot(context.Context, string) (string, error) {
+	return "", context.DeadlineExceeded
+}
+
+// A dead new-api connection must not take down historical bill viewing:
+// currency degrades to the snapshot-derived default instead of a 500.
+func TestBillingSummaryDegradesCurrencyWhenSourceUnavailable(t *testing.T) {
+	billing.MonthlySummaryCache.InvalidateInstance("site-degrade")
+	store := fakeBillingSummaryStore{rows: []billing.AggregateRow{{UserID: 1, RequestCount: 1}}}
+	req := httptest.NewRequest("GET", "/api/dashboard/billing/summary?instance_id=site-degrade&month=2026-08", nil)
+	w := httptest.NewRecorder()
+	BillingSummaryHandler{Store: store, Source: failingBillingCurrencySource{}}.ServeHTTP(w, req)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"currency":{"type":"USD","symbol":"$","exchange_rate":"1"}`) {
+		t.Fatalf("unexpected response: %d %s", w.Code, w.Body.String())
+	}
+}

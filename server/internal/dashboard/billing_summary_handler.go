@@ -72,10 +72,15 @@ func (h BillingSummaryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		writeDashboardError(w, http.StatusInternalServerError, "billing_query_failed")
 		return
 	}
-	currency, err := currentBillingCurrency(r.Context(), h.Source, instanceID)
-	if err != nil {
-		writeDashboardError(w, http.StatusInternalServerError, "billing_currency_query_failed")
-		return
+	currency, currencyErr := currentBillingCurrency(r.Context(), h.Source, instanceID)
+	if currencyErr != nil {
+		// Currency is display sugar. A dead new-api connection must not take
+		// down historical bill viewing - fall back to the generation-time
+		// snapshot currency (defaults to USD when absent).
+		currency = billing.CurrencyDisplayForSnapshots(snapshots)
+		if currency.Type == "" {
+			currency = billing.CurrencyDisplay{Type: "USD", Symbol: "$", ExchangeRate: "1"}
+		}
 	}
 	cacheKey := billing.SummaryCacheKey(instanceID, period+":"+jobID, userIDs)
 	if items, total, ok := billing.MonthlySummaryCache.Get(cacheKey); ok {

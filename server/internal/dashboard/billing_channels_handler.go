@@ -102,11 +102,7 @@ func (h BillingChannelsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 		writeDashboardError(w, 500, "billing_channel_query_failed")
 		return
 	}
-	currency, e := currentBillingCurrency(r.Context(), h.Source, site)
-	if e != nil {
-		writeDashboardError(w, 500, "billing_currency_query_failed")
-		return
-	}
+	currency, currencyErr := currentBillingCurrency(r.Context(), h.Source, site)
 	settings, e := h.Store.ListBillingChannelSettings(r.Context(), site)
 	if e != nil {
 		writeDashboardError(w, 500, "billing_channel_query_failed")
@@ -167,6 +163,15 @@ func (h BillingChannelsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 	var generationJob any
 	if jobErr == nil {
 		generationJob = job
+	}
+	if currencyErr != nil {
+		// Currency is display sugar. A dead new-api connection must not take
+		// down historical bill viewing - fall back to the generation-time
+		// snapshot currency (defaults to USD when absent).
+		currency = billing.CurrencyDisplayForSnapshots(snapshots)
+		if currency.Type == "" {
+			currency = billing.CurrencyDisplay{Type: "USD", Symbol: "$", ExchangeRate: "1"}
+		}
 	}
 	writeDashboardJSON(w, 200, map[string]any{"items": items, "details": details, "period": period, "generation_job": generationJob, "warning": warning, "currency": currency})
 }
