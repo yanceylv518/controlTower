@@ -12,6 +12,7 @@ const loading = ref(false), saving = ref(false), dirty = ref(false), activeTab =
 const mode = ref<"observe" | "confirm" | "auto">("observe");
 const bases = ref<ChannelBaseValue[]>([]), states = ref<TuningContinuousState[]>([]), events = ref<TuningRecommendation[]>([]);
 const modelQuery = ref(""), activeModel = ref("");
+const eventModelFilter = ref("__current__"), eventRuleFilter = ref(""), eventChannelQuery = ref("");
 const defaults = () => ({ sensitivity: 1, otps_cap: 1.5, circuit_threshold: .1, recovery_threshold: .2, circuit_error_rate: .3, recovery_error_rate: .1, silent_minutes: 5, probe_interval_seconds: 5, probe_count: 10, soft_start_multiplier: .2, window_minutes: 15, min_samples: 20, sparse_lookback_minutes: 360 });
 const policy = reactive<TuningPolicy>({ scheduling: { window_minutes: 15, min_samples: 20, sparse_min_samples: 10, sparse_lookback_minutes: 360 }, continuous: defaults(), dispatch_modes: {} });
 const siteID = computed(() => filters.site_id || "");
@@ -29,6 +30,17 @@ const activeRows = computed(() => bases.value.filter(x => x.model_name === activ
 const stateMap = computed(() => new Map(states.value.map(x => [`${x.channel_id}:${x.model_name}`, x])));
 const stateFor = (row: ChannelBaseValue) => stateMap.value.get(`${row.channel_id}:${row.model_name}`);
 const recentEvents = computed(() => events.value.filter(x => ["weight_observed", "weight_write", "manual_takeover", "auto_paused", "circuit_opened", "probe_started", "probe_failed", "circuit_recovered"].includes(x.rule)));
+const eventModel = (item: TuningRecommendation) => String(item.evidence?.model ?? bases.value.find(row => row.channel_id === item.channel_id)?.model_name ?? "");
+const filteredEvents = computed(() => {
+  const selectedModel = eventModelFilter.value === "__current__" ? activeModel.value : eventModelFilter.value;
+  const channelQuery = eventChannelQuery.value.trim().toLowerCase();
+  return recentEvents.value.filter(item =>
+    (!selectedModel || eventModel(item) === selectedModel)
+    && (!eventRuleFilter.value || item.rule === eventRuleFilter.value)
+    && (!channelQuery || item.channel_name.toLowerCase().includes(channelQuery) || String(item.channel_id).includes(channelQuery)),
+  );
+});
+const eventRuleOptions = computed(() => [...new Set(recentEvents.value.map(item => item.rule))]);
 const counts = computed(() => models.value.reduce((v, model) => { v[policy.dispatch_modes[model] || "off"]++; return v; }, { off: 0, observe: 0, auto: 0 }));
 const abnormal = computed(() => states.value.filter(x => x.phase !== "normal" || x.paused_reason).length);
 const modelAbnormal = (model: string) => bases.value.filter(row => row.model_name === model && stateFor(row) && (stateFor(row)?.phase !== "normal" || stateFor(row)?.paused_reason)).length;
@@ -131,7 +143,25 @@ onBeforeUnmount(() => { if (refreshTimer) clearInterval(refreshTimer); });
         </div>
       </el-card>
     </el-tab-pane>
-    <el-tab-pane label="变更记录" name="events"><div class="summary compact"><div><span>近 7 天自动调权</span><b>{{ eventCount(7,'weight_write') }}</b></div><div><span>近 7 天熔断</span><b>{{ eventCount(7,'circuit_opened') }}</b></div><div><span>近 7 天恢复</span><b>{{ eventCount(7,'circuit_recovered') }}</b></div><div><span>近 7 天人工接管</span><b>{{ eventCount(7,'manual_takeover') }}</b></div></div><el-card shadow="never"><template #header><div class="head"><div><b>系统做过什么</b><small>自动写入、暂停、熔断和恢复都会记录</small></div></div></template><el-timeline v-if="recentEvents.length"><el-timeline-item v-for="item in recentEvents" :key="item.id" :timestamp="formatTime(item.created_at)" placement="top"><el-tag :type="item.rule==='weight_write'?'success':'warning'">{{ eventName(item.rule) }}</el-tag><strong class="channel">{{ item.channel_name }}</strong><span>权重 {{ item.current_weight }} → {{ item.proposed_weight }}</span></el-timeline-item></el-timeline><el-empty v-else description="暂无调权记录"/></el-card></el-tab-pane>
+    <el-tab-pane label="变更记录" name="events">
+      <div class="summary compact"><div><span>近 7 天自动调权</span><b>{{ eventCount(7,'weight_write') }}</b></div><div><span>近 7 天熔断</span><b>{{ eventCount(7,'circuit_opened') }}</b></div><div><span>近 7 天恢复</span><b>{{ eventCount(7,'circuit_recovered') }}</b></div><div><span>近 7 天人工接管</span><b>{{ eventCount(7,'manual_takeover') }}</b></div></div>
+      <el-card shadow="never"><template #header><div class="head"><div><b>系统做过什么</b><small>按模型、渠道和事件类型筛选；共 {{ filteredEvents.length }} 条</small></div></div></template>
+        <div class="event-filters">
+          <el-select v-model="eventModelFilter" placeholder="模型" style="width:220px"><el-option label="当前模型" value="__current__"/><el-option label="全部模型" value=""/><el-option v-for="model in models" :key="model" :label="model" :value="model"/></el-select>
+          <el-select v-model="eventRuleFilter" clearable placeholder="全部事件" style="width:170px"><el-option v-for="rule in eventRuleOptions" :key="rule" :label="eventName(rule)" :value="rule"/></el-select>
+          <el-input v-model="eventChannelQuery" clearable placeholder="搜索渠道名称或 ID" style="width:240px"/>
+        </div>
+        <el-table v-if="filteredEvents.length" :data="filteredEvents" size="small" max-height="calc(100vh - 330px)">
+          <el-table-column label="时间" width="170"><template #default="{row}">{{ formatTime(row.created_at) }}</template></el-table-column>
+          <el-table-column label="模型" min-width="180"><template #default="{row}">{{ eventModel(row) || '—' }}</template></el-table-column>
+          <el-table-column prop="channel_name" label="渠道" min-width="190"><template #default="{row}"><b>{{ row.channel_name }}</b><small class="channel-id">ID {{ row.channel_id }}</small></template></el-table-column>
+          <el-table-column label="事件" width="130"><template #default="{row}"><el-tag :type="row.rule==='weight_write'?'success':row.rule==='circuit_opened'?'danger':'warning'">{{ eventName(row.rule) }}</el-tag></template></el-table-column>
+          <el-table-column label="权重变化" width="130"><template #default="{row}">{{ row.current_weight }} → {{ row.proposed_weight }}</template></el-table-column>
+          <el-table-column label="模式" width="100"><template #default="{row}">{{ row.mode_at_creation==='auto'?'自动执行':row.mode_at_creation==='observe'?'只观察':'关闭' }}</template></el-table-column>
+        </el-table>
+        <el-empty v-else description="当前筛选条件下暂无记录"/>
+      </el-card>
+    </el-tab-pane>
     <el-tab-pane label="规则设置" name="settings"><el-card shadow="never"><template #header><div class="head"><div><b>系统如何计算权重</b><small>通常保持默认值即可</small></div></div></template>
       <div class="flow"><div><i>1</i><b>同模型比较</b><span>只比较相同模型的渠道</span></div><div><i>2</i><b>综合评分</b><span>速度、缓存、输出与错误</span></div><div><i>3</i><b>计算权重</b><span>基础权重 × 综合倍率</span></div><div><i>4</i><b>安全执行</b><span>自动执行才写入线上</span></div></div>
       <el-form label-position="top"><div class="params"><el-form-item label="调整灵敏度"><el-input-number v-model="policy.continuous.sensitivity" :min=".1" :max="5" :step=".1" @change="dirty=true"/><small>放大或缩小渠道相对差异；1 为标准</small></el-form-item><el-form-item label="输出加权上限"><el-input-number v-model="policy.continuous.otps_cap" :min="1" :max="3" :step=".1" @change="dirty=true"/><small>限制 OTPS 输出系数，最终综合倍率仍封顶 1.5</small></el-form-item><el-form-item label="评估窗口（分钟）"><el-input-number v-model="policy.continuous.window_minutes" :min="1" @change="dirty=true"/><small>每次计算使用最近多少分钟的指标</small></el-form-item><el-form-item label="每渠道最少请求数"><el-input-number v-model="policy.continuous.min_samples" :min="1" @change="dirty=true"/><small>低于此数量不参与本轮比较和调权</small></el-form-item></div></el-form>
@@ -186,4 +216,5 @@ onBeforeUnmount(() => { if (refreshTimer) clearInterval(refreshTimer); });
 .help-guide .parameter-guide{gap:0;border:1px solid #e5eaf2;border-radius:8px;overflow:hidden}.help-guide .parameter-guide>div{grid-template-columns:118px 1fr;padding:10px 12px;border-bottom:1px solid #edf1f6}.help-guide .parameter-guide>div:last-child{border-bottom:0}.help-guide .parameter-guide dt{color:#253858}.help-guide .help-note{margin-top:10px;padding:9px 11px;border-radius:6px;background:#f5f7fa;color:#606b7d;font-size:13px}
 .evaluation{display:flex;flex-direction:column;gap:2px}.evaluation small{color:#8491a5}.factors{color:#596579;font-size:12px;white-space:normal;line-height:1.75}.positive{color:#21a675;font-weight:600}.negative{color:#d84a4a;font-weight:600}
 .evidence-collapse{margin:0 0 8px}.evidence-collapse :deep(.el-collapse-item__header){height:34px;padding:0 10px;color:#596579;font-size:12px}.evidence-grid{display:grid;gap:6px;padding:4px 10px 10px}.evidence-row{display:grid;grid-template-columns:minmax(150px,1.2fr) 2fr 1fr 1fr 1fr;gap:10px;color:#596579;font-size:12px}.evidence-row b{color:#17233b}.evidence-row span{white-space:nowrap}
+.event-filters{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:12px}.channel-id{display:block;color:#8491a5;font-weight:400}
 </style>
