@@ -209,6 +209,11 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 			}
 			if state.Phase == "circuit" {
 				if mode == "auto" && state.NextProbeAt != nil && !now.Before(*state.NextProbeAt) {
+					// The probe counters are shared with observe-mode passive
+					// accumulation. An active round must start from zero so a
+					// mode switch cannot dilute the probe success ratio with
+					// leftover passive evidence.
+					state.ProbeAttempts, state.ProbeSuccesses, state.ProbeDurationSum = 0, 0, 0
 					rec := continuousEvent(id, base, state, "probe_started", mode, now)
 					if commandID, probeErr := cs.CreateContinuousProbe(rec, model, p.ProbeCount, p.ProbeIntervalSeconds, now); probeErr == nil {
 						state.Phase = "probing"

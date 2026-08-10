@@ -314,7 +314,7 @@ func TestObservedCircuitWaitsForPassiveRecoveryEvidence(t *testing.T) {
 	p := DefaultPolicy()
 	p.DispatchModes = map[string]string{"m": "observe"}
 	f := &continuousFake{
-		bases: []ChannelBaseValue{{ChannelID: 1, ModelName: "m", Models: []string{"m"}, BaseWeight: 100}},
+		bases:   []ChannelBaseValue{{ChannelID: 1, ModelName: "m", Models: []string{"m"}, BaseWeight: 100}},
 		metrics: []ChannelMetric{{ChannelID: 1, RequestCount: 9}},
 		states: map[int64]ContinuousState{1: {
 			InstanceID: "i", ChannelID: 1, ModelName: "m", KError: .2,
@@ -372,5 +372,33 @@ func TestLegacyErrorRateRoundTripsReliabilityFactor(t *testing.T) {
 	}
 	if legacyErrorRate(.1) != .30 {
 		t.Fatalf("deep-decayed legacy state must seed at the circuit rate")
+	}
+}
+
+// Probe counters are shared between observe-mode passive accumulation and
+// auto-mode active rounds. Switching a channel to auto with leftover passive
+// counts must start the active probe round from zero.
+func TestActiveProbeRoundDiscardsPassiveResidue(t *testing.T) {
+	now := time.Now().UTC()
+	due := now.Add(-time.Minute)
+	p := DefaultPolicy()
+	p.DispatchModes = map[string]string{"m": "auto"}
+	f := &continuousFake{
+		bases: []ChannelBaseValue{{ChannelID: 1, ModelName: "m", Models: []string{"m"}, BaseWeight: 100}},
+		states: map[int64]ContinuousState{1: {
+			InstanceID: "i", ChannelID: 1, ModelName: "m", KError: .2,
+			SmoothedErrorRate: .3, Phase: "circuit", NextProbeAt: &due,
+			ProbeAttempts: 7, ProbeSuccesses: 7, ProbeDurationSum: 3,
+		}},
+	}
+
+	NewEngine(f).evaluateContinuous("i", PolicyRecord{InstanceID: "i", Policy: p, Mode: "auto"}, now, f)
+
+	state := f.states[1]
+	if len(f.probes) != 1 || state.Phase != "probing" {
+		t.Fatalf("due circuit must start an active probe: probes=%d %#v", len(f.probes), state)
+	}
+	if state.ProbeAttempts != 0 || state.ProbeSuccesses != 0 || state.ProbeDurationSum != 0 {
+		t.Fatalf("active round must discard passive residue: %#v", state)
 	}
 }
