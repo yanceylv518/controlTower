@@ -172,7 +172,32 @@ func TestDirectControlIntegration(t *testing.T) {
 		time.Sleep(200 * time.Millisecond)
 	}
 
-	// 4. A site without direct config keeps the agent queue path untouched.
+	// 4. A stale engine upsert must not resurrect the completed probe round:
+	// simulate the tick race by re-persisting the pre-completion state.
+	stale := tuning.ContinuousState{InstanceID: site, ChannelID: 9, ModelName: "m", KError: 1, Phase: "probing", ProbeCommandID: &probeID, UpdatedAt: now}
+	if err := inner.PutContinuousState(stale); err != nil {
+		t.Fatalf("stale persist: %v", err)
+	}
+	var attempts int
+	var pending *string
+	if err := db.QueryRow("SELECT probe_attempts, probe_command_id FROM tuning_continuous_states WHERE channel_id=9 AND model_name='m'").Scan(&attempts, &pending); err != nil {
+		t.Fatalf("guard check: %v", err)
+	}
+	if attempts != 3 || pending != nil {
+		t.Fatalf("stale upsert resurrected the completed round: attempts=%d pending=%v", attempts, pending)
+	}
+	// The engine's own reset (NULL command id) must still pass the guard.
+	if err := inner.PutContinuousState(tuning.ContinuousState{InstanceID: site, ChannelID: 9, ModelName: "m", KError: 1, Phase: "normal", UpdatedAt: now}); err != nil {
+		t.Fatalf("reset persist: %v", err)
+	}
+	if err := db.QueryRow("SELECT probe_attempts, probe_command_id FROM tuning_continuous_states WHERE channel_id=9 AND model_name='m'").Scan(&attempts, &pending); err != nil {
+		t.Fatalf("reset check: %v", err)
+	}
+	if attempts != 0 || pending != nil {
+		t.Fatalf("legitimate fold-reset must pass the guard: attempts=%d pending=%v", attempts, pending)
+	}
+
+	// 5. A site without direct config keeps the agent queue path untouched.
 	queueRec := tuning.Recommendation{ID: "smoke-rec-3-" + runID, InstanceID: plainSite, ChannelID: 5, ChannelName: "queued", CreatedAt: now, Rule: "weight_write", Evidence: map[string]any{}, CurrentWeight: 1, ProposedWeight: 2, ModeAtCreation: "auto"}
 	queueID, err := store.CreateContinuousWeightChange(queueRec, "system:auto", now)
 	if err != nil {

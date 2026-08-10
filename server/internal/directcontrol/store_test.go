@@ -127,3 +127,25 @@ func TestWaitForProbeMarkerIgnoresForeignRounds(t *testing.T) {
 		t.Fatal("a stale marker from another round must not release the probes")
 	}
 }
+
+func TestRecordExecutedWriteRetriesThenReportsSuccess(t *testing.T) {
+	calls := 0
+	id, err := recordExecutedWrite(func() (string, error) {
+		calls++
+		if calls == 1 {
+			return "", fmt.Errorf("lock wait timeout")
+		}
+		return "cmd-9", nil
+	})
+	if err != nil || id != "cmd-9" || calls != 2 {
+		t.Fatalf("one transient failure must be retried: id=%q err=%v calls=%d", id, err, calls)
+	}
+}
+
+func TestRecordExecutedWriteNeverForksFromReality(t *testing.T) {
+	calls := 0
+	id, err := recordExecutedWrite(func() (string, error) { calls++; return "", fmt.Errorf("boom") })
+	if err != nil || id != "" || calls != 2 {
+		t.Fatalf("a write that reached new-api must be reported as written even without a paper trail: id=%q err=%v calls=%d", id, err, calls)
+	}
+}

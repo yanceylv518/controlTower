@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"time"
 
 	"controltower/internal/channelcontrol"
@@ -106,7 +107,25 @@ func (s Store) CreateContinuousWeightChange(v tuning.Recommendation, actor strin
 	if err := executeWeightUpdate(ctx, controller, v); err != nil {
 		return "", fmt.Errorf("direct weight write: %w", err)
 	}
-	return s.Store.RecordDirectWeightChange(v, actor, now)
+	return recordExecutedWrite(func() (string, error) { return s.Store.RecordDirectWeightChange(v, actor, now) })
+}
+
+// recordExecutedWrite persists the paper trail of a write that ALREADY
+// reached new-api. If persisting fails twice the write is still reported as
+// a success: returning an error here would fork CT's belief from reality —
+// the engine would skip LastWrittenWeight, the next snapshot would disagree
+// and mislabel our own write as a manual takeover with an unhealable pause.
+// The missing trail is only a logging problem; the state must track reality.
+func recordExecutedWrite(record func() (string, error)) (string, error) {
+	commandID, err := record()
+	if err == nil {
+		return commandID, nil
+	}
+	if commandID, err = record(); err == nil {
+		return commandID, nil
+	}
+	log.Printf("direct control: weight write reached new-api but recording its paper trail failed twice: %v", err)
+	return "", nil
 }
 
 func executeWeightUpdate(ctx context.Context, controller Controller, v tuning.Recommendation) error {
