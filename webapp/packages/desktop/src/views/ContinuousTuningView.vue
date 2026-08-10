@@ -148,21 +148,22 @@ onBeforeUnmount(() => { if (refreshTimer) clearInterval(refreshTimer); });
     </el-tab-pane>
     <el-tab-pane label="变更记录" name="events">
       <div class="summary compact"><div><span>近 7 天自动调权</span><b>{{ eventCount(7,'weight_write') }}</b></div><div><span>近 7 天熔断</span><b>{{ eventCount(7,'circuit_opened') }}</b></div><div><span>近 7 天恢复</span><b>{{ eventCount(7,'circuit_recovered') }}</b></div><div><span>近 7 天人工接管</span><b>{{ eventCount(7,'manual_takeover') }}</b></div></div>
-      <el-card shadow="never"><template #header><div class="head"><div><b>系统做过什么</b><small>按模型、渠道和事件类型筛选；共 {{ filteredEvents.length }} 条</small></div></div></template>
-        <div class="event-filters">
-          <el-select v-model="eventModelFilter" placeholder="模型" style="width:220px"><el-option label="全部模型" value=""/><el-option :label="`当前模型${activeModel ? `（${activeModel}）` : ''}`" value="__current__"/><el-option v-for="model in models" :key="model" :label="model" :value="model"/></el-select>
-          <el-select v-model="eventRuleFilter" clearable placeholder="全部事件" style="width:170px"><el-option v-for="rule in eventRuleOptions" :key="rule" :label="eventName(rule)" :value="rule"/></el-select>
-          <el-input v-model="eventChannelQuery" clearable placeholder="搜索渠道名称或 ID" style="width:240px"/>
+      <el-card shadow="never">
+        <div class="event-toolbar"><div class="event-filters">
+            <el-select v-model="eventModelFilter" placeholder="模型" style="width:220px"><el-option label="全部模型" value=""/><el-option :label="`当前模型${activeModel ? `（${activeModel}）` : ''}`" value="__current__"/><el-option v-for="model in models" :key="model" :label="model" :value="model"/></el-select>
+            <el-select v-model="eventRuleFilter" clearable placeholder="全部事件" style="width:170px"><el-option v-for="rule in eventRuleOptions" :key="rule" :label="eventName(rule)" :value="rule"/></el-select>
+            <el-input v-model="eventChannelQuery" clearable placeholder="搜索渠道名称或 ID" style="width:240px"/>
+          </div>
+          <el-pagination v-if="filteredEvents.length" v-model:current-page="eventPage" v-model:page-size="eventPageSize" layout="sizes, prev, pager, next" :page-sizes="[20,50,100]" :total="filteredEvents.length"/>
         </div>
-        <el-table v-if="filteredEvents.length" :data="pagedEvents" size="small" max-height="560">
+        <el-table v-if="filteredEvents.length" :data="pagedEvents" :fit="false" size="small" height="calc(100vh - 390px)">
           <el-table-column label="时间" width="170"><template #default="{row}">{{ formatTime(row.created_at) }}</template></el-table-column>
           <el-table-column label="模型" width="210" show-overflow-tooltip><template #default="{row}">{{ eventModel(row) || '—' }}</template></el-table-column>
-          <el-table-column prop="channel_name" label="渠道" min-width="300" show-overflow-tooltip><template #default="{row}"><b>{{ row.channel_name }}</b><small class="channel-id">ID {{ row.channel_id }}</small></template></el-table-column>
+          <el-table-column prop="channel_name" label="渠道" width="360" show-overflow-tooltip><template #default="{row}"><b>{{ row.channel_name }}</b><small class="channel-id">ID {{ row.channel_id }}</small></template></el-table-column>
           <el-table-column label="事件" width="145"><template #default="{row}"><el-tag :type="row.rule==='weight_write'?'success':row.rule==='circuit_opened'?'danger':'warning'">{{ eventName(row.rule) }}</el-tag></template></el-table-column>
           <el-table-column label="权重变化" width="125"><template #default="{row}">{{ row.current_weight }} → {{ row.proposed_weight }}</template></el-table-column>
           <el-table-column label="模式" width="90"><template #default="{row}">{{ row.mode_at_creation==='auto'?'自动':row.mode_at_creation==='observe'?'观察':'关闭' }}</template></el-table-column>
         </el-table>
-        <el-pagination v-if="filteredEvents.length" v-model:current-page="eventPage" v-model:page-size="eventPageSize" class="event-pagination" layout="total, sizes, prev, pager, next" :page-sizes="[20,50,100]" :total="filteredEvents.length"/>
         <el-empty v-else description="当前筛选条件下暂无记录"/>
       </el-card>
     </el-tab-pane>
@@ -220,5 +221,5 @@ onBeforeUnmount(() => { if (refreshTimer) clearInterval(refreshTimer); });
 .help-guide .parameter-guide{gap:0;border:1px solid #e5eaf2;border-radius:8px;overflow:hidden}.help-guide .parameter-guide>div{grid-template-columns:118px 1fr;padding:10px 12px;border-bottom:1px solid #edf1f6}.help-guide .parameter-guide>div:last-child{border-bottom:0}.help-guide .parameter-guide dt{color:#253858}.help-guide .help-note{margin-top:10px;padding:9px 11px;border-radius:6px;background:#f5f7fa;color:#606b7d;font-size:13px}
 .evaluation{display:flex;flex-direction:column;gap:2px}.evaluation small{color:#8491a5}.factors{color:#596579;font-size:12px;white-space:normal;line-height:1.75}.positive{color:#21a675;font-weight:600}.negative{color:#d84a4a;font-weight:600}
 .evidence-collapse{margin:0 0 8px}.evidence-collapse :deep(.el-collapse-item__header){height:34px;padding:0 10px;color:#596579;font-size:12px}.evidence-grid{display:grid;gap:6px;padding:4px 10px 10px}.evidence-row{display:grid;grid-template-columns:minmax(150px,1.2fr) 2fr 1fr 1fr 1fr;gap:10px;color:#596579;font-size:12px}.evidence-row b{color:#17233b}.evidence-row span{white-space:nowrap}
-.event-filters{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:12px}.channel-id{display:block;color:#8491a5;font-weight:400}.event-pagination{justify-content:flex-end;margin-top:14px}
+.event-toolbar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px 16px;margin-bottom:12px}.event-filters{display:flex;flex-wrap:wrap;gap:10px}.channel-id{display:block;color:#8491a5;font-weight:400}
 </style>
