@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-type continuousStore interface {
+type ContinuousStore interface {
 	ListChannelBaseValues(string, string) ([]ChannelBaseValue, error)
 	ListContinuousStates(string) ([]ContinuousState, error)
 	PutContinuousState(ContinuousState) error
@@ -27,7 +27,7 @@ const (
 
 // evaluateContinuous implements the v3.0 continuous dispatch state machine,
 // including B3 circuit breaking, active probes, and one-cycle soft start.
-func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, cs continuousStore) (int, int) {
+func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, cs ContinuousStore) (int, int) {
 	p := pr.Policy.Continuous
 	values, err := cs.ListChannelBaseValues(id, "")
 	if err != nil || len(values) == 0 {

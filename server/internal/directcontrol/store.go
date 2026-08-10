@@ -46,6 +46,11 @@ type Store struct {
 	sleep     func(context.Context, time.Duration)
 }
 
+// The engine discovers continuous-dispatch persistence via a runtime type
+// assertion that degrades to "tuning silently off" when unsatisfied; this
+// pins the wrapper to that contract at compile time instead.
+var _ tuning.ContinuousStore = Store{}
+
 func Wrap(inner mysqlstore.Store, secretKey string) Store {
 	return Store{Store: inner, secretKey: secretKey, factory: DefaultFactory, sleep: sleepContext}
 }

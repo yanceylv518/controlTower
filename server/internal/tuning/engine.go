@@ -42,7 +42,7 @@ func (e *Engine) Tick(now time.Time) {
 		log.Printf("tuning list sites failed: %v", err)
 		return
 	}
-	cs, ok := e.store.(continuousStore)
+	cs, ok := e.store.(ContinuousStore)
 	if !ok {
 		log.Printf("tuning continuous store unavailable")
 		return
