@@ -15,6 +15,7 @@ import (
 	"controltower/server/internal/billing"
 	"controltower/server/internal/config"
 	"controltower/server/internal/dashboard"
+	"controltower/server/internal/directcontrol"
 	"controltower/server/internal/httpapi"
 	"controltower/server/internal/mysqlstore"
 	"controltower/server/internal/settings"
@@ -92,14 +93,14 @@ func run() error {
 		startNotificationRunner(store, settingsProvider, time.Duration(cfg.NotificationIntervalSeconds)*time.Second)
 		startChannelSnapshotHistoryCleanup(store)
 		startRetentionRunner(store, settingsProvider)
-		startTuningRunner(store)
+		startTuningRunner(directcontrol.Wrap(store, cfg.SecretKey))
 	}
 	startBillingJobRunner(store, cfg.SecretKey, time.Duration(cfg.BillingPagePauseMilliseconds)*time.Millisecond)
 	startReadonlyLogRollupRunner(store, cfg.SecretKey)
 
 	server := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           httpapi.NewMux(httpapi.Options{AgentToken: cfg.AgentToken, DashboardToken: cfg.DashboardToken, Store: store, TuningStore: store, AuthManager: authManager, AgentTokenPepper: cfg.AgentTokenPepper, SecretKey: cfg.SecretKey, NotificationMaxAttempts: cfg.NotificationMaxAttempts, CommandExpiry: time.Duration(cfg.CommandExpiryMinutes) * time.Minute, SettingsProvider: settingsProvider, BillingPagePause: time.Duration(cfg.BillingPagePauseMilliseconds) * time.Millisecond}),
+		Handler:           httpapi.NewMux(httpapi.Options{AgentToken: cfg.AgentToken, DashboardToken: cfg.DashboardToken, Store: store, TuningStore: directcontrol.Wrap(store, cfg.SecretKey), AuthManager: authManager, AgentTokenPepper: cfg.AgentTokenPepper, SecretKey: cfg.SecretKey, NotificationMaxAttempts: cfg.NotificationMaxAttempts, CommandExpiry: time.Duration(cfg.CommandExpiryMinutes) * time.Minute, SettingsProvider: settingsProvider, BillingPagePause: time.Duration(cfg.BillingPagePauseMilliseconds) * time.Millisecond}),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	log.Printf("control tower server listening on %s", cfg.ListenAddr)
@@ -126,7 +127,7 @@ func startReadonlyLogRollupRunner(store mysqlstore.Store, secretKey string) {
 	}()
 }
 
-func startTuningRunner(store mysqlstore.Store) {
+func startTuningRunner(store tuning.Store) {
 	runner := tuning.NewEngine(store)
 	go func() {
 		if err := runner.Run(context.Background()); err != nil && !errors.Is(err, context.Canceled) {

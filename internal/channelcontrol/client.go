@@ -9,11 +9,8 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	neturl "net/url"
-	"os"
 	"strconv"
 	"strings"
-
-	"controltower/agent/internal/fileatomic"
 )
 
 type UpdateRequest struct {
@@ -58,34 +55,28 @@ func (c *Client) Probe(ctx context.Context, channelID int64, model string) (Prob
 	return ProbeResult{Success: response.Success, Duration: response.Time, Message: response.Message}, nil
 }
 
+// Check proves the base URL, credentials and admin identity are valid with a
+// read-only call: listing channels requires admin rights but writes nothing.
+func (c *Client) Check(ctx context.Context) error {
+	if err := c.ensureToken(ctx); err != nil {
+		return err
+	}
+	if c.adminUserID <= 0 {
+		return fmt.Errorf("new-api admin user id is not configured")
+	}
+	var response apiResponse
+	if err := c.doJSON(ctx, http.MethodGet, c.baseURL+"/api/channel/?p=1&page_size=1", nil, &response); err != nil {
+		return err
+	}
+	if !response.Success {
+		return fmt.Errorf("new-api channel list failed: %s", response.Message)
+	}
+	return nil
+}
+
 type TokenStore interface {
 	Load() (string, error)
 	Save(token string) error
-}
-
-type FileTokenStore struct{ path string }
-
-func NewFileTokenStore(path string) FileTokenStore { return FileTokenStore{path: path} }
-
-func (s FileTokenStore) Load() (string, error) {
-	if s.path == "" {
-		return "", nil
-	}
-	data, err := fileatomic.ReadFile(s.path)
-	if os.IsNotExist(err) {
-		return "", nil
-	}
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(data)), nil
-}
-
-func (s FileTokenStore) Save(token string) error {
-	if s.path == "" {
-		return nil
-	}
-	return fileatomic.WriteFile(s.path, []byte(strings.TrimSpace(token)+"\n"), 0600)
 }
 
 type Client struct {

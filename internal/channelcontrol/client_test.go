@@ -50,3 +50,35 @@ func mustJSON(value any) []byte {
 	data, _ := json.Marshal(value)
 	return data
 }
+
+func TestCheckUsesReadOnlyChannelList(t *testing.T) {
+	var method, path string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer admin-token" || r.Header.Get("New-Api-User") != "7" {
+			t.Fatalf("missing admin auth headers")
+		}
+		method, path = r.Method, r.URL.Path
+		// Real new-api GetAllChannels returns data as an object (verified in
+		// source: common.ApiSuccess with items/total/page keys).
+		_, _ = w.Write([]byte(`{"success":true,"data":{"items":[],"total":0,"page":1,"page_size":1}}`))
+	}))
+	defer server.Close()
+
+	if err := New(server.URL, "admin-token", 7, server.Client()).Check(context.Background()); err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	if method != http.MethodGet || path != "/api/channel/" {
+		t.Fatalf("check must be a read-only channel list call: %s %s", method, path)
+	}
+}
+
+func TestCheckSurfacesAPIFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":false,"message":"unauthorized"}`))
+	}))
+	defer server.Close()
+	err := New(server.URL, "admin-token", 7, server.Client()).Check(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "unauthorized") {
+		t.Fatalf("api failure must surface: %v", err)
+	}
+}

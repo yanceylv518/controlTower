@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"controltower/agent/internal/channelcollector"
-	"controltower/agent/internal/channelcontrol"
+	"controltower/agent/internal/channeltoken"
 	"controltower/agent/internal/config"
 	"controltower/agent/internal/dockercollector"
 	"controltower/agent/internal/erroralert"
@@ -28,6 +28,7 @@ import (
 	"controltower/agent/internal/samples"
 	"controltower/agent/internal/state"
 	"controltower/agent/internal/syscollector"
+	"controltower/internal/channelcontrol"
 )
 
 var agentVersion = "0.1.0"
@@ -122,7 +123,7 @@ func run() error {
 	checker := healthcheck.New(time.Duration(cfg.LogQueryTimeoutSeconds) * time.Second)
 	var channelControllerClient channelController
 	if cfg.NewAPIControlEnabled {
-		channelControllerClient = channelcontrol.NewWithCredentials(cfg.NewAPIAdminAPIURL, cfg.NewAPIAdminAccessToken, cfg.NewAPIAdminUsername, cfg.NewAPIAdminPassword, cfg.NewAPIAdminUserID, channelcontrol.NewFileTokenStore(filepath.Join(cfg.DataDir, "new-api-admin-token")), nil)
+		channelControllerClient = channelcontrol.NewWithCredentials(cfg.NewAPIAdminAPIURL, cfg.NewAPIAdminAccessToken, cfg.NewAPIAdminUsername, cfg.NewAPIAdminPassword, cfg.NewAPIAdminUserID, channeltoken.NewFileTokenStore(filepath.Join(cfg.DataDir, "new-api-admin-token")), nil)
 	}
 	var dockerCollector dockerStatusCollector
 	if cfg.DockerEnabled {

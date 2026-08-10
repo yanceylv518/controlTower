@@ -108,6 +108,10 @@ export interface InstanceItem {
     backlog_estimate: number;
     online: boolean;
   }>;
+  logs_readonly_configured?: boolean;
+  control_configured?: boolean;
+  control_api_url?: string;
+  control_admin_user_id?: number;
 }
 export interface ChannelSnapshot {
   id: string;
@@ -231,6 +235,9 @@ export interface InstanceUpdateInput {
   site_id?: string;
   name?: string;
   enabled?: boolean;
+  control_api_url?: string;
+  control_api_token?: string;
+  control_admin_user_id?: number;
 }
 export interface InstanceTokenResponse {
   token: string;

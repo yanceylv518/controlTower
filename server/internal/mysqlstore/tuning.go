@@ -308,6 +308,90 @@ func (s Store) CreateContinuousProbe(v tuning.Recommendation, model string, coun
 	return commandID, nil
 }
 
+// RecordDirectWeightChange persists the paper trail of a weight write the
+// server already executed against new-api: the recommendation row, a terminal
+// channel_commands row (never delivered to an agent), and the audit entry.
+func (s Store) RecordDirectWeightChange(v tuning.Recommendation, actor string, now time.Time) (string, error) {
+	tx, err := s.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+	controlInstanceID, err := controlInstanceForSite(tx, v.InstanceID)
+	if err != nil {
+		return "", err
+	}
+	ev, _ := json.Marshal(v.Evidence)
+	commandID := randomCommandID()
+	payloadValues := map[string]any{"weight": v.ProposedWeight}
+	if v.ProposedPriority != nil && (v.Rule == "circuit_opened" || v.Rule == "circuit_recovered") {
+		payloadValues["priority"] = *v.ProposedPriority
+	}
+	payload, _ := json.Marshal(payloadValues)
+	if _, err = tx.Exec(`INSERT INTO tuning_recommendations(id,instance_id,channel_id,channel_name,created_at,rule,evidence_json,current_weight,proposed_weight,current_priority,proposed_priority,mode_at_creation,status,command_id,acted_by,acted_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, v.ID, v.InstanceID, v.ChannelID, v.ChannelName, v.CreatedAt, v.Rule, string(ev), v.CurrentWeight, v.ProposedWeight, v.CurrentPriority, v.ProposedPriority, v.ModeAtCreation, "auto_executed", commandID, actor, now); err != nil {
+		return "", err
+	}
+	if _, err = tx.Exec(`INSERT INTO channel_commands(id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at) VALUES(?,?,?,?,?,'succeeded',?,'',?,?)`, commandID, controlInstanceID, v.ChannelID, "channel.update", string(payload), actor, now, now); err != nil {
+		return "", err
+	}
+	before := fmt.Sprintf(`{"weight":%d}`, v.CurrentWeight)
+	after := fmt.Sprintf(`{"weight":%d,"command_id":%q,"direct":true}`, v.ProposedWeight, commandID)
+	if _, err = tx.Exec(`INSERT INTO operation_audits(id,instance_id,operation_type,target_type,target_id,actor_id,before_summary,after_summary,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, commandID, v.InstanceID, "tuning.auto_execute", "channel", fmt.Sprint(v.ChannelID), actor, before, after, "success", now); err != nil {
+		return "", err
+	}
+	return commandID, tx.Commit()
+}
+
+// CreateContinuousProbeExecuting mirrors CreateContinuousProbe for the direct
+// control path: the command row starts as 'delivered' so agents never pick it
+// up and the expiry sweeper ignores it while the server runs the probes.
+func (s Store) CreateContinuousProbeExecuting(v tuning.Recommendation, model string, count, interval int, now time.Time) (string, error) {
+	tx, err := s.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+	controlInstanceID, err := controlInstanceForSite(tx, v.InstanceID)
+	if err != nil {
+		return "", err
+	}
+	commandID := randomCommandID()
+	payload, _ := json.Marshal(map[string]any{"model": model, "probe_count": count, "probe_interval_seconds": interval})
+	_, err = tx.Exec(`INSERT INTO channel_commands(id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at) VALUES(?,?,?,?,?,'delivered','system:auto','',?,?)`, commandID, controlInstanceID, v.ChannelID, "channel.probe", string(payload), now, now)
+	if err != nil {
+		return "", err
+	}
+	v.Rule, v.Status, v.CommandID = "probe_started", "auto_executed", &commandID
+	ev, _ := json.Marshal(v.Evidence)
+	if _, err = tx.Exec(`INSERT INTO tuning_recommendations(id,instance_id,channel_id,channel_name,created_at,rule,evidence_json,current_weight,proposed_weight,current_priority,proposed_priority,mode_at_creation,status,command_id,acted_by,acted_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, v.ID, v.InstanceID, v.ChannelID, v.ChannelName, v.CreatedAt, v.Rule, string(ev), v.CurrentWeight, v.ProposedWeight, v.CurrentPriority, v.ProposedPriority, v.ModeAtCreation, v.Status, commandID, "system:auto", now); err != nil {
+		return "", err
+	}
+	if err = tx.Commit(); err != nil {
+		return "", err
+	}
+	return commandID, nil
+}
+
+// RecordTuningPreflightResult persists an already-executed direct preflight as
+// a terminal channel.verify command so the polling endpoint and the auto-mode
+// gate read it exactly like an agent-executed one.
+func (s Store) RecordTuningPreflightResult(siteID string, channelID int64, actor, status, errorSummary string, now time.Time) (storage.ChannelCommand, error) {
+	tx, err := s.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		return storage.ChannelCommand{}, err
+	}
+	defer tx.Rollback()
+	instanceID, err := controlInstanceForSite(tx, siteID)
+	if err != nil {
+		return storage.ChannelCommand{}, err
+	}
+	command := storage.ChannelCommand{ID: randomCommandID(), InstanceID: instanceID, ChannelID: channelID, CommandType: "channel.verify", PayloadJSON: `{}`, Status: status, CreatedBy: actor, ErrorSummary: errorSummary, CreatedAt: now, UpdatedAt: now}
+	if _, err = tx.Exec(`INSERT INTO channel_commands(id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, command.ID, command.InstanceID, command.ChannelID, command.CommandType, command.PayloadJSON, command.Status, command.CreatedBy, command.ErrorSummary, now, now); err != nil {
+		return storage.ChannelCommand{}, err
+	}
+	return command, tx.Commit()
+}
+
 // CreateTuningPreflight queues a no-change new-api update. A succeeded result
 // proves that the selected Agent is online, channel control is enabled, and
 // its admin credentials have read/write access to the channel API.

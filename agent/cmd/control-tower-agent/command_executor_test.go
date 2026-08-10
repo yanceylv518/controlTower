@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"controltower/agent/internal/channelcontrol"
+	"controltower/internal/channelcontrol"
 	"controltower/agent/internal/reporter"
 )
 

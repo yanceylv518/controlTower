@@ -114,6 +114,9 @@ func NewMux(options Options) *http.ServeMux {
 	if configStore, ok := any(options.Store).(dashboard.ReadonlyConfigStore); ok {
 		instances.ReadonlyConfig = configStore
 	}
+	if configStore, ok := any(options.Store).(dashboard.ControlConfigStore); ok {
+		instances.ControlConfig = configStore
+	}
 	passthrough := &dashboard.PassthroughHandler{SecretKey: options.SecretKey, Audit: options.Store}
 	if configStore, ok := any(options.Store).(dashboard.ReadonlyConfigStore); ok {
 		passthrough.Config = configStore

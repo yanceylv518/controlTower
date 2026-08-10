@@ -28,6 +28,14 @@ type Instance struct {
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 }
+
+// SiteControlConfig is the per-site new-api admin API access used to write
+// channel weights directly from the server instead of via agent commands.
+type SiteControlConfig struct {
+	APIURL         string
+	EncryptedToken string
+	AdminUserID    int64
+}
 type InstanceToken struct {
 	ID                    int64
 	InstanceID, TokenHash string

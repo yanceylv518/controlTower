@@ -51,6 +51,18 @@ func (s Store) UpdateReadonlyDSNForSite(siteID, encrypted string, now time.Time)
 	_, err := s.db.Exec("UPDATE instances SET logs_readonly_dsn=?,updated_at=? WHERE COALESCE(NULLIF(site_id,''),id)=?", encrypted, now, siteID)
 	return err
 }
+func (s Store) ControlConfigForSite(siteID string) (storage.SiteControlConfig, error) {
+	var v storage.SiteControlConfig
+	err := s.db.QueryRow("SELECT control_api_url,control_api_token,control_admin_user_id FROM instances WHERE COALESCE(NULLIF(site_id,''),id)=? AND control_api_url<>'' AND control_api_token<>'' ORDER BY id LIMIT 1", siteID).Scan(&v.APIURL, &v.EncryptedToken, &v.AdminUserID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return storage.SiteControlConfig{}, nil
+	}
+	return v, err
+}
+func (s Store) UpdateControlConfigForSite(siteID, apiURL, encryptedToken string, adminUserID int64, now time.Time) error {
+	_, err := s.db.Exec("UPDATE instances SET control_api_url=?,control_api_token=?,control_admin_user_id=?,updated_at=? WHERE COALESCE(NULLIF(site_id,''),id)=?", apiURL, encryptedToken, adminUserID, now, siteID)
+	return err
+}
 func (s Store) CreateInstanceToken(v storage.InstanceToken) error {
 	_, e := s.db.Exec("INSERT INTO instance_tokens(instance_id,token_hash,created_at,expires_at) VALUES(?,?,?,?)", v.InstanceID, v.TokenHash, v.CreatedAt, v.ExpiresAt)
 	return e

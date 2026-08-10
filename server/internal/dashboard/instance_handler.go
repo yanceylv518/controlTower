@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"context"
+	"controltower/internal/channelcontrol"
 	ctauth "controltower/server/internal/auth"
 	"controltower/server/internal/settings"
 	"controltower/server/internal/storage"
@@ -12,6 +13,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -29,11 +31,19 @@ type InstanceHandler struct {
 	Pepper         string
 	Settings       *settings.Provider
 	ReadonlyConfig ReadonlyConfigStore
-	SecretKey      string
+	ControlConfig  ControlConfigStore
+	// ControlCheck validates a direct control config with a read-only new-api
+	// call before it is saved; tests may replace it.
+	ControlCheck func(ctx context.Context, apiURL, accessToken string, adminUserID int64) error
+	SecretKey    string
 }
 type ReadonlyConfigStore interface {
 	ReadonlyDSNForSite(string) (string, error)
 	UpdateReadonlyDSNForSite(string, string, time.Time) error
+}
+type ControlConfigStore interface {
+	ControlConfigForSite(string) (storage.SiteControlConfig, error)
+	UpdateControlConfigForSite(string, string, string, int64, time.Time) error
 }
 type InstanceItem struct {
 	InstanceID             string          `json:"instance_id"`
@@ -44,6 +54,9 @@ type InstanceItem struct {
 	UpdatedAt              time.Time       `json:"updated_at"`
 	Agents                 []InstanceAgent `json:"agents"`
 	LogsReadonlyConfigured bool            `json:"logs_readonly_configured"`
+	ControlConfigured      bool            `json:"control_configured"`
+	ControlAPIURL          string          `json:"control_api_url"`
+	ControlAdminUserID     int64           `json:"control_admin_user_id"`
 }
 type InstanceAgent struct {
 	ID              string    `json:"id"`
@@ -61,6 +74,15 @@ func (i InstanceHandler) item(v storage.Instance) (InstanceItem, error) {
 			return out, err
 		}
 		out.LogsReadonlyConfigured = encrypted != ""
+	}
+	if i.ControlConfig != nil {
+		cfg, err := i.ControlConfig.ControlConfigForSite(siteOf(v))
+		if err != nil {
+			return out, err
+		}
+		out.ControlConfigured = cfg.EncryptedToken != ""
+		out.ControlAPIURL = cfg.APIURL
+		out.ControlAdminUserID = cfg.AdminUserID
 	}
 	if i.Runtime != nil {
 		agents, e := i.Runtime.QueryAgents(storage.AgentQuery{InstanceID: v.ID, Limit: storage.MaxRuntimeQueryLimit})
@@ -112,6 +134,9 @@ func (i InstanceHandler) List(w http.ResponseWriter, r *http.Request) {
 		}
 		if scoped && current.Role == "viewer" {
 			item.Agents = []InstanceAgent{}
+			item.ControlAPIURL = ""
+			item.ControlAdminUserID = 0
+			item.ControlConfigured = false
 		}
 		items = append(items, item)
 	}
@@ -160,10 +185,13 @@ func (i InstanceHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var q struct {
-		SiteID          *string `json:"site_id"`
-		Name            *string `json:"name"`
-		Enabled         *bool   `json:"enabled"`
-		LogsReadonlyDSN *string `json:"logs_readonly_dsn"`
+		SiteID             *string `json:"site_id"`
+		Name               *string `json:"name"`
+		Enabled            *bool   `json:"enabled"`
+		LogsReadonlyDSN    *string `json:"logs_readonly_dsn"`
+		ControlAPIURL      *string `json:"control_api_url"`
+		ControlAPIToken    *string `json:"control_api_token"`
+		ControlAdminUserID *int64  `json:"control_admin_user_id"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&q)
 	if q.SiteID != nil {
@@ -202,10 +230,60 @@ func (i InstanceHandler) Update(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	var encryptedControlToken, controlURL string
+	var controlAdminUserID int64
+	if q.ControlAPIURL != nil {
+		if i.ControlConfig == nil {
+			writeDashboardError(w, 501, "control_config_unavailable")
+			return
+		}
+		controlURL = strings.TrimSpace(*q.ControlAPIURL)
+		if controlURL != "" {
+			if !strings.HasPrefix(controlURL, "http://") && !strings.HasPrefix(controlURL, "https://") || len(controlURL) > 255 {
+				writeDashboardError(w, 400, "invalid_control_api_url")
+				return
+			}
+			token := ""
+			if q.ControlAPIToken != nil {
+				token = strings.TrimSpace(*q.ControlAPIToken)
+			}
+			if token == "" || len(token) > 512 {
+				writeDashboardError(w, 400, "invalid_control_api_token")
+				return
+			}
+			if q.ControlAdminUserID == nil || *q.ControlAdminUserID <= 0 {
+				writeDashboardError(w, 400, "invalid_control_admin_user_id")
+				return
+			}
+			controlAdminUserID = *q.ControlAdminUserID
+			check := i.ControlCheck
+			if check == nil {
+				check = defaultControlCheck
+			}
+			checkCtx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+			err := check(checkCtx, controlURL, token, controlAdminUserID)
+			cancel()
+			if err != nil {
+				writeDashboardError(w, 400, "control_connection_test_failed")
+				return
+			}
+			encryptedControlToken, err = encryptSecret(i.SecretKey, token)
+			if err != nil {
+				writeDashboardError(w, 503, "secret_key_not_configured")
+				return
+			}
+		}
+	}
 	v.UpdatedAt = time.Now().UTC()
 	if i.Store.UpdateInstance(id, v.SiteID, v.Name, v.Enabled, v.UpdatedAt) != nil {
 		writeDashboardError(w, 500, "query_failed")
 		return
+	}
+	if q.ControlAPIURL != nil {
+		if err := i.ControlConfig.UpdateControlConfigForSite(siteOf(v), controlURL, encryptedControlToken, controlAdminUserID, v.UpdatedAt); err != nil {
+			writeDashboardError(w, 500, "query_failed")
+			return
+		}
 	}
 	if q.LogsReadonlyDSN != nil {
 		if err := i.ReadonlyConfig.UpdateReadonlyDSNForSite(siteOf(v), encryptedReadonlyDSN, v.UpdatedAt); err != nil {
@@ -224,6 +302,10 @@ func (i InstanceHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeDashboardJSON(w, 200, item)
+}
+
+func defaultControlCheck(ctx context.Context, apiURL, accessToken string, adminUserID int64) error {
+	return channelcontrol.New(apiURL, accessToken, adminUserID, nil).Check(ctx)
 }
 
 func validateReadonlyDSN(parent context.Context, dsn string) error {

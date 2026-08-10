@@ -2,10 +2,12 @@ package dashboard
 
 import (
 	"bytes"
+	"context"
 	"controltower/server/internal/aggregator"
 	"controltower/server/internal/ingest"
 	"controltower/server/internal/storage"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -143,5 +145,103 @@ func TestRuntimeQueriesFilterByInstance(t *testing.T) {
 	h.HandleServerMetrics(w, httptest.NewRequest(http.MethodGet, "/api/dashboard/server-metrics?instance_id=inst-b", nil))
 	if body := w.Body.String(); !strings.Contains(body, "inst-b") || strings.Contains(body, "inst-a") {
 		t.Fatalf("server metrics filter leaked: %s", body)
+	}
+}
+
+type controlConfigStub struct {
+	saved map[string]storage.SiteControlConfig
+}
+
+func (c *controlConfigStub) ControlConfigForSite(siteID string) (storage.SiteControlConfig, error) {
+	return c.saved[siteID], nil
+}
+func (c *controlConfigStub) UpdateControlConfigForSite(siteID, apiURL, encryptedToken string, adminUserID int64, _ time.Time) error {
+	c.saved[siteID] = storage.SiteControlConfig{APIURL: apiURL, EncryptedToken: encryptedToken, AdminUserID: adminUserID}
+	return nil
+}
+
+func TestInstanceControlConfigSaveValidatesAndEncrypts(t *testing.T) {
+	s := ingest.NewMemoryStore()
+	stub := &controlConfigStub{saved: map[string]storage.SiteControlConfig{}}
+	var checkedURL, checkedToken string
+	var checkedUser int64
+	h := InstanceHandler{Store: s, Runtime: s, Pepper: "pep", ControlConfig: stub, SecretKey: "secret-key",
+		ControlCheck: func(_ context.Context, apiURL, accessToken string, adminUserID int64) error {
+			checkedURL, checkedToken, checkedUser = apiURL, accessToken, adminUserID
+			return nil
+		}}
+	w := httptest.NewRecorder()
+	h.Create(w, httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(`{"instance_id":"inst-a","site_id":"site-a","name":"A"}`)))
+	if w.Code != 201 {
+		t.Fatal(w.Code)
+	}
+
+	w = httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/", bytes.NewBufferString(`{"control_api_url":"https://alb.example.com","control_api_token":"tok-1","control_admin_user_id":7}`))
+	r.SetPathValue("id", "inst-a")
+	h.Update(w, r)
+	if w.Code != 200 {
+		t.Fatalf("save control config: %d %s", w.Code, w.Body.String())
+	}
+	if checkedURL != "https://alb.example.com" || checkedToken != "tok-1" || checkedUser != 7 {
+		t.Fatalf("live check not called with saved values: %q %q %d", checkedURL, checkedToken, checkedUser)
+	}
+	cfg := stub.saved["site-a"]
+	if cfg.APIURL != "https://alb.example.com" || cfg.AdminUserID != 7 {
+		t.Fatalf("config not stored site-wide: %#v", cfg)
+	}
+	if cfg.EncryptedToken == "tok-1" || cfg.EncryptedToken == "" {
+		t.Fatalf("token must be stored encrypted: %q", cfg.EncryptedToken)
+	}
+	if plain, err := decryptSecret("secret-key", cfg.EncryptedToken); err != nil || plain != "tok-1" {
+		t.Fatalf("token round-trip failed: %q %v", plain, err)
+	}
+	if !strings.Contains(w.Body.String(), `"control_configured":true`) || strings.Contains(w.Body.String(), "tok-1") {
+		t.Fatalf("response must expose configured flag but never the token: %s", w.Body.String())
+	}
+}
+
+func TestInstanceControlConfigRejectsInvalidAndFailedCheck(t *testing.T) {
+	s := ingest.NewMemoryStore()
+	stub := &controlConfigStub{saved: map[string]storage.SiteControlConfig{}}
+	h := InstanceHandler{Store: s, Runtime: s, Pepper: "pep", ControlConfig: stub, SecretKey: "secret-key",
+		ControlCheck: func(context.Context, string, string, int64) error { return errors.New("boom") }}
+	w := httptest.NewRecorder()
+	h.Create(w, httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(`{"instance_id":"inst-a","site_id":"site-a","name":"A"}`)))
+
+	for _, body := range []string{
+		`{"control_api_url":"ftp://x","control_api_token":"t","control_admin_user_id":7}`,
+		`{"control_api_url":"https://alb","control_api_token":"","control_admin_user_id":7}`,
+		`{"control_api_url":"https://alb","control_api_token":"t"}`,
+	} {
+		w = httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPut, "/", bytes.NewBufferString(body))
+		r.SetPathValue("id", "inst-a")
+		h.Update(w, r)
+		if w.Code != 400 {
+			t.Fatalf("invalid config must 400: %s -> %d", body, w.Code)
+		}
+	}
+
+	w = httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/", bytes.NewBufferString(`{"control_api_url":"https://alb","control_api_token":"t","control_admin_user_id":7}`))
+	r.SetPathValue("id", "inst-a")
+	h.Update(w, r)
+	if w.Code != 400 || !strings.Contains(w.Body.String(), "control_connection_test_failed") {
+		t.Fatalf("failed live check must block save: %d %s", w.Code, w.Body.String())
+	}
+	if len(stub.saved) != 0 {
+		t.Fatalf("nothing may be stored on failure: %#v", stub.saved)
+	}
+
+	w = httptest.NewRecorder()
+	r = httptest.NewRequest(http.MethodPut, "/", bytes.NewBufferString(`{"control_api_url":""}`))
+	r.SetPathValue("id", "inst-a")
+	h.Update(w, r)
+	if w.Code != 200 {
+		t.Fatalf("clearing must not require a live check: %d %s", w.Code, w.Body.String())
+	}
+	if cfg := stub.saved["site-a"]; cfg.APIURL != "" || cfg.EncryptedToken != "" || cfg.AdminUserID != 0 {
+		t.Fatalf("clear must wipe all three fields: %#v", cfg)
 	}
 }

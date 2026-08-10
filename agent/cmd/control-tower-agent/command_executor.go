@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"controltower/agent/internal/channelcontrol"
 	"controltower/agent/internal/reporter"
+	"controltower/internal/channelcontrol"
 )
 
 func executeCommands(ctx context.Context, controller channelController, commands []reporter.ChannelCommand) []reporter.ChannelCommandResult {
