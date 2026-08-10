@@ -292,7 +292,13 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 			if state.ProposedWeight < 1 && base.BaseWeight > 0 {
 				state.ProposedWeight = 1
 			}
-			if mode != "off" && state.Phase == "normal" && m.RequestCount >= p.MinSamples && state.SmoothedErrorRate >= p.CircuitErrorRate {
+			// In auto mode entering circuit means "the zeroing write happened";
+			// during a write_failed pause the transition must wait for the slow
+			// retry window and only commit once the real write succeeds —
+			// otherwise CT would show a circuit (and run recovery probes) while
+			// new-api still serves the channel at full weight.
+			if mode != "off" && state.Phase == "normal" && m.RequestCount >= p.MinSamples && state.SmoothedErrorRate >= p.CircuitErrorRate &&
+				(mode != "auto" || writeAttemptAllowed(state, now)) {
 				state.Phase = "circuit"
 				state.Multiplier = 0
 				state.ProposedWeight = 0
@@ -306,10 +312,7 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 				rec := continuousEvent(id, base, state, "circuit_opened", mode, now)
 				zero := int64(0)
 				rec.ProposedPriority = &zero
-				// During a write_failed pause the circuit is tracked
-				// observe-style (event only) until the slow retry window
-				// reopens actual writes.
-				if mode == "auto" && writeAttemptAllowed(state, now) {
+				if mode == "auto" {
 					if _, err = cs.CreateContinuousWeightChange(rec, "system:auto", now); err == nil {
 						w := int64(0)
 						at := now

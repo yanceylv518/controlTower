@@ -80,3 +80,7 @@ channelcontrol 客户端从 `agent/internal/` 移至共享 `internal/`(agent 侧
 ## 10. observe 残留标签清理(2026-08-10 用户发令收尾)
 
 write_failed 暂停只在 auto 写入路径上有意义;模型切回 observe/off 或基础权重为 0 时写入不可能发生,标签永远无法经"重试成功"解除。引擎在这两种形态下主动清除 write_failed 暂停与失败计数(auto+有权重的渠道不受影响,暂停与慢速重试语义原样);测试覆盖三态(observe 清/零权重清/auto 保留)。
+
+## 11. 暂停期熔断状态分叉修复(2026-08-10 codex 第二次 review 发现)
+
+codex 指出 §9 实现里"暂停期熔断退化为 observe 式记录"是错误设计:observe 式熔断的前提是该模式本来就不写;**auto 下 phase=circuit 语义即"置零已对线上执行"**,不写而转移=CT 显示已熔断、排恢复探针,而 newapi 满权重在跑——把"恢复到 0"的同类不一致反向重现。修(与 codex 给的语义一致):熔断转移条件对 auto 增加 writeAttemptAllowed 守卫——暂停退避期内**不转移、不发 circuit_opened、不排探针**(熔断待执行,渠道保持 normal);慢速重试窗口到达时熔断分支先做**真实置零写**,失败继续未熔断+刷新退避,**写成功才提交 circuit**(LastWrittenWeight=0 与线上一致)。observe 的 observed-circuit 语义不变。测试复现三段:退避期不熔断零事件零探针/窗口内真写失败保持未熔断/写成功才进 circuit 且暂停自愈解除。

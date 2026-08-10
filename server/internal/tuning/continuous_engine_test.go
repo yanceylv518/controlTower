@@ -549,3 +549,49 @@ func TestWriteFailedPauseClearsWhenWritesCannotRun(t *testing.T) {
 		t.Fatalf("auto mode must keep the pause: %#v", s)
 	}
 }
+
+func TestPausedAutoCircuitWaitsForRealZeroingWrite(t *testing.T) {
+	now := time.Now().UTC()
+	failedAt := now.Add(-time.Minute)
+	f := &continuousFake{
+		bases:   []ChannelBaseValue{{ChannelID: 1, ModelName: "m", Models: []string{"m"}, BaseWeight: 10, CurrentWeight: 10, SnapshotAt: now.Add(-time.Hour)}},
+		metrics: []ChannelMetric{{ChannelID: 1, RequestCount: 100, ErrorCount: 60, TTFTP50: 1, TTFTP90: 1, TTFTP95: 1}},
+		states: map[int64]ContinuousState{1: {InstanceID: "i", ChannelID: 1, ModelName: "m", KError: .2, SmoothedErrorRate: .5, Phase: "normal",
+			PausedReason: "write_failed", WriteFailureStreak: 3, LastWriteError: "boom", LastWriteFailureAt: &failedAt}},
+		writeErr: errors.New("boom"),
+	}
+	e := NewEngine(f)
+
+	// Inside the retry backoff: the circuit must NOT open without the write —
+	// CT showing "circuit" while new-api serves full weight is the exact
+	// inconsistency this guards against.
+	e.evaluateContinuous("i", autoPolicy(), now, f)
+	s := f.states[1]
+	if s.Phase != "normal" || s.NextProbeAt != nil || f.writeAttempts != 0 {
+		t.Fatalf("paused auto channel must not enter circuit without writing: %#v attempts=%d", s, f.writeAttempts)
+	}
+	for _, r := range f.recommendations {
+		if r.Rule == "circuit_opened" {
+			t.Fatalf("no circuit_opened event may exist without the write: %#v", r)
+		}
+	}
+
+	// Retry window: the real zeroing write is attempted; failure keeps the
+	// channel un-circuited and extends the backoff.
+	e.evaluateContinuous("i", autoPolicy(), now.Add(writeFailureRetryInterval), f)
+	s = f.states[1]
+	if f.writeAttempts != 1 || s.Phase != "normal" || s.NextProbeAt != nil {
+		t.Fatalf("failed zeroing write must keep the channel un-circuited: %#v attempts=%d", s, f.writeAttempts)
+	}
+
+	// Control path healed: the zeroing write lands, only then the circuit commits.
+	f.writeErr = nil
+	e.evaluateContinuous("i", autoPolicy(), now.Add(2*writeFailureRetryInterval+time.Minute), f)
+	s = f.states[1]
+	if f.writeAttempts != 2 || s.Phase != "circuit" || s.LastWrittenWeight == nil || *s.LastWrittenWeight != 0 || s.PausedReason != "" {
+		t.Fatalf("successful zeroing write must commit the circuit and clear the pause: %#v attempts=%d", s, f.writeAttempts)
+	}
+	if len(f.writes) != 1 || f.writes[0].Rule != "circuit_opened" {
+		t.Fatalf("the committed write must be the circuit zeroing: %#v", f.writes)
+	}
+}
