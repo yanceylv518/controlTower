@@ -43,6 +43,13 @@ func (f *fakeNewAPI) handler() http.Handler {
 		case r.Method == http.MethodPut && r.URL.Path == "/api/channel/":
 			var body map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&body)
+			// Real new-api rejects status on the general update endpoint
+			// (source: UpdateChannel bails with MsgInvalidParams). The fake
+			// must be as strict, or it green-lights broken clients.
+			if _, exists := body["status"]; exists {
+				_, _ = w.Write([]byte(`{"success":false,"message":"Invalid parameters"}`))
+				return
+			}
 			f.mu.Lock()
 			f.putBodies = append(f.putBodies, body)
 			f.mu.Unlock()
