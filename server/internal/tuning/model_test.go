@@ -46,3 +46,29 @@ func TestPolicyValidationCoversContinuousAndRetainedScheduling(t *testing.T) {
 		t.Fatalf("missing validation: %#v", fields)
 	}
 }
+
+func TestDecodePolicyJSONDefaultsWriteHysteresisForOldPolicies(t *testing.T) {
+	p, err := DecodePolicyJSON([]byte(`{"scheduling":{"window_minutes":15,"min_samples":20,"sparse_min_samples":10,"sparse_lookback_minutes":360},"dispatch_modes":{},"continuous":{"sensitivity":1,"otps_cap":1.5,"circuit_threshold":0.1,"recovery_threshold":0.2,"circuit_error_rate":0.3,"recovery_error_rate":0.1,"silent_minutes":5,"probe_interval_seconds":5,"probe_count":10,"soft_start_multiplier":0.2,"window_minutes":15,"min_samples":20,"sparse_lookback_minutes":360}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Continuous.WriteDeadbandPercent != 5 || p.Continuous.MinWriteIntervalMinutes != 5 {
+		t.Fatalf("old policy must receive hysteresis defaults: %#v", p.Continuous)
+	}
+}
+
+func TestPolicyValidationCoversWriteHysteresisRanges(t *testing.T) {
+	p := DefaultPolicy()
+	p.Continuous.WriteDeadbandPercent = -1
+	p.Continuous.MinWriteIntervalMinutes = 0
+	fields := p.Validate()
+	if fields["continuous.write_deadband_percent"] == "" || fields["continuous.min_write_interval_minutes"] == "" {
+		t.Fatalf("missing lower-bound validation: %#v", fields)
+	}
+	p.Continuous.WriteDeadbandPercent = 51
+	p.Continuous.MinWriteIntervalMinutes = 61
+	fields = p.Validate()
+	if fields["continuous.write_deadband_percent"] == "" || fields["continuous.min_write_interval_minutes"] == "" {
+		t.Fatalf("missing upper-bound validation: %#v", fields)
+	}
+}

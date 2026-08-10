@@ -337,9 +337,10 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 			}
 
 			// Preserve useful observation evidence without adding one event per
-			// channel every minute: only record a material proposal change.
+			// channel every minute: only record a proposal change outside the
+			// same deadband used by automatic writes.
 			if mode == "observe" && healthy && m.RequestCount >= p.MinSamples &&
-				(!exists || previous.ProposedWeight != state.ProposedWeight) {
+				(!exists || weightChangeOutsideDeadband(state.ProposedWeight, previous.ProposedWeight, base.BaseWeight, p.WriteDeadbandPercent)) {
 				_ = e.store.InsertRecommendation(continuousEvent(id, base, state, "weight_observed", mode, now))
 			}
 
@@ -361,7 +362,18 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 			// the snapshot lags for minutes after a write and would otherwise
 			// re-issue the same command every evaluation.
 			alreadyWritten := state.LastWrittenWeight != nil && *state.LastWrittenWeight == state.ProposedWeight
-			if mode == "auto" && writeAttemptAllowed(state, now) && !alreadyWritten && state.ProposedWeight != base.CurrentWeight {
+			needsWrite := !alreadyWritten && state.ProposedWeight != base.CurrentWeight
+			materialChange := weightChangeOutsideDeadband(state.ProposedWeight, writeReference(state, base), base.BaseWeight, p.WriteDeadbandPercent)
+			retryingWriteFailure := state.PausedReason == "write_failed" && writeAttemptAllowed(state, now)
+			// A due retry with no material write left has nothing useful to test.
+			// Clear the pause; the next real change will exercise the path again.
+			if mode == "auto" && retryingWriteFailure && (!needsWrite || !materialChange) {
+				e.noteWriteSuccess(&state)
+				retryingWriteFailure = false
+			}
+			intervalReady := state.LastWriteAt == nil || !now.Before(state.LastWriteAt.Add(time.Duration(p.MinWriteIntervalMinutes)*time.Minute))
+			regularWriteAllowed := materialChange && intervalReady
+			if mode == "auto" && writeAttemptAllowed(state, now) && needsWrite && (regularWriteAllowed || retryingWriteFailure) {
 				rec := continuousEvent(id, base, state, "weight_write", mode, now)
 				if _, err = cs.CreateContinuousWeightChange(rec, "system:auto", now); err == nil {
 					written := state.ProposedWeight
@@ -561,6 +573,28 @@ func writeAttemptAllowed(state ContinuousState, now time.Time) bool {
 		return true
 	}
 	return state.PausedReason == "write_failed" && state.LastWriteFailureAt != nil && !now.Before(state.LastWriteFailureAt.Add(writeFailureRetryInterval))
+}
+
+func writeReference(state ContinuousState, base ChannelBaseValue) int64 {
+	if state.LastWrittenWeight != nil {
+		return *state.LastWrittenWeight
+	}
+	return base.CurrentWeight
+}
+
+func writeDeadband(baseWeight int64, percent float64) int64 {
+	return max(int64(1), int64(math.Round(float64(baseWeight)*percent/100)))
+}
+
+func weightChangeOutsideDeadband(proposed, reference, baseWeight int64, percent float64) bool {
+	return absInt64(proposed-reference) >= writeDeadband(baseWeight, percent)
+}
+
+func absInt64(value int64) int64 {
+	if value < 0 {
+		return -value
+	}
+	return value
 }
 
 func continuousEvent(id string, base ChannelBaseValue, state ContinuousState, rule, mode string, now time.Time) Recommendation {

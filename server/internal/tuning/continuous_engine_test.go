@@ -66,6 +66,21 @@ func TestObservePublishesWindowProgressAndOnlyChangedProposals(t *testing.T) {
 	if len(f.recommendations) != 2 {
 		t.Fatalf("unchanged proposals must not spam observation history: %d", len(f.recommendations))
 	}
+	actual := f.states[1].ProposedWeight
+	previous := f.states[1]
+	previous.ProposedWeight = actual - 4
+	f.states[1] = previous
+	e.evaluateContinuous("i", PolicyRecord{InstanceID: "i", Policy: p, Mode: "observe"}, now.Add(2*time.Minute), f)
+	if len(f.recommendations) != 2 {
+		t.Fatalf("proposal changes inside the deadband must not spam history: %d", len(f.recommendations))
+	}
+	previous = f.states[1]
+	previous.ProposedWeight = actual - 6
+	f.states[1] = previous
+	e.evaluateContinuous("i", PolicyRecord{InstanceID: "i", Policy: p, Mode: "observe"}, now.Add(3*time.Minute), f)
+	if len(f.recommendations) != 3 || f.recommendations[2].ChannelID != 1 {
+		t.Fatalf("proposal changes outside the deadband must be observed: %#v", f.recommendations)
+	}
 }
 
 type continuousFake struct {
@@ -156,6 +171,64 @@ func TestContinuousAutoDedupesAgainstOwnLastWrite(t *testing.T) {
 	}
 }
 
+func TestContinuousAutoWriteDeadband(t *testing.T) {
+	now := time.Now().UTC()
+	tests := []struct {
+		name       string
+		last       int64
+		deadband   float64
+		wantWrites int
+	}{
+		{name: "four percent is suppressed", last: 96, deadband: 5, wantWrites: 0},
+		{name: "six percent is written", last: 94, deadband: 5, wantWrites: 1},
+		{name: "zero deadband writes one unit", last: 99, deadband: 0, wantWrites: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			writeAt := now.Add(-time.Hour)
+			last := tt.last
+			f := &continuousFake{
+				bases:  []ChannelBaseValue{{ChannelID: 1, ModelName: "m", Models: []string{"m"}, BaseWeight: 100, CurrentWeight: last, SnapshotAt: now.Add(-time.Hour)}},
+				states: map[int64]ContinuousState{1: {InstanceID: "i", ChannelID: 1, ModelName: "m", KError: 1, LastWrittenWeight: &last, LastWriteAt: &writeAt}},
+			}
+			pr := autoPolicy()
+			pr.Policy.Continuous.WriteDeadbandPercent = tt.deadband
+			NewEngine(f).evaluateContinuous("i", pr, now, f)
+			if len(f.writes) != tt.wantWrites {
+				t.Fatalf("writes=%d want=%d state=%#v", len(f.writes), tt.wantWrites, f.states[1])
+			}
+		})
+	}
+}
+
+func TestContinuousAutoMinimumWriteInterval(t *testing.T) {
+	now := time.Now().UTC()
+	for _, tc := range []struct {
+		name       string
+		lastWrite  *time.Time
+		wantWrites int
+	}{
+		{name: "inside interval", lastWrite: timePointer(now.Add(-4 * time.Minute)), wantWrites: 0},
+		{name: "at interval", lastWrite: timePointer(now.Add(-5 * time.Minute)), wantWrites: 1},
+		{name: "first write", lastWrite: nil, wantWrites: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			last := int64(90)
+			state := ContinuousState{InstanceID: "i", ChannelID: 1, ModelName: "m", KError: 1, LastWriteAt: tc.lastWrite}
+			if tc.lastWrite != nil {
+				state.LastWrittenWeight = &last
+			}
+			f := &continuousFake{bases: []ChannelBaseValue{{ChannelID: 1, ModelName: "m", Models: []string{"m"}, BaseWeight: 100, CurrentWeight: 90, SnapshotAt: now.Add(-time.Hour)}}, states: map[int64]ContinuousState{1: state}}
+			NewEngine(f).evaluateContinuous("i", autoPolicy(), now, f)
+			if len(f.writes) != tc.wantWrites {
+				t.Fatalf("writes=%d want=%d state=%#v", len(f.writes), tc.wantWrites, f.states[1])
+			}
+		})
+	}
+}
+
+func timePointer(value time.Time) *time.Time { return &value }
+
 func TestManualOverrideOnlyWhenSnapshotPostdatesWrite(t *testing.T) {
 	now := time.Now().UTC()
 	written := int64(100)
@@ -240,10 +313,13 @@ func TestContinuousCircuitProbeAndSoftStart(t *testing.T) {
 	p.Policy.Continuous.RecoveryThreshold = .2
 	p.Policy.Continuous.SilentMinutes = 5
 	p.Policy.Continuous.SoftStartMultiplier = .2
+	p.Policy.Continuous.WriteDeadbandPercent = 50
+	p.Policy.Continuous.MinWriteIntervalMinutes = 60
+	lastWritten, lastWriteAt := int64(100), now
 	f := &continuousFake{bases: []ChannelBaseValue{
 		{ChannelID: 1, ChannelName: "c", ModelName: "m", Models: []string{"m"}, BaseWeight: 100, BasePriority: 7, CurrentWeight: 100, CurrentPriority: 7, SnapshotAt: now},
 		{ChannelID: 2, ChannelName: "peer", ModelName: "m", Models: []string{"m"}, BaseWeight: 100, BasePriority: 7, CurrentWeight: 100, CurrentPriority: 7, SnapshotAt: now},
-	}, states: map[int64]ContinuousState{1: {InstanceID: "i", ChannelID: 1, ModelName: "m", KError: .2, SmoothedErrorRate: .35, Phase: "normal"}}}
+	}, states: map[int64]ContinuousState{1: {InstanceID: "i", ChannelID: 1, ModelName: "m", KError: .2, SmoothedErrorRate: .35, Phase: "normal", LastWrittenWeight: &lastWritten, LastWriteAt: &lastWriteAt}}}
 	f.metrics = []ChannelMetric{{ChannelID: 1, RequestCount: 20, TTFTP50: 1, TTFTP90: 1, TTFTP95: 1}, {ChannelID: 2, RequestCount: 20, TTFTP50: 1, TTFTP90: 1, TTFTP95: 1}}
 	e := NewEngine(f)
 	e.evaluateContinuous("i", p, now, f)
@@ -443,9 +519,12 @@ func TestWriteFailureStreakPausesThenSelfHeals(t *testing.T) {
 		writeErr: errors.New("new-api channel update failed: unauthorized"),
 	}
 	e := NewEngine(f)
+	pr := autoPolicy()
+	pr.Policy.Continuous.WriteDeadbandPercent = 50
+	pr.Policy.Continuous.MinWriteIntervalMinutes = 60
 
 	for i := 0; i < 3; i++ {
-		e.evaluateContinuous("i", autoPolicy(), now.Add(time.Duration(i)*time.Minute), f)
+		e.evaluateContinuous("i", pr, now.Add(time.Duration(i)*time.Minute), f)
 	}
 	state := f.states[1]
 	if f.writeAttempts != 3 || state.PausedReason != "write_failed" || state.WriteFailureStreak != 3 {
@@ -465,20 +544,51 @@ func TestWriteFailureStreakPausesThenSelfHeals(t *testing.T) {
 	}
 
 	// Within the retry interval the engine must stop hammering new-api.
-	e.evaluateContinuous("i", autoPolicy(), now.Add(4*time.Minute), f)
+	e.evaluateContinuous("i", pr, now.Add(4*time.Minute), f)
 	if f.writeAttempts != 3 {
 		t.Fatalf("paused channel must not retry inside the interval: attempts=%d", f.writeAttempts)
 	}
 
 	// After the interval one retry runs; on success the pause self-heals.
 	f.writeErr = nil
-	e.evaluateContinuous("i", autoPolicy(), now.Add(2*time.Minute+writeFailureRetryInterval), f)
+	lastWritten, lastWriteAt := int64(20), now.Add(2*time.Minute+writeFailureRetryInterval)
+	state = f.states[1]
+	state.LastWrittenWeight, state.LastWriteAt = &lastWritten, &lastWriteAt
+	f.states[1] = state
+	e.evaluateContinuous("i", pr, lastWriteAt, f)
 	state = f.states[1]
 	if f.writeAttempts != 4 || state.PausedReason != "" || state.WriteFailureStreak != 0 || state.LastWriteError != "" {
 		t.Fatalf("successful retry must clear the pause: attempts=%d state=%#v", f.writeAttempts, state)
 	}
 	if state.LastWrittenWeight == nil || *state.LastWrittenWeight != 10 {
 		t.Fatalf("recovered write must land: %#v", state.LastWrittenWeight)
+	}
+}
+
+func TestWriteFailurePauseClearsWhenDueChangeEvaporates(t *testing.T) {
+	now := time.Now().UTC()
+	failedAt := now.Add(-writeFailureRetryInterval)
+	lastWriteAt := now.Add(-time.Minute)
+	for _, tc := range []struct {
+		name    string
+		current int64
+		last    int64
+	}{
+		{name: "already written", current: 100, last: 100},
+		{name: "inside deadband", current: 96, last: 96},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			last := tc.last
+			f := &continuousFake{
+				bases:  []ChannelBaseValue{{ChannelID: 1, ModelName: "m", Models: []string{"m"}, BaseWeight: 100, CurrentWeight: tc.current, SnapshotAt: now.Add(-time.Hour)}},
+				states: map[int64]ContinuousState{1: {InstanceID: "i", ChannelID: 1, ModelName: "m", KError: 1, LastWrittenWeight: &last, LastWriteAt: &lastWriteAt, PausedReason: "write_failed", WriteFailureStreak: 3, LastWriteFailureAt: &failedAt, LastWriteError: "boom"}},
+			}
+			NewEngine(f).evaluateContinuous("i", autoPolicy(), now, f)
+			state := f.states[1]
+			if f.writeAttempts != 0 || state.PausedReason != "" || state.WriteFailureStreak != 0 || state.LastWriteError != "" {
+				t.Fatalf("evaporated change must clear pause without writing: attempts=%d state=%#v", f.writeAttempts, state)
+			}
+		})
 	}
 }
 

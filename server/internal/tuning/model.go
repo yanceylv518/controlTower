@@ -16,19 +16,21 @@ type SchedulingParams struct {
 
 // ContinuousDispatchParams is the v3.0 continuous weighting policy.
 type ContinuousDispatchParams struct {
-	Sensitivity           float64 `json:"sensitivity"`
-	OTPSCap               float64 `json:"otps_cap"`
-	CircuitThreshold      float64 `json:"circuit_threshold"`
-	RecoveryThreshold     float64 `json:"recovery_threshold"`
-	CircuitErrorRate      float64 `json:"circuit_error_rate"`
-	RecoveryErrorRate     float64 `json:"recovery_error_rate"`
-	SilentMinutes         int     `json:"silent_minutes"`
-	ProbeIntervalSeconds  int     `json:"probe_interval_seconds"`
-	ProbeCount            int     `json:"probe_count"`
-	SoftStartMultiplier   float64 `json:"soft_start_multiplier"`
-	WindowMinutes         int     `json:"window_minutes"`
-	MinSamples            int64   `json:"min_samples"`
-	SparseLookbackMinutes int     `json:"sparse_lookback_minutes"`
+	Sensitivity             float64 `json:"sensitivity"`
+	OTPSCap                 float64 `json:"otps_cap"`
+	CircuitThreshold        float64 `json:"circuit_threshold"`
+	RecoveryThreshold       float64 `json:"recovery_threshold"`
+	CircuitErrorRate        float64 `json:"circuit_error_rate"`
+	RecoveryErrorRate       float64 `json:"recovery_error_rate"`
+	SilentMinutes           int     `json:"silent_minutes"`
+	ProbeIntervalSeconds    int     `json:"probe_interval_seconds"`
+	ProbeCount              int     `json:"probe_count"`
+	SoftStartMultiplier     float64 `json:"soft_start_multiplier"`
+	WindowMinutes           int     `json:"window_minutes"`
+	MinSamples              int64   `json:"min_samples"`
+	SparseLookbackMinutes   int     `json:"sparse_lookback_minutes"`
+	WriteDeadbandPercent    float64 `json:"write_deadband_percent"`
+	MinWriteIntervalMinutes int     `json:"min_write_interval_minutes"`
 }
 
 type Policy struct {
@@ -48,6 +50,7 @@ func DefaultPolicy() Policy {
 			CircuitErrorRate: .30, RecoveryErrorRate: .10,
 			SilentMinutes: 5, ProbeIntervalSeconds: 5, ProbeCount: 10, SoftStartMultiplier: .2,
 			WindowMinutes: 15, MinSamples: 20, SparseLookbackMinutes: 360,
+			WriteDeadbandPercent: 5, MinWriteIntervalMinutes: 5,
 		},
 	}
 }
@@ -114,6 +117,12 @@ func (p Policy) Validate() map[string]string {
 	}
 	if c.SparseLookbackMinutes < c.WindowMinutes || c.SparseLookbackMinutes > 2880 {
 		e["continuous.sparse_lookback_minutes"] = "must_be_between_window_and_2880"
+	}
+	if c.WriteDeadbandPercent < 0 || c.WriteDeadbandPercent > 50 {
+		e["continuous.write_deadband_percent"] = "must_be_between_0_and_50"
+	}
+	if c.MinWriteIntervalMinutes < 1 || c.MinWriteIntervalMinutes > 60 {
+		e["continuous.min_write_interval_minutes"] = "must_be_between_1_and_60"
 	}
 	if p.Scheduling.WindowMinutes < 1 || p.Scheduling.WindowMinutes > 2880 {
 		e["scheduling.window_minutes"] = "must_be_between_1_and_2880"
