@@ -12,7 +12,7 @@ const loading = ref(false), saving = ref(false), dirty = ref(false), activeTab =
 const mode = ref<"observe" | "confirm" | "auto">("observe");
 const bases = ref<ChannelBaseValue[]>([]), states = ref<TuningContinuousState[]>([]), events = ref<TuningRecommendation[]>([]);
 const modelQuery = ref(""), activeModel = ref("");
-const eventModelFilter = ref("__current__"), eventRuleFilter = ref(""), eventChannelQuery = ref("");
+const eventModelFilter = ref(""), eventRuleFilter = ref(""), eventChannelQuery = ref("");
 const defaults = () => ({ sensitivity: 1, otps_cap: 1.5, circuit_threshold: .1, recovery_threshold: .2, circuit_error_rate: .3, recovery_error_rate: .1, silent_minutes: 5, probe_interval_seconds: 5, probe_count: 10, soft_start_multiplier: .2, window_minutes: 15, min_samples: 20, sparse_lookback_minutes: 360 });
 const policy = reactive<TuningPolicy>({ scheduling: { window_minutes: 15, min_samples: 20, sparse_min_samples: 10, sparse_lookback_minutes: 360 }, continuous: defaults(), dispatch_modes: {} });
 const siteID = computed(() => filters.site_id || "");
@@ -147,7 +147,7 @@ onBeforeUnmount(() => { if (refreshTimer) clearInterval(refreshTimer); });
       <div class="summary compact"><div><span>近 7 天自动调权</span><b>{{ eventCount(7,'weight_write') }}</b></div><div><span>近 7 天熔断</span><b>{{ eventCount(7,'circuit_opened') }}</b></div><div><span>近 7 天恢复</span><b>{{ eventCount(7,'circuit_recovered') }}</b></div><div><span>近 7 天人工接管</span><b>{{ eventCount(7,'manual_takeover') }}</b></div></div>
       <el-card shadow="never"><template #header><div class="head"><div><b>系统做过什么</b><small>按模型、渠道和事件类型筛选；共 {{ filteredEvents.length }} 条</small></div></div></template>
         <div class="event-filters">
-          <el-select v-model="eventModelFilter" placeholder="模型" style="width:220px"><el-option label="当前模型" value="__current__"/><el-option label="全部模型" value=""/><el-option v-for="model in models" :key="model" :label="model" :value="model"/></el-select>
+          <el-select v-model="eventModelFilter" placeholder="模型" style="width:220px"><el-option label="全部模型" value=""/><el-option :label="`当前模型${activeModel ? `（${activeModel}）` : ''}`" value="__current__"/><el-option v-for="model in models" :key="model" :label="model" :value="model"/></el-select>
           <el-select v-model="eventRuleFilter" clearable placeholder="全部事件" style="width:170px"><el-option v-for="rule in eventRuleOptions" :key="rule" :label="eventName(rule)" :value="rule"/></el-select>
           <el-input v-model="eventChannelQuery" clearable placeholder="搜索渠道名称或 ID" style="width:240px"/>
         </div>
