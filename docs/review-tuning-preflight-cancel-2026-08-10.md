@@ -30,3 +30,7 @@
 ## 部署
 
 无迁移。rc42/rc43(若已按上批打)均不含;**发布本批需 server+agent 同版新 tag,agent 部署要点回归**(A 机升级,B 机 CT_LOG_COLLECT_ENABLED=false)。
+
+## 补充(同日,用户问询预检交互后核实)
+
+预检为异步:POST 立即 202 返回 command_id,前端每秒轮询最多 45 次,期间仅保存按钮 loading+toast 提示;成功才继续 PUT 策略。Agent 侧同一趟上报内闭环(Heartbeat 领命令→立即执行→结果附在同趟 Report 回传),默认 30s 周期下端到端平均 ~15s/最坏 ~31s,45s 预算覆盖。**P3 记档:轮询预算写死 45s,若站点把 CT_LOG_POLL_INTERVAL_SECONDS 配到 ~40s 以上预检必假超时**(命令实际稍后成功但保存已中止);生产默认 30s 不受影响。
