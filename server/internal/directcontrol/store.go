@@ -144,6 +144,15 @@ func (s Store) CreateContinuousProbe(v tuning.Recommendation, model string, coun
 func (s Store) runProbeRound(controller Controller, siteID string, channelID int64, commandID, model string, count, interval int) {
 	ctx, cancel := context.WithTimeout(context.Background(), probeRoundTimeout)
 	defer cancel()
+	// Ordering guard: the engine persists probe_command_id into the state row
+	// only after CreateContinuousProbe returns. A round that finishes before
+	// that (instant connection failures, probe_count=1) would report into an
+	// UPDATE matching no row and be lost until the 10-minute fallback. Probes
+	// therefore start only once the persisted marker references this round.
+	if !waitForProbeMarker(ctx, s.Store, siteID, channelID, commandID, s.sleep) {
+		_, _, _ = s.Store.CompleteChannelCommand(commandID, "failed", "probe marker was never persisted", time.Now().UTC())
+		return
+	}
 	attempts, successes, durationSum, lastError := executeProbeRound(ctx, controller, channelID, model, count, interval, s.sleep)
 	now := time.Now().UTC()
 	status := "succeeded"
@@ -156,6 +165,31 @@ func (s Store) runProbeRound(controller Controller, siteID string, channelID int
 	summary, _ := json.Marshal(map[string]any{"result": map[string]any{"status": status, "error": lastError, "attempts": attempts, "successes": successes, "duration_seconds": durationSum, "direct": true}})
 	_ = s.Store.InsertOperationAudit(storage.OperationAudit{ID: commandID, InstanceID: siteID, OperationType: "channel.probe", TargetType: "channel", TargetID: fmt.Sprint(channelID), ActorID: "system:auto", AfterSummary: string(summary), Status: status, CreatedAt: now})
 	_ = s.Store.RecordContinuousProbeResult(siteID, channelID, commandID, attempts, successes, durationSum, now)
+}
+
+type continuousStateLister interface {
+	ListContinuousStates(string) ([]tuning.ContinuousState, error)
+}
+
+const probeMarkerWait = 30 * time.Second
+const probeMarkerPoll = 200 * time.Millisecond
+
+func waitForProbeMarker(ctx context.Context, lister continuousStateLister, siteID string, channelID int64, commandID string, sleep func(context.Context, time.Duration)) bool {
+	deadline := time.Now().Add(probeMarkerWait)
+	for {
+		states, err := lister.ListContinuousStates(siteID)
+		if err == nil {
+			for _, state := range states {
+				if state.ChannelID == channelID && state.ProbeCommandID != nil && *state.ProbeCommandID == commandID {
+					return true
+				}
+			}
+		}
+		if ctx.Err() != nil || time.Now().After(deadline) {
+			return false
+		}
+		sleep(ctx, probeMarkerPoll)
+	}
 }
 
 // executeProbeRound mirrors the agent's probe loop: the whole round reports

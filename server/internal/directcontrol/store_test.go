@@ -87,3 +87,43 @@ func TestExecuteProbeRoundStopsOnCanceledContext(t *testing.T) {
 		t.Fatalf("canceled round must stop early and record the reason: attempts=%d err=%q", attempts, lastError)
 	}
 }
+
+type fakeStateLister struct {
+	calls    int
+	markerAt int
+	id       string
+}
+
+func (f *fakeStateLister) ListContinuousStates(string) ([]tuning.ContinuousState, error) {
+	f.calls++
+	if f.markerAt > 0 && f.calls >= f.markerAt {
+		return []tuning.ContinuousState{{ChannelID: 9, ProbeCommandID: &f.id}}, nil
+	}
+	return []tuning.ContinuousState{{ChannelID: 9}}, nil
+}
+
+func TestWaitForProbeMarkerBlocksUntilPersisted(t *testing.T) {
+	lister := &fakeStateLister{markerAt: 3, id: "cmd-1"}
+	ok := waitForProbeMarker(context.Background(), lister, "s", 9, "cmd-1", func(context.Context, time.Duration) {})
+	if !ok || lister.calls != 3 {
+		t.Fatalf("marker must be awaited before probing: ok=%v calls=%d", ok, lister.calls)
+	}
+}
+
+func TestWaitForProbeMarkerGivesUpWhenNeverPersisted(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	lister := &fakeStateLister{id: "cmd-1"}
+	if waitForProbeMarker(ctx, lister, "s", 9, "cmd-1", func(context.Context, time.Duration) {}) {
+		t.Fatal("a marker that never lands must abort the round")
+	}
+}
+
+func TestWaitForProbeMarkerIgnoresForeignRounds(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	lister := &fakeStateLister{markerAt: 1, id: "other-round"}
+	if waitForProbeMarker(ctx, lister, "s", 9, "cmd-1", func(context.Context, time.Duration) {}) {
+		t.Fatal("a stale marker from another round must not release the probes")
+	}
+}
