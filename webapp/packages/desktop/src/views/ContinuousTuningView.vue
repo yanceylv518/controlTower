@@ -11,9 +11,11 @@ const filters = useFiltersStore();
 const loading = ref(false), saving = ref(false), dirty = ref(false), activeTab = ref("overview"), helpOpen = ref(false);
 const mode = ref<"observe" | "confirm" | "auto">("observe");
 const bases = ref<ChannelBaseValue[]>([]), states = ref<TuningContinuousState[]>([]), events = ref<TuningRecommendation[]>([]);
+const savedBases = ref<ChannelBaseValue[]>([]), savedPolicy = ref<TuningPolicy | null>(null), savedMode = ref<"observe" | "confirm" | "auto">("observe");
 const modelQuery = ref(""), activeModel = ref("");
 const eventModelFilter = ref(""), eventRuleFilter = ref(""), eventChannelQuery = ref("");
 const eventPage = ref(1), eventPageSize = ref(20);
+const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 const defaults = () => ({ sensitivity: 1, otps_cap: 1.5, circuit_threshold: .1, recovery_threshold: .2, circuit_error_rate: .3, recovery_error_rate: .1, silent_minutes: 5, probe_interval_seconds: 5, probe_count: 10, soft_start_multiplier: .2, window_minutes: 15, min_samples: 20, sparse_lookback_minutes: 360 });
 const policy = reactive<TuningPolicy>({ scheduling: { window_minutes: 15, min_samples: 20, sparse_min_samples: 10, sparse_lookback_minutes: 360 }, continuous: defaults(), dispatch_modes: {} });
 const siteID = computed(() => filters.site_id || "");
@@ -27,7 +29,8 @@ const models = computed(() => {
   );
 });
 const visibleModels = computed(() => models.value.filter(model => model.toLowerCase().includes(modelQuery.value.trim().toLowerCase())));
-const activeRows = computed(() => bases.value.filter(x => x.model_name === activeModel.value).sort((a, b) => b.base_priority - a.base_priority || b.base_weight - a.base_weight || a.channel_id - b.channel_id));
+const activeRows = computed(() => bases.value.filter(x => x.model_name === activeModel.value).sort((a, b) => b.current_priority - a.current_priority || b.current_weight - a.current_weight || a.channel_id - b.channel_id));
+const channelRowKey = (row: ChannelBaseValue) => `${row.channel_id}:${row.model_name}`;
 const stateMap = computed(() => new Map(states.value.map(x => [`${x.channel_id}:${x.model_name}`, x])));
 const stateFor = (row: ChannelBaseValue) => stateMap.value.get(`${row.channel_id}:${row.model_name}`);
 const validEvent = (item: TuningRecommendation) => item.rule !== "circuit_recovered" || item.proposed_weight > 0;
@@ -101,6 +104,28 @@ const evaluationText = (row: ChannelBaseValue) => {
   return state.baseline_ready ? "已参与本轮计算" : "合格渠道不足 2 个";
 };
 const lastEvaluationAt = computed(() => activeRows.value.map(row => stateFor(row)?.updated_at).filter((value): value is string => !!value).sort().at(-1));
+const replacePolicy = (value: TuningPolicy) => {
+  for (const key of Object.keys(policy)) delete (policy as unknown as Record<string, unknown>)[key];
+  Object.assign(policy, clone(value));
+};
+const captureSavedState = () => {
+  savedBases.value = clone(bases.value);
+  savedPolicy.value = clone(policy);
+  savedMode.value = mode.value;
+};
+const cancelChanges = (notify = true) => {
+  if (!savedPolicy.value) return;
+  bases.value = clone(savedBases.value);
+  replacePolicy(savedPolicy.value);
+  mode.value = savedMode.value;
+  dirty.value = false;
+  if (notify) ElMessage.info("已取消未保存的更改");
+};
+const selectModel = (model: string) => {
+  if (model === activeModel.value) return;
+  if (dirty.value) cancelChanges(false);
+  activeModel.value = model;
+};
 
 async function load() {
   await filters.loadInstances(); if (!siteID.value) return;
@@ -111,7 +136,7 @@ async function load() {
     bases.value = b.items ?? []; events.value = r.items ?? []; for (const model of models.value) policy.dispatch_modes[model] ||= "off";
     if (!models.value.includes(activeModel.value)) activeModel.value = models.value[0] || "";
     try { states.value = (await dashboard.tuningContinuousStates(siteID.value)).items ?? []; } catch { states.value = []; }
-    dirty.value = false;
+    dirty.value = false; captureSavedState();
   } finally { loading.value = false; }
 }
 let refreshTimer: ReturnType<typeof setInterval> | undefined;
@@ -132,6 +157,7 @@ async function refreshRuntime() {
     }
     for (const model of models.value) policy.dispatch_modes[model] ||= "off";
     if (!models.value.includes(activeModel.value)) activeModel.value = models.value[0] || "";
+    if (!dirty.value) captureSavedState();
   } catch { /* Keep the last good state; the next poll retries. */ }
 }
 async function sync(kind: "weight" | "priority") {
@@ -154,7 +180,7 @@ async function sync(kind: "weight" | "priority") {
     for (const model of models.value) policy.dispatch_modes[model] ||= "off";
     if (!activeModel.value) activeModel.value = models.value[0] || "";
     bases.value = (await dashboard.saveTuningBaseValues(siteID.value, bases.value)).items ?? [];
-    dirty.value = false;
+    dirty.value = false; captureSavedState();
     ElMessage.success("基础值已从 new-api 更新并保存");
   } finally { saving.value = false; }
 }
@@ -168,13 +194,13 @@ onBeforeUnmount(() => { if (refreshTimer) clearInterval(refreshTimer); });
 <template><AppShell title="调权中心"><div v-loading="loading" class="page" :class="{'events-page':activeTab==='events'}">
   <el-tabs v-model="activeTab" class="tabs">
     <el-tab-pane label="运行概览" name="overview">
-      <el-card shadow="never" class="workspace-card"><template #header><div class="head"><div class="title-line"><b>模型与渠道</b><small>每个模型单独选择关闭、只观察或自动执行</small><div class="inline-metrics"><span>自动 <b>{{ counts.auto }}</b></span><span>观察 <b>{{ counts.observe }}</b></span><span>关闭 <b>{{ counts.off }}</b></span><span :class="{ danger: abnormal }">关注 <b>{{ abnormal }}</b></span></div></div><div class="tools"><el-button @click="helpOpen=true">使用说明</el-button><el-button :loading="saving" @click="sync('weight')">初始化/刷新基础值</el-button><el-button v-if="dirty" type="primary" :loading="saving" @click="save">保存更改</el-button></div></div></template>
+      <el-card shadow="never" class="workspace-card"><template #header><div class="head"><div class="title-line"><b>模型与渠道</b><small>每个模型单独选择关闭、只观察或自动执行</small><div class="inline-metrics"><span>自动 <b>{{ counts.auto }}</b></span><span>观察 <b>{{ counts.observe }}</b></span><span>关闭 <b>{{ counts.off }}</b></span><span :class="{ danger: abnormal }">关注 <b>{{ abnormal }}</b></span></div></div><div class="tools"><el-button @click="helpOpen=true">使用说明</el-button><el-button :loading="saving" @click="sync('weight')">初始化/刷新基础值</el-button><el-button v-if="dirty" :disabled="saving" @click="cancelChanges()">取消更改</el-button><el-button v-if="dirty" type="primary" :loading="saving" @click="save">保存更改</el-button></div></div></template>
         <el-empty v-if="!models.length" description="还没有渠道基础值"><el-button type="primary" @click="sync('weight')">立即从 new-api 读取</el-button></el-empty>
         <div v-else class="model-workspace">
-          <aside class="model-nav"><el-input v-model="modelQuery" clearable placeholder="搜索模型"/><div class="model-list"><button v-for="model in visibleModels" :key="model" :class="{active:activeModel===model}" @click="activeModel=model"><span><b>{{ model }}</b><small>{{ bases.filter(x=>x.model_name===model).length }} 个渠道</small></span><span class="model-status"><el-badge v-if="modelAbnormal(model)" :value="modelAbnormal(model)" type="danger"/><el-tag :type="modeType(model)" effect="plain" size="small">{{ modeText(model) }}</el-tag></span></button><el-empty v-if="!visibleModels.length" :image-size="48" description="没有匹配模型"/></div></aside>
+          <aside class="model-nav"><el-input v-model="modelQuery" clearable placeholder="搜索模型"/><div class="model-list"><button v-for="model in visibleModels" :key="model" :class="{active:activeModel===model}" @click="selectModel(model)"><span><b>{{ model }}</b><small>{{ bases.filter(x=>x.model_name===model).length }} 个渠道</small></span><span class="model-status"><el-badge v-if="modelAbnormal(model)" :value="modelAbnormal(model)" type="danger"/><el-tag :type="modeType(model)" effect="plain" size="small">{{ modeText(model) }}</el-tag></span></button><el-empty v-if="!visibleModels.length" :image-size="48" description="没有匹配模型"/></div></aside>
           <section class="model-detail"><div class="model-head"><div><b>{{ activeModel }}</b><small>{{ activeRows.length }} 个渠道</small><small v-if="lastEvaluationAt">最近评估 {{ formatTime(lastEvaluationAt) }} · 每 30 秒自动刷新</small></div><el-radio-group v-if="activeModel" v-model="policy.dispatch_modes[activeModel]" size="small" @change="dirty=true"><el-radio-button value="off">关闭</el-radio-button><el-radio-button value="observe">只观察</el-radio-button><el-radio-button value="auto">自动执行</el-radio-button></el-radio-group></div>
             <el-collapse class="evidence-collapse"><el-collapse-item title="查看本轮原始指标与同模型中位数" name="evidence"><div class="evidence-grid"><div v-for="row in activeRows" :key="`${row.channel_id}:${row.model_name}`" class="evidence-row"><b>{{ row.channel_name }}</b><span>TTFT {{ seconds(stateFor(row)?.metric_ttft_p50) }}/{{ seconds(stateFor(row)?.metric_ttft_p90) }}/{{ seconds(stateFor(row)?.metric_ttft_p95) }} → 中位数 {{ seconds(stateFor(row)?.baseline_ttft_p50) }}/{{ seconds(stateFor(row)?.baseline_ttft_p90) }}/{{ seconds(stateFor(row)?.baseline_ttft_p95) }}</span><span>缓存 {{ stateFor(row)?.cache_ready ? `${percent(stateFor(row)?.metric_cache)} → ${percent(stateFor(row)?.baseline_cache)}` : "证据不足，不参与" }}</span><span>输出 {{ stateFor(row)?.otps_ready ? `${stateFor(row)?.metric_otps.toFixed(1)} → ${stateFor(row)?.baseline_otps.toFixed(1)} OTPS` : "证据不足，不参与" }}</span><span>平滑渠道错误率 {{ percent(stateFor(row)?.smoothed_error_rate) }}</span></div></div></el-collapse-item></el-collapse>
-            <el-table :data="activeRows" size="small" height="calc(100vh - 230px)"><el-table-column prop="channel_id" label="ID" width="76"/><el-table-column prop="channel_name" label="渠道" min-width="170"/><el-table-column prop="group_name" label="分组" min-width="110"><template #default="{row}">{{ row.group_name || "—" }}</template></el-table-column><el-table-column label="评估状态" min-width="180"><template #default="{row}"><div class="evaluation"><span>{{ evaluationText(row) }}</span><small>窗口样本 {{ sampleText(row) }}</small></div></template></el-table-column><el-table-column label="评估系数" min-width="220"><template #default="{row}"><el-popover trigger="hover" placement="top-start" :width="520" popper-class="factor-explain-popover"><template #reference><span class="factors explainable"><span :class="comparisonClass(stateFor(row)?.k_speed)">速度 {{ factor(stateFor(row)?.k_speed) }}</span> · <span :class="comparisonClass(stateFor(row)?.k_cache)">缓存 {{ factor(stateFor(row)?.k_cache) }}</span> · <span :class="comparisonClass(stateFor(row)?.k_otps)">输出 {{ factor(stateFor(row)?.k_otps) }}</span> · <span :class="comparisonClass(stateFor(row)?.k_error)">错误 {{ factor(stateFor(row)?.k_error) }}</span></span></template><pre class="factor-explanation">{{ factorExplanation(row) }}</pre></el-popover></template></el-table-column><el-table-column label="基础权重" width="122"><template #default="{row}"><el-input-number v-model="row.base_weight" :min="0" size="small" controls-position="right" @change="dirty=true"/></template></el-table-column><el-table-column width="105"><template #header><span class="column-help">计算权重<el-popover trigger="click" width="460"><template #reference><button class="help" aria-label="查看计算权重说明">i</button></template><div class="calc-details"><div class="calc-title"><b>计算权重说明</b><code>round(基础权重 × 综合倍率)</code></div><p class="formula">综合倍率 = clamp(速度 × 缓存 × 输出 × 错误，0.500，1.500)</p><dl><div><dt>速度</dt><dd>比较该渠道与同模型渠道的 TTFT P50/P90/P95，按 50%/30%/20% 加权；越快系数越高。<small>来源：Agent 采集 new-api 日志的首字耗时，汇总到 metric_1m。</small></dd></div><div><dt>缓存</dt><dd>渠道缓存命中率相对同模型中位数换算；证据不足时不参与计算。<small>来源：new-api 日志中的缓存 token ÷提示 token。</small></dd></div><div><dt>输出</dt><dd>渠道 OTPS 相对同模型中位数换算；证据不足时不参与计算。<small>来源：成功流式请求的输出 token ÷生成耗时。</small></dd></div><div><dt>错误</dt><dd>分钟渠道错误率经 EWMA 平滑后换算；用户自身错误不处罚渠道。<small>来源：new-api 请求状态，由配置的用户错误码规则分类。</small></dd></div></dl><p class="calc-note">至少需要 2 个达到最少请求数且有完整 TTFT 数据的同模型渠道；模型关闭或数据不足时倍率保持 1.000。</p></div></el-popover></span></template><template #default="{row}"><span :class="weightClass(row)">{{ stateFor(row)?.proposed_weight ?? "—" }}</span></template></el-table-column><el-table-column prop="current_weight" label="当前权重" width="100"/><el-table-column label="基础优先级" width="122"><template #default="{row}"><el-input-number v-model="row.base_priority" :min="0" size="small" controls-position="right" @change="dirty=true"/></template></el-table-column><el-table-column prop="current_priority" label="线上优先级" width="110"/></el-table>
+            <el-table :data="activeRows" :row-key="channelRowKey" size="small" height="calc(100vh - 230px)"><el-table-column prop="channel_id" label="ID" width="76"/><el-table-column prop="channel_name" label="渠道" min-width="170"/><el-table-column prop="group_name" label="分组" min-width="110"><template #default="{row}">{{ row.group_name || "—" }}</template></el-table-column><el-table-column label="评估状态" min-width="180"><template #default="{row}"><div class="evaluation"><span>{{ evaluationText(row) }}</span><small>窗口样本 {{ sampleText(row) }}</small></div></template></el-table-column><el-table-column label="评估系数" min-width="220"><template #default="{row}"><el-popover trigger="hover" placement="top-start" :width="520" popper-class="factor-explain-popover"><template #reference><span class="factors explainable"><span :class="comparisonClass(stateFor(row)?.k_speed)">速度 {{ factor(stateFor(row)?.k_speed) }}</span> · <span :class="comparisonClass(stateFor(row)?.k_cache)">缓存 {{ factor(stateFor(row)?.k_cache) }}</span> · <span :class="comparisonClass(stateFor(row)?.k_otps)">输出 {{ factor(stateFor(row)?.k_otps) }}</span> · <span :class="comparisonClass(stateFor(row)?.k_error)">错误 {{ factor(stateFor(row)?.k_error) }}</span></span></template><pre class="factor-explanation">{{ factorExplanation(row) }}</pre></el-popover></template></el-table-column><el-table-column label="基础权重" width="122"><template #default="{row}"><el-input-number v-model="row.base_weight" :min="0" size="small" controls-position="right" @change="dirty=true"/></template></el-table-column><el-table-column width="105"><template #header><span class="column-help">计算权重<el-popover trigger="click" width="460"><template #reference><button class="help" aria-label="查看计算权重说明">i</button></template><div class="calc-details"><div class="calc-title"><b>计算权重说明</b><code>round(基础权重 × 综合倍率)</code></div><p class="formula">综合倍率 = clamp(速度 × 缓存 × 输出 × 错误，0.500，1.500)</p><dl><div><dt>速度</dt><dd>比较该渠道与同模型渠道的 TTFT P50/P90/P95，按 50%/30%/20% 加权；越快系数越高。<small>来源：Agent 采集 new-api 日志的首字耗时，汇总到 metric_1m。</small></dd></div><div><dt>缓存</dt><dd>渠道缓存命中率相对同模型中位数换算；证据不足时不参与计算。<small>来源：new-api 日志中的缓存 token ÷提示 token。</small></dd></div><div><dt>输出</dt><dd>渠道 OTPS 相对同模型中位数换算；证据不足时不参与计算。<small>来源：成功流式请求的输出 token ÷生成耗时。</small></dd></div><div><dt>错误</dt><dd>分钟渠道错误率经 EWMA 平滑后换算；用户自身错误不处罚渠道。<small>来源：new-api 请求状态，由配置的用户错误码规则分类。</small></dd></div></dl><p class="calc-note">至少需要 2 个达到最少请求数且有完整 TTFT 数据的同模型渠道；模型关闭或数据不足时倍率保持 1.000。</p></div></el-popover></span></template><template #default="{row}"><span :class="weightClass(row)">{{ stateFor(row)?.proposed_weight ?? "—" }}</span></template></el-table-column><el-table-column prop="current_weight" label="当前权重" width="100"/><el-table-column label="基础优先级" width="122"><template #default="{row}"><el-input-number v-model="row.base_priority" :min="0" size="small" controls-position="right" @change="dirty=true"/></template></el-table-column><el-table-column prop="current_priority" label="线上优先级" width="110"/></el-table>
           </section>
         </div>
       </el-card>
