@@ -38,11 +38,71 @@ func TestUpdatePreservesChannelFieldsWithoutSendingKey(t *testing.T) {
 	if _, ok := putBody["key"]; ok || putBody["weight"] != float64(20) {
 		t.Fatalf("unsafe PUT body: %#v", putBody)
 	}
+	if _, ok := putBody["status"]; ok {
+		t.Fatalf("general update must not contain status: %#v", putBody)
+	}
 	if result.ChannelID != 12 {
 		t.Fatalf("unexpected result: %#v", result)
 	}
 	if strings.Contains(string(mustJSON(putBody)), "secret") {
 		t.Fatalf("PUT body leaked secret: %#v", putBody)
+	}
+}
+
+func TestNoChangeUpdateOmitsStatusReturnedByChannelLookup(t *testing.T) {
+	var putBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/channel/12":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"id":12,"name":"primary","status":1,"weight":10,"priority":2}}`))
+		case r.Method == http.MethodPut && r.URL.Path == "/api/channel/":
+			_ = json.NewDecoder(r.Body).Decode(&putBody)
+			if _, exists := putBody["status"]; exists {
+				_, _ = w.Write([]byte(`{"success":false,"message":"Invalid parameters"}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"success":true,"data":{}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	if _, err := New(server.URL, "admin-token", 7, server.Client()).Update(context.Background(), UpdateRequest{ChannelID: 12}); err != nil {
+		t.Fatalf("no-change update: %v", err)
+	}
+	if putBody["id"] != float64(12) || putBody["weight"] != float64(10) {
+		t.Fatalf("unexpected no-change body: %#v", putBody)
+	}
+}
+
+func TestStatusUpdateUsesDedicatedEndpoint(t *testing.T) {
+	var generalHasStatus bool
+	var statusBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet:
+			_, _ = w.Write([]byte(`{"success":true,"data":{"id":12,"status":1,"weight":10,"priority":2}}`))
+		case r.Method == http.MethodPut && r.URL.Path == "/api/channel/":
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			_, generalHasStatus = body["status"]
+			_, _ = w.Write([]byte(`{"success":true,"data":{}}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/channel/12/status":
+			_ = json.NewDecoder(r.Body).Decode(&statusBody)
+			_, _ = w.Write([]byte(`{"success":true,"data":true}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	status := 2
+	if _, err := New(server.URL, "admin-token", 7, server.Client()).Update(context.Background(), UpdateRequest{ChannelID: 12, Status: &status}); err != nil {
+		t.Fatalf("status update: %v", err)
+	}
+	if generalHasStatus || statusBody["status"] != float64(2) {
+		t.Fatalf("status was not isolated: general=%v status=%#v", generalHasStatus, statusBody)
 	}
 }
 

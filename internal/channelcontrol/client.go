@@ -120,10 +120,13 @@ func (c *Client) Update(ctx context.Context, update UpdateRequest) (Result, erro
 	if err != nil {
 		return Result{}, err
 	}
+	originalStatus := channelNumber(channel["status"])
 	delete(channel, "key")
-	if update.Status != nil {
-		channel["status"] = *update.Status
-	}
+	// Current new-api versions reject status on the general channel update
+	// endpoint. Status has its own endpoint, while GET /api/channel/:id always
+	// includes the field, so forwarding the GET response verbatim makes even a
+	// no-change preflight fail with "Invalid parameters".
+	delete(channel, "status")
 	if update.Weight != nil {
 		channel["weight"] = *update.Weight
 	}
@@ -143,7 +146,25 @@ func (c *Client) Update(ctx context.Context, update UpdateRequest) (Result, erro
 	if !response.Success {
 		return Result{}, fmt.Errorf("new-api channel update failed: %s", response.Message)
 	}
-	return Result{ChannelID: update.ChannelID, Status: intPointer(channelNumber(channel["status"])), Weight: uintPointer(channelNumber(channel["weight"])), Priority: int64Pointer(channelNumber(channel["priority"]))}, nil
+	if update.Status != nil {
+		statusBody, marshalErr := json.Marshal(map[string]int{"status": *update.Status})
+		if marshalErr != nil {
+			return Result{}, marshalErr
+		}
+		var statusResponse struct {
+			Success bool   `json:"success"`
+			Message string `json:"message"`
+			Data    any    `json:"data"`
+		}
+		if err := c.do(ctx, http.MethodPost, c.baseURL+"/api/channel/"+strconv.FormatInt(update.ChannelID, 10)+"/status", statusBody, &statusResponse, true); err != nil {
+			return Result{}, err
+		}
+		if !statusResponse.Success {
+			return Result{}, fmt.Errorf("new-api channel status update failed: %s", statusResponse.Message)
+		}
+		originalStatus = int64(*update.Status)
+	}
+	return Result{ChannelID: update.ChannelID, Status: intPointer(originalStatus), Weight: uintPointer(channelNumber(channel["weight"])), Priority: int64Pointer(channelNumber(channel["priority"]))}, nil
 }
 
 func (c *Client) ensureToken(ctx context.Context) error {
