@@ -23,6 +23,13 @@ type continuousBaseline struct {
 const (
 	cacheEvidenceTokens = int64(10_000)
 	otpsEvidenceTokens  = int64(100)
+
+	// Control writes fail loudly on the direct path (immediate error) and as
+	// enqueue errors on the agent path. A short streak pauses the channel so
+	// the engine stops hammering new-api, then keeps probing on a slow
+	// interval and self-heals when writes succeed again.
+	writeFailurePauseThreshold = 3
+	writeFailureRetryInterval  = 10 * time.Minute
 )
 
 // evaluateContinuous implements the v3.0 continuous dispatch state machine,
@@ -164,11 +171,13 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 							at := now
 							state.LastWrittenWeight = &w
 							state.LastWriteAt = &at
+							e.noteWriteSuccess(&state)
 							writes++
 						} else {
 							state.Phase, state.SoftStartPending = "circuit", false
 							next := now.Add(time.Duration(p.SilentMinutes) * time.Minute)
 							state.NextProbeAt = &next
+							e.noteWriteFailure(id, base, &state, mode, err, now)
 						}
 					} else {
 						recoveredNow = true
@@ -288,18 +297,23 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 				rec := continuousEvent(id, base, state, "circuit_opened", mode, now)
 				zero := int64(0)
 				rec.ProposedPriority = &zero
-				if mode == "auto" {
+				// During a write_failed pause the circuit is tracked
+				// observe-style (event only) until the slow retry window
+				// reopens actual writes.
+				if mode == "auto" && writeAttemptAllowed(state, now) {
 					if _, err = cs.CreateContinuousWeightChange(rec, "system:auto", now); err == nil {
 						w := int64(0)
 						at := now
 						state.LastWrittenWeight = &w
 						state.LastWriteAt = &at
+						e.noteWriteSuccess(&state)
 						writes++
 					} else {
 						state.Phase = "normal"
 						state.Multiplier = clamp(state.KSpeed*state.KCache*state.KOTPS*state.KError, .5, 1.5)
 						state.ProposedWeight = max(int64(1), int64(math.Round(float64(base.BaseWeight)*state.Multiplier)))
 						state.CircuitOpenedAt, state.NextProbeAt, state.OriginalPriority = nil, nil, nil
+						e.noteWriteFailure(id, base, &state, mode, err, now)
 					}
 				} else {
 					_ = e.store.InsertRecommendation(rec)
@@ -335,13 +349,16 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 			// the snapshot lags for minutes after a write and would otherwise
 			// re-issue the same command every evaluation.
 			alreadyWritten := state.LastWrittenWeight != nil && *state.LastWrittenWeight == state.ProposedWeight
-			if mode == "auto" && state.PausedReason == "" && !alreadyWritten && state.ProposedWeight != base.CurrentWeight {
+			if mode == "auto" && writeAttemptAllowed(state, now) && !alreadyWritten && state.ProposedWeight != base.CurrentWeight {
 				rec := continuousEvent(id, base, state, "weight_write", mode, now)
 				if _, err = cs.CreateContinuousWeightChange(rec, "system:auto", now); err == nil {
 					written := state.ProposedWeight
 					at := now
 					state.LastWrittenWeight, state.LastWriteAt = &written, &at
+					e.noteWriteSuccess(&state)
 					writes++
+				} else {
+					e.noteWriteFailure(id, base, &state, mode, err, now)
 				}
 			}
 			state.UpdatedAt = now
@@ -496,6 +513,42 @@ func median(values []float64) float64 {
 		return values[mid]
 	}
 	return (values[mid-1] + values[mid]) / 2
+}
+
+func (e *Engine) noteWriteSuccess(state *ContinuousState) {
+	state.WriteFailureStreak = 0
+	state.LastWriteError = ""
+	state.LastWriteFailureAt = nil
+	if state.PausedReason == "write_failed" {
+		state.PausedReason = ""
+	}
+}
+
+// noteWriteFailure records a failed control write; reaching the streak
+// threshold pauses the channel and surfaces one auto_paused event carrying
+// the transport error.
+func (e *Engine) noteWriteFailure(id string, base ChannelBaseValue, state *ContinuousState, mode string, writeErr error, now time.Time) {
+	state.WriteFailureStreak++
+	at := now
+	state.LastWriteFailureAt = &at
+	state.LastWriteError = writeErr.Error()
+	if state.WriteFailureStreak >= writeFailurePauseThreshold && state.PausedReason == "" {
+		state.PausedReason = "write_failed"
+		rec := continuousEvent(id, base, *state, "auto_paused", mode, now)
+		rec.Evidence["reason"] = "write_failed"
+		rec.Evidence["error"] = state.LastWriteError
+		_ = e.store.InsertRecommendation(rec)
+	}
+}
+
+// writeAttemptAllowed keeps a write_failed pause retryable: one attempt per
+// slow interval instead of every tick, so recovery is automatic once the
+// control path works again.
+func writeAttemptAllowed(state ContinuousState, now time.Time) bool {
+	if state.PausedReason == "" {
+		return true
+	}
+	return state.PausedReason == "write_failed" && state.LastWriteFailureAt != nil && !now.Before(state.LastWriteFailureAt.Add(writeFailureRetryInterval))
 }
 
 func continuousEvent(id string, base ChannelBaseValue, state ContinuousState, rule, mode string, now time.Time) Recommendation {

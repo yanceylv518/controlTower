@@ -219,7 +219,13 @@ type ContinuousState struct {
 	ProbeDurationSum float64    `json:"probe_duration_sum"`
 	OriginalPriority *int64     `json:"original_priority,omitempty"`
 	SoftStartPending bool       `json:"soft_start_pending"`
-	UpdatedAt        time.Time  `json:"updated_at"`
+	// Direct-control write failure accounting: after a streak of failed
+	// new-api writes the channel pauses (paused_reason=write_failed) and
+	// retries on a slow interval instead of hammering every tick.
+	WriteFailureStreak int        `json:"write_failure_streak,omitempty"`
+	LastWriteFailureAt *time.Time `json:"last_write_failure_at,omitempty"`
+	LastWriteError     string     `json:"last_write_error,omitempty"`
+	UpdatedAt          time.Time  `json:"updated_at"`
 }
 
 type RecentChannelBucket struct {

@@ -3,6 +3,7 @@ package directcontrol
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -94,6 +95,7 @@ func TestDirectControlIntegration(t *testing.T) {
 	inner := mysqlstore.New(db)
 	now := time.Now().UTC()
 	site, plainSite := "smoke-direct", "smoke-queue"
+	runID := fmt.Sprintf("%d", time.Now().UnixNano())
 	for _, id := range []string{site, plainSite} {
 		if err := inner.CreateInstance(storage.Instance{ID: id, SiteID: id, Name: id, Enabled: true, CreatedAt: now, UpdatedAt: now}); err != nil && !strings.Contains(err.Error(), "Duplicate") {
 			t.Fatalf("create instance %s: %v", id, err)
@@ -126,7 +128,7 @@ func TestDirectControlIntegration(t *testing.T) {
 	}
 
 	// 2. Direct weight write hits new-api and leaves the full paper trail.
-	rec := tuning.Recommendation{ID: "smoke-rec-1", InstanceID: site, ChannelID: 9, ChannelName: "smoke", CreatedAt: now, Rule: "weight_write", Evidence: map[string]any{"model": "m"}, CurrentWeight: 10, ProposedWeight: 25, ModeAtCreation: "auto"}
+	rec := tuning.Recommendation{ID: "smoke-rec-1-" + runID, InstanceID: site, ChannelID: 9, ChannelName: "smoke", CreatedAt: now, Rule: "weight_write", Evidence: map[string]any{"model": "m"}, CurrentWeight: 10, ProposedWeight: 25, ModeAtCreation: "auto"}
 	commandID, err := store.CreateContinuousWeightChange(rec, "system:auto", now)
 	if err != nil {
 		t.Fatalf("direct weight change: %v", err)
@@ -144,7 +146,7 @@ func TestDirectControlIntegration(t *testing.T) {
 	}
 
 	// 3. Probe round runs server-side and reports like an agent round.
-	probeRec := tuning.Recommendation{ID: "smoke-rec-2", InstanceID: site, ChannelID: 9, ChannelName: "smoke", CreatedAt: now, Rule: "probe_started", Evidence: map[string]any{}, ModeAtCreation: "auto"}
+	probeRec := tuning.Recommendation{ID: "smoke-rec-2-" + runID, InstanceID: site, ChannelID: 9, ChannelName: "smoke", CreatedAt: now, Rule: "probe_started", Evidence: map[string]any{}, ModeAtCreation: "auto"}
 	probeID, err := store.CreateContinuousProbe(probeRec, "m", 3, 1, now)
 	if err != nil {
 		t.Fatalf("direct probe: %v", err)
@@ -171,7 +173,7 @@ func TestDirectControlIntegration(t *testing.T) {
 	}
 
 	// 4. A site without direct config keeps the agent queue path untouched.
-	queueRec := tuning.Recommendation{ID: "smoke-rec-3", InstanceID: plainSite, ChannelID: 5, ChannelName: "queued", CreatedAt: now, Rule: "weight_write", Evidence: map[string]any{}, CurrentWeight: 1, ProposedWeight: 2, ModeAtCreation: "auto"}
+	queueRec := tuning.Recommendation{ID: "smoke-rec-3-" + runID, InstanceID: plainSite, ChannelID: 5, ChannelName: "queued", CreatedAt: now, Rule: "weight_write", Evidence: map[string]any{}, CurrentWeight: 1, ProposedWeight: 2, ModeAtCreation: "auto"}
 	queueID, err := store.CreateContinuousWeightChange(queueRec, "system:auto", now)
 	if err != nil {
 		t.Fatalf("queue fallback: %v", err)

@@ -62,3 +62,19 @@ func TestControlConfigMigrationContract(t *testing.T) {
 		}
 	}
 }
+
+func TestWriteFailureMigrationContract(t *testing.T) {
+	data, e := os.ReadFile("../../migrations/042_tuning_write_failure.sql")
+	if e != nil {
+		t.Fatal(e)
+	}
+	statements := splitSQLStatements(string(data))
+	if len(statements) != 1 {
+		t.Fatalf("042 must stay a single ALTER statement, got %d", len(statements))
+	}
+	for _, column := range []string{"write_failure_streak", "last_write_failure_at", "last_write_error"} {
+		if !strings.Contains(statements[0], "ADD COLUMN "+column) {
+			t.Fatalf("042 missing column %s", column)
+		}
+	}
+}

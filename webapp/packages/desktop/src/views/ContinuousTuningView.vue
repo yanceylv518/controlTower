@@ -90,7 +90,7 @@ const weightClass = (row: ChannelBaseValue) => comparisonClass(stateFor(row)?.pr
 const modelMode = (model: string) => policy.dispatch_modes[model] || "off";
 const modeText = (model: string) => ({ off: "已关闭", observe: "只观察", auto: "自动执行" }[modelMode(model)]);
 const modeType = (model: string) => modelMode(model) === "auto" ? "success" : modelMode(model) === "observe" ? "warning" : "info";
-const phaseText = (s?: TuningContinuousState) => !s ? "等待首次评估" : s.paused_reason === "manual_override" ? "人工修改后已暂停" : s.paused_reason ? "安全保护已暂停" : s.phase === "circuit" ? `已熔断，下次检测 ${s.next_probe_at ? formatTime(s.next_probe_at) : "待定"}` : s.phase === "probing" ? `恢复检测 ${s.probe_attempts || 0}/${policy.continuous.probe_count}` : s.phase === "soft_start" ? "恢复中（低权重运行）" : "运行正常";
+const phaseText = (s?: TuningContinuousState) => !s ? "等待首次评估" : s.paused_reason === "manual_override" ? "人工修改后已暂停" : s.paused_reason === "write_failed" ? `写入 new-api 失败已暂停，每10分钟自动重试${s.last_write_error ? `：${s.last_write_error}` : ""}` : s.paused_reason ? "安全保护已暂停" : s.phase === "circuit" ? `已熔断，下次检测 ${s.next_probe_at ? formatTime(s.next_probe_at) : "待定"}` : s.phase === "probing" ? `恢复检测 ${s.probe_attempts || 0}/${policy.continuous.probe_count}` : s.phase === "soft_start" ? "恢复中（低权重运行）" : "运行正常";
 const phaseType = (s?: TuningContinuousState) => s?.phase === "circuit" ? "danger" : s?.phase === "probing" || s?.phase === "soft_start" || s?.paused_reason ? "warning" : "success";
 const eventName = (rule: string) => ({ weight_observed: "观察到权重变化", weight_write: "自动调整权重", manual_takeover: "检测到人工修改", auto_paused: "安全保护暂停", circuit_opened: "渠道熔断", probe_started: "开始恢复检测", probe_failed: "恢复检测未通过", circuit_recovered: "渠道恢复" } as Record<string, string>)[rule] || rule;
 const eventCount = (days: number, rule: string) => events.value.filter(x => validEvent(x) && x.rule === rule && new Date(x.created_at).getTime() >= Date.now() - days * 86400000).length;
@@ -293,7 +293,7 @@ onBeforeUnmount(() => { if (refreshTimer) clearInterval(refreshTimer); });
         <div><dt>恢复初始倍率</dt><dd>刚通过恢复检测时，以基础权重的多少比例重新接流量。数值越小恢复越谨慎；数值越大恢复越快，但再次故障的影响也更大。</dd></div>
       </dl><p class="help-note">修改规则后需点击“保存更改”，从下一次每分钟评估开始生效；不会立即重算已经完成的历史结果。</p></section>
       <section><h3>什么时候会修改线上</h3><p>只有模型处于“自动执行”且数据量达到要求时才会写入。关闭和只观察模式都不会修改当前权重。刚切换模式、写入排队或执行失败时，计算权重与当前权重可能暂时不同。</p></section>
-      <section><h3>安全保护</h3><ul><li>数据不足时保持当前权重，不用不完整样本做决策。</li><li>检测到人工修改时自动暂停，优先尊重人工设置。</li><li>所有自动写入、熔断、探测和恢复都记录在“变更记录”。</li></ul></section>
+      <section><h3>安全保护</h3><ul><li>数据不足时保持当前权重，不用不完整样本做决策。</li><li>检测到人工修改时自动暂停，优先尊重人工设置。</li><li>写入 new-api 连续失败 3 次自动暂停并记录原因，之后每 10 分钟重试一次，恢复成功自动解除。</li><li>所有自动写入、熔断、探测和恢复都记录在“变更记录”。</li></ul></section>
       <section><h3>四项评估系数公式</h3><dl class="factor-formulas">
         <div><dt>速度系数</dt><dd><code>R = 0.5×(P50/中位P50) + 0.3×(P90/中位P90) + 0.2×(P95/中位P95)</code><br><code>速度 = clamp((1/R)^(0.35×灵敏度), 0.75, 1.25)</code></dd></div>
         <div><dt>缓存系数</dt><dd><code>缓存命中率 = 缓存Token / 提示Token</code><br><code>缓存 = clamp((本渠道命中率/同模型中位命中率)^(0.15×灵敏度), 0.9, 1.1)</code><br>窗口内提示 Token 不足 1 万或基线不足两渠道时不参与（取 1）。</dd></div>

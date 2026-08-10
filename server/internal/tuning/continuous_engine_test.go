@@ -1,6 +1,7 @@
 package tuning
 
 import (
+	"errors"
 	"math"
 	"testing"
 	"time"
@@ -75,6 +76,8 @@ type continuousFake struct {
 	states          map[int64]ContinuousState
 	writes          []Recommendation
 	probes          []Recommendation
+	writeErr        error
+	writeAttempts   int
 }
 
 func (f *continuousFake) GetPolicy(string) (PolicyRecord, bool, error) {
@@ -122,6 +125,10 @@ func (f *continuousFake) PutContinuousState(s ContinuousState) error {
 	return nil
 }
 func (f *continuousFake) CreateContinuousWeightChange(r Recommendation, _ string, _ time.Time) (string, error) {
+	f.writeAttempts++
+	if f.writeErr != nil {
+		return "", f.writeErr
+	}
 	f.writes = append(f.writes, r)
 	return "cmd-" + r.ID, nil
 }
@@ -339,7 +346,7 @@ func TestZeroBaseWeightDoesNotCircuitOrRecover(t *testing.T) {
 	p := DefaultPolicy()
 	p.DispatchModes = map[string]string{"m": "observe"}
 	f := &continuousFake{
-		bases: []ChannelBaseValue{{ChannelID: 1, ModelName: "m", Models: []string{"m"}, BaseWeight: 0, CurrentWeight: 20}},
+		bases:   []ChannelBaseValue{{ChannelID: 1, ModelName: "m", Models: []string{"m"}, BaseWeight: 0, CurrentWeight: 20}},
 		metrics: []ChannelMetric{{ChannelID: 1, RequestCount: 100, ErrorCount: 100, TTFTP50: 1, TTFTP90: 1, TTFTP95: 1}},
 		states: map[int64]ContinuousState{1: {
 			InstanceID: "i", ChannelID: 1, ModelName: "m", KError: .2,
@@ -426,5 +433,77 @@ func TestActiveProbeRoundDiscardsPassiveResidue(t *testing.T) {
 	}
 	if state.ProbeAttempts != 0 || state.ProbeSuccesses != 0 || state.ProbeDurationSum != 0 {
 		t.Fatalf("active round must discard passive residue: %#v", state)
+	}
+}
+
+func TestWriteFailureStreakPausesThenSelfHeals(t *testing.T) {
+	now := time.Now().UTC()
+	f := &continuousFake{
+		bases:    []ChannelBaseValue{{ChannelID: 1, ModelName: "m", Models: []string{"m"}, BaseWeight: 10, CurrentWeight: 20, SnapshotAt: now.Add(-time.Hour)}},
+		writeErr: errors.New("new-api channel update failed: unauthorized"),
+	}
+	e := NewEngine(f)
+
+	for i := 0; i < 3; i++ {
+		e.evaluateContinuous("i", autoPolicy(), now.Add(time.Duration(i)*time.Minute), f)
+	}
+	state := f.states[1]
+	if f.writeAttempts != 3 || state.PausedReason != "write_failed" || state.WriteFailureStreak != 3 {
+		t.Fatalf("three failures must pause: attempts=%d state=%#v", f.writeAttempts, state)
+	}
+	paused := 0
+	for _, r := range f.recommendations {
+		if r.Rule == "auto_paused" {
+			paused++
+			if r.Evidence["reason"] != "write_failed" || r.Evidence["error"] == "" {
+				t.Fatalf("pause event must carry the transport error: %#v", r.Evidence)
+			}
+		}
+	}
+	if paused != 1 {
+		t.Fatalf("exactly one pause event expected, got %d", paused)
+	}
+
+	// Within the retry interval the engine must stop hammering new-api.
+	e.evaluateContinuous("i", autoPolicy(), now.Add(4*time.Minute), f)
+	if f.writeAttempts != 3 {
+		t.Fatalf("paused channel must not retry inside the interval: attempts=%d", f.writeAttempts)
+	}
+
+	// After the interval one retry runs; on success the pause self-heals.
+	f.writeErr = nil
+	e.evaluateContinuous("i", autoPolicy(), now.Add(2*time.Minute+writeFailureRetryInterval), f)
+	state = f.states[1]
+	if f.writeAttempts != 4 || state.PausedReason != "" || state.WriteFailureStreak != 0 || state.LastWriteError != "" {
+		t.Fatalf("successful retry must clear the pause: attempts=%d state=%#v", f.writeAttempts, state)
+	}
+	if state.LastWrittenWeight == nil || *state.LastWrittenWeight != 10 {
+		t.Fatalf("recovered write must land: %#v", state.LastWrittenWeight)
+	}
+}
+
+func TestWriteFailurePauseKeepsRetryFailuresQuiet(t *testing.T) {
+	now := time.Now().UTC()
+	f := &continuousFake{
+		bases:    []ChannelBaseValue{{ChannelID: 1, ModelName: "m", Models: []string{"m"}, BaseWeight: 10, CurrentWeight: 20, SnapshotAt: now.Add(-time.Hour)}},
+		writeErr: errors.New("boom"),
+	}
+	e := NewEngine(f)
+	for i := 0; i < 3; i++ {
+		e.evaluateContinuous("i", autoPolicy(), now.Add(time.Duration(i)*time.Minute), f)
+	}
+	// A failing slow retry must extend the pause without a second event.
+	e.evaluateContinuous("i", autoPolicy(), now.Add(2*time.Minute+writeFailureRetryInterval), f)
+	if f.writeAttempts != 4 {
+		t.Fatalf("slow retry expected: attempts=%d", f.writeAttempts)
+	}
+	paused := 0
+	for _, r := range f.recommendations {
+		if r.Rule == "auto_paused" {
+			paused++
+		}
+	}
+	if paused != 1 || f.states[1].PausedReason != "write_failed" || f.states[1].WriteFailureStreak != 4 {
+		t.Fatalf("failed retry must stay paused without duplicate events: paused=%d state=%#v", paused, f.states[1])
 	}
 }

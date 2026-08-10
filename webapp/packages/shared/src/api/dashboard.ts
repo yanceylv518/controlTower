@@ -413,6 +413,9 @@ export interface TuningContinuousState {
   probe_duration_sum: number;
   original_priority?: number;
   soft_start_pending: boolean;
+  write_failure_streak?: number;
+  last_write_failure_at?: string;
+  last_write_error?: string;
   updated_at: string;
 }
 
