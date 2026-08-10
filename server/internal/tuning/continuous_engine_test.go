@@ -272,7 +272,9 @@ func TestObservedCircuitRecoversFromPassiveProductionTraffic(t *testing.T) {
 			{ChannelID: 2, ChannelName: "peer", ModelName: "m", Models: []string{"m"}, BaseWeight: 100, CurrentWeight: 100},
 		},
 		metrics: []ChannelMetric{
-			{ChannelID: 1, RequestCount: 30, TTFTP50: 1, TTFTP90: 1, TTFTP95: 1, CacheHitRate: .5, OTPS: 10},
+			// Below the normal 20-request performance threshold: these requests
+			// are still sufficient as a 10-request passive recovery round.
+			{ChannelID: 1, RequestCount: 10},
 			{ChannelID: 2, RequestCount: 30, TTFTP50: 1, TTFTP90: 1, TTFTP95: 1, CacheHitRate: .5, OTPS: 10},
 		},
 		states: map[int64]ContinuousState{
@@ -282,7 +284,7 @@ func TestObservedCircuitRecoversFromPassiveProductionTraffic(t *testing.T) {
 			1: {InstanceID: "i", ChannelID: 1, ModelName: "m", KError: .605, SmoothedErrorRate: .12, Phase: "circuit", ProposedWeight: 0},
 		},
 		recentBuckets: map[int64][]RecentChannelBucket{
-			1: {{BucketTime: settled, RequestCount: 20}},
+			1: {{BucketTime: settled, RequestCount: 10}},
 		},
 	}
 
@@ -304,6 +306,30 @@ func TestObservedCircuitRecoversFromPassiveProductionTraffic(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("observe recovery event was not recorded")
+	}
+}
+
+func TestObservedCircuitWaitsForPassiveRecoveryEvidence(t *testing.T) {
+	now := time.Now().UTC()
+	p := DefaultPolicy()
+	p.DispatchModes = map[string]string{"m": "observe"}
+	f := &continuousFake{
+		bases: []ChannelBaseValue{{ChannelID: 1, ModelName: "m", Models: []string{"m"}, BaseWeight: 100}},
+		metrics: []ChannelMetric{{ChannelID: 1, RequestCount: 9}},
+		states: map[int64]ContinuousState{1: {
+			InstanceID: "i", ChannelID: 1, ModelName: "m", KError: .2,
+			SmoothedErrorRate: .3, Phase: "circuit",
+		}},
+		recentBuckets: map[int64][]RecentChannelBucket{1: {{
+			BucketTime: now.Add(-3 * time.Minute), RequestCount: 9,
+		}}},
+	}
+
+	NewEngine(f).evaluateContinuous("i", PolicyRecord{InstanceID: "i", Policy: p, Mode: "observe"}, now, f)
+
+	state := f.states[1]
+	if state.Phase != "circuit" || state.ProbeAttempts != 9 {
+		t.Fatalf("passive recovery must wait for its own evidence threshold: %#v", state)
 	}
 }
 

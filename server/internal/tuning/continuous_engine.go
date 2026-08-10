@@ -105,7 +105,15 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 				state.PausedReason = ""
 			}
 
-			e.foldErrorDecay(id, base.ChannelID, &state, now)
+			wasCircuit := state.Phase == "circuit"
+			foldedRequests, foldedErrors := e.foldErrorDecay(id, base.ChannelID, &state, now)
+			// In observe mode, settled production traffic is the passive probe.
+			// Keep its evidence independent from the larger performance-ranking
+			// sample threshold so a low-traffic channel can still prove recovery.
+			if wasCircuit && mode == "observe" && foldedRequests > 0 {
+				state.ProbeAttempts += int(foldedRequests)
+				state.ProbeSuccesses += int(max(foldedRequests-foldedErrors, 0))
+			}
 			recoveredNow := false
 
 			// A completed probe round is folded before normal factor evaluation.
@@ -170,10 +178,16 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 			// production requests remain valid recovery evidence. Re-evaluate an
 			// observed circuit from those passive samples instead of waiting for an
 			// active probe that is intentionally only available in auto mode.
-			if state.Phase == "circuit" && mode == "observe" && healthy && m.RequestCount >= p.MinSamples {
-				state.KSpeed, state.KCache, state.KOTPS = performanceFactors(m, baseline, p.Sensitivity, p.OTPSCap, state.CacheReady, state.OTPSReady)
-				passiveMultiplier := math.Min(1.5, state.KSpeed*state.KCache*state.KOTPS*state.KError)
-				if state.SmoothedErrorRate <= p.RecoveryErrorRate {
+			if state.Phase == "circuit" && mode == "observe" && state.ProbeAttempts >= p.ProbeCount {
+				passiveErrors := state.ProbeAttempts - state.ProbeSuccesses
+				passiveErrorRate := float64(passiveErrors) / float64(state.ProbeAttempts)
+				if passiveErrorRate <= p.RecoveryErrorRate {
+					state.SmoothedErrorRate = passiveErrorRate
+					state.KError = reliabilityFactor(passiveErrorRate)
+					if healthy && m.RequestCount >= p.MinSamples {
+						state.KSpeed, state.KCache, state.KOTPS = performanceFactors(m, baseline, p.Sensitivity, p.OTPSCap, state.CacheReady, state.OTPSReady)
+					}
+					passiveMultiplier := clamp(state.KSpeed*state.KCache*state.KOTPS*state.KError, .5, 1.5)
 					state.Phase = "normal"
 					state.Multiplier = passiveMultiplier
 					state.ProposedWeight = int64(math.Round(float64(base.BaseWeight) * passiveMultiplier))
@@ -182,12 +196,16 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 					}
 					state.CircuitOpenedAt, state.NextProbeAt, state.OriginalPriority = nil, nil, nil
 					state.SoftStartPending = false
+					state.ProbeAttempts, state.ProbeSuccesses = 0, 0
 					_ = e.store.InsertRecommendation(continuousEvent(id, base, state, "circuit_recovered", mode, now))
 					state.UpdatedAt = now
 					_ = cs.PutContinuousState(state)
 					evaluated++
 					continue
 				}
+				// A failed passive recovery round starts a fresh evidence batch;
+				// otherwise an old failure would poison a quiet channel forever.
+				state.ProbeAttempts, state.ProbeSuccesses = 0, 0
 			}
 			if state.Phase == "circuit" {
 				if mode == "auto" && state.NextProbeAt != nil && !now.Before(*state.NextProbeAt) {
@@ -247,6 +265,7 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 				state.CircuitOpenedAt = &opened
 				state.NextProbeAt = &next
 				state.OriginalPriority = &original
+				state.ProbeAttempts, state.ProbeSuccesses, state.ProbeDurationSum = 0, 0, 0
 				rec := continuousEvent(id, base, state, "circuit_opened", mode, now)
 				zero := int64(0)
 				rec.ProposedPriority = &zero
