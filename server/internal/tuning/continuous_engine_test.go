@@ -333,6 +333,32 @@ func TestObservedCircuitWaitsForPassiveRecoveryEvidence(t *testing.T) {
 	}
 }
 
+func TestZeroBaseWeightDoesNotCircuitOrRecover(t *testing.T) {
+	now := time.Now().UTC()
+	due := now.Add(-time.Minute)
+	p := DefaultPolicy()
+	p.DispatchModes = map[string]string{"m": "observe"}
+	f := &continuousFake{
+		bases: []ChannelBaseValue{{ChannelID: 1, ModelName: "m", Models: []string{"m"}, BaseWeight: 0, CurrentWeight: 20}},
+		metrics: []ChannelMetric{{ChannelID: 1, RequestCount: 100, ErrorCount: 100, TTFTP50: 1, TTFTP90: 1, TTFTP95: 1}},
+		states: map[int64]ContinuousState{1: {
+			InstanceID: "i", ChannelID: 1, ModelName: "m", KError: .2,
+			SmoothedErrorRate: .3, Phase: "circuit", NextProbeAt: &due,
+			ProbeAttempts: 10, ProbeSuccesses: 10,
+		}},
+	}
+
+	NewEngine(f).evaluateContinuous("i", PolicyRecord{InstanceID: "i", Policy: p, Mode: "observe"}, now, f)
+
+	state := f.states[1]
+	if state.Phase != "normal" || state.ProposedWeight != 0 || state.ProbeAttempts != 0 {
+		t.Fatalf("zero base weight must be excluded from circuit state machine: %#v", state)
+	}
+	if len(f.recommendations) != 0 || len(f.probes) != 0 || len(f.writes) != 0 {
+		t.Fatalf("zero base weight must not emit tuning actions: recommendations=%d probes=%d writes=%d", len(f.recommendations), len(f.probes), len(f.writes))
+	}
+}
+
 func mathAbs(a float64) float64 { return math.Abs(a) }
 
 func TestRecoveryFloorsErrorDecayAgainstReCircuitLoop(t *testing.T) {

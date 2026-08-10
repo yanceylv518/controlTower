@@ -104,6 +104,20 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 			if state.PausedReason == "mixed_channel" {
 				state.PausedReason = ""
 			}
+			// A zero base weight is an explicit no-traffic baseline. It cannot
+			// produce a meaningful recovery weight, so exclude it from the
+			// circuit state machine instead of recording "recovered to zero".
+			if base.BaseWeight <= 0 {
+				state.Phase = "normal"
+				state.Multiplier, state.ProposedWeight = 1, 0
+				state.CircuitOpenedAt, state.NextProbeAt, state.ProbeCommandID, state.OriginalPriority = nil, nil, nil, nil
+				state.ProbeAttempts, state.ProbeSuccesses, state.ProbeDurationSum = 0, 0, 0
+				state.SoftStartPending = false
+				state.UpdatedAt = now
+				_ = cs.PutContinuousState(state)
+				evaluated++
+				continue
+			}
 
 			wasCircuit := state.Phase == "circuit"
 			foldedRequests, foldedErrors := e.foldErrorDecay(id, base.ChannelID, &state, now)

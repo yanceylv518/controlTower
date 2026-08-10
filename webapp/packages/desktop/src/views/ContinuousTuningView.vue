@@ -30,7 +30,8 @@ const visibleModels = computed(() => models.value.filter(model => model.toLowerC
 const activeRows = computed(() => bases.value.filter(x => x.model_name === activeModel.value).sort((a, b) => b.base_priority - a.base_priority || b.base_weight - a.base_weight || a.channel_id - b.channel_id));
 const stateMap = computed(() => new Map(states.value.map(x => [`${x.channel_id}:${x.model_name}`, x])));
 const stateFor = (row: ChannelBaseValue) => stateMap.value.get(`${row.channel_id}:${row.model_name}`);
-const recentEvents = computed(() => events.value.filter(x => ["weight_observed", "weight_write", "manual_takeover", "auto_paused", "circuit_opened", "probe_started", "probe_failed", "circuit_recovered"].includes(x.rule)));
+const validEvent = (item: TuningRecommendation) => item.rule !== "circuit_recovered" || item.proposed_weight > 0;
+const recentEvents = computed(() => events.value.filter(x => validEvent(x) && ["weight_observed", "weight_write", "manual_takeover", "auto_paused", "circuit_opened", "probe_started", "probe_failed", "circuit_recovered"].includes(x.rule)));
 const eventModel = (item: TuningRecommendation) => String(item.evidence?.model ?? bases.value.find(row => row.channel_id === item.channel_id)?.model_name ?? "");
 const filteredEvents = computed(() => {
   const selectedModel = eventModelFilter.value === "__current__" ? activeModel.value : eventModelFilter.value;
@@ -57,12 +58,13 @@ const modeType = (model: string) => modelMode(model) === "auto" ? "success" : mo
 const phaseText = (s?: TuningContinuousState) => !s ? "等待首次评估" : s.paused_reason === "manual_override" ? "人工修改后已暂停" : s.paused_reason ? "安全保护已暂停" : s.phase === "circuit" ? `已熔断，下次检测 ${s.next_probe_at ? formatTime(s.next_probe_at) : "待定"}` : s.phase === "probing" ? `恢复检测 ${s.probe_attempts || 0}/${policy.continuous.probe_count}` : s.phase === "soft_start" ? "恢复中（低权重运行）" : "运行正常";
 const phaseType = (s?: TuningContinuousState) => s?.phase === "circuit" ? "danger" : s?.phase === "probing" || s?.phase === "soft_start" || s?.paused_reason ? "warning" : "success";
 const eventName = (rule: string) => ({ weight_observed: "观察到权重变化", weight_write: "自动调整权重", manual_takeover: "检测到人工修改", auto_paused: "安全保护暂停", circuit_opened: "渠道熔断", probe_started: "开始恢复检测", probe_failed: "恢复检测未通过", circuit_recovered: "渠道恢复" } as Record<string, string>)[rule] || rule;
-const eventCount = (days: number, rule: string) => events.value.filter(x => x.rule === rule && new Date(x.created_at).getTime() >= Date.now() - days * 86400000).length;
+const eventCount = (days: number, rule: string) => events.value.filter(x => validEvent(x) && x.rule === rule && new Date(x.created_at).getTime() >= Date.now() - days * 86400000).length;
 const sampleText = (row: ChannelBaseValue) => `${stateFor(row)?.last_observed_requests ?? 0}/${policy.continuous.min_samples}`;
 const evaluationText = (row: ChannelBaseValue) => {
   const state = stateFor(row), requests = state?.last_observed_requests ?? 0;
   if ((row.models?.length ?? 1) > 1 || state?.paused_reason === "mixed_channel") return "多模型渠道，安全暂停";
   if (modelMode(row.model_name) === "off") return "模型已关闭";
+  if (row.base_weight <= 0) return "基础权重为 0，未参与调权";
   if (requests < policy.continuous.min_samples) return `样本不足 ${requests}/${policy.continuous.min_samples}`;
   if (!state?.metric_ready) return "缺少完整 TTFT 数据";
   return state.baseline_ready ? "已参与本轮计算" : "合格渠道不足 2 个";
