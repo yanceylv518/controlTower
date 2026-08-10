@@ -507,3 +507,45 @@ func TestWriteFailurePauseKeepsRetryFailuresQuiet(t *testing.T) {
 		t.Fatalf("failed retry must stay paused without duplicate events: paused=%d state=%#v", paused, f.states[1])
 	}
 }
+
+func TestWriteFailedPauseClearsWhenWritesCannotRun(t *testing.T) {
+	now := time.Now().UTC()
+	failedAt := now.Add(-time.Minute)
+	seed := func() map[int64]ContinuousState {
+		return map[int64]ContinuousState{1: {InstanceID: "i", ChannelID: 1, ModelName: "m", KError: 1,
+			PausedReason: "write_failed", WriteFailureStreak: 3, LastWriteError: "boom", LastWriteFailureAt: &failedAt}}
+	}
+
+	// Observe mode cannot write, so the stale pause must clear.
+	observe := &continuousFake{
+		bases:  []ChannelBaseValue{{ChannelID: 1, ModelName: "m", Models: []string{"m"}, BaseWeight: 10, CurrentWeight: 20, SnapshotAt: now.Add(-time.Hour)}},
+		states: seed(),
+	}
+	p := DefaultPolicy()
+	p.DispatchModes = map[string]string{"m": "observe"}
+	NewEngine(observe).evaluateContinuous("i", PolicyRecord{InstanceID: "i", Policy: p, Mode: "observe"}, now, observe)
+	if s := observe.states[1]; s.PausedReason != "" || s.WriteFailureStreak != 0 || s.LastWriteError != "" {
+		t.Fatalf("observe mode must clear a stale write_failed pause: %#v", s)
+	}
+
+	// Zero base weight cannot write either.
+	zero := &continuousFake{
+		bases:  []ChannelBaseValue{{ChannelID: 1, ModelName: "m", Models: []string{"m"}, BaseWeight: 0, CurrentWeight: 20, SnapshotAt: now.Add(-time.Hour)}},
+		states: seed(),
+	}
+	NewEngine(zero).evaluateContinuous("i", autoPolicy(), now, zero)
+	if s := zero.states[1]; s.PausedReason != "" || s.WriteFailureStreak != 0 {
+		t.Fatalf("zero base weight must clear a stale write_failed pause: %#v", s)
+	}
+
+	// Auto with weight keeps the pause (and its slow retry) untouched.
+	auto := &continuousFake{
+		bases:    []ChannelBaseValue{{ChannelID: 1, ModelName: "m", Models: []string{"m"}, BaseWeight: 10, CurrentWeight: 20, SnapshotAt: now.Add(-time.Hour)}},
+		states:   seed(),
+		writeErr: errors.New("boom"),
+	}
+	NewEngine(auto).evaluateContinuous("i", autoPolicy(), now, auto)
+	if s := auto.states[1]; s.PausedReason != "write_failed" {
+		t.Fatalf("auto mode must keep the pause: %#v", s)
+	}
+}

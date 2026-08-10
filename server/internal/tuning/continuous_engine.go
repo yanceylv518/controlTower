@@ -80,6 +80,12 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 				state.Phase = "normal"
 			}
 			state.KSpeed, state.KCache, state.KOTPS = 1, 1, 1
+			// A write_failed pause is only meaningful while auto writes can
+			// run; on observe/off models nothing could ever clear it, so the
+			// stale label would stick until the mode flips back.
+			if mode != "auto" && state.PausedReason == "write_failed" {
+				e.noteWriteSuccess(&state)
+			}
 			m := metricByID[base.ChannelID]
 			// Operator-facing sample progress describes the complete current
 			// evaluation window, not only error buckets folded since the last pass.
@@ -120,6 +126,9 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 				state.CircuitOpenedAt, state.NextProbeAt, state.ProbeCommandID, state.OriginalPriority = nil, nil, nil, nil
 				state.ProbeAttempts, state.ProbeSuccesses, state.ProbeDurationSum = 0, 0, 0
 				state.SoftStartPending = false
+				if state.PausedReason == "write_failed" {
+					e.noteWriteSuccess(&state)
+				}
 				state.UpdatedAt = now
 				_ = cs.PutContinuousState(state)
 				evaluated++
