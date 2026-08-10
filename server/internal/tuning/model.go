@@ -172,7 +172,7 @@ type ChannelMetric struct {
 	TTFTP50, TTFTP90, TTFTP95                float64
 	CacheHitRate                             float64
 	OTPS                                     float64
-	CachePromptTokens, OTPSSampleTokens       int64
+	CachePromptTokens, OTPSSampleTokens      int64
 }
 
 type ContinuousState struct {
