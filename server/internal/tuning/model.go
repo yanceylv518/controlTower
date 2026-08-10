@@ -234,7 +234,12 @@ type ContinuousState struct {
 	WriteFailureStreak int        `json:"write_failure_streak,omitempty"`
 	LastWriteFailureAt *time.Time `json:"last_write_failure_at,omitempty"`
 	LastWriteError     string     `json:"last_write_error,omitempty"`
-	UpdatedAt          time.Time  `json:"updated_at"`
+	// LastObservedWeight anchors the observe-event deadband at the value of
+	// the last recorded weight_observed event (level filter). Comparing with
+	// the previous tick instead would rate-filter: a slow drift never exceeds
+	// the threshold per step and stays unrecorded no matter how far it goes.
+	LastObservedWeight *int64    `json:"last_observed_weight,omitempty"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 
 type RecentChannelBucket struct {

@@ -67,19 +67,66 @@ func TestObservePublishesWindowProgressAndOnlyChangedProposals(t *testing.T) {
 		t.Fatalf("unchanged proposals must not spam observation history: %d", len(f.recommendations))
 	}
 	actual := f.states[1].ProposedWeight
-	previous := f.states[1]
-	previous.ProposedWeight = actual - 4
-	f.states[1] = previous
+	shifted := f.states[1]
+	anchor := actual - 4
+	shifted.LastObservedWeight = &anchor
+	f.states[1] = shifted
 	e.evaluateContinuous("i", PolicyRecord{InstanceID: "i", Policy: p, Mode: "observe"}, now.Add(2*time.Minute), f)
 	if len(f.recommendations) != 2 {
 		t.Fatalf("proposal changes inside the deadband must not spam history: %d", len(f.recommendations))
 	}
-	previous = f.states[1]
-	previous.ProposedWeight = actual - 6
-	f.states[1] = previous
+	shifted = f.states[1]
+	anchorFar := actual - 6
+	shifted.LastObservedWeight = &anchorFar
+	f.states[1] = shifted
 	e.evaluateContinuous("i", PolicyRecord{InstanceID: "i", Policy: p, Mode: "observe"}, now.Add(3*time.Minute), f)
 	if len(f.recommendations) != 3 || f.recommendations[2].ChannelID != 1 {
 		t.Fatalf("proposal changes outside the deadband must be observed: %#v", f.recommendations)
+	}
+	if got := f.states[1].LastObservedWeight; got == nil || *got != actual {
+		t.Fatalf("recording an event must move the anchor to the recorded value: %#v", got)
+	}
+}
+
+// A creeping drift must eventually be recorded: the deadband anchors on the
+// last RECORDED event, not on the previous tick, so small per-tick steps
+// accumulate against the anchor instead of resetting the reference.
+func TestObserveDeadbandAnchorsOnLastRecordedEvent(t *testing.T) {
+	now := time.Now().UTC()
+	anchor := int64(100)
+	f := &continuousFake{
+		bases: []ChannelBaseValue{
+			{ChannelID: 1, ChannelName: "drift", ModelName: "m", Models: []string{"m"}, BaseWeight: 100, CurrentWeight: 100},
+			{ChannelID: 2, ChannelName: "peer", ModelName: "m", Models: []string{"m"}, BaseWeight: 100, CurrentWeight: 100},
+		},
+		states: map[int64]ContinuousState{
+			1: {InstanceID: "i", ChannelID: 1, ModelName: "m", KError: 1, LastObservedWeight: &anchor},
+			2: {InstanceID: "i", ChannelID: 2, ModelName: "m", KError: 1, LastObservedWeight: &anchor},
+		},
+	}
+	p := DefaultPolicy()
+	p.DispatchModes = map[string]string{"m": "observe"}
+	e := NewEngine(f)
+	// Channel 1 drifts 2 units per tick via a slowly-degrading error factor
+	// stand-in: simulate by shrinking KError before each pass.
+	for i, kerr := range []float64{.98, .96, .94} {
+		st := f.states[1]
+		st.KError = kerr
+		f.states[1] = st
+		f.metrics = []ChannelMetric{
+			{ChannelID: 1, RequestCount: 30, TTFTP50: 1, TTFTP90: 1, TTFTP95: 1},
+			{ChannelID: 2, RequestCount: 30, TTFTP50: 1, TTFTP90: 1, TTFTP95: 1},
+		}
+		e.evaluateContinuous("i", PolicyRecord{InstanceID: "i", Policy: p, Mode: "observe"}, now.Add(time.Duration(i)*time.Minute), f)
+	}
+	var drifted int
+	for _, r := range f.recommendations {
+		if r.Rule == "weight_observed" && r.ChannelID == 1 {
+			drifted++
+		}
+	}
+	if drifted != 1 {
+		t.Fatalf("cumulative drift beyond the deadband must be recorded exactly once: %d events %#v", drifted, f.recommendations)
 	}
 }
 

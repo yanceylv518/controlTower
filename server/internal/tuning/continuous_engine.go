@@ -337,11 +337,16 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 			}
 
 			// Preserve useful observation evidence without adding one event per
-			// channel every minute: only record a proposal change outside the
-			// same deadband used by automatic writes.
+			// channel every minute: only record a proposal outside the write
+			// deadband RELATIVE TO THE LAST RECORDED EVENT. Anchoring on the
+			// previous tick instead would rate-filter — a slow drift never
+			// exceeds the threshold per step and would stay unrecorded no
+			// matter how far it travels.
 			if mode == "observe" && healthy && m.RequestCount >= p.MinSamples &&
-				(!exists || weightChangeOutsideDeadband(state.ProposedWeight, previous.ProposedWeight, base.BaseWeight, p.WriteDeadbandPercent)) {
+				(state.LastObservedWeight == nil || weightChangeOutsideDeadband(state.ProposedWeight, *state.LastObservedWeight, base.BaseWeight, p.WriteDeadbandPercent)) {
 				_ = e.store.InsertRecommendation(continuousEvent(id, base, state, "weight_observed", mode, now))
+				anchor := state.ProposedWeight
+				state.LastObservedWeight = &anchor
 			}
 
 			// Manual-override detection. Snapshots refresh every ~10 minutes,

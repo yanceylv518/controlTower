@@ -112,3 +112,14 @@ func TestContinuousStateProbeGuardContract(t *testing.T) {
 		}
 	}
 }
+
+func TestObserveAnchorMigrationContract(t *testing.T) {
+	data, e := os.ReadFile("../../migrations/044_tuning_observe_anchor.sql")
+	if e != nil {
+		t.Fatal(e)
+	}
+	statements := splitSQLStatements(string(data))
+	if len(statements) != 1 || !strings.Contains(statements[0], "ADD COLUMN last_observed_weight") {
+		t.Fatalf("044 must add last_observed_weight in a single statement: %#v", statements)
+	}
+}
