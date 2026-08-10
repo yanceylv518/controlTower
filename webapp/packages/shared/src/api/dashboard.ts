@@ -818,7 +818,7 @@ export const dashboardApi = (client: ApiClient) => ({
   saveTuningPolicy: (site_id: string, policy: TuningPolicy, mode: "observe" | "confirm" | "auto", preflight_command_id?: string) =>
     client.request<TuningPolicyResponse>(`/api/dashboard/tuning/policy${query({ site_id })}`, { method: "PUT", body: JSON.stringify({ policy, mode, preflight_command_id }) }),
   startTuningPreflight: (site_id: string, channel_id: number) =>
-    client.request<{ command_id: string; status: string }>(`/api/dashboard/tuning/preflight${query({ site_id })}`, { method: "POST", body: JSON.stringify({ channel_id }) }),
+    client.request<{ command_id: string; status: string; error?: string }>(`/api/dashboard/tuning/preflight${query({ site_id })}`, { method: "POST", body: JSON.stringify({ channel_id }) }),
   tuningPreflight: (site_id: string, command_id: string) =>
     client.request<{ command_id: string; status: string; error?: string }>(`/api/dashboard/tuning/preflight${query({ site_id, command_id })}`),
   tuningRecommendations: (site_id: string, limit = 100, rule?: string) =>

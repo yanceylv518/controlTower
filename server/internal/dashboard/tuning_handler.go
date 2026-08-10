@@ -168,7 +168,10 @@ func (h Handler) HandleTuningPreflight(w http.ResponseWriter, r *http.Request) {
 			writeDashboardError(w, 409, "tuning_preflight_unavailable")
 			return
 		}
-		writeDashboardJSON(w, 202, map[string]any{"command_id": command.ID, "status": command.Status})
+		// Direct-control sites verify synchronously, so the command may
+		// already be terminal here; return the error so the client can
+		// settle without polling.
+		writeDashboardJSON(w, 202, map[string]any{"command_id": command.ID, "status": command.Status, "error": command.ErrorSummary})
 	case http.MethodGet:
 		command, found, err := store.GetTuningPreflight(id, strings.TrimSpace(r.URL.Query().Get("command_id")))
 		if err != nil {

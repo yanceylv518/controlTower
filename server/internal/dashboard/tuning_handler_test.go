@@ -13,14 +13,16 @@ import (
 )
 
 type tuningStub struct {
-	recs       []tuning.Recommendation
-	report     tuning.Report
-	query      tuning.RecommendationQuery
-	saved      tuning.PolicyRecord
-	baseValues []tuning.ChannelBaseValue
-	baseSaved  []tuning.ChannelBaseValue
-	syncModels []string
-	preflight  storage.ChannelCommand
+	recs            []tuning.Recommendation
+	report          tuning.Report
+	query           tuning.RecommendationQuery
+	saved           tuning.PolicyRecord
+	baseValues      []tuning.ChannelBaseValue
+	baseSaved       []tuning.ChannelBaseValue
+	syncModels      []string
+	preflight       storage.ChannelCommand
+	preflightStatus string
+	preflightError  string
 }
 
 func (s *tuningStub) GetPolicy(string) (tuning.PolicyRecord, bool, error) {
@@ -55,7 +57,11 @@ func (s *tuningStub) SyncChannelBaseValues(_ string, models []string) ([]tuning.
 	return []tuning.ChannelBaseValue{{InstanceID: "i", ChannelID: 7, ModelName: "m", BaseWeight: 10, BasePriority: 3}}, nil
 }
 func (s *tuningStub) CreateTuningPreflight(_ string, channelID int64, actor string, now time.Time) (storage.ChannelCommand, error) {
-	s.preflight = storage.ChannelCommand{ID: "verify-1", ChannelID: channelID, CommandType: "channel.verify", Status: "pending", CreatedBy: actor, CreatedAt: now, UpdatedAt: now}
+	status, errorSummary := s.preflightStatus, s.preflightError
+	if status == "" {
+		status = "pending"
+	}
+	s.preflight = storage.ChannelCommand{ID: "verify-1", ChannelID: channelID, CommandType: "channel.verify", Status: status, ErrorSummary: errorSummary, CreatedBy: actor, CreatedAt: now, UpdatedAt: now}
 	return s.preflight, nil
 }
 func (s *tuningStub) GetTuningPreflight(_ string, commandID string) (storage.ChannelCommand, bool, error) {
@@ -110,6 +116,16 @@ func TestTuningAutoModeRequiresSuccessfulPreflight(t *testing.T) {
 		t.Fatalf("successful preflight must allow auto: %d %s", rr.Code, rr.Body.String())
 	}
 }
+func TestTuningPreflightPostReturnsTerminalResultInline(t *testing.T) {
+	s := &tuningStub{preflightStatus: "failed", preflightError: "new-api channel update failed: unauthorized"}
+	h := NewHandler(nil).WithTuningStore(s)
+	rr := httptest.NewRecorder()
+	h.HandleTuningPreflight(rr, httptest.NewRequest(http.MethodPost, "/api/dashboard/tuning/preflight?site_id=s", bytes.NewBufferString(`{"channel_id":9}`)))
+	if rr.Code != http.StatusAccepted || !bytes.Contains(rr.Body.Bytes(), []byte(`"status":"failed"`)) || !bytes.Contains(rr.Body.Bytes(), []byte("unauthorized")) {
+		t.Fatalf("synchronous preflight result must ride the POST response: %d %s", rr.Code, rr.Body.String())
+	}
+}
+
 func TestTuningRecommendationsPaginationAndReport(t *testing.T) {
 	s := &tuningStub{recs: []tuning.Recommendation{{ID: "r", InstanceID: "i", Evidence: map[string]any{"samples": 20}}}, report: tuning.Report{Total: 4, ByRule: map[string]int64{"demote": 4}}}
 	h := NewHandler(nil).WithTuningStore(s)

@@ -192,14 +192,23 @@ async function runAutoPreflight() {
   if (!newlyAutoModels.length) return "";
   const channel = bases.value.find(row => newlyAutoModels.includes(row.model_name) && row.channel_id > 0);
   if (!channel) throw new Error("自动模式预检失败：当前模型没有可验证的渠道");
-  ElMessage.info("正在验证 Agent 与 new-api 控制能力，请稍候…");
+  ElMessage.info("正在验证与 new-api 的控制链路，请稍候…");
   const started = await dashboard.startTuningPreflight(siteID.value, channel.channel_id);
+  // Direct-control sites verify synchronously: the POST response is already
+  // terminal. Only agent-queue sites need the polling loop below.
+  const settle = (status: string, error?: string) => {
+    if (status === "succeeded") return started.command_id;
+    if (["failed", "expired"].includes(status)) {
+      throw new Error(`自动模式预检失败：${error || (status === "expired" ? "Agent 未及时领取验证命令" : "new-api 控制命令执行失败")}`);
+    }
+    return "";
+  };
+  const immediate = settle(started.status, started.error);
+  if (immediate) return immediate;
   for (let attempt = 0; attempt < 45; attempt++) {
     const result = await dashboard.tuningPreflight(siteID.value, started.command_id);
-    if (result.status === "succeeded") return started.command_id;
-    if (["failed", "expired"].includes(result.status)) {
-      throw new Error(`自动模式预检失败：${result.error || (result.status === "expired" ? "Agent 未及时领取验证命令" : "new-api 控制命令执行失败")}`);
-    }
+    const settled = settle(result.status, result.error);
+    if (settled) return settled;
     await wait(1000);
   }
   throw new Error("自动模式预检超时：请确认 Agent 在线且上报周期正常");
