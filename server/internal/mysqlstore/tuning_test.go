@@ -31,11 +31,17 @@ func TestLatestChannelsSQLAggregatesSnapshotsOnce(t *testing.T) {
 }
 
 func TestTuningChannelMetricsSQLExtractsChannelIDFromDimensionKey(t *testing.T) {
-	if !strings.Contains(tuningChannelMetricsSQL, "SUBSTRING_INDEX(dimension_key,':',-1)") {
-		t.Fatalf("channel metrics query must split the channel id out of '<instance>:channel:<id>': %s", tuningChannelMetricsSQL)
+	query := tuningChannelMetricsSQL()
+	if !strings.Contains(query, "SUBSTRING_INDEX(dimension_key,':',-1)") {
+		t.Fatalf("channel metrics query must split the channel id out of '<instance>:channel:<id>': %s", query)
 	}
-	if strings.Contains(tuningChannelMetricsSQL, "CAST(dimension_key AS SIGNED)") {
-		t.Fatalf("casting the whole dimension key yields 0 for every row: %s", tuningChannelMetricsSQL)
+	if strings.Contains(query, "CAST(dimension_key AS SIGNED)") {
+		t.Fatalf("casting the whole dimension key yields 0 for every row: %s", query)
+	}
+	for _, column := range ttft2BucketColumns {
+		if !strings.Contains(query, "SUM(COALESCE("+column+",0))") {
+			t.Fatalf("channel metrics query must merge TTFT histogram column %s: %s", column, query)
+		}
 	}
 }
 

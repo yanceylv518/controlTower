@@ -23,16 +23,18 @@ func TestContinuousBaselineRequiresTwoComparableChannels(t *testing.T) {
 }
 
 func TestContinuousFactorsRewardFasterChannelAndRespectCap(t *testing.T) {
-	b := continuousBaseline{ttft50: 2, ttft90: 4, ttft95: 6}
-	fast := ChannelMetric{TTFTP50: 1, TTFTP90: 2, TTFTP95: 3}
+	b := continuousBaseline{ttft50: 2, ttft90: 4, ttft95: 6, cache: .5, otps: 50, cacheReady: true, otpsReady: true}
+	fast := ChannelMetric{TTFTP50: 1, TTFTP90: 2, TTFTP95: 3, CacheHitRate: .8, CachePromptTokens: cacheEvidenceTokens, OTPS: 80, OTPSSampleTokens: otpsEvidenceTokens}
 	if got := speedFactor(fast, b, 1); got <= 1 {
 		t.Fatalf("faster channel should have factor above one, got %v", got)
 	}
-	if got := continuousRatioFactor(100, 1, 1, 1.5); got != 1.5 {
-		t.Fatalf("factor cap not enforced: %v", got)
+	_, cache, otps := performanceFactors(fast, b, 1, 1.5, true, true)
+	if cache <= 1 || cache > 1.1 || otps <= 1 || otps > 1.2 {
+		t.Fatalf("relative factors must reward better evidence within caps: cache=%v otps=%v", cache, otps)
 	}
-	if got := continuousRatioFactor(0, 1, 1, 1.5); math.Abs(got-1) > 1e-9 {
-		t.Fatalf("missing observation must be neutral: %v", got)
+	_, cache, otps = performanceFactors(fast, b, 1, 1.5, false, false)
+	if math.Abs(cache-1) > 1e-9 || math.Abs(otps-1) > 1e-9 {
+		t.Fatalf("unavailable optional evidence must be neutral: cache=%v otps=%v", cache, otps)
 	}
 }
 
@@ -185,7 +187,7 @@ func TestErrorDecayFoldsEachBucketExactlyOnce(t *testing.T) {
 	e := NewEngine(f)
 	state := ContinuousState{InstanceID: "i", ChannelID: 1, KError: 1}
 	e.foldErrorDecay("i", 1, &state, now)
-	want := clamp(1*mathPow(.8, 3)*mathPow(1.08, 6), .001, 1)
+	want := reliabilityFactor(.3 * 3 / 10)
 	if mathAbs(state.KError-want) > 1e-9 {
 		t.Fatalf("decay mismatch: got %v want %v (fresh bucket must be excluded)", state.KError, want)
 	}
@@ -234,7 +236,7 @@ func TestContinuousCircuitProbeAndSoftStart(t *testing.T) {
 	f := &continuousFake{bases: []ChannelBaseValue{
 		{ChannelID: 1, ChannelName: "c", ModelName: "m", Models: []string{"m"}, BaseWeight: 100, BasePriority: 7, CurrentWeight: 100, CurrentPriority: 7, SnapshotAt: now},
 		{ChannelID: 2, ChannelName: "peer", ModelName: "m", Models: []string{"m"}, BaseWeight: 100, BasePriority: 7, CurrentWeight: 100, CurrentPriority: 7, SnapshotAt: now},
-	}, states: map[int64]ContinuousState{1: {InstanceID: "i", ChannelID: 1, ModelName: "m", KError: .05, Phase: "normal"}}}
+	}, states: map[int64]ContinuousState{1: {InstanceID: "i", ChannelID: 1, ModelName: "m", KError: .2, SmoothedErrorRate: .35, Phase: "normal"}}}
 	f.metrics = []ChannelMetric{{ChannelID: 1, RequestCount: 20, TTFTP50: 1, TTFTP90: 1, TTFTP95: 1}, {ChannelID: 2, RequestCount: 20, TTFTP50: 1, TTFTP90: 1, TTFTP95: 1}}
 	e := NewEngine(f)
 	e.evaluateContinuous("i", p, now, f)
@@ -259,7 +261,49 @@ func TestContinuousCircuitProbeAndSoftStart(t *testing.T) {
 	}
 }
 
-func mathPow(a, b float64) float64 { return math.Pow(a, b) }
+func TestObservedCircuitRecoversFromPassiveProductionTraffic(t *testing.T) {
+	now := time.Now().UTC()
+	settled := now.Add(-3 * time.Minute)
+	p := DefaultPolicy()
+	p.DispatchModes = map[string]string{"m": "observe"}
+	f := &continuousFake{
+		bases: []ChannelBaseValue{
+			{ChannelID: 1, ChannelName: "recovering", ModelName: "m", Models: []string{"m"}, BaseWeight: 100, CurrentWeight: 100},
+			{ChannelID: 2, ChannelName: "peer", ModelName: "m", Models: []string{"m"}, BaseWeight: 100, CurrentWeight: 100},
+		},
+		metrics: []ChannelMetric{
+			{ChannelID: 1, RequestCount: 30, TTFTP50: 1, TTFTP90: 1, TTFTP95: 1, CacheHitRate: .5, OTPS: 10},
+			{ChannelID: 2, RequestCount: 30, TTFTP50: 1, TTFTP90: 1, TTFTP95: 1, CacheHitRate: .5, OTPS: 10},
+		},
+		states: map[int64]ContinuousState{
+			1: {InstanceID: "i", ChannelID: 1, ModelName: "m", KError: .05, Phase: "circuit", ProposedWeight: 0},
+		},
+		recentBuckets: map[int64][]RecentChannelBucket{
+			1: {{BucketTime: settled, RequestCount: 20}},
+		},
+	}
+
+	NewEngine(f).evaluateContinuous("i", PolicyRecord{InstanceID: "i", Policy: p, Mode: "observe"}, now, f)
+
+	state := f.states[1]
+	wantWeight := int64(math.Round(100 * state.KError))
+	if state.Phase != "normal" || state.ProposedWeight != wantWeight || state.KError < p.Continuous.RecoveryThreshold {
+		t.Fatalf("passive production traffic must recover observed circuit: %#v", state)
+	}
+	if len(f.probes) != 0 || len(f.writes) != 0 {
+		t.Fatalf("observe recovery must not probe or write: probes=%d writes=%d", len(f.probes), len(f.writes))
+	}
+	found := false
+	for _, rec := range f.recommendations {
+		if rec.Rule == "circuit_recovered" && rec.ModeAtCreation == "observe" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("observe recovery event was not recorded")
+	}
+}
+
 func mathAbs(a float64) float64    { return math.Abs(a) }
 
 func TestRecoveryFloorsErrorDecayAgainstReCircuitLoop(t *testing.T) {

@@ -2,6 +2,7 @@ package tuning
 
 import (
 	"math"
+	"sort"
 	"time"
 )
 
@@ -16,7 +17,13 @@ type continuousStore interface {
 type continuousBaseline struct {
 	ttft50, ttft90, ttft95 float64
 	cache, otps            float64
+	cacheReady, otpsReady  bool
 }
+
+const (
+	cacheEvidenceTokens = int64(10_000)
+	otpsEvidenceTokens  = int64(100)
+)
 
 // evaluateContinuous implements the v3.0 continuous dispatch state machine,
 // including B3 circuit breaking, active probes, and one-cycle soft start.
@@ -73,6 +80,12 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 			state.LastObservedErrors = max(m.ErrorCount-m.UserErrorCount, 0)
 			state.MetricReady = m.RequestCount >= p.MinSamples && m.TTFTP50 > 0 && m.TTFTP90 > 0 && m.TTFTP95 > 0
 			state.BaselineReady = healthy
+			state.MetricTTFTP50, state.MetricTTFTP90, state.MetricTTFTP95 = m.TTFTP50, m.TTFTP90, m.TTFTP95
+			state.BaselineTTFTP50, state.BaselineTTFTP90, state.BaselineTTFTP95 = baseline.ttft50, baseline.ttft90, baseline.ttft95
+			state.MetricCache, state.BaselineCache = m.CacheHitRate, baseline.cache
+			state.CacheReady = baseline.cacheReady && m.CachePromptTokens >= cacheEvidenceTokens
+			state.MetricOTPS, state.BaselineOTPS = m.OTPS, baseline.otps
+			state.OTPSReady = baseline.otpsReady && m.OTPSSampleTokens >= otpsEvidenceTokens
 
 			// Mixed-channel fuse (design §4): the weight knob is channel-wide,
 			// so a channel serving several models must never be auto-tuned on
@@ -113,7 +126,8 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 					// M ≈ KError < circuit threshold and re-opens the circuit in a
 					// probe/recover loop. Ten successful probes are success
 					// evidence; floor the decay state at the recovery bar.
-					state.KError = math.Max(state.KError, p.RecoveryThreshold)
+					state.SmoothedErrorRate = math.Min(state.SmoothedErrorRate, p.RecoveryErrorRate)
+					state.KError = reliabilityFactor(state.SmoothedErrorRate)
 					state.Phase, state.SoftStartPending = "soft_start", true
 					state.Multiplier = p.SoftStartMultiplier
 					state.ProposedWeight = max(int64(1), int64(math.Round(float64(base.BaseWeight)*state.Multiplier)))
@@ -151,6 +165,29 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 				_ = cs.PutContinuousState(state)
 				evaluated++
 				continue
+			}
+			// Observe mode never removes traffic from the real channel, so normal
+			// production requests remain valid recovery evidence. Re-evaluate an
+			// observed circuit from those passive samples instead of waiting for an
+			// active probe that is intentionally only available in auto mode.
+			if state.Phase == "circuit" && mode == "observe" && healthy && m.RequestCount >= p.MinSamples {
+				state.KSpeed, state.KCache, state.KOTPS = performanceFactors(m, baseline, p.Sensitivity, p.OTPSCap, state.CacheReady, state.OTPSReady)
+				passiveMultiplier := math.Min(1.5, state.KSpeed*state.KCache*state.KOTPS*state.KError)
+				if state.SmoothedErrorRate <= p.RecoveryErrorRate {
+					state.Phase = "normal"
+					state.Multiplier = passiveMultiplier
+					state.ProposedWeight = int64(math.Round(float64(base.BaseWeight) * passiveMultiplier))
+					if state.ProposedWeight < 1 && base.BaseWeight > 0 {
+						state.ProposedWeight = 1
+					}
+					state.CircuitOpenedAt, state.NextProbeAt, state.OriginalPriority = nil, nil, nil
+					state.SoftStartPending = false
+					_ = e.store.InsertRecommendation(continuousEvent(id, base, state, "circuit_recovered", mode, now))
+					state.UpdatedAt = now
+					_ = cs.PutContinuousState(state)
+					evaluated++
+					continue
+				}
 			}
 			if state.Phase == "circuit" {
 				if mode == "auto" && state.NextProbeAt != nil && !now.Before(*state.NextProbeAt) {
@@ -190,11 +227,9 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 				state.NextProbeAt = nil
 			}
 			if healthy && mode != "off" && m.RequestCount >= p.MinSamples {
-				state.KSpeed = speedFactor(m, baseline, p.Sensitivity)
-				state.KCache = continuousRatioFactor(m.CacheHitRate, baseline.cache, p.Sensitivity, 1.5)
-				state.KOTPS = continuousRatioFactor(m.OTPS, baseline.otps, p.Sensitivity, p.OTPSCap)
+				state.KSpeed, state.KCache, state.KOTPS = performanceFactors(m, baseline, p.Sensitivity, p.OTPSCap, state.CacheReady, state.OTPSReady)
 			}
-			state.Multiplier = math.Min(1.5, state.KSpeed*state.KCache*state.KOTPS*state.KError)
+			state.Multiplier = clamp(state.KSpeed*state.KCache*state.KOTPS*state.KError, .5, 1.5)
 			if mode == "off" || !healthy {
 				state.Multiplier = 1
 			}
@@ -202,7 +237,7 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 			if state.ProposedWeight < 1 && base.BaseWeight > 0 {
 				state.ProposedWeight = 1
 			}
-			if mode != "off" && state.Phase == "normal" && state.Multiplier < p.CircuitThreshold {
+			if mode != "off" && state.Phase == "normal" && m.RequestCount >= p.MinSamples && state.SmoothedErrorRate >= p.CircuitErrorRate {
 				state.Phase = "circuit"
 				state.Multiplier = 0
 				state.ProposedWeight = 0
@@ -224,7 +259,7 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 						writes++
 					} else {
 						state.Phase = "normal"
-						state.Multiplier = state.KSpeed * state.KCache * state.KOTPS * state.KError
+						state.Multiplier = clamp(state.KSpeed*state.KCache*state.KOTPS*state.KError, .5, 1.5)
 						state.ProposedWeight = max(int64(1), int64(math.Round(float64(base.BaseWeight)*state.Multiplier)))
 						state.CircuitOpenedAt, state.NextProbeAt, state.OriginalPriority = nil, nil, nil
 					}
@@ -294,7 +329,10 @@ func (e *Engine) foldErrorDecay(id string, channelID int64, state *ContinuousSta
 	settled := now.Add(-90 * time.Second)
 	var requests, channelErrors int64
 	newest := state.LastBucketAt
-	for _, bucket := range buckets {
+	// The store returns newest buckets first so LIMIT keeps the most recent
+	// evidence. Fold them oldest-to-newest because EWMA is order-sensitive.
+	for i := len(buckets) - 1; i >= 0; i-- {
+		bucket := buckets[i]
 		if bucket.BucketTime.After(settled) {
 			continue
 		}
@@ -302,8 +340,11 @@ func (e *Engine) foldErrorDecay(id string, channelID int64, state *ContinuousSta
 			continue
 		}
 		errs := max(bucket.ErrorCount-bucket.UserErrorCount, 0)
-		successes := max(bucket.RequestCount-bucket.ErrorCount, 0)
-		state.KError = clamp(state.KError*math.Pow(.8, float64(errs))*math.Pow(1.08, float64(successes)), .001, 1)
+		if bucket.RequestCount > 0 {
+			rate := float64(errs) / float64(bucket.RequestCount)
+			state.SmoothedErrorRate = .3*rate + .7*state.SmoothedErrorRate
+			state.KError = reliabilityFactor(state.SmoothedErrorRate)
+		}
 		requests += bucket.RequestCount
 		channelErrors += errs
 		if newest == nil || bucket.BucketTime.After(*newest) {
@@ -317,27 +358,30 @@ func (e *Engine) foldErrorDecay(id string, channelID int64, state *ContinuousSta
 
 func buildContinuousBaseline(rows []ChannelBaseValue, metrics map[int64]ChannelMetric, minSamples int64) (continuousBaseline, bool) {
 	var b continuousBaseline
-	n := 0.0
+	var ttft50, ttft90, ttft95, caches, otps []float64
 	for _, row := range rows {
 		m := metrics[row.ChannelID]
 		if m.RequestCount < minSamples || m.TTFTP50 <= 0 || m.TTFTP90 <= 0 || m.TTFTP95 <= 0 {
 			continue
 		}
-		b.ttft50 += m.TTFTP50
-		b.ttft90 += m.TTFTP90
-		b.ttft95 += m.TTFTP95
-		b.cache += m.CacheHitRate
-		b.otps += m.OTPS
-		n++
+		ttft50, ttft90, ttft95 = append(ttft50, m.TTFTP50), append(ttft90, m.TTFTP90), append(ttft95, m.TTFTP95)
+		if m.CachePromptTokens >= cacheEvidenceTokens {
+			caches = append(caches, m.CacheHitRate)
+		}
+		if m.OTPSSampleTokens >= otpsEvidenceTokens && m.OTPS > 0 {
+			otps = append(otps, m.OTPS)
+		}
 	}
-	if n < 2 {
+	if len(ttft50) < 2 {
 		return b, false
 	}
-	b.ttft50 /= n
-	b.ttft90 /= n
-	b.ttft95 /= n
-	b.cache /= n
-	b.otps /= n
+	b.ttft50, b.ttft90, b.ttft95 = median(ttft50), median(ttft90), median(ttft95)
+	if len(caches) >= 2 {
+		b.cache, b.cacheReady = median(caches), true
+	}
+	if len(otps) >= 2 {
+		b.otps, b.otpsReady = median(otps), true
+	}
 	return b, true
 }
 
@@ -349,18 +393,57 @@ func speedFactor(m ChannelMetric, b continuousBaseline, sensitivity float64) flo
 	if r <= 0 {
 		return 1
 	}
-	return math.Pow(1/r, .5*sensitivity)
+	return clamp(math.Pow(1/r, .35*sensitivity), .75, 1.25)
 }
 
-func continuousRatioFactor(value, average, sensitivity, upper float64) float64 {
-	if value <= 0 || average <= 0 {
-		return 1
+func performanceFactors(m ChannelMetric, b continuousBaseline, sensitivity, otpsCap float64, cacheReady, otpsReady bool) (float64, float64, float64) {
+	speed, cache, otps := speedFactor(m, b, sensitivity), 1.0, 1.0
+	if cacheReady && b.cache > 0 {
+		cache = clamp(math.Pow(m.CacheHitRate/b.cache, .15*sensitivity), .9, 1.1)
 	}
-	return math.Min(upper, math.Pow(value/average, .5*sensitivity))
+	if otpsReady && b.otps > 0 {
+		otps = clamp(math.Pow(m.OTPS/b.otps, .25*sensitivity), .8, math.Min(1.2, otpsCap))
+	}
+	return speed, cache, otps
+}
+
+func reliabilityFactor(rate float64) float64 {
+	switch {
+	case rate <= .01:
+		return 1
+	case rate <= .05:
+		return 1 - (rate-.01)/.04*.15
+	case rate <= .15:
+		return .85 - (rate-.05)/.10*.35
+	case rate <= .30:
+		return .50 - (rate-.15)/.15*.30
+	default:
+		return .20
+	}
+}
+
+func median(values []float64) float64 {
+	if len(values) == 0 {
+		return 0
+	}
+	sort.Float64s(values)
+	mid := len(values) / 2
+	if len(values)%2 == 1 {
+		return values[mid]
+	}
+	return (values[mid-1] + values[mid]) / 2
 }
 
 func continuousEvent(id string, base ChannelBaseValue, state ContinuousState, rule, mode string, now time.Time) Recommendation {
 	return Recommendation{ID: NewID(now, id, base.ChannelID, rule), InstanceID: id, ChannelID: base.ChannelID, ChannelName: base.ChannelName, CreatedAt: now, Rule: rule,
-		Evidence:      map[string]any{"model": base.ModelName, "phase": state.Phase, "multiplier": state.Multiplier, "k_speed": state.KSpeed, "k_cache": state.KCache, "k_otps": state.KOTPS, "k_error": state.KError, "probe_attempts": state.ProbeAttempts, "probe_successes": state.ProbeSuccesses},
+		Evidence: map[string]any{
+			"model": base.ModelName, "phase": state.Phase, "multiplier": state.Multiplier,
+			"k_speed": state.KSpeed, "k_cache": state.KCache, "k_otps": state.KOTPS, "k_error": state.KError,
+			"metric_ttft_p50": state.MetricTTFTP50, "metric_ttft_p90": state.MetricTTFTP90, "metric_ttft_p95": state.MetricTTFTP95,
+			"baseline_ttft_p50": state.BaselineTTFTP50, "baseline_ttft_p90": state.BaselineTTFTP90, "baseline_ttft_p95": state.BaselineTTFTP95,
+			"metric_cache": state.MetricCache, "baseline_cache": state.BaselineCache, "cache_ready": state.CacheReady,
+			"metric_otps": state.MetricOTPS, "baseline_otps": state.BaselineOTPS, "otps_ready": state.OTPSReady,
+			"smoothed_error_rate": state.SmoothedErrorRate, "probe_attempts": state.ProbeAttempts, "probe_successes": state.ProbeSuccesses,
+		},
 		CurrentWeight: base.CurrentWeight, ProposedWeight: state.ProposedWeight, CurrentPriority: &base.CurrentPriority, ProposedPriority: &base.BasePriority, ModeAtCreation: mode, Status: "recorded"}
 }

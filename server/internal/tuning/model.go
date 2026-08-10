@@ -20,6 +20,8 @@ type ContinuousDispatchParams struct {
 	OTPSCap               float64 `json:"otps_cap"`
 	CircuitThreshold      float64 `json:"circuit_threshold"`
 	RecoveryThreshold     float64 `json:"recovery_threshold"`
+	CircuitErrorRate      float64 `json:"circuit_error_rate"`
+	RecoveryErrorRate     float64 `json:"recovery_error_rate"`
 	SilentMinutes         int     `json:"silent_minutes"`
 	ProbeIntervalSeconds  int     `json:"probe_interval_seconds"`
 	ProbeCount            int     `json:"probe_count"`
@@ -43,6 +45,7 @@ func DefaultPolicy() Policy {
 		DispatchModes: map[string]string{},
 		Continuous: ContinuousDispatchParams{
 			Sensitivity: 1, OTPSCap: 1.5, CircuitThreshold: .1, RecoveryThreshold: .2,
+			CircuitErrorRate: .30, RecoveryErrorRate: .10,
 			SilentMinutes: 5, ProbeIntervalSeconds: 5, ProbeCount: 10, SoftStartMultiplier: .2,
 			WindowMinutes: 15, MinSamples: 20, SparseLookbackMinutes: 360,
 		},
@@ -87,6 +90,12 @@ func (p Policy) Validate() map[string]string {
 	}
 	if c.RecoveryThreshold > 1 {
 		e["continuous.recovery_threshold"] = "must_be_at_most_1"
+	}
+	if c.CircuitErrorRate <= 0 || c.CircuitErrorRate > 1 {
+		e["continuous.circuit_error_rate"] = "must_be_between_0_and_1"
+	}
+	if c.RecoveryErrorRate < 0 || c.RecoveryErrorRate >= c.CircuitErrorRate {
+		e["continuous.recovery_error_rate"] = "must_be_nonnegative_and_less_than_circuit_error_rate"
 	}
 	if c.SilentMinutes < 1 || c.SilentMinutes > 1440 {
 		e["continuous.silent_minutes"] = "must_be_between_1_and_1440"
@@ -163,6 +172,7 @@ type ChannelMetric struct {
 	TTFTP50, TTFTP90, TTFTP95                float64
 	CacheHitRate                             float64
 	OTPS                                     float64
+	CachePromptTokens, OTPSSampleTokens       int64
 }
 
 type ContinuousState struct {
@@ -181,6 +191,19 @@ type ContinuousState struct {
 	LastObservedErrors   int64      `json:"last_observed_errors"`
 	MetricReady          bool       `json:"metric_ready"`
 	BaselineReady        bool       `json:"baseline_ready"`
+	MetricTTFTP50        float64    `json:"metric_ttft_p50"`
+	MetricTTFTP90        float64    `json:"metric_ttft_p90"`
+	MetricTTFTP95        float64    `json:"metric_ttft_p95"`
+	BaselineTTFTP50      float64    `json:"baseline_ttft_p50"`
+	BaselineTTFTP90      float64    `json:"baseline_ttft_p90"`
+	BaselineTTFTP95      float64    `json:"baseline_ttft_p95"`
+	MetricCache          float64    `json:"metric_cache"`
+	BaselineCache        float64    `json:"baseline_cache"`
+	CacheReady           bool       `json:"cache_ready"`
+	MetricOTPS           float64    `json:"metric_otps"`
+	BaselineOTPS         float64    `json:"baseline_otps"`
+	OTPSReady            bool       `json:"otps_ready"`
+	SmoothedErrorRate    float64    `json:"smoothed_error_rate"`
 	// LastBucketAt is the newest metric bucket already folded into KError.
 	// Buckets arrive late (agent reports every ~30s), so the decay must walk
 	// complete buckets past this cursor instead of re-reading "the last

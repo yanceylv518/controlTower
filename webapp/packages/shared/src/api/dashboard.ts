@@ -328,6 +328,8 @@ export interface TuningContinuousDispatchParams {
   otps_cap: number;
   circuit_threshold: number;
   recovery_threshold: number;
+  circuit_error_rate: number;
+  recovery_error_rate: number;
   silent_minutes: number;
   probe_interval_seconds: number;
   probe_count: number;
@@ -381,6 +383,19 @@ export interface TuningContinuousState {
   last_observed_errors: number;
   metric_ready: boolean;
   baseline_ready: boolean;
+  metric_ttft_p50: number;
+  metric_ttft_p90: number;
+  metric_ttft_p95: number;
+  baseline_ttft_p50: number;
+  baseline_ttft_p90: number;
+  baseline_ttft_p95: number;
+  metric_cache: number;
+  baseline_cache: number;
+  cache_ready: boolean;
+  metric_otps: number;
+  baseline_otps: number;
+  otps_ready: boolean;
+  smoothed_error_rate: number;
   paused_reason?: string;
   phase: "normal" | "circuit" | "probing" | "soft_start";
   circuit_opened_at?: string;
