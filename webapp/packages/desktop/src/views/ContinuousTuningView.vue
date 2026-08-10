@@ -13,6 +13,7 @@ const mode = ref<"observe" | "confirm" | "auto">("observe");
 const bases = ref<ChannelBaseValue[]>([]), states = ref<TuningContinuousState[]>([]), events = ref<TuningRecommendation[]>([]);
 const modelQuery = ref(""), activeModel = ref("");
 const eventModelFilter = ref(""), eventRuleFilter = ref(""), eventChannelQuery = ref("");
+const eventPage = ref(1), eventPageSize = ref(20);
 const defaults = () => ({ sensitivity: 1, otps_cap: 1.5, circuit_threshold: .1, recovery_threshold: .2, circuit_error_rate: .3, recovery_error_rate: .1, silent_minutes: 5, probe_interval_seconds: 5, probe_count: 10, soft_start_multiplier: .2, window_minutes: 15, min_samples: 20, sparse_lookback_minutes: 360 });
 const policy = reactive<TuningPolicy>({ scheduling: { window_minutes: 15, min_samples: 20, sparse_min_samples: 10, sparse_lookback_minutes: 360 }, continuous: defaults(), dispatch_modes: {} });
 const siteID = computed(() => filters.site_id || "");
@@ -41,6 +42,7 @@ const filteredEvents = computed(() => {
   );
 });
 const eventRuleOptions = computed(() => [...new Set(recentEvents.value.map(item => item.rule))]);
+const pagedEvents = computed(() => filteredEvents.value.slice((eventPage.value - 1) * eventPageSize.value, eventPage.value * eventPageSize.value));
 const counts = computed(() => models.value.reduce((v, model) => { v[policy.dispatch_modes[model] || "off"]++; return v; }, { off: 0, observe: 0, auto: 0 }));
 const abnormal = computed(() => states.value.filter(x => x.phase !== "normal" || x.paused_reason).length);
 const modelAbnormal = (model: string) => bases.value.filter(row => row.model_name === model && stateFor(row) && (stateFor(row)?.phase !== "normal" || stateFor(row)?.paused_reason)).length;
@@ -125,6 +127,7 @@ async function sync(kind: "weight" | "priority") {
 }
 async function save() { saving.value = true; try { bases.value = (await dashboard.saveTuningBaseValues(siteID.value, bases.value)).items ?? []; await dashboard.saveTuningPolicy(siteID.value, policy, mode.value); ElMessage.success("设置已保存，将在下一分钟生效"); await load(); } finally { saving.value = false; } }
 watch(() => filters.site_id, () => void load());
+watch([eventModelFilter, eventRuleFilter, eventChannelQuery, activeModel], () => { eventPage.value = 1; });
 onMounted(() => { void load(); refreshTimer = setInterval(() => void refreshRuntime(), 30000); });
 onBeforeUnmount(() => { if (refreshTimer) clearInterval(refreshTimer); });
 </script>
@@ -151,14 +154,15 @@ onBeforeUnmount(() => { if (refreshTimer) clearInterval(refreshTimer); });
           <el-select v-model="eventRuleFilter" clearable placeholder="全部事件" style="width:170px"><el-option v-for="rule in eventRuleOptions" :key="rule" :label="eventName(rule)" :value="rule"/></el-select>
           <el-input v-model="eventChannelQuery" clearable placeholder="搜索渠道名称或 ID" style="width:240px"/>
         </div>
-        <el-table v-if="filteredEvents.length" :data="filteredEvents" size="small" max-height="calc(100vh - 330px)">
+        <el-table v-if="filteredEvents.length" :data="pagedEvents" size="small" max-height="560">
           <el-table-column label="时间" width="170"><template #default="{row}">{{ formatTime(row.created_at) }}</template></el-table-column>
-          <el-table-column label="模型" min-width="180"><template #default="{row}">{{ eventModel(row) || '—' }}</template></el-table-column>
-          <el-table-column prop="channel_name" label="渠道" min-width="190"><template #default="{row}"><b>{{ row.channel_name }}</b><small class="channel-id">ID {{ row.channel_id }}</small></template></el-table-column>
-          <el-table-column label="事件" width="130"><template #default="{row}"><el-tag :type="row.rule==='weight_write'?'success':row.rule==='circuit_opened'?'danger':'warning'">{{ eventName(row.rule) }}</el-tag></template></el-table-column>
-          <el-table-column label="权重变化" width="130"><template #default="{row}">{{ row.current_weight }} → {{ row.proposed_weight }}</template></el-table-column>
-          <el-table-column label="模式" width="100"><template #default="{row}">{{ row.mode_at_creation==='auto'?'自动执行':row.mode_at_creation==='observe'?'只观察':'关闭' }}</template></el-table-column>
+          <el-table-column label="模型" width="210" show-overflow-tooltip><template #default="{row}">{{ eventModel(row) || '—' }}</template></el-table-column>
+          <el-table-column prop="channel_name" label="渠道" min-width="300" show-overflow-tooltip><template #default="{row}"><b>{{ row.channel_name }}</b><small class="channel-id">ID {{ row.channel_id }}</small></template></el-table-column>
+          <el-table-column label="事件" width="145"><template #default="{row}"><el-tag :type="row.rule==='weight_write'?'success':row.rule==='circuit_opened'?'danger':'warning'">{{ eventName(row.rule) }}</el-tag></template></el-table-column>
+          <el-table-column label="权重变化" width="125"><template #default="{row}">{{ row.current_weight }} → {{ row.proposed_weight }}</template></el-table-column>
+          <el-table-column label="模式" width="90"><template #default="{row}">{{ row.mode_at_creation==='auto'?'自动':row.mode_at_creation==='observe'?'观察':'关闭' }}</template></el-table-column>
         </el-table>
+        <el-pagination v-if="filteredEvents.length" v-model:current-page="eventPage" v-model:page-size="eventPageSize" class="event-pagination" layout="total, sizes, prev, pager, next" :page-sizes="[20,50,100]" :total="filteredEvents.length"/>
         <el-empty v-else description="当前筛选条件下暂无记录"/>
       </el-card>
     </el-tab-pane>
@@ -216,5 +220,5 @@ onBeforeUnmount(() => { if (refreshTimer) clearInterval(refreshTimer); });
 .help-guide .parameter-guide{gap:0;border:1px solid #e5eaf2;border-radius:8px;overflow:hidden}.help-guide .parameter-guide>div{grid-template-columns:118px 1fr;padding:10px 12px;border-bottom:1px solid #edf1f6}.help-guide .parameter-guide>div:last-child{border-bottom:0}.help-guide .parameter-guide dt{color:#253858}.help-guide .help-note{margin-top:10px;padding:9px 11px;border-radius:6px;background:#f5f7fa;color:#606b7d;font-size:13px}
 .evaluation{display:flex;flex-direction:column;gap:2px}.evaluation small{color:#8491a5}.factors{color:#596579;font-size:12px;white-space:normal;line-height:1.75}.positive{color:#21a675;font-weight:600}.negative{color:#d84a4a;font-weight:600}
 .evidence-collapse{margin:0 0 8px}.evidence-collapse :deep(.el-collapse-item__header){height:34px;padding:0 10px;color:#596579;font-size:12px}.evidence-grid{display:grid;gap:6px;padding:4px 10px 10px}.evidence-row{display:grid;grid-template-columns:minmax(150px,1.2fr) 2fr 1fr 1fr 1fr;gap:10px;color:#596579;font-size:12px}.evidence-row b{color:#17233b}.evidence-row span{white-space:nowrap}
-.event-filters{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:12px}.channel-id{display:block;color:#8491a5;font-weight:400}
+.event-filters{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:12px}.channel-id{display:block;color:#8491a5;font-weight:400}.event-pagination{justify-content:flex-end;margin-top:14px}
 </style>
