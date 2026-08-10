@@ -16,6 +16,7 @@ const modelQuery = ref(""), activeModel = ref("");
 const eventModelFilter = ref(""), eventRuleFilter = ref(""), eventChannelQuery = ref("");
 const eventPage = ref(1), eventPageSize = ref(20);
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
+const wait = (milliseconds: number) => new Promise(resolve => setTimeout(resolve, milliseconds));
 const defaults = () => ({ sensitivity: 1, otps_cap: 1.5, circuit_threshold: .1, recovery_threshold: .2, circuit_error_rate: .3, recovery_error_rate: .1, silent_minutes: 5, probe_interval_seconds: 5, probe_count: 10, soft_start_multiplier: .2, window_minutes: 15, min_samples: 20, sparse_lookback_minutes: 360 });
 const policy = reactive<TuningPolicy>({ scheduling: { window_minutes: 15, min_samples: 20, sparse_min_samples: 10, sparse_lookback_minutes: 360 }, continuous: defaults(), dispatch_modes: {} });
 const siteID = computed(() => filters.site_id || "");
@@ -184,7 +185,37 @@ async function sync(kind: "weight" | "priority") {
     ElMessage.success("基础值已从 new-api 更新并保存");
   } finally { saving.value = false; }
 }
-async function save() { saving.value = true; try { bases.value = (await dashboard.saveTuningBaseValues(siteID.value, bases.value)).items ?? []; await dashboard.saveTuningPolicy(siteID.value, policy, mode.value); ElMessage.success("设置已保存，将在下一分钟生效"); await load(); } finally { saving.value = false; } }
+async function runAutoPreflight() {
+  const newlyAutoModels = Object.entries(policy.dispatch_modes)
+    .filter(([model, nextMode]) => nextMode === "auto" && savedPolicy.value?.dispatch_modes?.[model] !== "auto")
+    .map(([model]) => model);
+  if (!newlyAutoModels.length) return "";
+  const channel = bases.value.find(row => newlyAutoModels.includes(row.model_name) && row.channel_id > 0);
+  if (!channel) throw new Error("自动模式预检失败：当前模型没有可验证的渠道");
+  ElMessage.info("正在验证 Agent 与 new-api 控制能力，请稍候…");
+  const started = await dashboard.startTuningPreflight(siteID.value, channel.channel_id);
+  for (let attempt = 0; attempt < 45; attempt++) {
+    const result = await dashboard.tuningPreflight(siteID.value, started.command_id);
+    if (result.status === "succeeded") return started.command_id;
+    if (["failed", "expired"].includes(result.status)) {
+      throw new Error(`自动模式预检失败：${result.error || (result.status === "expired" ? "Agent 未及时领取验证命令" : "new-api 控制命令执行失败")}`);
+    }
+    await wait(1000);
+  }
+  throw new Error("自动模式预检超时：请确认 Agent 在线且上报周期正常");
+}
+async function save() {
+  saving.value = true;
+  try {
+    const preflightCommandID = await runAutoPreflight();
+    await dashboard.saveTuningPolicy(siteID.value, policy, mode.value, preflightCommandID || undefined);
+    bases.value = (await dashboard.saveTuningBaseValues(siteID.value, bases.value)).items ?? [];
+    ElMessage.success(preflightCommandID ? "控制能力验证通过，自动模式已启用" : "设置已保存，将在下一分钟生效");
+    await load();
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "保存失败");
+  } finally { saving.value = false; }
+}
 watch(() => filters.site_id, () => void load());
 watch([eventModelFilter, eventRuleFilter, eventChannelQuery, activeModel], () => { eventPage.value = 1; });
 onMounted(() => { void load(); refreshTimer = setInterval(() => void refreshRuntime(), 30000); });

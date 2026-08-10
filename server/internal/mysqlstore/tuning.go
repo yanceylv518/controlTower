@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"controltower/internal/latencyhist"
+	"controltower/server/internal/storage"
 	"controltower/server/internal/tuning"
 )
 
@@ -305,6 +306,37 @@ func (s Store) CreateContinuousProbe(v tuning.Recommendation, model string, coun
 		return "", err
 	}
 	return commandID, nil
+}
+
+// CreateTuningPreflight queues a no-change new-api update. A succeeded result
+// proves that the selected Agent is online, channel control is enabled, and
+// its admin credentials have read/write access to the channel API.
+func (s Store) CreateTuningPreflight(siteID string, channelID int64, actor string, now time.Time) (storage.ChannelCommand, error) {
+	tx, err := s.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		return storage.ChannelCommand{}, err
+	}
+	defer tx.Rollback()
+	instanceID, err := controlInstanceForSite(tx, siteID)
+	if err != nil {
+		return storage.ChannelCommand{}, err
+	}
+	command := storage.ChannelCommand{ID: randomCommandID(), InstanceID: instanceID, ChannelID: channelID, CommandType: "channel.verify", PayloadJSON: `{}`, Status: "pending", CreatedBy: actor, CreatedAt: now, UpdatedAt: now}
+	if _, err = tx.Exec(`INSERT INTO channel_commands(id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, command.ID, command.InstanceID, command.ChannelID, command.CommandType, command.PayloadJSON, command.Status, command.CreatedBy, "", now, now); err != nil {
+		return storage.ChannelCommand{}, err
+	}
+	return command, tx.Commit()
+}
+
+func (s Store) GetTuningPreflight(siteID, commandID string) (storage.ChannelCommand, bool, error) {
+	var command storage.ChannelCommand
+	err := s.db.QueryRowContext(context.Background(), `SELECT c.id,c.instance_id,c.channel_id,c.command_type,c.payload_json,c.status,c.created_by,c.error_summary,c.created_at,c.updated_at
+FROM channel_commands c JOIN instances i ON i.id=c.instance_id
+WHERE c.id=? AND c.command_type='channel.verify' AND CASE WHEN i.site_id='' THEN i.id ELSE i.site_id END=?`, commandID, siteID).Scan(&command.ID, &command.InstanceID, &command.ChannelID, &command.CommandType, &command.PayloadJSON, &command.Status, &command.CreatedBy, &command.ErrorSummary, &command.CreatedAt, &command.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return storage.ChannelCommand{}, false, nil
+	}
+	return command, err == nil, err
 }
 
 func (s Store) RecordContinuousProbeResult(instanceID string, channelID int64, commandID string, attempts, successes int, duration float64, now time.Time) error {

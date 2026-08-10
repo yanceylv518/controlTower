@@ -26,7 +26,7 @@ func executeCommands(ctx context.Context, controller channelController, commands
 			results = append(results, result)
 			continue
 		}
-		if command.Type != "channel.update" && command.Type != "channel.probe" {
+		if command.Type != "channel.update" && command.Type != "channel.verify" && command.Type != "channel.probe" {
 			result.Status = "failed"
 			result.Error = fmt.Sprintf("unsupported command type %q", command.Type)
 			results = append(results, result)
@@ -73,6 +73,8 @@ func executeCommands(ctx context.Context, controller channelController, commands
 			results = append(results, result)
 			continue
 		}
+		// channel.verify sends no field changes. Update still performs an
+		// authenticated GET and PUT, proving that new-api is writable.
 		_, err := controller.Update(ctx, channelcontrol.UpdateRequest{
 			ChannelID: command.ChannelID,
 			Status:    command.Status,

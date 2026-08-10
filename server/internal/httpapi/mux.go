@@ -105,6 +105,7 @@ func NewMux(options Options) *http.ServeMux {
 		mux.Handle("/api/dashboard/tuning/policy", protect(http.HandlerFunc(dashboardHandler.HandleTuningPolicy)))
 		mux.Handle("/api/dashboard/tuning/base-values", protect(http.HandlerFunc(dashboardHandler.HandleTuningBaseValues)))
 		mux.Handle("POST /api/dashboard/tuning/base-values/sync", protect(http.HandlerFunc(dashboardHandler.HandleTuningBaseValuesSync)))
+		mux.Handle("/api/dashboard/tuning/preflight", protect(http.HandlerFunc(dashboardHandler.HandleTuningPreflight)))
 		mux.Handle("GET /api/dashboard/tuning/continuous-states", protect(http.HandlerFunc(dashboardHandler.HandleTuningContinuousStates)))
 		mux.Handle("GET /api/dashboard/tuning/recommendations", protect(http.HandlerFunc(dashboardHandler.HandleTuningRecommendations)))
 		mux.Handle("GET /api/dashboard/tuning/report", protect(http.HandlerFunc(dashboardHandler.HandleTuningReport)))

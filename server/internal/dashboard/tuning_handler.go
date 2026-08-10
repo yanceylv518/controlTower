@@ -8,6 +8,7 @@ import (
 	"time"
 
 	ctauth "controltower/server/internal/auth"
+	"controltower/server/internal/storage"
 	"controltower/server/internal/tuning"
 )
 
@@ -19,6 +20,10 @@ type ChannelBaseValueStore interface {
 }
 type ContinuousStateStore interface {
 	ListContinuousStates(string) ([]tuning.ContinuousState, error)
+}
+type TuningPreflightStore interface {
+	CreateTuningPreflight(string, int64, string, time.Time) (storage.ChannelCommand, error)
+	GetTuningPreflight(string, string) (storage.ChannelCommand, bool, error)
 }
 
 func tuningSiteID(r *http.Request) string {
@@ -138,6 +143,48 @@ func (h Handler) HandleTuningBaseValuesSync(w http.ResponseWriter, r *http.Reque
 	writeDashboardJSON(w, 200, map[string]any{"items": items})
 }
 
+func (h Handler) HandleTuningPreflight(w http.ResponseWriter, r *http.Request) {
+	id := tuningSiteID(r)
+	if id == "" {
+		writeDashboardError(w, 400, "site_id_required")
+		return
+	}
+	store, ok := h.tuningStore.(TuningPreflightStore)
+	if !ok {
+		writeDashboardError(w, 501, "tuning_preflight_not_supported")
+		return
+	}
+	switch r.Method {
+	case http.MethodPost:
+		var req struct {
+			ChannelID int64 `json:"channel_id"`
+		}
+		if json.NewDecoder(r.Body).Decode(&req) != nil || req.ChannelID <= 0 {
+			writeDashboardError(w, 400, "invalid_channel_id")
+			return
+		}
+		command, err := store.CreateTuningPreflight(id, req.ChannelID, ctauth.Actor(r), time.Now().UTC())
+		if err != nil {
+			writeDashboardError(w, 409, "tuning_preflight_unavailable")
+			return
+		}
+		writeDashboardJSON(w, 202, map[string]any{"command_id": command.ID, "status": command.Status})
+	case http.MethodGet:
+		command, found, err := store.GetTuningPreflight(id, strings.TrimSpace(r.URL.Query().Get("command_id")))
+		if err != nil {
+			writeDashboardError(w, 500, "query_failed")
+			return
+		}
+		if !found {
+			writeDashboardError(w, 404, "preflight_not_found")
+			return
+		}
+		writeDashboardJSON(w, 200, map[string]any{"command_id": command.ID, "status": command.Status, "error": command.ErrorSummary})
+	default:
+		writeDashboardError(w, 405, "method_not_allowed")
+	}
+}
+
 type RecommendationItem struct {
 	ID               string         `json:"id"`
 	InstanceID       string         `json:"instance_id"`
@@ -181,8 +228,9 @@ func (h Handler) HandleTuningPolicy(w http.ResponseWriter, r *http.Request) {
 		writeDashboardJSON(w, 200, PolicyResponse{InstanceID: id, SiteID: id, Policy: rec.Policy, Mode: rec.Mode, UpdatedAt: &rec.UpdatedAt, UpdatedBy: rec.UpdatedBy})
 	case http.MethodPut:
 		var req struct {
-			Policy tuning.Policy `json:"policy"`
-			Mode   string        `json:"mode"`
+			Policy             tuning.Policy `json:"policy"`
+			Mode               string        `json:"mode"`
+			PreflightCommandID string        `json:"preflight_command_id"`
 		}
 		if json.NewDecoder(r.Body).Decode(&req) != nil {
 			writeDashboardError(w, 400, "invalid_json")
@@ -195,6 +243,29 @@ func (h Handler) HandleTuningPolicy(w http.ResponseWriter, r *http.Request) {
 		if fields := req.Policy.Validate(); len(fields) > 0 {
 			writeDashboardJSON(w, 400, map[string]any{"error": "validation_failed", "fields": fields})
 			return
+		}
+		current, _, err := h.tuningStore.GetPolicy(id)
+		if err != nil {
+			writeDashboardError(w, 500, "query_failed")
+			return
+		}
+		newlyAuto := false
+		for model, nextMode := range req.Policy.DispatchModes {
+			if nextMode == "auto" && current.Policy.DispatchModes[model] != "auto" {
+				newlyAuto = true
+				break
+			}
+		}
+		if newlyAuto {
+			preflightStore, supported := h.tuningStore.(TuningPreflightStore)
+			command, found, preflightErr := storage.ChannelCommand{}, false, error(nil)
+			if supported && req.PreflightCommandID != "" {
+				command, found, preflightErr = preflightStore.GetTuningPreflight(id, req.PreflightCommandID)
+			}
+			if !supported || preflightErr != nil || !found || command.Status != "succeeded" || time.Since(command.UpdatedAt) > 5*time.Minute {
+				writeDashboardJSON(w, 409, map[string]any{"error": "tuning_preflight_required", "detail": command.ErrorSummary})
+				return
+			}
 		}
 		now := time.Now().UTC()
 		rec := tuning.PolicyRecord{InstanceID: id, Policy: req.Policy, Mode: req.Mode, UpdatedAt: now, UpdatedBy: ctauth.Actor(r)}
