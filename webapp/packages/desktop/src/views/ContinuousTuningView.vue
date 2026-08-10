@@ -154,7 +154,7 @@ onBeforeUnmount(() => { if (refreshTimer) clearInterval(refreshTimer); });
             <el-select v-model="eventRuleFilter" clearable placeholder="全部事件" style="width:170px"><el-option v-for="rule in eventRuleOptions" :key="rule" :label="eventName(rule)" :value="rule"/></el-select>
             <el-input v-model="eventChannelQuery" clearable placeholder="搜索渠道名称或 ID" style="width:240px"/>
           </div></div>
-        <el-table v-if="filteredEvents.length" :data="pagedEvents" :fit="false" size="small" height="calc(100vh - 430px)">
+        <el-table v-if="filteredEvents.length" :data="pagedEvents" :fit="false" size="small" height="calc(100vh - 370px)">
           <el-table-column label="时间" width="170"><template #default="{row}">{{ formatTime(row.created_at) }}</template></el-table-column>
           <el-table-column label="模型" width="210" show-overflow-tooltip><template #default="{row}">{{ eventModel(row) || '—' }}</template></el-table-column>
           <el-table-column prop="channel_name" label="渠道" width="360" show-overflow-tooltip><template #default="{row}"><b>{{ row.channel_name }}</b><small class="channel-id">ID {{ row.channel_id }}</small></template></el-table-column>
