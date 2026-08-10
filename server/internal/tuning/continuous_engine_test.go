@@ -276,7 +276,10 @@ func TestObservedCircuitRecoversFromPassiveProductionTraffic(t *testing.T) {
 			{ChannelID: 2, RequestCount: 30, TTFTP50: 1, TTFTP90: 1, TTFTP95: 1, CacheHitRate: .5, OTPS: 10},
 		},
 		states: map[int64]ContinuousState{
-			1: {InstanceID: "i", ChannelID: 1, ModelName: "m", KError: .05, Phase: "circuit", ProposedWeight: 0},
+			// A faithful v2 circuit state carries the smoothed rate that
+			// tripped or sustained it; a zero rate with decayed KError is the
+			// v1-legacy shape and triggers the upgrade seeding instead.
+			1: {InstanceID: "i", ChannelID: 1, ModelName: "m", KError: .605, SmoothedErrorRate: .12, Phase: "circuit", ProposedWeight: 0},
 		},
 		recentBuckets: map[int64][]RecentChannelBucket{
 			1: {{BucketTime: settled, RequestCount: 20}},
@@ -304,7 +307,7 @@ func TestObservedCircuitRecoversFromPassiveProductionTraffic(t *testing.T) {
 	}
 }
 
-func mathAbs(a float64) float64    { return math.Abs(a) }
+func mathAbs(a float64) float64 { return math.Abs(a) }
 
 func TestRecoveryFloorsErrorDecayAgainstReCircuitLoop(t *testing.T) {
 	now := time.Now().UTC()
@@ -328,5 +331,20 @@ func TestRecoveryFloorsErrorDecayAgainstReCircuitLoop(t *testing.T) {
 	e.evaluateContinuous("i", p, now.Add(2*time.Minute), f)
 	if f.states[1].Phase != "normal" {
 		t.Fatalf("recovered channel with no new failures must settle to normal, got %q", f.states[1].Phase)
+	}
+}
+
+// A v1 state carries a decayed KError with no smoothed rate. Upgrading must
+// seed the rate by inverting the reliability mapping so error memory
+// survives, and the inversion must round-trip the mapping.
+func TestLegacyErrorRateRoundTripsReliabilityFactor(t *testing.T) {
+	for _, factor := range []float64{.95, .85, .7, .5, .3, .2} {
+		rate := legacyErrorRate(factor)
+		if got := reliabilityFactor(rate); math.Abs(got-factor) > 1e-9 {
+			t.Fatalf("round trip factor %v -> rate %v -> %v", factor, rate, got)
+		}
+	}
+	if legacyErrorRate(.1) != .30 {
+		t.Fatalf("deep-decayed legacy state must seed at the circuit rate")
 	}
 }

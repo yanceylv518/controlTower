@@ -318,6 +318,15 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 // the stored cursor. Buckets land late (agent reports every ~30s), so only
 // buckets older than a 90s settling lag are folded, each exactly once.
 func (e *Engine) foldErrorDecay(id string, channelID int64, state *ContinuousState, now time.Time) (int64, int64) {
+	// One-time migration from the v1 multiplicative decay: a legacy state has
+	// a decayed KError but no smoothed rate yet (EWMA never returns to exact
+	// zero once fed). Seed the rate by inverting the reliability mapping so
+	// upgraded channels keep their error memory instead of restarting from
+	// an optimistic blank slate.
+	if state.SmoothedErrorRate == 0 && state.KError > 0 && state.KError < 1 {
+		state.SmoothedErrorRate = legacyErrorRate(state.KError)
+		state.KError = reliabilityFactor(state.SmoothedErrorRate)
+	}
 	since := now.Add(-15 * time.Minute)
 	if state.LastBucketAt != nil && state.LastBucketAt.After(since) {
 		since = *state.LastBucketAt
@@ -405,6 +414,23 @@ func performanceFactors(m ChannelMetric, b continuousBaseline, sensitivity, otps
 		otps = clamp(math.Pow(m.OTPS/b.otps, .25*sensitivity), .8, math.Min(1.2, otpsCap))
 	}
 	return speed, cache, otps
+}
+
+// legacyErrorRate inverts reliabilityFactor's piecewise mapping so a v1
+// KError value can seed an equivalent smoothed error rate on upgrade.
+func legacyErrorRate(factor float64) float64 {
+	switch {
+	case factor >= 1:
+		return 0
+	case factor >= .85:
+		return .01 + (1-factor)/.15*.04
+	case factor >= .5:
+		return .05 + (.85-factor)/.35*.10
+	case factor >= .2:
+		return .15 + (.5-factor)/.30*.15
+	default:
+		return .30
+	}
 }
 
 func reliabilityFactor(rate float64) float64 {
