@@ -132,7 +132,7 @@ onMounted(() => { void load(); refreshTimer = setInterval(() => void refreshRunt
 onBeforeUnmount(() => { if (refreshTimer) clearInterval(refreshTimer); });
 </script>
 
-<template><AppShell title="调权中心"><div v-loading="loading" class="page">
+<template><AppShell title="调权中心"><div v-loading="loading" class="page" :class="{'events-page':activeTab==='events'}">
   <el-tabs v-model="activeTab" class="tabs">
     <el-tab-pane label="运行概览" name="overview">
       <el-card shadow="never" class="workspace-card"><template #header><div class="head"><div class="title-line"><b>模型与渠道</b><small>每个模型单独选择关闭、只观察或自动执行</small><div class="inline-metrics"><span>自动 <b>{{ counts.auto }}</b></span><span>观察 <b>{{ counts.observe }}</b></span><span>关闭 <b>{{ counts.off }}</b></span><span :class="{ danger: abnormal }">关注 <b>{{ abnormal }}</b></span></div></div><div class="tools"><el-button @click="helpOpen=true">使用说明</el-button><el-button :loading="saving" @click="sync('weight')">初始化/刷新基础值</el-button><el-button v-if="dirty" type="primary" :loading="saving" @click="save">保存更改</el-button></div></div></template>
@@ -154,7 +154,7 @@ onBeforeUnmount(() => { if (refreshTimer) clearInterval(refreshTimer); });
             <el-select v-model="eventRuleFilter" clearable placeholder="全部事件" style="width:170px"><el-option v-for="rule in eventRuleOptions" :key="rule" :label="eventName(rule)" :value="rule"/></el-select>
             <el-input v-model="eventChannelQuery" clearable placeholder="搜索渠道名称或 ID" style="width:240px"/>
           </div></div>
-        <el-table v-if="filteredEvents.length" :data="pagedEvents" :fit="false" size="small" height="calc(100vh - 370px)">
+        <el-table v-if="filteredEvents.length" :data="pagedEvents" :fit="false" size="small" height="calc(100% - 108px)">
           <el-table-column label="时间" width="170"><template #default="{row}">{{ formatTime(row.created_at) }}</template></el-table-column>
           <el-table-column label="模型" width="210" show-overflow-tooltip><template #default="{row}">{{ eventModel(row) || '—' }}</template></el-table-column>
           <el-table-column prop="channel_name" label="渠道" width="360" show-overflow-tooltip><template #default="{row}"><b>{{ row.channel_name }}</b><small class="channel-id">ID {{ row.channel_id }}</small></template></el-table-column>
@@ -221,4 +221,5 @@ onBeforeUnmount(() => { if (refreshTimer) clearInterval(refreshTimer); });
 .evaluation{display:flex;flex-direction:column;gap:2px}.evaluation small{color:#8491a5}.factors{color:#596579;font-size:12px;white-space:normal;line-height:1.75}.positive{color:#21a675;font-weight:600}.negative{color:#d84a4a;font-weight:600}
 .evidence-collapse{margin:0 0 8px}.evidence-collapse :deep(.el-collapse-item__header){height:34px;padding:0 10px;color:#596579;font-size:12px}.evidence-grid{display:grid;gap:6px;padding:4px 10px 10px}.evidence-row{display:grid;grid-template-columns:minmax(150px,1.2fr) 2fr 1fr 1fr 1fr;gap:10px;color:#596579;font-size:12px}.evidence-row b{color:#17233b}.evidence-row span{white-space:nowrap}
 .event-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:12px 16px;margin-bottom:12px}.event-filters{display:flex;flex-wrap:wrap;gap:10px}.channel-id{display:block;color:#8491a5;font-weight:400}.event-footer{display:flex;justify-content:flex-end;align-items:center;min-height:48px;padding-top:10px}
+.page.events-page{height:calc(100vh - 88px);overflow:hidden}.events-page .tabs{height:100%}.events-page .tabs :deep(.el-tabs__content){height:calc(100% - 42px);overflow:hidden}.events-page .tabs :deep(.el-tab-pane){height:100%;overflow:hidden}.events-page .event-history-card{height:calc(100% - 124px)}.event-history-card :deep(.el-card__body){display:flex;height:100%;min-height:0;flex-direction:column}
 </style>
