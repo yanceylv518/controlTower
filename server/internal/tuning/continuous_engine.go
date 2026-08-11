@@ -349,36 +349,28 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 				state.LastObservedWeight = &anchor
 			}
 
-			// Manual-override detection. Snapshots refresh every ~10 minutes,
-			// so a stale snapshot differing from our write is expected, not
-			// evidence: only flag when the snapshot was captured well after
-			// the write (command-apply grace) and still disagrees.
-			if state.LastWrittenWeight != nil && base.CurrentWeight == *state.LastWrittenWeight {
-				if state.PausedReason == "manual_override" {
-					state.PausedReason = ""
-				}
-			} else if state.LastWrittenWeight != nil && state.LastWriteAt != nil &&
-				base.SnapshotAt.After(state.LastWriteAt.Add(2*time.Minute)) && state.PausedReason == "" {
-				state.PausedReason = "manual_override"
-				_ = e.store.InsertRecommendation(continuousEvent(id, base, state, "manual_takeover", mode, now))
+			// Auto mode is authoritative: a confirmed external change is written
+			// back to the current calculated weight instead of permanently pausing
+			// the channel. The snapshot must postdate our write plus apply grace;
+			// otherwise it is merely the expected stale snapshot after our own write.
+			confirmedExternalChange := state.LastWrittenWeight != nil && state.LastWriteAt != nil &&
+				base.CurrentWeight != *state.LastWrittenWeight && base.SnapshotAt.After(state.LastWriteAt.Add(2*time.Minute))
+			if state.PausedReason == "manual_override" {
+				state.PausedReason = ""
 			}
 
-			// Deduplicate against our own last write, not the snapshot value:
-			// the snapshot lags for minutes after a write and would otherwise
-			// re-issue the same command every evaluation.
-			alreadyWritten := state.LastWrittenWeight != nil && *state.LastWrittenWeight == state.ProposedWeight
-			needsWrite := !alreadyWritten && state.ProposedWeight != base.CurrentWeight
-			materialChange := weightChangeOutsideDeadband(state.ProposedWeight, writeReference(state, base), base.BaseWeight, p.WriteDeadbandPercent)
+			// Recalculate every minute and write every integer target change. Keep
+			// only exact-value deduplication so a stale channel snapshot does not
+			// cause the same command to be sent repeatedly before it refreshes.
+			needsWrite := state.ProposedWeight != writeReference(state, base) || confirmedExternalChange
 			retryingWriteFailure := state.PausedReason == "write_failed" && writeAttemptAllowed(state, now)
-			// A due retry with no material write left has nothing useful to test.
+			// A due retry with no write left has nothing useful to test.
 			// Clear the pause; the next real change will exercise the path again.
-			if mode == "auto" && retryingWriteFailure && (!needsWrite || !materialChange) {
+			if mode == "auto" && retryingWriteFailure && !needsWrite {
 				e.noteWriteSuccess(&state)
 				retryingWriteFailure = false
 			}
-			intervalReady := state.LastWriteAt == nil || !now.Before(state.LastWriteAt.Add(time.Duration(p.MinWriteIntervalMinutes)*time.Minute))
-			regularWriteAllowed := materialChange && intervalReady
-			if mode == "auto" && writeAttemptAllowed(state, now) && needsWrite && (regularWriteAllowed || retryingWriteFailure) {
+			if mode == "auto" && writeAttemptAllowed(state, now) && needsWrite {
 				rec := continuousEvent(id, base, state, "weight_write", mode, now)
 				if _, err = cs.CreateContinuousWeightChange(rec, "system:auto", now); err == nil {
 					written := state.ProposedWeight

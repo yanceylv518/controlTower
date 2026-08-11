@@ -218,44 +218,31 @@ func TestContinuousAutoDedupesAgainstOwnLastWrite(t *testing.T) {
 	}
 }
 
-func TestContinuousAutoWriteDeadband(t *testing.T) {
+func TestContinuousAutoWritesEveryIntegerTargetChange(t *testing.T) {
 	now := time.Now().UTC()
-	tests := []struct {
-		name       string
-		last       int64
-		deadband   float64
-		wantWrites int
-	}{
-		{name: "four percent is suppressed", last: 96, deadband: 5, wantWrites: 0},
-		{name: "six percent is written", last: 94, deadband: 5, wantWrites: 1},
-		{name: "zero deadband writes one unit", last: 99, deadband: 0, wantWrites: 1},
+	writeAt := now.Add(-time.Minute)
+	last := int64(99)
+	f := &continuousFake{
+		bases:  []ChannelBaseValue{{ChannelID: 1, ModelName: "m", Models: []string{"m"}, BaseWeight: 100, CurrentWeight: last, SnapshotAt: now.Add(-time.Hour)}},
+		states: map[int64]ContinuousState{1: {InstanceID: "i", ChannelID: 1, ModelName: "m", KError: 1, LastWrittenWeight: &last, LastWriteAt: &writeAt}},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			writeAt := now.Add(-time.Hour)
-			last := tt.last
-			f := &continuousFake{
-				bases:  []ChannelBaseValue{{ChannelID: 1, ModelName: "m", Models: []string{"m"}, BaseWeight: 100, CurrentWeight: last, SnapshotAt: now.Add(-time.Hour)}},
-				states: map[int64]ContinuousState{1: {InstanceID: "i", ChannelID: 1, ModelName: "m", KError: 1, LastWrittenWeight: &last, LastWriteAt: &writeAt}},
-			}
-			pr := autoPolicy()
-			pr.Policy.Continuous.WriteDeadbandPercent = tt.deadband
-			NewEngine(f).evaluateContinuous("i", pr, now, f)
-			if len(f.writes) != tt.wantWrites {
-				t.Fatalf("writes=%d want=%d state=%#v", len(f.writes), tt.wantWrites, f.states[1])
-			}
-		})
+	pr := autoPolicy()
+	pr.Policy.Continuous.WriteDeadbandPercent = 50
+	pr.Policy.Continuous.MinWriteIntervalMinutes = 60
+	NewEngine(f).evaluateContinuous("i", pr, now, f)
+	if len(f.writes) != 1 || f.writes[0].ProposedWeight != 100 {
+		t.Fatalf("one-unit target change must write immediately: %#v", f.writes)
 	}
 }
 
-func TestContinuousAutoMinimumWriteInterval(t *testing.T) {
+func TestContinuousAutoDoesNotWaitForMinimumWriteInterval(t *testing.T) {
 	now := time.Now().UTC()
 	for _, tc := range []struct {
 		name       string
 		lastWrite  *time.Time
 		wantWrites int
 	}{
-		{name: "inside interval", lastWrite: timePointer(now.Add(-4 * time.Minute)), wantWrites: 0},
+		{name: "inside interval", lastWrite: timePointer(now.Add(-4 * time.Minute)), wantWrites: 1},
 		{name: "at interval", lastWrite: timePointer(now.Add(-5 * time.Minute)), wantWrites: 1},
 		{name: "first write", lastWrite: nil, wantWrites: 1},
 	} {
@@ -276,7 +263,7 @@ func TestContinuousAutoMinimumWriteInterval(t *testing.T) {
 
 func timePointer(value time.Time) *time.Time { return &value }
 
-func TestManualOverrideOnlyWhenSnapshotPostdatesWrite(t *testing.T) {
+func TestAutoReassertsCalculatedWeightAfterConfirmedExternalChange(t *testing.T) {
 	now := time.Now().UTC()
 	written := int64(100)
 	writeAt := now.Add(-10 * time.Minute)
@@ -287,8 +274,8 @@ func TestManualOverrideOnlyWhenSnapshotPostdatesWrite(t *testing.T) {
 			KError: 1, LastWrittenWeight: &written, LastWriteAt: &writeAt}},
 	}
 	NewEngine(stale).evaluateContinuous("i", autoPolicy(), now, stale)
-	if stale.states[1].PausedReason != "" {
-		t.Fatalf("stale snapshot must not flag manual override: %#v", stale.states[1])
+	if stale.states[1].PausedReason != "" || len(stale.writes) != 0 {
+		t.Fatalf("stale snapshot must neither pause nor duplicate: state=%#v writes=%d", stale.states[1], len(stale.writes))
 	}
 	fresh := &continuousFake{
 		bases: []ChannelBaseValue{{ChannelID: 1, ModelName: "m", Models: []string{"m"}, BaseWeight: 100,
@@ -297,8 +284,8 @@ func TestManualOverrideOnlyWhenSnapshotPostdatesWrite(t *testing.T) {
 			KError: 1, LastWrittenWeight: &written, LastWriteAt: &writeAt}},
 	}
 	NewEngine(fresh).evaluateContinuous("i", autoPolicy(), now, fresh)
-	if fresh.states[1].PausedReason != "manual_override" || len(fresh.writes) != 0 {
-		t.Fatalf("fresh differing snapshot must pause channel: %#v writes=%d", fresh.states[1], len(fresh.writes))
+	if fresh.states[1].PausedReason != "" || len(fresh.writes) != 1 || fresh.writes[0].ProposedWeight != 100 {
+		t.Fatalf("fresh external change must be overwritten by auto: %#v writes=%#v", fresh.states[1], fresh.writes)
 	}
 }
 
@@ -622,7 +609,6 @@ func TestWriteFailurePauseClearsWhenDueChangeEvaporates(t *testing.T) {
 		last    int64
 	}{
 		{name: "already written", current: 100, last: 100},
-		{name: "inside deadband", current: 96, last: 96},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			last := tc.last
