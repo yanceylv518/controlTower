@@ -289,6 +289,22 @@ func TestAutoReassertsCalculatedWeightAfterConfirmedExternalChange(t *testing.T)
 	}
 }
 
+func TestLegacyManualOverrideIsClearedBeforeCircuitEarlyReturn(t *testing.T) {
+	now := time.Now().UTC()
+	nextProbe := now.Add(5 * time.Minute)
+	f := &continuousFake{
+		bases: []ChannelBaseValue{{ChannelID: 1, ModelName: "m", Models: []string{"m"}, BaseWeight: 100, CurrentWeight: 0, SnapshotAt: now}},
+		states: map[int64]ContinuousState{1: {
+			InstanceID: "i", ChannelID: 1, ModelName: "m", KError: .2,
+			PausedReason: "manual_override", Phase: "circuit", NextProbeAt: &nextProbe,
+		}},
+	}
+	NewEngine(f).evaluateContinuous("i", autoPolicy(), now, f)
+	if got := f.states[1].PausedReason; got != "" {
+		t.Fatalf("legacy manual override must clear even while circuit branch returns early: %q", got)
+	}
+}
+
 func TestErrorDecayFoldsEachBucketExactlyOnce(t *testing.T) {
 	now := time.Now().UTC()
 	settledBucket := now.Add(-3 * time.Minute)

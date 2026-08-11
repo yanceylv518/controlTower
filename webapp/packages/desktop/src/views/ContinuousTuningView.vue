@@ -88,8 +88,9 @@ const weightClass = (row: ChannelBaseValue) => comparisonClass(stateFor(row)?.pr
 const modelMode = (model: string) => policy.dispatch_modes[model] || "off";
 const modeText = (model: string) => ({ off: "已关闭", observe: "只观察", auto: "自动执行" }[modelMode(model)]);
 const modeType = (model: string) => modelMode(model) === "auto" ? "success" : modelMode(model) === "observe" ? "warning" : "info";
-const phaseText = (s?: TuningContinuousState) => !s ? "等待首次评估" : s.paused_reason === "manual_override" ? "人工修改后已暂停" : s.paused_reason === "write_failed" ? `写入 new-api 失败已暂停，每10分钟自动重试${s.last_write_error ? `：${s.last_write_error}` : ""}` : s.paused_reason ? "安全保护已暂停" : s.phase === "circuit" ? `已熔断，下次检测 ${s.next_probe_at ? formatTime(s.next_probe_at) : "待定"}` : s.phase === "probing" ? `恢复检测 ${s.probe_attempts || 0}/${policy.continuous.probe_count}` : s.phase === "soft_start" ? "恢复中（低权重运行）" : "运行正常";
-const phaseType = (s?: TuningContinuousState) => s?.phase === "circuit" ? "danger" : s?.phase === "probing" || s?.phase === "soft_start" || s?.paused_reason ? "warning" : "success";
+const effectivePause = (s?: TuningContinuousState) => s?.paused_reason === "manual_override" ? "" : s?.paused_reason || "";
+const phaseText = (s?: TuningContinuousState) => !s ? "等待首次评估" : effectivePause(s) === "write_failed" ? `写入 new-api 失败已暂停，每10分钟自动重试${s.last_write_error ? `：${s.last_write_error}` : ""}` : effectivePause(s) ? "安全保护已暂停" : s.phase === "circuit" ? `已熔断，下次检测 ${s.next_probe_at ? formatTime(s.next_probe_at) : "待定"}` : s.phase === "probing" ? `恢复检测 ${s.probe_attempts || 0}/${policy.continuous.probe_count}` : s.phase === "soft_start" ? "恢复中（低权重运行）" : "运行正常";
+const phaseType = (s?: TuningContinuousState) => s?.phase === "circuit" ? "danger" : s?.phase === "probing" || s?.phase === "soft_start" || effectivePause(s) ? "warning" : "success";
 const eventName = (rule: string) => ({ weight_observed: "观察到权重变化", weight_write: "自动调整权重", manual_takeover: "检测到人工修改", auto_paused: "安全保护暂停", circuit_opened: "渠道熔断", probe_started: "开始恢复检测", probe_failed: "恢复检测未通过", circuit_recovered: "渠道恢复" } as Record<string, string>)[rule] || rule;
 const eventCount = (days: number, rule: string) => events.value.filter(x => validEvent(x) && x.rule === rule && new Date(x.created_at).getTime() >= Date.now() - days * 86400000).length;
 const sampleText = (row: ChannelBaseValue) => `${stateFor(row)?.last_observed_requests ?? 0}/${policy.continuous.min_samples}`;
@@ -275,7 +276,7 @@ onBeforeUnmount(() => { if (refreshTimer) clearInterval(refreshTimer); });
       <section><h3>最简单的理解</h3><ol><li>系统每分钟计算一次渠道权重。</li><li>关闭模式不计算；只观察模式只展示；自动执行模式会写入 new-api。</li><li>自动模式下，整数计算权重只要变化就立即写入；没有变化就不重复写。</li></ol></section>
       <section><h3>第一次使用</h3><ol><li>点击“初始化/刷新基础值”，读取当前线上权重和优先级。</li><li>先选择“只观察”，确认计算结果合理。</li><li>再切换为“自动执行”并保存；系统会先验证 new-api 控制链路。</li></ol></section>
       <section><h3>三个权重</h3><dl><div><dt>基础权重</dt><dd>计算基准，可手动修改。</dd></div><div><dt>计算权重</dt><dd>基础权重乘以速度、缓存、输出和错误四项系数后的整数结果。</dd></div><div><dt>当前权重</dt><dd>new-api 当前实际权重；渠道快照刷新后会与最近写入结果一致。</dd></div></dl></section>
-      <section><h3>自动模式</h3><p>每分钟重新计算。只要计算权重与上次成功写入值不同，就写入 new-api。不存在写入死区，也不等待最小写入间隔；如果线上权重被外部修改，下一轮会重新写回当前计算权重。</p></section>
+      <section><h3>自动模式</h3><p>每分钟重新计算。只要计算权重与上次成功写入值不同，就写入 new-api。不存在写入死区，也不等待最小写入间隔；如果线上权重被人工或其他系统修改，不会暂停调权，下一轮会重新写回当前计算权重。</p></section>
       <section><h3>保留的安全保护</h3><dl><div><dt>熔断</dt><dd>渠道错误率达到阈值且样本足够时，将权重和优先级置为 0。</dd></div><div><dt>恢复</dt><dd>静默期后主动探测；通过后先以低权重恢复，再回到正常计算。</dd></div><div><dt>多模型渠道</dt><dd>一个渠道同时服务多个模型时不自动调权，避免模型之间互相影响。</dd></div><div><dt>写入失败</dt><dd>连续失败 3 次后暂停每分钟写入，改为每 10 分钟重试，成功后自动恢复。</dd></div></dl></section>
       <section><h3>表格与记录</h3><p>“评估状态”直接显示样本不足、熔断、恢复中或写入失败等原因；“变更记录”保存每次自动写入、熔断和恢复。计算公式可点击“计算权重”旁的 i 查看。</p></section>
     </div>

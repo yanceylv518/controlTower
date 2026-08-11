@@ -80,6 +80,14 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 				state.Phase = "normal"
 			}
 			state.KSpeed, state.KCache, state.KOTPS = 1, 1, 1
+			// manual_override is obsolete in authoritative auto tuning. Clear any
+			// legacy state before the early-return branches below (mixed channel,
+			// zero baseline, circuit and probing), so an old pause can never remain
+			// visible or influence execution merely because the channel is not in
+			// the normal phase.
+			if state.PausedReason == "manual_override" {
+				state.PausedReason = ""
+			}
 			// A write_failed pause is only meaningful while auto writes can
 			// run; on observe/off models nothing could ever clear it, so the
 			// stale label would stick until the mode flips back.
@@ -355,10 +363,6 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 			// otherwise it is merely the expected stale snapshot after our own write.
 			confirmedExternalChange := state.LastWrittenWeight != nil && state.LastWriteAt != nil &&
 				base.CurrentWeight != *state.LastWrittenWeight && base.SnapshotAt.After(state.LastWriteAt.Add(2*time.Minute))
-			if state.PausedReason == "manual_override" {
-				state.PausedReason = ""
-			}
-
 			// Recalculate every minute and write every integer target change. Keep
 			// only exact-value deduplication so a stale channel snapshot does not
 			// cause the same command to be sent repeatedly before it refreshes.
