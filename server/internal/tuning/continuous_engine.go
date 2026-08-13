@@ -1,6 +1,7 @@
 package tuning
 
 import (
+	"log"
 	"math"
 	"sort"
 	"time"
@@ -35,19 +36,35 @@ const (
 // evaluateContinuous implements the v3.0 continuous dispatch state machine,
 // including B3 circuit breaking, active probes, and one-cycle soft start.
 func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, cs ContinuousStore) (int, int) {
+	evaluationStarted := time.Now()
 	p := pr.Policy.Continuous
+	stageStarted := time.Now()
 	values, err := cs.ListChannelBaseValues(id, "")
-	if err != nil || len(values) == 0 {
+	baseDuration := time.Since(stageStarted)
+	if err != nil {
+		log.Printf("tuning continuous evaluation site=%s stage=base_values failed duration=%s error=%v", id, baseDuration, err)
 		return 0, 0
 	}
+	if len(values) == 0 {
+		log.Printf("tuning continuous evaluation site=%s stage=base_values empty duration=%s", id, baseDuration)
+		return 0, 0
+	}
+	stageStarted = time.Now()
 	metrics, err := e.store.QueryMetrics(id, now.Add(-time.Duration(p.WindowMinutes)*time.Minute), now)
+	metricsDuration := time.Since(stageStarted)
 	if err != nil {
+		log.Printf("tuning continuous evaluation site=%s stage=metrics failed duration=%s error=%v", id, metricsDuration, err)
 		return 0, 0
 	}
+	stageStarted = time.Now()
 	states, err := cs.ListContinuousStates(id)
+	statesDuration := time.Since(stageStarted)
 	if err != nil {
+		log.Printf("tuning continuous evaluation site=%s stage=states failed duration=%s error=%v", id, statesDuration, err)
 		return 0, 0
 	}
+	log.Printf("tuning continuous evaluation site=%s stages base_values=%s metrics=%s states=%s channels=%d metrics_rows=%d state_rows=%d", id, baseDuration, metricsDuration, statesDuration, len(values), len(metrics), len(states))
+	channelLoopStarted := time.Now()
 	metricByID := map[int64]ChannelMetric{}
 	stateByID := map[int64]ContinuousState{}
 	for _, v := range metrics {
@@ -391,6 +408,7 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 			evaluated++
 		}
 	}
+	log.Printf("tuning continuous evaluation site=%s stage=channel_loop duration=%s total_duration=%s", id, time.Since(channelLoopStarted), time.Since(evaluationStarted))
 	return writes, evaluated
 }
 

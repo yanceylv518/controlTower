@@ -48,8 +48,10 @@ func (e *Engine) Tick(now time.Time) {
 		return
 	}
 	for _, id := range ids {
+		siteStarted := time.Now()
 		p, found, err := e.store.GetPolicy(id)
 		if err != nil {
+			log.Printf("tuning continuous evaluation site=%s stage=policy failed duration=%s error=%v", id, time.Since(siteStarted), err)
 			continue
 		}
 		if !found {
@@ -57,7 +59,7 @@ func (e *Engine) Tick(now time.Time) {
 		}
 		e.runAutoSentinel(&p, now)
 		n, c := e.evaluateContinuous(id, p, now, cs)
-		log.Printf("tuning continuous evaluation site=%s active_channels=%d writes=%d", id, c, n)
+		log.Printf("tuning continuous evaluation site=%s active_channels=%d writes=%d duration=%s", id, c, n, time.Since(siteStarted))
 	}
 }
 

@@ -95,8 +95,10 @@ func (s Store) controllerForSite(siteID string) (Controller, bool, error) {
 // direct sites, then records the same paper trail the command path leaves.
 // The recommendation's InstanceID carries the site id (engine convention).
 func (s Store) CreateContinuousWeightChange(v tuning.Recommendation, actor string, now time.Time) (string, error) {
+	started := time.Now()
 	controller, direct, err := s.controllerForSite(v.InstanceID)
 	if err != nil {
+		log.Printf("direct control: weight write site=%s channel=%d stage=controller duration=%s failed: %v", v.InstanceID, v.ChannelID, time.Since(started), err)
 		return "", err
 	}
 	if !direct {
@@ -105,9 +107,12 @@ func (s Store) CreateContinuousWeightChange(v tuning.Recommendation, actor strin
 	ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
 	defer cancel()
 	if err := executeWeightUpdate(ctx, controller, v); err != nil {
+		log.Printf("direct control: weight write site=%s channel=%d target=%d duration=%s failed: %v", v.InstanceID, v.ChannelID, v.ProposedWeight, time.Since(started), err)
 		return "", fmt.Errorf("direct weight write: %w", err)
 	}
-	return recordExecutedWrite(func() (string, error) { return s.Store.RecordDirectWeightChange(v, actor, now) })
+	commandID, err := recordExecutedWrite(func() (string, error) { return s.Store.RecordDirectWeightChange(v, actor, now) })
+	log.Printf("direct control: weight write site=%s channel=%d target=%d duration=%s succeeded", v.InstanceID, v.ChannelID, v.ProposedWeight, time.Since(started))
+	return commandID, err
 }
 
 // recordExecutedWrite persists the paper trail of a write that ALREADY
