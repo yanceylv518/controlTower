@@ -60,6 +60,22 @@ func TestTuningRecentChannelBucketsSQLUsesNewestNonEmptyBuckets(t *testing.T) {
 	}
 }
 
+func TestTuningRecentChannelBucketsBySiteSQLScansWindowOnce(t *testing.T) {
+	for _, fragment := range []string{
+		"SUBSTRING_INDEX(dimension_key,':',-1)",
+		"bucket_time>=?",
+		"request_count>0",
+		"GROUP BY CAST(SUBSTRING_INDEX(dimension_key,':',-1) AS SIGNED),bucket_time",
+	} {
+		if !strings.Contains(tuningRecentChannelBucketsBySiteSQL, fragment) {
+			t.Fatalf("batch recent channel bucket query missing %q: %s", fragment, tuningRecentChannelBucketsBySiteSQL)
+		}
+	}
+	if strings.Contains(tuningRecentChannelBucketsBySiteSQL, "LIMIT ?") {
+		t.Fatalf("site batch must return every channel bucket in the bounded window: %s", tuningRecentChannelBucketsBySiteSQL)
+	}
+}
+
 func TestChannelBaseValuesPersistenceContracts(t *testing.T) {
 	source, err := os.ReadFile("tuning.go")
 	if err != nil {

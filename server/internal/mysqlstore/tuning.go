@@ -474,6 +474,43 @@ GROUP BY bucket_time
 ORDER BY bucket_time DESC
 LIMIT ?`
 
+const tuningRecentChannelBucketsBySiteSQL = `SELECT
+CAST(SUBSTRING_INDEX(dimension_key,':',-1) AS SIGNED),
+bucket_time,SUM(request_count),SUM(error_count),SUM(user_error_count)
+FROM metric_1m
+WHERE instance_id IN (SELECT id FROM instances WHERE enabled=1 AND CASE WHEN site_id='' THEN id ELSE site_id END=?) AND dimension_type='instance_channel'
+  AND bucket_time>=? AND request_count>0
+GROUP BY CAST(SUBSTRING_INDEX(dimension_key,':',-1) AS SIGNED),bucket_time
+ORDER BY CAST(SUBSTRING_INDEX(dimension_key,':',-1) AS SIGNED),bucket_time DESC`
+
+// QueryRecentChannelBucketsBySite scans the evaluation window once for the
+// whole site. The old per-channel predicate computes the channel id from
+// dimension_key, so MySQL cannot seek by it and repeats the same range scan
+// for every channel in the model.
+func (s Store) QueryRecentChannelBucketsBySite(id string, since time.Time) (map[int64][]tuning.RecentChannelBucket, error) {
+	started := time.Now()
+	rows, err := s.db.QueryContext(context.Background(), tuningRecentChannelBucketsBySiteSQL, id, since)
+	if err != nil {
+		log.Printf("tuning mysql operation=recent_channel_buckets_batch site=%s duration=%s error=%v", id, time.Since(started), err)
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[int64][]tuning.RecentChannelBucket)
+	rowCount := 0
+	for rows.Next() {
+		var channelID int64
+		var bucket tuning.RecentChannelBucket
+		if err = rows.Scan(&channelID, &bucket.BucketTime, &bucket.RequestCount, &bucket.ErrorCount, &bucket.UserErrorCount); err != nil {
+			return nil, err
+		}
+		out[channelID] = append(out[channelID], bucket)
+		rowCount++
+	}
+	err = rows.Err()
+	log.Printf("tuning mysql operation=recent_channel_buckets_batch site=%s duration=%s channels=%d rows=%d error=%v", id, time.Since(started), len(out), rowCount, err)
+	return out, err
+}
+
 func (s Store) QueryRecentChannelBuckets(id string, channelID int64, since time.Time, limit int) ([]tuning.RecentChannelBucket, error) {
 	started := time.Now()
 	rows, err := s.db.QueryContext(context.Background(), tuningRecentChannelBucketsSQL, id, channelID, since, limit)

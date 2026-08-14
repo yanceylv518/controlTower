@@ -15,6 +15,10 @@ type ContinuousStore interface {
 	CreateContinuousProbe(Recommendation, string, int, int, time.Time) (string, error)
 }
 
+type continuousRecentBucketsStore interface {
+	QueryRecentChannelBucketsBySite(string, time.Time) (map[int64][]RecentChannelBucket, error)
+}
+
 type continuousBaseline struct {
 	ttft50, ttft90, ttft95 float64
 	cache, otps            float64
@@ -64,6 +68,17 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 		return 0, 0
 	}
 	log.Printf("tuning continuous evaluation site=%s stages base_values=%s metrics=%s states=%s channels=%d metrics_rows=%d state_rows=%d", id, baseDuration, metricsDuration, statesDuration, len(values), len(metrics), len(states))
+	var recentBuckets map[int64][]RecentChannelBucket
+	if batchStore, ok := e.store.(continuousRecentBucketsStore); ok {
+		stageStarted = time.Now()
+		recentBuckets, err = batchStore.QueryRecentChannelBucketsBySite(id, now.Add(-15*time.Minute))
+		if err != nil {
+			log.Printf("tuning continuous evaluation site=%s stage=recent_buckets_batch failed duration=%s error=%v; falling back to per-channel queries", id, time.Since(stageStarted), err)
+			recentBuckets = nil
+		} else {
+			log.Printf("tuning continuous evaluation site=%s stage=recent_buckets_batch duration=%s channels=%d", id, time.Since(stageStarted), len(recentBuckets))
+		}
+	}
 	channelLoopStarted := time.Now()
 	metricByID := map[int64]ChannelMetric{}
 	stateByID := map[int64]ContinuousState{}
@@ -161,7 +176,7 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 			}
 
 			wasCircuit := state.Phase == "circuit"
-			foldedRequests, foldedErrors := e.foldErrorDecay(id, base.ChannelID, &state, now)
+			foldedRequests, foldedErrors := e.foldErrorDecayWithBuckets(id, base.ChannelID, &state, now, recentBuckets)
 			// In observe mode, settled production traffic is the passive probe.
 			// Keep its evidence independent from the larger performance-ranking
 			// sample threshold so a low-traffic channel can still prove recovery.
@@ -416,6 +431,10 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 // the stored cursor. Buckets land late (agent reports every ~30s), so only
 // buckets older than a 90s settling lag are folded, each exactly once.
 func (e *Engine) foldErrorDecay(id string, channelID int64, state *ContinuousState, now time.Time) (int64, int64) {
+	return e.foldErrorDecayWithBuckets(id, channelID, state, now, nil)
+}
+
+func (e *Engine) foldErrorDecayWithBuckets(id string, channelID int64, state *ContinuousState, now time.Time, recentBuckets map[int64][]RecentChannelBucket) (int64, int64) {
 	// One-time migration from the v1 multiplicative decay: a legacy state has
 	// a decayed KError but no smoothed rate yet (EWMA never returns to exact
 	// zero once fed). Seed the rate by inverting the reliability mapping so
@@ -429,9 +448,13 @@ func (e *Engine) foldErrorDecay(id string, channelID int64, state *ContinuousSta
 	if state.LastBucketAt != nil && state.LastBucketAt.After(since) {
 		since = *state.LastBucketAt
 	}
-	buckets, err := e.store.QueryRecentChannelBuckets(id, channelID, since, 240)
-	if err != nil {
-		return state.LastObservedRequests, state.LastObservedErrors
+	buckets := recentBuckets[channelID]
+	if recentBuckets == nil {
+		var err error
+		buckets, err = e.store.QueryRecentChannelBuckets(id, channelID, since, 240)
+		if err != nil {
+			return state.LastObservedRequests, state.LastObservedErrors
+		}
 	}
 	settled := now.Add(-90 * time.Second)
 	var requests, channelErrors int64
