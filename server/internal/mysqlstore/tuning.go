@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -253,7 +254,11 @@ func (s Store) ListContinuousStates(id string) ([]tuning.ContinuousState, error)
 // refuses exactly one thing: writing back the id RecordContinuousProbeResult
 // stamped into last_probe_command_id — a column this upsert never assigns.
 func (s Store) PutContinuousState(v tuning.ContinuousState) error {
+	started := time.Now()
 	_, err := s.db.ExecContext(context.Background(), `INSERT INTO tuning_continuous_states(instance_id,channel_id,model_name,k_error,k_speed,k_cache,k_otps,multiplier,proposed_weight,last_written_weight,last_write_at,last_observed_requests,last_observed_errors,metric_ready,baseline_ready,metric_ttft_p50,metric_ttft_p90,metric_ttft_p95,baseline_ttft_p50,baseline_ttft_p90,baseline_ttft_p95,metric_cache,baseline_cache,cache_ready,metric_otps,baseline_otps,otps_ready,smoothed_error_rate,last_bucket_at,paused_reason,phase,circuit_opened_at,next_probe_at,probe_command_id,probe_attempts,probe_successes,probe_duration_sum,original_priority,soft_start_pending,write_failure_streak,last_write_failure_at,last_write_error,last_observed_weight,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE model_name=VALUES(model_name),k_error=VALUES(k_error),k_speed=VALUES(k_speed),k_cache=VALUES(k_cache),k_otps=VALUES(k_otps),multiplier=VALUES(multiplier),proposed_weight=VALUES(proposed_weight),last_written_weight=VALUES(last_written_weight),last_write_at=VALUES(last_write_at),last_observed_requests=VALUES(last_observed_requests),last_observed_errors=VALUES(last_observed_errors),metric_ready=VALUES(metric_ready),baseline_ready=VALUES(baseline_ready),metric_ttft_p50=VALUES(metric_ttft_p50),metric_ttft_p90=VALUES(metric_ttft_p90),metric_ttft_p95=VALUES(metric_ttft_p95),baseline_ttft_p50=VALUES(baseline_ttft_p50),baseline_ttft_p90=VALUES(baseline_ttft_p90),baseline_ttft_p95=VALUES(baseline_ttft_p95),metric_cache=VALUES(metric_cache),baseline_cache=VALUES(baseline_cache),cache_ready=VALUES(cache_ready),metric_otps=VALUES(metric_otps),baseline_otps=VALUES(baseline_otps),otps_ready=VALUES(otps_ready),smoothed_error_rate=VALUES(smoothed_error_rate),last_bucket_at=VALUES(last_bucket_at),paused_reason=VALUES(paused_reason),phase=VALUES(phase),circuit_opened_at=VALUES(circuit_opened_at),next_probe_at=VALUES(next_probe_at),probe_command_id=IF(@keep_probe:=(VALUES(probe_command_id) IS NOT NULL AND VALUES(probe_command_id)=last_probe_command_id),probe_command_id,VALUES(probe_command_id)),probe_attempts=IF(@keep_probe,probe_attempts,VALUES(probe_attempts)),probe_successes=IF(@keep_probe,probe_successes,VALUES(probe_successes)),probe_duration_sum=IF(@keep_probe,probe_duration_sum,VALUES(probe_duration_sum)),original_priority=VALUES(original_priority),soft_start_pending=VALUES(soft_start_pending),write_failure_streak=VALUES(write_failure_streak),last_write_failure_at=VALUES(last_write_failure_at),last_write_error=VALUES(last_write_error),last_observed_weight=VALUES(last_observed_weight),updated_at=VALUES(updated_at)`, v.InstanceID, v.ChannelID, v.ModelName, v.KError, v.KSpeed, v.KCache, v.KOTPS, v.Multiplier, v.ProposedWeight, v.LastWrittenWeight, v.LastWriteAt, v.LastObservedRequests, v.LastObservedErrors, v.MetricReady, v.BaselineReady, v.MetricTTFTP50, v.MetricTTFTP90, v.MetricTTFTP95, v.BaselineTTFTP50, v.BaselineTTFTP90, v.BaselineTTFTP95, v.MetricCache, v.BaselineCache, v.CacheReady, v.MetricOTPS, v.BaselineOTPS, v.OTPSReady, v.SmoothedErrorRate, v.LastBucketAt, v.PausedReason, v.Phase, v.CircuitOpenedAt, v.NextProbeAt, v.ProbeCommandID, v.ProbeAttempts, v.ProbeSuccesses, v.ProbeDurationSum, v.OriginalPriority, v.SoftStartPending, v.WriteFailureStreak, v.LastWriteFailureAt, v.LastWriteError, v.LastObservedWeight, v.UpdatedAt)
+	if elapsed := time.Since(started); elapsed >= time.Second || err != nil {
+		log.Printf("tuning mysql operation=put_continuous_state site=%s channel=%d duration=%s error=%v", v.InstanceID, v.ChannelID, elapsed, err)
+	}
 	return err
 }
 
@@ -470,8 +475,10 @@ ORDER BY bucket_time DESC
 LIMIT ?`
 
 func (s Store) QueryRecentChannelBuckets(id string, channelID int64, since time.Time, limit int) ([]tuning.RecentChannelBucket, error) {
+	started := time.Now()
 	rows, err := s.db.QueryContext(context.Background(), tuningRecentChannelBucketsSQL, id, channelID, since, limit)
 	if err != nil {
+		log.Printf("tuning mysql operation=recent_channel_buckets site=%s channel=%d duration=%s error=%v", id, channelID, time.Since(started), err)
 		return nil, err
 	}
 	defer rows.Close()
@@ -483,7 +490,11 @@ func (s Store) QueryRecentChannelBuckets(id string, channelID int64, since time.
 		}
 		out = append(out, bucket)
 	}
-	return out, rows.Err()
+	err = rows.Err()
+	if elapsed := time.Since(started); elapsed >= time.Second || err != nil {
+		log.Printf("tuning mysql operation=recent_channel_buckets site=%s channel=%d duration=%s rows=%d error=%v", id, channelID, elapsed, len(out), err)
+	}
+	return out, err
 }
 
 func (s Store) LatestChannels(id string) ([]tuning.Channel, error) {
