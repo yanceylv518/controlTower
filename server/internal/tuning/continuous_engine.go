@@ -42,6 +42,16 @@ const (
 func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, cs ContinuousStore) (int, int) {
 	evaluationStarted := time.Now()
 	p := pr.Policy.Continuous
+	activeModes := make(map[string]bool)
+	for model, mode := range pr.Policy.DispatchModes {
+		if mode == "observe" || mode == "auto" {
+			activeModes[model] = true
+		}
+	}
+	if len(activeModes) == 0 {
+		log.Printf("tuning continuous evaluation site=%s skipped=no_active_models", id)
+		return 0, 0
+	}
 	stageStarted := time.Now()
 	values, err := cs.ListChannelBaseValues(id, "")
 	baseDuration := time.Since(stageStarted)
@@ -51,6 +61,17 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 	}
 	if len(values) == 0 {
 		log.Printf("tuning continuous evaluation site=%s stage=base_values empty duration=%s", id, baseDuration)
+		return 0, 0
+	}
+	activeValues := values[:0]
+	for _, value := range values {
+		if activeModes[value.ModelName] {
+			activeValues = append(activeValues, value)
+		}
+	}
+	values = activeValues
+	if len(values) == 0 {
+		log.Printf("tuning continuous evaluation site=%s skipped=no_active_channels duration=%s", id, baseDuration)
 		return 0, 0
 	}
 	stageStarted = time.Now()

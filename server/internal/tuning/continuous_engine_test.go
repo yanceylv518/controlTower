@@ -140,6 +140,7 @@ type continuousFake struct {
 	probes          []Recommendation
 	writeErr        error
 	writeAttempts   int
+	metricsQueries  int
 }
 
 func (f *continuousFake) GetPolicy(string) (PolicyRecord, bool, error) {
@@ -148,6 +149,7 @@ func (f *continuousFake) GetPolicy(string) (PolicyRecord, bool, error) {
 func (f *continuousFake) PutPolicy(PolicyRecord) error        { return nil }
 func (f *continuousFake) ListEnabledSites() ([]string, error) { return nil, nil }
 func (f *continuousFake) QueryMetrics(string, time.Time, time.Time) ([]ChannelMetric, error) {
+	f.metricsQueries++
 	return f.metrics, nil
 }
 func (f *continuousFake) QueryRecentChannelBuckets(_ string, id int64, _ time.Time, _ int) ([]RecentChannelBucket, error) {
@@ -199,6 +201,18 @@ func autoPolicy() PolicyRecord {
 	p := DefaultPolicy()
 	p.DispatchModes = map[string]string{"m": "auto"}
 	return PolicyRecord{InstanceID: "i", Policy: p, Mode: "observe"}
+}
+
+func TestContinuousSkipsMetricsWhenEveryModelIsOff(t *testing.T) {
+	p := DefaultPolicy()
+	p.DispatchModes = map[string]string{"m": "off"}
+	f := &continuousFake{bases: []ChannelBaseValue{{ChannelID: 1, ModelName: "m", BaseWeight: 100}}}
+
+	writes, evaluated := NewEngine(f).evaluateContinuous("i", PolicyRecord{InstanceID: "i", Policy: p}, time.Now().UTC(), f)
+
+	if writes != 0 || evaluated != 0 || f.metricsQueries != 0 {
+		t.Fatalf("off-only site must do no metric work: writes=%d evaluated=%d metric_queries=%d", writes, evaluated, f.metricsQueries)
+	}
 }
 
 func TestContinuousAutoDedupesAgainstOwnLastWrite(t *testing.T) {
