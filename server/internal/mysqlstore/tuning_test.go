@@ -62,6 +62,7 @@ func TestTuningRecentChannelBucketsSQLUsesNewestNonEmptyBuckets(t *testing.T) {
 
 func TestTuningRecentChannelBucketsBySiteSQLScansWindowOnce(t *testing.T) {
 	for _, fragment := range []string{
+		"FORCE INDEX (idx_metric_1m_bucket_dimension)",
 		"SUBSTRING_INDEX(dimension_key,':',-1)",
 		"bucket_time>=?",
 		"request_count>0",
@@ -73,6 +74,9 @@ func TestTuningRecentChannelBucketsBySiteSQLScansWindowOnce(t *testing.T) {
 	}
 	if strings.Contains(tuningRecentChannelBucketsBySiteSQL, "LIMIT ?") {
 		t.Fatalf("site batch must return every channel bucket in the bounded window: %s", tuningRecentChannelBucketsBySiteSQL)
+	}
+	if strings.Contains(tuningRecentChannelBucketsBySiteSQL, "ORDER BY") {
+		t.Fatalf("site batch must sort its small result in Go instead of making MySQL filesort the metric range: %s", tuningRecentChannelBucketsBySiteSQL)
 	}
 }
 

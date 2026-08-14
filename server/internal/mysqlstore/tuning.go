@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"time"
 
@@ -477,11 +478,10 @@ LIMIT ?`
 const tuningRecentChannelBucketsBySiteSQL = `SELECT
 CAST(SUBSTRING_INDEX(dimension_key,':',-1) AS SIGNED),
 bucket_time,SUM(request_count),SUM(error_count),SUM(user_error_count)
-FROM metric_1m
+FROM metric_1m FORCE INDEX (idx_metric_1m_bucket_dimension)
 WHERE instance_id IN (SELECT id FROM instances WHERE enabled=1 AND CASE WHEN site_id='' THEN id ELSE site_id END=?) AND dimension_type='instance_channel'
   AND bucket_time>=? AND request_count>0
-GROUP BY CAST(SUBSTRING_INDEX(dimension_key,':',-1) AS SIGNED),bucket_time
-ORDER BY CAST(SUBSTRING_INDEX(dimension_key,':',-1) AS SIGNED),bucket_time DESC`
+GROUP BY CAST(SUBSTRING_INDEX(dimension_key,':',-1) AS SIGNED),bucket_time`
 
 // QueryRecentChannelBucketsBySite scans the evaluation window once for the
 // whole site. The old per-channel predicate computes the channel id from
@@ -507,6 +507,11 @@ func (s Store) QueryRecentChannelBucketsBySite(id string, since time.Time) (map[
 		rowCount++
 	}
 	err = rows.Err()
+	for channelID := range out {
+		sort.Slice(out[channelID], func(i, j int) bool {
+			return out[channelID][i].BucketTime.After(out[channelID][j].BucketTime)
+		})
+	}
 	log.Printf("tuning mysql operation=recent_channel_buckets_batch site=%s duration=%s channels=%d rows=%d error=%v", id, time.Since(started), len(out), rowCount, err)
 	return out, err
 }
