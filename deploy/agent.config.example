@@ -52,7 +52,7 @@ CT_ALERT_ERROR_WINDOW=10
 CT_ALERT_ERROR_THRESHOLD=3
 # HTTP status codes attributed to caller/request errors. These still count in
 # total/customer errors, but are excluded from channel alerts and dispatch demotion.
-CT_USER_ERROR_CODES=400,413,422
+CT_USER_ERROR_CODES=400,413,422,424
 CT_ALERT_WINDOW_MAX_AGE_MINUTES=60
 CT_ALERT_REMIND_MINUTES=60
 # Cache-miss alert: fires when the most recent CT_ALERT_NOCACHE_WINDOW

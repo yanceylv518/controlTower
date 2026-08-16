@@ -129,6 +129,7 @@ func New(webhookURL string, instanceID string, window int, threshold int, logf f
 			400: true,
 			413: true,
 			422: true,
+			424: true,
 		},
 	}
 }

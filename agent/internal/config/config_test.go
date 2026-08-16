@@ -12,7 +12,7 @@ func TestUserErrorCodeDefaultsAndValidation(t *testing.T) {
 		"CT_AGENT_TOKEN": "t", "CT_LOG_DSN": "dsn",
 	}
 	cfg, err := LoadFromMap(base)
-	if err != nil || !cfg.UserErrorCodes[400] || !cfg.UserErrorCodes[413] || !cfg.UserErrorCodes[422] {
+	if err != nil || !cfg.UserErrorCodes[400] || !cfg.UserErrorCodes[413] || !cfg.UserErrorCodes[422] || !cfg.UserErrorCodes[424] {
 		t.Fatalf("default codes not loaded: cfg=%#v err=%v", cfg, err)
 	}
 	base["CT_USER_ERROR_CODES"] = "400,429"

@@ -34,7 +34,7 @@ type dimension struct {
 }
 
 func Aggregate(instanceID string, events []logcollector.Event, cacheHitMinPromptTokens int64, configuredUserCodes ...map[int]bool) []reporter.AggregatedMetricPayload {
-	userCodes := map[int]bool{400: true, 413: true, 422: true}
+	userCodes := map[int]bool{400: true, 413: true, 422: true, 424: true}
 	if len(configuredUserCodes) > 0 && configuredUserCodes[0] != nil {
 		userCodes = configuredUserCodes[0]
 	}

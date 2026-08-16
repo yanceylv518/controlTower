@@ -78,7 +78,7 @@ func LoadFromFileAndMap(path string, envValues map[string]string) (Config, error
 }
 
 func LoadFromMap(values map[string]string) (Config, error) {
-	userErrorCodes, err := parseStatusCodes(valueOrDefault(values, "CT_USER_ERROR_CODES", "400,413,422"))
+	userErrorCodes, err := parseStatusCodes(valueOrDefault(values, "CT_USER_ERROR_CODES", "400,413,422,424"))
 	if err != nil {
 		return Config{}, err
 	}
