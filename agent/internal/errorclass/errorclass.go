@@ -7,6 +7,7 @@ import (
 
 var statusCodePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)status code\s+(\d{3})`),
+	regexp.MustCompile(`(?i)status_code[=: ]+(\d{3})`),
 	regexp.MustCompile(`(?i)statusCode[=: ]+(\d{3})`),
 	regexp.MustCompile(`(?i)"code"\s*:\s*(\d{3})`),
 	regexp.MustCompile(`(?i)HTTP\s+(\d{3})`),

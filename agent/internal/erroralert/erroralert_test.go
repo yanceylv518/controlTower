@@ -27,7 +27,7 @@ func TestUserErrorExcludedFromChannelButKeptForCustomer(t *testing.T) {
 	n := New("", "inst", 10, 3, nil).WithUserErrorCodes(map[int]bool{400: true})
 	n.Process(context.Background(), []logcollector.Event{{
 		ChannelID: 7, UserID: 9, LogType: "error",
-		ErrorSummary: "request failed with status code 400", CreatedAt: time.Now(),
+		ErrorSummary: "status_code=400, Extra inputs are not permitted", CreatedAt: time.Now(),
 	}})
 	if _, ok := n.states["channel:7"]; ok {
 		t.Fatalf("user-side error entered channel window: %#v", n.states["channel:7"])

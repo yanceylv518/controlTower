@@ -8,6 +8,8 @@ func TestExtractStatusCodePatterns(t *testing.T) {
 		want    int
 	}{
 		{"upstream returned status code 400", 400},
+		{"status_code=400, Extra inputs are not permitted", 400},
+		{"status_code: 424 failed dependency", 424},
 		{"request failed statusCode=413", 413},
 		{"request failed statusCode: 422", 422},
 		{`provider error {"code": 502}`, 502},

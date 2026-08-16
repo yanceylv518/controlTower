@@ -10,7 +10,7 @@ import (
 func TestAggregateTracksTotalAndUserErrors(t *testing.T) {
 	now := time.Now().UTC()
 	metrics := Aggregate("inst", []logcollector.Event{
-		{CreatedAt: now, LogType: "error", ErrorSummary: "status code 400"},
+		{CreatedAt: now, LogType: "error", ErrorSummary: "status_code=400, Extra inputs are not permitted"},
 		{CreatedAt: now, LogType: "error", ErrorSummary: "HTTP 502"},
 	}, 512, map[int]bool{400: true})
 	if len(metrics) != 1 || metrics[0].ErrorCount != 2 || metrics[0].UserErrorCount != 1 {
