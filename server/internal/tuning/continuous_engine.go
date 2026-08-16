@@ -3,7 +3,6 @@ package tuning
 import (
 	"log"
 	"math"
-	"sort"
 	"time"
 )
 
@@ -532,12 +531,12 @@ func buildContinuousBaseline(rows []ChannelBaseValue, metrics map[int64]ChannelM
 	if len(ttft50) < 2 {
 		return b, false
 	}
-	b.ttft50, b.ttft90, b.ttft95 = median(ttft50), median(ttft90), median(ttft95)
+	b.ttft50, b.ttft90, b.ttft95 = average(ttft50), average(ttft90), average(ttft95)
 	if len(caches) >= 2 {
-		b.cache, b.cacheReady = median(caches), true
+		b.cache, b.cacheReady = average(caches), true
 	}
 	if len(otps) >= 2 {
-		b.otps, b.otpsReady = median(otps), true
+		b.otps, b.otpsReady = average(otps), true
 	}
 	return b, true
 }
@@ -608,16 +607,15 @@ func reliabilityFactorWithPolicy(rate float64, p ContinuousDispatchParams) float
 	}
 }
 
-func median(values []float64) float64 {
+func average(values []float64) float64 {
 	if len(values) == 0 {
 		return 0
 	}
-	sort.Float64s(values)
-	mid := len(values) / 2
-	if len(values)%2 == 1 {
-		return values[mid]
+	var total float64
+	for _, value := range values {
+		total += value
 	}
-	return (values[mid-1] + values[mid]) / 2
+	return total / float64(len(values))
 }
 
 func (e *Engine) noteWriteSuccess(state *ContinuousState) {

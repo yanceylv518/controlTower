@@ -23,6 +23,27 @@ func TestContinuousBaselineRequiresTwoComparableChannels(t *testing.T) {
 	}
 }
 
+func TestContinuousBaselineUsesArithmeticAverage(t *testing.T) {
+	rows := []ChannelBaseValue{{ChannelID: 1}, {ChannelID: 2}, {ChannelID: 3}}
+	metrics := map[int64]ChannelMetric{
+		1: {ChannelID: 1, RequestCount: 20, TTFTP50: 1, TTFTP90: 2, TTFTP95: 3, CacheHitRate: .1, CachePromptTokens: cacheEvidenceTokens, OTPS: 10, OTPSSampleTokens: otpsEvidenceTokens},
+		2: {ChannelID: 2, RequestCount: 20, TTFTP50: 2, TTFTP90: 4, TTFTP95: 6, CacheHitRate: .2, CachePromptTokens: cacheEvidenceTokens, OTPS: 20, OTPSSampleTokens: otpsEvidenceTokens},
+		3: {ChannelID: 3, RequestCount: 20, TTFTP50: 9, TTFTP90: 12, TTFTP95: 15, CacheHitRate: .9, CachePromptTokens: cacheEvidenceTokens, OTPS: 90, OTPSSampleTokens: otpsEvidenceTokens},
+	}
+	b, ok := buildContinuousBaseline(rows, metrics, 20)
+	if !ok || !b.cacheReady || !b.otpsReady {
+		t.Fatalf("expected complete baseline: %#v ok=%v", b, ok)
+	}
+	for name, pair := range map[string][2]float64{
+		"ttft50": {b.ttft50, 4}, "ttft90": {b.ttft90, 6}, "ttft95": {b.ttft95, 8},
+		"cache": {b.cache, .4}, "otps": {b.otps, 40},
+	} {
+		if math.Abs(pair[0]-pair[1]) > 1e-9 {
+			t.Fatalf("%s=%v want arithmetic average %v", name, pair[0], pair[1])
+		}
+	}
+}
+
 func TestContinuousFactorsRewardFasterChannelAndRespectCap(t *testing.T) {
 	b := continuousBaseline{ttft50: 2, ttft90: 4, ttft95: 6, cache: .5, otps: 50, cacheReady: true, otpsReady: true}
 	fast := ChannelMetric{TTFTP50: 1, TTFTP90: 2, TTFTP95: 3, CacheHitRate: .8, CachePromptTokens: cacheEvidenceTokens, OTPS: 80, OTPSSampleTokens: otpsEvidenceTokens}
