@@ -34,4 +34,3 @@ func (s Scheduler) RunOnce(events []storage.LogEvent) (RunResult, error) {
 	result.Metrics5m = len(metrics5m)
 	return result, nil
 }
-

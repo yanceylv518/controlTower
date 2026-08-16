@@ -167,25 +167,41 @@ func (s Store) QueryOperationAudits(q storage.OperationAuditQuery) ([]storage.Op
 	return out, rows.Err()
 }
 
+// pruneBatchSize bounds each retention DELETE so every statement finishes
+// well inside the 30s driver read timeout: an unbatched DELETE over a large
+// backlog would time out, roll back and retry with an even larger backlog
+// next hour — permanently stuck. Batches always terminate.
+const pruneBatchSize = 20000
+
 func (s Store) PruneBefore(kind string, cutoff time.Time) (int64, error) {
 	if kind == "alerts" {
 		// Age out by last-seen time regardless of status: anything still
 		// firing gets its last_seen_at refreshed every evaluation cycle, so
 		// only genuinely stale history is removed.
-		result, err := s.db.ExecContext(context.Background(), `DELETE FROM alerts WHERE last_seen_at < ?`, cutoff)
-		if err != nil {
-			return 0, err
-		}
-		return result.RowsAffected()
+		return s.pruneInBatches(`DELETE FROM alerts WHERE last_seen_at < ? LIMIT ?`, cutoff)
 	}
 	tables := map[string][2]string{"log_events": {"log_events", "created_at"}, "log_samples": {"log_samples", "created_at"}, "metric_1m": {"metric_1m", "bucket_time"}, "metric_5m": {"metric_5m", "bucket_time"}, "server_metrics": {"server_metrics_10s", "collected_at"}, "health_checks": {"health_checks", "checked_at"}, "docker_statuses": {"docker_statuses", "collected_at"}, "nginx_timing_1m": {"nginx_timing_1m", "bucket_at"}, "nginx_slow_samples": {"nginx_slow_samples", "occurred_at"}, "alert_events": {"alert_events", "created_at"}, "notification_deliveries": {"notification_deliveries", "attempted_at"}}
 	v, ok := tables[kind]
 	if !ok {
 		return 0, sql.ErrNoRows
 	}
-	r, e := s.db.ExecContext(context.Background(), "DELETE FROM "+v[0]+" WHERE "+v[1]+" < ?", cutoff)
-	if e != nil {
-		return 0, e
+	return s.pruneInBatches("DELETE FROM "+v[0]+" WHERE "+v[1]+" < ? LIMIT ?", cutoff)
+}
+
+func (s Store) pruneInBatches(query string, cutoff time.Time) (int64, error) {
+	var total int64
+	for {
+		r, e := s.db.ExecContext(context.Background(), query, cutoff, pruneBatchSize)
+		if e != nil {
+			return total, e
+		}
+		affected, e := r.RowsAffected()
+		if e != nil {
+			return total, e
+		}
+		total += affected
+		if affected < pruneBatchSize {
+			return total, nil
+		}
 	}
-	return r.RowsAffected()
 }

@@ -19,6 +19,21 @@ func Open(dsn string) (*sql.DB, error) {
 	return db, nil
 }
 
+// OpenForMigrations returns a connection without read/write deadlines:
+// migrations legitimately run long statements (index builds, table rebuilds)
+// that the 30s runtime read timeout would abort mid-flight. Only the connect
+// timeout default applies; explicit DSN values always take precedence.
+func OpenForMigrations(dsn string) (*sql.DB, error) {
+	normalized, err := mysql.ParseDSN(dsn)
+	if err != nil {
+		return nil, err
+	}
+	if normalized.Timeout == 0 {
+		normalized.Timeout = 5 * time.Second
+	}
+	return sql.Open("mysql", normalized.FormatDSN())
+}
+
 func withDatabaseTimeoutDefaults(dsn string) (string, error) {
 	normalized, err := mysql.ParseDSN(dsn)
 	if err != nil {

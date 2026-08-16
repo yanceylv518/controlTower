@@ -47,21 +47,6 @@ func TestPolicyValidationCoversContinuousAndRetainedScheduling(t *testing.T) {
 	}
 }
 
-func TestDecodePolicyJSONDefaultsWriteHysteresisForOldPolicies(t *testing.T) {
-	p, err := DecodePolicyJSON([]byte(`{"scheduling":{"window_minutes":15,"min_samples":20,"sparse_min_samples":10,"sparse_lookback_minutes":360},"dispatch_modes":{},"continuous":{"sensitivity":1,"otps_cap":1.5,"circuit_threshold":0.1,"recovery_threshold":0.2,"circuit_error_rate":0.3,"recovery_error_rate":0.1,"silent_minutes":5,"probe_interval_seconds":5,"probe_count":10,"soft_start_multiplier":0.2,"window_minutes":15,"min_samples":20,"sparse_lookback_minutes":360}}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if p.Continuous.WriteDeadbandPercent != 5 || p.Continuous.MinWriteIntervalMinutes != 5 {
-		t.Fatalf("old policy must receive hysteresis defaults: %#v", p.Continuous)
-	}
-	if p.Continuous.SpeedExponent != .35 || p.Continuous.CacheExponent != .15 || p.Continuous.OTPSExponent != .25 ||
-		p.Continuous.ErrorHealthyRate != .01 || p.Continuous.ErrorMinFactor != .20 ||
-		p.Continuous.CombinedMinFactor != .50 || p.Continuous.CombinedMaxFactor != 1.50 {
-		t.Fatalf("old policy must receive evaluation curve defaults: %#v", p.Continuous)
-	}
-}
-
 func TestPolicyValidationCoversEvaluationCurveRanges(t *testing.T) {
 	p := DefaultPolicy()
 	p.Continuous.CacheMinFactor = 1.1
@@ -75,18 +60,15 @@ func TestPolicyValidationCoversEvaluationCurveRanges(t *testing.T) {
 	}
 }
 
-func TestPolicyValidationCoversWriteHysteresisRanges(t *testing.T) {
-	p := DefaultPolicy()
-	p.Continuous.WriteDeadbandPercent = -1
-	p.Continuous.MinWriteIntervalMinutes = 0
-	fields := p.Validate()
-	if fields["continuous.write_deadband_percent"] == "" || fields["continuous.min_write_interval_minutes"] == "" {
-		t.Fatalf("missing lower-bound validation: %#v", fields)
+// Policies persisted by earlier releases carry retired knobs (otps_cap,
+// write_deadband_percent, min_write_interval_minutes); decoding must ignore
+// them instead of failing or resurrecting semantics.
+func TestDecodePolicyJSONIgnoresRetiredWriteKnobs(t *testing.T) {
+	p, err := DecodePolicyJSON([]byte(`{"scheduling":{"window_minutes":15,"min_samples":20,"sparse_min_samples":10,"sparse_lookback_minutes":360},"dispatch_modes":{},"continuous":{"sensitivity":1,"otps_cap":2.5,"write_deadband_percent":30,"min_write_interval_minutes":45}}`))
+	if err != nil {
+		t.Fatal(err)
 	}
-	p.Continuous.WriteDeadbandPercent = 51
-	p.Continuous.MinWriteIntervalMinutes = 61
-	fields = p.Validate()
-	if fields["continuous.write_deadband_percent"] == "" || fields["continuous.min_write_interval_minutes"] == "" {
-		t.Fatalf("missing upper-bound validation: %#v", fields)
+	if fields := p.Validate(); len(fields) != 0 {
+		t.Fatalf("retired knobs must not fail validation: %#v", fields)
 	}
 }

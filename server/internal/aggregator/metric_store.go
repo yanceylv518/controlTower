@@ -61,4 +61,3 @@ func mapValues(values map[string]Metric) []Metric {
 	}
 	return result
 }
-

@@ -59,4 +59,3 @@ func TestMemoryMetricStoreReturnsCopies(t *testing.T) {
 		t.Fatalf("store should return copies")
 	}
 }
-

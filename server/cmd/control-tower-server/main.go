@@ -51,9 +51,16 @@ func run() error {
 	// rc20 performs a one-time indexed scan of the legacy channel history to
 	// preserve each channel's newest state before asynchronous cleanup starts.
 	// Keep that migration bounded, but do not reuse the short ping timeout.
+	// Migrations run on a dedicated connection without the 30s runtime
+	// read/write deadlines: long ALTERs would otherwise abort mid-flight.
+	migrationDB, err := mysqlstore.OpenForMigrations(cfg.DatabaseDSN)
+	if err != nil {
+		return fmt.Errorf("open migration connection: %w", err)
+	}
 	migrationCtx, cancelMigration := context.WithTimeout(context.Background(), 30*time.Minute)
-	err = mysqlstore.ApplyDir(migrationCtx, db, filepath.Dir(cfg.MigrationPath))
+	err = mysqlstore.ApplyDir(migrationCtx, migrationDB, filepath.Dir(cfg.MigrationPath))
 	cancelMigration()
+	_ = migrationDB.Close()
 	if err != nil {
 		return fmt.Errorf("apply migration: %w", err)
 	}

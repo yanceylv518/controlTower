@@ -35,6 +35,12 @@ const (
 	// interval and self-heals when writes succeed again.
 	writeFailurePauseThreshold = 3
 	writeFailureRetryInterval  = 10 * time.Minute
+
+	// Auto mode writes every integer change, so the deadband survives only as
+	// the observe-event anchor granularity: a weight_observed event is
+	// recorded once cumulative drift from the last recorded event exceeds
+	// this percentage of the base weight (at least one unit).
+	observeEventDeadbandPercent = 5.0
 )
 
 // evaluateContinuous implements the v3.0 continuous dispatch state machine,
@@ -404,7 +410,7 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 			// exceeds the threshold per step and would stay unrecorded no
 			// matter how far it travels.
 			if mode == "observe" && healthy && m.RequestCount >= p.MinSamples &&
-				(state.LastObservedWeight == nil || weightChangeOutsideDeadband(state.ProposedWeight, *state.LastObservedWeight, base.BaseWeight, p.WriteDeadbandPercent)) {
+				(state.LastObservedWeight == nil || weightChangeOutsideDeadband(state.ProposedWeight, *state.LastObservedWeight, base.BaseWeight, observeEventDeadbandPercent)) {
 				_ = e.store.InsertRecommendation(continuousEvent(id, base, state, "weight_observed", mode, now))
 				anchor := state.ProposedWeight
 				state.LastObservedWeight = &anchor

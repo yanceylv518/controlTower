@@ -1,6 +1,7 @@
 package aggregator
 
 import (
+	"controltower/internal/cachemetrics"
 	"sort"
 	"strconv"
 	"time"
@@ -112,7 +113,7 @@ func (a *accumulator) add(event storage.LogEvent) {
 		a.streamCount++
 		a.metric.StreamCount++
 	}
-	if event.LogType == "consume" && event.PromptTokens > 512 && event.CacheFieldPresent && event.CacheTokens != nil {
+	if event.LogType == "consume" && event.PromptTokens > cachemetrics.DefaultCacheHitMinPromptTokens && event.CacheFieldPresent && event.CacheTokens != nil {
 		a.cacheTokens += *event.CacheTokens
 		a.cachePromptTokens += event.PromptTokens
 		a.metric.CacheTokensTotal += *event.CacheTokens

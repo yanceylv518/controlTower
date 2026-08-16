@@ -263,8 +263,6 @@ func TestContinuousAutoWritesEveryIntegerTargetChange(t *testing.T) {
 		states: map[int64]ContinuousState{1: {InstanceID: "i", ChannelID: 1, ModelName: "m", KError: 1, LastWrittenWeight: &last, LastWriteAt: &writeAt}},
 	}
 	pr := autoPolicy()
-	pr.Policy.Continuous.WriteDeadbandPercent = 50
-	pr.Policy.Continuous.MinWriteIntervalMinutes = 60
 	NewEngine(f).evaluateContinuous("i", pr, now, f)
 	if len(f.writes) != 1 || f.writes[0].ProposedWeight != 100 {
 		t.Fatalf("one-unit target change must write immediately: %#v", f.writes)
@@ -399,8 +397,6 @@ func TestContinuousCircuitProbeAndSoftStart(t *testing.T) {
 	p.Policy.Continuous.RecoveryThreshold = .2
 	p.Policy.Continuous.SilentMinutes = 5
 	p.Policy.Continuous.SoftStartMultiplier = .2
-	p.Policy.Continuous.WriteDeadbandPercent = 50
-	p.Policy.Continuous.MinWriteIntervalMinutes = 60
 	lastWritten, lastWriteAt := int64(100), now
 	f := &continuousFake{bases: []ChannelBaseValue{
 		{ChannelID: 1, ChannelName: "c", ModelName: "m", Models: []string{"m"}, BaseWeight: 100, BasePriority: 7, CurrentWeight: 100, CurrentPriority: 7, SnapshotAt: now},
@@ -606,8 +602,6 @@ func TestWriteFailureStreakPausesThenSelfHeals(t *testing.T) {
 	}
 	e := NewEngine(f)
 	pr := autoPolicy()
-	pr.Policy.Continuous.WriteDeadbandPercent = 50
-	pr.Policy.Continuous.MinWriteIntervalMinutes = 60
 
 	for i := 0; i < 3; i++ {
 		e.evaluateContinuous("i", pr, now.Add(time.Duration(i)*time.Minute), f)

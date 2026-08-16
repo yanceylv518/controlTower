@@ -350,7 +350,6 @@ export interface TuningContinuousDispatchParams {
   error_min_factor: number;
   combined_min_factor: number;
   combined_max_factor: number;
-  otps_cap: number;
   circuit_threshold: number;
   recovery_threshold: number;
   circuit_error_rate: number;
@@ -362,8 +361,6 @@ export interface TuningContinuousDispatchParams {
   window_minutes: number;
   min_samples: number;
   sparse_lookback_minutes: number;
-  write_deadband_percent: number;
-  min_write_interval_minutes: number;
 }
 export interface TuningPolicy {
   scheduling: TuningSchedulingParams;
