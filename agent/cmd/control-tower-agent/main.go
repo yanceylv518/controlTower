@@ -28,6 +28,7 @@ import (
 	"controltower/agent/internal/samples"
 	"controltower/agent/internal/state"
 	"controltower/agent/internal/syscollector"
+	"controltower/internal/cachemetrics"
 	"controltower/internal/channelcontrol"
 )
 
@@ -447,7 +448,7 @@ func buildReport(ctx context.Context, cfg config.Config, reportedAt time.Time, s
 		MetricBatchID:           metricBatchID(cfg.AgentID, events),
 		LogEvents:               toPayloads(selectLogEventsForReport(cfg, events)),
 		LogSamples:              selectLogSamplesForReport(cfg, events),
-		AggregatedMetrics:       metricaggregator.Aggregate(cfg.InstanceID, events, cfg.CacheHitMinPromptTokens, cfg.UserErrorCodes),
+		AggregatedMetrics:       metricaggregator.Aggregate(cfg.InstanceID, events, cachemetrics.MinPromptTokens, cfg.UserErrorCodes),
 		ServerMetrics:           serverMetrics,
 		DockerStatuses:          dockerStatuses,
 		HealthChecks:            healthChecks,

@@ -2,7 +2,6 @@ package config
 
 import (
 	"bufio"
-	"controltower/internal/cachemetrics"
 	"errors"
 	"fmt"
 	"os"
@@ -48,7 +47,6 @@ type Config struct {
 	AlertNoCacheEnabled            bool
 	AlertNoCacheMinPromptTokens    int64
 	AlertNoCacheWindow             int
-	CacheHitMinPromptTokens        int64
 	UserErrorCodes                 map[int]bool
 }
 
@@ -122,7 +120,6 @@ func LoadFromMap(values map[string]string) (Config, error) {
 		AlertNoCacheEnabled:            boolOrDefault(values, "CT_ALERT_NOCACHE_ENABLED", true),
 		AlertNoCacheMinPromptTokens:    int64(intOrDefault(values, "CT_ALERT_NOCACHE_MIN_PROMPT_TOKENS", 512)),
 		AlertNoCacheWindow:             intOrDefault(values, "CT_ALERT_NOCACHE_WINDOW", 10),
-		CacheHitMinPromptTokens:        int64(intOrDefault(values, "CT_CACHE_HIT_MIN_PROMPT_TOKENS", int(cachemetrics.DefaultCacheHitMinPromptTokens))),
 		UserErrorCodes:                 userErrorCodes,
 	}
 
@@ -169,9 +166,6 @@ func LoadFromMap(values map[string]string) (Config, error) {
 	}
 	if cfg.AlertNoCacheWindow < 1 || cfg.AlertNoCacheWindow > 1000 {
 		return Config{}, errors.New("CT_ALERT_NOCACHE_WINDOW must be between 1 and 1000")
-	}
-	if cfg.CacheHitMinPromptTokens < 1 {
-		return Config{}, errors.New("CT_CACHE_HIT_MIN_PROMPT_TOKENS must be >= 1")
 	}
 	if cfg.LogPollIntervalSeconds < 1 || cfg.LogPollIntervalSeconds > 3600 {
 		return Config{}, errors.New("CT_LOG_POLL_INTERVAL_SECONDS must be between 1 and 3600")
@@ -245,7 +239,6 @@ func envMap() map[string]string {
 		"CT_ALERT_NOCACHE_ENABLED",
 		"CT_ALERT_NOCACHE_MIN_PROMPT_TOKENS",
 		"CT_ALERT_NOCACHE_WINDOW",
-		"CT_CACHE_HIT_MIN_PROMPT_TOKENS",
 		"CT_USER_ERROR_CODES",
 	}
 	values := make(map[string]string, len(keys))

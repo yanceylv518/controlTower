@@ -31,7 +31,7 @@
 ## 跟进（同日,用户发令三 P3 一并修,验收方实施）
 
 1. **三死参数退役**：otps_cap/write_deadband_percent/min_write_interval_minutes 从策略结构/默认值/校验/前端类型与 defaults 全部移除;observe 事件锚点粒度改固定常量 5%（注释记载);已存策略里的遗留键由 JSON 解码天然忽略（新增容忍测试:带遗留键的旧策略解码后校验零错误）。
-2. **缓存阈值单一事实源**：新建共享包 internal/cachemetrics.DefaultCacheHitMinPromptTokens=512,agent 配置默认值与 server 回落聚合器同引一处——编译期绑死不再各写一个 512;agent env 覆盖与回落路径的残余分叉在常量注释记载（server 无法感知各 agent env,接受）。
-3. **30s 超时暴露面收口**：迁移改走 OpenForMigrations 专用连接（仅连接超时,无读写死线——长 ALTER 不再会被 30s 掐断）,用完即关;**保留清理 12 表 DELETE 全部改 LIMIT 20000 分批循环**——原无界 DELETE 在大积压下会 30s 超时→回滚→下小时更大积压,永久卡死;分批每条必然有界,契约测试钉 pruneInBatches+LIMIT。
+2. **缓存阈值单一事实源**：新建共享包 `internal/cachemetrics.MinPromptTokens=512`，agent 聚合与 server 回落聚合均直接使用该常量；退役 agent 独有的 `CT_CACHE_HIT_MIN_PROMPT_TOKENS` 覆盖，彻底消除两条路径的部署配置分叉（无缓存告警阈值仍独立可配）。
+3. **30s 超时暴露面收口**：迁移改走 OpenForMigrations 专用连接（仅连接超时,无读写死线——长 ALTER 不再会被 30s 掐断）,用完即关;**保留清理 12 表 DELETE 全部改 LIMIT 20000 分批循环**——原无界 DELETE 在大积压下会 30s 超时→回滚→下小时更大积压,永久卡死;分批每条必然有界；行为测试覆盖多批累计、整批边界、执行失败保留进度及 RowsAffected 失败。
 
 全量三树+真库集成+typecheck+build 绿。
