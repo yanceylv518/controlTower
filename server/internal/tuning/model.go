@@ -17,6 +17,24 @@ type SchedulingParams struct {
 // ContinuousDispatchParams is the v3.0 continuous weighting policy.
 type ContinuousDispatchParams struct {
 	Sensitivity             float64 `json:"sensitivity"`
+	SpeedExponent           float64 `json:"speed_exponent"`
+	SpeedMinFactor          float64 `json:"speed_min_factor"`
+	SpeedMaxFactor          float64 `json:"speed_max_factor"`
+	CacheExponent           float64 `json:"cache_exponent"`
+	CacheMinFactor          float64 `json:"cache_min_factor"`
+	CacheMaxFactor          float64 `json:"cache_max_factor"`
+	OTPSExponent            float64 `json:"otps_exponent"`
+	OTPSMinFactor           float64 `json:"otps_min_factor"`
+	OTPSMaxFactor           float64 `json:"otps_max_factor"`
+	ErrorHealthyRate        float64 `json:"error_healthy_rate"`
+	ErrorDegradedRate       float64 `json:"error_degraded_rate"`
+	ErrorPoorRate           float64 `json:"error_poor_rate"`
+	ErrorFloorRate          float64 `json:"error_floor_rate"`
+	ErrorDegradedFactor     float64 `json:"error_degraded_factor"`
+	ErrorPoorFactor         float64 `json:"error_poor_factor"`
+	ErrorMinFactor          float64 `json:"error_min_factor"`
+	CombinedMinFactor       float64 `json:"combined_min_factor"`
+	CombinedMaxFactor       float64 `json:"combined_max_factor"`
 	OTPSCap                 float64 `json:"otps_cap"`
 	CircuitThreshold        float64 `json:"circuit_threshold"`
 	RecoveryThreshold       float64 `json:"recovery_threshold"`
@@ -46,7 +64,13 @@ func DefaultPolicy() Policy {
 		},
 		DispatchModes: map[string]string{},
 		Continuous: ContinuousDispatchParams{
-			Sensitivity: 1, OTPSCap: 1.5, CircuitThreshold: .1, RecoveryThreshold: .2,
+			Sensitivity: 1, SpeedExponent: .35, SpeedMinFactor: .75, SpeedMaxFactor: 1.25,
+			CacheExponent: .15, CacheMinFactor: .90, CacheMaxFactor: 1.10,
+			OTPSExponent: .25, OTPSMinFactor: .80, OTPSMaxFactor: 1.20,
+			ErrorHealthyRate: .01, ErrorDegradedRate: .05, ErrorPoorRate: .15, ErrorFloorRate: .30,
+			ErrorDegradedFactor: .85, ErrorPoorFactor: .50, ErrorMinFactor: .20,
+			CombinedMinFactor: .50, CombinedMaxFactor: 1.50,
+			OTPSCap: 1.5, CircuitThreshold: .1, RecoveryThreshold: .2,
 			CircuitErrorRate: .30, RecoveryErrorRate: .10,
 			SilentMinutes: 5, ProbeIntervalSeconds: 5, ProbeCount: 10, SoftStartMultiplier: .2,
 			WindowMinutes: 15, MinSamples: 20, SparseLookbackMinutes: 360,
@@ -84,6 +108,36 @@ func (p Policy) Validate() map[string]string {
 	c := p.Continuous
 	if c.Sensitivity <= 0 || c.Sensitivity > 5 {
 		e["continuous.sensitivity"] = "must_be_greater_than_0_and_at_most_5"
+	}
+	if c.SpeedExponent <= 0 || c.SpeedExponent > 2 {
+		e["continuous.speed_exponent"] = "must_be_greater_than_0_and_at_most_2"
+	}
+	if c.SpeedMinFactor <= 0 || c.SpeedMinFactor > 1 {
+		e["continuous.speed_min_factor"] = "must_be_greater_than_0_and_at_most_1"
+	}
+	if c.SpeedMaxFactor < 1 || c.SpeedMaxFactor > 3 || c.SpeedMaxFactor <= c.SpeedMinFactor {
+		e["continuous.speed_max_factor"] = "must_be_greater_than_min_and_between_1_and_3"
+	}
+	if c.CacheExponent <= 0 || c.CacheExponent > 2 {
+		e["continuous.cache_exponent"] = "must_be_greater_than_0_and_at_most_2"
+	}
+	if c.CacheMinFactor <= 0 || c.CacheMinFactor > 1 || c.CacheMaxFactor < 1 || c.CacheMaxFactor > 3 || c.CacheMaxFactor <= c.CacheMinFactor {
+		e["continuous.cache_factor_range"] = "must_include_1_and_be_ordered"
+	}
+	if c.OTPSExponent <= 0 || c.OTPSExponent > 2 {
+		e["continuous.otps_exponent"] = "must_be_greater_than_0_and_at_most_2"
+	}
+	if c.OTPSMinFactor <= 0 || c.OTPSMinFactor > 1 || c.OTPSMaxFactor < 1 || c.OTPSMaxFactor > 3 || c.OTPSMaxFactor <= c.OTPSMinFactor {
+		e["continuous.otps_factor_range"] = "must_include_1_and_be_ordered"
+	}
+	if c.ErrorHealthyRate < 0 || c.ErrorDegradedRate <= c.ErrorHealthyRate || c.ErrorPoorRate <= c.ErrorDegradedRate || c.ErrorFloorRate <= c.ErrorPoorRate || c.ErrorFloorRate > 1 {
+		e["continuous.error_rate_breakpoints"] = "must_be_strictly_increasing_between_0_and_1"
+	}
+	if c.ErrorDegradedFactor <= 0 || c.ErrorDegradedFactor >= 1 || c.ErrorPoorFactor <= 0 || c.ErrorPoorFactor >= c.ErrorDegradedFactor || c.ErrorMinFactor <= 0 || c.ErrorMinFactor >= c.ErrorPoorFactor {
+		e["continuous.error_factors"] = "must_be_strictly_decreasing_between_0_and_1"
+	}
+	if c.CombinedMinFactor <= 0 || c.CombinedMinFactor > 1 || c.CombinedMaxFactor < 1 || c.CombinedMaxFactor > 5 || c.CombinedMaxFactor <= c.CombinedMinFactor {
+		e["continuous.combined_factor_range"] = "must_include_1_and_be_ordered"
 	}
 	if c.OTPSCap < 1 || c.OTPSCap > 3 {
 		e["continuous.otps_cap"] = "must_be_between_1_and_3"

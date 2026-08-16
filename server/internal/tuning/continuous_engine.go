@@ -197,7 +197,7 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 			}
 
 			wasCircuit := state.Phase == "circuit"
-			foldedRequests, foldedErrors := e.foldErrorDecayWithBuckets(id, base.ChannelID, &state, now, recentBuckets)
+			foldedRequests, foldedErrors := e.foldErrorDecayWithBuckets(id, base.ChannelID, &state, now, recentBuckets, p)
 			// In observe mode, settled production traffic is the passive probe.
 			// Keep its evidence independent from the larger performance-ranking
 			// sample threshold so a low-traffic channel can still prove recovery.
@@ -226,7 +226,7 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 					// probe/recover loop. Ten successful probes are success
 					// evidence; floor the decay state at the recovery bar.
 					state.SmoothedErrorRate = math.Min(state.SmoothedErrorRate, p.RecoveryErrorRate)
-					state.KError = reliabilityFactor(state.SmoothedErrorRate)
+					state.KError = reliabilityFactorWithPolicy(state.SmoothedErrorRate, p)
 					state.Phase, state.SoftStartPending = "soft_start", true
 					state.Multiplier = p.SoftStartMultiplier
 					state.ProposedWeight = max(int64(1), int64(math.Round(float64(base.BaseWeight)*state.Multiplier)))
@@ -276,11 +276,11 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 				passiveErrorRate := float64(passiveErrors) / float64(state.ProbeAttempts)
 				if passiveErrorRate <= p.RecoveryErrorRate {
 					state.SmoothedErrorRate = passiveErrorRate
-					state.KError = reliabilityFactor(passiveErrorRate)
+					state.KError = reliabilityFactorWithPolicy(passiveErrorRate, p)
 					if healthy && m.RequestCount >= p.MinSamples {
-						state.KSpeed, state.KCache, state.KOTPS = performanceFactors(m, baseline, p.Sensitivity, p.OTPSCap, state.CacheReady, state.OTPSReady)
+						state.KSpeed, state.KCache, state.KOTPS = performanceFactors(m, baseline, p, state.CacheReady, state.OTPSReady)
 					}
-					passiveMultiplier := clamp(state.KSpeed*state.KCache*state.KOTPS*state.KError, .5, 1.5)
+					passiveMultiplier := combinedFactor(state, p)
 					state.Phase = "normal"
 					state.Multiplier = passiveMultiplier
 					state.ProposedWeight = int64(math.Round(float64(base.BaseWeight) * passiveMultiplier))
@@ -343,9 +343,9 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 				state.NextProbeAt = nil
 			}
 			if healthy && mode != "off" && m.RequestCount >= p.MinSamples {
-				state.KSpeed, state.KCache, state.KOTPS = performanceFactors(m, baseline, p.Sensitivity, p.OTPSCap, state.CacheReady, state.OTPSReady)
+				state.KSpeed, state.KCache, state.KOTPS = performanceFactors(m, baseline, p, state.CacheReady, state.OTPSReady)
 			}
-			state.Multiplier = clamp(state.KSpeed*state.KCache*state.KOTPS*state.KError, .5, 1.5)
+			state.Multiplier = combinedFactor(state, p)
 			if mode == "off" || !healthy {
 				state.Multiplier = 1
 			}
@@ -383,7 +383,7 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 						writes++
 					} else {
 						state.Phase = "normal"
-						state.Multiplier = clamp(state.KSpeed*state.KCache*state.KOTPS*state.KError, .5, 1.5)
+						state.Multiplier = combinedFactor(state, p)
 						state.ProposedWeight = max(int64(1), int64(math.Round(float64(base.BaseWeight)*state.Multiplier)))
 						state.CircuitOpenedAt, state.NextProbeAt, state.OriginalPriority = nil, nil, nil
 						e.noteWriteFailure(id, base, &state, mode, err, now)
@@ -452,18 +452,18 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 // the stored cursor. Buckets land late (agent reports every ~30s), so only
 // buckets older than a 90s settling lag are folded, each exactly once.
 func (e *Engine) foldErrorDecay(id string, channelID int64, state *ContinuousState, now time.Time) (int64, int64) {
-	return e.foldErrorDecayWithBuckets(id, channelID, state, now, nil)
+	return e.foldErrorDecayWithBuckets(id, channelID, state, now, nil, DefaultPolicy().Continuous)
 }
 
-func (e *Engine) foldErrorDecayWithBuckets(id string, channelID int64, state *ContinuousState, now time.Time, recentBuckets map[int64][]RecentChannelBucket) (int64, int64) {
+func (e *Engine) foldErrorDecayWithBuckets(id string, channelID int64, state *ContinuousState, now time.Time, recentBuckets map[int64][]RecentChannelBucket, p ContinuousDispatchParams) (int64, int64) {
 	// One-time migration from the v1 multiplicative decay: a legacy state has
 	// a decayed KError but no smoothed rate yet (EWMA never returns to exact
 	// zero once fed). Seed the rate by inverting the reliability mapping so
 	// upgraded channels keep their error memory instead of restarting from
 	// an optimistic blank slate.
 	if state.SmoothedErrorRate == 0 && state.KError > 0 && state.KError < 1 {
-		state.SmoothedErrorRate = legacyErrorRate(state.KError)
-		state.KError = reliabilityFactor(state.SmoothedErrorRate)
+		state.SmoothedErrorRate = legacyErrorRateWithPolicy(state.KError, p)
+		state.KError = reliabilityFactorWithPolicy(state.SmoothedErrorRate, p)
 	}
 	since := now.Add(-15 * time.Minute)
 	if state.LastBucketAt != nil && state.LastBucketAt.After(since) {
@@ -494,7 +494,7 @@ func (e *Engine) foldErrorDecayWithBuckets(id string, channelID int64, state *Co
 		if bucket.RequestCount > 0 {
 			rate := float64(errs) / float64(bucket.RequestCount)
 			state.SmoothedErrorRate = .3*rate + .7*state.SmoothedErrorRate
-			state.KError = reliabilityFactor(state.SmoothedErrorRate)
+			state.KError = reliabilityFactorWithPolicy(state.SmoothedErrorRate, p)
 		}
 		requests += bucket.RequestCount
 		channelErrors += errs
@@ -536,7 +536,7 @@ func buildContinuousBaseline(rows []ChannelBaseValue, metrics map[int64]ChannelM
 	return b, true
 }
 
-func speedFactor(m ChannelMetric, b continuousBaseline, sensitivity float64) float64 {
+func speedFactor(m ChannelMetric, b continuousBaseline, sensitivity, exponent, minFactor, maxFactor float64) float64 {
 	if m.TTFTP50 <= 0 || m.TTFTP90 <= 0 || m.TTFTP95 <= 0 {
 		return 1
 	}
@@ -544,49 +544,61 @@ func speedFactor(m ChannelMetric, b continuousBaseline, sensitivity float64) flo
 	if r <= 0 {
 		return 1
 	}
-	return clamp(math.Pow(1/r, .35*sensitivity), .75, 1.25)
+	return clamp(math.Pow(1/r, exponent*sensitivity), minFactor, maxFactor)
 }
 
-func performanceFactors(m ChannelMetric, b continuousBaseline, sensitivity, otpsCap float64, cacheReady, otpsReady bool) (float64, float64, float64) {
-	speed, cache, otps := speedFactor(m, b, sensitivity), 1.0, 1.0
+func performanceFactors(m ChannelMetric, b continuousBaseline, p ContinuousDispatchParams, cacheReady, otpsReady bool) (float64, float64, float64) {
+	speed, cache, otps := speedFactor(m, b, p.Sensitivity, p.SpeedExponent, p.SpeedMinFactor, p.SpeedMaxFactor), 1.0, 1.0
 	if cacheReady && b.cache > 0 {
-		cache = clamp(math.Pow(m.CacheHitRate/b.cache, .15*sensitivity), .9, 1.1)
+		cache = clamp(math.Pow(m.CacheHitRate/b.cache, p.CacheExponent*p.Sensitivity), p.CacheMinFactor, p.CacheMaxFactor)
 	}
 	if otpsReady && b.otps > 0 {
-		otps = clamp(math.Pow(m.OTPS/b.otps, .25*sensitivity), .8, math.Min(1.2, otpsCap))
+		otps = clamp(math.Pow(m.OTPS/b.otps, p.OTPSExponent*p.Sensitivity), p.OTPSMinFactor, p.OTPSMaxFactor)
 	}
 	return speed, cache, otps
+}
+
+func combinedFactor(state ContinuousState, p ContinuousDispatchParams) float64 {
+	return clamp(state.KSpeed*state.KCache*state.KOTPS*state.KError, p.CombinedMinFactor, p.CombinedMaxFactor)
 }
 
 // legacyErrorRate inverts reliabilityFactor's piecewise mapping so a v1
 // KError value can seed an equivalent smoothed error rate on upgrade.
 func legacyErrorRate(factor float64) float64 {
+	return legacyErrorRateWithPolicy(factor, DefaultPolicy().Continuous)
+}
+
+func legacyErrorRateWithPolicy(factor float64, p ContinuousDispatchParams) float64 {
 	switch {
 	case factor >= 1:
 		return 0
-	case factor >= .85:
-		return .01 + (1-factor)/.15*.04
-	case factor >= .5:
-		return .05 + (.85-factor)/.35*.10
-	case factor >= .2:
-		return .15 + (.5-factor)/.30*.15
+	case factor >= p.ErrorDegradedFactor:
+		return p.ErrorHealthyRate + (1-factor)/(1-p.ErrorDegradedFactor)*(p.ErrorDegradedRate-p.ErrorHealthyRate)
+	case factor >= p.ErrorPoorFactor:
+		return p.ErrorDegradedRate + (p.ErrorDegradedFactor-factor)/(p.ErrorDegradedFactor-p.ErrorPoorFactor)*(p.ErrorPoorRate-p.ErrorDegradedRate)
+	case factor >= p.ErrorMinFactor:
+		return p.ErrorPoorRate + (p.ErrorPoorFactor-factor)/(p.ErrorPoorFactor-p.ErrorMinFactor)*(p.ErrorFloorRate-p.ErrorPoorRate)
 	default:
-		return .30
+		return p.ErrorFloorRate
 	}
 }
 
 func reliabilityFactor(rate float64) float64 {
+	return reliabilityFactorWithPolicy(rate, DefaultPolicy().Continuous)
+}
+
+func reliabilityFactorWithPolicy(rate float64, p ContinuousDispatchParams) float64 {
 	switch {
-	case rate <= .01:
+	case rate <= p.ErrorHealthyRate:
 		return 1
-	case rate <= .05:
-		return 1 - (rate-.01)/.04*.15
-	case rate <= .15:
-		return .85 - (rate-.05)/.10*.35
-	case rate <= .30:
-		return .50 - (rate-.15)/.15*.30
+	case rate <= p.ErrorDegradedRate:
+		return 1 - (rate-p.ErrorHealthyRate)/(p.ErrorDegradedRate-p.ErrorHealthyRate)*(1-p.ErrorDegradedFactor)
+	case rate <= p.ErrorPoorRate:
+		return p.ErrorDegradedFactor - (rate-p.ErrorDegradedRate)/(p.ErrorPoorRate-p.ErrorDegradedRate)*(p.ErrorDegradedFactor-p.ErrorPoorFactor)
+	case rate <= p.ErrorFloorRate:
+		return p.ErrorPoorFactor - (rate-p.ErrorPoorRate)/(p.ErrorFloorRate-p.ErrorPoorRate)*(p.ErrorPoorFactor-p.ErrorMinFactor)
 	default:
-		return .20
+		return p.ErrorMinFactor
 	}
 }
 

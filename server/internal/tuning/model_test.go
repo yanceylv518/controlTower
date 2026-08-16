@@ -55,6 +55,24 @@ func TestDecodePolicyJSONDefaultsWriteHysteresisForOldPolicies(t *testing.T) {
 	if p.Continuous.WriteDeadbandPercent != 5 || p.Continuous.MinWriteIntervalMinutes != 5 {
 		t.Fatalf("old policy must receive hysteresis defaults: %#v", p.Continuous)
 	}
+	if p.Continuous.SpeedExponent != .35 || p.Continuous.CacheExponent != .15 || p.Continuous.OTPSExponent != .25 ||
+		p.Continuous.ErrorHealthyRate != .01 || p.Continuous.ErrorMinFactor != .20 ||
+		p.Continuous.CombinedMinFactor != .50 || p.Continuous.CombinedMaxFactor != 1.50 {
+		t.Fatalf("old policy must receive evaluation curve defaults: %#v", p.Continuous)
+	}
+}
+
+func TestPolicyValidationCoversEvaluationCurveRanges(t *testing.T) {
+	p := DefaultPolicy()
+	p.Continuous.CacheMinFactor = 1.1
+	p.Continuous.ErrorPoorRate = p.Continuous.ErrorDegradedRate
+	p.Continuous.CombinedMaxFactor = p.Continuous.CombinedMinFactor
+	fields := p.Validate()
+	for _, field := range []string{"continuous.cache_factor_range", "continuous.error_rate_breakpoints", "continuous.combined_factor_range"} {
+		if fields[field] == "" {
+			t.Fatalf("missing validation for %s: %#v", field, fields)
+		}
+	}
 }
 
 func TestPolicyValidationCoversWriteHysteresisRanges(t *testing.T) {

@@ -332,6 +332,24 @@ export interface TuningSchedulingParams {
 }
 export interface TuningContinuousDispatchParams {
   sensitivity: number;
+  speed_exponent: number;
+  speed_min_factor: number;
+  speed_max_factor: number;
+  cache_exponent: number;
+  cache_min_factor: number;
+  cache_max_factor: number;
+  otps_exponent: number;
+  otps_min_factor: number;
+  otps_max_factor: number;
+  error_healthy_rate: number;
+  error_degraded_rate: number;
+  error_poor_rate: number;
+  error_floor_rate: number;
+  error_degraded_factor: number;
+  error_poor_factor: number;
+  error_min_factor: number;
+  combined_min_factor: number;
+  combined_max_factor: number;
   otps_cap: number;
   circuit_threshold: number;
   recovery_threshold: number;

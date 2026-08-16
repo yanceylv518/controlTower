@@ -26,16 +26,38 @@ func TestContinuousBaselineRequiresTwoComparableChannels(t *testing.T) {
 func TestContinuousFactorsRewardFasterChannelAndRespectCap(t *testing.T) {
 	b := continuousBaseline{ttft50: 2, ttft90: 4, ttft95: 6, cache: .5, otps: 50, cacheReady: true, otpsReady: true}
 	fast := ChannelMetric{TTFTP50: 1, TTFTP90: 2, TTFTP95: 3, CacheHitRate: .8, CachePromptTokens: cacheEvidenceTokens, OTPS: 80, OTPSSampleTokens: otpsEvidenceTokens}
-	if got := speedFactor(fast, b, 1); got <= 1 {
+	if got := speedFactor(fast, b, 1, .35, .75, 1.25); got <= 1 {
 		t.Fatalf("faster channel should have factor above one, got %v", got)
 	}
-	_, cache, otps := performanceFactors(fast, b, 1, 1.5, true, true)
+	p := DefaultPolicy().Continuous
+	_, cache, otps := performanceFactors(fast, b, p, true, true)
 	if cache <= 1 || cache > 1.1 || otps <= 1 || otps > 1.2 {
 		t.Fatalf("relative factors must reward better evidence within caps: cache=%v otps=%v", cache, otps)
 	}
-	_, cache, otps = performanceFactors(fast, b, 1, 1.5, false, false)
+	_, cache, otps = performanceFactors(fast, b, p, false, false)
 	if math.Abs(cache-1) > 1e-9 || math.Abs(otps-1) > 1e-9 {
 		t.Fatalf("unavailable optional evidence must be neutral: cache=%v otps=%v", cache, otps)
+	}
+}
+
+func TestContinuousFactorsUseConfiguredCurves(t *testing.T) {
+	p := DefaultPolicy().Continuous
+	p.CacheExponent, p.CacheMinFactor, p.CacheMaxFactor = 1, .6, 1.4
+	p.OTPSExponent, p.OTPSMinFactor, p.OTPSMaxFactor = 1, .7, 1.6
+	b := continuousBaseline{ttft50: 1, ttft90: 1, ttft95: 1, cache: .5, otps: 10}
+	m := ChannelMetric{TTFTP50: 1, TTFTP90: 1, TTFTP95: 1, CacheHitRate: .25, OTPS: 20}
+	_, cache, otps := performanceFactors(m, b, p, true, true)
+	if cache != .6 || otps != 1.6 {
+		t.Fatalf("configured factor bounds were ignored: cache=%v otps=%v", cache, otps)
+	}
+	p.ErrorHealthyRate, p.ErrorDegradedRate, p.ErrorPoorRate, p.ErrorFloorRate = .02, .10, .20, .40
+	p.ErrorDegradedFactor, p.ErrorPoorFactor, p.ErrorMinFactor = .9, .6, .3
+	if got := reliabilityFactorWithPolicy(.10, p); math.Abs(got-.9) > 1e-9 {
+		t.Fatalf("configured error curve was ignored: %v", got)
+	}
+	p.CombinedMinFactor, p.CombinedMaxFactor = .8, 1.1
+	if got := combinedFactor(ContinuousState{KSpeed: 2, KCache: 1, KOTPS: 1, KError: 1}, p); got != 1.1 {
+		t.Fatalf("configured combined bound was ignored: %v", got)
 	}
 }
 
