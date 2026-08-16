@@ -26,8 +26,8 @@ type continuousBaseline struct {
 }
 
 const (
-	cacheEvidenceTokens = int64(10_000)
-	otpsEvidenceTokens  = int64(100)
+	cacheEvidenceSamples = int64(10)
+	otpsEvidenceTokens   = int64(100)
 
 	// Control writes fail loudly on the direct path (immediate error) and as
 	// enqueue errors on the agent path. A short streak pauses the channel so
@@ -157,7 +157,7 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 			state.MetricTTFTP50, state.MetricTTFTP90, state.MetricTTFTP95 = m.TTFTP50, m.TTFTP90, m.TTFTP95
 			state.BaselineTTFTP50, state.BaselineTTFTP90, state.BaselineTTFTP95 = baseline.ttft50, baseline.ttft90, baseline.ttft95
 			state.MetricCache, state.BaselineCache = m.CacheHitRate, baseline.cache
-			state.CacheReady = baseline.cacheReady && m.CachePromptTokens >= cacheEvidenceTokens
+			state.CacheReady = baseline.cacheReady && m.CacheSampleCount >= cacheEvidenceSamples
 			state.MetricOTPS, state.BaselineOTPS = m.OTPS, baseline.otps
 			state.OTPSReady = baseline.otpsReady && m.OTPSSampleTokens >= otpsEvidenceTokens
 
@@ -516,7 +516,7 @@ func buildContinuousBaseline(rows []ChannelBaseValue, metrics map[int64]ChannelM
 			continue
 		}
 		ttft50, ttft90, ttft95 = append(ttft50, m.TTFTP50), append(ttft90, m.TTFTP90), append(ttft95, m.TTFTP95)
-		if m.CachePromptTokens >= cacheEvidenceTokens {
+		if m.CacheSampleCount >= cacheEvidenceSamples {
 			caches = append(caches, m.CacheHitRate)
 		}
 		if m.OTPSSampleTokens >= otpsEvidenceTokens && m.OTPS > 0 {

@@ -152,7 +152,7 @@ func tuningChannelMetricsSQL() string {
 CAST(SUBSTRING_INDEX(dimension_key,':',-1) AS SIGNED),
 SUM(request_count),SUM(error_count),SUM(user_error_count),
 COALESCE(MAX(p95_use_time),0),
-SUM(cache_tokens_total),SUM(cache_prompt_tokens),
+SUM(COALESCE(big_input_cache_hits,0)),SUM(COALESCE(big_input_count,0)),
 SUM(otps_output_tokens),SUM(otps_duration_seconds),` + strings.Join(histogramSums, ",") + `
 FROM metric_1m
 WHERE instance_id IN (SELECT id FROM instances WHERE enabled=1 AND CASE WHEN site_id='' THEN id ELSE site_id END=?) AND dimension_type='instance_channel' AND bucket_time>=? AND bucket_time<?
@@ -168,18 +168,18 @@ func (s Store) QueryMetrics(id string, start, end time.Time) ([]tuning.ChannelMe
 	var out []tuning.ChannelMetric
 	for rows.Next() {
 		var m tuning.ChannelMetric
-		var cacheTokens int64
+		var cacheHits int64
 		var otpsDuration float64
 		var buckets latencyhist.BucketsV2
-		dest := []any{&m.ChannelID, &m.RequestCount, &m.ErrorCount, &m.UserErrorCount, &m.P95, &cacheTokens, &m.CachePromptTokens, &m.OTPSSampleTokens, &otpsDuration}
+		dest := []any{&m.ChannelID, &m.RequestCount, &m.ErrorCount, &m.UserErrorCount, &m.P95, &cacheHits, &m.CacheSampleCount, &m.OTPSSampleTokens, &otpsDuration}
 		for i := range buckets {
 			dest = append(dest, &buckets[i])
 		}
 		if e = rows.Scan(dest...); e != nil {
 			return nil, e
 		}
-		if m.CachePromptTokens > 0 {
-			m.CacheHitRate = float64(cacheTokens) / float64(m.CachePromptTokens)
+		if m.CacheSampleCount > 0 {
+			m.CacheHitRate = float64(cacheHits) / float64(m.CacheSampleCount)
 		}
 		if otpsDuration > 0 {
 			m.OTPS = float64(m.OTPSSampleTokens) / otpsDuration

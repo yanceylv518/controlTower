@@ -25,7 +25,7 @@ func TestContinuousBaselineRequiresTwoComparableChannels(t *testing.T) {
 
 func TestContinuousFactorsRewardFasterChannelAndRespectCap(t *testing.T) {
 	b := continuousBaseline{ttft50: 2, ttft90: 4, ttft95: 6, cache: .5, otps: 50, cacheReady: true, otpsReady: true}
-	fast := ChannelMetric{TTFTP50: 1, TTFTP90: 2, TTFTP95: 3, CacheHitRate: .8, CachePromptTokens: cacheEvidenceTokens, OTPS: 80, OTPSSampleTokens: otpsEvidenceTokens}
+	fast := ChannelMetric{TTFTP50: 1, TTFTP90: 2, TTFTP95: 3, CacheHitRate: .8, CacheSampleCount: cacheEvidenceSamples, OTPS: 80, OTPSSampleTokens: otpsEvidenceTokens}
 	if got := speedFactor(fast, b, 1, .35, .75, 1.25); got <= 1 {
 		t.Fatalf("faster channel should have factor above one, got %v", got)
 	}
