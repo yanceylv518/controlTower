@@ -315,7 +315,7 @@ func (h Handler) filterMetricItemsByInstances(metrics []aggregator.Metric, dimen
 			CacheTokenRate:    metric.CacheTokenRate,
 			BigInputCount:     metric.BigInputCount,
 			BigInputCacheHits: metric.BigInputCacheHits,
-			CacheHitRate:      nullableRatio(metric.BigInputCacheHits, metric.BigInputCount),
+			CacheHitRate:      metric.CacheTokenRate,
 			TTFTCount:         metric.TTFTCount,
 			TTFTAvgMS:         nullableAverage(metric.TTFTSumMS, metric.TTFTCount),
 			TTFTP50MS:         metric.TTFTP50MS,

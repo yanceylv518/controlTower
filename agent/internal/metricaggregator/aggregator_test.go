@@ -81,6 +81,9 @@ func TestAggregateExactQuantilesCacheBoundaryAndStreamTTFT(t *testing.T) {
 	if metric.BigInputCount == nil || *metric.BigInputCount != 2 || metric.BigInputCacheHits == nil || *metric.BigInputCacheHits != 1 {
 		t.Fatalf("unexpected cache boundary metrics: %#v", metric)
 	}
+	if metric.CacheTokensTotal != 8 || metric.CachePromptTokens != 1113 || metric.CacheTokenRate == nil || *metric.CacheTokenRate != float64(8)/1113 {
+		t.Fatalf("cache token ratio must only include prompts above the boundary: %#v", metric)
+	}
 	if metric.TTFTCount == nil || *metric.TTFTCount != 2 || metric.TTFTSumMS == nil || *metric.TTFTSumMS != 400 || metric.TTFTP95MS == nil || *metric.TTFTP95MS != 300 {
 		t.Fatalf("unexpected ttft metrics: %#v", metric)
 	}

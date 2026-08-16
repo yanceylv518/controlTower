@@ -93,14 +93,14 @@ func (a *accumulator) add(event logcollector.Event, cacheHitMinPromptTokens int6
 		a.streamCount++
 		a.metric.StreamCount++
 	}
-	if event.CacheFieldPresent && event.CacheTokens != nil {
-		a.cacheTokens += *event.CacheTokens
-		a.cachePromptTokens += event.PromptTokens
-		a.metric.CacheTokensTotal += *event.CacheTokens
-		a.metric.CachePromptTokens += event.PromptTokens
-	}
 	if event.LogType == "consume" && event.PromptTokens > cacheHitMinPromptTokens {
 		a.bigInputCount++
+		if event.CacheFieldPresent && event.CacheTokens != nil {
+			a.cacheTokens += *event.CacheTokens
+			a.cachePromptTokens += event.PromptTokens
+			a.metric.CacheTokensTotal += *event.CacheTokens
+			a.metric.CachePromptTokens += event.PromptTokens
+		}
 		if event.CacheTokens != nil && *event.CacheTokens > 0 {
 			a.bigInputCacheHits++
 		}

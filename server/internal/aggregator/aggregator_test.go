@@ -15,9 +15,9 @@ func TestAggregate1mComputesInstanceMetrics(t *testing.T) {
 			InstanceID:        "inst-1",
 			CreatedAt:         bucket.Add(5 * time.Second),
 			LogType:           "consume",
-			PromptTokens:      100,
+			PromptTokens:      1000,
 			CompletionTokens:  50,
-			TotalTokens:       150,
+			TotalTokens:       1050,
 			Quota:             500,
 			UseTime:           1,
 			IsStream:          true,
@@ -46,7 +46,7 @@ func TestAggregate1mComputesInstanceMetrics(t *testing.T) {
 	if metric.SuccessRate == nil || *metric.SuccessRate != 0.5 {
 		t.Fatalf("unexpected success rate: %#v", metric.SuccessRate)
 	}
-	if metric.TPM != 160 {
+	if metric.TPM != 1060 {
 		t.Fatalf("unexpected tpm: %d", metric.TPM)
 	}
 	if metric.AvgUseTime == nil || *metric.AvgUseTime != 3 {
@@ -58,7 +58,7 @@ func TestAggregate1mComputesInstanceMetrics(t *testing.T) {
 	if metric.StreamRate == nil || *metric.StreamRate != 0.5 {
 		t.Fatalf("unexpected stream rate: %#v", metric.StreamRate)
 	}
-	if metric.CacheTokenRate == nil || *metric.CacheTokenRate != 0.2 {
+	if metric.CacheTokenRate == nil || *metric.CacheTokenRate != 0.02 {
 		t.Fatalf("unexpected cache token rate: %#v", metric.CacheTokenRate)
 	}
 }

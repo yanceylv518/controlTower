@@ -43,13 +43,10 @@ func TestTuningChannelMetricsSQLExtractsChannelIDFromDimensionKey(t *testing.T) 
 			t.Fatalf("channel metrics query must merge TTFT histogram column %s: %s", column, query)
 		}
 	}
-	for _, fragment := range []string{"SUM(COALESCE(big_input_cache_hits,0))", "SUM(COALESCE(big_input_count,0))"} {
+	for _, fragment := range []string{"SUM(cache_tokens_total)", "SUM(cache_prompt_tokens)"} {
 		if !strings.Contains(query, fragment) {
-			t.Fatalf("channel cache metric must match monitoring calculation and include %q: %s", fragment, query)
+			t.Fatalf("channel cache metric must use the big-input token totals reported by the agent and include %q: %s", fragment, query)
 		}
-	}
-	if strings.Contains(query, "SUM(cache_tokens_total)") || strings.Contains(query, "SUM(cache_prompt_tokens)") {
-		t.Fatalf("channel cache metric must not use the legacy token ratio: %s", query)
 	}
 }
 
