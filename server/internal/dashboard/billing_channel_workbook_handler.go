@@ -5,6 +5,7 @@ import (
 	"controltower/server/internal/billing"
 	"controltower/server/internal/xlsxwriter"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -78,21 +79,27 @@ func (h BillingChannelWorkbookHandler) ServeHTTP(w http.ResponseWriter, r *http.
 		name = rows[0].Username
 	}
 	book := xlsxwriter.New()
+	stage := "overview"
 	if err = writeChannelOverview(book, name, period, discount, rows, prices, ratios, snapshots); err == nil {
+		stage = "daily"
 		err = writeDaily(book, channelID, period, billing.BuildDetails(rows, prices, ratios, snapshots))
 	}
 	if err == nil {
+		stage = "request_details"
 		err = writeRequestPages(r.Context(), book, period, from, to, prices, ratios, metadata, func(cursor billing.LogCursor, limit int) ([]billing.PagedLogRecord, error) {
 			return h.Source.ChannelLogsPage(r.Context(), site, channelID, from, to, cursor, limit)
 		})
 	}
 	if err != nil {
+		log.Printf("billing channel workbook failed site=%s channel=%d from=%s to=%s stage=%s: %v", site, channelID, from.Format(time.RFC3339), to.Format(time.RFC3339), stage, err)
 		writeDashboardError(w, 500, "billing_xlsx_failed")
 		return
 	}
 	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 	w.Header().Set("Content-Disposition", `attachment; filename="`+billingDownloadName("channel-billing", 0, channelID, from, to)+`.xlsx"`)
-	_ = book.Write(w)
+	if err = book.Write(w); err != nil {
+		log.Printf("billing channel workbook failed site=%s channel=%d from=%s to=%s stage=write: %v", site, channelID, from.Format(time.RFC3339), to.Format(time.RFC3339), err)
+	}
 }
 
 func writeChannelOverview(book *xlsxwriter.Workbook, name, month, discount string, rows []billing.AggregateRow, prices []billing.PriceRecord, ratios []billing.GroupRatio, snapshots map[string]string) error {

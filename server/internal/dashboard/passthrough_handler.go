@@ -122,27 +122,30 @@ func (h *PassthroughHandler) logsPageForBilling(ctx context.Context, site string
 	if limit <= 0 || limit > 5000 {
 		limit = billing.BillingPageSize
 	}
-	queryCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
 	// `other` can contain large provider diagnostics. Billing only needs the
 	// cache-usage fields below, so project a compact JSON value inside MySQL
 	// instead of transferring the complete payload over the RDS connection.
-	query := `SELECT l.id,l.created_at,COALESCE(l.request_id,''),COALESCE(l.upstream_request_id,''),l.user_id,COALESCE(l.username,''),COALESCE(l.channel_id,0),COALESCE(c.name,''),COALESCE(l.model_name,''),COALESCE(l.` + "`group`" + `,''),l.prompt_tokens,l.completion_tokens,l.quota,` + billingOtherProjection + ` FROM logs l LEFT JOIN channels c ON c.id=l.channel_id WHERE l.type=2 AND l.created_at>=? AND l.created_at<? AND (l.created_at>? OR (l.created_at=? AND l.id>?))`
-	args := []any{start.Unix(), end.Unix(), cursor.CreatedUnix, cursor.CreatedUnix, cursor.ID}
+	query, idCursor := billingLogsPageQuery(userID, channelID)
+	args := []any{start.Unix(), end.Unix()}
+	if idCursor {
+		args = append(args, cursor.ID)
+	} else {
+		args = append(args, cursor.CreatedUnix, cursor.CreatedUnix, cursor.ID)
+	}
 	if userID > 0 {
-		query += ` AND l.user_id=?`
 		args = append(args, userID)
 	}
 	if channelID > 0 {
-		query += ` AND l.channel_id=?`
 		args = append(args, channelID)
 	}
-	query += ` ORDER BY l.created_at,l.id LIMIT ?`
 	args = append(args, limit)
+	queryCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	rows, err := db.QueryContext(queryCtx, query, args...)
 	if err != nil {
-		return nil, err
+		cancel()
+		return nil, fmt.Errorf("billing logs page site=%s user=%d channel=%d cursor=%d/%d: %w", site, userID, channelID, cursor.CreatedUnix, cursor.ID, err)
 	}
+	defer cancel()
 	defer rows.Close()
 	out := make([]billing.PagedLogRecord, 0, limit)
 	for rows.Next() {
@@ -176,6 +179,29 @@ func (h *PassthroughHandler) logsPageForBilling(ctx context.Context, site string
 		out = append(out, v)
 	}
 	return out, rows.Err()
+}
+
+func billingLogsPageQuery(userID, channelID int64) (string, bool) {
+	query := `SELECT l.id,l.created_at,COALESCE(l.request_id,''),COALESCE(l.upstream_request_id,''),l.user_id,COALESCE(l.username,''),COALESCE(l.channel_id,0),COALESCE(c.name,''),COALESCE(l.model_name,''),COALESCE(l.` + "`group`" + `,''),l.prompt_tokens,l.completion_tokens,l.quota,` + billingOtherProjection + ` FROM logs l LEFT JOIN channels c ON c.id=l.channel_id WHERE l.type=2 AND l.created_at>=? AND l.created_at<?`
+	// Workbook exports target one user or channel. Page them in primary-key
+	// order so MySQL can use new-api's (user_id,id) or channel_id index without
+	// filesorting the same time range again for every page.
+	idCursor := userID > 0 || channelID > 0
+	if idCursor {
+		query += ` AND l.id>?`
+	} else {
+		query += ` AND (l.created_at>? OR (l.created_at=? AND l.id>?))`
+	}
+	if userID > 0 {
+		query += ` AND l.user_id=?`
+	}
+	if channelID > 0 {
+		query += ` AND l.channel_id=?`
+	}
+	if idCursor {
+		return query + ` ORDER BY l.id LIMIT ?`, true
+	}
+	return query + ` ORDER BY l.created_at,l.id LIMIT ?`, false
 }
 
 const billingOtherProjection = `CASE WHEN JSON_VALID(l.other) THEN JSON_OBJECT(` +

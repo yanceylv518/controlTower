@@ -170,10 +170,12 @@ func writeRequestPages(ctx context.Context, book *xlsxwriter.Workbook, month str
 		return e
 	}
 	cursor := billing.LogCursor{}
+	pageNumber := 0
 	for {
+		pageNumber++
 		logs, e := readPage(cursor, billing.BillingPageSize)
 		if e != nil {
-			return e
+			return fmt.Errorf("request details page=%d cursor=%d/%d: %w", pageNumber, cursor.CreatedUnix, cursor.ID, e)
 		}
 		if len(logs) == 0 {
 			break

@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -87,6 +88,7 @@ func (h BillingExportJobHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 	billingExports.Unlock()
 	ctx := context.WithoutCancel(r.Context())
 	go func() {
+		startedAt := time.Now()
 		setExportStatus(id, "running", "")
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://local/?"+query, nil)
 		out, err := os.Create(billingExportPath(id))
@@ -101,6 +103,7 @@ func (h BillingExportJobHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 		}
 		if err != nil {
 			_ = os.Remove(billingExportPath(id))
+			log.Printf("billing export failed id=%s kind=%s instance=%s user=%s channel=%s elapsed=%s: %v", id, h.Kind, q["instance_id"], q["user_id"], q["channel_id"], time.Since(startedAt).Round(time.Millisecond), err)
 			setExportStatus(id, "failed", err.Error())
 			return
 		}
@@ -137,7 +140,9 @@ func (w *fileDownloadWriter) Write(p []byte) (int, error) {
 	return n, e
 }
 func (w *fileDownloadWriter) responseError() error {
-	var payload struct{ Error string `json:"error"` }
+	var payload struct {
+		Error string `json:"error"`
+	}
 	if json.Unmarshal(w.body.Bytes(), &payload) == nil && payload.Error != "" {
 		return &exportError{payload.Error}
 	}
