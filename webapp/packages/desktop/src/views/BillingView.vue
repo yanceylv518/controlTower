@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
-import type { BillingJob, BillingRequestItem, BillingUserSummary } from "@ct/shared";
+import type { BillingJob, BillingUserSummary } from "@ct/shared";
 import { dashboard, passthrough } from "../api";
 import AppShell from "../components/AppShell.vue";
 import AsyncPanel from "../components/AsyncPanel.vue";
@@ -27,12 +27,6 @@ const generating = ref(false);
 const tierSettings = ref<Record<string, { instance_id: string; user_id: number; use_tiered_pricing: boolean }>>({});
 const jobProgress = ref(0);
 const exporting = ref<Record<number, boolean>>({});
-const requestItems = ref<BillingRequestItem[]>([]);
-const requestsLoading = ref(false);
-const requestsError = ref("");
-const requestsHasMore = ref(false);
-const requestsAfterID = ref(0);
-const requestsAfterCreated = ref(0);
 let monitorVersion=0;
 onUnmounted(()=>{monitorVersion++;});
 void prefs.load();
@@ -100,21 +94,7 @@ async function exportUser(row: BillingUserSummary, includeRequests = false) {
     exporting.value = { ...exporting.value, [row.user_id]: false };
   }
 }
-async function loadRequests(reset = false) {
-  if (!selected.value || requestsLoading.value) return;
-  if (reset) { requestItems.value = []; requestsAfterID.value = 0; requestsAfterCreated.value = 0; requestsHasMore.value = false; }
-  requestsLoading.value = true; requestsError.value = "";
-  try {
-    const [from, to] = generationRange.value;
-    const response = await dashboard.billingRequests({ instance_id: filters.site_id, user_id: selected.value.user_id, from, to, job_id: state.data.value?.generation_job?.id, after_id: requestsAfterID.value || undefined, after_created: requestsAfterCreated.value || undefined, page_size: 100 });
-    requestItems.value = reset ? response.items : [...requestItems.value, ...response.items];
-    requestsAfterID.value = response.next_after_id;
-    requestsAfterCreated.value = response.next_after_created;
-    requestsHasMore.value = response.has_more;
-  } catch (error) { requestsError.value = billingReadErrorMessage(error, "加载请求明细失败"); }
-  finally { requestsLoading.value = false; }
-}
-function openDetail(row: BillingUserSummary) { selected.value = row; detailOpen.value = true; void detail.reload(); void loadRequests(true); }
+function openDetail(row: BillingUserSummary) { selected.value = row; detailOpen.value = true; void detail.reload(); }
 async function monitorJob(initial: BillingJob, reused=false){
   if(generating.value)return;const version=++monitorVersion;generating.value=true;let job=initial;
   try{while(job.status==="pending"||job.status==="running"){jobProgress.value=job.total_steps?Math.round(job.completed_steps*100/job.total_steps):0;await new Promise(resolve=>setTimeout(resolve,1500));if(version!==monitorVersion)return;job=await dashboard.billingJob(job.id)}if(job.status==="failed")throw new Error(job.error_message||"账单任务失败");jobProgress.value=100;ElMessage.success(reused?"该区间已有账单，已直接加载":`账单生成完成，排除异常订单 ${job.abnormal_rows} 条`);await state.reload();}
@@ -132,7 +112,7 @@ async function changeTiered(userID:number,value:boolean){await dashboard.saveBil
 watch(generationRange,(value)=>localStorage.setItem("ct.billing.user.range",JSON.stringify(value)),{deep:true});
 let searchTimer: ReturnType<typeof setTimeout> | undefined;
 watch(search, () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { page.value = 1; void state.reload(); }, 400); });
-watch([generationRange, () => filters.site_id, pageSize], () => { page.value = 1; void state.reload(); if(detailOpen.value){void detail.reload();void loadRequests(true);} });
+watch([generationRange, () => filters.site_id, pageSize], () => { page.value = 1; void state.reload(); if(detailOpen.value)void detail.reload(); });
 watch(page, () => void state.reload());
 watch(() => state.data.value?.generation_job?.id, () => {const job=state.data.value?.generation_job;if(job&&(job.status==="pending"||job.status==="running"))void monitorJob(job);});
 void state.reload();
@@ -153,21 +133,7 @@ void state.reload();
       <div class="drawer-actions"><el-button :loading="Boolean(selected && exporting[selected.user_id])" @click="selected && exportUser(selected, true)">{{ selected && exporting[selected.user_id] ? "后台生成中" : "导出完整账单 Excel" }}</el-button><el-button :disabled="!selected" @click="selected && exportDaily(selected)">导出日账单</el-button><el-button :disabled="!selected" @click="selected && exportAnomalies(selected)">导出异常订单</el-button><router-link :to="`/readonly-logs?username=${encodeURIComponent(selected?.username || '')}&from=${generationRange[0]}&to=${generationRange[1]}`"><el-button>查看使用日志</el-button></router-link></div>
       <el-alert v-if="detail.error.value" class="pending-alert" type="info" :title="detail.error.value" :closable="false" show-icon />
       <AsyncPanel :loading="detail.loading.value" :error="''" :empty="!detail.error.value && !detail.data.value?.items?.length" @retry="detail.reload"><el-table :data="detail.data.value?.items || []" class="billing-detail-table" table-layout="fixed"><el-table-column prop="day" label="日期" width="105" /><el-table-column label="模型信息" min-width="165"><template #default="s"><b class="cell-primary">{{ s.row.model_name }}</b><small class="cell-secondary">{{ s.row.group_name || "默认分组" }} · {{ s.row.tier_from > 0 ? `档位 ≥${formatNumber(s.row.tier_from)}` : "基础价" }}</small></template></el-table-column><el-table-column label="订单" min-width="125"><template #default="s"><div class="metric-pairs"><span>总数</span><b>{{ formatNumber(s.row.request_count + s.row.abnormal_rows) }}</b><span>计费</span><b>{{ formatNumber(s.row.request_count) }}</b><span>异常</span><b :class="{ danger: s.row.abnormal_rows > 0 }">{{ formatNumber(s.row.abnormal_rows) }}</b></div></template></el-table-column><el-table-column label="Token 用量" min-width="230"><template #default="s"><div class="metric-grid"><span>普通</span><b>{{ formatNumber(s.row.prompt_tokens) }}</b><span>读取</span><b>{{ formatNumber(s.row.cache_tokens) }}</b><span>写入</span><b>{{ formatNumber(s.row.cache_write_tokens) }}</b><span>输出</span><b>{{ formatNumber(s.row.completion_tokens) }}</b></div></template></el-table-column><el-table-column label="单价 / 1M" min-width="205"><template #default="s"><div class="metric-grid"><span>输入</span><b>{{ unitPrice(s.row.input_price) }}</b><span>读取</span><b>{{ unitPrice(s.row.cache_price) }}</b><span>写入</span><b>{{ unitPrice(s.row.cache_write_price) }}</b><span>输出</span><b>{{ unitPrice(s.row.output_price) }}</b></div></template></el-table-column><el-table-column prop="amount" label="金额" min-width="125" align="right"><template #default="s"><b>{{ s.row.unpriced ? "无法取价" : money(s.row.amount) }}</b><small class="cell-secondary">异常 {{ money(s.row.abnormal_amount) }}</small></template></el-table-column></el-table></AsyncPanel>
-      <h3 class="request-title">请求明细</h3>
-      <el-alert v-if="requestsError" class="pending-alert" type="error" :title="requestsError" :closable="false" show-icon />
-      <el-table v-loading="requestsLoading && requestItems.length === 0" :data="requestItems" class="billing-detail-table" table-layout="fixed" empty-text="暂无请求明细">
-        <el-table-column prop="created_at" label="请求时间" width="165" />
-        <el-table-column prop="request_id" label="Request ID" min-width="260" show-overflow-tooltip><template #default="s">{{ s.row.request_id || "—" }}</template></el-table-column>
-        <el-table-column prop="log_id" label="日志 ID" width="105" align="right" />
-        <el-table-column prop="model_name" label="模型" min-width="160" show-overflow-tooltip />
-        <el-table-column prop="prompt_tokens" label="普通输入" width="110" align="right"><template #default="s">{{ formatNumber(s.row.prompt_tokens) }}</template></el-table-column>
-        <el-table-column prop="cache_tokens" label="缓存读取" width="110" align="right"><template #default="s">{{ formatNumber(s.row.cache_tokens) }}</template></el-table-column>
-        <el-table-column prop="cache_write_tokens" label="缓存写入" width="110" align="right"><template #default="s">{{ formatNumber(s.row.cache_write_tokens) }}</template></el-table-column>
-        <el-table-column prop="completion_tokens" label="输出" width="100" align="right"><template #default="s">{{ formatNumber(s.row.completion_tokens) }}</template></el-table-column>
-        <el-table-column prop="quota" label="Quota" width="110" align="right"><template #default="s">{{ formatNumber(s.row.quota) }}</template></el-table-column>
-      </el-table>
-      <div class="request-more" v-if="requestsHasMore"><el-button :loading="requestsLoading" @click="loadRequests()">加载更多</el-button></div>
     </el-drawer>
   </AppShell>
 </template>
-<style scoped>.billing-total{display:flex;align-items:center;gap:28px;padding:12px 4px}.billing-total b{font-size:18px;color:var(--el-color-primary);font-variant-numeric:tabular-nums}.billing-period{padding-right:20px;border-right:1px solid var(--el-border-color)}.billing-period b{font-size:14px}.billing-period small{display:block;margin-top:3px;color:var(--el-text-color-secondary)}.pending-alert{margin-bottom:10px}.billing-table :deep(.el-table__row){cursor:pointer}.billing-table :deep(.cell),.billing-detail-table :deep(.cell){font-variant-numeric:tabular-nums}.sub,.cell-secondary{display:block;color:var(--el-text-color-secondary);margin-top:3px}.cell-primary{color:var(--el-text-color-primary)}.metric-pairs,.metric-grid{display:grid;grid-template-columns:auto 1fr;column-gap:8px;row-gap:3px;align-items:center}.metric-grid{grid-template-columns:auto minmax(0,1fr) auto minmax(0,1fr)}.metric-pairs span,.metric-grid span{color:var(--el-text-color-secondary);font-size:12px}.metric-pairs b,.metric-grid b{text-align:right;white-space:nowrap}.danger{color:var(--el-color-danger)}.drawer-actions{display:flex;gap:8px;justify-content:flex-end;margin-bottom:12px}.job-progress{color:var(--el-color-primary);font-variant-numeric:tabular-nums}.period-label{color:var(--el-text-color-secondary);font-size:13px}.request-title{margin:24px 0 10px}.request-more{display:flex;justify-content:center;padding:14px}</style>
+<style scoped>.billing-total{display:flex;align-items:center;gap:28px;padding:12px 4px}.billing-total b{font-size:18px;color:var(--el-color-primary);font-variant-numeric:tabular-nums}.billing-period{padding-right:20px;border-right:1px solid var(--el-border-color)}.billing-period b{font-size:14px}.billing-period small{display:block;margin-top:3px;color:var(--el-text-color-secondary)}.pending-alert{margin-bottom:10px}.billing-table :deep(.el-table__row){cursor:pointer}.billing-table :deep(.cell),.billing-detail-table :deep(.cell){font-variant-numeric:tabular-nums}.sub,.cell-secondary{display:block;color:var(--el-text-color-secondary);margin-top:3px}.cell-primary{color:var(--el-text-color-primary)}.metric-pairs,.metric-grid{display:grid;grid-template-columns:auto 1fr;column-gap:8px;row-gap:3px;align-items:center}.metric-grid{grid-template-columns:auto minmax(0,1fr) auto minmax(0,1fr)}.metric-pairs span,.metric-grid span{color:var(--el-text-color-secondary);font-size:12px}.metric-pairs b,.metric-grid b{text-align:right;white-space:nowrap}.danger{color:var(--el-color-danger)}.drawer-actions{display:flex;gap:8px;justify-content:flex-end;margin-bottom:12px}.job-progress{color:var(--el-color-primary);font-variant-numeric:tabular-nums}.period-label{color:var(--el-text-color-secondary);font-size:13px}</style>
