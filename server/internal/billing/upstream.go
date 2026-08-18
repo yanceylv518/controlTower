@@ -1,6 +1,7 @@
 package billing
 
 import (
+	"math/big"
 	"sort"
 	"strings"
 	"time"
@@ -13,12 +14,31 @@ type UpstreamChannelMapping struct {
 }
 
 type UpstreamTotals struct {
-	RequestCount     int64 `json:"request_count"`
-	PromptTokens     int64 `json:"prompt_tokens"`
-	CompletionTokens int64 `json:"completion_tokens"`
-	CacheTokens      int64 `json:"cache_tokens"`
-	CacheWriteTokens int64 `json:"cache_write_tokens"`
-	Quota            int64 `json:"quota"`
+	RequestCount     int64  `json:"request_count"`
+	PromptTokens     int64  `json:"prompt_tokens"`
+	CompletionTokens int64  `json:"completion_tokens"`
+	CacheTokens      int64  `json:"cache_tokens"`
+	CacheWriteTokens int64  `json:"cache_write_tokens"`
+	Quota            int64  `json:"quota"`
+	Amount           string `json:"amount"`
+}
+
+func ApplyUpstreamAmounts(groups []UpstreamGroup, channels []ChannelSummary) {
+	byChannel := make(map[int64]string, len(channels))
+	for _, channel := range channels {
+		byChannel[channel.ChannelID] = channel.Amount
+	}
+	for i := range groups {
+		total := new(big.Rat)
+		for j := range groups[i].Members {
+			amount := byChannel[groups[i].Members[j].ChannelID]
+			groups[i].Members[j].Totals.Amount = amount
+			if value, ok := new(big.Rat).SetString(amount); ok {
+				total.Add(total, value)
+			}
+		}
+		groups[i].Totals.Amount = FormatAmount(total, 6)
+	}
 }
 
 type UpstreamMember struct {

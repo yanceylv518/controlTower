@@ -25,3 +25,11 @@ func TestMergeUpstreamDetailsAddsSameModelAcrossChannels(t *testing.T) {
 		t.Fatalf("out=%#v", out)
 	}
 }
+
+func TestApplyUpstreamAmountsAddsMembersAndGroupTotal(t *testing.T) {
+	groups := []UpstreamGroup{{Members: []UpstreamMember{{ChannelID: 1}, {ChannelID: 2}}}}
+	ApplyUpstreamAmounts(groups, []ChannelSummary{{ChannelID: 1, Amount: "1.250000"}, {ChannelID: 2, Amount: "2.750000"}})
+	if groups[0].Members[0].Totals.Amount != "1.250000" || groups[0].Totals.Amount != "4.000000" {
+		t.Fatalf("groups=%#v", groups)
+	}
+}

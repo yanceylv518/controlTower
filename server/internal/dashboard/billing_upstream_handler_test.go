@@ -98,9 +98,11 @@ func TestBillingUpstreamRefreshRetainsDeletedSnapshotAndGroupsRows(t *testing.T)
 
 func TestBillingUpstreamCSVHasTwoSections(t *testing.T) {
 	w := httptest.NewRecorder()
-	writeUpstreamCSV(w, "billing-upstream.csv", []upstreamDetailItem{{Day: "2026-07-01", ModelName: "m", RequestCount: 2}}, []billing.UpstreamMember{{ChannelID: 1, ChannelName: "c", ModelName: "m"}})
+	from := time.Date(2026, 7, 1, 0, 0, 0, 0, billing.BusinessLocation)
+	group := billing.UpstreamGroup{DisplayName: "https://up …1234", BaseURL: "https://up", Members: []billing.UpstreamMember{{ChannelID: 1, ChannelName: "渠道 A", ModelName: "m", Totals: billing.UpstreamTotals{Amount: "3.000000"}}}}
+	writeUpstreamCSV(w, "billing-upstream.csv", from, from.AddDate(0, 1, 0), group, []upstreamDetailItem{{Day: "2026-07-01", ModelName: "m", RequestCount: 2, Amount: "3.000000"}})
 	body := w.Body.String()
-	if !strings.HasPrefix(body, "\xef\xbb\xbf") || !strings.Contains(body, "日×模型明细") || !strings.Contains(body, "成员渠道小计") {
+	if !strings.HasPrefix(body, "\xef\xbb\xbf") || !strings.Contains(body, "上游 key,https://up …1234") || !strings.Contains(body, "成员渠道,渠道 A (#1)") || !strings.Contains(body, "日×模型明细") || !strings.Contains(body, "成员渠道小计") || !strings.Contains(body, "金额") {
 		t.Fatalf("csv=%q", body)
 	}
 }

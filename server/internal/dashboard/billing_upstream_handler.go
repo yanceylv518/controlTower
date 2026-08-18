@@ -37,6 +37,8 @@ type upstreamDetailItem struct {
 	CacheTokens      int64  `json:"cache_tokens"`
 	CacheWriteTokens int64  `json:"cache_write_tokens"`
 	Quota            int64  `json:"quota"`
+	Amount           string `json:"amount"`
+	Unpriced         bool   `json:"unpriced"`
 }
 
 func (h BillingUpstreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -76,15 +78,31 @@ func (h BillingUpstreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 		writeDashboardError(w, 500, "billing_upstream_query_failed")
 		return
 	}
+	prices, err := h.Store.ListBillingPrices(r.Context(), site)
+	if err != nil {
+		writeDashboardError(w, 500, "billing_upstream_query_failed")
+		return
+	}
+	ratios, err := h.Store.ListBillingGroupRatios(r.Context(), site)
+	if err != nil {
+		writeDashboardError(w, 500, "billing_upstream_query_failed")
+		return
+	}
+	snapshots, err := h.Store.BillingRatioSnapshots(r.Context(), site, from, to)
+	if err != nil {
+		writeDashboardError(w, 500, "billing_upstream_query_failed")
+		return
+	}
 	groups := billing.BuildUpstreamGroups(rows, mappings)
+	billing.ApplyUpstreamAmounts(groups, billing.BuildChannelSummary(rows, prices, ratios, snapshots, nil))
 	if strings.HasSuffix(r.URL.Path, "/detail") {
-		h.detail(w, r, from, to, groups, rows)
+		h.detail(w, r, from, to, groups, rows, prices, ratios, snapshots)
 		return
 	}
 	writeDashboardJSON(w, 200, map[string]any{"items": groups, "job": job})
 }
 
-func (h BillingUpstreamHandler) detail(w http.ResponseWriter, r *http.Request, from, to time.Time, groups []billing.UpstreamGroup, rows []billing.AggregateRow) {
+func (h BillingUpstreamHandler) detail(w http.ResponseWriter, r *http.Request, from, to time.Time, groups []billing.UpstreamGroup, rows []billing.AggregateRow, prices []billing.PriceRecord, ratios []billing.GroupRatio, snapshots map[string]string) {
 	fp := r.URL.Query().Get("fp")
 	var selected *billing.UpstreamGroup
 	for i := range groups {
@@ -108,33 +126,47 @@ func (h BillingUpstreamHandler) detail(w http.ResponseWriter, r *http.Request, f
 		}
 	}
 	merged := billing.MergeUpstreamDetails(filtered)
-	details := make([]upstreamDetailItem, 0, len(merged))
-	for _, v := range merged {
-		details = append(details, upstreamDetailItem{Day: v.Day.Format("2006-01-02"), ModelName: v.ModelName, GroupName: v.GroupName, TierFrom: v.TierFrom, RequestCount: v.RequestCount, PromptTokens: v.PromptTokens, CompletionTokens: v.CompletionTokens, CacheTokens: v.CacheTokens, CacheWriteTokens: v.CacheWriteTokens, Quota: v.Quota})
+	priced := billing.BuildDetails(merged, prices, ratios, snapshots)
+	details := make([]upstreamDetailItem, 0, len(priced))
+	for _, v := range priced {
+		details = append(details, upstreamDetailItem{Day: v.Day, ModelName: v.ModelName, GroupName: v.GroupName, TierFrom: v.TierFrom, RequestCount: v.RequestCount, PromptTokens: v.PromptTokens, CompletionTokens: v.CompletionTokens, CacheTokens: v.CacheTokens, CacheWriteTokens: v.CacheWriteTokens, Quota: v.Quota, Amount: v.Amount, Unpriced: v.Unpriced})
 	}
 	if r.URL.Query().Get("format") == "csv" {
-		writeUpstreamCSV(w, billingDownloadName("billing-upstream", 0, 0, from, to)+".csv", details, selected.Members)
+		writeUpstreamCSV(w, billingDownloadName("billing-upstream", 0, 0, from, to)+".csv", from, to, *selected, details)
 		return
 	}
 	writeDashboardJSON(w, 200, map[string]any{"group": selected, "details": details})
 }
 
-func writeUpstreamCSV(w http.ResponseWriter, filename string, details []upstreamDetailItem, members []billing.UpstreamMember) {
+func writeUpstreamCSV(w http.ResponseWriter, filename string, from, to time.Time, group billing.UpstreamGroup, details []upstreamDetailItem) {
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
 	_, _ = w.Write([]byte{0xef, 0xbb, 0xbf})
 	cw := csv.NewWriter(w)
+	memberNames := make([]string, 0, len(group.Members))
+	for _, member := range group.Members {
+		memberNames = append(memberNames, member.ChannelName+" (#"+strconv.FormatInt(member.ChannelID, 10)+")")
+	}
+	_ = cw.Write([]string{"上游 key", group.DisplayName})
+	_ = cw.Write([]string{"Base URL", group.BaseURL})
+	_ = cw.Write([]string{"成员渠道", strings.Join(memberNames, "、")})
+	_ = cw.Write([]string{"账单区间", billing.FormatBusinessTime(from.Unix()), billing.FormatBusinessTime(to.Unix())})
+	_ = cw.Write(nil)
 	_ = cw.Write([]string{"日×模型明细"})
-	_ = cw.Write([]string{"日期", "模型", "分组", "档位", "请求数", "普通输入Token", "缓存读取Token", "缓存写入Token", "输出Token", "Quota参考"})
+	_ = cw.Write([]string{"日期", "模型", "分组", "档位", "请求数", "普通输入Token", "缓存读取Token", "缓存写入Token", "输出Token", "金额", "Quota参考"})
 	for _, v := range details {
-		_ = cw.Write([]string{v.Day, v.ModelName, v.GroupName, strconv.FormatInt(v.TierFrom, 10), strconv.FormatInt(v.RequestCount, 10), strconv.FormatInt(v.PromptTokens, 10), strconv.FormatInt(v.CacheTokens, 10), strconv.FormatInt(v.CacheWriteTokens, 10), strconv.FormatInt(v.CompletionTokens, 10), strconv.FormatInt(v.Quota, 10)})
+		amount := v.Amount
+		if v.Unpriced {
+			amount = ""
+		}
+		_ = cw.Write([]string{v.Day, v.ModelName, v.GroupName, strconv.FormatInt(v.TierFrom, 10), strconv.FormatInt(v.RequestCount, 10), strconv.FormatInt(v.PromptTokens, 10), strconv.FormatInt(v.CacheTokens, 10), strconv.FormatInt(v.CacheWriteTokens, 10), strconv.FormatInt(v.CompletionTokens, 10), amount, strconv.FormatInt(v.Quota, 10)})
 	}
 	_ = cw.Write(nil)
 	_ = cw.Write([]string{"成员渠道小计"})
-	_ = cw.Write([]string{"渠道ID", "渠道名", "模型", "请求数", "普通输入Token", "缓存读取Token", "缓存写入Token", "输出Token", "Quota参考"})
-	for _, m := range members {
+	_ = cw.Write([]string{"渠道ID", "渠道名", "模型", "请求数", "普通输入Token", "缓存读取Token", "缓存写入Token", "输出Token", "金额", "Quota参考"})
+	for _, m := range group.Members {
 		v := m.Totals
-		_ = cw.Write([]string{strconv.FormatInt(m.ChannelID, 10), m.ChannelName, m.ModelName, strconv.FormatInt(v.RequestCount, 10), strconv.FormatInt(v.PromptTokens, 10), strconv.FormatInt(v.CacheTokens, 10), strconv.FormatInt(v.CacheWriteTokens, 10), strconv.FormatInt(v.CompletionTokens, 10), strconv.FormatInt(v.Quota, 10)})
+		_ = cw.Write([]string{strconv.FormatInt(m.ChannelID, 10), m.ChannelName, m.ModelName, strconv.FormatInt(v.RequestCount, 10), strconv.FormatInt(v.PromptTokens, 10), strconv.FormatInt(v.CacheTokens, 10), strconv.FormatInt(v.CacheWriteTokens, 10), strconv.FormatInt(v.CompletionTokens, 10), v.Amount, strconv.FormatInt(v.Quota, 10)})
 	}
 	cw.Flush()
 }
