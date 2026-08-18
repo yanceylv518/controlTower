@@ -129,13 +129,18 @@ func TestBillingLogsPageQueryUsesChannelIDKeyset(t *testing.T) {
 
 func TestBillingLogsPageQueryUsesUserIDKeyset(t *testing.T) {
 	query, idCursor := billingLogsPageQuery(7, 0)
-	if idCursor {
-		t.Fatal("user export must retain the time cursor")
+	if !idCursor {
+		t.Fatal("user export must use a bounded ID cursor")
 	}
 	if !strings.Contains(query, "AND l.user_id=?") || strings.Contains(query, "AND l.channel_id=?") ||
-		!strings.Contains(query, "(l.created_at>? OR (l.created_at=? AND l.id>?))") ||
-		!strings.Contains(query, "ORDER BY l.created_at,l.id LIMIT ?") {
+		!strings.Contains(query, "FORCE INDEX (idx_user_id_id)") ||
+		!strings.Contains(query, "lower_bound FORCE INDEX (idx_created_at_id)") ||
+		!strings.Contains(query, "upper_bound FORCE INDEX (idx_created_at_id)") ||
+		!strings.Contains(query, "AND l.id>?") || !strings.Contains(query, "ORDER BY l.id LIMIT ?") {
 		t.Fatalf("query filters do not match user export: %s", query)
+	}
+	if got := strings.Count(query, "?"); got != 7 {
+		t.Fatalf("user query placeholders=%d want=7: %s", got, query)
 	}
 }
 

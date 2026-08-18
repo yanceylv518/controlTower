@@ -130,7 +130,13 @@ func (h *PassthroughHandler) logsPageForBilling(ctx context.Context, site string
 	// instead of transferring the complete payload over the RDS connection.
 	query, idCursor := billingLogsPageQuery(userID, channelID)
 	args := []any{start.Unix(), end.Unix()}
-	if idCursor {
+	if userID > 0 {
+		// Bound the user/id walk to the requested time window. The scalar
+		// boundary lookups use idx_created_at_id and the main scan uses
+		// idx_user_id_id, avoiding both a full user-history walk and a scan of
+		// every site's row in the requested month.
+		args = append(args, cursor.ID, start.Unix(), end.Unix())
+	} else if idCursor {
 		args = append(args, cursor.ID)
 	} else {
 		args = append(args, cursor.CreatedUnix, cursor.CreatedUnix, cursor.ID)
@@ -188,17 +194,24 @@ func (h *PassthroughHandler) logsPageForBilling(ctx context.Context, site string
 }
 
 func billingLogsPageQuery(userID, channelID int64) (string, bool) {
-	query := `SELECT l.id,l.created_at,COALESCE(l.request_id,''),COALESCE(l.upstream_request_id,''),l.user_id,COALESCE(l.username,''),COALESCE(l.channel_id,0),COALESCE(c.name,''),COALESCE(l.model_name,''),COALESCE(l.` + "`group`" + `,''),l.prompt_tokens,l.completion_tokens,l.quota,` + billingOtherProjection + ` FROM logs l LEFT JOIN channels c ON c.id=l.channel_id WHERE l.type=2 AND l.created_at>=? AND l.created_at<?`
-	// Channel exports use the channel/id path. User exports keep the time
-	// keyset: production new-api datasets can plan the bounded time range much
-	// better than a pure id walk for users spread across a very large log table.
-	idCursor := channelID > 0
+	from := ` FROM logs l`
+	if userID > 0 {
+		from += ` FORCE INDEX (idx_user_id_id)`
+	}
+	query := `SELECT l.id,l.created_at,COALESCE(l.request_id,''),COALESCE(l.upstream_request_id,''),l.user_id,COALESCE(l.username,''),COALESCE(l.channel_id,0),COALESCE(c.name,''),COALESCE(l.model_name,''),COALESCE(l.` + "`group`" + `,''),l.prompt_tokens,l.completion_tokens,l.quota,` + billingOtherProjection + from + ` LEFT JOIN channels c ON c.id=l.channel_id WHERE l.type=2 AND l.created_at>=? AND l.created_at<?`
+	// User exports combine two existing indexes without changing new-api:
+	// idx_created_at_id supplies cheap scalar ID bounds and idx_user_id_id
+	// pages only that user's rows inside those bounds. Channel exports keep
+	// their existing ID path; unfiltered generation keeps its time keyset.
+	idCursor := userID > 0 || channelID > 0
 	if idCursor {
 		query += ` AND l.id>?`
 	} else {
 		query += ` AND (l.created_at>? OR (l.created_at=? AND l.id>?))`
 	}
 	if userID > 0 {
+		query += ` AND l.id>=COALESCE((SELECT lower_bound.id FROM logs lower_bound FORCE INDEX (idx_created_at_id) WHERE lower_bound.created_at>=? ORDER BY lower_bound.created_at,lower_bound.id LIMIT 1),0)`
+		query += ` AND l.id<COALESCE((SELECT upper_bound.id FROM logs upper_bound FORCE INDEX (idx_created_at_id) WHERE upper_bound.created_at>=? ORDER BY upper_bound.created_at,upper_bound.id LIMIT 1),9223372036854775807)`
 		query += ` AND l.user_id=?`
 	}
 	if channelID > 0 {
