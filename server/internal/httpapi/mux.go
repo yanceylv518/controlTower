@@ -182,8 +182,10 @@ func NewMux(options Options) *http.ServeMux {
 		mux.Handle("GET /api/dashboard/billing/tokens", protect(tokenHandler))
 		mux.Handle("GET /api/dashboard/billing/tokens/daily", protect(tokenHandler))
 	}
-	tokenLog := dashboard.BillingTokenLogExportHandler{Source: dashboard.BillingReadonlySource{Handler: passthrough}, PagePause: options.BillingPagePause}
-	mux.Handle("/api/dashboard/billing/token-detail-jobs", protect(dashboard.BillingExportJobHandler{Workbook: tokenLog, Kind: "token"}))
+	if tokenLogStore, ok := any(options.Store).(dashboard.BillingTokenLogStore); ok {
+		tokenLog := dashboard.BillingTokenLogExportHandler{Store: tokenLogStore, Source: dashboard.BillingReadonlySource{Handler: passthrough}, PagePause: options.BillingPagePause}
+		mux.Handle("/api/dashboard/billing/token-detail-jobs", protect(dashboard.BillingExportJobHandler{Workbook: tokenLog, Kind: "token"}))
+	}
 	if verificationStore, ok := any(options.Store).(dashboard.BillingVerificationStore); ok {
 		mux.Handle("/api/dashboard/billing/verification", protect(dashboard.BillingVerificationHandler{Store: verificationStore}))
 	}

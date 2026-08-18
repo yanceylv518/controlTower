@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-const billingExportFormatVersion = "v1"
+const billingExportFormatVersion = "v2"
 
 type billingExportTask struct {
 	ID        string    `json:"id"`
