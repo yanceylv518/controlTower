@@ -503,6 +503,18 @@ export interface BillingDetailResponse {
   month: string;
   data_through: string;
 }
+export interface BillingRequestItem {
+  log_id: number;
+  created_at: string;
+  request_id: string;
+  model_name: string;
+  prompt_tokens: number;
+  cache_tokens: number;
+  cache_write_tokens: number;
+  completion_tokens: number;
+  quota: number;
+}
+export interface BillingRequestsResponse { items: BillingRequestItem[]; has_more: boolean; next_after_id: number }
 export interface BillingPriceItem {
   instance_id: string;
   model_name: string;
@@ -865,6 +877,8 @@ export const dashboardApi = (client: ApiClient) => ({
     client.request<{ accepted: boolean; reused: boolean; job: BillingJob }>("/api/dashboard/billing/verification", { method: "POST", body: JSON.stringify({ source_job_id }) }),
   billingDetail: (params: { instance_id: string; user_id: number; month?: string; from?: string; to?: string; job_id?: string }) =>
     client.request<BillingDetailResponse>(`/api/dashboard/billing/detail${query(params)}`),
+  billingRequests: (params: { instance_id: string; user_id: number; from: string; to: string; job_id?: string; after_id?: number; page_size?: number }) =>
+    client.request<BillingRequestsResponse>(`/api/dashboard/billing/requests${query(params)}`),
   generateBilling: (input: { instance_id: string; from: string; to: string; force?: boolean; scope?: "all" | "channel" }) =>
     client.request<{ accepted: boolean; reused: boolean; job: BillingJob }>("/api/dashboard/billing/backfill", { method: "POST", body: JSON.stringify(input) }),
   billingJob: (id: string) => client.request<BillingJob>(`/api/dashboard/billing/jobs${query({ id })}`),
