@@ -48,6 +48,9 @@ func TestBillingPricesPutValidatesAndAuditsVersionedTiers(t *testing.T) {
 	if len(store.saved) != 2 || store.saved[1].TierFrom != 128000 {
 		t.Fatalf("saved=%#v", store.saved)
 	}
+	if _, offset := store.saved[0].EffectiveFrom.Zone(); offset != 8*60*60 {
+		t.Fatalf("effective date must use Shanghai business time: %s", store.saved[0].EffectiveFrom)
+	}
 	if len(store.audits) != 1 || store.audits[0].OperationType != "billing.price_update" {
 		t.Fatalf("audits=%#v", store.audits)
 	}

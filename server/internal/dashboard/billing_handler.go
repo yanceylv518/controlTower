@@ -48,12 +48,12 @@ func (h BillingBackfillHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 		writeDashboardError(w, 400, "invalid_request")
 		return
 	}
-	from, err := time.ParseInLocation("2006-01-02", req.From, time.Local)
+	from, err := time.ParseInLocation("2006-01-02", req.From, billing.BusinessLocation)
 	if err != nil {
 		writeDashboardError(w, 400, "invalid_from")
 		return
 	}
-	to, err := time.ParseInLocation("2006-01-02", req.To, time.Local)
+	to, err := time.ParseInLocation("2006-01-02", req.To, billing.BusinessLocation)
 	if err != nil || to.Before(from) || to.Sub(from) > 366*24*time.Hour {
 		writeDashboardError(w, 400, "invalid_to")
 		return

@@ -107,7 +107,7 @@ func (h BillingModelsHandler) list(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	today := time.Now().Format("2006-01-02")
+	today := time.Now().In(billing.BusinessLocation).Format("2006-01-02")
 	for _, p := range prices {
 		item := items[p.ModelName]
 		if item == nil {
@@ -198,8 +198,8 @@ func (h BillingModelsHandler) sync(w http.ResponseWriter, r *http.Request) {
 }
 
 func billingSyncDay(now time.Time) time.Time {
-	y, m, d := now.In(time.Local).Date()
-	return time.Date(y, m, d, 0, 0, 0, 0, time.Local)
+	y, m, d := now.In(billing.BusinessLocation).Date()
+	return time.Date(y, m, d, 0, 0, 0, 0, billing.BusinessLocation)
 }
 
 func sameCurrentBasePrice(records []billing.PriceRecord, model string, now time.Time, price billing.Price) bool {

@@ -11,10 +11,15 @@ import (
 	"controltower/server/internal/storage"
 )
 
-type fakeBackfillRollupper struct{ days []string }
+type fakeBackfillRollupper struct {
+	days    []string
+	offsets []int
+}
 
 func (f *fakeBackfillRollupper) RollupDay(_ context.Context, site string, day time.Time) (billing.RollupResult, error) {
 	f.days = append(f.days, day.Format("2006-01-02"))
+	_, offset := day.Zone()
+	f.offsets = append(f.offsets, offset)
 	return billing.RollupResult{InstanceID: site, Day: day, Rows: 1}, nil
 }
 
@@ -38,11 +43,22 @@ func TestBillingBackfillRunsSerialDaysWithRateLimitAndAudit(t *testing.T) {
 	if strings.Join(rollup.days, ",") != "2026-07-30,2026-07-31,2026-08-01" {
 		t.Fatalf("days=%v", rollup.days)
 	}
+	if len(rollup.offsets) != 3 || rollup.offsets[0] != 8*60*60 {
+		t.Fatalf("backfill days must use Shanghai business time: %v", rollup.offsets)
+	}
 	if len(sleeps) != 2 || sleeps[0] != 500*time.Millisecond {
 		t.Fatalf("sleeps=%v", sleeps)
 	}
 	if len(audit.values) != 1 || audit.values[0].OperationType != "billing.backfill" {
 		t.Fatalf("audit=%#v", audit.values)
+	}
+}
+
+func TestBillingSyncDayUsesShanghaiBusinessDate(t *testing.T) {
+	now := time.Date(2026, 8, 1, 16, 30, 0, 0, time.UTC)
+	day := billingSyncDay(now)
+	if got := day.Format(time.RFC3339); got != "2026-08-02T00:00:00+08:00" {
+		t.Fatalf("billing sync day=%s", got)
 	}
 }
 

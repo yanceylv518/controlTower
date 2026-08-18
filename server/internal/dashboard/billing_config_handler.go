@@ -77,7 +77,7 @@ func (h BillingPricesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 			writeDashboardError(w, 400, "invalid_json")
 			return
 		}
-		day, err := time.ParseInLocation("2006-01-02", req.EffectiveFrom, time.Local)
+		day, err := time.ParseInLocation("2006-01-02", req.EffectiveFrom, billing.BusinessLocation)
 		if err != nil || strings.TrimSpace(req.InstanceID) == "" || strings.TrimSpace(req.ModelName) == "" || len(req.Tiers) == 0 {
 			writeDashboardError(w, 400, "invalid_price_schedule")
 			return

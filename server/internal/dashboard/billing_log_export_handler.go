@@ -24,7 +24,7 @@ func (h BillingLogExportHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 	instanceID := strings.TrimSpace(r.URL.Query().Get("instance_id"))
 	userID, err := strconv.ParseInt(r.URL.Query().Get("user_id"), 10, 64)
 	month := strings.TrimSpace(r.URL.Query().Get("month"))
-	from, monthErr := time.ParseInLocation("2006-01", month, time.Local)
+	from, monthErr := time.ParseInLocation("2006-01", month, billing.BusinessLocation)
 	if r.Method != http.MethodGet || instanceID == "" || err != nil || userID <= 0 || monthErr != nil {
 		writeDashboardError(w, 400, "invalid_query")
 		return
@@ -77,7 +77,7 @@ func (h BillingLogExportHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 		}
 		amount := ""
 		if !ok {
-			if snapshot, e := billing.ParseRatioSnapshot(snapshots[log.CreatedAt.Format("2006-01-02")]); e == nil {
+			if snapshot, e := billing.ParseRatioSnapshot(snapshots[log.CreatedAt.In(billing.BusinessLocation).Format("2006-01-02")]); e == nil {
 				price, ratio, e = billing.FallbackPrice(snapshot, log.ModelName, log.GroupName)
 				ok = e == nil
 			}
