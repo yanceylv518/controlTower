@@ -181,7 +181,7 @@ void state.reload();
           <el-table-column prop="completion_tokens" label="输出 Token" width="125" align="right"><template #default="s">{{formatNumber(s.row.completion_tokens)}}</template></el-table-column>
           <el-table-column prop="amount" label="金额" width="120" align="right"><template #default="s"><b>{{money(s.row.amount)}}</b></template></el-table-column>
           <el-table-column prop="quota" label="Quota（参考）" width="130" align="right"><template #default="s">{{formatNumber(s.row.quota)}}</template></el-table-column>
-          <el-table-column label="操作" width="130"><template #default="s"><template v-if="s.row.member_count!==undefined"><el-button link type="primary" @click.stop="openUpstream(s.row)">明细</el-button><el-button link type="primary" @click.stop="exportUpstream(s.row)">CSV</el-button></template></template></el-table-column>
+          <el-table-column label="操作" width="170"><template #default="s"><template v-if="s.row.member_count!==undefined"><el-button link type="primary" @click.stop="openUpstream(s.row)">查看明细</el-button><el-button link type="primary" @click.stop="exportUpstream(s.row)">导出 CSV</el-button></template></template></el-table-column>
         </el-table></div>
       </AsyncPanel>
     </div>
