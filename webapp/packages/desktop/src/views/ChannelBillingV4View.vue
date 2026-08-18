@@ -38,6 +38,12 @@ const state = useAsyncData<PageData>(async () => {
 const upstreamState = useAsyncData(async()=>{if(viewMode.value!=="upstream"||!filters.site_id)return undefined;const[from,to]=generationRange.value;return dashboard.billingUpstreamChannels({instance_id:filters.site_id,from,to,job_id:job.value?.id})});
 
 const items = computed(() => state.data.value?.items || []), job = computed(() => state.data.value?.job || null);
+const channelSearch = ref("");
+const filteredItems = computed(() => {
+  const q = channelSearch.value.trim().toLowerCase();
+  if (!q) return items.value;
+  return items.value.filter(row => String(row.channel_id).includes(q) || (row.channel_name || "").toLowerCase().includes(q));
+});
 const upstreamItems = computed(()=>{const q=upstreamSearch.value.trim().toLowerCase();return (upstreamState.data.value?.items||[]).filter(g=>!q||g.base_url.toLowerCase().includes(q)||g.display_name.toLowerCase().includes(q)||g.members.some(m=>m.channel_name.toLowerCase().includes(q)||m.model_name.toLowerCase().includes(q))).map(g=>({...g,row_id:`g:${g.upstream_fp||'unmapped'}`,children:g.members.map(m=>({...m,row_id:`c:${m.channel_id}`,display_name:`${m.model_name||'未知模型'} · ${m.channel_name||`渠道 ${m.channel_id}`} · #${m.channel_id}`,request_count:m.totals.request_count,prompt_tokens:m.totals.prompt_tokens,completion_tokens:m.totals.completion_tokens,cache_tokens:m.totals.cache_tokens,cache_write_tokens:m.totals.cache_write_tokens,quota:m.totals.quota})) ,request_count:g.totals.request_count,prompt_tokens:g.totals.prompt_tokens,completion_tokens:g.totals.completion_tokens,cache_tokens:g.totals.cache_tokens,cache_write_tokens:g.totals.cache_write_tokens,quota:g.totals.quota}))});
 const upstreamExpanded=computed(()=>upstreamItems.value.filter(g=>g.upstream_fp).map(g=>g.row_id));
 const detail = useAsyncData(async () => {
@@ -47,7 +53,7 @@ const detail = useAsyncData(async () => {
 });
 const upstreamDetail=useAsyncData(async()=>{if(!selectedUpstream.value)return undefined;const[from,to]=generationRange.value;return dashboard.billingUpstreamDetail({instance_id:filters.site_id,fp:selectedUpstream.value.upstream_fp,from,to,job_id:job.value?.id})});
 const actualPeriod = computed(() => job.value?.status === "complete" ? jobRange(job.value) : "尚未生成，下方仅显示渠道配置");
-const pagedItems = computed(() => items.value.slice((page.value - 1) * pageSize.value, page.value * pageSize.value));
+const pagedItems = computed(() => filteredItems.value.slice((page.value - 1) * pageSize.value, page.value * pageSize.value));
 const currency = computed(() => state.data.value ? state.data.value.currencySymbol : (prefs.currencySymbol || "$"));
 // USD-based amounts must be converted by the site exchange rate, not just relabeled.
 const currencyRate = computed(() => state.data.value?.currencyRate || 1);
@@ -137,6 +143,7 @@ async function exportChannel(row: BillingChannelSummary) {
 watch(generationRange,(value)=>localStorage.setItem("ct.billing.channel.range",JSON.stringify(value)),{deep:true});
 watch([generationRange, () => filters.site_id], () => { page.value = 1; void state.reload(); if(viewMode.value==="upstream")void upstreamState.reload(); if (detailOpen.value) void detail.reload(); });
 watch(viewMode,mode=>{if(mode==="upstream")void upstreamState.reload()});
+watch(channelSearch, () => { page.value = 1; });
 watch(pageSize, () => { page.value = 1; });
 watch(() => state.data.value?.job?.id, () => { const current = state.data.value?.job; if (current && ["pending", "running"].includes(current.status)) void monitor(current); if(viewMode.value==="upstream")void upstreamState.reload(); });
 void state.reload();
@@ -152,8 +159,8 @@ void state.reload();
       <div class="period-summary"><span>选择区间</span><b>[{{ generationRange[0] }}, {{ generationRange[1] }})</b><span class="actual-period">下方数据区间 <strong>{{ actualPeriod }}</strong></span></div>
       <el-alert :type="status.type" :title="status.title" :description="status.text" :closable="false" show-icon />
       <el-alert v-if="state.data.value?.channelError" type="warning" title="部分渠道配置加载失败" :description="state.data.value.channelError" :closable="false" show-icon />
-      <div class="view-switch"><el-radio-group v-model="viewMode" size="small"><el-radio-button value="channel">按渠道</el-radio-button><el-radio-button value="upstream">按上游 key</el-radio-button></el-radio-group><el-input v-if="viewMode==='upstream'" v-model="upstreamSearch" clearable placeholder="搜索渠道名、模型或 base_url" style="width:280px" /></div>
-      <AsyncPanel v-if="viewMode==='channel'" class="content" :loading="state.loading.value" :error="state.error.value" :empty="!items.length" :empty-text="filters.site_id ? '当前站点没有渠道配置' : '尚未选择站点'" @retry="state.reload">
+      <div class="view-switch"><el-radio-group v-model="viewMode" size="small"><el-radio-button value="channel">按渠道</el-radio-button><el-radio-button value="upstream">按上游 key</el-radio-button></el-radio-group><el-input v-if="viewMode==='upstream'" v-model="upstreamSearch" clearable placeholder="搜索渠道名、模型或 base_url" style="width:280px" /><el-input v-else v-model="channelSearch" clearable placeholder="搜索渠道名或 ID" style="width:240px" /></div>
+      <AsyncPanel v-if="viewMode==='channel'" class="content" :loading="state.loading.value" :error="state.error.value" :empty="!filteredItems.length" :empty-text="!filters.site_id ? '尚未选择站点' : channelSearch.trim() ? '没有匹配的渠道' : '当前站点没有渠道配置'" @retry="state.reload">
         <div class="table-wrap"><el-table :data="pagedItems" height="100%" class="channel-table" @row-click="openDetail">
           <el-table-column prop="channel_name" label="渠道" min-width="180"><template #default="scope"><b>{{ scope.row.channel_name || `渠道 ${scope.row.channel_id}` }}</b><small class="sub">ID {{ scope.row.channel_id }}</small></template></el-table-column>
           <el-table-column prop="request_count" label="计费请求数" min-width="110" align="right"><template #default="scope">{{ formatNumber(scope.row.request_count) }}</template></el-table-column><el-table-column prop="abnormal_rows" label="异常订单数" min-width="105" align="right"><template #default="scope">{{ formatNumber(scope.row.abnormal_rows) }}</template></el-table-column><el-table-column prop="abnormal_amount" label="异常总金额" min-width="120" align="right"><template #default="scope">{{ money(scope.row.abnormal_amount) }}</template></el-table-column><el-table-column prop="prompt_tokens" label="普通输入 Token" min-width="135" align="right"><template #default="scope">{{ formatNumber(scope.row.prompt_tokens) }}</template></el-table-column><el-table-column prop="cache_tokens" label="缓存读取 Token" min-width="135" align="right"><template #default="scope">{{ formatNumber(scope.row.cache_tokens) }}</template></el-table-column><el-table-column prop="cache_write_tokens" label="缓存写入 Token" min-width="135" align="right"><template #default="scope">{{ formatNumber(scope.row.cache_write_tokens) }}</template></el-table-column><el-table-column prop="completion_tokens" label="输出 Token" min-width="125" align="right"><template #default="scope">{{ formatNumber(scope.row.completion_tokens) }}</template></el-table-column>
@@ -162,7 +169,7 @@ void state.reload();
           <el-table-column label="折扣总金额" min-width="125" align="right"><template #default="scope"><b>{{ money(scope.row.discounted_amount) }}</b></template></el-table-column>
           <el-table-column label="操作" width="220"><template #default="scope"><el-button link type="primary" @click.stop="openDetail(scope.row)">日账单</el-button><el-button link type="primary" :loading="exporting[scope.row.channel_id]" @click.stop="exportChannel(scope.row)">导出账单</el-button><el-button link type="primary" @click.stop="exportAnomalies(scope.row)">异常订单</el-button></template></el-table-column>
         </el-table></div>
-        <ListPager v-model:page="page" v-model:page-size="pageSize" :item-count="pagedItems.length" :total="items.length" />
+        <ListPager v-model:page="page" v-model:page-size="pageSize" :item-count="pagedItems.length" :total="filteredItems.length" />
       </AsyncPanel>
       <AsyncPanel v-else class="content" :loading="upstreamState.loading.value" :error="upstreamState.error.value" :empty="!upstreamItems.length" empty-text="该区间没有可归组的渠道账单" @retry="upstreamState.reload">
         <div class="table-wrap"><el-table :data="upstreamItems" row-key="row_id" :expand-row-keys="upstreamExpanded" height="100%" class="channel-table">
