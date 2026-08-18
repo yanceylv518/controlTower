@@ -14,6 +14,10 @@
 - 日切聚合同一趟额外按 token 维度累计,ReplaceBillingDay 事务内同步整日替换令牌表（与用户表同 job 同事务,原子一致）;
 - 旧 job 无令牌行属预期：令牌接口对无行任务返回明确标记（见 §3）,**部署后重生成账单一次令牌数据才齐**。
 
+## 2.5 后台任务韧性（用户原则:可以慢,不能报错——本批一并落实）
+
+新增统一重试壳（billing 包）：后台任务中对 newapi 的每一页读取,失败按指数退避重试（2s/10s/30s/60s/120s,此后 120s 封顶,单页总预算 10 分钟）,单次尝试保留现有超时;瞬时抖动/newapi 重启窗口内任务只慢不死。应用到三处：**账单生成扫描页、用户/渠道工作簿导出页、令牌明细导出页**。重试耗尽才失败,错误带页号+游标;生成任务失败后游标不丢可续跑（既有行为不退化）,导出任务可直接重试。重试壳需 context 感知（任务取消即停）。测试：瞬时两败后成功→任务无感完成;持续失败→按预算收敛失败且错误含游标;取消即停不再重试。
+
 ## 3. 读接口（复用用户账单读闸 billingJobForRead("generate") 语义,409 一致;scope 校验与 /billing/detail 相同:非 admin 站点+用户双闸）
 
 - `GET /api/dashboard/billing/tokens?instance_id&user_id&from&to[&job_id]`：该用户每令牌一行（token_id/token_name/区间合计 request/prompt/completion/cache/cache_write tokens/quota + **ct_amount:计价引擎在令牌分片行上跑现行回退链**）;job 有效但令牌表零行且用户表有行→返回 `token_data_missing:true`（前端提示"该账单生成于令牌功能上线前,重新生成后可见"）;
@@ -48,4 +52,5 @@
 - [ ] 046 单语句;未触碰 billing_daily_versions 结构与 request_key
 - [ ] 守恒断言测试在（令牌行合计=用户行合计,同 job）
 - [ ] token_data_missing 路径+scope 矩阵+409 测试在
+- [ ] 重试壳三处接入+三态测试在（瞬时恢复/预算收敛/取消即停）
 - [ ] 部署说明含"需重生成账单"
