@@ -18,25 +18,23 @@
 
 - `GET /api/dashboard/billing/tokens?instance_id&user_id&from&to[&job_id]`：该用户每令牌一行（token_id/token_name/区间合计 request/prompt/completion/cache/cache_write tokens/quota + **ct_amount:计价引擎在令牌分片行上跑现行回退链**）;job 有效但令牌表零行且用户表有行→返回 `token_data_missing:true`（前端提示"该账单生成于令牌功能上线前,重新生成后可见"）;
 - `GET /api/dashboard/billing/tokens/daily?instance_id&user_id&token_id&from&to[&job_id]`：该令牌 日×模型 行（含金额）;
-- `GET /api/dashboard/billing/tokens/requests?…&token_id&after_id/after_created`：请求明细——复用 DetailedLogsPage 的窗转 id 手法追加 `AND l.token_id=?`,复合游标翻页,page_size≤200;字段含 log_id/时间(业务时区)/request_id/模型/四类 token/quota;
-- CSV：令牌汇总+该令牌日账单两段（BOM,billingDownloadName 惯例）。
+- **请求明细只做下载,不做在线翻页**（用户拍板:实时逐页查 newapi 太慢）——令牌明细 CSV 走既有异步导出任务机制（BillingExportJobHandler 模式:建任务→后台流式写文件→轮询状态→下载）,内部用 DetailedLogsPage 窗转 id 手法追加 `AND l.token_id=?` 分页扫全区间（页大小沿用 billingWorkbookPageSize=500）;列=时间(业务时区)/request_id/模型/普通输入/缓存读/缓存写/输出/quota;
+- 汇总 CSV：令牌汇总+该令牌日账单两段（BOM,billingDownloadName 惯例）——同步接口即可（读 CT 表,快）。
 
 ## 4. 前端（用户账单抽屉内加"按令牌"分区,布局已定:上下结构）
 
 - 抽屉顶部 Tab："按模型（现状,默认,零改动） | 按令牌"；
 - **令牌汇总表=月账单,常驻 Tab 顶部**：每令牌一行（令牌名,空名显示"(未命名) #id"/请求数/输入/缓存读/输出 tokens/ct 金额/quota 参考）,按金额降序,行可点选;
-- **点选令牌 → 下方详情区**,内部两子 Tab：
-  - 日账单：该令牌 日×模型 行（日期/模型/请求数/输入/输出/金额）;
-  - 请求明细：加载更多式列表（业务时区时间/request_id/模型/输入\/缓存\/输出/quota,100 条页,复合游标）;
-- **token_data_missing**：汇总区与日账单显示引导条"该账单生成于令牌功能上线前,重新生成账单后可见";**请求明细子 Tab 不受影响照常可用**（实时查 logs,不依赖重生成）;
-- [导出 CSV] 挂在选中令牌上（汇总+该令牌日账单两段;明细不进 CSV）。
+- **点选令牌 → 下方详情区 = 日账单表**（日期/模型/请求数/输入/输出/金额）,不做在线请求明细;
+- **token_data_missing**：汇总区与日账单显示引导条"该账单生成于令牌功能上线前,重新生成账单后可见";明细下载不依赖重生成照常可用（实时扫 logs）;
+- 选中令牌上两个下载按钮：[导出 CSV]（汇总+日账单两段,同步）与 [下载明细]（异步任务,按钮态=生成中→下载,失败 toast 透出原因）。
 
 ## 5. 测试要求
 
 1. 046 单语句契约;投影契约（token 两列在,billingOtherProjection 不动）;
 2. 聚合：多令牌同用户同模型正确拆行、令牌行与用户行同 job 合计相等（守恒断言）;ReplaceBillingDay 同事务替换两表;
 3. 金额：令牌分片计价与用户级同价源（同模型同档同分组单价一致）;
-4. 接口：三接口 scope 矩阵（非 admin 越权 403）、job 409、token_data_missing 路径、明细游标透传;
+4. 接口：scope 矩阵（非 admin 越权 403）、job 409、token_data_missing 路径、明细导出任务状态流转（running→completed/failed）;
 5. CSV 两段结构。
 
 ## 6. 明确不做（记档）
