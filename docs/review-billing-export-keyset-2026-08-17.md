@@ -14,3 +14,7 @@
 ## 部署后动作
 
 对生产 newapi 库跑一次单渠道导出翻页 SQL 的 EXPLAIN（`WHERE type=2 AND created_at range AND id>? AND channel_id=? ORDER BY id LIMIT`）,确认走 channel_id 或主键索引无 filesort——与日志列表选路的既有 EXPLAIN 惯例同批做即可。
+
+## 跟进（cb422c5,2026-08-18,验收通过零缺陷——用户导出游标形态部分反转）
+
+生产实测反馈:**用户导出退回时间键集**（(created_at,id) 复合游标）,仅渠道导出保留 id 主键游标——注释记载原因:大 logs 表上用户行分布稀疏时,newapi 对有界时间范围的规划优于纯 id 走查（前天"(user_id,id) 索引直走"的假设被生产证伪,SQL 形态测试已相应反转）。**连带正确性已核**:昨日请求明细端点只传 after_id,退回时间游标后 CreatedUnix=0 会致 `created_at>0` 恒真、翻页原地踏步——本笔同步补 after_created 复合游标参数+next_after_created 回传+前端跟进,处理完整。另:账单翻页超时 30s→2min（对齐既有明细读路径上限,测试钉住）;用户工作簿补四阶段失败日志（与渠道工作簿对齐）。教训延续:**索引假设必须以生产 EXPLAIN 实证,"应该能走索引"不算数**——单渠道导出 EXPLAIN 仍在部署后清单上,现在多一条用户导出时间键集的 EXPLAIN 一起做。
