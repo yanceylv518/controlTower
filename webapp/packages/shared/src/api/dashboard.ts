@@ -552,6 +552,7 @@ export interface BillingUpstreamTotals { request_count:number;prompt_tokens:numb
 export interface BillingUpstreamMember { channel_id:number;channel_name:string;model_name:string;totals:BillingUpstreamTotals }
 export interface BillingUpstreamGroup { upstream_fp:string;display_name:string;base_url:string;member_count:number;members:BillingUpstreamMember[];totals:BillingUpstreamTotals }
 export interface BillingUpstreamDetail { day:string;model_name:string;group_name:string;tier_from:number;request_count:number;prompt_tokens:number;completion_tokens:number;cache_tokens:number;cache_write_tokens:number;quota:number }
+export interface BillingTokenSummary { token_id:number;token_name:string;request_count:number;prompt_tokens:number;completion_tokens:number;cache_tokens:number;cache_write_tokens:number;quota:number;ct_amount:string }
 export interface BillingReconciliationBreakdown { anomaly: string; cache_write_policy: string; residual: string }
 export interface BillingReconciliationRow {
   user_id: number;
@@ -877,6 +878,8 @@ export const dashboardApi = (client: ApiClient) => ({
   billingChannels:(params:{instance_id:string;month?:string;from?:string;to?:string;channel_id?:number;job_id?:string})=>client.request<{items:BillingChannelSummary[];details:BillingDetailItem[];period:string;generation_job?:BillingJob|null;warning?:string;currency?:BillingCurrencyDisplay}>(`/api/dashboard/billing/channels${query(params)}`),
   billingUpstreamChannels:(params:{instance_id:string;from:string;to:string;job_id?:string})=>client.request<{items:BillingUpstreamGroup[];job:BillingJob}>(`/api/dashboard/billing/upstream-channels${query(params)}`),
   billingUpstreamDetail:(params:{instance_id:string;fp:string;from:string;to:string;job_id?:string})=>client.request<{group:BillingUpstreamGroup;details:BillingUpstreamDetail[]}>(`/api/dashboard/billing/upstream-channels/detail${query(params)}`),
+  billingTokens:(params:{instance_id:string;user_id:number;from:string;to:string;job_id?:string})=>client.request<{items:BillingTokenSummary[];token_data_missing:boolean;job:BillingJob}>(`/api/dashboard/billing/tokens${query(params)}`),
+  billingTokenDaily:(params:{instance_id:string;user_id:number;token_id:number;from:string;to:string;job_id?:string})=>client.request<{items:BillingDetailItem[];token_id:number;job:BillingJob}>(`/api/dashboard/billing/tokens/daily${query(params)}`),
   saveBillingChannelDiscount:(input:{instance_id:string;channel_id:number;discount:string})=>client.request("/api/dashboard/billing/channels",{method:"PUT",body:JSON.stringify(input)}),
   billingPrices: (instance_id: string) =>
     client.request<ListResponse<BillingPriceItem>>(`/api/dashboard/billing/prices${query({ instance_id })}`),

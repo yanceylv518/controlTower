@@ -21,15 +21,15 @@ var ErrVerificationAlreadyExists = errors.New("billing verification already exis
 var BusinessLocation = time.FixedZone("Asia/Shanghai", 8*60*60)
 
 type PagedLogRecord struct {
-	ID, CreatedUnix, UserID, ChannelID, CacheTokens, Quota   int64
-	CacheWriteTokens, CacheWrite5mTokens, CacheWrite1hTokens int64
-	ContextTokens                                            int64
-	UsageSemantic                                            string
+	ID, CreatedUnix, UserID, TokenID, ChannelID, CacheTokens, Quota int64
+	CacheWriteTokens, CacheWrite5mTokens, CacheWrite1hTokens        int64
+	ContextTokens                                                   int64
+	UsageSemantic                                                   string
 	// Per-request ratios are copied from new-api logs.other. They preserve the
 	// pricing that was actually used for this request; an empty value means the
 	// legacy log did not record that ratio.
 	ModelRatio, CompletionRatio, CacheRatio, CacheCreationRatio, GroupRatio string
-	RequestID, UpstreamRequestID, Username, ModelName, GroupName            string
+	RequestID, UpstreamRequestID, Username, TokenName, ModelName, GroupName string
 	ChannelName                                                             string
 	// SourcePromptTokens preserves logs.prompt_tokens before the billing
 	// source separates cache reads/writes from ordinary input tokens.
@@ -165,7 +165,7 @@ type JobStore interface {
 	ListBillingModelMetadata(context.Context, string) ([]ModelMetadata, error)
 	ListBillingPrices(context.Context, string) ([]PriceRecord, error)
 	ListBillingGroupRatios(context.Context, string) ([]GroupRatio, error)
-	AppendBillingHour(context.Context, Job, JobStep, []DailyRow, []ChannelDailyRow, []AnomalyOrder, LogCursor, int64) error
+	AppendBillingHour(context.Context, Job, JobStep, []DailyRow, []TokenDailyRow, []ChannelDailyRow, []AnomalyOrder, LogCursor, int64) error
 	CompleteBillingStep(context.Context, Job, JobStep, int64, int64) error
 	FailBillingStep(context.Context, Job, JobStep, error) error
 	FinalizeBillingJob(context.Context, Job) error
@@ -308,7 +308,9 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 	cursor := step.Cursor
 	var processed, abnormal int64
 	for {
-		logs, e := r.Source.LogsPage(ctx, job.InstanceID, step.From, step.To, cursor, BillingPageSize)
+		logs, e := ReadPageWithRetry(ctx, fmt.Sprintf("site=%s page=generate", job.InstanceID), cursor, func() ([]PagedLogRecord, error) {
+			return r.Source.LogsPage(ctx, job.InstanceID, step.From, step.To, cursor, BillingPageSize)
+		})
 		if e != nil {
 			return e
 		}
@@ -327,6 +329,11 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 			tier         int64
 		}
 		channelAcc := map[channelKey]ChannelDailyRow{}
+		type tokenKey struct {
+			user, token, tier int64
+			model, group      string
+		}
+		tokenAcc := map[tokenKey]TokenDailyRow{}
 		anomalies := []AnomalyOrder{}
 		for _, log := range logs {
 			setting, configured := settings[log.UserID]
@@ -363,6 +370,21 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 			row.Quota += log.Quota
 			row.UpdatedAt = time.Now().UTC()
 			acc[k] = row
+			tk := tokenKey{log.UserID, log.TokenID, tier, log.ModelName, log.GroupName}
+			tr := tokenAcc[tk]
+			tr.InstanceID, tr.UserID, tr.Username = job.InstanceID, log.UserID, log.Username
+			tr.TokenID, tr.TokenName = log.TokenID, log.TokenName
+			tr.ModelName, tr.GroupName, tr.TierFrom, tr.Day = log.ModelName, log.GroupName, tier, dateOnly(step.From)
+			tr.RequestCount++
+			tr.PromptTokens += log.PromptTokens.Int64
+			tr.CompletionTokens += log.CompletionTokens.Int64
+			tr.CacheTokens += log.CacheTokens
+			tr.CacheWriteTokens += log.CacheWriteTokens
+			tr.CacheWrite5mTokens += log.CacheWrite5mTokens
+			tr.CacheWrite1hTokens += log.CacheWrite1hTokens
+			tr.Quota += log.Quota
+			tr.UpdatedAt = time.Now().UTC()
+			tokenAcc[tk] = tr
 			ck := channelKey{log.ChannelID, log.ModelName, log.GroupName, tier}
 			cr := channelAcc[ck]
 			cr.InstanceID = job.InstanceID
@@ -391,11 +413,15 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 		for _, row := range channelAcc {
 			channelRows = append(channelRows, row)
 		}
+		tokenRows := make([]TokenDailyRow, 0, len(tokenAcc))
+		for _, row := range tokenAcc {
+			tokenRows = append(tokenRows, row)
+		}
 		last := logs[len(logs)-1]
 		cursor = LogCursor{last.CreatedUnix, last.ID}
 		processed += int64(len(logs))
 		abnormal += int64(len(anomalies))
-		if e = r.Store.AppendBillingHour(ctx, job, step, rows, channelRows, anomalies, cursor, int64(len(logs))); e != nil {
+		if e = r.Store.AppendBillingHour(ctx, job, step, rows, tokenRows, channelRows, anomalies, cursor, int64(len(logs))); e != nil {
 			return e
 		}
 		if len(logs) < BillingPageSize {
@@ -470,7 +496,9 @@ func (r JobRunner) processVerificationStep(ctx context.Context, job Job, step Jo
 	cursor := step.Cursor
 	var processed, abnormal int64
 	for {
-		logs, pageErr := r.Source.LogsPage(ctx, job.InstanceID, step.From, step.To, cursor, BillingPageSize)
+		logs, pageErr := ReadPageWithRetry(ctx, fmt.Sprintf("site=%s page=verify", job.InstanceID), cursor, func() ([]PagedLogRecord, error) {
+			return r.Source.LogsPage(ctx, job.InstanceID, step.From, step.To, cursor, BillingPageSize)
+		})
 		if pageErr != nil {
 			return pageErr
 		}

@@ -16,6 +16,15 @@ func (unconfiguredReadonlyStore) UpdateReadonlyDSNForSite(string, string, time.T
 	return nil
 }
 
+func TestBillingLogsPageProjectionIncludesTokenWithoutChangingOtherProjection(t *testing.T) {
+	query, _ := billingLogsPageQuery(7, 0, 3)
+	for _, want := range []string{"COALESCE(l.token_id,0)", "COALESCE(l.token_name,'')", "AND COALESCE(l.token_id,0)=?", billingOtherProjection} {
+		if !strings.Contains(query, want) {
+			t.Fatalf("missing %q in %s", want, query)
+		}
+	}
+}
+
 func TestPassthroughPageLimits(t *testing.T) {
 	r := httptest.NewRequest("GET", "/?limit=999&offset=-3", nil)
 	limit, offset := queryPage(r, 100)
@@ -108,7 +117,7 @@ func TestBillingLogsPageQueryUsesChannelIDKeyset(t *testing.T) {
 	if billingLogsPageTimeout != 2*time.Minute {
 		t.Fatalf("large billing pages need a bounded two-minute query window: %s", billingLogsPageTimeout)
 	}
-	query, idCursor := billingLogsPageQuery(0, 23)
+	query, idCursor := billingLogsPageQuery(0, 23, -1)
 	if !idCursor {
 		t.Fatal("channel export must use an ID cursor")
 	}
@@ -128,7 +137,7 @@ func TestBillingLogsPageQueryUsesChannelIDKeyset(t *testing.T) {
 }
 
 func TestBillingLogsPageQueryUsesUserIDKeyset(t *testing.T) {
-	query, idCursor := billingLogsPageQuery(7, 0)
+	query, idCursor := billingLogsPageQuery(7, 0, -1)
 	if !idCursor {
 		t.Fatal("user export must use a bounded ID cursor")
 	}
@@ -145,7 +154,7 @@ func TestBillingLogsPageQueryUsesUserIDKeyset(t *testing.T) {
 }
 
 func TestBillingLogsPageQueryKeepsTimeKeysetForUnfilteredJobs(t *testing.T) {
-	query, idCursor := billingLogsPageQuery(0, 0)
+	query, idCursor := billingLogsPageQuery(0, 0, -1)
 	if idCursor {
 		t.Fatal("unfiltered billing jobs must keep the time cursor")
 	}

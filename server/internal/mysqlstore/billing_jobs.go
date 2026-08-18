@@ -165,7 +165,7 @@ func (s Store) PutBillingUserSetting(ctx context.Context, v billing.UserSetting)
 	return e
 }
 
-func (s Store) AppendBillingHour(ctx context.Context, j billing.Job, st billing.JobStep, items []billing.DailyRow, channels []billing.ChannelDailyRow, bad []billing.AnomalyOrder, c billing.LogCursor, pageRows int64) error {
+func (s Store) AppendBillingHour(ctx context.Context, j billing.Job, st billing.JobStep, items []billing.DailyRow, tokens []billing.TokenDailyRow, channels []billing.ChannelDailyRow, bad []billing.AnomalyOrder, c billing.LogCursor, pageRows int64) error {
 	tx, e := s.db.BeginTx(ctx, nil)
 	if e != nil {
 		return e
@@ -174,6 +174,12 @@ func (s Store) AppendBillingHour(ctx context.Context, j billing.Job, st billing.
 	now := time.Now().UTC()
 	for _, v := range items {
 		_, e = tx.ExecContext(ctx, `INSERT INTO billing_hourly(job_id,instance_id,hour_start,user_id,username,model_name,group_name,tier_from,request_count,prompt_tokens,completion_tokens,cache_tokens,cache_write_tokens,cache_write_5m_tokens,cache_write_1h_tokens,quota,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE username=VALUES(username),request_count=request_count+VALUES(request_count),prompt_tokens=prompt_tokens+VALUES(prompt_tokens),completion_tokens=completion_tokens+VALUES(completion_tokens),cache_tokens=cache_tokens+VALUES(cache_tokens),cache_write_tokens=cache_write_tokens+VALUES(cache_write_tokens),cache_write_5m_tokens=cache_write_5m_tokens+VALUES(cache_write_5m_tokens),cache_write_1h_tokens=cache_write_1h_tokens+VALUES(cache_write_1h_tokens),quota=quota+VALUES(quota),updated_at=VALUES(updated_at)`, j.ID, j.InstanceID, st.From.UTC(), v.UserID, v.Username, v.ModelName, v.GroupName, v.TierFrom, v.RequestCount, v.PromptTokens, v.CompletionTokens, v.CacheTokens, v.CacheWriteTokens, v.CacheWrite5mTokens, v.CacheWrite1hTokens, v.Quota, now)
+		if e != nil {
+			return e
+		}
+	}
+	for _, v := range tokens {
+		_, e = tx.ExecContext(ctx, `INSERT INTO billing_token_daily_versions(job_id,instance_id,user_id,token_id,token_name,username,model_name,group_name,tier_from,day,request_count,prompt_tokens,completion_tokens,cache_tokens,cache_write_tokens,cache_write_5m_tokens,cache_write_1h_tokens,quota,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE token_name=VALUES(token_name),username=VALUES(username),request_count=request_count+VALUES(request_count),prompt_tokens=prompt_tokens+VALUES(prompt_tokens),completion_tokens=completion_tokens+VALUES(completion_tokens),cache_tokens=cache_tokens+VALUES(cache_tokens),cache_write_tokens=cache_write_tokens+VALUES(cache_write_tokens),cache_write_5m_tokens=cache_write_5m_tokens+VALUES(cache_write_5m_tokens),cache_write_1h_tokens=cache_write_1h_tokens+VALUES(cache_write_1h_tokens),quota=quota+VALUES(quota),updated_at=VALUES(updated_at)`, j.ID, v.InstanceID, v.UserID, v.TokenID, v.TokenName, v.Username, v.ModelName, v.GroupName, v.TierFrom, v.Day, v.RequestCount, v.PromptTokens, v.CompletionTokens, v.CacheTokens, v.CacheWriteTokens, v.CacheWrite5mTokens, v.CacheWrite1hTokens, v.Quota, now)
 		if e != nil {
 			return e
 		}

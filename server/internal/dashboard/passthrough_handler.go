@@ -103,18 +103,21 @@ func (h *PassthroughHandler) DetailedLogsForBilling(ctx context.Context, site st
 // stable (created_at,id) keyset. It deliberately avoids OFFSET so later pages
 // do not rescan all preceding rows on large new-api log tables.
 func (h *PassthroughHandler) LogsPageForBilling(ctx context.Context, site string, start, end time.Time, cursor billing.LogCursor, limit int) ([]billing.PagedLogRecord, error) {
-	return h.logsPageForBilling(ctx, site, 0, 0, start, end, cursor, limit)
+	return h.logsPageForBilling(ctx, site, 0, 0, -1, start, end, cursor, limit)
 }
 func (h *PassthroughHandler) DetailedLogsPageForBilling(ctx context.Context, site string, userID int64, start, end time.Time, cursor billing.LogCursor, limit int) ([]billing.PagedLogRecord, error) {
-	return h.logsPageForBilling(ctx, site, userID, 0, start, end, cursor, limit)
+	return h.logsPageForBilling(ctx, site, userID, 0, -1, start, end, cursor, limit)
+}
+func (h *PassthroughHandler) TokenDetailedLogsPageForBilling(ctx context.Context, site string, userID, tokenID int64, start, end time.Time, cursor billing.LogCursor, limit int) ([]billing.PagedLogRecord, error) {
+	return h.logsPageForBilling(ctx, site, userID, 0, tokenID, start, end, cursor, limit)
 }
 func (h *PassthroughHandler) ChannelLogsPageForBilling(ctx context.Context, site string, channelID int64, start, end time.Time, cursor billing.LogCursor, limit int) ([]billing.PagedLogRecord, error) {
-	return h.logsPageForBilling(ctx, site, 0, channelID, start, end, cursor, limit)
+	return h.logsPageForBilling(ctx, site, 0, channelID, -1, start, end, cursor, limit)
 }
 
 const billingLogsPageTimeout = 2 * time.Minute
 
-func (h *PassthroughHandler) logsPageForBilling(ctx context.Context, site string, userID, channelID int64, start, end time.Time, cursor billing.LogCursor, limit int) ([]billing.PagedLogRecord, error) {
+func (h *PassthroughHandler) logsPageForBilling(ctx context.Context, site string, userID, channelID, tokenID int64, start, end time.Time, cursor billing.LogCursor, limit int) ([]billing.PagedLogRecord, error) {
 	db, configured, err := h.database(site)
 	if err != nil {
 		return nil, err
@@ -128,7 +131,7 @@ func (h *PassthroughHandler) logsPageForBilling(ctx context.Context, site string
 	// `other` can contain large provider diagnostics. Billing only needs the
 	// cache-usage fields below, so project a compact JSON value inside MySQL
 	// instead of transferring the complete payload over the RDS connection.
-	query, idCursor := billingLogsPageQuery(userID, channelID)
+	query, idCursor := billingLogsPageQuery(userID, channelID, tokenID)
 	args := []any{start.Unix(), end.Unix()}
 	if userID > 0 {
 		// Bound the user/id walk to the requested time window. The scalar
@@ -147,6 +150,9 @@ func (h *PassthroughHandler) logsPageForBilling(ctx context.Context, site string
 	if channelID > 0 {
 		args = append(args, channelID)
 	}
+	if tokenID >= 0 {
+		args = append(args, tokenID)
+	}
 	args = append(args, limit)
 	// Large users and channels can still need more than 30 seconds for the
 	// first indexed page on a remote new-api database. Keep every page bounded,
@@ -163,7 +169,7 @@ func (h *PassthroughHandler) logsPageForBilling(ctx context.Context, site string
 	for rows.Next() {
 		var v billing.PagedLogRecord
 		var other string
-		if err = rows.Scan(&v.ID, &v.CreatedUnix, &v.RequestID, &v.UpstreamRequestID, &v.UserID, &v.Username, &v.ChannelID, &v.ChannelName, &v.ModelName, &v.GroupName, &v.PromptTokens, &v.CompletionTokens, &v.Quota, &other); err != nil {
+		if err = rows.Scan(&v.ID, &v.CreatedUnix, &v.RequestID, &v.UpstreamRequestID, &v.UserID, &v.Username, &v.TokenID, &v.TokenName, &v.ChannelID, &v.ChannelName, &v.ModelName, &v.GroupName, &v.PromptTokens, &v.CompletionTokens, &v.Quota, &other); err != nil {
 			return nil, err
 		}
 		cache := parseBillingCacheUsage(other)
@@ -193,12 +199,12 @@ func (h *PassthroughHandler) logsPageForBilling(ctx context.Context, site string
 	return out, rows.Err()
 }
 
-func billingLogsPageQuery(userID, channelID int64) (string, bool) {
+func billingLogsPageQuery(userID, channelID, tokenID int64) (string, bool) {
 	from := ` FROM logs l`
 	if userID > 0 {
 		from += ` FORCE INDEX (idx_user_id_id)`
 	}
-	query := `SELECT l.id,l.created_at,COALESCE(l.request_id,''),COALESCE(l.upstream_request_id,''),l.user_id,COALESCE(l.username,''),COALESCE(l.channel_id,0),COALESCE(c.name,''),COALESCE(l.model_name,''),COALESCE(l.` + "`group`" + `,''),l.prompt_tokens,l.completion_tokens,l.quota,` + billingOtherProjection + from + ` LEFT JOIN channels c ON c.id=l.channel_id WHERE l.type=2 AND l.created_at>=? AND l.created_at<?`
+	query := `SELECT l.id,l.created_at,COALESCE(l.request_id,''),COALESCE(l.upstream_request_id,''),l.user_id,COALESCE(l.username,''),COALESCE(l.token_id,0),COALESCE(l.token_name,''),COALESCE(l.channel_id,0),COALESCE(c.name,''),COALESCE(l.model_name,''),COALESCE(l.` + "`group`" + `,''),l.prompt_tokens,l.completion_tokens,l.quota,` + billingOtherProjection + from + ` LEFT JOIN channels c ON c.id=l.channel_id WHERE l.type=2 AND l.created_at>=? AND l.created_at<?`
 	// User exports combine two existing indexes without changing new-api:
 	// idx_created_at_id supplies cheap scalar ID bounds and idx_user_id_id
 	// pages only that user's rows inside those bounds. Channel exports keep
@@ -216,6 +222,9 @@ func billingLogsPageQuery(userID, channelID int64) (string, bool) {
 	}
 	if channelID > 0 {
 		query += ` AND l.channel_id=?`
+	}
+	if tokenID >= 0 {
+		query += ` AND COALESCE(l.token_id,0)=?`
 	}
 	if idCursor {
 		return query + ` ORDER BY l.id LIMIT ?`, true
@@ -406,6 +415,9 @@ func (s BillingReadonlySource) LogsPage(ctx context.Context, site string, start,
 }
 func (s BillingReadonlySource) DetailedLogsPage(ctx context.Context, site string, userID int64, start, end time.Time, cursor billing.LogCursor, limit int) ([]billing.PagedLogRecord, error) {
 	return s.Handler.DetailedLogsPageForBilling(ctx, site, userID, start, end, cursor, limit)
+}
+func (s BillingReadonlySource) TokenDetailedLogsPage(ctx context.Context, site string, userID, tokenID int64, start, end time.Time, cursor billing.LogCursor, limit int) ([]billing.PagedLogRecord, error) {
+	return s.Handler.TokenDetailedLogsPageForBilling(ctx, site, userID, tokenID, start, end, cursor, limit)
 }
 func (s BillingReadonlySource) UpstreamChannelMappings(ctx context.Context, site string) ([]billing.UpstreamChannelMapping, error) {
 	return s.Handler.UpstreamChannelMappingsForBilling(ctx, site)

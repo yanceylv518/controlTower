@@ -48,8 +48,12 @@ func (h BillingExportJobHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 				writeDashboardError(w, 409, "export_not_ready")
 				return
 			}
-			w.Header().Set("Content-Disposition", `attachment; filename="billing-export-`+id+`.xlsx"`)
-			http.ServeFile(w, r, billingExportPath(id))
+			ext := ".xlsx"
+			if h.Kind == "token" {
+				ext = ".csv"
+			}
+			w.Header().Set("Content-Disposition", `attachment; filename="billing-export-`+id+ext+`"`)
+			http.ServeFile(w, r, billingExportPath(id, h.Kind))
 			return
 		}
 		writeDashboardJSON(w, 200, task)
@@ -72,13 +76,17 @@ func (h BillingExportJobHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 		query += "&channel_id=" + urlQuery(q["channel_id"])
 	} else {
 		query += "&user_id=" + urlQuery(q["user_id"])
-		query += "&include_requests=" + urlQuery(q["include_requests"])
+		if h.Kind == "token" {
+			query += "&token_id=" + urlQuery(q["token_id"])
+		} else {
+			query += "&include_requests=" + urlQuery(q["include_requests"])
+		}
 	}
 	sum := sha256.Sum256([]byte(ctauth.Actor(r) + "|" + h.Kind + "|" + query))
 	id := hex.EncodeToString(sum[:12])
 	billingExports.Lock()
 	task := billingExports.tasks[id]
-	if task != nil && (task.Status == "pending" || task.Status == "running" || (task.Status == "complete" && fileExists(billingExportPath(id)))) {
+	if task != nil && (task.Status == "pending" || task.Status == "running" || (task.Status == "complete" && fileExists(billingExportPath(id, h.Kind)))) {
 		billingExports.Unlock()
 		writeDashboardJSON(w, 202, task)
 		return
@@ -91,7 +99,7 @@ func (h BillingExportJobHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 		startedAt := time.Now()
 		setExportStatus(id, "running", "")
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://local/?"+query, nil)
-		out, err := os.Create(billingExportPath(id))
+		out, err := os.Create(billingExportPath(id, h.Kind))
 		if err == nil {
 			rw := &fileDownloadWriter{header: http.Header{}, file: out}
 			h.Workbook.ServeHTTP(rw, req)
@@ -102,7 +110,7 @@ func (h BillingExportJobHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 			out.Close()
 		}
 		if err != nil {
-			_ = os.Remove(billingExportPath(id))
+			_ = os.Remove(billingExportPath(id, h.Kind))
 			log.Printf("billing export failed id=%s kind=%s instance=%s user=%s channel=%s elapsed=%s: %v", id, h.Kind, q["instance_id"], q["user_id"], q["channel_id"], time.Since(startedAt).Round(time.Millisecond), err)
 			setExportStatus(id, "failed", err.Error())
 			return
@@ -148,8 +156,12 @@ func (w *fileDownloadWriter) responseError() error {
 	}
 	return errExportFailed
 }
-func billingExportPath(id string) string {
-	return filepath.Join(os.TempDir(), "control-tower-billing-"+id+".xlsx")
+func billingExportPath(id, kind string) string {
+	ext := ".xlsx"
+	if kind == "token" {
+		ext = ".csv"
+	}
+	return filepath.Join(os.TempDir(), "control-tower-billing-"+id+ext)
 }
 func fileExists(p string) bool { _, e := os.Stat(p); return e == nil }
 func setExportStatus(id, status, msg string) {

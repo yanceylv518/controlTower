@@ -21,8 +21,9 @@ type BillingWorkbookSource interface {
 	DetailedLogsPage(context.Context, string, int64, time.Time, time.Time, billing.LogCursor, int) ([]billing.PagedLogRecord, error)
 }
 type BillingWorkbookHandler struct {
-	Store  BillingWorkbookStore
-	Source BillingWorkbookSource
+	Store     BillingWorkbookStore
+	Source    BillingWorkbookSource
+	PagePause time.Duration
 }
 
 func (h BillingWorkbookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -78,7 +79,7 @@ func (h BillingWorkbookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 	}
 	if e == nil && r.URL.Query().Get("include_requests") != "0" {
 		stage = "request_details"
-		e = writeRequests(r.Context(), book, h.Source, site, uid, period, from, to, prices, ratios, metadata)
+		e = writeRequests(r.Context(), book, h.Source, site, uid, period, from, to, prices, ratios, metadata, h.PagePause)
 	}
 	if e != nil {
 		log.Printf("billing user workbook failed site=%s user=%d from=%s to=%s stage=%s: %v", site, uid, from.Format(time.RFC3339), to.Format(time.RFC3339), stage, e)
@@ -137,8 +138,8 @@ func writeDaily(book *xlsxwriter.Workbook, uid int64, month string, items []bill
 	}
 	return nil
 }
-func writeRequests(ctx context.Context, book *xlsxwriter.Workbook, source BillingWorkbookSource, site string, uid int64, month string, from, to time.Time, prices []billing.PriceRecord, ratios []billing.GroupRatio, metadata []billing.ModelMetadata) error {
-	return writeRequestPages(ctx, book, month, from, to, prices, ratios, metadata, func(cursor billing.LogCursor, limit int) ([]billing.PagedLogRecord, error) {
+func writeRequests(ctx context.Context, book *xlsxwriter.Workbook, source BillingWorkbookSource, site string, uid int64, month string, from, to time.Time, prices []billing.PriceRecord, ratios []billing.GroupRatio, metadata []billing.ModelMetadata, pagePause time.Duration) error {
+	return writeRequestPages(ctx, book, month, from, to, prices, ratios, metadata, pagePause, func(cursor billing.LogCursor, limit int) ([]billing.PagedLogRecord, error) {
 		return source.DetailedLogsPage(ctx, site, uid, from, to, cursor, limit)
 	})
 }
@@ -149,7 +150,7 @@ func writeRequests(ctx context.Context, book *xlsxwriter.Workbook, source Billin
 // monopolizing the read-only connection or hitting its bounded timeout.
 const billingWorkbookPageSize = 500
 
-func writeRequestPages(ctx context.Context, book *xlsxwriter.Workbook, month string, from, to time.Time, prices []billing.PriceRecord, ratios []billing.GroupRatio, metadata []billing.ModelMetadata, readPage func(billing.LogCursor, int) ([]billing.PagedLogRecord, error)) error {
+func writeRequestPages(ctx context.Context, book *xlsxwriter.Workbook, month string, from, to time.Time, prices []billing.PriceRecord, ratios []billing.GroupRatio, metadata []billing.ModelMetadata, pagePause time.Duration, readPage func(billing.LogCursor, int) ([]billing.PagedLogRecord, error)) error {
 	byModel := map[string][]billing.Price{}
 	for _, v := range prices {
 		byModel[v.ModelName] = append(byModel[v.ModelName], v.Price)
@@ -185,7 +186,7 @@ func writeRequestPages(ctx context.Context, book *xlsxwriter.Workbook, month str
 	pageNumber := 0
 	for {
 		pageNumber++
-		logs, e := readPage(cursor, billingWorkbookPageSize)
+		logs, e := billing.ReadPageWithRetry(ctx, fmt.Sprintf("page=workbook page_no=%d", pageNumber), cursor, func() ([]billing.PagedLogRecord, error) { return readPage(cursor, billingWorkbookPageSize) })
 		if e != nil {
 			return fmt.Errorf("request details page=%d cursor=%d/%d: %w", pageNumber, cursor.CreatedUnix, cursor.ID, e)
 		}
@@ -218,6 +219,15 @@ func writeRequestPages(ctx context.Context, book *xlsxwriter.Workbook, month str
 		cursor = billing.LogCursor{CreatedUnix: last.CreatedUnix, ID: last.ID}
 		if len(logs) < billingWorkbookPageSize {
 			break
+		}
+		if pagePause > 0 {
+			timer := time.NewTimer(pagePause)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			case <-timer.C:
+			}
 		}
 	}
 	return nil

@@ -177,16 +177,23 @@ func NewMux(options Options) *http.ServeMux {
 		mux.Handle("GET /api/dashboard/billing/reconciliation", protect(dashboard.BillingReconciliationHandler{Store: billingSummaryStore, Source: dashboard.BillingReadonlySource{Handler: passthrough}}))
 		mux.Handle("GET /api/dashboard/billing/reconciliation/requests", protect(dashboard.BillingReconciliationRequestsHandler{Store: billingSummaryStore, Source: dashboard.BillingReadonlySource{Handler: passthrough}, PagePause: options.BillingPagePause}))
 	}
+	if tokenStore, ok := any(options.Store).(dashboard.BillingTokenStore); ok {
+		tokenHandler := dashboard.BillingTokenHandler{Store: tokenStore}
+		mux.Handle("GET /api/dashboard/billing/tokens", protect(tokenHandler))
+		mux.Handle("GET /api/dashboard/billing/tokens/daily", protect(tokenHandler))
+	}
+	tokenLog := dashboard.BillingTokenLogExportHandler{Source: dashboard.BillingReadonlySource{Handler: passthrough}, PagePause: options.BillingPagePause}
+	mux.Handle("/api/dashboard/billing/token-detail-jobs", protect(dashboard.BillingExportJobHandler{Workbook: tokenLog, Kind: "token"}))
 	if verificationStore, ok := any(options.Store).(dashboard.BillingVerificationStore); ok {
 		mux.Handle("/api/dashboard/billing/verification", protect(dashboard.BillingVerificationHandler{Store: verificationStore}))
 	}
 	if workbookStore, ok := any(options.Store).(dashboard.BillingWorkbookStore); ok {
-		workbook := dashboard.BillingWorkbookHandler{Store: workbookStore, Source: dashboard.BillingReadonlySource{Handler: passthrough}}
+		workbook := dashboard.BillingWorkbookHandler{Store: workbookStore, Source: dashboard.BillingReadonlySource{Handler: passthrough}, PagePause: options.BillingPagePause}
 		mux.Handle("GET /api/dashboard/billing/workbook", protect(workbook))
 		mux.Handle("/api/dashboard/billing/workbook-jobs", protect(dashboard.BillingExportJobHandler{Workbook: workbook, Kind: "user"}))
 	}
 	if channelWorkbookStore, ok := any(options.Store).(dashboard.BillingChannelWorkbookStore); ok {
-		workbook := dashboard.BillingChannelWorkbookHandler{Store: channelWorkbookStore, Source: dashboard.BillingReadonlySource{Handler: passthrough}}
+		workbook := dashboard.BillingChannelWorkbookHandler{Store: channelWorkbookStore, Source: dashboard.BillingReadonlySource{Handler: passthrough}, PagePause: options.BillingPagePause}
 		mux.Handle("GET /api/dashboard/billing/channel-workbook", protect(workbook))
 		mux.Handle("/api/dashboard/billing/channel-workbook-jobs", protect(dashboard.BillingExportJobHandler{Workbook: workbook, Kind: "channel"}))
 	}

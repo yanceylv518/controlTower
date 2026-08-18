@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
-import type { BillingJob, BillingUserSummary } from "@ct/shared";
+import type { BillingJob, BillingTokenSummary, BillingUserSummary } from "@ct/shared";
 import { dashboard, passthrough } from "../api";
 import AppShell from "../components/AppShell.vue";
 import AsyncPanel from "../components/AsyncPanel.vue";
@@ -23,10 +23,12 @@ const page = ref(1);
 const pageSize = ref(50);
 const detailOpen = ref(false);
 const selected = ref<BillingUserSummary>();
+const detailTab=ref<"model"|"token">("model"),selectedToken=ref<BillingTokenSummary>();
 const generating = ref(false);
 const tierSettings = ref<Record<string, { instance_id: string; user_id: number; use_tiered_pricing: boolean }>>({});
 const jobProgress = ref(0);
 const exporting = ref<Record<number, boolean>>({});
+const tokenExporting=ref(false);
 let monitorVersion=0;
 onUnmounted(()=>{monitorVersion++;});
 void prefs.load();
@@ -46,6 +48,8 @@ const state = useAsyncData(async () => {
 });
 const generated = computed(() => state.data.value?.generated !== false);
 const detail = useAsyncData(async () => {const[from,to]=generationRange.value;return selected.value ? dashboard.billingDetail({ instance_id: filters.site_id, user_id: selected.value.user_id, from, to, job_id: state.data.value?.generation_job?.id }) : undefined;});
+const tokens=useAsyncData(async()=>{if(!selected.value||detailTab.value!=="token")return undefined;const[from,to]=generationRange.value;return dashboard.billingTokens({instance_id:filters.site_id,user_id:selected.value.user_id,from,to,job_id:state.data.value?.generation_job?.id})});
+const tokenDaily=useAsyncData(async()=>{if(!selected.value||!selectedToken.value)return undefined;const[from,to]=generationRange.value;return dashboard.billingTokenDaily({instance_id:filters.site_id,user_id:selected.value.user_id,token_id:selectedToken.value.token_id,from,to,job_id:state.data.value?.generation_job?.id})});
 const currency = computed(() => state.data.value?.currency ? state.data.value.currency.symbol : (prefs.currencySymbol || "$"));
 // Amounts are USD-based (quota / QuotaPerUnit); a non-USD site display must
 // convert with the site exchange rate, not just swap the symbol.
@@ -94,7 +98,12 @@ async function exportUser(row: BillingUserSummary, includeRequests = false) {
     exporting.value = { ...exporting.value, [row.user_id]: false };
   }
 }
-function openDetail(row: BillingUserSummary) { selected.value = row; detailOpen.value = true; void detail.reload(); }
+function openDetail(row: BillingUserSummary) { selected.value = row;selectedToken.value=undefined;detailTab.value="model"; detailOpen.value = true; void detail.reload(); }
+function tokenName(row:BillingTokenSummary){return row.token_name||`(未命名) #${row.token_id}`}
+function selectToken(row:BillingTokenSummary){selectedToken.value=row;void tokenDaily.reload()}
+function tokenCSVURL(row:BillingTokenSummary){const[from,to]=generationRange.value;const p=new URLSearchParams({instance_id:filters.site_id,user_id:String(selected.value?.user_id||0),token_id:String(row.token_id),from,to,format:"csv"});const id=state.data.value?.generation_job?.id;if(id)p.set("job_id",id);return`/api/dashboard/billing/tokens/daily?${p}`}
+async function exportToken(row:BillingTokenSummary){try{await downloadBillingFile(tokenCSVURL(row),"导出令牌账单失败")}catch(error){ElMessage.error(billingReadErrorMessage(error,"导出令牌账单失败"))}}
+async function downloadTokenDetails(row:BillingTokenSummary){if(!selected.value)return;tokenExporting.value=true;try{const[from,to]=generationRange.value;const response=await fetch("/api/dashboard/billing/token-detail-jobs",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json","X-Requested-With":"XMLHttpRequest"},body:JSON.stringify({instance_id:filters.site_id,user_id:String(selected.value.user_id),token_id:String(row.token_id),from,to})});if(!response.ok)throw await httpError(response,"创建令牌明细任务失败");let task=await response.json();while(task.status==="pending"||task.status==="running"){await new Promise(resolve=>setTimeout(resolve,1500));const status=await fetch(`/api/dashboard/billing/token-detail-jobs?id=${task.id}`,{credentials:"same-origin"});if(!status.ok)throw await httpError(status,"查询令牌明细任务失败");task=await status.json()}if(task.status!=="complete")throw new Error(task.error||"令牌明细导出失败");await downloadBillingFile(`/api/dashboard/billing/token-detail-jobs?id=${task.id}&download=1`,"下载令牌明细失败",`billing-token-${row.token_id}-details.csv`)}catch(error){ElMessage.error(billingReadErrorMessage(error,"令牌明细导出失败"))}finally{tokenExporting.value=false}}
 async function monitorJob(initial: BillingJob, reused=false){
   if(generating.value)return;const version=++monitorVersion;generating.value=true;let job=initial;
   try{while(job.status==="pending"||job.status==="running"){jobProgress.value=job.total_steps?Math.round(job.completed_steps*100/job.total_steps):0;await new Promise(resolve=>setTimeout(resolve,1500));if(version!==monitorVersion)return;job=await dashboard.billingJob(job.id)}if(job.status==="failed")throw new Error(job.error_message||"账单任务失败");jobProgress.value=100;ElMessage.success(reused?"该区间已有账单，已直接加载":`账单生成完成，排除异常订单 ${job.abnormal_rows} 条`);await state.reload();}
@@ -115,6 +124,7 @@ watch(search, () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => 
 watch([generationRange, () => filters.site_id, pageSize], () => { page.value = 1; void state.reload(); if(detailOpen.value)void detail.reload(); });
 watch(page, () => void state.reload());
 watch(() => state.data.value?.generation_job?.id, () => {const job=state.data.value?.generation_job;if(job&&(job.status==="pending"||job.status==="running"))void monitorJob(job);});
+watch(detailTab,tab=>{if(tab==="token")void tokens.reload()});
 void state.reload();
 </script>
 <template>
@@ -130,9 +140,13 @@ void state.reload();
       </el-table><ListPager v-model:page="page" v-model:page-size="pageSize" :item-count="state.data.value?.items?.length || 0" :total="state.data.value?.total || 0" />
     </AsyncPanel>
     <el-drawer v-model="detailOpen" :title="`${selected?.username || '用户'} · ${generationRange[0]} 至 ${generationRange[1]}`" size="78%">
+      <el-tabs v-model="detailTab"><el-tab-pane label="按模型" name="model"/><el-tab-pane label="按令牌" name="token"/></el-tabs>
+      <template v-if="detailTab==='model'">
       <div class="drawer-actions"><el-button :loading="Boolean(selected && exporting[selected.user_id])" @click="selected && exportUser(selected, true)">{{ selected && exporting[selected.user_id] ? "后台生成中" : "导出完整账单 Excel" }}</el-button><el-button :disabled="!selected" @click="selected && exportDaily(selected)">导出日账单</el-button><el-button :disabled="!selected" @click="selected && exportAnomalies(selected)">导出异常订单</el-button><router-link :to="`/readonly-logs?username=${encodeURIComponent(selected?.username || '')}&from=${generationRange[0]}&to=${generationRange[1]}`"><el-button>查看使用日志</el-button></router-link></div>
       <el-alert v-if="detail.error.value" class="pending-alert" type="info" :title="detail.error.value" :closable="false" show-icon />
       <AsyncPanel :loading="detail.loading.value" :error="''" :empty="!detail.error.value && !detail.data.value?.items?.length" @retry="detail.reload"><el-table :data="detail.data.value?.items || []" class="billing-detail-table" table-layout="fixed"><el-table-column prop="day" label="日期" width="105" /><el-table-column label="模型信息" min-width="165"><template #default="s"><b class="cell-primary">{{ s.row.model_name }}</b><small class="cell-secondary">{{ s.row.group_name || "默认分组" }} · {{ s.row.tier_from > 0 ? `档位 ≥${formatNumber(s.row.tier_from)}` : "基础价" }}</small></template></el-table-column><el-table-column label="订单" min-width="125"><template #default="s"><div class="metric-pairs"><span>总数</span><b>{{ formatNumber(s.row.request_count + s.row.abnormal_rows) }}</b><span>计费</span><b>{{ formatNumber(s.row.request_count) }}</b><span>异常</span><b :class="{ danger: s.row.abnormal_rows > 0 }">{{ formatNumber(s.row.abnormal_rows) }}</b></div></template></el-table-column><el-table-column label="Token 用量" min-width="230"><template #default="s"><div class="metric-grid"><span>普通</span><b>{{ formatNumber(s.row.prompt_tokens) }}</b><span>读取</span><b>{{ formatNumber(s.row.cache_tokens) }}</b><span>写入</span><b>{{ formatNumber(s.row.cache_write_tokens) }}</b><span>输出</span><b>{{ formatNumber(s.row.completion_tokens) }}</b></div></template></el-table-column><el-table-column label="单价 / 1M" min-width="205"><template #default="s"><div class="metric-grid"><span>输入</span><b>{{ unitPrice(s.row.input_price) }}</b><span>读取</span><b>{{ unitPrice(s.row.cache_price) }}</b><span>写入</span><b>{{ unitPrice(s.row.cache_write_price) }}</b><span>输出</span><b>{{ unitPrice(s.row.output_price) }}</b></div></template></el-table-column><el-table-column prop="amount" label="金额" min-width="125" align="right"><template #default="s"><b>{{ s.row.unpriced ? "无法取价" : money(s.row.amount) }}</b><small class="cell-secondary">异常 {{ money(s.row.abnormal_amount) }}</small></template></el-table-column></el-table></AsyncPanel>
+      </template>
+      <template v-else><el-alert v-if="tokens.data.value?.token_data_missing" type="warning" title="该账单生成于令牌功能上线前，重新生成账单后可见" :closable="false" show-icon/><AsyncPanel :loading="tokens.loading.value" :error="tokens.error.value" :empty="!tokens.data.value?.items.length" @retry="tokens.reload"><el-table :data="tokens.data.value?.items||[]" highlight-current-row @row-click="selectToken"><el-table-column label="令牌" min-width="180"><template #default="s"><b>{{tokenName(s.row)}}</b></template></el-table-column><el-table-column prop="ct_amount" label="CT 金额" width="120" align="right"><template #default="s">{{money(s.row.ct_amount)}}</template></el-table-column><el-table-column prop="request_count" label="请求数" width="100" align="right"/><el-table-column prop="prompt_tokens" label="普通输入" width="120" align="right"/><el-table-column prop="cache_tokens" label="缓存读取" width="120" align="right"/><el-table-column prop="completion_tokens" label="输出" width="120" align="right"/><el-table-column prop="quota" label="Quota 参考" width="130" align="right"/></el-table><template v-if="selectedToken"><div class="drawer-actions token-actions"><b>{{tokenName(selectedToken)}}</b><el-button @click="exportToken(selectedToken)">导出 CSV</el-button><el-button :loading="tokenExporting" @click="downloadTokenDetails(selectedToken)">{{tokenExporting?'生成中':'下载明细'}}</el-button></div><AsyncPanel :loading="tokenDaily.loading.value" :error="tokenDaily.error.value" :empty="!tokenDaily.data.value?.items.length" @retry="tokenDaily.reload"><el-table :data="tokenDaily.data.value?.items||[]"><el-table-column prop="day" label="日期" width="110"/><el-table-column prop="model_name" label="模型" min-width="180"/><el-table-column prop="request_count" label="请求数" width="100" align="right"/><el-table-column prop="prompt_tokens" label="普通输入" width="120" align="right"/><el-table-column prop="completion_tokens" label="输出" width="120" align="right"/><el-table-column prop="amount" label="金额" width="120" align="right"><template #default="s">{{money(s.row.amount)}}</template></el-table-column></el-table></AsyncPanel></template></AsyncPanel></template>
     </el-drawer>
   </AppShell>
 </template>

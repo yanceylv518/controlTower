@@ -80,6 +80,16 @@ type DailyRow struct {
 	UpdatedAt          time.Time
 }
 
+type TokenDailyRow struct {
+	InstanceID, Username, TokenName, ModelName, GroupName string
+	UserID, TokenID, TierFrom                             int64
+	Day                                                   time.Time
+	RequestCount, PromptTokens, CompletionTokens          int64
+	CacheTokens, CacheWriteTokens                         int64
+	CacheWrite5mTokens, CacheWrite1hTokens, Quota         int64
+	UpdatedAt                                             time.Time
+}
+
 // SelectPrice uses the most recently saved price schedule and then selects its
 // tier. Billing is priced when it is generated; the log date is intentionally
 // ignored and remains in the signature only for compatibility with callers.

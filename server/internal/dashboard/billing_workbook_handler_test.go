@@ -11,7 +11,7 @@ import (
 
 func TestBillingWorkbookUsesBoundedRequestPages(t *testing.T) {
 	seenLimit := 0
-	err := writeRequestPages(context.Background(), xlsxwriter.New(), "period", time.Time{}, time.Time{}, nil, nil, nil, func(_ billing.LogCursor, limit int) ([]billing.PagedLogRecord, error) {
+	err := writeRequestPages(context.Background(), xlsxwriter.New(), "period", time.Time{}, time.Time{}, nil, nil, nil, 0, func(_ billing.LogCursor, limit int) ([]billing.PagedLogRecord, error) {
 		seenLimit = limit
 		return nil, nil
 	})

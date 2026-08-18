@@ -19,8 +19,9 @@ type BillingChannelWorkbookSource interface {
 	ChannelLogsPage(context.Context, string, int64, time.Time, time.Time, billing.LogCursor, int) ([]billing.PagedLogRecord, error)
 }
 type BillingChannelWorkbookHandler struct {
-	Store  BillingChannelWorkbookStore
-	Source BillingChannelWorkbookSource
+	Store     BillingChannelWorkbookStore
+	Source    BillingChannelWorkbookSource
+	PagePause time.Duration
 }
 
 func (h BillingChannelWorkbookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -86,7 +87,7 @@ func (h BillingChannelWorkbookHandler) ServeHTTP(w http.ResponseWriter, r *http.
 	}
 	if err == nil {
 		stage = "request_details"
-		err = writeRequestPages(r.Context(), book, period, from, to, prices, ratios, metadata, func(cursor billing.LogCursor, limit int) ([]billing.PagedLogRecord, error) {
+		err = writeRequestPages(r.Context(), book, period, from, to, prices, ratios, metadata, h.PagePause, func(cursor billing.LogCursor, limit int) ([]billing.PagedLogRecord, error) {
 			return h.Source.ChannelLogsPage(r.Context(), site, channelID, from, to, cursor, limit)
 		})
 	}
