@@ -369,11 +369,46 @@ func (h *PassthroughHandler) BalancesForBilling(ctx context.Context, site string
 // satisfying billing.Source through a small explicit wrapper.
 type BillingReadonlySource struct{ Handler *PassthroughHandler }
 
+// new-api multi-key channel values are intentionally fingerprinted and tailed as
+// one stored bundle. Never split or return the plaintext key from this query.
+const upstreamChannelMappingsQuery = "SELECT id,COALESCE(name,''),COALESCE(base_url,''),SHA2(CONCAT(COALESCE(base_url,''),'|',COALESCE(`key`,'')),256),RIGHT(COALESCE(`key`,''),4) FROM channels"
+
+func (h *PassthroughHandler) UpstreamChannelMappingsForBilling(ctx context.Context, site string) ([]billing.UpstreamChannelMapping, error) {
+	db, configured, err := h.database(site)
+	if err != nil {
+		return nil, err
+	}
+	if !configured {
+		return nil, fmt.Errorf("readonly database is not configured for %s", site)
+	}
+	queryCtx, cancel := context.WithTimeout(ctx, readonlyQueryTimeout)
+	defer cancel()
+	rows, err := db.QueryContext(queryCtx, upstreamChannelMappingsQuery)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []billing.UpstreamChannelMapping{}
+	for rows.Next() {
+		var v billing.UpstreamChannelMapping
+		v.InstanceID = site
+		v.UpdatedAt = time.Now().UTC()
+		if err = rows.Scan(&v.ChannelID, &v.ChannelName, &v.BaseURL, &v.UpstreamFP, &v.KeyTail); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
 func (s BillingReadonlySource) LogsPage(ctx context.Context, site string, start, end time.Time, cursor billing.LogCursor, limit int) ([]billing.PagedLogRecord, error) {
 	return s.Handler.LogsPageForBilling(ctx, site, start, end, cursor, limit)
 }
 func (s BillingReadonlySource) DetailedLogsPage(ctx context.Context, site string, userID int64, start, end time.Time, cursor billing.LogCursor, limit int) ([]billing.PagedLogRecord, error) {
 	return s.Handler.DetailedLogsPageForBilling(ctx, site, userID, start, end, cursor, limit)
+}
+func (s BillingReadonlySource) UpstreamChannelMappings(ctx context.Context, site string) ([]billing.UpstreamChannelMapping, error) {
+	return s.Handler.UpstreamChannelMappingsForBilling(ctx, site)
 }
 func (s BillingReadonlySource) ChannelLogsPage(ctx context.Context, site string, channelID int64, start, end time.Time, cursor billing.LogCursor, limit int) ([]billing.PagedLogRecord, error) {
 	return s.Handler.ChannelLogsPageForBilling(ctx, site, channelID, start, end, cursor, limit)

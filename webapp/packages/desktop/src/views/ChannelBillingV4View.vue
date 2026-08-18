@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
-import { type BillingChannelSummary, type BillingJob } from "@ct/shared";
+import { type BillingChannelSummary, type BillingJob, type BillingUpstreamGroup } from "@ct/shared";
 import { dashboard } from "../api";
 import AppShell from "../components/AppShell.vue";
 import AsyncPanel from "../components/AsyncPanel.vue";
@@ -18,6 +18,8 @@ const filters = useFiltersStore(), prefs = usePrefsStore();
 const generating = ref(false), progress = ref(0), page = ref(1), pageSize = ref(20);
 const exporting = ref<Record<number, boolean>>({});
 const detailOpen = ref(false), selected = ref<BillingChannelSummary>();
+const viewMode = ref<"channel"|"upstream">("channel"), upstreamSearch = ref("");
+const upstreamOpen = ref(false), selectedUpstream = ref<BillingUpstreamGroup>();
 const generationRange = ref<[string, string]>(savedGenerationRange("ct.billing.channel.range"));
 void prefs.load();
 const state = useAsyncData<PageData>(async () => {
@@ -33,13 +35,17 @@ const state = useAsyncData<PageData>(async () => {
     currencyRate: (() => { const rate = Number(bill.currency?.exchange_rate); return Number.isFinite(rate) && rate > 0 ? rate : 1; })(),
   };
 });
+const upstreamState = useAsyncData(async()=>{if(viewMode.value!=="upstream"||!filters.site_id)return undefined;const[from,to]=generationRange.value;return dashboard.billingUpstreamChannels({instance_id:filters.site_id,from,to,job_id:job.value?.id})});
 
 const items = computed(() => state.data.value?.items || []), job = computed(() => state.data.value?.job || null);
+const upstreamItems = computed(()=>{const q=upstreamSearch.value.trim().toLowerCase();return (upstreamState.data.value?.items||[]).filter(g=>!q||g.base_url.toLowerCase().includes(q)||g.display_name.toLowerCase().includes(q)||g.members.some(m=>m.channel_name.toLowerCase().includes(q)||m.model_name.toLowerCase().includes(q))).map(g=>({...g,row_id:`g:${g.upstream_fp||'unmapped'}`,children:g.members.map(m=>({...m,row_id:`c:${m.channel_id}`,display_name:`${m.model_name||'未知模型'} · ${m.channel_name||`渠道 ${m.channel_id}`} · #${m.channel_id}`,request_count:m.totals.request_count,prompt_tokens:m.totals.prompt_tokens,completion_tokens:m.totals.completion_tokens,cache_tokens:m.totals.cache_tokens,cache_write_tokens:m.totals.cache_write_tokens,quota:m.totals.quota})) ,request_count:g.totals.request_count,prompt_tokens:g.totals.prompt_tokens,completion_tokens:g.totals.completion_tokens,cache_tokens:g.totals.cache_tokens,cache_write_tokens:g.totals.cache_write_tokens,quota:g.totals.quota}))});
+const upstreamExpanded=computed(()=>upstreamItems.value.filter(g=>g.upstream_fp).map(g=>g.row_id));
 const detail = useAsyncData(async () => {
   if (!selected.value || !filters.site_id) return undefined;
   const [from, to] = generationRange.value;
   return dashboard.billingChannels({ instance_id: filters.site_id, channel_id: selected.value.channel_id, from, to, job_id: job.value?.id });
 });
+const upstreamDetail=useAsyncData(async()=>{if(!selectedUpstream.value)return undefined;const[from,to]=generationRange.value;return dashboard.billingUpstreamDetail({instance_id:filters.site_id,fp:selectedUpstream.value.upstream_fp,from,to,job_id:job.value?.id})});
 const actualPeriod = computed(() => job.value?.status === "complete" ? jobRange(job.value) : "尚未生成，下方仅显示渠道配置");
 const pagedItems = computed(() => items.value.slice((page.value - 1) * pageSize.value, page.value * pageSize.value));
 const currency = computed(() => state.data.value ? state.data.value.currencySymbol : (prefs.currencySymbol || "$"));
@@ -87,6 +93,9 @@ async function save(row: BillingChannelSummary, value: string) {
   row.discount = String(discount); row.discounted_amount = (Number(row.amount) * discount).toFixed(6); ElMessage.success("渠道折扣已保存");
 }
 function openDetail(row: BillingChannelSummary) { selected.value = row; detailOpen.value = true; void detail.reload(); }
+function openUpstream(row: BillingUpstreamGroup){selectedUpstream.value=row;upstreamOpen.value=true;void upstreamDetail.reload()}
+function upstreamURL(row:BillingUpstreamGroup){const[from,to]=generationRange.value;const p=new URLSearchParams({instance_id:filters.site_id,fp:row.upstream_fp,from,to,format:"csv"});if(job.value?.id)p.set("job_id",job.value.id);return`/api/dashboard/billing/upstream-channels/detail?${p}`}
+async function exportUpstream(row:BillingUpstreamGroup){try{await downloadBillingFile(upstreamURL(row),"导出上游渠道 CSV 失败")}catch(error){ElMessage.error(billingReadErrorMessage(error,"导出上游渠道 CSV 失败"))}}
 function channelReadURL(path: string, row: BillingChannelSummary, extra = "") {
   const [from, to] = generationRange.value;
   const params = new URLSearchParams({ instance_id: filters.site_id, channel_id: String(row.channel_id), from, to });
@@ -126,9 +135,10 @@ async function exportChannel(row: BillingChannelSummary) {
   }
 }
 watch(generationRange,(value)=>localStorage.setItem("ct.billing.channel.range",JSON.stringify(value)),{deep:true});
-watch([generationRange, () => filters.site_id], () => { page.value = 1; void state.reload(); if (detailOpen.value) void detail.reload(); });
+watch([generationRange, () => filters.site_id], () => { page.value = 1; void state.reload(); if(viewMode.value==="upstream")void upstreamState.reload(); if (detailOpen.value) void detail.reload(); });
+watch(viewMode,mode=>{if(mode==="upstream")void upstreamState.reload()});
 watch(pageSize, () => { page.value = 1; });
-watch(() => state.data.value?.job?.id, () => { const current = state.data.value?.job; if (current && ["pending", "running"].includes(current.status)) void monitor(current); });
+watch(() => state.data.value?.job?.id, () => { const current = state.data.value?.job; if (current && ["pending", "running"].includes(current.status)) void monitor(current); if(viewMode.value==="upstream")void upstreamState.reload(); });
 void state.reload();
 </script>
 
@@ -142,7 +152,8 @@ void state.reload();
       <div class="period-summary"><span>选择区间</span><b>[{{ generationRange[0] }}, {{ generationRange[1] }})</b><span class="actual-period">下方数据区间 <strong>{{ actualPeriod }}</strong></span></div>
       <el-alert :type="status.type" :title="status.title" :description="status.text" :closable="false" show-icon />
       <el-alert v-if="state.data.value?.channelError" type="warning" title="部分渠道配置加载失败" :description="state.data.value.channelError" :closable="false" show-icon />
-      <AsyncPanel class="content" :loading="state.loading.value" :error="state.error.value" :empty="!items.length" :empty-text="filters.site_id ? '当前站点没有渠道配置' : '尚未选择站点'" @retry="state.reload">
+      <div class="view-switch"><el-radio-group v-model="viewMode" size="small"><el-radio-button value="channel">按渠道</el-radio-button><el-radio-button value="upstream">按上游 key</el-radio-button></el-radio-group><el-input v-if="viewMode==='upstream'" v-model="upstreamSearch" clearable placeholder="搜索渠道名、模型或 base_url" style="width:280px" /></div>
+      <AsyncPanel v-if="viewMode==='channel'" class="content" :loading="state.loading.value" :error="state.error.value" :empty="!items.length" :empty-text="filters.site_id ? '当前站点没有渠道配置' : '尚未选择站点'" @retry="state.reload">
         <div class="table-wrap"><el-table :data="pagedItems" height="100%" class="channel-table" @row-click="openDetail">
           <el-table-column prop="channel_name" label="渠道" min-width="180"><template #default="scope"><b>{{ scope.row.channel_name || `渠道 ${scope.row.channel_id}` }}</b><small class="sub">ID {{ scope.row.channel_id }}</small></template></el-table-column>
           <el-table-column prop="request_count" label="计费请求数" min-width="110" align="right"><template #default="scope">{{ formatNumber(scope.row.request_count) }}</template></el-table-column><el-table-column prop="abnormal_rows" label="异常订单数" min-width="105" align="right"><template #default="scope">{{ formatNumber(scope.row.abnormal_rows) }}</template></el-table-column><el-table-column prop="abnormal_amount" label="异常总金额" min-width="120" align="right"><template #default="scope">{{ money(scope.row.abnormal_amount) }}</template></el-table-column><el-table-column prop="prompt_tokens" label="普通输入 Token" min-width="135" align="right"><template #default="scope">{{ formatNumber(scope.row.prompt_tokens) }}</template></el-table-column><el-table-column prop="cache_tokens" label="缓存读取 Token" min-width="135" align="right"><template #default="scope">{{ formatNumber(scope.row.cache_tokens) }}</template></el-table-column><el-table-column prop="cache_write_tokens" label="缓存写入 Token" min-width="135" align="right"><template #default="scope">{{ formatNumber(scope.row.cache_write_tokens) }}</template></el-table-column><el-table-column prop="completion_tokens" label="输出 Token" min-width="125" align="right"><template #default="scope">{{ formatNumber(scope.row.completion_tokens) }}</template></el-table-column>
@@ -152,6 +163,18 @@ void state.reload();
           <el-table-column label="操作" width="220"><template #default="scope"><el-button link type="primary" @click.stop="openDetail(scope.row)">日账单</el-button><el-button link type="primary" :loading="exporting[scope.row.channel_id]" @click.stop="exportChannel(scope.row)">导出账单</el-button><el-button link type="primary" @click.stop="exportAnomalies(scope.row)">异常订单</el-button></template></el-table-column>
         </el-table></div>
         <ListPager v-model:page="page" v-model:page-size="pageSize" :item-count="pagedItems.length" :total="items.length" />
+      </AsyncPanel>
+      <AsyncPanel v-else class="content" :loading="upstreamState.loading.value" :error="upstreamState.error.value" :empty="!upstreamItems.length" empty-text="该区间没有可归组的渠道账单" @retry="upstreamState.reload">
+        <div class="table-wrap"><el-table :data="upstreamItems" row-key="row_id" :expand-row-keys="upstreamExpanded" height="100%" class="channel-table">
+          <el-table-column prop="display_name" label="上游 key / 成员渠道" min-width="300"><template #default="s"><b>{{s.row.display_name}}</b><small v-if="s.row.member_count!==undefined" class="sub">{{s.row.upstream_fp ? `${s.row.member_count} 个成员渠道` : '快照缺失，未归组'}}</small></template></el-table-column>
+          <el-table-column prop="request_count" label="请求数" width="105" align="right"><template #default="s">{{formatNumber(s.row.request_count)}}</template></el-table-column>
+          <el-table-column prop="prompt_tokens" label="普通输入 Token" width="140" align="right"><template #default="s">{{formatNumber(s.row.prompt_tokens)}}</template></el-table-column>
+          <el-table-column prop="cache_tokens" label="缓存读取 Token" width="140" align="right"><template #default="s">{{formatNumber(s.row.cache_tokens)}}</template></el-table-column>
+          <el-table-column prop="cache_write_tokens" label="缓存写入 Token" width="140" align="right"><template #default="s">{{formatNumber(s.row.cache_write_tokens)}}</template></el-table-column>
+          <el-table-column prop="completion_tokens" label="输出 Token" width="125" align="right"><template #default="s">{{formatNumber(s.row.completion_tokens)}}</template></el-table-column>
+          <el-table-column prop="quota" label="Quota（参考）" width="130" align="right"><template #default="s">{{formatNumber(s.row.quota)}}</template></el-table-column>
+          <el-table-column label="操作" width="130"><template #default="s"><template v-if="s.row.member_count!==undefined"><el-button link type="primary" @click.stop="openUpstream(s.row)">明细</el-button><el-button link type="primary" @click.stop="exportUpstream(s.row)">CSV</el-button></template></template></el-table-column>
+        </el-table></div>
       </AsyncPanel>
     </div>
     <el-drawer v-model="detailOpen" :title="`${selected?.channel_name || `渠道 ${selected?.channel_id || ''}`} · ${generationRange[0]} 至 ${generationRange[1]}`" size="82%">
@@ -165,6 +188,13 @@ void state.reload();
           <el-table-column label="单价 / 1M" min-width="205"><template #default="s"><div class="metric-grid"><span>输入</span><b>{{ unitPrice(s.row.input_price) }}</b><span>读取</span><b>{{ unitPrice(s.row.cache_price) }}</b><span>写入</span><b>{{ unitPrice(s.row.cache_write_price) }}</b><span>输出</span><b>{{ unitPrice(s.row.output_price) }}</b></div></template></el-table-column>
           <el-table-column label="金额" min-width="135" align="right"><template #default="s"><b>{{ s.row.unpriced ? "无法取价" : discountedMoney(s.row.amount) }}</b><small v-if="!s.row.unpriced && Number(selected?.discount || 1) !== 1" class="cell-secondary">原价 {{ money(s.row.amount) }}</small><small class="cell-secondary">异常 {{ money(s.row.abnormal_amount) }}</small></template></el-table-column>
         </el-table>
+      </AsyncPanel>
+    </el-drawer>
+    <el-drawer v-model="upstreamOpen" :title="`${selectedUpstream?.display_name||'上游渠道'} · ${generationRange[0]} 至 ${generationRange[1]}`" size="82%">
+      <div class="drawer-actions"><el-button v-if="selectedUpstream" @click="exportUpstream(selectedUpstream)">导出 CSV</el-button></div>
+      <AsyncPanel :loading="upstreamDetail.loading.value" :error="upstreamDetail.error.value" :empty="!upstreamDetail.data.value?.details?.length" empty-text="该组没有日账单数据" @retry="upstreamDetail.reload">
+        <el-table :data="upstreamDetail.data.value?.details||[]"><el-table-column prop="day" label="日期" width="110"/><el-table-column prop="model_name" label="模型" min-width="180"/><el-table-column prop="request_count" label="请求数" width="100" align="right"/><el-table-column prop="prompt_tokens" label="普通输入" width="120" align="right"/><el-table-column prop="cache_tokens" label="缓存读取" width="120" align="right"/><el-table-column prop="cache_write_tokens" label="缓存写入" width="120" align="right"/><el-table-column prop="completion_tokens" label="输出" width="110" align="right"/><el-table-column prop="quota" label="Quota（参考）" width="130" align="right"/></el-table>
+        <h3>成员渠道小计</h3><el-table :data="upstreamDetail.data.value?.group.members||[]"><el-table-column prop="channel_name" label="渠道" min-width="180"/><el-table-column prop="model_name" label="模型" min-width="180"/><el-table-column prop="totals.request_count" label="请求数" width="100" align="right"/><el-table-column prop="totals.quota" label="Quota（参考）" width="130" align="right"/></el-table>
       </AsyncPanel>
     </el-drawer>
   </AppShell>

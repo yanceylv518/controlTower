@@ -157,6 +157,11 @@ func NewMux(options Options) *http.ServeMux {
 	if channelStore, ok := any(options.Store).(dashboard.BillingChannelStore); ok {
 		mux.Handle("/api/dashboard/billing/channels", protect(dashboard.BillingChannelsHandler{Store: channelStore, Source: dashboard.BillingReadonlySource{Handler: passthrough}}))
 	}
+	if upstreamStore, ok := any(options.Store).(dashboard.BillingUpstreamStore); ok {
+		handler := dashboard.BillingUpstreamHandler{Store: upstreamStore, Source: dashboard.BillingReadonlySource{Handler: passthrough}}
+		mux.Handle("GET /api/dashboard/billing/upstream-channels", protect(handler))
+		mux.Handle("GET /api/dashboard/billing/upstream-channels/detail", protect(handler))
+	}
 	if billingConfigStore, ok := any(options.Store).(dashboard.BillingConfigStore); ok {
 		mux.Handle("/api/dashboard/billing/prices", protect(dashboard.BillingPricesHandler{Store: billingConfigStore}))
 		mux.Handle("/api/dashboard/billing/group-ratios", protect(dashboard.BillingGroupRatiosHandler{Store: billingConfigStore}))
