@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	ctauth "controltower/server/internal/auth"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -14,6 +15,8 @@ import (
 	"sync"
 	"time"
 )
+
+const billingExportFormatVersion = "v1"
 
 type billingExportTask struct {
 	ID        string    `json:"id"`
@@ -82,11 +85,29 @@ func (h BillingExportJobHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 			query += "&include_requests=" + urlQuery(q["include_requests"])
 		}
 	}
-	sum := sha256.Sum256([]byte(ctauth.Actor(r) + "|" + h.Kind + "|" + query))
+	fingerprint := ctauth.Actor(r) + "|" + billingExportFormatVersion + "|" + h.Kind + "|" + query
+	// Without a generation job there is no stable data-version boundary. Do not
+	// reuse a range-only export because late logs or pricing changes can make a
+	// freshly generated workbook differ from the cached file.
+	if q["job_id"] == "" {
+		nonce := make([]byte, 12)
+		if _, err := rand.Read(nonce); err != nil {
+			nonce = []byte(time.Now().Format(time.RFC3339Nano))
+		}
+		fingerprint += "|uncached=" + hex.EncodeToString(nonce)
+	}
+	sum := sha256.Sum256([]byte(fingerprint))
 	id := hex.EncodeToString(sum[:12])
+	path := billingExportPath(id, h.Kind)
 	billingExports.Lock()
 	task := billingExports.tasks[id]
-	if task != nil && (task.Status == "pending" || task.Status == "running" || (task.Status == "complete" && fileExists(billingExportPath(id, h.Kind)))) {
+	if task == nil {
+		if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() && info.Size() > 0 {
+			task = &billingExportTask{ID: id, Status: "complete", CreatedAt: info.ModTime(), Owner: ctauth.Actor(r)}
+			billingExports.tasks[id] = task
+		}
+	}
+	if task != nil && (task.Status == "pending" || task.Status == "running" || (task.Status == "complete" && fileExists(path))) {
 		billingExports.Unlock()
 		writeDashboardJSON(w, 202, task)
 		return
@@ -99,7 +120,7 @@ func (h BillingExportJobHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 		startedAt := time.Now()
 		setExportStatus(id, "running", "")
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://local/?"+query, nil)
-		out, err := os.Create(billingExportPath(id, h.Kind))
+		out, err := os.Create(path)
 		if err == nil {
 			rw := &fileDownloadWriter{header: http.Header{}, file: out}
 			h.Workbook.ServeHTTP(rw, req)
@@ -110,7 +131,7 @@ func (h BillingExportJobHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 			out.Close()
 		}
 		if err != nil {
-			_ = os.Remove(billingExportPath(id, h.Kind))
+			_ = os.Remove(path)
 			log.Printf("billing export failed id=%s kind=%s instance=%s user=%s channel=%s elapsed=%s: %v", id, h.Kind, q["instance_id"], q["user_id"], q["channel_id"], time.Since(startedAt).Round(time.Millisecond), err)
 			setExportStatus(id, "failed", err.Error())
 			return
