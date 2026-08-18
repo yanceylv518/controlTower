@@ -142,6 +142,13 @@ func writeRequests(ctx context.Context, book *xlsxwriter.Workbook, source Billin
 		return source.DetailedLogsPage(ctx, site, uid, from, to, cursor, limit)
 	})
 }
+
+// Workbook exports intentionally use smaller pages than billing generation.
+// Each page applies JSON projections and a user/channel filter against the
+// remote new-api log table; keeping it small prevents one SQL page from
+// monopolizing the read-only connection or hitting its bounded timeout.
+const billingWorkbookPageSize = 500
+
 func writeRequestPages(ctx context.Context, book *xlsxwriter.Workbook, month string, from, to time.Time, prices []billing.PriceRecord, ratios []billing.GroupRatio, metadata []billing.ModelMetadata, readPage func(billing.LogCursor, int) ([]billing.PagedLogRecord, error)) error {
 	byModel := map[string][]billing.Price{}
 	for _, v := range prices {
@@ -178,7 +185,7 @@ func writeRequestPages(ctx context.Context, book *xlsxwriter.Workbook, month str
 	pageNumber := 0
 	for {
 		pageNumber++
-		logs, e := readPage(cursor, billing.BillingPageSize)
+		logs, e := readPage(cursor, billingWorkbookPageSize)
 		if e != nil {
 			return fmt.Errorf("request details page=%d cursor=%d/%d: %w", pageNumber, cursor.CreatedUnix, cursor.ID, e)
 		}
@@ -209,7 +216,7 @@ func writeRequestPages(ctx context.Context, book *xlsxwriter.Workbook, month str
 		}
 		last := logs[len(logs)-1]
 		cursor = billing.LogCursor{CreatedUnix: last.CreatedUnix, ID: last.ID}
-		if len(logs) < billing.BillingPageSize {
+		if len(logs) < billingWorkbookPageSize {
 			break
 		}
 	}
