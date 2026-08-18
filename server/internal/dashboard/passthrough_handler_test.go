@@ -105,6 +105,9 @@ func TestReadonlyLogsListQueryUsesTimeIndexOrder(t *testing.T) {
 }
 
 func TestBillingLogsPageQueryUsesChannelIDKeyset(t *testing.T) {
+	if billingLogsPageTimeout != 2*time.Minute {
+		t.Fatalf("large billing pages need a bounded two-minute query window: %s", billingLogsPageTimeout)
+	}
 	query, idCursor := billingLogsPageQuery(0, 23)
 	if !idCursor {
 		t.Fatal("channel export must use an ID cursor")
@@ -126,10 +129,12 @@ func TestBillingLogsPageQueryUsesChannelIDKeyset(t *testing.T) {
 
 func TestBillingLogsPageQueryUsesUserIDKeyset(t *testing.T) {
 	query, idCursor := billingLogsPageQuery(7, 0)
-	if !idCursor {
-		t.Fatal("user export must use an ID cursor")
+	if idCursor {
+		t.Fatal("user export must retain the time cursor")
 	}
-	if !strings.Contains(query, "AND l.user_id=?") || strings.Contains(query, "AND l.channel_id=?") {
+	if !strings.Contains(query, "AND l.user_id=?") || strings.Contains(query, "AND l.channel_id=?") ||
+		!strings.Contains(query, "(l.created_at>? OR (l.created_at=? AND l.id>?))") ||
+		!strings.Contains(query, "ORDER BY l.created_at,l.id LIMIT ?") {
 		t.Fatalf("query filters do not match user export: %s", query)
 	}
 }

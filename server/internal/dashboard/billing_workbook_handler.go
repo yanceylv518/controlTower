@@ -6,6 +6,7 @@ import (
 	"controltower/server/internal/billing"
 	"controltower/server/internal/xlsxwriter"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -70,13 +71,17 @@ func (h BillingWorkbookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 		return
 	}
 	book := xlsxwriter.New()
+	stage := "overview"
 	if e = writeOverview(book, uid, period, rows, prices, ratios, snapshots); e == nil {
+		stage = "daily"
 		e = writeDaily(book, uid, period, billing.BuildDetails(rows, prices, ratios, snapshots))
 	}
 	if e == nil && r.URL.Query().Get("include_requests") != "0" {
+		stage = "request_details"
 		e = writeRequests(r.Context(), book, h.Source, site, uid, period, from, to, prices, ratios, metadata)
 	}
 	if e != nil {
+		log.Printf("billing user workbook failed site=%s user=%d from=%s to=%s stage=%s: %v", site, uid, from.Format(time.RFC3339), to.Format(time.RFC3339), stage, e)
 		writeDashboardError(w, 500, "billing_xlsx_failed")
 		return
 	}

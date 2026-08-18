@@ -32,6 +32,7 @@ const requestsLoading = ref(false);
 const requestsError = ref("");
 const requestsHasMore = ref(false);
 const requestsAfterID = ref(0);
+const requestsAfterCreated = ref(0);
 let monitorVersion=0;
 onUnmounted(()=>{monitorVersion++;});
 void prefs.load();
@@ -101,13 +102,14 @@ async function exportUser(row: BillingUserSummary, includeRequests = false) {
 }
 async function loadRequests(reset = false) {
   if (!selected.value || requestsLoading.value) return;
-  if (reset) { requestItems.value = []; requestsAfterID.value = 0; requestsHasMore.value = false; }
+  if (reset) { requestItems.value = []; requestsAfterID.value = 0; requestsAfterCreated.value = 0; requestsHasMore.value = false; }
   requestsLoading.value = true; requestsError.value = "";
   try {
     const [from, to] = generationRange.value;
-    const response = await dashboard.billingRequests({ instance_id: filters.site_id, user_id: selected.value.user_id, from, to, job_id: state.data.value?.generation_job?.id, after_id: requestsAfterID.value || undefined, page_size: 100 });
+    const response = await dashboard.billingRequests({ instance_id: filters.site_id, user_id: selected.value.user_id, from, to, job_id: state.data.value?.generation_job?.id, after_id: requestsAfterID.value || undefined, after_created: requestsAfterCreated.value || undefined, page_size: 100 });
     requestItems.value = reset ? response.items : [...requestItems.value, ...response.items];
     requestsAfterID.value = response.next_after_id;
+    requestsAfterCreated.value = response.next_after_created;
     requestsHasMore.value = response.has_more;
   } catch (error) { requestsError.value = billingReadErrorMessage(error, "加载请求明细失败"); }
   finally { requestsLoading.value = false; }

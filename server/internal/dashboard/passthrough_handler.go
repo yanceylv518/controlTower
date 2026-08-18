@@ -111,6 +111,9 @@ func (h *PassthroughHandler) DetailedLogsPageForBilling(ctx context.Context, sit
 func (h *PassthroughHandler) ChannelLogsPageForBilling(ctx context.Context, site string, channelID int64, start, end time.Time, cursor billing.LogCursor, limit int) ([]billing.PagedLogRecord, error) {
 	return h.logsPageForBilling(ctx, site, 0, channelID, start, end, cursor, limit)
 }
+
+const billingLogsPageTimeout = 2 * time.Minute
+
 func (h *PassthroughHandler) logsPageForBilling(ctx context.Context, site string, userID, channelID int64, start, end time.Time, cursor billing.LogCursor, limit int) ([]billing.PagedLogRecord, error) {
 	db, configured, err := h.database(site)
 	if err != nil {
@@ -139,7 +142,10 @@ func (h *PassthroughHandler) logsPageForBilling(ctx context.Context, site string
 		args = append(args, channelID)
 	}
 	args = append(args, limit)
-	queryCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	// Large users and channels can still need more than 30 seconds for the
+	// first indexed page on a remote new-api database. Keep every page bounded,
+	// but use the same ceiling as the existing detailed billing-log read path.
+	queryCtx, cancel := context.WithTimeout(ctx, billingLogsPageTimeout)
 	rows, err := db.QueryContext(queryCtx, query, args...)
 	if err != nil {
 		cancel()
@@ -183,10 +189,10 @@ func (h *PassthroughHandler) logsPageForBilling(ctx context.Context, site string
 
 func billingLogsPageQuery(userID, channelID int64) (string, bool) {
 	query := `SELECT l.id,l.created_at,COALESCE(l.request_id,''),COALESCE(l.upstream_request_id,''),l.user_id,COALESCE(l.username,''),COALESCE(l.channel_id,0),COALESCE(c.name,''),COALESCE(l.model_name,''),COALESCE(l.` + "`group`" + `,''),l.prompt_tokens,l.completion_tokens,l.quota,` + billingOtherProjection + ` FROM logs l LEFT JOIN channels c ON c.id=l.channel_id WHERE l.type=2 AND l.created_at>=? AND l.created_at<?`
-	// Workbook exports target one user or channel. Page them in primary-key
-	// order so MySQL can use new-api's (user_id,id) or channel_id index without
-	// filesorting the same time range again for every page.
-	idCursor := userID > 0 || channelID > 0
+	// Channel exports use the channel/id path. User exports keep the time
+	// keyset: production new-api datasets can plan the bounded time range much
+	// better than a pure id walk for users spread across a very large log table.
+	idCursor := channelID > 0
 	if idCursor {
 		query += ` AND l.id>?`
 	} else {

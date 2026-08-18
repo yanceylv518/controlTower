@@ -47,6 +47,7 @@ func (h BillingRequestsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 		pageSize = value
 	}
 	afterID := int64(0)
+	afterCreated := int64(0)
 	if raw := strings.TrimSpace(q.Get("after_id")); raw != "" {
 		value, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil || value < 0 {
@@ -54,6 +55,14 @@ func (h BillingRequestsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 			return
 		}
 		afterID = value
+	}
+	if raw := strings.TrimSpace(q.Get("after_created")); raw != "" {
+		value, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || value < 0 {
+			writeDashboardError(w, http.StatusBadRequest, "invalid_after_created")
+			return
+		}
+		afterCreated = value
 	}
 	if instanceID == "" || userErr != nil || userID <= 0 || rangeErr != nil || h.Source == nil {
 		writeDashboardError(w, http.StatusBadRequest, "invalid_query")
@@ -68,7 +77,7 @@ func (h BillingRequestsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 		writeBillingReadConflict(w, jobErr)
 		return
 	}
-	logs, err := h.Source.DetailedLogsPage(r.Context(), instanceID, userID, from, to, billing.LogCursor{ID: afterID}, pageSize+1)
+	logs, err := h.Source.DetailedLogsPage(r.Context(), instanceID, userID, from, to, billing.LogCursor{CreatedUnix: afterCreated, ID: afterID}, pageSize+1)
 	if err != nil {
 		writeDashboardError(w, http.StatusBadGateway, "newapi_logs_query_failed")
 		return
@@ -86,8 +95,10 @@ func (h BillingRequestsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 		})
 	}
 	nextAfterID := afterID
+	nextAfterCreated := afterCreated
 	if len(logs) > 0 {
 		nextAfterID = logs[len(logs)-1].ID
+		nextAfterCreated = logs[len(logs)-1].CreatedUnix
 	}
-	writeDashboardJSON(w, http.StatusOK, map[string]any{"items": items, "has_more": hasMore, "next_after_id": nextAfterID})
+	writeDashboardJSON(w, http.StatusOK, map[string]any{"items": items, "has_more": hasMore, "next_after_id": nextAfterID, "next_after_created": nextAfterCreated})
 }
