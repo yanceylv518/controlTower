@@ -15,6 +15,18 @@ type Store struct {
 	db *sql.DB
 }
 
+// A channel snapshot owns the channel's model assignment, but it must not
+// continuously overwrite an operator's tuning anchor. When the model changes,
+// reset the anchor to the current online values; otherwise preserve it.
+const channelBaseValueSnapshotUpsertSQL = `INSERT INTO channel_base_values(instance_id,channel_id,model_name,base_weight,base_priority,updated_at,updated_by)
+VALUES(?,?,?,?,?,?,?)
+ON DUPLICATE KEY UPDATE
+base_weight=IF(model_name<>VALUES(model_name),VALUES(base_weight),base_weight),
+base_priority=IF(model_name<>VALUES(model_name),VALUES(base_priority),base_priority),
+updated_at=IF(model_name<>VALUES(model_name),VALUES(updated_at),updated_at),
+updated_by=IF(model_name<>VALUES(model_name),VALUES(updated_by),updated_by),
+model_name=VALUES(model_name)`
+
 func New(db *sql.DB) Store {
 	return Store{db: db}
 }
@@ -247,13 +259,33 @@ VALUES (?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE id=VALUES(id),channel_name=
 			if snapshot.Priority != nil {
 				priority = *snapshot.Priority
 			}
-			if _, err = tx.Exec(`INSERT IGNORE INTO channel_base_values(instance_id,channel_id,model_name,base_weight,base_priority,updated_at,updated_by) VALUES(?,?,?,?,?,?,?)`, siteID, snapshot.ChannelID, models[0], snapshot.Weight, priority, snapshot.CapturedAt, "system:snapshot"); err != nil {
+			// State from the previous model must not leak circuit-breaker or
+			// smoothing history into the new model assignment.
+			if _, err = tx.Exec(`DELETE FROM tuning_continuous_states WHERE instance_id=? AND channel_id=? AND model_name<>?`, siteID, snapshot.ChannelID, models[0]); err != nil {
+				return err
+			}
+			if _, err = tx.Exec(channelBaseValueSnapshotUpsertSQL, siteID, snapshot.ChannelID, models[0], snapshot.Weight, priority, snapshot.CapturedAt, "system:snapshot"); err != nil {
+				return err
+			}
+		} else {
+			// A channel-wide weight cannot safely be attributed to zero or
+			// multiple models. Remove its anchor and any old runtime state.
+			if _, err = tx.Exec(`DELETE FROM tuning_continuous_states WHERE instance_id=? AND channel_id=?`, siteID, snapshot.ChannelID); err != nil {
+				return err
+			}
+			if _, err = tx.Exec(`DELETE FROM channel_base_values WHERE instance_id=? AND channel_id=?`, siteID, snapshot.ChannelID); err != nil {
 				return err
 			}
 		}
 	}
 	if len(channelIDs) == 0 {
 		if _, err = tx.Exec(`DELETE FROM channel_current WHERE instance_id=?`, instanceID); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(`DELETE FROM tuning_continuous_states WHERE instance_id=?`, siteID); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(`DELETE FROM channel_base_values WHERE instance_id=?`, siteID); err != nil {
 			return err
 		}
 	} else {
@@ -264,6 +296,15 @@ VALUES (?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE id=VALUES(id),channel_name=
 			args = append(args, id)
 		}
 		if _, err = tx.Exec(`DELETE FROM channel_current WHERE instance_id=? AND channel_id NOT IN (`+placeholders+`)`, args...); err != nil {
+			return err
+		}
+		tuningArgs := make([]any, len(args))
+		copy(tuningArgs, args)
+		tuningArgs[0] = siteID
+		if _, err = tx.Exec(`DELETE FROM tuning_continuous_states WHERE instance_id=? AND channel_id NOT IN (`+placeholders+`)`, tuningArgs...); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(`DELETE FROM channel_base_values WHERE instance_id=? AND channel_id NOT IN (`+placeholders+`)`, tuningArgs...); err != nil {
 			return err
 		}
 	}

@@ -254,3 +254,23 @@ func TestChannelSnapshotHistoryCleanupOnlyDeletesMigratedRows(t *testing.T) {
 		}
 	}
 }
+
+func TestChannelSnapshotBaseValueUpsertPreservesAnchorUntilModelChanges(t *testing.T) {
+	sqlText := channelBaseValueSnapshotUpsertSQL
+	for _, fragment := range []string{
+		"ON DUPLICATE KEY UPDATE",
+		"base_weight=IF(model_name<>VALUES(model_name),VALUES(base_weight),base_weight)",
+		"base_priority=IF(model_name<>VALUES(model_name),VALUES(base_priority),base_priority)",
+		"updated_by=IF(model_name<>VALUES(model_name),VALUES(updated_by),updated_by)",
+		"model_name=VALUES(model_name)",
+	} {
+		if !strings.Contains(sqlText, fragment) {
+			t.Fatalf("snapshot base-value upsert missing %q: %s", fragment, sqlText)
+		}
+	}
+	// MySQL evaluates assignments from left to right. The model assignment
+	// must remain last so all reset predicates compare against the old model.
+	if strings.Index(sqlText, "model_name=VALUES(model_name)") < strings.Index(sqlText, "base_weight=IF") {
+		t.Fatalf("model assignment must follow conditional anchor resets: %s", sqlText)
+	}
+}
