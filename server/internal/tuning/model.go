@@ -3,6 +3,7 @@ package tuning
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 )
@@ -18,6 +19,9 @@ type SchedulingParams struct {
 type ContinuousDispatchParams struct {
 	Sensitivity           float64 `json:"sensitivity"`
 	SpeedExponent         float64 `json:"speed_exponent"`
+	SpeedP50Weight        float64 `json:"speed_p50_weight"`
+	SpeedP90Weight        float64 `json:"speed_p90_weight"`
+	SpeedP95Weight        float64 `json:"speed_p95_weight"`
 	SpeedMinFactor        float64 `json:"speed_min_factor"`
 	SpeedMaxFactor        float64 `json:"speed_max_factor"`
 	CacheExponent         float64 `json:"cache_exponent"`
@@ -61,7 +65,7 @@ func DefaultPolicy() Policy {
 		},
 		DispatchModes: map[string]string{},
 		Continuous: ContinuousDispatchParams{
-			Sensitivity: 1, SpeedExponent: .35, SpeedMinFactor: .75, SpeedMaxFactor: 1.25,
+			Sensitivity: 1, SpeedExponent: .35, SpeedP50Weight: .50, SpeedP90Weight: .30, SpeedP95Weight: .20, SpeedMinFactor: .75, SpeedMaxFactor: 1.25,
 			CacheExponent: .15, CacheMinFactor: .90, CacheMaxFactor: 1.10,
 			OTPSExponent: .25, OTPSMinFactor: .80, OTPSMaxFactor: 1.20,
 			ErrorHealthyRate: .01, ErrorDegradedRate: .05, ErrorPoorRate: .15, ErrorFloorRate: .30,
@@ -107,6 +111,9 @@ func (p Policy) Validate() map[string]string {
 	}
 	if c.SpeedExponent <= 0 || c.SpeedExponent > 2 {
 		e["continuous.speed_exponent"] = "must_be_greater_than_0_and_at_most_2"
+	}
+	if c.SpeedP50Weight < 0 || c.SpeedP50Weight > 1 || c.SpeedP90Weight < 0 || c.SpeedP90Weight > 1 || c.SpeedP95Weight < 0 || c.SpeedP95Weight > 1 || math.Abs(c.SpeedP50Weight+c.SpeedP90Weight+c.SpeedP95Weight-1) > 1e-9 {
+		e["continuous.speed_percentile_weights"] = "must_be_between_0_and_1_and_sum_to_1"
 	}
 	if c.SpeedMinFactor <= 0 || c.SpeedMinFactor > 1 {
 		e["continuous.speed_min_factor"] = "must_be_greater_than_0_and_at_most_1"

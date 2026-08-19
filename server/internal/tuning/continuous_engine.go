@@ -541,19 +541,19 @@ func buildContinuousBaseline(rows []ChannelBaseValue, metrics map[int64]ChannelM
 	return b, true
 }
 
-func speedFactor(m ChannelMetric, b continuousBaseline, sensitivity, exponent, minFactor, maxFactor float64) float64 {
+func speedFactor(m ChannelMetric, b continuousBaseline, p ContinuousDispatchParams) float64 {
 	if m.TTFTP50 <= 0 || m.TTFTP90 <= 0 || m.TTFTP95 <= 0 {
 		return 1
 	}
-	r := .5*(m.TTFTP50/b.ttft50) + .3*(m.TTFTP90/b.ttft90) + .2*(m.TTFTP95/b.ttft95)
+	r := p.SpeedP50Weight*(m.TTFTP50/b.ttft50) + p.SpeedP90Weight*(m.TTFTP90/b.ttft90) + p.SpeedP95Weight*(m.TTFTP95/b.ttft95)
 	if r <= 0 {
 		return 1
 	}
-	return clamp(math.Pow(1/r, exponent*sensitivity), minFactor, maxFactor)
+	return clamp(math.Pow(1/r, p.SpeedExponent*p.Sensitivity), p.SpeedMinFactor, p.SpeedMaxFactor)
 }
 
 func performanceFactors(m ChannelMetric, b continuousBaseline, p ContinuousDispatchParams, cacheReady, otpsReady bool) (float64, float64, float64) {
-	speed, cache, otps := speedFactor(m, b, p.Sensitivity, p.SpeedExponent, p.SpeedMinFactor, p.SpeedMaxFactor), 1.0, 1.0
+	speed, cache, otps := speedFactor(m, b, p), 1.0, 1.0
 	if cacheReady && b.cache > 0 {
 		cache = clamp(math.Pow(m.CacheHitRate/b.cache, p.CacheExponent*p.Sensitivity), p.CacheMinFactor, p.CacheMaxFactor)
 	}

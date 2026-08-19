@@ -60,6 +60,18 @@ func TestPolicyValidationCoversEvaluationCurveRanges(t *testing.T) {
 	}
 }
 
+func TestPolicyValidationRequiresSpeedPercentileWeightsToSumToOne(t *testing.T) {
+	p := DefaultPolicy()
+	p.Continuous.SpeedP50Weight = .6
+	if fields := p.Validate(); fields["continuous.speed_percentile_weights"] == "" {
+		t.Fatalf("missing percentile weight validation: %#v", fields)
+	}
+	p.Continuous.SpeedP50Weight, p.Continuous.SpeedP90Weight, p.Continuous.SpeedP95Weight = 0, 0, 1
+	if fields := p.Validate(); fields["continuous.speed_percentile_weights"] != "" {
+		t.Fatalf("valid percentile weights rejected: %#v", fields)
+	}
+}
+
 // Policies persisted by earlier releases carry retired knobs (otps_cap,
 // write_deadband_percent, min_write_interval_minutes); decoding must ignore
 // them instead of failing or resurrecting semantics.

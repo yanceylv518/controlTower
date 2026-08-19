@@ -333,6 +333,9 @@ export interface TuningSchedulingParams {
 export interface TuningContinuousDispatchParams {
   sensitivity: number;
   speed_exponent: number;
+  speed_p50_weight: number;
+  speed_p90_weight: number;
+  speed_p95_weight: number;
   speed_min_factor: number;
   speed_max_factor: number;
   cache_exponent: number;

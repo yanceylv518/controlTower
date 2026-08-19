@@ -47,7 +47,7 @@ func TestContinuousBaselineUsesArithmeticAverage(t *testing.T) {
 func TestContinuousFactorsRewardFasterChannelAndRespectCap(t *testing.T) {
 	b := continuousBaseline{ttft50: 2, ttft90: 4, ttft95: 6, cache: .5, otps: 50, cacheReady: true, otpsReady: true}
 	fast := ChannelMetric{TTFTP50: 1, TTFTP90: 2, TTFTP95: 3, CacheHitRate: .8, CachePromptTokens: cacheEvidenceTokens, OTPS: 80, OTPSSampleTokens: otpsEvidenceTokens}
-	if got := speedFactor(fast, b, 1, .35, .75, 1.25); got <= 1 {
+	if got := speedFactor(fast, b, DefaultPolicy().Continuous); got <= 1 {
 		t.Fatalf("faster channel should have factor above one, got %v", got)
 	}
 	p := DefaultPolicy().Continuous
@@ -58,6 +58,22 @@ func TestContinuousFactorsRewardFasterChannelAndRespectCap(t *testing.T) {
 	_, cache, otps = performanceFactors(fast, b, p, false, false)
 	if math.Abs(cache-1) > 1e-9 || math.Abs(otps-1) > 1e-9 {
 		t.Fatalf("unavailable optional evidence must be neutral: cache=%v otps=%v", cache, otps)
+	}
+}
+
+func TestSpeedFactorUsesConfiguredPercentileWeights(t *testing.T) {
+	b := continuousBaseline{ttft50: 1, ttft90: 1, ttft95: 1}
+	m := ChannelMetric{TTFTP50: 1, TTFTP90: 2, TTFTP95: 4}
+	p := DefaultPolicy().Continuous
+	p.Sensitivity, p.SpeedExponent = 1, 1
+	p.SpeedMinFactor, p.SpeedMaxFactor = .01, 10
+	p.SpeedP50Weight, p.SpeedP90Weight, p.SpeedP95Weight = 1, 0, 0
+	if got := speedFactor(m, b, p); got != 1 {
+		t.Fatalf("P50-only factor = %v, want 1", got)
+	}
+	p.SpeedP50Weight, p.SpeedP90Weight, p.SpeedP95Weight = 0, 0, 1
+	if got := speedFactor(m, b, p); got != .25 {
+		t.Fatalf("P95-only factor = %v, want .25", got)
 	}
 }
 
