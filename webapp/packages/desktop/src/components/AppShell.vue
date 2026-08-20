@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { useRouter } from "vue-router";
+import { ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import {
+  ArrowDown,
   Bell,
   Coin,
   Connection,
@@ -21,45 +23,62 @@ import SiteSelect from "./SiteSelect.vue";
 
 defineProps<{ title: string }>();
 const auth = useAuthStore();
+const route = useRoute();
 const router = useRouter();
 const nav = [
   {
-    group: "监控",
+    group: "监控分析",
     items: [
-      ["/", "总览", HomeFilled],
       ["/customers", "客户监控", User],
       ["/channels", "渠道监控", Connection],
       ["/models", "模型监控", DataAnalysis],
       ["/alerts", "告警中心", Bell],
+      ["/samples", "样本分析", Document],
+      ["/latency", "延时分诊", DataLine],
+      ["/runtime", "系统状态", Monitor],
     ],
   },
   {
-    group: "分析",
+    group: "数据查询",
     items: [
-      ["/samples", "样本分析", Document],
       ["/usage", "用量统计", Coin],
-      ["/latency", "延时分诊", DataLine],
       ["/readonly-users", "用户管理", User],
       ["/readonly-logs", "使用日志", Document],
+    ],
+  },
+  {
+    group: "账单管理",
+    items: [
       ["/billing", "用户账单", Coin],
       ["/billing/channels", "渠道账单", Coin],
       ["/billing-reconciliation", "账单核对", DataAnalysis],
+      ["/models/manage", "模型管理", SetUp],
     ],
   },
   {
-    group: "系统",
+    group: "系统管理",
     items: [
-      ["/runtime", "系统状态", Monitor],
-      ["/notifications", "通知设置", Notification],
-      ["/instances", "实例管理", Management],
-      ["/audits", "操作审计", Operation],
       ["/tuning", "调权中心", TrendCharts],
-      ["/models/manage", "模型管理", Coin],
-      ["/settings", "设置", SetUp],
+      ["/instances", "实例管理", Management],
+      ["/notifications", "通知设置", Notification],
+      ["/audits", "操作审计", Operation],
       ["/access-users", "访问账号", User],
+      ["/settings", "系统设置", SetUp],
     ],
   },
 ] as const;
+function groupForPath(path: string) {
+  if (path === "/") return "";
+  const exact = nav.find((section) => section.items.some((item) => item[0] === path));
+  if (exact) return exact.group;
+  const nested = nav.find((section) => section.items.some((item) => item[0] !== "/" && path.startsWith(`${item[0]}/`)));
+  return nested?.group ?? "";
+}
+const activeGroup = ref<string>(groupForPath(route.path));
+watch(() => route.path, (path) => { activeGroup.value = groupForPath(path); });
+function toggleGroup(group: string) {
+  activeGroup.value = activeGroup.value === group ? "" : group;
+}
 const viewerNav = [
   ["/customers", "客户监控", User],
   ["/readonly-users", "用户管理", User],
@@ -81,17 +100,28 @@ async function logout() {
             <span>{{ item[1] }}</span>
           </router-link>
         </template>
-        <section v-else v-for="section in nav" :key="section.group">
-          <div class="nav-group">{{ section.group }}</div>
-          <router-link
-            v-for="item in section.items"
-            :key="item[0]"
-            :to="item[0]"
-          >
-            <el-icon><component :is="item[2]" /></el-icon>
-            <span>{{ item[1] }}</span>
+        <template v-else>
+          <router-link to="/" class="nav-home">
+            <el-icon><HomeFilled /></el-icon>
+            <span>总览</span>
           </router-link>
+        <section v-for="section in nav" :key="section.group" class="nav-section">
+          <button class="nav-group" type="button" :aria-expanded="activeGroup === section.group" @click="toggleGroup(section.group)">
+            <span>{{ section.group }}</span>
+            <el-icon :class="{ expanded: activeGroup === section.group }"><ArrowDown /></el-icon>
+          </button>
+          <div v-show="activeGroup === section.group" class="nav-items">
+            <router-link
+              v-for="item in section.items"
+              :key="item[0]"
+              :to="item[0]"
+            >
+              <el-icon><component :is="item[2]" /></el-icon>
+              <span>{{ item[1] }}</span>
+            </router-link>
+          </div>
         </section>
+        </template>
       </nav>
     </aside>
     <main class="workspace">

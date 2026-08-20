@@ -80,10 +80,43 @@ body {
   font-size: 12px;
 }
 .shell .nav-group {
-  margin: 12px 10px 4px;
+  display: flex;
+  width: calc(100% - 8px);
+  align-items: center;
+  justify-content: space-between;
+  margin: 4px 4px 2px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
   letter-spacing: 0.12em;
   color: var(--ct-sidebar-ink);
   opacity: 0.65;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+}
+.shell .nav-group:hover,
+.shell .nav-group[aria-expanded="true"] {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--ct-sidebar-active);
+  opacity: 0.9;
+}
+.shell .nav-group .el-icon {
+  transition: transform 0.18s ease;
+}
+.shell .nav-group .el-icon.expanded {
+  transform: rotate(180deg);
+}
+.shell .nav-section + .nav-section {
+  margin-top: 2px;
+}
+.shell .sidebar a.nav-home {
+  margin-bottom: 7px;
+}
+.shell .nav-items {
+  padding-bottom: 4px;
 }
 .shell .sidebar a {
   display: flex;
