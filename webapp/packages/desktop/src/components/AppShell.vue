@@ -71,7 +71,7 @@ function groupForPath(path: string) {
   if (path === "/") return "";
   const exact = nav.find((section) => section.items.some((item) => item[0] === path));
   if (exact) return exact.group;
-  const nested = nav.find((section) => section.items.some((item) => item[0] !== "/" && path.startsWith(`${item[0]}/`)));
+  const nested = nav.find((section) => section.items.some((item) => path.startsWith(`${item[0]}/`)));
   return nested?.group ?? "";
 }
 const activeGroup = ref<string>(groupForPath(route.path));
