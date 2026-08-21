@@ -106,7 +106,10 @@ const currentIndex = computed(() =>
 const dimensionOptions = computed(() =>
   (state.data.value || []).map((item) => ({
     value: item.dimension_key,
-    label: item.display_name || item.display_key || item.dimension_key,
+    label:
+      props.kind === "channels"
+        ? item.display_key || item.display_name || item.dimension_key
+        : item.display_name || item.display_key || item.dimension_key,
   })),
 );
 function selectDimension(value: string) {
