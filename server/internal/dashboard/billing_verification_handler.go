@@ -15,6 +15,7 @@ import (
 // one completed user-billing generation job.
 type BillingVerificationStore interface {
 	BillingJob(context.Context, string) (billing.Job, error)
+	ActiveBillingJob(context.Context) (billing.Job, error)
 	CreateBillingVerificationJob(context.Context, billing.Job, []billing.JobStep, string) error
 	LatestBillingVerificationJob(context.Context, string) (billing.Job, error)
 	VerificationSourceJob(context.Context, string) (billing.Job, error)
@@ -58,6 +59,13 @@ func (h BillingVerificationHandler) create(w http.ResponseWriter, r *http.Reques
 		return
 	} else if findErr != nil && findErr != sql.ErrNoRows {
 		writeDashboardError(w, http.StatusInternalServerError, "billing_verification_query_failed")
+		return
+	}
+	if active, activeErr := h.Store.ActiveBillingJob(r.Context()); activeErr == nil {
+		writeDashboardJSON(w, http.StatusConflict, map[string]any{"error": "billing_job_busy", "active_job": active})
+		return
+	} else if activeErr != sql.ErrNoRows {
+		writeDashboardError(w, http.StatusInternalServerError, "billing_job_query_failed")
 		return
 	}
 	job, steps, err := billing.NewVerificationJob(source, ctauth.Actor(r))

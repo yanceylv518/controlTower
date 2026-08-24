@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from "vue";
+import { useRoute } from "vue-router";
 import { ElMessage } from "element-plus";
-import type { BillingJob, BillingTokenSummary, BillingUserSummary } from "@ct/shared";
+import { ApiError, type BillingJob, type BillingTokenSummary, type BillingUserSummary } from "@ct/shared";
 import { dashboard, passthrough } from "../api";
 import AppShell from "../components/AppShell.vue";
 import AsyncPanel from "../components/AsyncPanel.vue";
@@ -11,13 +12,20 @@ import { useFiltersStore } from "../stores/filters";
 import { usePrefsStore } from "../stores/prefs";
 import { useAuthStore } from "../stores/auth";
 import { formatNumber, formatQuota } from "../utils/format";
-import { savedGenerationRange, timeRangeShortcuts, validateGenerationRange } from "../utils/billingRange";
-import { billingReadErrorMessage, downloadBillingFile, httpError } from "../utils/httpError";
+import { formatDateTime, savedGenerationRange, timeRangeShortcuts, validateGenerationRange } from "../utils/billingRange";
+import { billingReadErrorMessage, billingTaskErrorMessage, downloadBillingFile, httpError } from "../utils/httpError";
 
 const filters = useFiltersStore();
+const route = useRoute();
 const prefs = usePrefsStore();
 const auth = useAuthStore();
-const generationRange = ref<[string, string]>(savedGenerationRange("ct.billing.user.range"));
+const routedSite = typeof route.query.site === "string" ? route.query.site : "";
+if (routedSite) filters.selectSite(routedSite);
+const routedRange: [string, string] | undefined = typeof route.query.from === "string" && typeof route.query.to === "string" ? [route.query.from, route.query.to] : undefined;
+const routedJobID = typeof route.query.job_id === "string" ? route.query.job_id : "";
+const pinnedJobID = ref(routedJobID);
+const coveredView = ref(false);
+const generationRange = ref<[string, string]>(routedRange || savedGenerationRange("ct.billing.user.range"));
 const search = ref("");
 const page = ref(1);
 const pageSize = ref(50);
@@ -29,6 +37,7 @@ const tierSettings = ref<Record<string, { instance_id: string; user_id: number; 
 const jobProgress = ref(0);
 const exporting = ref<Record<number, boolean>>({});
 const tokenExporting=ref(false);
+const currentJob=ref<BillingJob>();
 let monitorVersion=0;
 onUnmounted(()=>{monitorVersion++;});
 void prefs.load();
@@ -37,19 +46,21 @@ const state = useAsyncData(async () => {
   const keyword=search.value.trim()||undefined;
   const [from,to]=generationRange.value;
   const [bill,users,settings]=await Promise.all([
-    dashboard.billingSummary({instance_id:filters.site_id,from,to,page:page.value,page_size:pageSize.value,search:keyword}),
+    dashboard.billingSummary({instance_id:filters.site_id,from,to,job_id:pinnedJobID.value||undefined,covered:coveredView.value?1:undefined,page:page.value,page_size:pageSize.value,search:keyword}),
     passthrough.users({site:filters.site_id,keyword,limit:pageSize.value,offset:(page.value-1)*pageSize.value}),
     dashboard.billingUserSettings(filters.site_id),
   ]);
   tierSettings.value=settings.items||{};
-  if((bill.items?.length||0)>0)return {...bill,generated:true};
+  if(bill.generation_job?.status==="complete")return {...bill,generated:true};
   const items:BillingUserSummary[]=users.items.map((user)=>({user_id:user.id,username:user.display_name||user.username,request_count:0,prompt_tokens:0,completion_tokens:0,cache_tokens:0,cache_write_tokens:0,abnormal_rows:0,abnormal_amount:"0.000000",quota:0,amount:"0.000000",balance:user.quota,unpriced_models:[],price_sources:[]}));
   return {...bill,items,total:users.total,summary:{...bill.summary,users:users.total},generated:false};
 });
 const generated = computed(() => state.data.value?.generated !== false);
-const detail = useAsyncData(async () => {const[from,to]=generationRange.value;return selected.value ? dashboard.billingDetail({ instance_id: filters.site_id, user_id: selected.value.user_id, from, to, job_id: state.data.value?.generation_job?.id }) : undefined;});
-const tokens=useAsyncData(async()=>{if(!selected.value||detailTab.value!=="token")return undefined;const[from,to]=generationRange.value;return dashboard.billingTokens({instance_id:filters.site_id,user_id:selected.value.user_id,from,to,job_id:state.data.value?.generation_job?.id})});
-const tokenDaily=useAsyncData(async()=>{if(!selected.value||!selectedToken.value)return undefined;const[from,to]=generationRange.value;return dashboard.billingTokenDaily({instance_id:filters.site_id,user_id:selected.value.user_id,token_id:selectedToken.value.token_id,from,to,job_id:state.data.value?.generation_job?.id})});
+const displayedRange = computed<[string,string]>(()=>{const data=state.data.value;if(data?.data_from&&data.data_to)return[formatDateTime(new Date(data.data_from)),formatDateTime(new Date(data.data_to))];const job=data?.generation_job;return job?.range_from&&job.range_to?[formatDateTime(new Date(job.range_from)),formatDateTime(new Date(job.range_to))]:generationRange.value});
+const showingPrevious = computed(()=>generated.value&&(displayedRange.value[0]!==generationRange.value[0]||displayedRange.value[1]!==generationRange.value[1]));
+const detail = useAsyncData(async () => {const[from,to]=displayedRange.value;return selected.value ? dashboard.billingDetail({ instance_id: filters.site_id, user_id: selected.value.user_id, from, to, job_id: state.data.value?.generation_job?.id }) : undefined;});
+const tokens=useAsyncData(async()=>{if(!selected.value||detailTab.value!=="token")return undefined;const[from,to]=displayedRange.value;return dashboard.billingTokens({instance_id:filters.site_id,user_id:selected.value.user_id,from,to,job_id:state.data.value?.generation_job?.id})});
+const tokenDaily=useAsyncData(async()=>{if(!selected.value||!selectedToken.value)return undefined;const[from,to]=displayedRange.value;return dashboard.billingTokenDaily({instance_id:filters.site_id,user_id:selected.value.user_id,token_id:selectedToken.value.token_id,from,to,job_id:state.data.value?.generation_job?.id})});
 const currency = computed(() => state.data.value?.currency ? state.data.value.currency.symbol : (prefs.currencySymbol || "$"));
 // Amounts are USD-based (quota / QuotaPerUnit); a non-USD site display must
 // convert with the site exchange rate, not just swap the symbol.
@@ -57,10 +68,10 @@ const currencyRate = computed(() => { const rate = Number(state.data.value?.curr
 const money = (value: string | number | undefined) => `${currency.value}${(Number(value || 0) * currencyRate.value).toFixed(4)}`;
 const balanceMoney = (quota: number | undefined) => formatQuota(quota ?? 0, prefs.quotaPerUnit, currency.value);
 const unitPrice = (value: string | undefined) => value ? `${currency.value}${(Number(value) * currencyRate.value).toFixed(4)}` : "—";
-const periodText = computed(() => `[${generationRange.value[0]}, ${generationRange.value[1]})`);
-const exportURL = computed(() => {const[from,to]=generationRange.value;return`/api/dashboard/billing/summary?instance_id=${encodeURIComponent(filters.site_id)}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&search=${encodeURIComponent(search.value)}&format=csv`;});
+const periodText = computed(() => `[${displayedRange.value[0]}, ${displayedRange.value[1]})`);
+const exportURL = computed(() => {const[from,to]=generationRange.value;const p=new URLSearchParams({instance_id:filters.site_id,from,to,search:search.value,format:"csv"});if(pinnedJobID.value)p.set("job_id",pinnedJobID.value);return`/api/dashboard/billing/summary?${p}`;});
 function userReadURL(path: string, row: BillingUserSummary, format = "csv") {
-  const [from, to] = generationRange.value;
+  const [from, to] = displayedRange.value;
   const params = new URLSearchParams({ instance_id: filters.site_id, user_id: String(row.user_id), from, to, format });
   const jobID = state.data.value?.generation_job?.id;
   if (jobID) params.set("job_id", jobID);
@@ -77,7 +88,7 @@ async function exportAnomalies(row: BillingUserSummary) {
 async function exportUser(row: BillingUserSummary, includeRequests = false) {
   exporting.value = { ...exporting.value, [row.user_id]: true };
   try {
-    const [from, to] = generationRange.value;
+    const [from, to] = displayedRange.value;
     const createResponse = await fetch("/api/dashboard/billing/workbook-jobs", {
       method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", "X-Requested-With": "XMLHttpRequest" },
       body: JSON.stringify({ instance_id: filters.site_id, user_id: String(row.user_id), from, to, job_id: state.data.value?.generation_job?.id || "", include_requests: includeRequests ? "1" : "0" }),
@@ -101,48 +112,69 @@ async function exportUser(row: BillingUserSummary, includeRequests = false) {
 function openDetail(row: BillingUserSummary) { selected.value = row;selectedToken.value=undefined;detailTab.value="model"; detailOpen.value = true; void detail.reload(); }
 function tokenName(row:BillingTokenSummary){return row.token_name||`(未命名) #${row.token_id}`}
 function selectToken(row:BillingTokenSummary){selectedToken.value=row;void tokenDaily.reload()}
-function tokenCSVURL(row:BillingTokenSummary){const[from,to]=generationRange.value;const p=new URLSearchParams({instance_id:filters.site_id,user_id:String(selected.value?.user_id||0),token_id:String(row.token_id),from,to,format:"csv"});const id=state.data.value?.generation_job?.id;if(id)p.set("job_id",id);return`/api/dashboard/billing/tokens/daily?${p}`}
+function tokenCSVURL(row:BillingTokenSummary){const[from,to]=displayedRange.value;const p=new URLSearchParams({instance_id:filters.site_id,user_id:String(selected.value?.user_id||0),token_id:String(row.token_id),from,to,format:"csv"});const id=state.data.value?.generation_job?.id;if(id)p.set("job_id",id);return`/api/dashboard/billing/tokens/daily?${p}`}
 async function exportToken(row:BillingTokenSummary){try{await downloadBillingFile(tokenCSVURL(row),"导出令牌账单失败")}catch(error){ElMessage.error(billingReadErrorMessage(error,"导出令牌账单失败"))}}
-async function downloadTokenDetails(row:BillingTokenSummary){if(!selected.value)return;tokenExporting.value=true;try{const[from,to]=generationRange.value;const response=await fetch("/api/dashboard/billing/token-detail-jobs",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json","X-Requested-With":"XMLHttpRequest"},body:JSON.stringify({instance_id:filters.site_id,user_id:String(selected.value.user_id),token_id:String(row.token_id),from,to,job_id:state.data.value?.generation_job?.id||""})});if(!response.ok)throw await httpError(response,"创建令牌明细任务失败");let task=await response.json();while(task.status==="pending"||task.status==="running"){await new Promise(resolve=>setTimeout(resolve,1500));const status=await fetch(`/api/dashboard/billing/token-detail-jobs?id=${task.id}`,{credentials:"same-origin"});if(!status.ok)throw await httpError(status,"查询令牌明细任务失败");task=await status.json()}if(task.status!=="complete")throw new Error(task.error||"令牌明细导出失败");await downloadBillingFile(`/api/dashboard/billing/token-detail-jobs?id=${task.id}&download=1`,"下载令牌明细失败",`billing-token-${row.token_id}-details.csv`)}catch(error){ElMessage.error(billingReadErrorMessage(error,"令牌明细导出失败"))}finally{tokenExporting.value=false}}
+async function downloadTokenDetails(row:BillingTokenSummary){if(!selected.value)return;tokenExporting.value=true;try{const[from,to]=displayedRange.value;const response=await fetch("/api/dashboard/billing/token-detail-jobs",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json","X-Requested-With":"XMLHttpRequest"},body:JSON.stringify({instance_id:filters.site_id,user_id:String(selected.value.user_id),token_id:String(row.token_id),from,to,job_id:state.data.value?.generation_job?.id||""})});if(!response.ok)throw await httpError(response,"创建令牌明细任务失败");let task=await response.json();while(task.status==="pending"||task.status==="running"){await new Promise(resolve=>setTimeout(resolve,1500));const status=await fetch(`/api/dashboard/billing/token-detail-jobs?id=${task.id}`,{credentials:"same-origin"});if(!status.ok)throw await httpError(status,"查询令牌明细任务失败");task=await status.json()}if(task.status!=="complete")throw new Error(task.error||"令牌明细导出失败");await downloadBillingFile(`/api/dashboard/billing/token-detail-jobs?id=${task.id}&download=1`,"下载令牌明细失败",`billing-token-${row.token_id}-details.csv`)}catch(error){ElMessage.error(billingReadErrorMessage(error,"令牌明细导出失败"))}finally{tokenExporting.value=false}}
 async function monitorJob(initial: BillingJob, reused=false){
-  if(generating.value)return;const version=++monitorVersion;generating.value=true;let job=initial;
-  try{while(job.status==="pending"||job.status==="running"){jobProgress.value=job.total_steps?Math.round(job.completed_steps*100/job.total_steps):0;await new Promise(resolve=>setTimeout(resolve,1500));if(version!==monitorVersion)return;job=await dashboard.billingJob(job.id)}if(job.status==="failed")throw new Error(job.error_message||"账单任务失败");jobProgress.value=100;ElMessage.success(reused?"该区间已有账单，已直接加载":`账单生成完成，排除异常订单 ${job.abnormal_rows} 条`);await state.reload();}
+  if(generating.value)return;const version=++monitorVersion;generating.value=true;let job=initial;currentJob.value=job;
+  try{while(job.status==="pending"||job.status==="running"){currentJob.value=job;jobProgress.value=job.total_steps?Math.round(job.completed_steps*100/job.total_steps):0;await new Promise(resolve=>setTimeout(resolve,1500));if(version!==monitorVersion)return;job=await dashboard.billingJob(job.id)}if(job.status==="failed")throw new Error(job.error_message||"账单任务失败");jobProgress.value=100;ElMessage.success(reused?"该区间已有账单，已直接加载":`账单生成完成，排除异常订单 ${job.abnormal_rows} 条`);await state.reload();}
   catch(error){ElMessage.error(error instanceof Error?error.message:"账单任务失败");}
-  finally{if(version===monitorVersion)generating.value=false;}
+  finally{if(version===monitorVersion){generating.value=false;currentJob.value=undefined;}}
 }
+async function viewBill(){
+  const invalid=validateGenerationRange(generationRange.value);if(invalid){ElMessage.warning(invalid);return;}
+  const[from,to]=generationRange.value;
+  try{
+    await dashboard.billingSummary({instance_id:filters.site_id,from,to,covered:1,page:1,page_size:1});
+    pinnedJobID.value="";coveredView.value=true;page.value=1;await state.reload();
+  }catch(error){
+    if(error instanceof ApiError&&error.code==="billing_range_not_covered"){
+      const latest=error.details.latest_job as BillingJob|undefined;
+      const recent=latest?.range_from&&latest.range_to?`${formatDateTime(new Date(latest.range_from))} 至 ${formatDateTime(new Date(latest.range_to))}`:"暂无已生成账单";
+      ElMessage.warning(`所选区间账单未生成，最近一次账单区间：${recent}`);return;
+    }
+    ElMessage.warning(billingReadErrorMessage(error,"查看账单失败"));
+  }
+}
+async function stopGeneration(){const job=currentJob.value;if(!job)return;try{++monitorVersion;await dashboard.cancelBillingJob(job.id);generating.value=false;currentJob.value=undefined;ElMessage.success("账单生成已停止，之前完成的账单不受影响");await state.reload();}catch(error){ElMessage.error(billingTaskErrorMessage(error,"停止账单生成失败"));}}
 async function generateBill(force=false){
   const invalid=validateGenerationRange(generationRange.value);if(invalid){ElMessage.warning(invalid);return;}
-  const [from,to]=generationRange.value;const result=await dashboard.generateBilling({instance_id:filters.site_id,from,to,force});
-  if(result.job.status==="complete"){jobProgress.value=100;await state.reload();ElMessage.success(result.reused?"该区间已有账单，已直接加载":"账单生成完成");return;}
-  await monitorJob(result.job,result.reused);
+  try {
+    pinnedJobID.value="";coveredView.value=false;
+    const [from,to]=generationRange.value;const result=await dashboard.generateBilling({instance_id:filters.site_id,from,to,force});
+    if(result.job.status==="complete"){jobProgress.value=100;await state.reload();ElMessage.success(result.reused?"该区间已有账单，已直接加载":"账单生成完成");return;}
+    await monitorJob(result.job,result.reused);
+  } catch (error) { ElMessage.warning(billingTaskErrorMessage(error)); }
 }
 function useTiered(userID:number){return tierSettings.value[String(userID)]?.use_tiered_pricing!==false}
 async function changeTiered(userID:number,value:boolean){await dashboard.saveBillingUserSetting({instance_id:filters.site_id,user_id:userID,use_tiered_pricing:value});tierSettings.value={...tierSettings.value,[String(userID)]:{instance_id:filters.site_id,user_id:userID,use_tiered_pricing:value}};ElMessage.success("阶梯计价设置已保存，下次生成账单时生效")}
-watch(generationRange,(value)=>localStorage.setItem("ct.billing.user.range",JSON.stringify(value)),{deep:true});
+watch(generationRange,(value)=>{pinnedJobID.value="";coveredView.value=false;localStorage.setItem("ct.billing.user.range",JSON.stringify(value))},{deep:true});
 let searchTimer: ReturnType<typeof setTimeout> | undefined;
 watch(search, () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { page.value = 1; void state.reload(); }, 400); });
-watch([generationRange, () => filters.site_id, pageSize], () => { page.value = 1; void state.reload(); if(detailOpen.value)void detail.reload(); });
+watch([generationRange, () => filters.site_id, pageSize], (_value, oldValue) => { if(oldValue && oldValue[1] !== filters.site_id)pinnedJobID.value="";page.value = 1; void state.reload(); if(detailOpen.value)void detail.reload(); });
 watch(page, () => void state.reload());
 watch(() => state.data.value?.generation_job?.id, () => {const job=state.data.value?.generation_job;if(job&&(job.status==="pending"||job.status==="running"))void monitorJob(job);});
 watch(detailTab,tab=>{if(tab==="token")void tokens.reload()});
-void state.reload();
+async function resumeActiveGeneration(){if(auth.user?.role!=="admin"||generating.value||!filters.site_id)return;try{const jobs=await dashboard.billingJobs({instance_id:filters.site_id,limit:20});const active=jobs.items.find(job=>job.job_type==="generate"&&(job.status==="pending"||job.status==="running"));if(active)void monitorJob(active);}catch{/* 任务中心查询失败不影响账单读取 */}}
+void state.reload().then(resumeActiveGeneration);
 </script>
 <template>
   <AppShell title="用户账单">
-    <template #tools><span class="period-label">账单周期</span><el-date-picker v-model="generationRange" type="datetimerange" value-format="YYYY-MM-DD HH:mm:ss" format="YYYY-MM-DD HH:mm:ss" range-separator="至" start-placeholder="开始时间" end-placeholder="结束时间" :shortcuts="timeRangeShortcuts" unlink-panels style="width:420px" /><el-input v-model="search" clearable placeholder="搜索用户名或用户 ID" style="width:220px" /><span v-if="generating" class="job-progress">生成 {{ jobProgress }}%</span><el-button v-if="auth.user?.role === 'admin'" type="primary" :loading="generating" @click="generateBill()">生成账单</el-button><el-popconfirm v-if="auth.user?.role === 'admin'" title="强制重新生成会创建新的账单版本，确定继续？" @confirm="generateBill(true)"><template #reference><el-button :disabled="generating">强制重新生成</el-button></template></el-popconfirm><el-button tag="a" :href="exportURL">导出汇总 CSV</el-button></template>
-    <el-alert v-if="!generated && (state.data.value?.items?.length || 0) > 0" class="pending-alert" type="warning" title="该区间账单尚未生成" description="下方先显示用户列表；生成账单后才会出现请求量、Token 和金额。" :closable="false" show-icon />
+    <template #tools><span class="period-label">账单周期</span><el-date-picker v-model="generationRange" type="datetimerange" value-format="YYYY-MM-DD HH:mm:ss" format="YYYY-MM-DD HH:mm:ss" range-separator="至" start-placeholder="开始时间" end-placeholder="结束时间" :shortcuts="timeRangeShortcuts" unlink-panels style="width:420px" /><el-input v-model="search" clearable placeholder="搜索用户名或用户 ID" style="width:220px" /><span v-if="generating" class="job-progress">生成 {{ jobProgress }}%</span><el-button @click="viewBill">查看账单</el-button><el-button v-if="auth.user?.role === 'admin'" type="primary" :loading="generating" @click="generateBill()">生成账单</el-button><el-button v-if="auth.user?.role === 'admin' && generating" type="danger" plain @click="stopGeneration">停止生成</el-button><el-popconfirm v-if="auth.user?.role === 'admin'" title="强制重新生成会创建新的账单版本，确定继续？" @confirm="generateBill(true)"><template #reference><el-button :disabled="generating">强制重新生成</el-button></template></el-popconfirm><el-button tag="a" :href="exportURL">导出汇总 CSV</el-button></template>
+    <el-alert v-if="showingPrevious" class="pending-alert" type="info" title="所选区间尚未生成，当前继续展示上一次完成的账单" :description="`当前数据区间 ${periodText}；新账单完整生成后才会切换，生成过程中不会清空现有数据。`" :closable="false" show-icon />
+    <el-alert v-else-if="!generated && (state.data.value?.items?.length || 0) > 0" class="pending-alert" type="warning" title="该站点尚无已完成账单" description="下方先显示用户列表；首次账单生成完成后才会出现请求量、Token 和金额。" :closable="false" show-icon />
     <AsyncPanel :loading="state.loading.value" :error="state.error.value" :empty="!(state.data.value?.items?.length || 0)" @retry="state.reload">
-      <div class="billing-total" v-if="state.data.value?.summary"><span class="billing-period">下方数据区间 <b>{{ periodText }}</b><small>{{ generated ? "严格对应所选区间，仅统计消费日志并排除异常订单" : "该区间尚未生成，下方仅显示用户列表和 0 值" }}</small></span><span>用户 <b>{{ formatNumber(state.data.value.summary.users) }}</b></span><span>计费请求 <b>{{ formatNumber(state.data.value.summary.request_count) }}</b></span><span>合计 <b>{{ money(state.data.value.summary.amount) }}</b></span></div>
+      <div class="billing-total" v-if="state.data.value?.summary"><span class="billing-period">下方实际数据区间 <b>{{ periodText }}</b><small>{{ generated ? (showingPrevious ? "顶部时间是下一次生成目标；当前数据来自上一次完成账单" : "严格对应当前账单版本，仅统计消费日志并排除异常订单") : "该站点尚无已完成账单，下方仅显示用户列表和 0 值" }}</small></span><span>用户 <b>{{ formatNumber(state.data.value.summary.users) }}</b></span><span>计费请求 <b>{{ formatNumber(state.data.value.summary.request_count) }}</b></span><span>合计 <b>{{ money(state.data.value.summary.amount) }}</b></span></div>
       <el-table :data="state.data.value?.items || []" class="billing-table" @row-click="openDetail">
         <el-table-column prop="username" label="用户" min-width="150"><template #default="s"><b>{{ s.row.username || `用户 ${s.row.user_id}` }}</b><small class="sub">ID {{ s.row.user_id }}</small></template></el-table-column>
         <el-table-column prop="amount" label="消费金额" min-width="120" align="right"><template #default="s">{{ money(s.row.amount) }}</template></el-table-column><el-table-column prop="request_count" label="请求数" min-width="100" align="right"><template #default="s">{{ formatNumber(s.row.request_count) }}</template></el-table-column><el-table-column prop="abnormal_rows" label="异常订单数" min-width="105" align="right"><template #default="s">{{ formatNumber(s.row.abnormal_rows) }}</template></el-table-column><el-table-column prop="abnormal_amount" label="异常总金额" min-width="120" align="right"><template #default="s">{{ money(s.row.abnormal_amount) }}</template></el-table-column><el-table-column prop="prompt_tokens" label="普通输入 Token" min-width="130" align="right"><template #default="s">{{ formatNumber(s.row.prompt_tokens) }}</template></el-table-column><el-table-column prop="cache_tokens" label="缓存读取 Token" min-width="130" align="right"><template #default="s">{{ formatNumber(s.row.cache_tokens) }}</template></el-table-column><el-table-column prop="cache_write_tokens" label="缓存写入 Token" min-width="130" align="right"><template #default="s">{{ formatNumber(s.row.cache_write_tokens) }}</template></el-table-column><el-table-column prop="completion_tokens" label="输出 Token" min-width="120" align="right"><template #default="s">{{ formatNumber(s.row.completion_tokens) }}</template></el-table-column><el-table-column prop="quota" label="Quota 对照" min-width="110" align="right"><template #default="s">{{ formatNumber(s.row.quota) }}</template></el-table-column><el-table-column prop="balance" label="当前余额" min-width="130" align="right"><template #default="s">{{ balanceMoney(s.row.balance) }}</template></el-table-column>
         <el-table-column label="阶梯计价" width="115"><template #default="s"><el-switch v-if="auth.user?.role === 'admin'" :model-value="useTiered(s.row.user_id)" @click.stop @change="changeTiered(s.row.user_id, Boolean($event))" /><span v-else>{{ useTiered(s.row.user_id)?"启用":"停用" }}</span></template></el-table-column><el-table-column label="计价状态" min-width="150"><template #default="s"><el-tag v-if="!generated" type="info">未生成</el-tag><el-tag v-else-if="s.row.unpriced_models?.length" type="warning">{{ s.row.unpriced_models.length }} 个模型无法取价</el-tag><el-tag v-else type="success">已计价</el-tag></template></el-table-column><el-table-column label="操作" width="190" fixed="right"><template #default="s"><el-button link type="primary" @click.stop="openDetail(s.row)">查看</el-button><el-button link type="primary" :loading="exporting[s.row.user_id]" @click.stop="exportUser(s.row)">导出汇总/日账单</el-button></template></el-table-column>
       </el-table><ListPager v-model:page="page" v-model:page-size="pageSize" :item-count="state.data.value?.items?.length || 0" :total="state.data.value?.total || 0" />
     </AsyncPanel>
-    <el-drawer v-model="detailOpen" :title="`${selected?.username || '用户'} · ${generationRange[0]} 至 ${generationRange[1]}`" size="78%">
+    <el-drawer v-model="detailOpen" :title="`${selected?.username || '用户'} · ${displayedRange[0]} 至 ${displayedRange[1]}`" size="78%">
       <el-tabs v-model="detailTab"><el-tab-pane label="按模型" name="model"/><el-tab-pane label="按令牌" name="token"/></el-tabs>
       <template v-if="detailTab==='model'">
-      <div class="drawer-actions"><el-button :loading="Boolean(selected && exporting[selected.user_id])" @click="selected && exportUser(selected, true)">{{ selected && exporting[selected.user_id] ? "后台生成中" : "导出完整账单 Excel" }}</el-button><el-button :disabled="!selected" @click="selected && exportDaily(selected)">导出日账单</el-button><el-button :disabled="!selected" @click="selected && exportAnomalies(selected)">导出异常订单</el-button><router-link :to="`/readonly-logs?username=${encodeURIComponent(selected?.username || '')}&from=${generationRange[0]}&to=${generationRange[1]}`"><el-button>查看使用日志</el-button></router-link></div>
+      <div class="drawer-actions"><el-button :loading="Boolean(selected && exporting[selected.user_id])" @click="selected && exportUser(selected, true)">{{ selected && exporting[selected.user_id] ? "后台生成中" : "导出完整账单 Excel" }}</el-button><el-button :disabled="!selected" @click="selected && exportDaily(selected)">导出日账单</el-button><el-button :disabled="!selected" @click="selected && exportAnomalies(selected)">导出异常订单</el-button><router-link :to="`/readonly-logs?username=${encodeURIComponent(selected?.username || '')}&from=${displayedRange[0]}&to=${displayedRange[1]}`"><el-button>查看使用日志</el-button></router-link></div>
       <el-alert v-if="detail.error.value" class="pending-alert" type="info" :title="detail.error.value" :closable="false" show-icon />
       <AsyncPanel :loading="detail.loading.value" :error="''" :empty="!detail.error.value && !detail.data.value?.items?.length" @retry="detail.reload"><el-table :data="detail.data.value?.items || []" class="billing-detail-table" table-layout="fixed"><el-table-column prop="day" label="日期" width="105" /><el-table-column label="模型信息" min-width="165"><template #default="s"><b class="cell-primary">{{ s.row.model_name }}</b><small class="cell-secondary">{{ s.row.group_name || "默认分组" }} · {{ s.row.tier_from > 0 ? `档位 ≥${formatNumber(s.row.tier_from)}` : "基础价" }}</small></template></el-table-column><el-table-column label="订单" min-width="125"><template #default="s"><div class="metric-pairs"><span>总数</span><b>{{ formatNumber(s.row.request_count + s.row.abnormal_rows) }}</b><span>计费</span><b>{{ formatNumber(s.row.request_count) }}</b><span>异常</span><b :class="{ danger: s.row.abnormal_rows > 0 }">{{ formatNumber(s.row.abnormal_rows) }}</b></div></template></el-table-column><el-table-column label="Token 用量" min-width="230"><template #default="s"><div class="metric-grid"><span>普通</span><b>{{ formatNumber(s.row.prompt_tokens) }}</b><span>读取</span><b>{{ formatNumber(s.row.cache_tokens) }}</b><span>写入</span><b>{{ formatNumber(s.row.cache_write_tokens) }}</b><span>输出</span><b>{{ formatNumber(s.row.completion_tokens) }}</b></div></template></el-table-column><el-table-column label="单价 / 1M" min-width="205"><template #default="s"><div class="metric-grid"><span>输入</span><b>{{ unitPrice(s.row.input_price) }}</b><span>读取</span><b>{{ unitPrice(s.row.cache_price) }}</b><span>写入</span><b>{{ unitPrice(s.row.cache_write_price) }}</b><span>输出</span><b>{{ unitPrice(s.row.output_price) }}</b></div></template></el-table-column><el-table-column prop="amount" label="金额" min-width="125" align="right"><template #default="s"><b>{{ s.row.unpriced ? "无法取价" : money(s.row.amount) }}</b><small class="cell-secondary">异常 {{ money(s.row.abnormal_amount) }}</small></template></el-table-column></el-table></AsyncPanel>
       </template>

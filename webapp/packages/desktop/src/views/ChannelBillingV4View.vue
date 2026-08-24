@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
+import { useRoute } from "vue-router";
 import { ElMessage } from "element-plus";
 import { type BillingChannelSummary, type BillingJob, type BillingUpstreamGroup } from "@ct/shared";
 import { dashboard } from "../api";
@@ -11,22 +12,27 @@ import { useFiltersStore } from "../stores/filters";
 import { usePrefsStore } from "../stores/prefs";
 import { formatNumber } from "../utils/format";
 import { formatDateTime, savedGenerationRange, timeRangeShortcuts, validateGenerationRange } from "../utils/billingRange";
-import { billingReadErrorMessage, downloadBillingFile, httpError } from "../utils/httpError";
+import { billingReadErrorMessage, billingTaskErrorMessage, downloadBillingFile, httpError } from "../utils/httpError";
 
 type PageData = { items: BillingChannelSummary[]; job: BillingJob | null; channelError: string; currencySymbol: string; currencyRate: number };
-const filters = useFiltersStore(), prefs = usePrefsStore();
+const filters = useFiltersStore(), prefs = usePrefsStore(), route = useRoute();
 const generating = ref(false), progress = ref(0), page = ref(1), pageSize = ref(20);
 const exporting = ref<Record<number, boolean>>({});
 const detailOpen = ref(false), selected = ref<BillingChannelSummary>();
 const viewMode = ref<"channel"|"upstream">("channel"), upstreamSearch = ref("");
 const upstreamOpen = ref(false), selectedUpstream = ref<BillingUpstreamGroup>();
-const generationRange = ref<[string, string]>(savedGenerationRange("ct.billing.channel.range"));
+const routedSite = typeof route.query.site === "string" ? route.query.site : "";
+if (routedSite) filters.selectSite(routedSite);
+const routedRange: [string, string] | undefined = typeof route.query.from === "string" && typeof route.query.to === "string" ? [route.query.from, route.query.to] : undefined;
+const routedJobID = typeof route.query.job_id === "string" ? route.query.job_id : "";
+const pinnedJobID = ref(routedJobID);
+const generationRange = ref<[string, string]>(routedRange || savedGenerationRange("ct.billing.channel.range"));
 void prefs.load();
 const state = useAsyncData<PageData>(async () => {
   await filters.loadInstances();
   if (!filters.site_id) return { items: [], job: null, channelError: "", currencySymbol: "", currencyRate: 1 };
   const [from,to]=generationRange.value;
-  const bill = await dashboard.billingChannels({ instance_id: filters.site_id, from, to });
+  const bill = await dashboard.billingChannels({ instance_id: filters.site_id, from, to, job_id: pinnedJobID.value || undefined });
   return {
     items: (bill.items || []).sort((a, b) => Number(b.amount) - Number(a.amount) || a.channel_id - b.channel_id),
     job: bill.generation_job || null,
@@ -87,10 +93,13 @@ async function generate(force=false) {
   if (generating.value || !filters.site_id) return;
   const invalid=validateGenerationRange(generationRange.value);
   if(invalid){ElMessage.warning(invalid);return;}
-  const [from,to]=generationRange.value;
-  const result = await dashboard.generateBilling({ instance_id: filters.site_id, from, to, scope: "channel", force });
-  if(result.job.status==="complete"){await state.reload();ElMessage.success(result.reused?"该区间已有渠道账单，已直接加载":"所选时间范围的渠道账单已经生成完成");return;}
-  await monitor(result.job);
+  try {
+    pinnedJobID.value="";
+    const [from,to]=generationRange.value;
+    const result = await dashboard.generateBilling({ instance_id: filters.site_id, from, to, scope: "channel", force });
+    if(result.job.status==="complete"){await state.reload();ElMessage.success(result.reused?"该区间已有渠道账单，已直接加载":"所选时间范围的渠道账单已经生成完成");return;}
+    await monitor(result.job);
+  } catch (error) { ElMessage.warning(billingTaskErrorMessage(error)); }
 }
 async function save(row: BillingChannelSummary, value: string) {
   const discount = Number(value);
@@ -140,8 +149,8 @@ async function exportChannel(row: BillingChannelSummary) {
     exporting.value = { ...exporting.value, [row.channel_id]: false };
   }
 }
-watch(generationRange,(value)=>localStorage.setItem("ct.billing.channel.range",JSON.stringify(value)),{deep:true});
-watch([generationRange, () => filters.site_id], () => { page.value = 1; void state.reload(); if(viewMode.value==="upstream")void upstreamState.reload(); if (detailOpen.value) void detail.reload(); });
+watch(generationRange,(value)=>{pinnedJobID.value="";localStorage.setItem("ct.billing.channel.range",JSON.stringify(value))},{deep:true});
+watch([generationRange, () => filters.site_id], (_value, oldValue) => { if(oldValue && oldValue[1] !== filters.site_id)pinnedJobID.value="";page.value = 1; void state.reload(); if(viewMode.value==="upstream")void upstreamState.reload(); if (detailOpen.value) void detail.reload(); });
 watch(viewMode,mode=>{if(mode==="upstream")void upstreamState.reload()});
 watch(channelSearch, () => { page.value = 1; });
 watch(pageSize, () => { page.value = 1; });

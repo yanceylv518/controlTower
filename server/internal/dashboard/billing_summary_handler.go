@@ -15,7 +15,10 @@ import (
 type BillingSummaryStore interface {
 	QueryBillingAggregates(context.Context, string, time.Time, time.Time, []int64) ([]billing.AggregateRow, error)
 	QueryBillingAggregatesForJob(context.Context, string, []int64) ([]billing.AggregateRow, error)
+	QueryBillingAggregatesForJobRange(context.Context, string, time.Time, time.Time, []int64) ([]billing.AggregateRow, error)
 	LatestBillingJob(context.Context, string, string, time.Time, time.Time) (billing.Job, error)
+	LatestCompletedBillingJob(context.Context, string, string) (billing.Job, error)
+	LatestCoveringBillingJob(context.Context, string, string, time.Time, time.Time) (billing.Job, error)
 	BillingJob(context.Context, string) (billing.Job, error)
 	ListBillingPrices(context.Context, string) ([]billing.PriceRecord, error)
 	ListBillingGroupRatios(context.Context, string) ([]billing.GroupRatio, error)
@@ -46,10 +49,34 @@ func (h BillingSummaryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		writeDashboardError(w, http.StatusBadRequest, "invalid_query")
 		return
 	}
-	job, jobErr := h.Store.LatestBillingJob(r.Context(), instanceID, "generate", from, to)
+	var job billing.Job
+	var jobErr error
+	explicitJob := strings.TrimSpace(r.URL.Query().Get("job_id")) != ""
+	if explicitJob {
+		job, jobErr = billingJobForRead(r, h.Store, instanceID, "generate", from, to)
+	} else {
+		job, jobErr = h.Store.LatestBillingJob(r.Context(), instanceID, "generate", from, to)
+		if (jobErr != nil || job.Status != "complete") && r.URL.Query().Get("covered") == "1" {
+			job, jobErr = h.Store.LatestCoveringBillingJob(r.Context(), instanceID, "generate", from, to)
+		}
+		if (jobErr != nil || job.Status != "complete") && r.URL.Query().Get("covered") != "1" {
+			job, jobErr = h.Store.LatestCompletedBillingJob(r.Context(), instanceID, "generate")
+		}
+	}
 	var generationJob *billing.Job
 	if jobErr == nil {
 		generationJob = &job
+	} else if explicitJob {
+		writeBillingReadConflict(w, jobErr)
+		return
+	} else if r.URL.Query().Get("covered") == "1" {
+		latest, latestErr := h.Store.LatestCompletedBillingJob(r.Context(), instanceID, "generate")
+		if latestErr == nil {
+			writeDashboardJSON(w, http.StatusConflict, map[string]any{"error": "billing_range_not_covered", "latest_job": latest})
+		} else {
+			writeDashboardError(w, http.StatusConflict, "billing_range_not_covered")
+		}
+		return
 	}
 	var userIDs []int64
 	if user, ok := ctauth.CurrentUser(r); ok && user.Role != "admin" {
@@ -59,15 +86,19 @@ func (h BillingSummaryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		}
 		userIDs = user.ScopeUserIDs
 		if len(userIDs) == 0 {
-			h.writeResponse(w, r, nil, billing.SummaryTotal{}, to.Add(-time.Nanosecond), generationJob)
+			h.writeResponse(w, r, nil, billing.SummaryTotal{}, from, to, generationJob)
 			return
 		}
 	}
 	jobID := ""
+	dataFrom, dataTo := from, to
 	if jobErr == nil && job.Status == "complete" {
 		jobID = job.ID
+		if r.URL.Query().Get("covered") != "1" {
+			dataFrom, dataTo = job.From, job.To
+		}
 	}
-	snapshots, err := h.Store.BillingRatioSnapshots(r.Context(), instanceID, from, to)
+	snapshots, err := h.Store.BillingRatioSnapshots(r.Context(), instanceID, dataFrom, dataTo)
 	if err != nil {
 		writeDashboardError(w, http.StatusInternalServerError, "billing_query_failed")
 		return
@@ -84,12 +115,16 @@ func (h BillingSummaryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	}
 	cacheKey := billing.SummaryCacheKey(instanceID, period+":"+jobID, userIDs)
 	if items, total, ok := billing.MonthlySummaryCache.Get(cacheKey); ok {
-		h.respondWithSearch(w, r, items, total, to, generationJob, currency)
+		h.respondWithSearch(w, r, items, total, dataFrom, dataTo, generationJob, currency)
 		return
 	}
 	var rows []billing.AggregateRow
 	if jobID != "" {
-		rows, err = h.Store.QueryBillingAggregatesForJob(r.Context(), jobID, userIDs)
+		if r.URL.Query().Get("covered") == "1" && (dataFrom.After(job.From) || dataTo.Before(job.To)) {
+			rows, err = h.Store.QueryBillingAggregatesForJobRange(r.Context(), jobID, dataFrom, dataTo, userIDs)
+		} else {
+			rows, err = h.Store.QueryBillingAggregatesForJob(r.Context(), jobID, userIDs)
+		}
 	}
 	if err != nil {
 		writeDashboardError(w, http.StatusInternalServerError, "billing_query_failed")
@@ -105,7 +140,7 @@ func (h BillingSummaryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		writeDashboardError(w, http.StatusInternalServerError, "billing_query_failed")
 		return
 	}
-	balances, err := h.Store.LatestBillingBalances(r.Context(), instanceID, to, userIDs)
+	balances, err := h.Store.LatestBillingBalances(r.Context(), instanceID, dataTo, userIDs)
 	if err != nil {
 		writeDashboardError(w, http.StatusInternalServerError, "billing_query_failed")
 		return
@@ -119,10 +154,10 @@ func (h BillingSummaryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	applyUserAnomalyCounts(items, counts)
 	total = billing.SummarizeUsers(items)
 	billing.MonthlySummaryCache.Put(cacheKey, items, total)
-	h.respondWithSearch(w, r, items, total, to, generationJob, currency)
+	h.respondWithSearch(w, r, items, total, dataFrom, dataTo, generationJob, currency)
 }
 
-func (h BillingSummaryHandler) respondWithSearch(w http.ResponseWriter, r *http.Request, items []billing.UserSummary, total billing.SummaryTotal, to time.Time, generationJob *billing.Job, currency ...billing.CurrencyDisplay) {
+func (h BillingSummaryHandler) respondWithSearch(w http.ResponseWriter, r *http.Request, items []billing.UserSummary, total billing.SummaryTotal, from, to time.Time, generationJob *billing.Job, currency ...billing.CurrencyDisplay) {
 	search := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("search")))
 	if search != "" {
 		filtered := items[:0]
@@ -138,10 +173,10 @@ func (h BillingSummaryHandler) respondWithSearch(w http.ResponseWriter, r *http.
 	if len(currency) > 0 {
 		display = currency[0]
 	}
-	h.writeResponse(w, r, items, total, to.Add(-time.Nanosecond), generationJob, display)
+	h.writeResponse(w, r, items, total, from, to, generationJob, display)
 }
 
-func (h BillingSummaryHandler) writeResponse(w http.ResponseWriter, r *http.Request, items []billing.UserSummary, total billing.SummaryTotal, through time.Time, generationJob *billing.Job, currency ...billing.CurrencyDisplay) {
+func (h BillingSummaryHandler) writeResponse(w http.ResponseWriter, r *http.Request, items []billing.UserSummary, total billing.SummaryTotal, from, to time.Time, generationJob *billing.Job, currency ...billing.CurrencyDisplay) {
 	if r.URL.Query().Get("format") == "csv" {
 		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 		w.Header().Set("Content-Disposition", `attachment; filename="billing-summary.csv"`)
@@ -174,7 +209,7 @@ func (h BillingSummaryHandler) writeResponse(w http.ResponseWriter, r *http.Requ
 	if len(currency) > 0 {
 		display = currency[0]
 	}
-	writeDashboardJSON(w, http.StatusOK, map[string]any{"items": items[start:end], "total": count, "page": page, "page_size": pageSize, "summary": total, "data_through": through, "generation_job": generationJob, "currency": display})
+	writeDashboardJSON(w, http.StatusOK, map[string]any{"items": items[start:end], "total": count, "page": page, "page_size": pageSize, "summary": total, "data_from": from, "data_to": to, "data_through": to.Add(-time.Nanosecond), "generation_job": generationJob, "currency": display})
 }
 
 func positiveInt(raw string, fallback int) int {

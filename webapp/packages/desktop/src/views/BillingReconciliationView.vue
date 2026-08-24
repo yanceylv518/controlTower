@@ -10,6 +10,7 @@ import { useFiltersStore } from "../stores/filters";
 import { usePrefsStore } from "../stores/prefs";
 import { savedGenerationRange, timeRangeShortcuts, validateGenerationRange } from "../utils/billingRange";
 import { formatNumber } from "../utils/format";
+import { billingTaskErrorMessage } from "../utils/httpError";
 
 const filters = useFiltersStore();
 const prefs = usePrefsStore();
@@ -117,7 +118,7 @@ async function startVerification() {
     await verification.reload();
     scheduleVerificationPoll();
     ElMessage.success(result.reused ? "已恢复现有全量核验任务" : "全量核验任务已启动");
-  } catch { ElMessage.error("全量核验任务创建失败"); }
+  } catch (error) { ElMessage.warning(billingTaskErrorMessage(error, "全量核验任务创建失败")); }
 }
 
 watch(range, value => localStorage.setItem("ct.billing.reconciliation.range", JSON.stringify(value)), { deep: true });

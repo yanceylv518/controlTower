@@ -15,6 +15,19 @@ export function billingReadErrorMessage(error: unknown, fallback = "数据加载
   return fallback;
 }
 
+export function billingTaskErrorMessage(error: unknown, fallback = "创建后台任务失败"): string {
+  if (error instanceof ApiError && error.code === "billing_job_busy") {
+    const active = error.details.active_job as { completed_steps?: number; total_steps?: number } | undefined;
+    const done = Number(active?.completed_steps || 0), total = Number(active?.total_steps || 0);
+    const progress = total > 0 ? Math.round(done * 100 / total) : 0;
+    return `当前已有后台任务正在执行（${progress}%），请等待当前任务结束后再创建新任务`;
+  }
+  if (error instanceof ApiError && error.code === "billing_range_already_covered") return "所选时间段已包含在已生成账单中，请直接点击查看账单，无需重新生成";
+  if (error instanceof ApiError) return error.code || fallback;
+  if (error instanceof Error) return error.message || fallback;
+  return fallback;
+}
+
 export async function httpError(response: Response, fallback: string): Promise<Error> {
   let detail = "";
   let progress: unknown;

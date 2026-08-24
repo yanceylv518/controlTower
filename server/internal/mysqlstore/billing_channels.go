@@ -12,6 +12,18 @@ func (s Store) LatestBillingJob(ctx context.Context, site, jobType string, from,
 	return j, err
 }
 
+func (s Store) LatestCompletedBillingJob(ctx context.Context, site, jobType string) (billing.Job, error) {
+	var j billing.Job
+	err := s.db.QueryRowContext(ctx, `SELECT id,instance_id,job_type,user_id,range_from,range_to,status,total_steps,completed_steps,abnormal_rows,error_message,output_path,requested_by,created_at,updated_at FROM billing_jobs WHERE instance_id=? AND job_type=? AND status='complete' ORDER BY updated_at DESC,created_at DESC LIMIT 1`, site, jobType).Scan(&j.ID, &j.InstanceID, &j.JobType, &j.UserID, &j.From, &j.To, &j.Status, &j.TotalSteps, &j.CompletedSteps, &j.AbnormalRows, &j.ErrorMessage, &j.OutputPath, &j.RequestedBy, &j.CreatedAt, &j.UpdatedAt)
+	return j, err
+}
+
+func (s Store) LatestCoveringBillingJob(ctx context.Context, site, jobType string, from, to time.Time) (billing.Job, error) {
+	var j billing.Job
+	err := s.db.QueryRowContext(ctx, `SELECT id,instance_id,job_type,user_id,range_from,range_to,status,total_steps,completed_steps,abnormal_rows,error_message,output_path,requested_by,created_at,updated_at FROM billing_jobs WHERE instance_id=? AND job_type=? AND status='complete' AND range_from<=? AND range_to>=? ORDER BY updated_at DESC,created_at DESC LIMIT 1`, site, jobType, from, to).Scan(&j.ID, &j.InstanceID, &j.JobType, &j.UserID, &j.From, &j.To, &j.Status, &j.TotalSteps, &j.CompletedSteps, &j.AbnormalRows, &j.ErrorMessage, &j.OutputPath, &j.RequestedBy, &j.CreatedAt, &j.UpdatedAt)
+	return j, err
+}
+
 func (s Store) QueryBillingChannelAggregates(ctx context.Context, site string, from, to time.Time, channelID int64) ([]billing.AggregateRow, error) {
 	dayFrom, dayTo := billingDayBounds(from, to)
 	q := `SELECT v.instance_id,v.channel_id,MAX(v.channel_name),v.model_name,v.group_name,v.tier_from,v.day,SUM(v.request_count),SUM(v.prompt_tokens),SUM(v.completion_tokens),SUM(v.cache_tokens),SUM(v.cache_write_tokens),SUM(v.cache_write_5m_tokens),SUM(v.cache_write_1h_tokens),SUM(v.quota) FROM billing_channel_daily_versions v JOIN billing_active_versions a ON a.instance_id=v.instance_id AND a.day=v.day AND a.job_id=v.job_id WHERE v.instance_id=? AND v.day>=? AND v.day<?`

@@ -12,8 +12,22 @@ import (
 )
 
 type fakeBillingSummaryStore struct {
-	rows       []billing.AggregateRow
-	missingJob bool
+	rows            []billing.AggregateRow
+	missingJob      bool
+	latestCompleted billing.Job
+}
+
+func (f fakeBillingSummaryStore) LatestCompletedBillingJob(context.Context, string, string) (billing.Job, error) {
+	if f.latestCompleted.ID != "" {
+		return f.latestCompleted, nil
+	}
+	return billing.Job{}, sql.ErrNoRows
+}
+func (f fakeBillingSummaryStore) LatestCoveringBillingJob(context.Context, string, string, time.Time, time.Time) (billing.Job, error) {
+	if f.latestCompleted.ID != "" {
+		return f.latestCompleted, nil
+	}
+	return billing.Job{}, sql.ErrNoRows
 }
 
 type fakeBillingLiveSource struct {
@@ -37,6 +51,9 @@ func (f fakeBillingSummaryStore) QueryBillingAggregates(context.Context, string,
 func (f fakeBillingSummaryStore) QueryBillingAggregatesForJob(context.Context, string, []int64) ([]billing.AggregateRow, error) {
 	return f.rows, nil
 }
+func (f fakeBillingSummaryStore) QueryBillingAggregatesForJobRange(context.Context, string, time.Time, time.Time, []int64) ([]billing.AggregateRow, error) {
+	return f.rows, nil
+}
 func (f fakeBillingSummaryStore) LatestBillingJob(context.Context, string, string, time.Time, time.Time) (billing.Job, error) {
 	if f.missingJob {
 		return billing.Job{}, sql.ErrNoRows
@@ -47,7 +64,18 @@ func (f fakeBillingSummaryStore) BillingJob(context.Context, string) (billing.Jo
 	if f.missingJob {
 		return billing.Job{}, sql.ErrNoRows
 	}
-	return billing.Job{ID: "job-1", InstanceID: "site-a", JobType: "generate", Status: "complete"}, nil
+	return billing.Job{ID: "job-1", InstanceID: "site-a", JobType: "generate", Status: "complete", From: time.Date(2026, 8, 1, 0, 0, 0, 0, billing.BusinessLocation), To: time.Date(2026, 9, 1, 0, 0, 0, 0, billing.BusinessLocation)}, nil
+}
+
+func TestBillingSummaryCanPinCompletedJobVersion(t *testing.T) {
+	billing.MonthlySummaryCache.InvalidateInstance("site-a")
+	store := fakeBillingSummaryStore{rows: []billing.AggregateRow{{UserID: 1, Username: "alice", ModelName: "m", Day: time.Date(2026, 8, 1, 0, 0, 0, 0, billing.BusinessLocation), RequestCount: 3}}}
+	req := httptest.NewRequest("GET", "/api/dashboard/billing/summary?instance_id=site-a&month=2026-08&job_id=job-1", nil)
+	w := httptest.NewRecorder()
+	BillingSummaryHandler{Store: store, Source: fakeBillingLiveSource{}}.ServeHTTP(w, req)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"generation_job":{"id":"job-1"`) || !strings.Contains(w.Body.String(), `"request_count":3`) {
+		t.Fatalf("unexpected response: %d %s", w.Code, w.Body.String())
+	}
 }
 
 func TestBillingSummaryDoesNotFallBackToAnotherInterval(t *testing.T) {

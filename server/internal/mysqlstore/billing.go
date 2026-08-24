@@ -66,6 +66,32 @@ func (s Store) QueryBillingAggregatesForJob(ctx context.Context, jobID string, u
 	return out, rows.Err()
 }
 
+func (s Store) QueryBillingAggregatesForJobRange(ctx context.Context, jobID string, from, to time.Time, userIDs []int64) ([]billing.AggregateRow, error) {
+	query := `SELECT instance_id,user_id,MAX(username),model_name,group_name,tier_from,DATE(CONVERT_TZ(hour_start,'+00:00','+08:00')),SUM(request_count),SUM(prompt_tokens),SUM(completion_tokens),SUM(cache_tokens),SUM(cache_write_tokens),SUM(cache_write_5m_tokens),SUM(cache_write_1h_tokens),SUM(quota) FROM billing_hourly WHERE job_id=? AND hour_start>=? AND hour_start<?`
+	args := []any{jobID, from.UTC(), to.UTC()}
+	if len(userIDs) > 0 {
+		query += ` AND user_id IN (` + strings.TrimRight(strings.Repeat("?,", len(userIDs)), ",") + `)`
+		for _, id := range userIDs {
+			args = append(args, id)
+		}
+	}
+	query += ` GROUP BY instance_id,user_id,model_name,group_name,tier_from,DATE(CONVERT_TZ(hour_start,'+00:00','+08:00')) ORDER BY user_id,DATE(CONVERT_TZ(hour_start,'+00:00','+08:00')),model_name,group_name,tier_from`
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []billing.AggregateRow
+	for rows.Next() {
+		var v billing.AggregateRow
+		if err = rows.Scan(&v.InstanceID, &v.UserID, &v.Username, &v.ModelName, &v.GroupName, &v.TierFrom, &v.Day, &v.RequestCount, &v.PromptTokens, &v.CompletionTokens, &v.CacheTokens, &v.CacheWriteTokens, &v.CacheWrite5mTokens, &v.CacheWrite1hTokens, &v.Quota); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
 func (s Store) BillingRatioSnapshots(ctx context.Context, instanceID string, from, to time.Time) (map[string]string, error) {
 	dayFrom, dayTo := billingDayBounds(from, to)
 	rows, err := s.db.QueryContext(ctx, `SELECT day,ratios_json FROM billing_ratio_snapshot WHERE instance_id=? AND day>=? AND day<?`, instanceID, dayFrom, dayTo)

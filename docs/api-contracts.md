@@ -253,7 +253,7 @@ Instance tokens are stored only as `SHA-256(pepper + token)` hashes. A token may
 
 ## v3.1-B3 User Billing
 
-- `GET /api/dashboard/billing/summary?instance_id=&month=&page=&page_size=&search=&sort=&format=` monthly per-user consumption (amount via CT prices with newapi-ratio fallback, `price_sources`, unpriced model list, quota cross-check, balance snapshot). Viewer requests are pinned to their scope site and user set by the session gate. `format=csv` streams a BOM-prefixed CSV. Results are cached until the next daily rollup or price/ratio change.
+- `GET /api/dashboard/billing/summary?instance_id=&month=&job_id=&covered=1&page=&page_size=&search=&sort=&format=` monthly per-user consumption (amount via CT prices with newapi-ratio fallback, `price_sources`, unpriced model list, quota cross-check, balance snapshot). Optional `job_id` pins the read to one completed immutable version. Without `job_id`, ordinary reads retain the latest completed bill until a new bill completes. `covered=1` requires the selected half-open range to be fully covered by a completed version and slices that immutable version to the selected hours; otherwise HTTP 409 `billing_range_not_covered` includes `latest_job` when available. Viewer requests are pinned to their scope site and user set by the session gate. `format=csv` streams a BOM-prefixed CSV. Results are cached until the next daily rollup or price/ratio change.
 - `GET /api/dashboard/billing/detail?instance_id=&user_id=&month=&format=` per-user model/tier/day breakdown; same scope rules; CSV export supported.
 - `GET /api/dashboard/billing/import-prices?instance_id=` converts the site's current newapi ModelRatio config into editable CT price rows (form backfill only, saving goes through the prices API).
 - `GET|PUT /api/dashboard/billing/prices?instance_id=` and `GET|PUT /api/dashboard/billing/group-ratios?instance_id=` admin-only, effective-dated tiered price schedules and group ratios; changes are audited and invalidate the summary cache.
@@ -263,6 +263,9 @@ Instance tokens are stored only as `SHA-256(pepper + token)` hashes. A token may
 
 - `POST /api/dashboard/billing/jobs` (also available at the compatibility path `POST /api/dashboard/billing/backfill`) creates an admin-only, hourly segmented billing job and returns HTTP 202 with the job record.
 - `GET /api/dashboard/billing/jobs?id=...` returns progress (`completed_steps / total_steps`), anomaly count, and terminal error. Scoped users may only read jobs for their site.
+- `GET /api/dashboard/billing/jobs?instance_id=&status=&limit=` lists recent billing generation and verification jobs for the admin task center; `status` optionally filters `pending|running|complete|failed`, and active jobs are ordered first when unfiltered.
+- `DELETE /api/dashboard/billing/jobs?id=...` stops an admin-owned pending/running task, marks its unfinished steps failed, and preserves all previously completed bill versions. Creating a generation job for a range already fully covered by a completed version returns HTTP 409 `billing_range_already_covered` with `covering_job`.
+- Billing generation and verification are globally serialized. A request for a different new job while any job is `pending` or `running` returns HTTP 409 `billing_job_busy` with `active_job`; an idempotent request for the same existing job is still reused.
 - Each hour is read from new-api in pages of 2,000 using the `(created_at,id)` keyset. No billing generation query uses `OFFSET`.
 - Completed data is written as an immutable version. `billing_active_versions` is switched only after every step succeeds, so an interrupted generation never replaces the currently visible bill.
 - A failed step is resumed from its persisted cursor and retried up to three times.

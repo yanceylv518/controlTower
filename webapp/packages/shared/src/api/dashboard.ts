@@ -473,6 +473,8 @@ export interface BillingSummaryResponse {
   page_size: number;
   summary: BillingUserSummary & { users: number };
   data_through: string;
+  data_from?: string;
+  data_to?: string;
   generation_job?: BillingJob | null;
   currency?: BillingCurrencyDisplay;
 }
@@ -544,6 +546,8 @@ export interface BillingJob {
   completed_steps: number;
   abnormal_rows: number;
   error_message?: string;
+  requested_by?: string;
+  created_at?: string;
 }
 export interface BillingUserSetting {
   instance_id: string;
@@ -861,7 +865,7 @@ export const dashboardApi = (client: ApiClient) => ({
     client.request<ListResponse<ChannelBaseValue>>(`/api/dashboard/tuning/base-values${query({ site_id })}`, { method: "PUT", body: JSON.stringify({ items }) }),
   syncTuningBaseValues: (site_id: string, models: string[]) =>
     client.request<ListResponse<ChannelBaseValue>>(`/api/dashboard/tuning/base-values/sync${query({ site_id })}`, { method: "POST", body: JSON.stringify({ models }) }),
-  billingSummary: (params: { instance_id: string; month?: string; from?: string; to?: string; page?: number; page_size?: number; search?: string }) =>
+  billingSummary: (params: { instance_id: string; month?: string; from?: string; to?: string; job_id?: string; covered?: 1; page?: number; page_size?: number; search?: string }) =>
     client.request<BillingSummaryResponse>(`/api/dashboard/billing/summary${query(params)}`),
   billingReconciliation: (params: { instance_id: string; from: string; to: string; job_id?: string; user_id?: number }) =>
     client.request<BillingReconciliationResponse>(`/api/dashboard/billing/reconciliation${query(params)}`),
@@ -876,6 +880,9 @@ export const dashboardApi = (client: ApiClient) => ({
   generateBilling: (input: { instance_id: string; from: string; to: string; force?: boolean; scope?: "all" | "channel" }) =>
     client.request<{ accepted: boolean; reused: boolean; job: BillingJob }>("/api/dashboard/billing/backfill", { method: "POST", body: JSON.stringify(input) }),
   billingJob: (id: string) => client.request<BillingJob>(`/api/dashboard/billing/jobs${query({ id })}`),
+  cancelBillingJob: (id: string) => client.request<BillingJob>(`/api/dashboard/billing/jobs${query({ id })}`, { method: "DELETE" }),
+  billingJobs: (params: { instance_id?: string; status?: BillingJob["status"]; limit?: number } = {}) =>
+    client.request<{ items: BillingJob[] }>(`/api/dashboard/billing/jobs${query(params)}`),
   billingUserSettings: (instance_id: string) => client.request<{ items: Record<string, BillingUserSetting> }>(`/api/dashboard/billing/user-settings${query({ instance_id })}`),
   saveBillingUserSetting: (input: BillingUserSetting) => client.request<BillingUserSetting>("/api/dashboard/billing/user-settings", { method: "PUT", body: JSON.stringify(input) }),
   billingChannels:(params:{instance_id:string;month?:string;from?:string;to?:string;channel_id?:number;job_id?:string})=>client.request<{items:BillingChannelSummary[];details:BillingDetailItem[];period:string;generation_job?:BillingJob|null;warning?:string;currency?:BillingCurrencyDisplay}>(`/api/dashboard/billing/channels${query(params)}`),

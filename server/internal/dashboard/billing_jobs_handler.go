@@ -18,6 +18,10 @@ type BillingJobsStore interface {
 	CreateBillingJob(context.Context, billing.Job, []billing.JobStep) error
 	BillingJob(context.Context, string) (billing.Job, error)
 	BillingJobByRequestKey(context.Context, string) (billing.Job, error)
+	ActiveBillingJob(context.Context) (billing.Job, error)
+	ListBillingJobs(context.Context, string, string, int) ([]billing.Job, error)
+	LatestCoveringBillingJob(context.Context, string, string, time.Time, time.Time) (billing.Job, error)
+	CancelBillingJob(context.Context, string) error
 }
 
 type BillingJobsPreflightStore interface {
@@ -32,8 +36,62 @@ type BillingJobsHandler struct {
 }
 
 func (h BillingJobsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodDelete {
+		if user, ok := ctauth.CurrentUser(r); ok && user.Role != "admin" {
+			writeDashboardError(w, http.StatusForbidden, "forbidden")
+			return
+		}
+		id := strings.TrimSpace(r.URL.Query().Get("id"))
+		if id == "" {
+			writeDashboardError(w, http.StatusBadRequest, "invalid_query")
+			return
+		}
+		job, err := h.Store.BillingJob(r.Context(), id)
+		if err == sql.ErrNoRows {
+			writeDashboardError(w, http.StatusNotFound, "job_not_found")
+			return
+		}
+		if err != nil {
+			writeDashboardError(w, http.StatusInternalServerError, "billing_job_query_failed")
+			return
+		}
+		if job.Status != "pending" && job.Status != "running" {
+			writeDashboardError(w, http.StatusConflict, "billing_job_not_active")
+			return
+		}
+		if err = h.Store.CancelBillingJob(r.Context(), id); err != nil {
+			writeDashboardError(w, http.StatusInternalServerError, "billing_job_cancel_failed")
+			return
+		}
+		job, _ = h.Store.BillingJob(r.Context(), id)
+		writeDashboardJSON(w, http.StatusOK, job)
+		return
+	}
 	if r.Method == http.MethodGet {
-		job, err := h.Store.BillingJob(r.Context(), strings.TrimSpace(r.URL.Query().Get("id")))
+		id := strings.TrimSpace(r.URL.Query().Get("id"))
+		if id == "" {
+			if user, ok := ctauth.CurrentUser(r); ok && user.Role != "admin" {
+				writeDashboardError(w, 403, "forbidden")
+				return
+			}
+			limit := positiveInt(r.URL.Query().Get("limit"), 100)
+			if limit > 200 {
+				limit = 200
+			}
+			status := strings.TrimSpace(r.URL.Query().Get("status"))
+			if status != "" && status != "pending" && status != "running" && status != "complete" && status != "failed" {
+				writeDashboardError(w, 400, "invalid_status")
+				return
+			}
+			items, err := h.Store.ListBillingJobs(r.Context(), strings.TrimSpace(r.URL.Query().Get("instance_id")), status, limit)
+			if err != nil {
+				writeDashboardError(w, 500, "billing_job_query_failed")
+				return
+			}
+			writeDashboardJSON(w, 200, map[string]any{"items": items})
+			return
+		}
+		job, err := h.Store.BillingJob(r.Context(), id)
 		if err == sql.ErrNoRows {
 			writeDashboardError(w, 404, "job_not_found")
 			return
@@ -76,6 +134,10 @@ func (h BillingJobsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	requestKey := billingRequestKey(req.InstanceID, scope, from, to)
+	jobType := "generate"
+	if scope == "channel" {
+		jobType = "channel_generate"
+	}
 	if !req.Force {
 		existing, findErr := h.Store.BillingJobByRequestKey(r.Context(), requestKey)
 		if findErr == nil {
@@ -89,6 +151,20 @@ func (h BillingJobsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeDashboardError(w, 500, "billing_job_query_failed")
 			return
 		}
+	}
+	if covered, coverErr := h.Store.LatestCoveringBillingJob(r.Context(), req.InstanceID, jobType, from, to); coverErr == nil {
+		writeDashboardJSON(w, http.StatusConflict, map[string]any{"error": "billing_range_already_covered", "covering_job": covered})
+		return
+	} else if coverErr != sql.ErrNoRows {
+		writeDashboardError(w, 500, "billing_job_query_failed")
+		return
+	}
+	if active, activeErr := h.Store.ActiveBillingJob(r.Context()); activeErr == nil {
+		writeDashboardJSON(w, http.StatusConflict, map[string]any{"error": "billing_job_busy", "active_job": active})
+		return
+	} else if activeErr != sql.ErrNoRows {
+		writeDashboardError(w, 500, "billing_job_query_failed")
+		return
 	}
 	if h.Preflight != nil && h.Source != nil {
 		models, syncErr := h.Source.ConfiguredModels(r.Context(), req.InstanceID)
@@ -119,7 +195,7 @@ func (h BillingJobsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if scope == "channel" {
-		job.JobType = "channel_generate"
+		job.JobType = jobType
 	}
 	if req.Force {
 		job.RequestKey = requestKey + ":force:" + job.ID

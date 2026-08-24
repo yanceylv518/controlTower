@@ -441,7 +441,7 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 		return err
 	}
 	latest, err := r.Store.BillingJob(ctx, job.ID)
-	if err == nil && latest.CompletedSteps >= latest.TotalSteps {
+	if err == nil && (latest.Status == "pending" || latest.Status == "running") && latest.CompletedSteps >= latest.TotalSteps {
 		if source, ok := r.Source.(SnapshotSource); ok {
 			if store, ok := r.Store.(SnapshotStore); ok {
 				raw, snapshotErr := source.RatioSnapshot(ctx, job.InstanceID)

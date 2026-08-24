@@ -4,6 +4,7 @@ import (
 	"context"
 	"controltower/server/internal/billing"
 	"database/sql"
+	"strings"
 	"time"
 )
 
@@ -94,6 +95,72 @@ func (s Store) BillingJobByRequestKey(ctx context.Context, key string) (billing.
 	var j billing.Job
 	e := s.db.QueryRowContext(ctx, `SELECT id,COALESCE(request_key,''),instance_id,job_type,user_id,range_from,range_to,status,total_steps,completed_steps,abnormal_rows,error_message,output_path,requested_by,created_at,updated_at FROM billing_jobs WHERE request_key=?`, key).Scan(&j.ID, &j.RequestKey, &j.InstanceID, &j.JobType, &j.UserID, &j.From, &j.To, &j.Status, &j.TotalSteps, &j.CompletedSteps, &j.AbnormalRows, &j.ErrorMessage, &j.OutputPath, &j.RequestedBy, &j.CreatedAt, &j.UpdatedAt)
 	return j, e
+}
+
+func (s Store) ActiveBillingJob(ctx context.Context) (billing.Job, error) {
+	var j billing.Job
+	err := s.db.QueryRowContext(ctx, `SELECT id,instance_id,job_type,user_id,range_from,range_to,status,total_steps,completed_steps,abnormal_rows,error_message,output_path,requested_by,created_at,updated_at FROM billing_jobs WHERE status IN ('pending','running') ORDER BY created_at LIMIT 1`).Scan(&j.ID, &j.InstanceID, &j.JobType, &j.UserID, &j.From, &j.To, &j.Status, &j.TotalSteps, &j.CompletedSteps, &j.AbnormalRows, &j.ErrorMessage, &j.OutputPath, &j.RequestedBy, &j.CreatedAt, &j.UpdatedAt)
+	return j, err
+}
+
+func (s Store) CancelBillingJob(ctx context.Context, id string) error {
+	now := time.Now().UTC()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `UPDATE billing_job_steps SET status='failed',error_message='cancelled manually',finished_at=?,updated_at=? WHERE job_id=? AND status IN ('pending','running')`, now, now, id); err != nil {
+		return err
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE billing_jobs SET status='failed',error_message='cancelled manually',finished_at=?,updated_at=? WHERE id=? AND status IN ('pending','running')`, now, now, id)
+	if err != nil {
+		return err
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if changed == 0 {
+		return sql.ErrNoRows
+	}
+	return tx.Commit()
+}
+
+func (s Store) ListBillingJobs(ctx context.Context, instanceID, status string, limit int) ([]billing.Job, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 100
+	}
+	query := `SELECT id,instance_id,job_type,user_id,range_from,range_to,status,total_steps,completed_steps,abnormal_rows,error_message,output_path,requested_by,created_at,updated_at FROM billing_jobs`
+	args := []any{}
+	conditions := []string{}
+	if instanceID != "" {
+		conditions = append(conditions, `instance_id=?`)
+		args = append(args, instanceID)
+	}
+	if status != "" {
+		conditions = append(conditions, `status=?`)
+		args = append(args, status)
+	}
+	if len(conditions) > 0 {
+		query += ` WHERE ` + strings.Join(conditions, ` AND `)
+	}
+	query += ` ORDER BY FIELD(status,'running','pending','failed','complete'),created_at DESC LIMIT ?`
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []billing.Job{}
+	for rows.Next() {
+		var j billing.Job
+		if err = rows.Scan(&j.ID, &j.InstanceID, &j.JobType, &j.UserID, &j.From, &j.To, &j.Status, &j.TotalSteps, &j.CompletedSteps, &j.AbnormalRows, &j.ErrorMessage, &j.OutputPath, &j.RequestedBy, &j.CreatedAt, &j.UpdatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, j)
+	}
+	return items, rows.Err()
 }
 
 func (s Store) ClaimBillingStep(ctx context.Context) (billing.Job, billing.JobStep, bool, error) {
@@ -285,13 +352,13 @@ func (s Store) CompleteBillingStep(ctx context.Context, j billing.Job, st billin
 	}
 	defer tx.Rollback()
 	now := time.Now().UTC()
-	res, e := tx.ExecContext(ctx, `UPDATE billing_job_steps SET status='complete',finished_at=?,updated_at=? WHERE job_id=? AND step_no=? AND status<>'complete'`, now, now, j.ID, st.StepNo)
+	res, e := tx.ExecContext(ctx, `UPDATE billing_job_steps SET status='complete',finished_at=?,updated_at=? WHERE job_id=? AND step_no=? AND status='running'`, now, now, j.ID, st.StepNo)
 	if e != nil {
 		return e
 	}
 	n, _ := res.RowsAffected()
 	if n > 0 {
-		_, e = tx.ExecContext(ctx, `UPDATE billing_jobs SET completed_steps=completed_steps+1,abnormal_rows=abnormal_rows+?,updated_at=? WHERE id=?`, bad, now, j.ID)
+		_, e = tx.ExecContext(ctx, `UPDATE billing_jobs SET completed_steps=completed_steps+1,abnormal_rows=abnormal_rows+?,updated_at=? WHERE id=? AND status IN ('pending','running')`, bad, now, j.ID)
 	}
 	if e != nil {
 		return e
@@ -311,6 +378,13 @@ func (s Store) FinalizeBillingJob(ctx context.Context, j billing.Job) error {
 	}
 	defer tx.Rollback()
 	now := time.Now().UTC()
+	var status string
+	if e = tx.QueryRowContext(ctx, `SELECT status FROM billing_jobs WHERE id=? FOR UPDATE`, j.ID).Scan(&status); e != nil {
+		return e
+	}
+	if status != "pending" && status != "running" {
+		return nil
+	}
 	_, e = tx.ExecContext(ctx, `INSERT INTO billing_daily_versions(job_id,instance_id,user_id,username,model_name,group_name,tier_from,day,request_count,prompt_tokens,completion_tokens,cache_tokens,cache_write_tokens,cache_write_5m_tokens,cache_write_1h_tokens,quota,updated_at) SELECT ?,instance_id,user_id,MAX(username),model_name,group_name,tier_from,DATE(CONVERT_TZ(hour_start,'+00:00','+08:00')),SUM(request_count),SUM(prompt_tokens),SUM(completion_tokens),SUM(cache_tokens),SUM(cache_write_tokens),SUM(cache_write_5m_tokens),SUM(cache_write_1h_tokens),SUM(quota),? FROM billing_hourly WHERE job_id=? GROUP BY instance_id,user_id,model_name,group_name,tier_from,DATE(CONVERT_TZ(hour_start,'+00:00','+08:00'))`, j.ID, now, j.ID)
 	if e != nil {
 		return e

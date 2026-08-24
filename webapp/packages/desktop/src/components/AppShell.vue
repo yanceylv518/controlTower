@@ -51,6 +51,8 @@ const nav = [
     items: [
       ["/billing", "用户账单", Coin],
       ["/billing/channels", "渠道账单", Coin],
+      ["/billing/generated", "已生成账单", Document],
+      ["/billing/tasks", "后台任务中心", Operation],
       ["/billing-reconciliation", "账单核对", DataAnalysis],
       ["/models/manage", "模型管理", SetUp],
     ],

@@ -21,6 +21,10 @@ type billingVerificationHandlerStore struct {
 	created    billing.Job
 }
 
+func (s *billingVerificationHandlerStore) ActiveBillingJob(context.Context) (billing.Job, error) {
+	return billing.Job{}, sql.ErrNoRows
+}
+
 func (s *billingVerificationHandlerStore) BillingJob(_ context.Context, id string) (billing.Job, error) {
 	if job, ok := s.jobs[id]; ok {
 		return job, nil

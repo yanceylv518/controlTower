@@ -11,7 +11,11 @@ import (
 	"controltower/server/internal/billing"
 )
 
-type preflightJobsStore struct{ created bool }
+type preflightJobsStore struct {
+	created bool
+	active  *billing.Job
+	jobs    []billing.Job
+}
 
 func (s *preflightJobsStore) CreateBillingJob(context.Context, billing.Job, []billing.JobStep) error {
 	s.created = true
@@ -23,6 +27,19 @@ func (s *preflightJobsStore) BillingJob(context.Context, string) (billing.Job, e
 func (s *preflightJobsStore) BillingJobByRequestKey(context.Context, string) (billing.Job, error) {
 	return billing.Job{}, sql.ErrNoRows
 }
+func (s *preflightJobsStore) ActiveBillingJob(context.Context) (billing.Job, error) {
+	if s.active == nil {
+		return billing.Job{}, sql.ErrNoRows
+	}
+	return *s.active, nil
+}
+func (s *preflightJobsStore) ListBillingJobs(context.Context, string, string, int) ([]billing.Job, error) {
+	return s.jobs, nil
+}
+func (s *preflightJobsStore) LatestCoveringBillingJob(context.Context, string, string, time.Time, time.Time) (billing.Job, error) {
+	return billing.Job{}, sql.ErrNoRows
+}
+func (s *preflightJobsStore) CancelBillingJob(context.Context, string) error { return nil }
 
 type preflightMetadataStore struct{ contexts map[string]int64 }
 
@@ -70,6 +87,18 @@ func TestBillingJobPreflightBlocksEmptyModelList(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, httptest.NewRequest("POST", "/api/dashboard/billing/jobs", strings.NewReader(body)))
 	if rec.Code != 409 || !strings.Contains(rec.Body.String(), "billing_models_missing") || store.created {
+		t.Fatalf("code=%d created=%v body=%s", rec.Code, store.created, rec.Body.String())
+	}
+}
+
+func TestBillingJobCreationBlocksWhileAnotherJobIsActive(t *testing.T) {
+	active := billing.Job{ID: "active-job", Status: "running", TotalSteps: 10, CompletedSteps: 4}
+	store := &preflightJobsStore{active: &active}
+	handler := BillingJobsHandler{Store: store}
+	body := `{"instance_id":"demo","from":"2026-08-01 00:00:00","to":"2026-08-02 00:00:00"}`
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest("POST", "/api/dashboard/billing/jobs", strings.NewReader(body)))
+	if rec.Code != 409 || !strings.Contains(rec.Body.String(), "billing_job_busy") || !strings.Contains(rec.Body.String(), "active-job") || store.created {
 		t.Fatalf("code=%d created=%v body=%s", rec.Code, store.created, rec.Body.String())
 	}
 }
