@@ -6,17 +6,17 @@ import (
 	"time"
 )
 
-func TestNewJobSplitsRangeIntoHourlySteps(t *testing.T) {
-	from := time.Date(2026, 8, 1, 0, 0, 0, 0, time.Local)
+func TestNewJobSplitsRangeIntoDailySteps(t *testing.T) {
+	from := time.Date(2026, 8, 1, 0, 0, 0, 0, BusinessLocation)
 	job, steps, err := NewJob("site-a", from, from.Add(25*time.Hour), "admin")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if job.TotalSteps != 25 || len(steps) != 25 {
+	if job.TotalSteps != 2 || len(steps) != 2 {
 		t.Fatalf("steps=%d total=%d", len(steps), job.TotalSteps)
 	}
-	if steps[24].To.Sub(steps[24].From) != time.Hour {
-		t.Fatalf("last step=%s", steps[24].To.Sub(steps[24].From))
+	if steps[0].To.Sub(steps[0].From) != 24*time.Hour || steps[1].To.Sub(steps[1].From) != time.Hour {
+		t.Fatalf("steps=%#v", steps)
 	}
 }
 
@@ -51,7 +51,7 @@ func TestNewJobRejectsMoreThanSixtyDays(t *testing.T) {
 	if _, _, err := NewJob("site-a", from, from.AddDate(0, 0, 61), "admin"); err == nil {
 		t.Fatal("expected a range longer than 60 days to be rejected")
 	}
-	if _, steps, err := NewJob("site-a", from, from.AddDate(0, 0, 60), "admin"); err != nil || len(steps) != 60*24 {
+	if _, steps, err := NewJob("site-a", from, from.AddDate(0, 0, 60), "admin"); err != nil || len(steps) != 60 {
 		t.Fatalf("60-day range should be accepted: steps=%d err=%v", len(steps), err)
 	}
 }
@@ -85,11 +85,9 @@ func TestAnomalyReasons(t *testing.T) {
 	}
 }
 
-func TestFillAnomalyAmountsSeparatesCachedInput(t *testing.T) {
-	log := PagedLogRecord{PromptTokens: sql.NullInt64{Valid: true, Int64: 100}, CompletionTokens: sql.NullInt64{Valid: true, Int64: 20}, CacheTokens: 40}
-	prices := []Price{{EffectiveFrom: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC), TierFrom: 0, Input: "1", Output: "2", Cache: "0.5"}}
+func TestFillAnomalyChargeUsesReconstructedRequestAmounts(t *testing.T) {
 	var got AnomalyOrder
-	fillAnomalyAmounts(&got, log, prices, "1", time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC), true)
+	fillAnomalyCharge(&got, LogCharge{InputPrice: "1", OutputPrice: "2", CacheReadPrice: "0.5", InputAmount: "0.000100", OutputAmount: "0.000040", CacheReadAmount: "0.000020", Total: "0.000160"})
 	if got.InputAmount != "0.000100" || got.OutputAmount != "0.000040" || got.CacheAmount != "0.000020" || got.ReferenceAmount != "0.000160" {
 		t.Fatalf("unexpected amounts: %+v", got)
 	}
@@ -116,28 +114,17 @@ func TestFormatBusinessTimeUsesBillingLocation(t *testing.T) {
 	}
 }
 
-func TestFillAnomalyAmountsUsesContextTokensForTier(t *testing.T) {
-	at := time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC)
-	log := PagedLogRecord{
-		PromptTokens:     sql.NullInt64{Valid: true, Int64: 100},
-		CompletionTokens: sql.NullInt64{Valid: true, Int64: 1},
-		CacheTokens:      900,
-		ContextTokens:    1000,
-	}
-	prices := []Price{
-		{EffectiveFrom: at, TierFrom: 0, Input: "1", Output: "1", Cache: "1"},
-		{EffectiveFrom: at, TierFrom: 1000, Input: "2", Output: "2", Cache: "2"},
-	}
+func TestFillAnomalyChargeCombinesCacheWriteDurations(t *testing.T) {
 	var got AnomalyOrder
-	fillAnomalyAmounts(&got, log, prices, "1", at, true)
-	if got.InputPrice != "2.000000" || got.CachePrice != "2.000000" {
-		t.Fatalf("anomaly selected the wrong context tier: %+v", got)
+	fillAnomalyCharge(&got, LogCharge{CacheWrite5mPrice: "3.75", CacheWrite5mAmount: "0.001", CacheWrite1hAmount: "0.002", Total: "0.003"})
+	if got.CacheWritePrice != "3.75" || got.CacheWriteAmount != "0.003000" || got.ReferenceAmount != "0.003" {
+		t.Fatalf("unexpected cache-write charge: %+v", got)
 	}
 }
 
-func TestFillAnomalyAmountsUsesNumericZeroWithoutPrice(t *testing.T) {
+func TestFillAnomalyChargeUsesNumericZeroWithoutPrice(t *testing.T) {
 	var got AnomalyOrder
-	fillAnomalyAmounts(&got, PagedLogRecord{}, nil, "1", time.Now(), true)
+	fillAnomalyCharge(&got, LogCharge{})
 	if got.InputPrice != "0" || got.OutputPrice != "0" || got.CachePrice != "0" || got.InputAmount != "0" || got.OutputAmount != "0" || got.CacheAmount != "0" || got.ReferenceAmount != "0" {
 		t.Fatalf("unpriced anomaly contains non-numeric defaults: %+v", got)
 	}

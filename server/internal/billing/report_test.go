@@ -99,6 +99,19 @@ func TestBuildSummaryUsesCTThenActualQuota(t *testing.T) {
 	}
 }
 
+func TestBuildSummaryUsesVerifiedRequestAmountWithoutRepricing(t *testing.T) {
+	day := time.Date(2026, 8, 1, 0, 0, 0, 0, BusinessLocation)
+	rows := []AggregateRow{{UserID: 7, Username: "alice", ModelName: "dynamic", Day: day, RequestCount: 1, PromptTokens: 25, CompletionTokens: 86, Amount: "0.009100"}}
+	prices := []PriceRecord{{ModelName: "dynamic", Price: Price{TierFrom: 0, EffectiveFrom: day, Input: "999", Output: "999", Cache: "999"}}}
+	items, total := BuildSummary(rows, prices, nil, nil, nil)
+	if len(items) != 1 || items[0].Amount != "0.009100" || total.Amount != "0.009100" {
+		t.Fatalf("request amount was repriced: items=%+v total=%+v", items, total)
+	}
+	if len(items[0].PriceSources) != 1 || items[0].PriceSources[0] != "request_log" {
+		t.Fatalf("price sources = %v", items[0].PriceSources)
+	}
+}
+
 func TestBuildDetailsShowsCTAndQuotaSources(t *testing.T) {
 	day := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
 	rows := []AggregateRow{

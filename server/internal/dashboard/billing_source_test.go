@@ -41,8 +41,8 @@ func TestParseBillingCacheUsageDoesNotDoubleCountAliases(t *testing.T) {
 }
 
 func TestParseBillingCacheUsagePreservesPerRequestRatios(t *testing.T) {
-	v := parseBillingCacheUsage(`{"model_ratio":2.5,"completion_ratio":4,"cache_ratio":0.5,"cache_creation_ratio":1.25,"group_ratio":1}`)
-	if v.ModelRatio != "2.5" || v.CompletionRatio != "4" || v.CacheRatio != "0.5" || v.CacheCreationRatio != "1.25" || v.GroupRatio != "1" {
+	v := parseBillingCacheUsage(`{"model_price":-1,"model_ratio":2.5,"completion_ratio":4,"cache_ratio":0.5,"cache_creation_ratio":1.25,"cache_creation_ratio_5m":1.25,"cache_creation_ratio_1h":2,"group_ratio":1}`)
+	if v.ModelPrice != "-1" || v.ModelRatio != "2.5" || v.CompletionRatio != "4" || v.CacheRatio != "0.5" || v.CacheCreationRatio != "1.25" || v.CacheCreationRatio5m != "1.25" || v.CacheCreationRatio1h != "2" || v.GroupRatio != "1" {
 		t.Fatalf("unexpected ratios: %#v", v)
 	}
 }

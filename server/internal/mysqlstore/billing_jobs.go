@@ -4,6 +4,7 @@ import (
 	"context"
 	"controltower/server/internal/billing"
 	"database/sql"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -127,25 +128,61 @@ func (s Store) CancelBillingJob(ctx context.Context, id string) error {
 	return tx.Commit()
 }
 
+// DeleteFailedBillingJob removes a failed task and all of its database-only
+// intermediate results. Inactive generated files remain registered so the
+// regular file-retention worker can remove them safely from disk.
+func (s Store) DeleteFailedBillingJob(ctx context.Context, id string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var status string
+	if err = tx.QueryRowContext(ctx, `SELECT status FROM billing_jobs WHERE id=? FOR UPDATE`, id).Scan(&status); err != nil {
+		return err
+	}
+	if status != "failed" {
+		return fmt.Errorf("billing job is not failed")
+	}
+	for _, table := range []string{
+		"billing_verification_results", "billing_verification_hourly", "billing_verification_jobs",
+		"billing_request_details", "billing_anomaly_orders", "billing_token_daily_versions",
+		"billing_channel_daily_versions", "billing_channel_hourly", "billing_daily_versions",
+		"billing_hourly", "billing_job_user_settings", "billing_job_steps",
+	} {
+		if _, err = tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE job_id=?`, id); err != nil {
+			return err
+		}
+	}
+	result, err := tx.ExecContext(ctx, `DELETE FROM billing_jobs WHERE id=? AND status='failed'`, id)
+	if err != nil {
+		return err
+	}
+	if affected, affectedErr := result.RowsAffected(); affectedErr != nil || affected != 1 {
+		return fmt.Errorf("failed billing job was not deleted")
+	}
+	return tx.Commit()
+}
+
 func (s Store) ListBillingJobs(ctx context.Context, instanceID, status string, limit int) ([]billing.Job, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 100
 	}
-	query := `SELECT id,instance_id,job_type,user_id,range_from,range_to,status,total_steps,completed_steps,abnormal_rows,error_message,output_path,requested_by,created_at,updated_at FROM billing_jobs`
+	query := `SELECT jobs.id,jobs.instance_id,jobs.job_type,jobs.user_id,jobs.range_from,jobs.range_to,jobs.status,jobs.total_steps,jobs.completed_steps,jobs.abnormal_rows,(SELECT COUNT(*) FROM billing_request_details details WHERE details.job_id=jobs.id),(SELECT COUNT(DISTINCT files.bill_day) FROM billing_user_daily_files files WHERE files.job_id=jobs.id),(SELECT COALESCE(DATE_FORMAT(MAX(files.bill_day),'%Y-%m-%d'),'') FROM billing_user_daily_files files WHERE files.job_id=jobs.id),jobs.error_message,jobs.output_path,jobs.requested_by,jobs.created_at,jobs.updated_at FROM billing_jobs jobs`
 	args := []any{}
 	conditions := []string{}
 	if instanceID != "" {
-		conditions = append(conditions, `instance_id=?`)
+		conditions = append(conditions, `jobs.instance_id=?`)
 		args = append(args, instanceID)
 	}
 	if status != "" {
-		conditions = append(conditions, `status=?`)
+		conditions = append(conditions, `jobs.status=?`)
 		args = append(args, status)
 	}
 	if len(conditions) > 0 {
 		query += ` WHERE ` + strings.Join(conditions, ` AND `)
 	}
-	query += ` ORDER BY FIELD(status,'running','pending','failed','complete'),created_at DESC LIMIT ?`
+	query += ` ORDER BY FIELD(jobs.status,'running','pending','failed','complete'),jobs.created_at DESC LIMIT ?`
 	args = append(args, limit)
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -155,7 +192,7 @@ func (s Store) ListBillingJobs(ctx context.Context, instanceID, status string, l
 	items := []billing.Job{}
 	for rows.Next() {
 		var j billing.Job
-		if err = rows.Scan(&j.ID, &j.InstanceID, &j.JobType, &j.UserID, &j.From, &j.To, &j.Status, &j.TotalSteps, &j.CompletedSteps, &j.AbnormalRows, &j.ErrorMessage, &j.OutputPath, &j.RequestedBy, &j.CreatedAt, &j.UpdatedAt); err != nil {
+		if err = rows.Scan(&j.ID, &j.InstanceID, &j.JobType, &j.UserID, &j.From, &j.To, &j.Status, &j.TotalSteps, &j.CompletedSteps, &j.AbnormalRows, &j.BilledRows, &j.OutputDays, &j.OutputLatestDay, &j.ErrorMessage, &j.OutputPath, &j.RequestedBy, &j.CreatedAt, &j.UpdatedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, j)
@@ -193,6 +230,23 @@ func (s Store) BillingJob(ctx context.Context, id string) (billing.Job, error) {
 	var j billing.Job
 	e := s.db.QueryRowContext(ctx, `SELECT id,instance_id,job_type,user_id,range_from,range_to,status,total_steps,completed_steps,abnormal_rows,error_message,output_path,requested_by,created_at,updated_at FROM billing_jobs WHERE id=?`, id).Scan(&j.ID, &j.InstanceID, &j.JobType, &j.UserID, &j.From, &j.To, &j.Status, &j.TotalSteps, &j.CompletedSteps, &j.AbnormalRows, &j.ErrorMessage, &j.OutputPath, &j.RequestedBy, &j.CreatedAt, &j.UpdatedAt)
 	return j, e
+}
+
+func (s Store) ListBillingJobSteps(ctx context.Context, jobID string) ([]billing.JobStep, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT job_id,step_no,range_from,range_to,status,processed_rows,abnormal_rows,attempts,error_message,cursor_created_at,cursor_id FROM billing_job_steps WHERE job_id=? ORDER BY step_no`, jobID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	steps := []billing.JobStep{}
+	for rows.Next() {
+		var step billing.JobStep
+		if err = rows.Scan(&step.JobID, &step.StepNo, &step.From, &step.To, &step.Status, &step.ProcessedRows, &step.AbnormalRows, &step.Attempts, &step.ErrorMessage, &step.Cursor.CreatedUnix, &step.Cursor.ID); err != nil {
+			return nil, err
+		}
+		steps = append(steps, step)
+	}
+	return steps, rows.Err()
 }
 func (s Store) ListBillingUserSettings(ctx context.Context, site string) (map[int64]billing.UserSetting, error) {
 	rows, e := s.db.QueryContext(ctx, `SELECT instance_id,user_id,use_tiered_pricing,updated_at,updated_by FROM billing_user_settings WHERE instance_id=?`, site)
@@ -232,7 +286,7 @@ func (s Store) PutBillingUserSetting(ctx context.Context, v billing.UserSetting)
 	return e
 }
 
-func (s Store) AppendBillingHour(ctx context.Context, j billing.Job, st billing.JobStep, items []billing.DailyRow, tokens []billing.TokenDailyRow, channels []billing.ChannelDailyRow, bad []billing.AnomalyOrder, c billing.LogCursor, pageRows int64) error {
+func (s Store) AppendBillingHour(ctx context.Context, j billing.Job, st billing.JobStep, items []billing.DailyRow, tokens []billing.TokenDailyRow, channels []billing.ChannelDailyRow, details []billing.RequestDetail, bad []billing.AnomalyOrder, c billing.LogCursor, pageRows int64) error {
 	tx, e := s.db.BeginTx(ctx, nil)
 	if e != nil {
 		return e
@@ -253,6 +307,23 @@ func (s Store) AppendBillingHour(ctx context.Context, j billing.Job, st billing.
 	}
 	for _, v := range channels {
 		_, e = tx.ExecContext(ctx, `INSERT INTO billing_channel_hourly(job_id,instance_id,hour_start,channel_id,channel_name,model_name,group_name,tier_from,request_count,prompt_tokens,completion_tokens,cache_tokens,cache_write_tokens,cache_write_5m_tokens,cache_write_1h_tokens,quota,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE channel_name=VALUES(channel_name),request_count=request_count+VALUES(request_count),prompt_tokens=prompt_tokens+VALUES(prompt_tokens),completion_tokens=completion_tokens+VALUES(completion_tokens),cache_tokens=cache_tokens+VALUES(cache_tokens),cache_write_tokens=cache_write_tokens+VALUES(cache_write_tokens),cache_write_5m_tokens=cache_write_5m_tokens+VALUES(cache_write_5m_tokens),cache_write_1h_tokens=cache_write_1h_tokens+VALUES(cache_write_1h_tokens),quota=quota+VALUES(quota),updated_at=VALUES(updated_at)`, j.ID, j.InstanceID, st.From.UTC(), v.ChannelID, v.ChannelName, v.ModelName, v.GroupName, v.TierFrom, v.RequestCount, v.PromptTokens, v.CompletionTokens, v.CacheTokens, v.CacheWriteTokens, v.CacheWrite5mTokens, v.CacheWrite1hTokens, v.Quota, now)
+		if e != nil {
+			return e
+		}
+	}
+	decimalValue := func(value string) string {
+		if strings.TrimSpace(value) == "" {
+			return "0"
+		}
+		return value
+	}
+	for _, v := range details {
+		charge := v.Charge
+		_, e = tx.ExecContext(ctx, `INSERT INTO billing_request_details(job_id,instance_id,bill_day,source_log_id,created_at,request_id,user_id,username,token_id,token_name,channel_id,channel_name,model_name,billing_mode,matched_tier,prompt_tokens,completion_tokens,cache_read_tokens,cache_write_tokens,cache_write_5m_tokens,cache_write_1h_tokens,input_price,output_price,cache_read_price,cache_write_price,cache_write_5m_price,cache_write_1h_price,per_request_price,input_amount,output_amount,cache_read_amount,cache_write_amount,cache_write_5m_amount,cache_write_1h_amount,total_amount,calculated_quota,logged_quota,created_record_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE token_name=VALUES(token_name),channel_name=VALUES(channel_name),model_name=VALUES(model_name),billing_mode=VALUES(billing_mode),matched_tier=VALUES(matched_tier),prompt_tokens=VALUES(prompt_tokens),completion_tokens=VALUES(completion_tokens),cache_read_tokens=VALUES(cache_read_tokens),cache_write_tokens=VALUES(cache_write_tokens),cache_write_5m_tokens=VALUES(cache_write_5m_tokens),cache_write_1h_tokens=VALUES(cache_write_1h_tokens),input_price=VALUES(input_price),output_price=VALUES(output_price),cache_read_price=VALUES(cache_read_price),cache_write_price=VALUES(cache_write_price),cache_write_5m_price=VALUES(cache_write_5m_price),cache_write_1h_price=VALUES(cache_write_1h_price),per_request_price=VALUES(per_request_price),input_amount=VALUES(input_amount),output_amount=VALUES(output_amount),cache_read_amount=VALUES(cache_read_amount),cache_write_amount=VALUES(cache_write_amount),cache_write_5m_amount=VALUES(cache_write_5m_amount),cache_write_1h_amount=VALUES(cache_write_1h_amount),total_amount=VALUES(total_amount),calculated_quota=VALUES(calculated_quota),logged_quota=VALUES(logged_quota),created_record_at=VALUES(created_record_at)`,
+			v.JobID, v.InstanceID, v.BillDay, v.SourceLogID, time.Unix(v.CreatedUnix, 0).UTC(), v.RequestID, v.UserID, v.Username, v.TokenID, v.TokenName, v.ChannelID, v.ChannelName, v.ModelName, charge.Mode, charge.MatchedTier,
+			v.PromptTokens, v.CompletionTokens, v.CacheReadTokens, v.CacheWriteTokens, v.CacheWrite5mTokens, v.CacheWrite1hTokens,
+			decimalValue(charge.InputPrice), decimalValue(charge.OutputPrice), decimalValue(charge.CacheReadPrice), decimalValue(charge.CacheWritePrice), decimalValue(charge.CacheWrite5mPrice), decimalValue(charge.CacheWrite1hPrice), decimalValue(charge.PerRequestPrice),
+			decimalValue(charge.InputAmount), decimalValue(charge.OutputAmount), decimalValue(charge.CacheReadAmount), decimalValue(charge.CacheWriteAmount), decimalValue(charge.CacheWrite5mAmount), decimalValue(charge.CacheWrite1hAmount), decimalValue(charge.Total), v.CalculatedQuota, v.LoggedQuota, now)
 		if e != nil {
 			return e
 		}
@@ -395,7 +466,34 @@ func (s Store) FinalizeBillingJob(ctx context.Context, j billing.Job) error {
 	}
 	localFrom, localTo := j.From.In(billing.BusinessLocation), j.To.In(billing.BusinessLocation)
 	for d := dateAt(localFrom); d.Before(localTo); d = d.AddDate(0, 0, 1) {
-		if _, e = tx.ExecContext(ctx, `INSERT INTO billing_active_versions(instance_id,day,job_id,activated_at) VALUES(?,?,?,?) ON DUPLICATE KEY UPDATE job_id=VALUES(job_id),activated_at=VALUES(activated_at)`, j.InstanceID, d, j.ID, now); e != nil {
+		// bill_day is a MySQL DATE. Passing a time.Time at Shanghai midnight lets
+		// the driver normalize it to the previous UTC date/time, so equality can
+		// silently match no rows. Always bind the calendar date as YYYY-MM-DD.
+		billDay := d.Format("2006-01-02")
+		// A non-forced range job may omit days already covered by an active bill.
+		// Only activate dates that were actually scheduled for this job, otherwise
+		// a partial regeneration could replace an existing active version with an
+		// empty/incomplete job.
+		var scheduledSteps int
+		if e = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM billing_job_steps WHERE job_id=? AND DATE(CONVERT_TZ(range_from,'+00:00','+08:00'))=?`, j.ID, billDay).Scan(&scheduledSteps); e != nil {
+			return e
+		}
+		if scheduledSteps == 0 {
+			continue
+		}
+		if j.UserID == 0 {
+			if _, e = tx.ExecContext(ctx, `INSERT INTO billing_active_versions(instance_id,day,job_id,activated_at) VALUES(?,?,?,?) ON DUPLICATE KEY UPDATE job_id=VALUES(job_id),activated_at=VALUES(activated_at)`, j.InstanceID, billDay, j.ID, now); e != nil {
+				return e
+			}
+		}
+		insertActive := `INSERT INTO billing_user_daily_active(instance_id,bill_day,user_id,job_id,activated_at) SELECT details.instance_id,details.bill_day,details.user_id,?,? FROM billing_request_details details WHERE details.job_id=? AND details.bill_day=?`
+		insertArgs := []any{j.ID, now, j.ID, billDay}
+		if j.UserID > 0 {
+			insertActive += ` AND details.user_id=?`
+			insertArgs = append(insertArgs, j.UserID)
+		}
+		insertActive += ` GROUP BY details.instance_id,details.bill_day,details.user_id ON DUPLICATE KEY UPDATE job_id=VALUES(job_id),activated_at=VALUES(activated_at)`
+		if _, e = tx.ExecContext(ctx, insertActive, insertArgs...); e != nil {
 			return e
 		}
 	}
@@ -404,6 +502,165 @@ func (s Store) FinalizeBillingJob(ctx context.Context, j billing.Job) error {
 		return e
 	}
 	return tx.Commit()
+}
+
+func (s Store) ListBillingRequestDetailGroups(ctx context.Context, jobID string) ([]billing.UserDailyFile, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT instance_id,bill_day,user_id FROM billing_request_details WHERE job_id=? GROUP BY instance_id,bill_day,user_id ORDER BY bill_day,user_id`, jobID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []billing.UserDailyFile{}
+	for rows.Next() {
+		var item billing.UserDailyFile
+		item.JobID = jobID
+		if err = rows.Scan(&item.InstanceID, &item.BillDay, &item.UserID); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s Store) ListBillingRequestDetails(ctx context.Context, jobID string, day time.Time, userID int64) ([]billing.RequestDetail, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT instance_id,job_id,source_log_id,created_at,request_id,user_id,username,token_id,token_name,channel_id,channel_name,model_name,bill_day,billing_mode,matched_tier,prompt_tokens,completion_tokens,cache_read_tokens,cache_write_tokens,cache_write_5m_tokens,cache_write_1h_tokens,input_price,output_price,cache_read_price,cache_write_price,cache_write_5m_price,cache_write_1h_price,per_request_price,input_amount,output_amount,cache_read_amount,cache_write_amount,cache_write_5m_amount,cache_write_1h_amount,total_amount,calculated_quota,logged_quota FROM billing_request_details WHERE job_id=? AND bill_day=? AND user_id=? ORDER BY created_at,source_log_id`, jobID, day, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []billing.RequestDetail{}
+	for rows.Next() {
+		var item billing.RequestDetail
+		var created time.Time
+		if err = rows.Scan(&item.InstanceID, &item.JobID, &item.SourceLogID, &created, &item.RequestID, &item.UserID, &item.Username, &item.TokenID, &item.TokenName, &item.ChannelID, &item.ChannelName, &item.ModelName, &item.BillDay, &item.Charge.Mode, &item.Charge.MatchedTier, &item.PromptTokens, &item.CompletionTokens, &item.CacheReadTokens, &item.CacheWriteTokens, &item.CacheWrite5mTokens, &item.CacheWrite1hTokens, &item.Charge.InputPrice, &item.Charge.OutputPrice, &item.Charge.CacheReadPrice, &item.Charge.CacheWritePrice, &item.Charge.CacheWrite5mPrice, &item.Charge.CacheWrite1hPrice, &item.Charge.PerRequestPrice, &item.Charge.InputAmount, &item.Charge.OutputAmount, &item.Charge.CacheReadAmount, &item.Charge.CacheWriteAmount, &item.Charge.CacheWrite5mAmount, &item.Charge.CacheWrite1hAmount, &item.Charge.Total, &item.CalculatedQuota, &item.LoggedQuota); err != nil {
+			return nil, err
+		}
+		item.CreatedUnix = created.Unix()
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s Store) PutBillingUserDailyFile(ctx context.Context, item billing.UserDailyFile) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO billing_user_daily_files(job_id,instance_id,bill_day,user_id,relative_path,file_size,sha256,created_at) VALUES(?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE relative_path=VALUES(relative_path),file_size=VALUES(file_size),sha256=VALUES(sha256),created_at=VALUES(created_at)`, item.JobID, item.InstanceID, item.BillDay, item.UserID, item.RelativePath, item.FileSize, item.SHA256, item.CreatedAt)
+	return err
+}
+
+func (s Store) ActiveBillingUserDailyFile(ctx context.Context, site string, day time.Time, userID int64) (billing.UserDailyFile, error) {
+	var item billing.UserDailyFile
+	err := s.db.QueryRowContext(ctx, `SELECT files.job_id,files.instance_id,files.bill_day,files.user_id,files.relative_path,files.file_size,files.sha256,files.created_at FROM billing_user_daily_active active JOIN billing_user_daily_files files ON files.job_id=active.job_id AND files.instance_id=active.instance_id AND files.bill_day=active.bill_day AND files.user_id=active.user_id WHERE active.instance_id=? AND active.bill_day=? AND active.user_id=?`, site, day, userID).Scan(&item.JobID, &item.InstanceID, &item.BillDay, &item.UserID, &item.RelativePath, &item.FileSize, &item.SHA256, &item.CreatedAt)
+	return item, err
+}
+
+func (s Store) BillingActiveDays(ctx context.Context, site string, userID int64, from, to time.Time) (map[string]string, error) {
+	fromDay := from.In(billing.BusinessLocation).Format("2006-01-02")
+	toDay := to.In(billing.BusinessLocation).Format("2006-01-02")
+	query := `SELECT day,job_id FROM billing_active_versions WHERE instance_id=? AND day>=? AND day<?`
+	args := []any{site, fromDay, toDay}
+	if userID > 0 {
+		query = `SELECT bill_day,job_id FROM billing_user_daily_active WHERE instance_id=? AND user_id=? AND bill_day>=? AND bill_day<?`
+		args = []any{site, userID, fromDay, toDay}
+	}
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := map[string]string{}
+	for rows.Next() {
+		var day time.Time
+		var jobID string
+		if err = rows.Scan(&day, &jobID); err != nil {
+			return nil, err
+		}
+		result[day.Format("2006-01-02")] = jobID
+	}
+	return result, rows.Err()
+}
+
+func (s Store) ListExpiredInactiveBillingFiles(ctx context.Context, cutoff time.Time, limit int) ([]billing.UserDailyFile, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 200
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT files.job_id,files.instance_id,files.bill_day,files.user_id,files.relative_path,files.file_size,files.sha256,files.created_at FROM billing_user_daily_files files LEFT JOIN billing_user_daily_active active ON active.job_id=files.job_id AND active.instance_id=files.instance_id AND active.bill_day=files.bill_day AND active.user_id=files.user_id WHERE files.created_at<? AND active.job_id IS NULL ORDER BY files.created_at LIMIT ?`, cutoff, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []billing.UserDailyFile{}
+	for rows.Next() {
+		var item billing.UserDailyFile
+		if err = rows.Scan(&item.JobID, &item.InstanceID, &item.BillDay, &item.UserID, &item.RelativePath, &item.FileSize, &item.SHA256, &item.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s Store) DeleteBillingUserDailyFile(ctx context.Context, item billing.UserDailyFile) error {
+	_, err := s.db.ExecContext(ctx, `DELETE files FROM billing_user_daily_files files LEFT JOIN billing_user_daily_active active ON active.job_id=files.job_id AND active.instance_id=files.instance_id AND active.bill_day=files.bill_day AND active.user_id=files.user_id WHERE files.job_id=? AND files.bill_day=? AND files.user_id=? AND active.job_id IS NULL`, item.JobID, item.BillDay, item.UserID)
+	return err
+}
+
+func (s Store) ListBillingDailyOverview(ctx context.Context, site string, from, to time.Time, limit int) ([]billing.DailyOverview, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 500
+	}
+	query := `SELECT active.instance_id,active.bill_day,COUNT(*),SUM((SELECT COUNT(*) FROM billing_request_details details WHERE details.job_id=active.job_id AND details.bill_day=active.bill_day AND details.user_id=active.user_id)),CAST(SUM((SELECT COALESCE(SUM(details.total_amount),0) FROM billing_request_details details WHERE details.job_id=active.job_id AND details.bill_day=active.bill_day AND details.user_id=active.user_id)) AS CHAR),SUM((SELECT COUNT(*) FROM billing_anomaly_orders anomaly WHERE anomaly.job_id=active.job_id AND anomaly.user_id=active.user_id AND DATE(CONVERT_TZ(anomaly.created_at,'+00:00','+08:00'))=active.bill_day)),SUM(EXISTS(SELECT 1 FROM billing_user_daily_files files WHERE files.job_id=active.job_id AND files.bill_day=active.bill_day AND files.user_id=active.user_id)),MAX(active.activated_at) FROM billing_user_daily_active active WHERE active.bill_day>=? AND active.bill_day<?`
+	args := []any{from, to}
+	if site != "" {
+		query += ` AND active.instance_id=?`
+		args = append(args, site)
+	}
+	query += ` GROUP BY active.instance_id,active.bill_day ORDER BY active.bill_day DESC,active.instance_id LIMIT ?`
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []billing.DailyOverview{}
+	for rows.Next() {
+		var item billing.DailyOverview
+		if err = rows.Scan(&item.InstanceID, &item.Day, &item.UserCount, &item.RequestCount, &item.Amount, &item.AnomalyRows, &item.FileCount, &item.ActivatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s Store) ListBillingUserBillDays(ctx context.Context, site string, from, to time.Time, userID int64, search string, limit int) ([]billing.UserBillDay, error) {
+	if limit <= 0 || limit > 5000 {
+		limit = 5000
+	}
+	query := `SELECT active.instance_id,active.job_id,active.bill_day,active.user_id,COALESCE(MAX(details.username),''),COUNT(details.source_log_id),CAST(COALESCE(SUM(details.total_amount),0) AS CHAR),(SELECT COUNT(*) FROM billing_anomaly_orders anomaly WHERE anomaly.job_id=active.job_id AND anomaly.user_id=active.user_id AND DATE(CONVERT_TZ(anomaly.created_at,'+00:00','+08:00'))=active.bill_day),active.activated_at FROM billing_user_daily_active active LEFT JOIN billing_request_details details ON details.job_id=active.job_id AND details.bill_day=active.bill_day AND details.user_id=active.user_id WHERE active.instance_id=? AND active.bill_day>=? AND active.bill_day<?`
+	args := []any{site, from, to}
+	if userID > 0 {
+		query += ` AND active.user_id=?`
+		args = append(args, userID)
+	}
+	if search = strings.TrimSpace(search); search != "" {
+		query += ` AND (CAST(active.user_id AS CHAR)=? OR EXISTS(SELECT 1 FROM billing_request_details named WHERE named.job_id=active.job_id AND named.bill_day=active.bill_day AND named.user_id=active.user_id AND named.username LIKE ?))`
+		args = append(args, search, "%"+search+"%")
+	}
+	query += ` GROUP BY active.instance_id,active.job_id,active.bill_day,active.user_id,active.activated_at ORDER BY active.bill_day DESC,active.user_id LIMIT ?`
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []billing.UserBillDay{}
+	for rows.Next() {
+		var item billing.UserBillDay
+		if err = rows.Scan(&item.InstanceID, &item.JobID, &item.Day, &item.UserID, &item.Username, &item.RequestCount, &item.Amount, &item.AnomalyRows, &item.ActivatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
 }
 func dateAt(v time.Time) time.Time {
 	y, m, d := v.Date()

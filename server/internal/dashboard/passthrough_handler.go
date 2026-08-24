@@ -180,8 +180,12 @@ func (h *PassthroughHandler) logsPageForBilling(ctx context.Context, site string
 		v.CacheTokens, v.CacheWriteTokens = cache.Read, cache.Write
 		v.CacheWrite5mTokens, v.CacheWrite1hTokens = cache.Write5m, cache.Write1h
 		v.UsageSemantic = cache.Semantic
-		v.ModelRatio, v.CompletionRatio = cache.ModelRatio, cache.CompletionRatio
+		v.ModelPrice, v.ModelRatio, v.CompletionRatio = cache.ModelPrice, cache.ModelRatio, cache.CompletionRatio
 		v.CacheRatio, v.CacheCreationRatio, v.GroupRatio = cache.CacheRatio, cache.CacheCreationRatio, cache.GroupRatio
+		v.CacheCreationRatio5m, v.CacheCreationRatio1h = cache.CacheCreationRatio5m, cache.CacheCreationRatio1h
+		v.BillingMode, v.ExprBase64, v.MatchedTier, v.RequestRules = cache.BillingMode, cache.ExprBase64, cache.MatchedTier, cache.RequestRules
+		v.ImageInputTokens, v.ImageOutputTokens = cache.ImageInput, cache.ImageOutput
+		v.AudioInputTokens, v.AudioOutputTokens = cache.AudioInput, cache.AudioOutput
 		if v.PromptTokens.Valid {
 			rawPrompt := v.PromptTokens.Int64
 			if cache.Semantic == "anthropic" {
@@ -246,11 +250,22 @@ const billingOtherProjection = `CASE WHEN JSON_VALID(l.other) THEN JSON_OBJECT(`
 	`'claude_cache_creation_5_m_tokens',JSON_EXTRACT(l.other,'$.claude_cache_creation_5_m_tokens'),` +
 	`'cache_creation_tokens_1h',JSON_EXTRACT(l.other,'$.cache_creation_tokens_1h'),` +
 	`'claude_cache_creation_1_h_tokens',JSON_EXTRACT(l.other,'$.claude_cache_creation_1_h_tokens'),` +
+	`'model_price',JSON_EXTRACT(l.other,'$.model_price'),` +
 	`'model_ratio',JSON_EXTRACT(l.other,'$.model_ratio'),` +
 	`'completion_ratio',JSON_EXTRACT(l.other,'$.completion_ratio'),` +
 	`'cache_ratio',JSON_EXTRACT(l.other,'$.cache_ratio'),` +
 	`'cache_creation_ratio',JSON_EXTRACT(l.other,'$.cache_creation_ratio'),` +
-	`'group_ratio',JSON_EXTRACT(l.other,'$.group_ratio')) ELSE '{}' END`
+	`'cache_creation_ratio_5m',JSON_EXTRACT(l.other,'$.cache_creation_ratio_5m'),` +
+	`'cache_creation_ratio_1h',JSON_EXTRACT(l.other,'$.cache_creation_ratio_1h'),` +
+	`'group_ratio',JSON_EXTRACT(l.other,'$.group_ratio'),` +
+	`'billing_mode',JSON_EXTRACT(l.other,'$.billing_mode'),` +
+	`'expr_b64',JSON_EXTRACT(l.other,'$.expr_b64'),` +
+	`'matched_tier',JSON_EXTRACT(l.other,'$.matched_tier'),` +
+	`'request_rules',JSON_EXTRACT(l.other,'$.request_rules'),` +
+	`'image_input',JSON_EXTRACT(l.other,'$.image_input'),` +
+	`'image_output',JSON_EXTRACT(l.other,'$.image_output'),` +
+	`'audio_input',JSON_EXTRACT(l.other,'$.audio_input'),` +
+	`'audio_output',JSON_EXTRACT(l.other,'$.audio_output')) ELSE '{}' END`
 
 func (h *PassthroughHandler) RatioSnapshotForBilling(ctx context.Context, site string) (string, error) {
 	db, configured, err := h.database(site)
@@ -452,8 +467,11 @@ func billingCacheTokens(other string) int64 {
 
 type billingCacheUsage struct {
 	Read, Write, Write5m, Write1h                                           int64
+	ImageInput, ImageOutput, AudioInput, AudioOutput                        int64
 	Semantic                                                                string
-	ModelRatio, CompletionRatio, CacheRatio, CacheCreationRatio, GroupRatio string
+	ModelPrice, ModelRatio, CompletionRatio, CacheRatio, CacheCreationRatio string
+	CacheCreationRatio5m, CacheCreationRatio1h, GroupRatio                  string
+	BillingMode, ExprBase64, MatchedTier, RequestRules                      string
 }
 
 func parseBillingCacheUsage(other string) billingCacheUsage {
@@ -529,10 +547,31 @@ func parseBillingCacheUsage(other string) billingCacheUsage {
 	}
 	return billingCacheUsage{
 		Read: read, Write: write, Write5m: write5m, Write1h: write1h, Semantic: semantic,
-		ModelRatio: decimal("model_ratio"), CompletionRatio: decimal("completion_ratio"),
+		ImageInput: number("image_input", "image_tokens"), ImageOutput: number("image_output", "image_output_tokens"),
+		AudioInput: number("audio_input"), AudioOutput: number("audio_output"),
+		ModelPrice: decimal("model_price"), ModelRatio: decimal("model_ratio"), CompletionRatio: decimal("completion_ratio"),
 		CacheRatio: decimal("cache_ratio"), CacheCreationRatio: decimal("cache_creation_ratio"),
-		GroupRatio: decimal("group_ratio"),
+		CacheCreationRatio5m: decimal("cache_creation_ratio_5m"), CacheCreationRatio1h: decimal("cache_creation_ratio_1h"),
+		GroupRatio: decimal("group_ratio"), BillingMode: stringValue(values, "billing_mode"), ExprBase64: stringValue(values, "expr_b64"),
+		MatchedTier: stringValue(values, "matched_tier"), RequestRules: jsonValue(values, "request_rules"),
 	}
+}
+
+func stringValue(values map[string]any, key string) string {
+	value, _ := values[key].(string)
+	return value
+}
+
+func jsonValue(values map[string]any, key string) string {
+	value, ok := values[key]
+	if !ok || value == nil {
+		return ""
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return ""
+	}
+	return string(raw)
 }
 
 // OpenAI-style usage counts cache reads inside prompt_tokens, so cache lanes

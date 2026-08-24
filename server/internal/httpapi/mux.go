@@ -59,7 +59,7 @@ func NewMux(options Options) *http.ServeMux {
 	mux.HandleFunc("/api/agent/heartbeat", agentHandler.HandleHeartbeat)
 	mux.HandleFunc("/api/agent/report", agentHandler.HandleReport)
 
-	dashboardHandler := dashboard.NewHandler(options.Store).WithNameSource(options.Store).WithLogStore(options.Store).WithLogSampleStore(options.Store).WithRuntimeStore(options.Store).WithMetricSource(options.Store).WithAlertStore(options.Store).WithNotificationStore(options.Store).WithChannelSnapshotStore(options.Store).WithNginxTimingStore(options.Store).WithNotificationMaxAttempts(options.NotificationMaxAttempts).WithSettingsProvider(options.SettingsProvider).WithInstanceStore(options.Store)
+	dashboardHandler := dashboard.NewHandler(options.Store).WithNameSource(options.Store).WithLogStore(options.Store).WithLogSampleStore(options.Store).WithRuntimeStore(options.Store).WithMetricSource(options.Store).WithAlertStore(options.Store).WithNotificationStore(options.Store).WithChannelSnapshotStore(options.Store).WithNginxTimingStore(options.Store).WithNotificationMaxAttempts(options.NotificationMaxAttempts).WithSettingsProvider(options.SettingsProvider).WithInstanceStore(options.Store).WithAlertGenerationDisabled()
 	tuningStore := options.TuningStore
 	if tuningStore == nil {
 		tuningStore, _ = any(options.Store).(tuning.Store)
@@ -143,6 +143,9 @@ func NewMux(options Options) *http.ServeMux {
 		preflight, _ := any(options.Store).(dashboard.BillingJobsPreflightStore)
 		jobsHandler := dashboard.BillingJobsHandler{Store: jobs, Preflight: preflight, Source: dashboard.BillingReadonlySource{Handler: passthrough}}
 		mux.Handle("/api/dashboard/billing/jobs", protect(jobsHandler))
+		if steps, stepsOK := any(options.Store).(dashboard.BillingJobStepsStore); stepsOK {
+			mux.Handle("GET /api/dashboard/billing/jobs/steps", protect(dashboard.BillingJobStepsHandler{Store: steps}))
+		}
 		mux.Handle("POST /api/dashboard/billing/backfill", protect(jobsHandler))
 	} else if billingStore, ok := any(options.Store).(billing.RollupStore); ok {
 		billingRollup := billing.RollupService{Source: dashboard.BillingReadonlySource{Handler: passthrough}, Store: billingStore}
@@ -150,6 +153,15 @@ func NewMux(options Options) *http.ServeMux {
 	}
 	if settingsStore, ok := any(options.Store).(dashboard.BillingUserSettingsStore); ok {
 		mux.Handle("/api/dashboard/billing/user-settings", protect(dashboard.BillingUserSettingsHandler{Store: settingsStore}))
+	}
+	if fileStore, ok := any(options.Store).(dashboard.BillingFileStore); ok {
+		mux.Handle("GET /api/dashboard/billing/files", protect(dashboard.BillingFileHandler{Store: fileStore}))
+	}
+	if overviewStore, ok := any(options.Store).(dashboard.BillingOverviewStore); ok {
+		mux.Handle("GET /api/dashboard/billing/overview", protect(dashboard.BillingOverviewHandler{Store: overviewStore}))
+	}
+	if userDaysStore, ok := any(options.Store).(dashboard.BillingUserDaysStore); ok {
+		mux.Handle("GET /api/dashboard/billing/user-days", protect(dashboard.BillingUserDaysHandler{Store: userDaysStore}))
 	}
 	if anomalyStore, ok := any(options.Store).(dashboard.BillingAnomalyStore); ok {
 		mux.Handle("GET /api/dashboard/billing/anomalies", protect(dashboard.BillingAnomalyHandler{Store: anomalyStore}))

@@ -20,6 +20,7 @@ type AggregateRow struct {
 	Day                                                              time.Time
 	RequestCount, PromptTokens, CompletionTokens, CacheTokens, Quota int64
 	CacheWriteTokens, CacheWrite5mTokens, CacheWrite1hTokens         int64
+	Amount                                                           string
 }
 
 type AnomalyCount struct {
@@ -448,6 +449,16 @@ func BuildSummary(rows []AggregateRow, prices []PriceRecord, ratios []GroupRatio
 		a.value.CacheTokens += row.CacheTokens
 		a.value.CacheWriteTokens += row.CacheWriteTokens
 		a.value.Quota += row.Quota
+		if strings.TrimSpace(row.Amount) != "" {
+			amount, amountErr := decimalRat(row.Amount)
+			if amountErr != nil {
+				a.unpriced[row.ModelName] = true
+				continue
+			}
+			a.amount.Add(a.amount, amount)
+			a.sources["request_log"] = true
+			continue
+		}
 		price, ok := selectPriceForTier(priceByModel[row.ModelName], row.Day, row.TierFrom)
 		ratio, source := "1", "ct"
 		if ok {
@@ -525,6 +536,12 @@ func BuildDetails(rows []AggregateRow, prices []PriceRecord, ratios []GroupRatio
 	items := make([]DetailItem, 0, len(rows))
 	for _, row := range rows {
 		item := DetailItem{Day: row.Day.Format("2006-01-02"), ModelName: row.ModelName, GroupName: row.GroupName, TierFrom: row.TierFrom, RequestCount: row.RequestCount, PromptTokens: row.PromptTokens, CompletionTokens: row.CompletionTokens, CacheTokens: row.CacheTokens, CacheWriteTokens: row.CacheWriteTokens, CacheWrite5mTokens: row.CacheWrite5mTokens, CacheWrite1hTokens: row.CacheWrite1hTokens, Quota: row.Quota}
+		if strings.TrimSpace(row.Amount) != "" {
+			item.Amount = row.Amount
+			item.PriceSource = "request_log"
+			items = append(items, item)
+			continue
+		}
 		price, ok := selectPriceForTier(priceByModel[row.ModelName], row.Day, row.TierFrom)
 		ratio := "1"
 		item.PriceSource = "ct"
@@ -605,6 +622,25 @@ func BuildInvoice(rows []AggregateRow, prices []PriceRecord, ratios []GroupRatio
 	}
 	itemsByKey := map[string]*invoiceAcc{}
 	for _, row := range rows {
+		if strings.TrimSpace(row.Amount) != "" {
+			key := strings.Join([]string{row.ModelName, "request_log"}, "\x00")
+			a := itemsByKey[key]
+			if a == nil {
+				a = &invoiceAcc{item: InvoiceItem{ModelName: row.ModelName, Discount: discount, PriceSource: "request_log"}, input: new(big.Rat), output: new(big.Rat), cache: new(big.Rat), cacheWrite: new(big.Rat), total: new(big.Rat)}
+				itemsByKey[key] = a
+			}
+			a.item.RequestCount += row.RequestCount
+			a.item.PromptTokens += row.PromptTokens
+			a.item.CompletionTokens += row.CompletionTokens
+			a.item.CacheTokens += row.CacheTokens
+			a.item.CacheWriteTokens += row.CacheWriteTokens
+			amount, amountErr := decimalRat(row.Amount)
+			if amountErr != nil {
+				return nil, InvoiceTotal{}, amountErr
+			}
+			a.total.Add(a.total, amount)
+			continue
+		}
 		price, ok := selectPriceForTier(priceByModel[row.ModelName], row.Day, row.TierFrom)
 		ratio, source := "1", "ct"
 		unpriced := false
@@ -723,20 +759,8 @@ func multipliedDecimal(value, ratio string) (string, error) {
 	return new(big.Rat).Mul(left, right).FloatString(6), nil
 }
 
-func selectPriceForTier(prices []Price, _ time.Time, tier int64) (Price, bool) {
-	var current time.Time
-	for _, p := range prices {
-		if current.IsZero() || p.EffectiveFrom.After(current) {
-			current = p.EffectiveFrom
-		}
-	}
-	if current.IsZero() {
-		return Price{}, false
-	}
-	for _, p := range prices {
-		if p.TierFrom == tier && p.EffectiveFrom.Equal(current) {
-			return p, true
-		}
-	}
-	return Price{}, false
+func selectPriceForTier(prices []Price, occurredAt time.Time, _ int64) (Price, bool) {
+	// Older immutable bill rows may retain a non-zero tier_from. Reading them
+	// must still follow the current billing policy: CT tiers are not applied.
+	return SelectPrice(prices, occurredAt, 0)
 }

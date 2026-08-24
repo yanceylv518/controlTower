@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"controltower/server/internal/aggregator"
+	"controltower/server/internal/ingest"
 	"controltower/server/internal/storage"
 )
 
@@ -104,5 +105,24 @@ func TestHandleAlertsRejectsNonGET(t *testing.T) {
 
 	if rr.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("expected 405, got %d", rr.Code)
+	}
+}
+
+func TestHandleAlertsGenerationDisabledReadsHistoryWithoutWriting(t *testing.T) {
+	store := ingest.NewMemoryStore()
+	now := time.Now().UTC()
+	if err := store.UpsertCurrentAlerts([]storage.Alert{{ID: "existing", InstanceID: "inst-1", RuleKey: "old", Status: "resolved", FirstSeenAt: now, LastSeenAt: now}}, now); err != nil {
+		t.Fatal(err)
+	}
+	errorRate := 1.0
+	handler := NewHandler(staticOverviewSource{metrics: []aggregator.Metric{{InstanceID: "inst-1", BucketTime: now, DimensionType: "instance", DimensionKey: "inst-1", RequestCount: 10, ErrorCount: 10, ErrorRate: &errorRate}}}).WithAlertStore(store).WithAlertGenerationDisabled()
+	rr := httptest.NewRecorder()
+	handler.HandleAlerts(rr, httptest.NewRequest(http.MethodGet, "/api/dashboard/alerts", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("code=%d body=%s", rr.Code, rr.Body.String())
+	}
+	items, err := store.QueryAlerts(storage.AlertQuery{Limit: 100})
+	if err != nil || len(items) != 1 || items[0].ID != "existing" {
+		t.Fatalf("alerts=%#v err=%v", items, err)
 	}
 }

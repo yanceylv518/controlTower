@@ -15,11 +15,17 @@ func TestPruneRetentionGroupsAndZeroDisabled(t *testing.T) {
 	now := time.Now().UTC()
 	r := &retentionRecorder{calls: map[string]time.Time{}}
 	pruneRetention(r, 0, 90, 7, 6, 30, now)
-	if len(r.calls) != 7 {
+	if len(r.calls) != 10 {
 		t.Fatalf("calls=%v", r.calls)
 	}
 	if _, ok := r.calls["log_events"]; ok {
 		t.Fatal("zero-day detail pruned")
+	}
+	analysisCutoff := now.Add(-analysisRetentionDays * 24 * time.Hour)
+	for _, kind := range []string{"log_samples", "nginx_timing_1m", "nginx_slow_samples"} {
+		if !r.calls[kind].Equal(analysisCutoff) {
+			t.Fatalf("%s cutoff=%v", kind, r.calls[kind])
+		}
 	}
 	if !r.calls["metric_5m"].Equal(now.Add(-90 * 24 * time.Hour)) {
 		t.Fatalf("metric cutoff=%v", r.calls["metric_5m"])

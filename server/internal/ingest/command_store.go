@@ -80,6 +80,9 @@ func (s *MemoryStore) QueryChannelCommands(q storage.ChannelCommandQuery) ([]sto
 	return append([]storage.ChannelCommand(nil), all[offset:end]...), nil
 }
 func (s *MemoryStore) InsertOperationAudit(v storage.OperationAudit) error {
+	if !storage.IsConfigurationAuditOperation(v.OperationType) {
+		return nil
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.operationAudits[v.ID]; ok {

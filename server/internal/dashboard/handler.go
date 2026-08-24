@@ -29,11 +29,13 @@ type Handler struct {
 	names                   *nameResolver
 	settings                *settings.Provider
 	instanceStore           InstanceStore
+	alertGenerationDisabled bool
 }
 
 func (h Handler) WithNotificationMaxAttempts(v int) Handler         { h.notificationMaxAttempts = v; return h }
 func (h Handler) WithSettingsProvider(v *settings.Provider) Handler { h.settings = v; return h }
 func (h Handler) WithInstanceStore(v InstanceStore) Handler         { h.instanceStore = v; return h }
+func (h Handler) WithAlertGenerationDisabled() Handler              { h.alertGenerationDisabled = true; return h }
 
 func NewHandler(source OverviewSource) Handler {
 	return Handler{source: source}

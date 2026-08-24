@@ -75,11 +75,11 @@ func TestRollupDayUses24SegmentsAndClassifiesBeforeAggregation(t *testing.T) {
 	if len(pauses) != 23 {
 		t.Fatalf("segment pauses = %d, want 23", len(pauses))
 	}
-	if result.Rows != 2 || len(store.replacements) != 1 || len(store.replacements[0]) != 2 {
+	if result.Rows != 1 || len(store.replacements) != 1 || len(store.replacements[0]) != 1 {
 		t.Fatalf("unexpected rollup result: %#v %#v", result, store.replacements)
 	}
-	if store.replacements[0][0].TierFrom != 0 || store.replacements[0][1].TierFrom != 128000 {
-		t.Fatalf("tiers = %d,%d", store.replacements[0][0].TierFrom, store.replacements[0][1].TierFrom)
+	if store.replacements[0][0].TierFrom != 0 {
+		t.Fatalf("tier = %d, want base tier 0", store.replacements[0][0].TierFrom)
 	}
 	if store.ratios != 1 || store.balances != 1 {
 		t.Fatalf("snapshots ratio=%d balance=%d", store.ratios, store.balances)

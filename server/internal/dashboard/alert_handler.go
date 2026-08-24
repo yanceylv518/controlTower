@@ -70,6 +70,19 @@ func (h Handler) HandleAlerts(w http.ResponseWriter, r *http.Request) {
 		writeDashboardError(w, http.StatusMethodNotAllowed, "method_not_allowed")
 		return
 	}
+	if h.alertGenerationDisabled {
+		if h.alertStore == nil {
+			writeDashboardJSON(w, http.StatusOK, AlertListResponse{Items: []AlertItem{}})
+			return
+		}
+		alerts, err := h.alertStore.QueryAlerts(parseAlertQuery(r))
+		if err != nil {
+			writeDashboardError(w, http.StatusInternalServerError, "query_failed")
+			return
+		}
+		writeDashboardJSON(w, http.StatusOK, AlertListResponse{Items: storageAlertsToItems(alerts)})
+		return
+	}
 	computed, err := h.currentAlerts()
 	if err != nil {
 		writeDashboardError(w, http.StatusInternalServerError, "query_failed")

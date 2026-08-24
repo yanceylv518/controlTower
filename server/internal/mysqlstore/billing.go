@@ -11,19 +11,15 @@ import (
 
 func (s Store) QueryBillingAggregates(ctx context.Context, instanceID string, from, to time.Time, userIDs []int64) ([]billing.AggregateRow, error) {
 	dayFrom, dayTo := billingDayBounds(from, to)
-	query := `SELECT instance_id,user_id,MAX(username),model_name,group_name,tier_from,day,SUM(request_count),SUM(prompt_tokens),SUM(completion_tokens),SUM(cache_tokens),SUM(cache_write_tokens),SUM(cache_write_5m_tokens),SUM(cache_write_1h_tokens),SUM(quota) FROM (
-SELECT v.instance_id,v.user_id,v.username,v.model_name,v.group_name,v.tier_from,v.day,v.request_count,v.prompt_tokens,v.completion_tokens,v.cache_tokens,v.cache_write_tokens,v.cache_write_5m_tokens,v.cache_write_1h_tokens,v.quota FROM billing_daily_versions v JOIN billing_active_versions a ON a.instance_id=v.instance_id AND a.day=v.day AND a.job_id=v.job_id WHERE v.instance_id=? AND v.day>=? AND v.day<?
-UNION ALL
-SELECT d.instance_id,d.user_id,d.username,d.model_name,d.group_name,d.tier_from,d.day,d.request_count,d.prompt_tokens,d.completion_tokens,d.cache_tokens,d.cache_write_tokens,d.cache_write_5m_tokens,d.cache_write_1h_tokens,d.quota FROM billing_daily d LEFT JOIN billing_active_versions a ON a.instance_id=d.instance_id AND a.day=d.day WHERE d.instance_id=? AND d.day>=? AND d.day<? AND a.job_id IS NULL
-) billing_rows WHERE 1=1`
-	args := []any{instanceID, dayFrom, dayTo, instanceID, dayFrom, dayTo}
+	query := `SELECT details.instance_id,details.user_id,MAX(details.username),details.model_name,'' group_name,0 tier_from,details.bill_day,COUNT(*),SUM(details.prompt_tokens),SUM(details.completion_tokens),SUM(details.cache_read_tokens),SUM(details.cache_write_tokens),SUM(details.cache_write_5m_tokens),SUM(details.cache_write_1h_tokens),SUM(details.calculated_quota),CAST(SUM(details.total_amount) AS CHAR) FROM billing_request_details details JOIN billing_user_daily_active active ON active.instance_id=details.instance_id AND active.bill_day=details.bill_day AND active.user_id=details.user_id AND active.job_id=details.job_id WHERE details.instance_id=? AND details.bill_day>=? AND details.bill_day<?`
+	args := []any{instanceID, dayFrom, dayTo}
 	if len(userIDs) > 0 {
-		query += ` AND user_id IN (` + strings.TrimRight(strings.Repeat("?,", len(userIDs)), ",") + `)`
+		query += ` AND details.user_id IN (` + strings.TrimRight(strings.Repeat("?,", len(userIDs)), ",") + `)`
 		for _, id := range userIDs {
 			args = append(args, id)
 		}
 	}
-	query += ` GROUP BY instance_id,user_id,model_name,group_name,tier_from,day ORDER BY user_id,day,model_name,group_name,tier_from`
+	query += ` GROUP BY details.instance_id,details.user_id,details.model_name,details.bill_day ORDER BY details.user_id,details.bill_day,details.model_name`
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -32,7 +28,7 @@ SELECT d.instance_id,d.user_id,d.username,d.model_name,d.group_name,d.tier_from,
 	var out []billing.AggregateRow
 	for rows.Next() {
 		var v billing.AggregateRow
-		if err = rows.Scan(&v.InstanceID, &v.UserID, &v.Username, &v.ModelName, &v.GroupName, &v.TierFrom, &v.Day, &v.RequestCount, &v.PromptTokens, &v.CompletionTokens, &v.CacheTokens, &v.CacheWriteTokens, &v.CacheWrite5mTokens, &v.CacheWrite1hTokens, &v.Quota); err != nil {
+		if err = rows.Scan(&v.InstanceID, &v.UserID, &v.Username, &v.ModelName, &v.GroupName, &v.TierFrom, &v.Day, &v.RequestCount, &v.PromptTokens, &v.CompletionTokens, &v.CacheTokens, &v.CacheWriteTokens, &v.CacheWrite5mTokens, &v.CacheWrite1hTokens, &v.Quota, &v.Amount); err != nil {
 			return nil, err
 		}
 		out = append(out, v)
@@ -41,7 +37,7 @@ SELECT d.instance_id,d.user_id,d.username,d.model_name,d.group_name,d.tier_from,
 }
 
 func (s Store) QueryBillingAggregatesForJob(ctx context.Context, jobID string, userIDs []int64) ([]billing.AggregateRow, error) {
-	query := `SELECT instance_id,user_id,MAX(username),model_name,group_name,tier_from,day,SUM(request_count),SUM(prompt_tokens),SUM(completion_tokens),SUM(cache_tokens),SUM(cache_write_tokens),SUM(cache_write_5m_tokens),SUM(cache_write_1h_tokens),SUM(quota) FROM billing_daily_versions WHERE job_id=?`
+	query := `SELECT instance_id,user_id,MAX(username),model_name,'' group_name,0 tier_from,bill_day,COUNT(*),SUM(prompt_tokens),SUM(completion_tokens),SUM(cache_read_tokens),SUM(cache_write_tokens),SUM(cache_write_5m_tokens),SUM(cache_write_1h_tokens),SUM(calculated_quota),CAST(SUM(total_amount) AS CHAR) FROM billing_request_details WHERE job_id=?`
 	args := []any{jobID}
 	if len(userIDs) > 0 {
 		query += ` AND user_id IN (` + strings.TrimRight(strings.Repeat("?,", len(userIDs)), ",") + `)`
@@ -49,7 +45,7 @@ func (s Store) QueryBillingAggregatesForJob(ctx context.Context, jobID string, u
 			args = append(args, id)
 		}
 	}
-	query += ` GROUP BY instance_id,user_id,model_name,group_name,tier_from,day ORDER BY user_id,day,model_name,group_name,tier_from`
+	query += ` GROUP BY instance_id,user_id,model_name,bill_day ORDER BY user_id,bill_day,model_name`
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -58,7 +54,7 @@ func (s Store) QueryBillingAggregatesForJob(ctx context.Context, jobID string, u
 	var out []billing.AggregateRow
 	for rows.Next() {
 		var v billing.AggregateRow
-		if err = rows.Scan(&v.InstanceID, &v.UserID, &v.Username, &v.ModelName, &v.GroupName, &v.TierFrom, &v.Day, &v.RequestCount, &v.PromptTokens, &v.CompletionTokens, &v.CacheTokens, &v.CacheWriteTokens, &v.CacheWrite5mTokens, &v.CacheWrite1hTokens, &v.Quota); err != nil {
+		if err = rows.Scan(&v.InstanceID, &v.UserID, &v.Username, &v.ModelName, &v.GroupName, &v.TierFrom, &v.Day, &v.RequestCount, &v.PromptTokens, &v.CompletionTokens, &v.CacheTokens, &v.CacheWriteTokens, &v.CacheWrite5mTokens, &v.CacheWrite1hTokens, &v.Quota, &v.Amount); err != nil {
 			return nil, err
 		}
 		out = append(out, v)
@@ -67,7 +63,7 @@ func (s Store) QueryBillingAggregatesForJob(ctx context.Context, jobID string, u
 }
 
 func (s Store) QueryBillingAggregatesForJobRange(ctx context.Context, jobID string, from, to time.Time, userIDs []int64) ([]billing.AggregateRow, error) {
-	query := `SELECT instance_id,user_id,MAX(username),model_name,group_name,tier_from,DATE(CONVERT_TZ(hour_start,'+00:00','+08:00')),SUM(request_count),SUM(prompt_tokens),SUM(completion_tokens),SUM(cache_tokens),SUM(cache_write_tokens),SUM(cache_write_5m_tokens),SUM(cache_write_1h_tokens),SUM(quota) FROM billing_hourly WHERE job_id=? AND hour_start>=? AND hour_start<?`
+	query := `SELECT instance_id,user_id,MAX(username),model_name,'' group_name,0 tier_from,bill_day,COUNT(*),SUM(prompt_tokens),SUM(completion_tokens),SUM(cache_read_tokens),SUM(cache_write_tokens),SUM(cache_write_5m_tokens),SUM(cache_write_1h_tokens),SUM(calculated_quota),CAST(SUM(total_amount) AS CHAR) FROM billing_request_details WHERE job_id=? AND created_at>=? AND created_at<?`
 	args := []any{jobID, from.UTC(), to.UTC()}
 	if len(userIDs) > 0 {
 		query += ` AND user_id IN (` + strings.TrimRight(strings.Repeat("?,", len(userIDs)), ",") + `)`
@@ -75,7 +71,7 @@ func (s Store) QueryBillingAggregatesForJobRange(ctx context.Context, jobID stri
 			args = append(args, id)
 		}
 	}
-	query += ` GROUP BY instance_id,user_id,model_name,group_name,tier_from,DATE(CONVERT_TZ(hour_start,'+00:00','+08:00')) ORDER BY user_id,DATE(CONVERT_TZ(hour_start,'+00:00','+08:00')),model_name,group_name,tier_from`
+	query += ` GROUP BY instance_id,user_id,model_name,bill_day ORDER BY user_id,bill_day,model_name`
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -84,7 +80,7 @@ func (s Store) QueryBillingAggregatesForJobRange(ctx context.Context, jobID stri
 	var out []billing.AggregateRow
 	for rows.Next() {
 		var v billing.AggregateRow
-		if err = rows.Scan(&v.InstanceID, &v.UserID, &v.Username, &v.ModelName, &v.GroupName, &v.TierFrom, &v.Day, &v.RequestCount, &v.PromptTokens, &v.CompletionTokens, &v.CacheTokens, &v.CacheWriteTokens, &v.CacheWrite5mTokens, &v.CacheWrite1hTokens, &v.Quota); err != nil {
+		if err = rows.Scan(&v.InstanceID, &v.UserID, &v.Username, &v.ModelName, &v.GroupName, &v.TierFrom, &v.Day, &v.RequestCount, &v.PromptTokens, &v.CompletionTokens, &v.CacheTokens, &v.CacheWriteTokens, &v.CacheWrite5mTokens, &v.CacheWrite1hTokens, &v.Quota, &v.Amount); err != nil {
 			return nil, err
 		}
 		out = append(out, v)
@@ -318,11 +314,16 @@ func (s Store) PutBillingBalanceSnapshots(ctx context.Context, instanceID string
 		return err
 	}
 	defer tx.Rollback()
-	if _, err = tx.ExecContext(ctx, `DELETE FROM billing_balance_snapshot WHERE instance_id=? AND day=?`, instanceID, day); err != nil {
+	// MySQL DATE values must be bound as calendar strings. Binding a Shanghai
+	// midnight time.Time can be normalized to the previous UTC date by the
+	// driver, making the delete miss rows that the following insert conflicts
+	// with. The upsert also makes retries safe if another snapshot writer wins.
+	billDay := day.In(billing.BusinessLocation).Format("2006-01-02")
+	if _, err = tx.ExecContext(ctx, `DELETE FROM billing_balance_snapshot WHERE instance_id=? AND day=?`, instanceID, billDay); err != nil {
 		return err
 	}
 	for userID, balance := range balances {
-		if _, err = tx.ExecContext(ctx, `INSERT INTO billing_balance_snapshot(instance_id,user_id,day,balance) VALUES(?,?,?,?)`, instanceID, userID, day, balance); err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO billing_balance_snapshot(instance_id,user_id,day,balance) VALUES(?,?,?,?) ON DUPLICATE KEY UPDATE balance=VALUES(balance)`, instanceID, userID, billDay, balance); err != nil {
 			return err
 		}
 	}

@@ -29,6 +29,34 @@ type BillingJobsPreflightStore interface {
 	ListBillingModelMetadata(context.Context, string) ([]billing.ModelMetadata, error)
 }
 
+type BillingFailedJobDeleteStore interface {
+	DeleteFailedBillingJob(context.Context, string) error
+}
+
+type BillingActiveDaysStore interface {
+	BillingActiveDays(context.Context, string, int64, time.Time, time.Time) (map[string]string, error)
+}
+
+type BillingJobStepsStore interface {
+	ListBillingJobSteps(context.Context, string) ([]billing.JobStep, error)
+}
+
+type BillingJobStepsHandler struct{ Store BillingJobStepsStore }
+
+func (h BillingJobStepsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.URL.Query().Get("id"))
+	if id == "" {
+		writeDashboardError(w, http.StatusBadRequest, "invalid_query")
+		return
+	}
+	steps, err := h.Store.ListBillingJobSteps(r.Context(), id)
+	if err != nil {
+		writeDashboardError(w, http.StatusInternalServerError, "billing_job_steps_query_failed")
+		return
+	}
+	writeDashboardJSON(w, http.StatusOK, map[string]any{"items": steps})
+}
+
 type BillingJobsHandler struct {
 	Store     BillingJobsStore
 	Preflight BillingJobsPreflightStore
@@ -53,6 +81,19 @@ func (h BillingJobsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		if err != nil {
 			writeDashboardError(w, http.StatusInternalServerError, "billing_job_query_failed")
+			return
+		}
+		if job.Status == "failed" {
+			store, ok := h.Store.(BillingFailedJobDeleteStore)
+			if !ok {
+				writeDashboardError(w, http.StatusNotImplemented, "billing_job_delete_unavailable")
+				return
+			}
+			if err = store.DeleteFailedBillingJob(r.Context(), id); err != nil {
+				writeDashboardError(w, http.StatusInternalServerError, "billing_job_delete_failed")
+				return
+			}
+			writeDashboardJSON(w, http.StatusOK, map[string]any{"deleted": true, "id": id})
 			return
 		}
 		if job.Status != "pending" && job.Status != "running" {
@@ -129,11 +170,15 @@ func (h BillingJobsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if scope == "" {
 		scope = "all"
 	}
-	if scope != "all" && scope != "channel" {
+	if scope != "all" && scope != "channel" && scope != "user" {
 		writeDashboardError(w, 400, "invalid_scope")
 		return
 	}
-	requestKey := billingRequestKey(req.InstanceID, scope, from, to)
+	if scope == "user" && req.UserID <= 0 {
+		writeDashboardError(w, 400, "invalid_user_id")
+		return
+	}
+	requestKey := billingRequestKey(req.InstanceID, scope+fmt.Sprintf(":%d", req.UserID), from, to)
 	jobType := "generate"
 	if scope == "channel" {
 		jobType = "channel_generate"
@@ -143,10 +188,10 @@ func (h BillingJobsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// request-key reuse so reuse keeps only its real job — deduplicating
 	// concurrent submits of a range whose job is still pending/running.
 	if !req.Force {
-		if covered, coverErr := h.Store.LatestCoveringBillingJob(r.Context(), req.InstanceID, jobType, from, to); coverErr == nil {
+		if covered, coverErr := h.Store.LatestCoveringBillingJob(r.Context(), req.InstanceID, jobType, from, to); scope != "user" && coverErr == nil {
 			writeDashboardJSON(w, http.StatusConflict, map[string]any{"error": "billing_range_already_covered", "covering_job": covered})
 			return
-		} else if coverErr != sql.ErrNoRows {
+		} else if scope != "user" && coverErr != sql.ErrNoRows {
 			writeDashboardError(w, 500, "billing_job_query_failed")
 			return
 		}
@@ -200,6 +245,36 @@ func (h BillingJobsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if scope == "channel" {
 		job.JobType = jobType
+	}
+	if scope == "user" {
+		job.UserID = req.UserID
+	}
+	if !req.Force && scope != "channel" {
+		if coverage, ok := h.Store.(BillingActiveDaysStore); ok {
+			activeDays, coverageErr := coverage.BillingActiveDays(r.Context(), req.InstanceID, job.UserID, from, to)
+			if coverageErr != nil {
+				writeDashboardError(w, 500, "billing_coverage_query_failed")
+				return
+			}
+			missing := make([]billing.JobStep, 0, len(steps))
+			for _, step := range steps {
+				if _, exists := activeDays[step.From.In(billing.BusinessLocation).Format("2006-01-02")]; exists {
+					continue
+				}
+				step.StepNo = len(missing)
+				missing = append(missing, step)
+			}
+			steps = missing
+			job.TotalSteps = len(steps)
+			if len(steps) == 0 {
+				for _, activeJobID := range activeDays {
+					if existing, existingErr := h.Store.BillingJob(r.Context(), activeJobID); existingErr == nil {
+						writeDashboardJSON(w, http.StatusOK, map[string]any{"accepted": true, "reused": true, "job": existing})
+						return
+					}
+				}
+			}
+		}
 	}
 	if req.Force {
 		job.RequestKey = requestKey + ":force:" + job.ID

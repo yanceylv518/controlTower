@@ -3,20 +3,19 @@ import { ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
   ArrowDown,
-  Bell,
   Coin,
   Connection,
   DataAnalysis,
-  DataLine,
   Document,
   HomeFilled,
   Management,
   Monitor,
-  Notification,
   Operation,
   SetUp,
   TrendCharts,
   User,
+  Fold,
+  Expand,
 } from "@element-plus/icons-vue";
 import { useAuthStore } from "../stores/auth";
 import SiteSelect from "./SiteSelect.vue";
@@ -25,6 +24,11 @@ defineProps<{ title: string }>();
 const auth = useAuthStore();
 const route = useRoute();
 const router = useRouter();
+const sidebarCollapsed = ref(localStorage.getItem("ct.sidebar.collapsed") === "1");
+function toggleSidebar() {
+  sidebarCollapsed.value = !sidebarCollapsed.value;
+  localStorage.setItem("ct.sidebar.collapsed", sidebarCollapsed.value ? "1" : "0");
+}
 const nav = [
   {
     group: "监控分析",
@@ -32,9 +36,6 @@ const nav = [
       ["/customers", "客户监控", User],
       ["/channels", "渠道监控", Connection],
       ["/models", "模型监控", DataAnalysis],
-      ["/alerts", "告警中心", Bell],
-      ["/samples", "样本分析", Document],
-      ["/latency", "延时分诊", DataLine],
       ["/runtime", "系统状态", Monitor],
     ],
   },
@@ -51,10 +52,8 @@ const nav = [
     items: [
       ["/billing", "用户账单", Coin],
       ["/billing/channels", "渠道账单", Coin],
-      ["/billing/generated", "已生成账单", Document],
-      ["/billing/tasks", "后台任务中心", Operation],
-      ["/billing-reconciliation", "账单核对", DataAnalysis],
-      ["/models/manage", "模型管理", SetUp],
+      ["/billing/anomalies", "计费异常", DataAnalysis],
+      ["/billing/tasks", "账单任务", Operation],
     ],
   },
   {
@@ -62,9 +61,8 @@ const nav = [
     items: [
       ["/tuning", "调权中心", TrendCharts],
       ["/instances", "实例管理", Management],
-      ["/notifications", "通知设置", Notification],
-      ["/audits", "操作审计", Operation],
       ["/access-users", "访问账号", User],
+      ["/models/manage", "模型管理", SetUp],
       ["/settings", "系统设置", SetUp],
     ],
   },
@@ -92,18 +90,23 @@ async function logout() {
 }
 </script>
 <template>
-  <div class="shell">
+  <div class="shell" :class="{ 'sidebar-collapsed': sidebarCollapsed }">
     <aside class="sidebar">
-      <div class="logo"><span>CT</span> Control Tower</div>
+      <div class="logo-row">
+        <div class="logo"><span>CT</span><b>Control Tower</b></div>
+        <button class="sidebar-toggle" type="button" :title="sidebarCollapsed ? '展开菜单' : '收起菜单'" :aria-label="sidebarCollapsed ? '展开菜单' : '收起菜单'" @click="toggleSidebar">
+          <el-icon><component :is="sidebarCollapsed ? Expand : Fold" /></el-icon>
+        </button>
+      </div>
       <nav>
         <template v-if="auth.user?.role === 'viewer'">
-          <router-link v-for="item in viewerNav" :key="item[0]" :to="item[0]">
+          <router-link v-for="item in viewerNav" :key="item[0]" :to="item[0]" :title="sidebarCollapsed ? item[1] : undefined">
             <el-icon><component :is="item[2]" /></el-icon>
             <span>{{ item[1] }}</span>
           </router-link>
         </template>
         <template v-else>
-          <router-link to="/" class="nav-home">
+          <router-link to="/" class="nav-home" :title="sidebarCollapsed ? '总览' : undefined">
             <el-icon><HomeFilled /></el-icon>
             <span>总览</span>
           </router-link>
@@ -112,11 +115,12 @@ async function logout() {
             <span>{{ section.group }}</span>
             <el-icon :class="{ expanded: activeGroup === section.group }"><ArrowDown /></el-icon>
           </button>
-          <div v-show="activeGroup === section.group" class="nav-items">
+          <div v-show="sidebarCollapsed || activeGroup === section.group" class="nav-items">
             <router-link
               v-for="item in section.items"
               :key="item[0]"
               :to="item[0]"
+              :title="sidebarCollapsed ? item[1] : undefined"
             >
               <el-icon><component :is="item[2]" /></el-icon>
               <span>{{ item[1] }}</span>

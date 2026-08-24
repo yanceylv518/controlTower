@@ -30,15 +30,21 @@ func (h BillingDetailHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	}
-	job, jobErr := billingJobForRead(r, h.Store, instanceID, "generate", from, to)
+	explicitJob := strings.TrimSpace(r.URL.Query().Get("job_id")) != ""
+	job, jobErr := billing.Job{}, error(nil)
 	var rows []billing.AggregateRow
-	if jobErr == nil && job.Status == "complete" {
+	if !explicitJob {
+		rows, err = h.Store.QueryBillingAggregates(r.Context(), instanceID, from, to, []int64{userID})
+	} else {
+		job, jobErr = billingJobForRead(r, h.Store, instanceID, "generate", from, to)
+	}
+	if explicitJob && jobErr == nil && job.Status == "complete" {
 		if from.After(job.From) || to.Before(job.To) {
 			rows, err = h.Store.QueryBillingAggregatesForJobRange(r.Context(), job.ID, from, to, []int64{userID})
 		} else {
 			rows, err = h.Store.QueryBillingAggregatesForJob(r.Context(), job.ID, []int64{userID})
 		}
-	} else {
+	} else if explicitJob {
 		writeBillingReadConflict(w, jobErr)
 		return
 	}
@@ -71,7 +77,7 @@ func (h BillingDetailHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	items := billing.BuildDetails(rows, prices, ratios, snapshots)
-	if jobErr == nil && job.Status == "complete" {
+	if explicitJob && jobErr == nil && job.Status == "complete" {
 		counts, countErr := anomalyCountsForRange(h.Store, r.Context(), job.ID, from, to)
 		if countErr != nil {
 			writeDashboardError(w, http.StatusInternalServerError, "billing_query_failed")

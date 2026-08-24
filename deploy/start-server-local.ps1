@@ -4,6 +4,8 @@
     [string]$AgentToken = "local-agent-token",
     [string]$DashboardToken = "local-dashboard-token",
     [string]$AgentTokenPepper = "local-token-pepper",
+    [string]$SecretKey = "control-tower-local-dev-secret-key-v1",
+    [string]$DatabaseName = "control_tower_test",
     [int]$AggregationIntervalSeconds = 60,
     [int]$NotificationIntervalSeconds = 30
 )
@@ -29,14 +31,17 @@ if ([string]::IsNullOrWhiteSpace($CTMySQLTestPassword) -or $CTMySQLTestPassword 
 $env:CT_SERVER_LISTEN_ADDR = $ListenAddr
 $env:CT_PUBLIC_BASE_URL = "http://$ListenAddr"
 $env:CT_DATABASE_DRIVER = "mysql"
-$env:CT_DATABASE_DSN = "{0}:{1}@tcp({2}:{3})/{4}?parseTime=true&loc=UTC" -f $CTMySQLTestUser, $CTMySQLTestPassword, $CTMySQLHost, $CTMySQLPort, $CTMySQLTestDatabase
+$env:CT_DATABASE_DSN = "{0}:{1}@tcp({2}:{3})/{4}?parseTime=true&loc=UTC" -f $CTMySQLTestUser, $CTMySQLTestPassword, $CTMySQLHost, $CTMySQLPort, $DatabaseName
 $env:CT_MIGRATION_PATH = "server/migrations/001_init.sql"
 $env:CT_AGGREGATION_INTERVAL_SECONDS = [string]$AggregationIntervalSeconds
 $env:CT_NOTIFICATION_INTERVAL_SECONDS = [string]$NotificationIntervalSeconds
 $env:CT_AGENT_TOKEN = $AgentToken
 $env:CT_DASHBOARD_TOKEN = $DashboardToken
 $env:CT_AGENT_TOKEN_PEPPER = $AgentTokenPepper
+$env:CT_SECRET_KEY = $SecretKey
 $env:CT_API_ONLY = "true"
+$env:GOCACHE = Join-Path $PSScriptRoot "..\local\go-build-cache"
+New-Item -ItemType Directory -Force -Path $env:GOCACHE | Out-Null
 
 Push-Location (Join-Path $PSScriptRoot "..")
 try {

@@ -12,18 +12,42 @@ import (
 )
 
 type preflightJobsStore struct {
-	created  bool
-	active   *billing.Job
-	covering *billing.Job
-	jobs     []billing.Job
+	created      bool
+	active       *billing.Job
+	covering     *billing.Job
+	jobs         []billing.Job
+	createdJob   billing.Job
+	createdSteps []billing.JobStep
+	activeDays   map[string]string
+	jobsByID     map[string]billing.Job
 }
 
-func (s *preflightJobsStore) CreateBillingJob(context.Context, billing.Job, []billing.JobStep) error {
+func (s *preflightJobsStore) CreateBillingJob(_ context.Context, job billing.Job, steps []billing.JobStep) error {
 	s.created = true
+	s.createdJob = job
+	s.createdSteps = steps
 	return nil
 }
-func (s *preflightJobsStore) BillingJob(context.Context, string) (billing.Job, error) {
+
+func TestBillingJobCanTargetOneUserEvenWhenFullRangeExists(t *testing.T) {
+	covering := billing.Job{ID: "full-job", Status: "complete"}
+	store := &preflightJobsStore{covering: &covering}
+	handler := BillingJobsHandler{Store: store}
+	body := `{"instance_id":"demo","from":"2026-08-01 00:00:00","to":"2026-08-02 00:00:00","scope":"user","user_id":42}`
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest("POST", "/api/dashboard/billing/jobs", strings.NewReader(body)))
+	if rec.Code != 202 || !store.created || store.createdJob.UserID != 42 || store.createdJob.JobType != "generate" {
+		t.Fatalf("code=%d created=%v job=%+v body=%s", rec.Code, store.created, store.createdJob, rec.Body.String())
+	}
+}
+func (s *preflightJobsStore) BillingJob(_ context.Context, id string) (billing.Job, error) {
+	if job, ok := s.jobsByID[id]; ok {
+		return job, nil
+	}
 	return billing.Job{}, context.Canceled
+}
+func (s *preflightJobsStore) BillingActiveDays(context.Context, string, int64, time.Time, time.Time) (map[string]string, error) {
+	return s.activeDays, nil
 }
 func (s *preflightJobsStore) BillingJobByRequestKey(context.Context, string) (billing.Job, error) {
 	return billing.Job{}, sql.ErrNoRows
@@ -44,6 +68,34 @@ func (s *preflightJobsStore) LatestCoveringBillingJob(context.Context, string, s
 	return billing.Job{}, sql.ErrNoRows
 }
 func (s *preflightJobsStore) CancelBillingJob(context.Context, string) error { return nil }
+
+func TestBillingUserRangeReusesActiveDays(t *testing.T) {
+	store := &preflightJobsStore{activeDays: map[string]string{"2026-08-02": "old-day"}}
+	handler := BillingJobsHandler{Store: store}
+	body := `{"instance_id":"demo","from":"2026-08-01 00:00:00","to":"2026-08-04 00:00:00","scope":"user","user_id":42}`
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest("POST", "/api/dashboard/billing/jobs", strings.NewReader(body)))
+	if rec.Code != 202 || len(store.createdSteps) != 2 || store.createdJob.TotalSteps != 2 {
+		t.Fatalf("code=%d steps=%#v job=%+v body=%s", rec.Code, store.createdSteps, store.createdJob, rec.Body.String())
+	}
+	for _, step := range store.createdSteps {
+		if step.From.In(billing.BusinessLocation).Format("2006-01-02") == "2026-08-02" {
+			t.Fatal("active user-day was scheduled again")
+		}
+	}
+}
+
+func TestBillingUserRangeFullyCoveredReturnsExistingBill(t *testing.T) {
+	existing := billing.Job{ID: "old-day", InstanceID: "demo", UserID: 42, Status: "complete"}
+	store := &preflightJobsStore{activeDays: map[string]string{"2026-08-01": existing.ID}, jobsByID: map[string]billing.Job{existing.ID: existing}}
+	handler := BillingJobsHandler{Store: store}
+	body := `{"instance_id":"demo","from":"2026-08-01 00:00:00","to":"2026-08-02 00:00:00","scope":"user","user_id":42}`
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest("POST", "/api/dashboard/billing/jobs", strings.NewReader(body)))
+	if rec.Code != 200 || store.created || !strings.Contains(rec.Body.String(), `"reused":true`) {
+		t.Fatalf("code=%d created=%v body=%s", rec.Code, store.created, rec.Body.String())
+	}
+}
 
 type preflightMetadataStore struct{ contexts map[string]int64 }
 

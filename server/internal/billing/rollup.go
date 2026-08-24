@@ -211,6 +211,7 @@ func (s RollupService) sleep(ctx context.Context, duration time.Duration) error 
 	}
 }
 func dateOnly(value time.Time) time.Time {
-	year, month, day := value.Date()
-	return time.Date(year, month, day, 0, 0, 0, 0, value.Location())
+	local := value.In(BusinessLocation)
+	year, month, day := local.Date()
+	return time.Date(year, month, day, 0, 0, 0, 0, BusinessLocation)
 }

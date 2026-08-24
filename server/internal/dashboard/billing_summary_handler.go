@@ -119,7 +119,9 @@ func (h BillingSummaryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var rows []billing.AggregateRow
-	if jobID != "" {
+	if !explicitJob && jobErr == nil {
+		rows, err = h.Store.QueryBillingAggregates(r.Context(), instanceID, dataFrom, dataTo, userIDs)
+	} else if jobID != "" {
 		if r.URL.Query().Get("covered") == "1" && (dataFrom.After(job.From) || dataTo.Before(job.To)) {
 			rows, err = h.Store.QueryBillingAggregatesForJobRange(r.Context(), jobID, dataFrom, dataTo, userIDs)
 		} else {
@@ -130,6 +132,9 @@ func (h BillingSummaryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		writeDashboardError(w, http.StatusInternalServerError, "billing_query_failed")
 		return
 	}
+	// Legacy generated jobs have no per-request amount column. Prices are only
+	// retained for reading those historical rows; current rows carry Amount and
+	// BuildSummary never re-prices them.
 	prices, err := h.Store.ListBillingPrices(r.Context(), instanceID)
 	if err != nil {
 		writeDashboardError(w, http.StatusInternalServerError, "billing_query_failed")

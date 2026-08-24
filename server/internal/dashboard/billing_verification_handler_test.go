@@ -93,7 +93,7 @@ func TestBillingVerificationCreateIsIdempotent(t *testing.T) {
 	req = httptest.NewRequest(http.MethodPost, "/api/dashboard/billing/verification", strings.NewReader(`{"source_job_id":"source-job"}`))
 	w = httptest.NewRecorder()
 	BillingVerificationHandler{Store: store}.ServeHTTP(w, req)
-	if w.Code != http.StatusAccepted || store.created.JobType != "verify" || store.created.TotalSteps != 31*24 {
+	if w.Code != http.StatusAccepted || store.created.JobType != "verify" || store.created.TotalSteps != 31 {
 		t.Fatalf("unexpected create response: code=%d body=%s job=%+v", w.Code, w.Body.String(), store.created)
 	}
 }

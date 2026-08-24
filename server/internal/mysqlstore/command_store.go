@@ -137,6 +137,9 @@ func (s Store) QueryChannelCommands(q storage.ChannelCommandQuery) ([]storage.Ch
 }
 
 func (s Store) InsertOperationAudit(v storage.OperationAudit) error {
+	if !storage.IsConfigurationAuditOperation(v.OperationType) {
+		return nil
+	}
 	_, e := s.db.ExecContext(context.Background(), `INSERT IGNORE INTO operation_audits(id,instance_id,operation_type,target_type,target_id,actor_id,before_summary,after_summary,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, v.ID, v.InstanceID, v.OperationType, v.TargetType, v.TargetID, v.ActorID, v.BeforeSummary, v.AfterSummary, v.Status, v.CreatedAt)
 	return e
 }

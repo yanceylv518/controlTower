@@ -39,17 +39,25 @@ func TestAmountPricesCacheWritesAndOneHourMultiplier(t *testing.T) {
 	}
 }
 
-func TestSelectPriceUsesCurrentScheduleRegardlessOfLogDate(t *testing.T) {
+func TestSelectPriceUsesBaseScheduleEffectiveAtLogTime(t *testing.T) {
 	day1 := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 	day2 := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
 	prices := []Price{{EffectiveFrom: day1, TierFrom: 0, Input: "1"}, {EffectiveFrom: day1, TierFrom: 128000, Input: "2"}, {EffectiveFrom: day2, TierFrom: 0, Input: "3"}, {EffectiveFrom: day2, TierFrom: 128000, Input: "4"}}
 	price, ok := SelectPrice(prices, day2, 128000)
-	if !ok || price.Input != "4" {
+	if !ok || price.Input != "3" || price.TierFrom != 0 {
 		t.Fatalf("selected %#v, ok=%v", price, ok)
 	}
 	price, ok = SelectPrice(prices, day1, 127999)
-	if !ok || price.Input != "3" {
+	if !ok || price.Input != "1" {
 		t.Fatalf("selected %#v, ok=%v", price, ok)
+	}
+	price, ok = SelectPrice(prices, day2.Add(-time.Nanosecond), 128000)
+	if !ok || price.Input != "1" || price.TierFrom != 0 {
+		t.Fatalf("selected %#v immediately before price change, ok=%v", price, ok)
+	}
+	price, ok = SelectPrice(prices, day1.Add(-time.Nanosecond), 0)
+	if ok {
+		t.Fatalf("selected future price %#v", price)
 	}
 }
 

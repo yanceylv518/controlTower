@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"math/big"
 	"strings"
 	"time"
@@ -28,9 +29,12 @@ type PagedLogRecord struct {
 	// Per-request ratios are copied from new-api logs.other. They preserve the
 	// pricing that was actually used for this request; an empty value means the
 	// legacy log did not record that ratio.
-	ModelRatio, CompletionRatio, CacheRatio, CacheCreationRatio, GroupRatio string
-	RequestID, UpstreamRequestID, Username, TokenName, ModelName, GroupName string
-	ChannelName                                                             string
+	ModelPrice, ModelRatio, CompletionRatio, CacheRatio, CacheCreationRatio  string
+	CacheCreationRatio5m, CacheCreationRatio1h, GroupRatio                   string
+	BillingMode, ExprBase64, MatchedTier, RequestRules                       string
+	ImageInputTokens, ImageOutputTokens, AudioInputTokens, AudioOutputTokens int64
+	RequestID, UpstreamRequestID, Username, TokenName, ModelName, GroupName  string
+	ChannelName                                                              string
 	// SourcePromptTokens preserves logs.prompt_tokens before the billing
 	// source separates cache reads/writes from ordinary input tokens.
 	SourcePromptTokens, PromptTokens, CompletionTokens sql.NullInt64
@@ -40,6 +44,9 @@ type LogCursor struct{ CreatedUnix, ID int64 }
 
 type PageSource interface {
 	LogsPage(context.Context, string, time.Time, time.Time, LogCursor, int) ([]PagedLogRecord, error)
+}
+type UserPageSource interface {
+	DetailedLogsPage(context.Context, string, int64, time.Time, time.Time, LogCursor, int) ([]PagedLogRecord, error)
 }
 type SnapshotSource interface {
 	RatioSnapshot(context.Context, string) (string, error)
@@ -59,29 +66,38 @@ type UserSetting struct {
 }
 
 type Job struct {
-	ID             string    `json:"id"`
-	RequestKey     string    `json:"-"`
-	InstanceID     string    `json:"instance_id"`
-	JobType        string    `json:"job_type"`
-	UserID         int64     `json:"user_id"`
-	From           time.Time `json:"range_from"`
-	To             time.Time `json:"range_to"`
-	Status         string    `json:"status"`
-	TotalSteps     int       `json:"total_steps"`
-	CompletedSteps int       `json:"completed_steps"`
-	AbnormalRows   int64     `json:"abnormal_rows"`
-	ErrorMessage   string    `json:"error_message,omitempty"`
-	OutputPath     string    `json:"output_path,omitempty"`
-	RequestedBy    string    `json:"requested_by"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	ID              string    `json:"id"`
+	RequestKey      string    `json:"-"`
+	InstanceID      string    `json:"instance_id"`
+	JobType         string    `json:"job_type"`
+	UserID          int64     `json:"user_id"`
+	From            time.Time `json:"range_from"`
+	To              time.Time `json:"range_to"`
+	Status          string    `json:"status"`
+	TotalSteps      int       `json:"total_steps"`
+	CompletedSteps  int       `json:"completed_steps"`
+	AbnormalRows    int64     `json:"abnormal_rows"`
+	BilledRows      int64     `json:"billed_rows"`
+	OutputDays      int64     `json:"output_days"`
+	OutputLatestDay string    `json:"output_latest_day,omitempty"`
+	ErrorMessage    string    `json:"error_message,omitempty"`
+	OutputPath      string    `json:"output_path,omitempty"`
+	RequestedBy     string    `json:"requested_by"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 type JobStep struct {
-	JobID    string
-	StepNo   int
-	From, To time.Time
-	Cursor   LogCursor
+	JobID         string    `json:"job_id"`
+	StepNo        int       `json:"step_no"`
+	From          time.Time `json:"range_from"`
+	To            time.Time `json:"range_to"`
+	Status        string    `json:"status"`
+	ProcessedRows int64     `json:"processed_rows"`
+	AbnormalRows  int64     `json:"abnormal_rows"`
+	Attempts      int       `json:"attempts"`
+	ErrorMessage  string    `json:"error_message,omitempty"`
+	Cursor        LogCursor `json:"-"`
 }
 
 type VerificationRow struct {
@@ -159,6 +175,47 @@ type AnomalyOrder struct {
 	DetectedAt                                                                                     time.Time `json:"detected_at"`
 }
 
+type RequestDetail struct {
+	InstanceID, JobID, RequestID, Username, TokenName, ChannelName, ModelName string
+	SourceLogID, CreatedUnix, UserID, TokenID, ChannelID                      int64
+	BillDay                                                                   time.Time
+	PromptTokens, CompletionTokens                                            int64
+	CacheReadTokens, CacheWriteTokens                                         int64
+	CacheWrite5mTokens, CacheWrite1hTokens                                    int64
+	Charge                                                                    LogCharge
+	CalculatedQuota, LoggedQuota                                              int64
+}
+
+type UserDailyFile struct {
+	JobID, InstanceID, RelativePath, SHA256 string
+	BillDay                                 time.Time
+	UserID, FileSize                        int64
+	CreatedAt                               time.Time
+}
+
+type DailyOverview struct {
+	InstanceID   string    `json:"instance_id"`
+	Day          time.Time `json:"day"`
+	UserCount    int64     `json:"user_count"`
+	RequestCount int64     `json:"request_count"`
+	AnomalyRows  int64     `json:"anomaly_rows"`
+	FileCount    int64     `json:"file_count"`
+	Amount       string    `json:"amount"`
+	ActivatedAt  time.Time `json:"activated_at"`
+}
+
+type UserBillDay struct {
+	InstanceID   string    `json:"instance_id"`
+	JobID        string    `json:"job_id"`
+	Day          time.Time `json:"day"`
+	UserID       int64     `json:"user_id"`
+	Username     string    `json:"username"`
+	RequestCount int64     `json:"request_count"`
+	AnomalyRows  int64     `json:"anomaly_rows"`
+	Amount       string    `json:"amount"`
+	ActivatedAt  time.Time `json:"activated_at"`
+}
+
 type JobStore interface {
 	CreateBillingJob(context.Context, Job, []JobStep) error
 	ClaimBillingStep(context.Context) (Job, JobStep, bool, error)
@@ -167,7 +224,7 @@ type JobStore interface {
 	ListBillingModelMetadata(context.Context, string) ([]ModelMetadata, error)
 	ListBillingPrices(context.Context, string) ([]PriceRecord, error)
 	ListBillingGroupRatios(context.Context, string) ([]GroupRatio, error)
-	AppendBillingHour(context.Context, Job, JobStep, []DailyRow, []TokenDailyRow, []ChannelDailyRow, []AnomalyOrder, LogCursor, int64) error
+	AppendBillingHour(context.Context, Job, JobStep, []DailyRow, []TokenDailyRow, []ChannelDailyRow, []RequestDetail, []AnomalyOrder, LogCursor, int64) error
 	CompleteBillingStep(context.Context, Job, JobStep, int64, int64) error
 	FailBillingStep(context.Context, Job, JobStep, error) error
 	FinalizeBillingJob(context.Context, Job) error
@@ -187,6 +244,16 @@ type JobUserSettingsSnapshotStore interface {
 	BillingUserSettingsForJob(context.Context, string) (map[int64]UserSetting, error)
 }
 
+type JobFileGenerator interface {
+	GenerateJobFiles(context.Context, Job) error
+}
+
+type UserDailyFileStore interface {
+	ListBillingRequestDetailGroups(context.Context, string) ([]UserDailyFile, error)
+	ListBillingRequestDetails(context.Context, string, time.Time, int64) ([]RequestDetail, error)
+	PutBillingUserDailyFile(context.Context, UserDailyFile) error
+}
+
 func NewJob(instanceID string, from, to time.Time, requestedBy string) (Job, []JobStep, error) {
 	if strings.TrimSpace(instanceID) == "" || !to.After(from) || to.Sub(from) > 60*24*time.Hour {
 		return Job{}, nil, fmt.Errorf("invalid billing range")
@@ -198,10 +265,8 @@ func NewJob(instanceID string, from, to time.Time, requestedBy string) (Job, []J
 	steps := []JobStep{}
 	n := 0
 	for start := from; start.Before(to); {
-		end := start.Truncate(time.Hour).Add(time.Hour)
-		if !end.After(start) {
-			end = start.Add(time.Hour)
-		}
+		local := start.In(BusinessLocation)
+		end := time.Date(local.Year(), local.Month(), local.Day()+1, 0, 0, 0, 0, BusinessLocation)
 		if end.After(to) {
 			end = to
 		}
@@ -225,6 +290,7 @@ func NewVerificationJob(source Job, requestedBy string) (Job, []JobStep, error) 
 type JobRunner struct {
 	Source    PageSource
 	Store     JobStore
+	Files     JobFileGenerator
 	Poll      time.Duration
 	PagePause time.Duration
 }
@@ -267,41 +333,20 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 	if job.JobType == "verify" {
 		return r.processVerificationStep(ctx, job, step)
 	}
-	prices, err := r.Store.ListBillingPrices(ctx, job.InstanceID)
-	if err != nil {
-		return err
-	}
-	ratios, err := r.Store.ListBillingGroupRatios(ctx, job.InstanceID)
-	if err != nil {
-		return err
+	quotaPerUnit := defaultQuotaPerUnit
+	if source, ok := r.Source.(SnapshotSource); ok {
+		raw, snapshotErr := source.RatioSnapshot(ctx, job.InstanceID)
+		if snapshotErr != nil {
+			return snapshotErr
+		}
+		quotaPerUnit, snapshotErr = quotaPerUnitForReport(raw)
+		if snapshotErr != nil {
+			return snapshotErr
+		}
 	}
 	metadata, err := r.Store.ListBillingModelMetadata(ctx, job.InstanceID)
 	if err != nil {
 		return err
-	}
-	settings, err := r.Store.ListBillingUserSettings(ctx, job.InstanceID)
-	if err != nil {
-		return err
-	}
-	if snapshotStore, ok := r.Store.(JobUserSettingsSnapshotStore); ok {
-		snapshot, snapshotErr := snapshotStore.BillingUserSettingsForJob(ctx, job.ID)
-		if snapshotErr != nil {
-			return snapshotErr
-		}
-		// New jobs always contain user 0 as a snapshot marker. Jobs created
-		// before this feature have no marker and retain the legacy fallback.
-		if _, snapshotted := snapshot[0]; snapshotted {
-			delete(snapshot, 0)
-			settings = snapshot
-		}
-	}
-	priceByModel := map[string][]Price{}
-	for _, p := range prices {
-		priceByModel[p.ModelName] = append(priceByModel[p.ModelName], p.Price)
-	}
-	ratioByGroup := map[string]string{}
-	for _, v := range ratios {
-		ratioByGroup[v.GroupName] = v.Ratio
 	}
 	maxByModel := map[string]int64{}
 	for _, m := range metadata {
@@ -311,6 +356,13 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 	var processed, abnormal int64
 	for {
 		logs, e := ReadPageWithRetry(ctx, fmt.Sprintf("site=%s page=generate", job.InstanceID), cursor, func() ([]PagedLogRecord, error) {
+			if job.UserID > 0 {
+				source, ok := r.Source.(UserPageSource)
+				if !ok {
+					return nil, fmt.Errorf("billing user page source unavailable")
+				}
+				return source.DetailedLogsPage(ctx, job.InstanceID, job.UserID, step.From, step.To, cursor, BillingPageSize)
+			}
 			return r.Source.LogsPage(ctx, job.InstanceID, step.From, step.To, cursor, BillingPageSize)
 		})
 		if e != nil {
@@ -337,22 +389,26 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 		}
 		tokenAcc := map[tokenKey]TokenDailyRow{}
 		anomalies := []AnomalyOrder{}
+		requestDetails := []RequestDetail{}
 		for _, log := range logs {
-			setting, configured := settings[log.UserID]
-			useTiers := !configured || setting.UseTieredPricing
 			reasons := AnomalyReasons(log, maxByModel[log.ModelName])
+			verification, pricingReason := VerifyLogChargeReason(log, quotaPerUnit)
+			if pricingReason != "" {
+				reasons = append(reasons, pricingReason)
+			}
 			if len(reasons) > 0 {
 				item := AnomalyOrder{InstanceID: job.InstanceID, SourceLogID: log.ID, JobID: job.ID, CreatedAt: time.Unix(log.CreatedUnix, 0), RequestID: log.RequestID, UpstreamRequestID: log.UpstreamRequestID, UserID: log.UserID, Username: log.Username, TokenID: log.TokenID, TokenName: log.TokenName, ChannelID: log.ChannelID, ChannelName: log.ChannelName, ModelName: log.ModelName, GroupName: log.GroupName, PromptTokens: SourcePromptTokens(log), CompletionTokens: log.CompletionTokens, CacheTokens: log.CacheTokens, CacheWriteTokens: log.CacheWriteTokens, CacheWrite5mTokens: log.CacheWrite5mTokens, CacheWrite1hTokens: log.CacheWrite1hTokens, Quota: log.Quota, MaxContextTokens: maxByModel[log.ModelName], Reasons: strings.Join(reasons, ","), DetectedAt: time.Now().UTC()}
-				fillAnomalyAmounts(&item, log, priceByModel[log.ModelName], ratioByGroup[log.GroupName], step.From, useTiers)
+				fillAnomalyCharge(&item, verification.Charge)
 				anomalies = append(anomalies, item)
 				continue
 			}
+			requestDetails = append(requestDetails, RequestDetail{
+				InstanceID: job.InstanceID, JobID: job.ID, SourceLogID: log.ID, CreatedUnix: log.CreatedUnix, BillDay: dateOnly(step.From), RequestID: log.RequestID,
+				UserID: log.UserID, Username: log.Username, TokenID: log.TokenID, TokenName: log.TokenName, ChannelID: log.ChannelID, ChannelName: log.ChannelName, ModelName: log.ModelName,
+				PromptTokens: nullableInt64(log.PromptTokens), CompletionTokens: nullableInt64(log.CompletionTokens), CacheReadTokens: log.CacheTokens, CacheWriteTokens: log.CacheWriteTokens,
+				CacheWrite5mTokens: log.CacheWrite5mTokens, CacheWrite1hTokens: log.CacheWrite1hTokens, Charge: verification.Charge, CalculatedQuota: verification.CalculatedQuota, LoggedQuota: log.Quota,
+			})
 			tier := int64(0)
-			if useTiers {
-				if p, found := SelectPrice(priceByModel[log.ModelName], step.From, RequestContextTokens(log)); found {
-					tier = p.TierFrom
-				}
-			}
 			k := key{log.UserID, log.ModelName, log.GroupName, tier}
 			row := acc[k]
 			row.InstanceID = job.InstanceID
@@ -369,7 +425,7 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 			row.CacheWriteTokens += log.CacheWriteTokens
 			row.CacheWrite5mTokens += log.CacheWrite5mTokens
 			row.CacheWrite1hTokens += log.CacheWrite1hTokens
-			row.Quota += log.Quota
+			row.Quota += verification.CalculatedQuota
 			row.UpdatedAt = time.Now().UTC()
 			acc[k] = row
 			tk := tokenKey{log.UserID, log.TokenID, tier, log.ModelName, log.GroupName}
@@ -384,7 +440,7 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 			tr.CacheWriteTokens += log.CacheWriteTokens
 			tr.CacheWrite5mTokens += log.CacheWrite5mTokens
 			tr.CacheWrite1hTokens += log.CacheWrite1hTokens
-			tr.Quota += log.Quota
+			tr.Quota += verification.CalculatedQuota
 			tr.UpdatedAt = time.Now().UTC()
 			tokenAcc[tk] = tr
 			ck := channelKey{log.ChannelID, log.ModelName, log.GroupName, tier}
@@ -403,7 +459,7 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 			cr.CacheWriteTokens += log.CacheWriteTokens
 			cr.CacheWrite5mTokens += log.CacheWrite5mTokens
 			cr.CacheWrite1hTokens += log.CacheWrite1hTokens
-			cr.Quota += log.Quota
+			cr.Quota += verification.CalculatedQuota
 			cr.UpdatedAt = time.Now().UTC()
 			channelAcc[ck] = cr
 		}
@@ -423,7 +479,7 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 		cursor = LogCursor{last.CreatedUnix, last.ID}
 		processed += int64(len(logs))
 		abnormal += int64(len(anomalies))
-		if e = r.Store.AppendBillingHour(ctx, job, step, rows, tokenRows, channelRows, anomalies, cursor, int64(len(logs))); e != nil {
+		if e = r.Store.AppendBillingHour(ctx, job, step, rows, tokenRows, channelRows, requestDetails, anomalies, cursor, int64(len(logs))); e != nil {
 			return e
 		}
 		if len(logs) < BillingPageSize {
@@ -473,7 +529,17 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 				}
 			}
 		}
-		return r.Store.FinalizeBillingJob(ctx, latest)
+		if err = r.Store.FinalizeBillingJob(ctx, latest); err != nil {
+			return err
+		}
+		// Files are delivery artifacts, not the source of truth. Workbook
+		// failures must not hide a successfully calculated and activated bill.
+		if r.Files != nil {
+			if fileErr := r.Files.GenerateJobFiles(ctx, job); fileErr != nil {
+				log.Printf("billing file generation job=%s: %v", job.ID, fileErr)
+			}
+		}
+		return nil
 	}
 	return err
 }
@@ -565,7 +631,7 @@ func (r JobRunner) processVerificationStep(ctx context.Context, job Job, step Jo
 	return nil
 }
 
-func fillAnomalyAmounts(out *AnomalyOrder, log PagedLogRecord, prices []Price, ratio string, at time.Time, useTiers bool) {
+func fillAnomalyCharge(out *AnomalyOrder, charge LogCharge) {
 	// Unpriced anomalies are still valid anomaly records. MySQL DECIMAL columns
 	// cannot accept an empty string, so keep every monetary field numeric even
 	// when no matching model price exists.
@@ -579,52 +645,26 @@ func fillAnomalyAmounts(out *AnomalyOrder, log PagedLogRecord, prices []Price, r
 	out.CacheWriteAmount = "0"
 	out.ReferenceAmount = "0"
 	out.ActualAmount = "0"
-	if ratio == "" {
-		ratio = "1"
-	}
-	prompt, completion := int64(0), int64(0)
-	if log.PromptTokens.Valid {
-		prompt = log.PromptTokens.Int64
-	}
-	if log.CompletionTokens.Valid {
-		completion = log.CompletionTokens.Int64
-	}
-	priceContext := log.ContextTokens
-	if priceContext == 0 {
-		priceContext = prompt
-	}
-	if !useTiers {
-		priceContext = 0
-	}
-	price, ok := SelectPrice(prices, at, priceContext)
-	if !ok {
+	if charge.Total == "" {
 		return
 	}
-	out.InputPrice, _ = multipliedDecimal(price.Input, ratio)
-	out.OutputPrice, _ = multipliedDecimal(price.Output, ratio)
-	out.CachePrice, _ = multipliedDecimal(price.Cache, ratio)
-	out.CacheWritePrice, _ = multipliedDecimal(decimalOrZero(price.CacheWrite), ratio)
-	zeroPrice := Price{Input: "0", Output: "0", Cache: "0", CacheWrite: "0"}
-	inputPrice := zeroPrice
-	inputPrice.Input = price.Input
-	outputPrice := zeroPrice
-	outputPrice.Output = price.Output
-	cachePrice := zeroPrice
-	cachePrice.Cache = price.Cache
-	writePrice := zeroPrice
-	writePrice.CacheWrite = price.CacheWrite
-	input, _ := Amount(Usage{PromptTokens: prompt}, inputPrice, ratio)
-	output, _ := Amount(Usage{CompletionTokens: completion}, outputPrice, ratio)
-	cache, _ := Amount(Usage{CacheTokens: log.CacheTokens}, cachePrice, ratio)
-	write, _ := Amount(Usage{CacheWriteTokens: log.CacheWriteTokens, CacheWrite5mTokens: log.CacheWrite5mTokens, CacheWrite1hTokens: log.CacheWrite1hTokens}, writePrice, ratio)
-	out.InputAmount = FormatAmount(input, 6)
-	out.OutputAmount = FormatAmount(output, 6)
-	out.CacheAmount = FormatAmount(cache, 6)
+	out.InputPrice, out.OutputPrice, out.CachePrice = decimalOrZero(charge.InputPrice), decimalOrZero(charge.OutputPrice), decimalOrZero(charge.CacheReadPrice)
+	out.CacheWritePrice = decimalOrZero(charge.CacheWritePrice)
+	if out.CacheWritePrice == "0" {
+		out.CacheWritePrice = decimalOrZero(charge.CacheWrite5mPrice)
+	}
+	if out.CacheWritePrice == "0" {
+		out.CacheWritePrice = decimalOrZero(charge.CacheWrite1hPrice)
+	}
+	out.InputAmount, out.OutputAmount, out.CacheAmount = decimalOrZero(charge.InputAmount), decimalOrZero(charge.OutputAmount), decimalOrZero(charge.CacheReadAmount)
+	write := new(big.Rat)
+	for _, value := range []string{charge.CacheWriteAmount, charge.CacheWrite5mAmount, charge.CacheWrite1hAmount} {
+		if parsed, err := decimalRat(decimalOrZero(value)); err == nil {
+			write.Add(write, parsed)
+		}
+	}
 	out.CacheWriteAmount = FormatAmount(write, 6)
-	total := new(big.Rat).Add(input, output)
-	total.Add(total, cache)
-	total.Add(total, write)
-	out.ReferenceAmount = FormatAmount(total, 6)
+	out.ReferenceAmount = charge.Total
 }
 
 // AnomalyReasons classifies a normalized source log using the same rules as

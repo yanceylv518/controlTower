@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
-import type { BillingReconciliationRow } from "@ct/shared";
+import { useRouter } from "vue-router";
+import { ApiError, type BillingReconciliationRow } from "@ct/shared";
 import { dashboard } from "../api";
 import AppShell from "../components/AppShell.vue";
 import AsyncPanel from "../components/AsyncPanel.vue";
@@ -14,6 +15,7 @@ import { billingTaskErrorMessage } from "../utils/httpError";
 
 const filters = useFiltersStore();
 const prefs = usePrefsStore();
+const router = useRouter();
 const range = ref<[string, string]>(savedGenerationRange("ct.billing.reconciliation.range"));
 const selectedUser = ref<BillingReconciliationRow>();
 const selectedScope = ref<BillingReconciliationRow>();
@@ -28,6 +30,13 @@ const report = useAsyncData(async () => {
   if (!filters.site_id) return undefined;
   const [from, to] = range.value;
   return dashboard.billingReconciliation({ instance_id: filters.site_id, from, to });
+});
+const unavailableState = computed(() => {
+  const error = report.lastRefreshError.value;
+  if (!(error instanceof ApiError)) return "";
+  if (error.code === "billing_not_generated") return "not_generated";
+  if (error.code === "billing_generating") return "generating";
+  return "";
 });
 const detail = useAsyncData(async () => {
   if (!selectedUser.value || !report.data.value?.job.id) return undefined;
@@ -130,7 +139,7 @@ void report.reload();
 </script>
 
 <template>
-  <AppShell title="账单核对">
+  <AppShell title="计费异常">
     <template #tools>
       <span class="period-label">核对区间</span>
       <el-date-picker v-model="range" type="datetimerange" value-format="YYYY-MM-DD HH:mm:ss" format="YYYY-MM-DD HH:mm:ss" range-separator="至" :shortcuts="timeRangeShortcuts" unlink-panels style="width:420px" />
@@ -139,7 +148,11 @@ void report.reload();
       <el-button v-if="report.data.value" tag="a" :href="csvURL">导出核对 CSV</el-button>
     </template>
 
-    <AsyncPanel :loading="report.loading.value" :error="report.error.value" :empty="!report.data.value?.items.length" @retry="report.reload">
+    <el-empty v-if="unavailableState" class="bill-empty" :description="unavailableState === 'generating' ? '该区间的账单正在生成，生成完成后即可核对' : '该区间还没有可核对的账单，请先创建账单生成任务'">
+      <el-button type="primary" @click="router.push('/billing/tasks')">前往账单任务</el-button>
+      <el-button v-if="unavailableState === 'generating'" @click="report.reload">刷新状态</el-button>
+    </el-empty>
+    <AsyncPanel v-else :loading="report.loading.value" :error="report.error.value" :empty="!report.data.value?.items.length" empty-text="该区间没有计费异常" @retry="report.reload">
       <div v-if="report.data.value" class="range-note">
         核对批次 <b>{{ report.data.value.job.id }}</b> · [{{ report.data.value.range_from }}, {{ report.data.value.range_to }})
       </div>
@@ -242,4 +255,5 @@ void report.reload();
 .period-label,.range-note,small{color:var(--el-text-color-secondary);font-size:12px}.range-note{padding:2px 2px 10px}.range-note b{color:var(--el-text-color-primary)}
 .cards{display:grid;grid-template-columns:repeat(6,minmax(150px,1fr));gap:10px;margin-bottom:8px}.cards>div{border:1px solid var(--el-border-color);border-radius:8px;padding:12px;background:var(--el-fill-color-blank)}.cards .danger-card{border-color:var(--el-color-danger-light-5);background:var(--el-color-danger-light-9)}.cards .danger-card b{color:var(--el-color-danger)}.cards span{display:block;color:var(--el-text-color-secondary);font-size:12px}.cards b{display:block;margin-top:6px;font-size:17px;font-variant-numeric:tabular-nums}.breakdown-note{margin:0 2px 10px;color:var(--el-text-color-secondary);font-size:12px}.lane-totals{display:flex;gap:24px;padding:12px 2px;color:var(--el-text-color-secondary)}.lane-totals b{color:var(--el-text-color-primary);font-variant-numeric:tabular-nums}.el-table small{display:block;margin-top:3px}.request-table{margin-top:4px}:deep(.fallback-row){opacity:.55}:deep(.el-table .cell){font-variant-numeric:tabular-nums}@media(max-width:1400px){.cards{grid-template-columns:repeat(3,1fr)}}
 .verification-panel{margin-top:18px;padding:16px;border:1px solid var(--el-border-color);border-radius:8px;background:var(--el-fill-color-blank)}.verification-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}.verification-heading h3{margin:0 0 5px}.verification-heading p{margin:0 0 14px;color:var(--el-text-color-secondary);font-size:12px}.verification-cards{display:flex;flex-wrap:wrap;gap:12px 30px;margin:14px 0}.verification-cards span{color:var(--el-text-color-secondary)}.verification-cards b{color:var(--el-text-color-primary);font-variant-numeric:tabular-nums}.verification-cards .danger-text{color:var(--el-color-danger)}.verification-table{margin-top:12px}.verification-panel .el-pagination{justify-content:flex-end;margin-top:12px}
+.bill-empty{min-height:420px}
 </style>

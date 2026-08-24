@@ -90,12 +90,15 @@ type TokenDailyRow struct {
 	UpdatedAt                                             time.Time
 }
 
-// SelectPrice uses the most recently saved price schedule and then selects its
-// tier. Billing is priced when it is generated; the log date is intentionally
-// ignored and remains in the signature only for compatibility with callers.
-func SelectPrice(prices []Price, _ time.Time, promptTokens int64) (Price, bool) {
+// SelectPrice uses the base price (tier_from=0) that was effective when the
+// request happened. CT tier prices are deliberately not applied to bills; a
+// later price change must not rewrite historical log rows either.
+func SelectPrice(prices []Price, occurredAt time.Time, _ int64) (Price, bool) {
 	var current time.Time
 	for _, price := range prices {
+		if price.EffectiveFrom.After(occurredAt) {
+			continue
+		}
 		if current.IsZero() || price.EffectiveFrom.After(current) {
 			current = price.EffectiveFrom
 		}
@@ -105,14 +108,13 @@ func SelectPrice(prices []Price, _ time.Time, promptTokens int64) (Price, bool) 
 	}
 	eligible := make([]Price, 0, len(prices))
 	for _, price := range prices {
-		if price.EffectiveFrom.Equal(current) && price.TierFrom <= promptTokens {
+		if price.EffectiveFrom.Equal(current) && price.TierFrom == 0 {
 			eligible = append(eligible, price)
 		}
 	}
 	if len(eligible) == 0 {
 		return Price{}, false
 	}
-	sort.Slice(eligible, func(i, j int) bool { return eligible[i].TierFrom > eligible[j].TierFrom })
 	return eligible[0], true
 }
 

@@ -66,10 +66,41 @@ body {
   width: 188px;
   padding: 16px 8px;
   background: var(--ct-sidebar);
+  transition: width 0.18s ease;
+  overflow-x: hidden;
+}
+.shell .logo-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
 }
 .shell .sidebar .logo {
   font-size: 14px;
-  margin: 0 8px 12px;
+  margin: 0 8px;
+  color: var(--ct-sidebar-active);
+  min-width: 0;
+  white-space: nowrap;
+}
+.shell .sidebar .logo b {
+  overflow: hidden;
+  font: inherit;
+  text-overflow: clip;
+}
+.shell .sidebar-toggle {
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ct-sidebar-ink);
+  cursor: pointer;
+}
+.shell .sidebar-toggle:hover {
+  background: rgba(255, 255, 255, 0.08);
   color: var(--ct-sidebar-active);
 }
 .shell .sidebar .logo span {
@@ -155,6 +186,44 @@ body {
 .shell .workspace {
   margin-left: 188px;
   width: calc(100% - 188px);
+  transition: margin-left 0.18s ease, width 0.18s ease;
+}
+.shell.sidebar-collapsed .sidebar {
+  width: 56px;
+  padding-inline: 6px;
+}
+.shell.sidebar-collapsed .logo-row {
+  flex-direction: column;
+  gap: 8px;
+}
+.shell.sidebar-collapsed .sidebar .logo {
+  margin: 0;
+}
+.shell.sidebar-collapsed .sidebar .logo b,
+.shell.sidebar-collapsed .nav-group {
+  display: none;
+}
+.shell.sidebar-collapsed .sidebar a {
+  justify-content: center;
+  padding-inline: 0;
+  gap: 0;
+}
+.shell.sidebar-collapsed .sidebar a span {
+  display: none;
+}
+.shell.sidebar-collapsed .sidebar a .el-icon {
+  font-size: 16px;
+  opacity: 0.9;
+}
+.shell.sidebar-collapsed .sidebar a.router-link-active::before {
+  left: -6px;
+}
+.shell.sidebar-collapsed .nav-section + .nav-section {
+  margin-top: 8px;
+}
+.shell.sidebar-collapsed .workspace {
+  margin-left: 56px;
+  width: calc(100% - 56px);
 }
 
 /* 单行工具栏：标题 + 页级控件 + 实例/用户 */

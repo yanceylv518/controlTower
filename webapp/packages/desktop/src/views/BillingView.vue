@@ -1,225 +1,101 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import { useRoute } from "vue-router";
-import { ElMessageBox, ElMessage } from "element-plus";
-import { ApiError, type BillingJob, type BillingTokenSummary, type BillingUserSummary } from "@ct/shared";
-import { dashboard, passthrough } from "../api";
+import type { BillingUserBillDay } from "@ct/shared";
+import { ElMessage } from "element-plus";
+import { dashboard } from "../api";
 import AppShell from "../components/AppShell.vue";
 import AsyncPanel from "../components/AsyncPanel.vue";
-import ListPager from "../components/ListPager.vue";
 import { useAsyncData } from "../composables/useAsyncData";
 import { useFiltersStore } from "../stores/filters";
-import { usePrefsStore } from "../stores/prefs";
-import { useAuthStore } from "../stores/auth";
-import { formatNumber, formatQuota } from "../utils/format";
-import { formatDateTime, savedGenerationRange, timeRangeShortcuts, validateGenerationRange } from "../utils/billingRange";
-import { billingReadErrorMessage, billingTaskErrorMessage, downloadBillingFile, httpError } from "../utils/httpError";
+import { downloadBillingFile } from "../utils/httpError";
+import { formatNumber } from "../utils/format";
 
-const filters = useFiltersStore();
+type UserBills = { user_id:number;username:string;days:BillingUserBillDay[];amount:number;requests:number;anomalies:number };
 const route = useRoute();
-const prefs = usePrefsStore();
-const auth = useAuthStore();
+const filters = useFiltersStore();
+const now = new Date();
 const routedSite = typeof route.query.site === "string" ? route.query.site : "";
 if (routedSite) filters.selectSite(routedSite);
-const routedRange: [string, string] | undefined = typeof route.query.from === "string" && typeof route.query.to === "string" ? [route.query.from, route.query.to] : undefined;
-const routedJobID = typeof route.query.job_id === "string" ? route.query.job_id : "";
-const pinnedJobID = ref(routedJobID);
-const coveredView = ref(false);
-const generationRange = ref<[string, string]>(routedRange || savedGenerationRange("ct.billing.user.range"));
+const routedUserID = typeof route.query.user_id === "string" ? Number(route.query.user_id) : 0;
 const search = ref("");
-const page = ref(1);
-const pageSize = ref(50);
+const month = ref(typeof route.query.from === "string" ? route.query.from.slice(0,7) : `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}`);
+const selected = ref<UserBills>();
+const selectedDay = ref<BillingUserBillDay>();
+const userOpen = ref(false);
 const detailOpen = ref(false);
-const selected = ref<BillingUserSummary>();
-const detailTab=ref<"model"|"token">("model"),selectedToken=ref<BillingTokenSummary>();
-const generating = ref(false);
-const tierSettings = ref<Record<string, { instance_id: string; user_id: number; use_tiered_pricing: boolean }>>({});
-const jobProgress = ref(0);
-const exporting = ref<Record<number, boolean>>({});
-const tokenExporting=ref(false);
-const currentJob=ref<BillingJob>();
-let monitorVersion=0;
-onUnmounted(()=>{monitorVersion++;});
-void prefs.load();
+
 const state = useAsyncData(async () => {
-  await filters.loadInstances(); if (!filters.site_id) return undefined;
-  const keyword=search.value.trim()||undefined;
-  const [from,to]=generationRange.value;
-  const [bill,users,settings]=await Promise.all([
-    dashboard.billingSummary({instance_id:filters.site_id,from,to,job_id:pinnedJobID.value||undefined,covered:coveredView.value?1:undefined,page:page.value,page_size:pageSize.value,search:keyword}),
-    passthrough.users({site:filters.site_id,keyword,limit:pageSize.value,offset:(page.value-1)*pageSize.value}),
-    dashboard.billingUserSettings(filters.site_id),
-  ]);
-  tierSettings.value=settings.items||{};
-  if(bill.generation_job?.status==="complete")return {...bill,generated:true};
-  const items:BillingUserSummary[]=users.items.map((user)=>({user_id:user.id,username:user.display_name||user.username,request_count:0,prompt_tokens:0,completion_tokens:0,cache_tokens:0,cache_write_tokens:0,abnormal_rows:0,abnormal_amount:"0.000000",quota:0,amount:"0.000000",balance:user.quota,unpriced_models:[],price_sources:[]}));
-  return {...bill,items,total:users.total,summary:{...bill.summary,users:users.total},generated:false};
+  await filters.loadInstances();
+  if (!filters.site_id) return undefined;
+  return dashboard.billingUserDays({ instance_id: filters.site_id, month:month.value, search: search.value.trim() || undefined });
 });
-const generated = computed(() => state.data.value?.generated !== false);
-const displayedRange = computed<[string,string]>(()=>{const data=state.data.value;if(data?.data_from&&data.data_to)return[formatDateTime(new Date(data.data_from)),formatDateTime(new Date(data.data_to))];const job=data?.generation_job;return job?.range_from&&job.range_to?[formatDateTime(new Date(job.range_from)),formatDateTime(new Date(job.range_to))]:generationRange.value});
-const showingPrevious = computed(()=>generated.value&&(displayedRange.value[0]!==generationRange.value[0]||displayedRange.value[1]!==generationRange.value[1]));
-const detail = useAsyncData(async () => {const[from,to]=displayedRange.value;return selected.value ? dashboard.billingDetail({ instance_id: filters.site_id, user_id: selected.value.user_id, from, to, job_id: state.data.value?.generation_job?.id }) : undefined;});
-const tokens=useAsyncData(async()=>{if(!selected.value||detailTab.value!=="token")return undefined;const[from,to]=displayedRange.value;return dashboard.billingTokens({instance_id:filters.site_id,user_id:selected.value.user_id,from,to,job_id:state.data.value?.generation_job?.id})});
-const tokenDaily=useAsyncData(async()=>{if(!selected.value||!selectedToken.value)return undefined;const[from,to]=displayedRange.value;return dashboard.billingTokenDaily({instance_id:filters.site_id,user_id:selected.value.user_id,token_id:selectedToken.value.token_id,from,to,job_id:state.data.value?.generation_job?.id})});
-const currency = computed(() => state.data.value?.currency ? state.data.value.currency.symbol : (prefs.currencySymbol || "$"));
-// Amounts are USD-based (quota / QuotaPerUnit); a non-USD site display must
-// convert with the site exchange rate, not just swap the symbol.
-const currencyRate = computed(() => { const rate = Number(state.data.value?.currency?.exchange_rate); return Number.isFinite(rate) && rate > 0 ? rate : 1; });
-const money = (value: string | number | undefined) => `${currency.value}${(Number(value || 0) * currencyRate.value).toFixed(4)}`;
-const balanceMoney = (quota: number | undefined) => formatQuota(quota ?? 0, prefs.quotaPerUnit, currency.value);
-const unitPrice = (value: string | undefined) => value ? `${currency.value}${(Number(value) * currencyRate.value).toFixed(4)}` : "—";
-const periodText = computed(() => `[${displayedRange.value[0]}, ${displayedRange.value[1]})`);
-const exportURL = computed(() => {const[from,to]=generationRange.value;const p=new URLSearchParams({instance_id:filters.site_id,from,to,search:search.value,format:"csv"});if(pinnedJobID.value)p.set("job_id",pinnedJobID.value);return`/api/dashboard/billing/summary?${p}`;});
-function userReadURL(path: string, row: BillingUserSummary, format = "csv") {
-  const [from, to] = displayedRange.value;
-  const params = new URLSearchParams({ instance_id: filters.site_id, user_id: String(row.user_id), from, to, format });
-  const jobID = state.data.value?.generation_job?.id;
-  if (jobID) params.set("job_id", jobID);
-  return `${path}?${params.toString()}`;
-}
-async function exportDaily(row: BillingUserSummary) {
-  try { await downloadBillingFile(userReadURL("/api/dashboard/billing/detail", row), "导出日账单失败"); }
-  catch (error) { ElMessage.error(billingReadErrorMessage(error, "导出日账单失败")); }
-}
-async function exportAnomalies(row: BillingUserSummary) {
-  try { await downloadBillingFile(userReadURL("/api/dashboard/billing/anomalies", row), "导出异常订单失败"); }
-  catch (error) { ElMessage.error(billingReadErrorMessage(error, "导出异常订单失败")); }
-}
-async function exportUser(row: BillingUserSummary, includeRequests = false) {
-  exporting.value = { ...exporting.value, [row.user_id]: true };
-  try {
-    const [from, to] = displayedRange.value;
-    const createResponse = await fetch("/api/dashboard/billing/workbook-jobs", {
-      method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", "X-Requested-With": "XMLHttpRequest" },
-      body: JSON.stringify({ instance_id: filters.site_id, user_id: String(row.user_id), from, to, job_id: state.data.value?.generation_job?.id || "", include_requests: includeRequests ? "1" : "0" }),
-    });
-    if (!createResponse.ok) throw await httpError(createResponse, "创建导出任务失败");
-    let task = await createResponse.json();
-    while (task.status === "pending" || task.status === "running") {
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-      const statusResponse = await fetch(`/api/dashboard/billing/workbook-jobs?id=${task.id}`, { credentials: "same-origin" });
-      if (!statusResponse.ok) throw await httpError(statusResponse, "查询导出任务失败");
-      task = await statusResponse.json();
-    }
-    if (task.status !== "complete") throw new Error(task.error || "导出任务失败");
-    await downloadBillingFile(`/api/dashboard/billing/workbook-jobs?id=${task.id}&download=1`, "下载账单失败", `billing-${row.user_id}-${from.replaceAll(":", "-")}-${to.replaceAll(":", "-")}.xlsx`);
-  } catch (error) {
-    ElMessage.error(billingReadErrorMessage(error, "导出失败"));
-  } finally {
-    exporting.value = { ...exporting.value, [row.user_id]: false };
+const users = computed<UserBills[]>(() => {
+  const grouped = new Map<number, UserBills>();
+  for (const day of state.data.value?.items || []) {
+    let user = grouped.get(day.user_id);
+    if (!user) { user = { user_id:day.user_id, username:day.username, days:[], amount:0, requests:0, anomalies:0 }; grouped.set(day.user_id, user); }
+    if (!user.username && day.username) user.username = day.username;
+    user.days.push(day); user.amount += Number(day.amount || 0); user.requests += day.request_count; user.anomalies += day.anomaly_rows;
   }
+  return [...grouped.values()].sort((a,b) => (b.days[0]?.day || "").localeCompare(a.days[0]?.day || "") || a.user_id-b.user_id);
+});
+const totals = computed(() => users.value.reduce((sum,user)=>({days:sum.days+user.days.length,requests:sum.requests+user.requests,anomalies:sum.anomalies+user.anomalies,amount:sum.amount+user.amount}),{days:0,requests:0,anomalies:0,amount:0}));
+const detail = useAsyncData(async () => {
+  const day = selectedDay.value;
+  if (!day) return undefined;
+  const from = `${day.day.slice(0,10)} 00:00:00`;
+  const date = new Date(`${day.day.slice(0,10)}T00:00:00`); date.setDate(date.getDate()+1);
+  const to = `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,"0")}-${String(date.getDate()).padStart(2,"0")} 00:00:00`;
+  return dashboard.billingDetail({ instance_id:day.instance_id,user_id:day.user_id,from,to,job_id:day.job_id });
+});
+const money = (value:string|number) => `$${Number(value || 0).toFixed(6)}`;
+const dayText = (value:string) => value.slice(0,10);
+const billKey = (day:BillingUserBillDay) => `${day.job_id}:${dayText(day.day)}:${day.user_id}`;
+const unitPrice = (value?:string) => value ? `$${Number(value).toFixed(6)}` : "—";
+function openUser(user:UserBills) { selected.value=user; userOpen.value=true; }
+async function openDay(day:BillingUserBillDay) { selectedDay.value=day; detailOpen.value=true; await detail.reload(); }
+async function downloadDay(day:BillingUserBillDay) {
+  const params=new URLSearchParams({instance_id:day.instance_id,user_id:String(day.user_id),day:dayText(day.day)});
+  try { await downloadBillingFile(`/api/dashboard/billing/files?${params}`,"下载用户日账单失败",`billing-user-${day.user_id}-${dayText(day.day)}.xlsx`); }
+  catch(error){ ElMessage.error(error instanceof Error?error.message:"下载失败"); }
 }
-function openDetail(row: BillingUserSummary) { selected.value = row;selectedToken.value=undefined;detailTab.value="model"; detailOpen.value = true; void detail.reload(); }
-function tokenName(row:BillingTokenSummary){return row.token_name||`(未命名) #${row.token_id}`}
-function selectToken(row:BillingTokenSummary){selectedToken.value=row;void tokenDaily.reload()}
-function tokenCSVURL(row:BillingTokenSummary){const[from,to]=displayedRange.value;const p=new URLSearchParams({instance_id:filters.site_id,user_id:String(selected.value?.user_id||0),token_id:String(row.token_id),from,to,format:"csv"});const id=state.data.value?.generation_job?.id;if(id)p.set("job_id",id);return`/api/dashboard/billing/tokens/daily?${p}`}
-async function exportToken(row:BillingTokenSummary){try{await downloadBillingFile(tokenCSVURL(row),"导出令牌账单失败")}catch(error){ElMessage.error(billingReadErrorMessage(error,"导出令牌账单失败"))}}
-async function downloadTokenDetails(row:BillingTokenSummary){if(!selected.value)return;tokenExporting.value=true;try{const[from,to]=displayedRange.value;const response=await fetch("/api/dashboard/billing/token-detail-jobs",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json","X-Requested-With":"XMLHttpRequest"},body:JSON.stringify({instance_id:filters.site_id,user_id:String(selected.value.user_id),token_id:String(row.token_id),from,to,job_id:state.data.value?.generation_job?.id||""})});if(!response.ok)throw await httpError(response,"创建令牌明细任务失败");let task=await response.json();while(task.status==="pending"||task.status==="running"){await new Promise(resolve=>setTimeout(resolve,1500));const status=await fetch(`/api/dashboard/billing/token-detail-jobs?id=${task.id}`,{credentials:"same-origin"});if(!status.ok)throw await httpError(status,"查询令牌明细任务失败");task=await status.json()}if(task.status!=="complete")throw new Error(task.error||"令牌明细导出失败");await downloadBillingFile(`/api/dashboard/billing/token-detail-jobs?id=${task.id}&download=1`,"下载令牌明细失败",`billing-token-${row.token_id}-details.csv`)}catch(error){ElMessage.error(billingReadErrorMessage(error,"令牌明细导出失败"))}finally{tokenExporting.value=false}}
-async function monitorJob(initial: BillingJob, reused=false){
-  if(generating.value)return;const version=++monitorVersion;generating.value=true;let job=initial;currentJob.value=job;
-  try{while(job.status==="pending"||job.status==="running"){currentJob.value=job;jobProgress.value=job.total_steps?Math.round(job.completed_steps*100/job.total_steps):0;await new Promise(resolve=>setTimeout(resolve,1500));if(version!==monitorVersion)return;job=await dashboard.billingJob(job.id)}if(job.status==="failed")throw new Error(job.error_message||"账单任务失败");jobProgress.value=100;ElMessage.success(reused?"该区间已有账单，已直接加载":`账单生成完成，排除异常订单 ${job.abnormal_rows} 条`);await state.reload();}
-  catch(error){ElMessage.error(error instanceof Error?error.message:"账单任务失败");}
-  finally{if(version===monitorVersion){generating.value=false;currentJob.value=undefined;}}
-}
-async function viewBill(){
-  const invalid=validateGenerationRange(generationRange.value);if(invalid){ElMessage.warning(invalid);return;}
-  const[from,to]=generationRange.value;
-  try{
-    await dashboard.billingSummary({instance_id:filters.site_id,from,to,covered:1,page:1,page_size:1});
-    pinnedJobID.value="";coveredView.value=true;page.value=1;await state.reload();
-  }catch(error){
-    if(error instanceof ApiError&&error.code==="billing_range_not_covered"){
-      const latest=error.details.latest_job as BillingJob|undefined;
-      const recent=latest?.range_from&&latest.range_to?`${formatDateTime(new Date(latest.range_from))} 至 ${formatDateTime(new Date(latest.range_to))}`:"暂无已生成账单";
-      ElMessage.warning(`所选区间账单未生成，最近一次账单区间：${recent}`);return;
-    }
-    ElMessage.warning(billingReadErrorMessage(error,"查看账单失败"));
-  }
-}
-async function stopGeneration(){const job=currentJob.value;if(!job)return;try{++monitorVersion;await dashboard.cancelBillingJob(job.id);generating.value=false;currentJob.value=undefined;ElMessage.success("账单生成已停止，之前完成的账单不受影响");await state.reload();}catch(error){ElMessage.error(billingTaskErrorMessage(error,"停止账单生成失败"));}}
-async function generateBill(force=false){
-  const invalid=validateGenerationRange(generationRange.value);if(invalid){ElMessage.warning(invalid);return;}
-  try {
-    pinnedJobID.value="";coveredView.value=false;
-    const [from,to]=generationRange.value;const result=await dashboard.generateBilling({instance_id:filters.site_id,from,to,force});
-    if(result.job.status==="complete"){jobProgress.value=100;await state.reload();ElMessage.success(result.reused?"该区间已有账单，已直接加载":"账单生成完成");return;}
-    await monitorJob(result.job,result.reused);
-  } catch (error) { if(await confirmRegenerate(error))return generateBill(true);ElMessage.warning(billingTaskErrorMessage(error)); }
-}
-// 生成是唯一写入口：区间已有账单时弹三选一——查看账单（安全默认）/重新生成/关闭取消。
-async function confirmRegenerate(error:unknown):Promise<boolean>{
-  if(!(error instanceof ApiError)||error.code!=="billing_range_already_covered")return false;
-  const covering=error.details?.covering_job as {range_from?:string;range_to?:string}|undefined;
-  const range=covering?.range_from?`（覆盖区间 ${new Date(covering.range_from).toLocaleString()} 至 ${new Date(covering.range_to||"").toLocaleString()}）`:"";
-  try{
-    await ElMessageBox.confirm(`所选时间段已生成过账单${range}。可直接查看现有账单；重新生成将产生新的账单版本并替换查看数据。`,"该区间已生成账单",{confirmButtonText:"查看账单",cancelButtonText:"重新生成",distinguishCancelAndClose:true,type:"info"});
-    await viewBill();
-    return false;
-  }catch(action){
-    return action==="cancel";
-  }
-}
-function useTiered(userID:number){return tierSettings.value[String(userID)]?.use_tiered_pricing!==false}
-async function changeTiered(userID:number,value:boolean){await dashboard.saveBillingUserSetting({instance_id:filters.site_id,user_id:userID,use_tiered_pricing:value});tierSettings.value={...tierSettings.value,[String(userID)]:{instance_id:filters.site_id,user_id:userID,use_tiered_pricing:value}};ElMessage.success("阶梯计价设置已保存，下次生成账单时生效")}
-watch(generationRange,(value)=>{pinnedJobID.value="";coveredView.value=false;localStorage.setItem("ct.billing.user.range",JSON.stringify(value))},{deep:true});
-let searchTimer: ReturnType<typeof setTimeout> | undefined;
-watch(search, () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { page.value = 1; void state.reload(); }, 400); });
-watch([generationRange, () => filters.site_id, pageSize], (_value, oldValue) => { if(oldValue && oldValue[1] !== filters.site_id)pinnedJobID.value="";page.value = 1; void state.reload(); if(detailOpen.value)void detail.reload(); });
-watch(page, () => void state.reload());
-watch(() => state.data.value?.generation_job?.id, () => {const job=state.data.value?.generation_job;if(job&&(job.status==="pending"||job.status==="running"))void monitorJob(job);});
-watch(detailTab,tab=>{if(tab==="token")void tokens.reload()});
-async function resumeActiveGeneration(){if(auth.user?.role!=="admin"||generating.value||!filters.site_id)return;try{const jobs=await dashboard.billingJobs({instance_id:filters.site_id,limit:20});const active=jobs.items.find(job=>job.job_type==="generate"&&(job.status==="pending"||job.status==="running"));if(active)void monitorJob(active);}catch{/* 任务中心查询失败不影响账单读取 */}}
-void state.reload().then(resumeActiveGeneration);
+let searchTimer:ReturnType<typeof setTimeout>|undefined;
+watch(search,()=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>void state.reload(),350)});
+watch(month,()=>{selected.value=undefined;userOpen.value=false;void state.reload()});
+watch(()=>filters.site_id,()=>{selected.value=undefined;userOpen.value=false;void state.reload()});
+let routedOpened=false;
+watch(users,(rows)=>{if(routedOpened||!routedUserID)return;const user=rows.find(item=>item.user_id===routedUserID);if(user){routedOpened=true;openUser(user);if(user.days.length===1)void openDay(user.days[0]);}},{flush:"post"});
+void state.reload();
 </script>
+
 <template>
   <AppShell title="用户账单">
-    <template #tools><span class="period-label">账单周期</span><el-date-picker v-model="generationRange" type="datetimerange" value-format="YYYY-MM-DD HH:mm:ss" format="YYYY-MM-DD HH:mm:ss" range-separator="至" start-placeholder="开始时间" end-placeholder="结束时间" :shortcuts="timeRangeShortcuts" unlink-panels style="width:420px" /><el-input v-model="search" clearable placeholder="搜索用户名或用户 ID" style="width:220px" /><span v-if="generating" class="job-progress">生成 {{ jobProgress }}%</span><el-button @click="viewBill">查看账单</el-button><el-button v-if="auth.user?.role === 'admin'" type="primary" :loading="generating" @click="generateBill()">生成账单</el-button><el-button v-if="auth.user?.role === 'admin' && generating" type="danger" plain @click="stopGeneration">停止生成</el-button><el-button tag="a" :href="exportURL">导出汇总 CSV</el-button></template>
-    <el-alert v-if="showingPrevious" class="pending-alert" type="info" title="所选区间尚未生成，当前继续展示上一次完成的账单" :description="`当前数据区间 ${periodText}；新账单完整生成后才会切换，生成过程中不会清空现有数据。`" :closable="false" show-icon />
-    <el-alert v-else-if="!generated && (state.data.value?.items?.length || 0) > 0" class="pending-alert" type="warning" title="该站点尚无已完成账单" description="下方先显示用户列表；首次账单生成完成后才会出现请求量、Token 和金额。" :closable="false" show-icon />
-    <AsyncPanel :loading="state.loading.value" :error="state.error.value" :empty="!(state.data.value?.items?.length || 0)" @retry="state.reload">
-      <div class="billing-total" v-if="state.data.value?.summary"><span class="billing-period">下方实际数据区间 <b>{{ periodText }}</b><small>{{ generated ? (showingPrevious ? "顶部时间是下一次生成目标；当前数据来自上一次完成账单" : "严格对应当前账单版本，仅统计消费日志并排除异常订单") : "该站点尚无已完成账单，下方仅显示用户列表和 0 值" }}</small></span><span>用户 <b>{{ formatNumber(state.data.value.summary.users) }}</b></span><span>计费请求 <b>{{ formatNumber(state.data.value.summary.request_count) }}</b></span><span>合计 <b>{{ money(state.data.value.summary.amount) }}</b></span></div>
-      <el-table :data="state.data.value?.items || []" class="billing-table" @row-click="openDetail">
-        <el-table-column prop="username" label="用户" min-width="150"><template #default="s"><b>{{ s.row.username || `用户 ${s.row.user_id}` }}</b><small class="sub">ID {{ s.row.user_id }}</small></template></el-table-column>
-        <el-table-column prop="amount" label="消费金额" min-width="120" align="right"><template #default="s">{{ money(s.row.amount) }}</template></el-table-column><el-table-column prop="request_count" label="请求数" min-width="100" align="right"><template #default="s">{{ formatNumber(s.row.request_count) }}</template></el-table-column><el-table-column prop="abnormal_rows" label="异常订单数" min-width="105" align="right"><template #default="s">{{ formatNumber(s.row.abnormal_rows) }}</template></el-table-column><el-table-column prop="abnormal_amount" label="异常总金额" min-width="120" align="right"><template #default="s">{{ money(s.row.abnormal_amount) }}</template></el-table-column><el-table-column prop="prompt_tokens" label="普通输入 Token" min-width="130" align="right"><template #default="s">{{ formatNumber(s.row.prompt_tokens) }}</template></el-table-column><el-table-column prop="cache_tokens" label="缓存读取 Token" min-width="130" align="right"><template #default="s">{{ formatNumber(s.row.cache_tokens) }}</template></el-table-column><el-table-column prop="cache_write_tokens" label="缓存写入 Token" min-width="130" align="right"><template #default="s">{{ formatNumber(s.row.cache_write_tokens) }}</template></el-table-column><el-table-column prop="completion_tokens" label="输出 Token" min-width="120" align="right"><template #default="s">{{ formatNumber(s.row.completion_tokens) }}</template></el-table-column><el-table-column prop="quota" label="Quota 对照" min-width="110" align="right"><template #default="s">{{ formatNumber(s.row.quota) }}</template></el-table-column><el-table-column prop="balance" label="当前余额" min-width="130" align="right"><template #default="s">{{ balanceMoney(s.row.balance) }}</template></el-table-column>
-        <el-table-column label="阶梯计价" width="115"><template #default="s"><el-switch v-if="auth.user?.role === 'admin'" :model-value="useTiered(s.row.user_id)" @click.stop @change="changeTiered(s.row.user_id, Boolean($event))" /><span v-else>{{ useTiered(s.row.user_id)?"启用":"停用" }}</span></template></el-table-column><el-table-column label="计价状态" min-width="150"><template #default="s"><el-tag v-if="!generated" type="info">未生成</el-tag><el-tag v-else-if="s.row.unpriced_models?.length" type="warning">{{ s.row.unpriced_models.length }} 个模型无法取价</el-tag><el-tag v-else type="success">已计价</el-tag></template></el-table-column><el-table-column label="操作" width="190" fixed="right"><template #default="s"><el-button link type="primary" @click.stop="openDetail(s.row)">查看</el-button><el-button link type="primary" :loading="exporting[s.row.user_id]" @click.stop="exportUser(s.row)">导出汇总/日账单</el-button></template></el-table-column>
-      </el-table><ListPager v-model:page="page" v-model:page-size="pageSize" :item-count="state.data.value?.items?.length || 0" :total="state.data.value?.total || 0" />
+    <template #tools><el-date-picker v-model="month" type="month" value-format="YYYY-MM" placeholder="选择月份" style="width:150px"/><el-input v-model="search" clearable placeholder="搜索用户名或用户 ID" style="width:240px"/><router-link to="/billing/tasks"><el-button>账单任务</el-button></router-link><el-button @click="state.reload">刷新</el-button></template>
+    <div class="summary"><div><span>有账单用户</span><b>{{users.length}}</b></div><div><span>用户日账单</span><b>{{totals.days}}</b></div><div><span>计费请求</span><b>{{formatNumber(totals.requests)}}</b></div><div><span>计费异常</span><b>{{formatNumber(totals.anomalies)}}</b></div><div><span>账单金额</span><b>{{money(totals.amount)}}</b></div></div>
+    <AsyncPanel :loading="state.loading.value" :error="state.error.value" :empty="!users.length" empty-text="暂无用户账单" @retry="state.reload">
+      <el-table :data="users" row-key="user_id" @row-click="openUser">
+        <el-table-column label="用户" min-width="190"><template #default="s"><b>{{s.row.username||`用户 ${s.row.user_id}`}}</b><small>ID {{s.row.user_id}}</small></template></el-table-column>
+        <el-table-column label="最近账单" min-width="220"><template #default="s"><div class="latest-bill"><b>{{dayText(s.row.days[0].day)}}</b><el-tag v-if="s.row.days.length>1" type="info" size="small">共 {{s.row.days.length}} 个账单日期</el-tag></div></template></el-table-column>
+        <el-table-column label="请求数" width="120" align="right"><template #default="s">{{formatNumber(s.row.requests)}}</template></el-table-column>
+        <el-table-column label="异常" width="90" align="right"><template #default="s"><el-tag v-if="s.row.anomalies" type="warning">{{s.row.anomalies}}</el-tag><span v-else>0</span></template></el-table-column>
+        <el-table-column label="账单金额" width="150" align="right"><template #default="s"><b>{{money(s.row.amount)}}</b></template></el-table-column>
+        <el-table-column label="操作" width="120"><template #default="s"><el-button link type="primary" @click.stop="openUser(s.row)">查看账单日期</el-button></template></el-table-column>
+      </el-table>
     </AsyncPanel>
-    <el-drawer v-model="detailOpen" :title="`${selected?.username || '用户'} · ${displayedRange[0]} 至 ${displayedRange[1]}`" size="78%">
-      <el-tabs v-model="detailTab"><el-tab-pane label="按模型" name="model"/><el-tab-pane label="按令牌" name="token"/></el-tabs>
-      <template v-if="detailTab==='model'">
-      <div class="drawer-actions"><el-button :loading="Boolean(selected && exporting[selected.user_id])" @click="selected && exportUser(selected, true)">{{ selected && exporting[selected.user_id] ? "后台生成中" : "导出完整账单 Excel" }}</el-button><el-button :disabled="!selected" @click="selected && exportDaily(selected)">导出日账单</el-button><el-button :disabled="!selected" @click="selected && exportAnomalies(selected)">导出异常订单</el-button><router-link :to="`/readonly-logs?username=${encodeURIComponent(selected?.username || '')}&from=${displayedRange[0]}&to=${displayedRange[1]}`"><el-button>查看使用日志</el-button></router-link></div>
-      <el-alert v-if="detail.error.value" class="pending-alert" type="info" :title="detail.error.value" :closable="false" show-icon />
-      <AsyncPanel :loading="detail.loading.value" :error="''" :empty="!detail.error.value && !detail.data.value?.items?.length" @retry="detail.reload"><el-table :data="detail.data.value?.items || []" class="billing-detail-table" table-layout="fixed"><el-table-column prop="day" label="日期" width="105" /><el-table-column label="模型信息" min-width="165"><template #default="s"><b class="cell-primary">{{ s.row.model_name }}</b><small class="cell-secondary">{{ s.row.group_name || "默认分组" }} · {{ s.row.tier_from > 0 ? `档位 ≥${formatNumber(s.row.tier_from)}` : "基础价" }}</small></template></el-table-column><el-table-column label="订单" min-width="125"><template #default="s"><div class="metric-pairs"><span>总数</span><b>{{ formatNumber(s.row.request_count + s.row.abnormal_rows) }}</b><span>计费</span><b>{{ formatNumber(s.row.request_count) }}</b><span>异常</span><b :class="{ danger: s.row.abnormal_rows > 0 }">{{ formatNumber(s.row.abnormal_rows) }}</b></div></template></el-table-column><el-table-column label="Token 用量" min-width="230"><template #default="s"><div class="metric-grid"><span>普通</span><b>{{ formatNumber(s.row.prompt_tokens) }}</b><span>读取</span><b>{{ formatNumber(s.row.cache_tokens) }}</b><span>写入</span><b>{{ formatNumber(s.row.cache_write_tokens) }}</b><span>输出</span><b>{{ formatNumber(s.row.completion_tokens) }}</b></div></template></el-table-column><el-table-column label="单价 / 1M" min-width="205"><template #default="s"><div class="metric-grid"><span>输入</span><b>{{ unitPrice(s.row.input_price) }}</b><span>读取</span><b>{{ unitPrice(s.row.cache_price) }}</b><span>写入</span><b>{{ unitPrice(s.row.cache_write_price) }}</b><span>输出</span><b>{{ unitPrice(s.row.output_price) }}</b></div></template></el-table-column><el-table-column prop="amount" label="金额" min-width="125" align="right"><template #default="s"><b>{{ s.row.unpriced ? "无法取价" : money(s.row.amount) }}</b><small class="cell-secondary">异常 {{ money(s.row.abnormal_amount) }}</small></template></el-table-column></el-table></AsyncPanel>
-      </template>
-      <template v-else>
-        <el-alert v-if="tokens.data.value?.token_data_missing" class="pending-alert" type="warning" title="该账单生成于令牌功能上线前，重新生成账单后可见" :closable="false" show-icon/>
-        <AsyncPanel :loading="tokens.loading.value" :error="tokens.error.value" :empty="!tokens.data.value?.items.length" @retry="tokens.reload">
-          <section class="token-section token-summary-section">
-            <div class="token-section-head"><div><h3>令牌月账单</h3><p>点击令牌查看对应日账单</p></div><span>共 {{ tokens.data.value?.items.length || 0 }} 个令牌</span></div>
-            <el-table :data="tokens.data.value?.items||[]" highlight-current-row class="token-summary-table" @row-click="selectToken">
-              <el-table-column label="令牌" min-width="190"><template #default="s"><b>{{tokenName(s.row)}}</b><small class="cell-secondary">Token ID {{s.row.token_id}}</small></template></el-table-column>
-              <el-table-column prop="ct_amount" label="CT 金额" width="130" align="right"><template #default="s"><b>{{money(s.row.ct_amount)}}</b></template></el-table-column>
-              <el-table-column prop="request_count" label="请求数" width="105" align="right"><template #default="s">{{formatNumber(s.row.request_count)}}</template></el-table-column>
-              <el-table-column prop="abnormal_rows" label="异常订单" width="105" align="right"><template #default="s"><span :class="{danger:s.row.abnormal_rows>0}">{{formatNumber(s.row.abnormal_rows)}}</span></template></el-table-column>
-              <el-table-column prop="abnormal_amount" label="异常金额" width="125" align="right"><template #default="s">{{money(s.row.abnormal_amount)}}</template></el-table-column>
-              <el-table-column prop="prompt_tokens" label="普通输入" width="130" align="right"><template #default="s">{{formatNumber(s.row.prompt_tokens)}}</template></el-table-column>
-              <el-table-column prop="cache_tokens" label="缓存读取" width="130" align="right"><template #default="s">{{formatNumber(s.row.cache_tokens)}}</template></el-table-column>
-              <el-table-column prop="completion_tokens" label="输出" width="130" align="right"><template #default="s">{{formatNumber(s.row.completion_tokens)}}</template></el-table-column>
-              <el-table-column prop="quota" label="Quota 参考" width="145" align="right"><template #default="s">{{formatNumber(s.row.quota)}}</template></el-table-column>
-            </el-table>
-          </section>
-          <section v-if="selectedToken" class="token-section token-daily-section">
-            <div class="token-detail-head"><div class="token-title"><span>令牌日账单</span><h3>{{tokenName(selectedToken)}}</h3><small>Token ID {{selectedToken.token_id}} · {{formatNumber(selectedToken.request_count)}} 次请求 · {{money(selectedToken.ct_amount)}}</small></div><div class="token-actions"><el-button @click="exportToken(selectedToken)">导出令牌账单</el-button><el-button type="primary" :loading="tokenExporting" @click="downloadTokenDetails(selectedToken)">{{tokenExporting?'明细生成中':'下载请求明细'}}</el-button></div></div>
-            <AsyncPanel :loading="tokenDaily.loading.value" :error="tokenDaily.error.value" :empty="!tokenDaily.data.value?.items.length" @retry="tokenDaily.reload">
-              <el-table :data="tokenDaily.data.value?.items||[]" height="calc(100vh - 500px)" min-height="260" class="token-daily-table">
-                <el-table-column prop="day" label="日期" width="115"/><el-table-column prop="model_name" label="模型" min-width="200"/><el-table-column prop="request_count" label="请求数" width="110" align="right"><template #default="s">{{formatNumber(s.row.request_count)}}</template></el-table-column><el-table-column prop="abnormal_rows" label="异常订单" width="110" align="right"><template #default="s"><span :class="{danger:s.row.abnormal_rows>0}">{{formatNumber(s.row.abnormal_rows)}}</span></template></el-table-column><el-table-column prop="abnormal_amount" label="异常金额" width="125" align="right"><template #default="s">{{money(s.row.abnormal_amount)}}</template></el-table-column><el-table-column prop="prompt_tokens" label="普通输入" width="135" align="right"><template #default="s">{{formatNumber(s.row.prompt_tokens)}}</template></el-table-column><el-table-column prop="completion_tokens" label="输出" width="135" align="right"><template #default="s">{{formatNumber(s.row.completion_tokens)}}</template></el-table-column><el-table-column prop="amount" label="金额" width="130" align="right"><template #default="s"><b>{{money(s.row.amount)}}</b></template></el-table-column>
-              </el-table>
-            </AsyncPanel>
-          </section>
-          <div v-else class="token-select-hint">选择上方令牌后查看日账单</div>
-        </AsyncPanel>
-      </template>
+    <el-drawer v-model="userOpen" :title="`${selected?.username||`用户 ${selected?.user_id||''}`} · 可用账单日期`" size="72%">
+      <el-table :data="selected?.days||[]" :row-key="billKey" @row-click="openDay">
+        <el-table-column label="账单日期" min-width="140"><template #default="s"><b>{{dayText(s.row.day)}}</b></template></el-table-column><el-table-column prop="request_count" label="请求数" width="120" align="right"/><el-table-column label="异常" width="100" align="right"><template #default="s">{{s.row.anomaly_rows}}</template></el-table-column><el-table-column label="金额" width="150" align="right"><template #default="s"><b>{{money(s.row.amount)}}</b></template></el-table-column><el-table-column label="生成时间" min-width="180"><template #default="s">{{new Date(s.row.activated_at).toLocaleString()}}</template></el-table-column><el-table-column label="操作" width="190"><template #default="s"><el-button link type="primary" @click.stop="openDay(s.row)">查看明细</el-button><el-button link type="primary" @click.stop="downloadDay(s.row)">下载 Excel</el-button></template></el-table-column>
+      </el-table>
+    </el-drawer>
+    <el-drawer v-model="detailOpen" :title="`${selectedDay?.username||`用户 ${selectedDay?.user_id||''}`} · ${selectedDay?dayText(selectedDay.day):''}`" size="82%">
+      <AsyncPanel :loading="detail.loading.value" :error="detail.error.value" :empty="!detail.data.value?.items.length" empty-text="该日没有计费明细" @retry="detail.reload">
+        <el-table :data="detail.data.value?.items||[]"><el-table-column prop="model_name" label="模型" min-width="180"/><el-table-column label="Token 用量" min-width="250"><template #default="s"><div class="metrics"><span>输入</span><b>{{formatNumber(s.row.prompt_tokens)}}</b><span>缓存读取</span><b>{{formatNumber(s.row.cache_tokens)}}</b><span>缓存写入</span><b>{{formatNumber(s.row.cache_write_tokens)}}</b><span>输出</span><b>{{formatNumber(s.row.completion_tokens)}}</b></div></template></el-table-column><el-table-column label="模型单价 / 1M" min-width="250"><template #default="s"><div class="metrics"><span>输入</span><b>{{unitPrice(s.row.input_price)}}</b><span>缓存读取</span><b>{{unitPrice(s.row.cache_price)}}</b><span>缓存写入</span><b>{{unitPrice(s.row.cache_write_price)}}</b><span>输出</span><b>{{unitPrice(s.row.output_price)}}</b></div></template></el-table-column><el-table-column prop="request_count" label="请求数" width="100" align="right"/><el-table-column label="金额" width="140" align="right"><template #default="s"><b>{{money(s.row.amount)}}</b></template></el-table-column></el-table>
+      </AsyncPanel>
     </el-drawer>
   </AppShell>
 </template>
-<style scoped>.billing-total{display:flex;align-items:center;gap:28px;padding:12px 4px}.billing-total b{font-size:18px;color:var(--el-color-primary);font-variant-numeric:tabular-nums}.billing-period{padding-right:20px;border-right:1px solid var(--el-border-color)}.billing-period b{font-size:14px}.billing-period small{display:block;margin-top:3px;color:var(--el-text-color-secondary)}.pending-alert{margin-bottom:10px}.billing-table :deep(.el-table__row),.token-summary-table :deep(.el-table__row){cursor:pointer}.billing-table :deep(.cell),.billing-detail-table :deep(.cell),.token-section :deep(.cell){font-variant-numeric:tabular-nums}.sub,.cell-secondary{display:block;color:var(--el-text-color-secondary);margin-top:3px}.cell-primary{color:var(--el-text-color-primary)}.metric-pairs,.metric-grid{display:grid;grid-template-columns:auto 1fr;column-gap:8px;row-gap:3px;align-items:center}.metric-grid{grid-template-columns:auto minmax(0,1fr) auto minmax(0,1fr)}.metric-pairs span,.metric-grid span{color:var(--el-text-color-secondary);font-size:12px}.metric-pairs b,.metric-grid b{text-align:right;white-space:nowrap}.danger{color:var(--el-color-danger)}.drawer-actions{display:flex;gap:8px;justify-content:flex-end;margin-bottom:12px}.job-progress{color:var(--el-color-primary);font-variant-numeric:tabular-nums}.period-label{color:var(--el-text-color-secondary);font-size:13px}.token-section{border:1px solid var(--el-border-color-lighter);border-radius:8px;background:var(--el-bg-color);overflow:hidden}.token-section-head,.token-detail-head{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--el-border-color-lighter);background:var(--el-fill-color-extra-light)}.token-section-head h3,.token-title h3{margin:0;font-size:15px;color:var(--el-text-color-primary)}.token-section-head p,.token-section-head span,.token-title small{margin:3px 0 0;color:var(--el-text-color-secondary);font-size:12px}.token-daily-section{margin-top:16px}.token-title>span{display:block;margin-bottom:3px;color:var(--el-color-primary);font-size:12px;font-weight:600}.token-actions{display:flex;gap:8px}.token-select-hint{display:grid;place-items:center;height:150px;margin-top:16px;border:1px dashed var(--el-border-color);border-radius:8px;color:var(--el-text-color-secondary);background:var(--el-fill-color-extra-light)}@media(max-width:900px){.token-detail-head{align-items:flex-start;gap:12px}.token-actions{flex-direction:column}.token-summary-section{overflow-x:auto}}</style>
+
+<style scoped>
+.summary{display:grid;grid-template-columns:repeat(5,minmax(140px,1fr));gap:12px;margin-bottom:16px}.summary>div{padding:16px;border:1px solid var(--el-border-color-light);border-radius:10px;background:var(--el-bg-color)}.summary span,.summary b{display:block}.summary span,small{color:var(--el-text-color-secondary);font-size:12px}.summary b{margin-top:8px;font-size:22px}.latest-bill{display:flex;align-items:center;gap:10px;white-space:nowrap}:deep(.el-table__row){cursor:pointer}.metrics{display:grid;grid-template-columns:auto 1fr auto 1fr;gap:4px 10px}.metrics span{color:var(--el-text-color-secondary);font-size:12px}.metrics b{text-align:right;font-variant-numeric:tabular-nums}@media(max-width:900px){.summary{grid-template-columns:repeat(2,1fr)}}
+</style>

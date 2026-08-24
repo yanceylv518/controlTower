@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log"
@@ -97,12 +98,13 @@ func run() error {
 			}
 		}()
 		startAggregationRunner(store, time.Duration(cfg.AggregationIntervalSeconds)*time.Second)
-		startNotificationRunner(store, settingsProvider, time.Duration(cfg.NotificationIntervalSeconds)*time.Second)
 		startChannelSnapshotHistoryCleanup(store)
 		startRetentionRunner(store, settingsProvider)
 		startTuningRunner(directcontrol.Wrap(store, cfg.SecretKey))
 	}
 	startBillingJobRunner(store, cfg.SecretKey, time.Duration(cfg.BillingPagePauseMilliseconds)*time.Millisecond)
+	startDailyBillingScheduler(store)
+	startBillingFileCleanup(store)
 	startReadonlyLogRollupRunner(store, cfg.SecretKey)
 
 	server := &http.Server{
@@ -114,12 +116,100 @@ func run() error {
 	return server.ListenAndServe()
 }
 
+func startBillingFileCleanup(store mysqlstore.Store) {
+	cleaner := billing.UserDailyFileCleaner{Store: store}
+	go func() {
+		run := func() {
+			removed, err := cleaner.Cleanup(context.Background(), time.Now().UTC().AddDate(0, 0, -180))
+			if err != nil {
+				log.Printf("billing file cleanup: %v", err)
+			} else if removed > 0 {
+				log.Printf("billing file cleanup removed=%d", removed)
+			}
+		}
+		run()
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		for range ticker.C {
+			run()
+		}
+	}()
+}
+
 func startBillingJobRunner(store mysqlstore.Store, secretKey string, pagePause time.Duration) {
 	readonly := &dashboard.PassthroughHandler{Config: store, SecretKey: secretKey}
-	runner := billing.JobRunner{Source: dashboard.BillingReadonlySource{Handler: readonly}, Store: store, PagePause: pagePause}
+	runner := billing.JobRunner{
+		Source:    dashboard.BillingReadonlySource{Handler: readonly},
+		Store:     store,
+		Files:     billing.UserDailyFileGenerator{Store: store},
+		PagePause: pagePause,
+	}
 	go func() {
 		if err := runner.Run(context.Background()); err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("billing job runner stopped: %v", err)
+		}
+	}()
+}
+
+func startDailyBillingScheduler(store mysqlstore.Store) {
+	runOnce := func(now time.Time) {
+		localNow := now.In(billing.BusinessLocation)
+		if localNow.Hour() < 2 {
+			return
+		}
+		if _, err := store.ActiveBillingJob(context.Background()); err == nil {
+			return
+		}
+		instances, err := store.ListInstances()
+		if err != nil {
+			log.Printf("daily billing scheduler list instances: %v", err)
+			return
+		}
+		today := time.Date(localNow.Year(), localNow.Month(), localNow.Day(), 0, 0, 0, 0, billing.BusinessLocation)
+		seen := map[string]bool{}
+		for _, instance := range instances {
+			site := instance.SiteID
+			if site == "" {
+				site = instance.ID
+			}
+			if !instance.Enabled || instance.LogsReadonlyDSN == "" || seen[site] {
+				continue
+			}
+			seen[site] = true
+			var dayFrom, dayTo time.Time
+			for daysAgo := 30; daysAgo >= 1; daysAgo-- {
+				candidateFrom := today.AddDate(0, 0, -daysAgo)
+				candidateTo := candidateFrom.AddDate(0, 0, 1)
+				if _, coverErr := store.LatestCoveringBillingJob(context.Background(), site, "generate", candidateFrom, candidateTo); errors.Is(coverErr, sql.ErrNoRows) {
+					dayFrom, dayTo = candidateFrom, candidateTo
+					break
+				} else if coverErr != nil {
+					log.Printf("daily billing scheduler check site=%s day=%s: %v", site, candidateFrom.Format("2006-01-02"), coverErr)
+					break
+				}
+			}
+			if dayFrom.IsZero() {
+				continue
+			}
+			job, steps, createErr := billing.NewJob(site, dayFrom, dayTo, "scheduler")
+			if createErr != nil {
+				log.Printf("daily billing scheduler prepare site=%s: %v", site, createErr)
+				continue
+			}
+			job.RequestKey = fmt.Sprintf("billing:auto:v1:%s:%s:%s", site, dayFrom.Format("2006-01-02"), job.ID)
+			if createErr = store.CreateBillingJob(context.Background(), job, steps); createErr != nil {
+				log.Printf("daily billing scheduler create site=%s day=%s: %v", site, dayFrom.Format("2006-01-02"), createErr)
+				continue
+			}
+			return
+		}
+	}
+	go func() {
+		runOnce(time.Now())
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for now := range ticker.C {
+			runOnce(now)
 		}
 	}()
 }
@@ -147,6 +237,8 @@ type retentionStore interface {
 	PruneBefore(string, time.Time) (int64, error)
 }
 
+const analysisRetentionDays = 3
+
 func startRetentionRunner(store retentionStore, provider *settings.Provider) {
 	prune := func() {
 		values, err := provider.Current()
@@ -172,7 +264,13 @@ func pruneRetention(store retentionStore, detailDays, metric5mDays, runtimeDays,
 	groups := []struct {
 		days  int
 		kinds []string
-	}{{detailDays, []string{"log_events", "log_samples", "metric_1m", "nginx_timing_1m", "nginx_slow_samples"}}, {metric5mDays, []string{"metric_5m"}}, {runtimeDays, []string{"server_metrics", "docker_statuses"}}, {alertsDays, []string{"alerts", "alert_events", "notification_deliveries"}}}
+	}{
+		{analysisRetentionDays, []string{"log_samples", "nginx_timing_1m", "nginx_slow_samples"}},
+		{detailDays, []string{"log_events", "metric_1m"}},
+		{metric5mDays, []string{"metric_5m"}},
+		{runtimeDays, []string{"server_metrics", "docker_statuses"}},
+		{alertsDays, []string{"alerts", "alert_events", "notification_deliveries"}},
+	}
 	for _, g := range groups {
 		if g.days == 0 {
 			continue
