@@ -146,7 +146,12 @@ func (h BillingSummaryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	items, total := billing.BuildSummary(rows, prices, ratios, snapshots, balances)
-	counts, err := anomalyCounts(h.Store, r.Context(), jobID)
+	var counts []billing.AnomalyCount
+	if jobID != "" && (dataFrom.After(job.From) || dataTo.Before(job.To)) {
+		counts, err = anomalyCountsForRange(h.Store, r.Context(), jobID, dataFrom, dataTo)
+	} else {
+		counts, err = anomalyCounts(h.Store, r.Context(), jobID)
+	}
 	if err != nil {
 		writeDashboardError(w, http.StatusInternalServerError, "billing_query_failed")
 		return

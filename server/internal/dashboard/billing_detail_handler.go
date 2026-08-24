@@ -33,7 +33,11 @@ func (h BillingDetailHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	job, jobErr := billingJobForRead(r, h.Store, instanceID, "generate", from, to)
 	var rows []billing.AggregateRow
 	if jobErr == nil && job.Status == "complete" {
-		rows, err = h.Store.QueryBillingAggregatesForJob(r.Context(), job.ID, []int64{userID})
+		if from.After(job.From) || to.Before(job.To) {
+			rows, err = h.Store.QueryBillingAggregatesForJobRange(r.Context(), job.ID, from, to, []int64{userID})
+		} else {
+			rows, err = h.Store.QueryBillingAggregatesForJob(r.Context(), job.ID, []int64{userID})
+		}
 	} else {
 		writeBillingReadConflict(w, jobErr)
 		return
@@ -68,12 +72,12 @@ func (h BillingDetailHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	}
 	items := billing.BuildDetails(rows, prices, ratios, snapshots)
 	if jobErr == nil && job.Status == "complete" {
-		counts, countErr := anomalyCounts(h.Store, r.Context(), job.ID)
+		counts, countErr := anomalyCountsForRange(h.Store, r.Context(), job.ID, from, to)
 		if countErr != nil {
 			writeDashboardError(w, http.StatusInternalServerError, "billing_query_failed")
 			return
 		}
-		applyDetailAnomalyCounts(items, counts, userID, 0)
+		items = applyDetailAnomalyCounts(items, counts, userID, 0)
 	}
 	if r.URL.Query().Get("format") == "csv" {
 		writeBillingDetailCSV(w, billingDownloadName("billing-daily", userID, 0, from, to)+".csv", items)
@@ -99,7 +103,7 @@ func billingJobForRead(r *http.Request, store billingJobReadStore, instanceID, j
 		job, err = store.LatestBillingJob(r.Context(), instanceID, jobType, from, to)
 	} else {
 		job, err = store.BillingJob(r.Context(), jobID)
-		if err == nil && (job.InstanceID != instanceID || job.JobType != jobType || !job.From.Equal(from) || !job.To.Equal(to)) {
+		if err == nil && (job.InstanceID != instanceID || job.JobType != jobType || job.From.After(from) || job.To.Before(to)) {
 			err = sql.ErrNoRows
 		}
 	}

@@ -258,7 +258,7 @@ func (s Store) AppendBillingHour(ctx context.Context, j billing.Job, st billing.
 		}
 	}
 	for _, v := range bad {
-		_, e = tx.ExecContext(ctx, `INSERT INTO billing_anomaly_orders(instance_id,source_log_id,job_id,created_at,request_id,upstream_request_id,user_id,username,channel_id,channel_name,model_name,group_name,prompt_tokens,completion_tokens,cache_tokens,cache_write_tokens,cache_write_5m_tokens,cache_write_1h_tokens,quota,max_context_tokens,input_price,output_price,cache_price,cache_write_price,input_amount,output_amount,cache_amount,cache_write_amount,reference_amount,actual_amount,reasons,detected_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE channel_id=VALUES(channel_id),channel_name=VALUES(channel_name),reasons=VALUES(reasons),max_context_tokens=VALUES(max_context_tokens),input_price=VALUES(input_price),output_price=VALUES(output_price),cache_price=VALUES(cache_price),cache_write_price=VALUES(cache_write_price),input_amount=VALUES(input_amount),output_amount=VALUES(output_amount),cache_amount=VALUES(cache_amount),cache_write_amount=VALUES(cache_write_amount),reference_amount=VALUES(reference_amount),actual_amount=VALUES(actual_amount),detected_at=VALUES(detected_at)`, v.InstanceID, v.SourceLogID, v.JobID, v.CreatedAt, v.RequestID, v.UpstreamRequestID, v.UserID, v.Username, v.ChannelID, v.ChannelName, v.ModelName, v.GroupName, v.PromptTokens, v.CompletionTokens, v.CacheTokens, v.CacheWriteTokens, v.CacheWrite5mTokens, v.CacheWrite1hTokens, v.Quota, v.MaxContextTokens, v.InputPrice, v.OutputPrice, v.CachePrice, v.CacheWritePrice, v.InputAmount, v.OutputAmount, v.CacheAmount, v.CacheWriteAmount, v.ReferenceAmount, v.ActualAmount, v.Reasons, v.DetectedAt)
+		_, e = tx.ExecContext(ctx, `INSERT INTO billing_anomaly_orders(instance_id,source_log_id,job_id,created_at,request_id,upstream_request_id,user_id,username,token_id,token_name,channel_id,channel_name,model_name,group_name,prompt_tokens,completion_tokens,cache_tokens,cache_write_tokens,cache_write_5m_tokens,cache_write_1h_tokens,quota,max_context_tokens,input_price,output_price,cache_price,cache_write_price,input_amount,output_amount,cache_amount,cache_write_amount,reference_amount,actual_amount,reasons,detected_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE token_id=VALUES(token_id),token_name=VALUES(token_name),channel_id=VALUES(channel_id),channel_name=VALUES(channel_name),reasons=VALUES(reasons),max_context_tokens=VALUES(max_context_tokens),input_price=VALUES(input_price),output_price=VALUES(output_price),cache_price=VALUES(cache_price),cache_write_price=VALUES(cache_write_price),input_amount=VALUES(input_amount),output_amount=VALUES(output_amount),cache_amount=VALUES(cache_amount),cache_write_amount=VALUES(cache_write_amount),reference_amount=VALUES(reference_amount),actual_amount=VALUES(actual_amount),detected_at=VALUES(detected_at)`, v.InstanceID, v.SourceLogID, v.JobID, v.CreatedAt, v.RequestID, v.UpstreamRequestID, v.UserID, v.Username, v.TokenID, v.TokenName, v.ChannelID, v.ChannelName, v.ModelName, v.GroupName, v.PromptTokens, v.CompletionTokens, v.CacheTokens, v.CacheWriteTokens, v.CacheWrite5mTokens, v.CacheWrite1hTokens, v.Quota, v.MaxContextTokens, v.InputPrice, v.OutputPrice, v.CachePrice, v.CacheWritePrice, v.InputAmount, v.OutputAmount, v.CacheAmount, v.CacheWriteAmount, v.ReferenceAmount, v.ActualAmount, v.Reasons, v.DetectedAt)
 		if e != nil {
 			return e
 		}
@@ -411,7 +411,7 @@ func dateAt(v time.Time) time.Time {
 }
 
 func (s Store) QueryBillingAnomalies(ctx context.Context, site, jobID string, userID, channelID int64, from, to, cursorTime time.Time, cursorID int64, limit int) ([]billing.AnomalyOrder, error) {
-	q := `SELECT instance_id,source_log_id,job_id,created_at,request_id,upstream_request_id,user_id,username,channel_id,channel_name,model_name,group_name,prompt_tokens,completion_tokens,cache_tokens,cache_write_tokens,cache_write_5m_tokens,cache_write_1h_tokens,quota,max_context_tokens,input_price,output_price,cache_price,cache_write_price,input_amount,output_amount,cache_amount,cache_write_amount,reference_amount,actual_amount,reasons,detected_at FROM billing_anomaly_orders WHERE instance_id=? AND job_id=? AND created_at>=? AND created_at<? AND (created_at>? OR (created_at=? AND source_log_id>?))`
+	q := `SELECT instance_id,source_log_id,job_id,created_at,request_id,upstream_request_id,user_id,username,token_id,token_name,channel_id,channel_name,model_name,group_name,prompt_tokens,completion_tokens,cache_tokens,cache_write_tokens,cache_write_5m_tokens,cache_write_1h_tokens,quota,max_context_tokens,input_price,output_price,cache_price,cache_write_price,input_amount,output_amount,cache_amount,cache_write_amount,reference_amount,actual_amount,reasons,detected_at FROM billing_anomaly_orders WHERE instance_id=? AND job_id=? AND created_at>=? AND created_at<? AND (created_at>? OR (created_at=? AND source_log_id>?))`
 	args := []any{site, jobID, from, to, cursorTime, cursorTime, cursorID}
 	if userID > 0 {
 		q += ` AND user_id=?`
@@ -431,12 +431,36 @@ func (s Store) QueryBillingAnomalies(ctx context.Context, site, jobID string, us
 	out := []billing.AnomalyOrder{}
 	for rows.Next() {
 		var v billing.AnomalyOrder
-		if e = rows.Scan(&v.InstanceID, &v.SourceLogID, &v.JobID, &v.CreatedAt, &v.RequestID, &v.UpstreamRequestID, &v.UserID, &v.Username, &v.ChannelID, &v.ChannelName, &v.ModelName, &v.GroupName, &v.PromptTokens, &v.CompletionTokens, &v.CacheTokens, &v.CacheWriteTokens, &v.CacheWrite5mTokens, &v.CacheWrite1hTokens, &v.Quota, &v.MaxContextTokens, &v.InputPrice, &v.OutputPrice, &v.CachePrice, &v.CacheWritePrice, &v.InputAmount, &v.OutputAmount, &v.CacheAmount, &v.CacheWriteAmount, &v.ReferenceAmount, &v.ActualAmount, &v.Reasons, &v.DetectedAt); e != nil {
+		if e = rows.Scan(&v.InstanceID, &v.SourceLogID, &v.JobID, &v.CreatedAt, &v.RequestID, &v.UpstreamRequestID, &v.UserID, &v.Username, &v.TokenID, &v.TokenName, &v.ChannelID, &v.ChannelName, &v.ModelName, &v.GroupName, &v.PromptTokens, &v.CompletionTokens, &v.CacheTokens, &v.CacheWriteTokens, &v.CacheWrite5mTokens, &v.CacheWrite1hTokens, &v.Quota, &v.MaxContextTokens, &v.InputPrice, &v.OutputPrice, &v.CachePrice, &v.CacheWritePrice, &v.InputAmount, &v.OutputAmount, &v.CacheAmount, &v.CacheWriteAmount, &v.ReferenceAmount, &v.ActualAmount, &v.Reasons, &v.DetectedAt); e != nil {
 			return nil, e
 		}
 		out = append(out, v)
 	}
 	return out, rows.Err()
+}
+
+func (s Store) BillingTokenAnomalyCountsForJob(ctx context.Context, jobID string, userID, tokenID int64, from, to time.Time) ([]billing.AnomalyCount, error) {
+	query := `SELECT user_id,token_id,MAX(token_name),DATE(CONVERT_TZ(created_at,'+00:00','+08:00')),model_name,group_name,COUNT(*),COALESCE(SUM(actual_amount),0) FROM billing_anomaly_orders WHERE job_id=? AND user_id=? AND created_at>=? AND created_at<?`
+	args := []any{jobID, userID, from.UTC(), to.UTC()}
+	if tokenID >= 0 {
+		query += ` AND token_id=?`
+		args = append(args, tokenID)
+	}
+	query += ` GROUP BY user_id,token_id,DATE(CONVERT_TZ(created_at,'+00:00','+08:00')),model_name,group_name`
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []billing.AnomalyCount
+	for rows.Next() {
+		var item billing.AnomalyCount
+		if err = rows.Scan(&item.UserID, &item.TokenID, &item.TokenName, &item.Day, &item.ModelName, &item.GroupName, &item.Count, &item.Amount); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
 }
 
 func (s Store) BillingAnomalyCountsForJob(ctx context.Context, jobID string) ([]billing.AnomalyCount, error) {
@@ -446,6 +470,23 @@ func (s Store) BillingAnomalyCountsForJob(ctx context.Context, jobID string) ([]
 	}
 	defer rows.Close()
 	items := []billing.AnomalyCount{}
+	for rows.Next() {
+		var item billing.AnomalyCount
+		if err = rows.Scan(&item.UserID, &item.ChannelID, &item.Day, &item.ModelName, &item.GroupName, &item.Count, &item.Amount); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s Store) BillingAnomalyCountsForJobRange(ctx context.Context, jobID string, from, to time.Time) ([]billing.AnomalyCount, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT user_id,channel_id,DATE(CONVERT_TZ(created_at,'+00:00','+08:00')),model_name,group_name,COUNT(*),COALESCE(SUM(actual_amount),0) FROM billing_anomaly_orders WHERE job_id=? AND created_at>=? AND created_at<? GROUP BY user_id,channel_id,DATE(CONVERT_TZ(created_at,'+00:00','+08:00')),model_name,group_name`, jobID, from.UTC(), to.UTC())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []billing.AnomalyCount
 	for rows.Next() {
 		var item billing.AnomalyCount
 		if err = rows.Scan(&item.UserID, &item.ChannelID, &item.Day, &item.ModelName, &item.GroupName, &item.Count, &item.Amount); err != nil {

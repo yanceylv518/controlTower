@@ -559,7 +559,7 @@ export interface BillingUpstreamTotals { request_count:number;prompt_tokens:numb
 export interface BillingUpstreamMember { channel_id:number;channel_name:string;model_name:string;totals:BillingUpstreamTotals }
 export interface BillingUpstreamGroup { upstream_fp:string;display_name:string;base_url:string;member_count:number;members:BillingUpstreamMember[];totals:BillingUpstreamTotals }
 export interface BillingUpstreamDetail { day:string;model_name:string;group_name:string;tier_from:number;request_count:number;prompt_tokens:number;completion_tokens:number;cache_tokens:number;cache_write_tokens:number;quota:number;amount:string;unpriced:boolean }
-export interface BillingTokenSummary { token_id:number;token_name:string;request_count:number;prompt_tokens:number;completion_tokens:number;cache_tokens:number;cache_write_tokens:number;quota:number;ct_amount:string }
+export interface BillingTokenSummary { token_id:number;token_name:string;request_count:number;abnormal_rows:number;abnormal_amount:string;prompt_tokens:number;completion_tokens:number;cache_tokens:number;cache_write_tokens:number;quota:number;ct_amount:string }
 export interface BillingReconciliationBreakdown { anomaly: string; cache_write_policy: string; residual: string }
 export interface BillingReconciliationRow {
   user_id: number;

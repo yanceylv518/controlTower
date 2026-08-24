@@ -3,6 +3,7 @@ package dashboard
 import (
 	"context"
 	"math/big"
+	"time"
 
 	"controltower/server/internal/billing"
 )
@@ -23,6 +24,9 @@ func formatAnomalyAmount(amount *big.Rat) string {
 type billingAnomalyCounter interface {
 	BillingAnomalyCountsForJob(context.Context, string) ([]billing.AnomalyCount, error)
 }
+type billingAnomalyRangeCounter interface {
+	BillingAnomalyCountsForJobRange(context.Context, string, time.Time, time.Time) ([]billing.AnomalyCount, error)
+}
 
 func anomalyCounts(store any, ctx context.Context, jobID string) ([]billing.AnomalyCount, error) {
 	counter, ok := store.(billingAnomalyCounter)
@@ -30,6 +34,13 @@ func anomalyCounts(store any, ctx context.Context, jobID string) ([]billing.Anom
 		return nil, nil
 	}
 	return counter.BillingAnomalyCountsForJob(ctx, jobID)
+}
+func anomalyCountsForRange(store any, ctx context.Context, jobID string, from, to time.Time) ([]billing.AnomalyCount, error) {
+	counter, ok := store.(billingAnomalyRangeCounter)
+	if !ok || jobID == "" {
+		return nil, nil
+	}
+	return counter.BillingAnomalyCountsForJobRange(ctx, jobID, from, to)
 }
 
 func applyUserAnomalyCounts(items []billing.UserSummary, counts []billing.AnomalyCount) {
@@ -64,7 +75,35 @@ func applyChannelAnomalyCounts(items []billing.ChannelSummary, counts []billing.
 	}
 }
 
-func applyDetailAnomalyCounts(items []billing.DetailItem, counts []billing.AnomalyCount, userID, channelID int64) {
+func applyTokenAnomalyCounts(items []billing.TokenSummary, counts []billing.AnomalyCount) []billing.TokenSummary {
+	byToken := map[int64]int64{}
+	byAmount := map[int64]*big.Rat{}
+	names := map[int64]string{}
+	for _, count := range counts {
+		byToken[count.TokenID] += count.Count
+		if byAmount[count.TokenID] == nil {
+			byAmount[count.TokenID] = new(big.Rat)
+		}
+		addAnomalyAmount(byAmount[count.TokenID], count.Amount)
+		if count.TokenName != "" {
+			names[count.TokenID] = count.TokenName
+		}
+	}
+	seen := map[int64]bool{}
+	for i := range items {
+		seen[items[i].TokenID] = true
+		items[i].AbnormalRows = byToken[items[i].TokenID]
+		items[i].AbnormalAmount = formatAnomalyAmount(byAmount[items[i].TokenID])
+	}
+	for tokenID, count := range byToken {
+		if !seen[tokenID] {
+			items = append(items, billing.TokenSummary{TokenID: tokenID, TokenName: names[tokenID], AbnormalRows: count, AbnormalAmount: formatAnomalyAmount(byAmount[tokenID]), CTAmount: "0.000000"})
+		}
+	}
+	return items
+}
+
+func applyDetailAnomalyCounts(items []billing.DetailItem, counts []billing.AnomalyCount, userID, channelID int64) []billing.DetailItem {
 	remaining := map[string]int64{}
 	remainingAmount := map[string]*big.Rat{}
 	for _, count := range counts {
@@ -86,4 +125,15 @@ func applyDetailAnomalyCounts(items []billing.DetailItem, counts []billing.Anoma
 			delete(remaining, key)
 		}
 	}
+	for _, count := range counts {
+		if userID > 0 && count.UserID != userID || channelID > 0 && count.ChannelID != channelID {
+			continue
+		}
+		key := count.Day.Format("2006-01-02") + "\x00" + count.ModelName + "\x00" + count.GroupName
+		if remaining[key] > 0 {
+			items = append(items, billing.DetailItem{Day: count.Day.Format("2006-01-02"), ModelName: count.ModelName, GroupName: count.GroupName, AbnormalRows: remaining[key], AbnormalAmount: formatAnomalyAmount(remainingAmount[key]), Amount: "0.000000"})
+			delete(remaining, key)
+		}
+	}
+	return items
 }

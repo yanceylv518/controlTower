@@ -23,11 +23,11 @@ type AggregateRow struct {
 }
 
 type AnomalyCount struct {
-	UserID, ChannelID    int64
-	Day                  time.Time
-	ModelName, GroupName string
-	Count                int64
-	Amount               string
+	UserID, ChannelID, TokenID      int64
+	Day                             time.Time
+	TokenName, ModelName, GroupName string
+	Count                           int64
+	Amount                          string
 }
 
 type UserSummary struct {

@@ -14,10 +14,24 @@ import (
 type tokenHandlerStore struct {
 	fakeBillingSummaryStore
 	tokenRows []billing.TokenDailyRow
+	anomalies []billing.AnomalyCount
 }
 
-func (s tokenHandlerStore) QueryBillingTokenRows(context.Context, string, int64, int64) ([]billing.TokenDailyRow, error) {
+func (s tokenHandlerStore) QueryBillingTokenRows(context.Context, string, int64, int64, time.Time, time.Time) ([]billing.TokenDailyRow, error) {
 	return s.tokenRows, nil
+}
+func (s tokenHandlerStore) BillingTokenAnomalyCountsForJob(context.Context, string, int64, int64, time.Time, time.Time) ([]billing.AnomalyCount, error) {
+	return s.anomalies, nil
+}
+
+func TestBillingTokensIncludesAnomalyOnlyToken(t *testing.T) {
+	store := tokenHandlerStore{fakeBillingSummaryStore: fakeBillingSummaryStore{}, anomalies: []billing.AnomalyCount{{UserID: 7, TokenID: 9, TokenName: "key-9", Day: time.Date(2026, 8, 1, 0, 0, 0, 0, billing.BusinessLocation), ModelName: "m", Count: 2, Amount: "1.25"}}}
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/api/dashboard/billing/tokens?instance_id=site-a&user_id=7&month=2026-08", nil)
+	BillingTokenHandler{Store: store}.ServeHTTP(w, r)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"token_id":9`) || !strings.Contains(w.Body.String(), `"abnormal_rows":2`) || !strings.Contains(w.Body.String(), `"abnormal_amount":"1.250000"`) {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
 }
 
 func TestBillingTokensMarksOldJobDataMissing(t *testing.T) {

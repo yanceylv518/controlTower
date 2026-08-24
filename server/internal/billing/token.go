@@ -10,6 +10,8 @@ type TokenSummary struct {
 	CacheWriteTokens int64  `json:"cache_write_tokens"`
 	Quota            int64  `json:"quota"`
 	CTAmount         string `json:"ct_amount"`
+	AbnormalRows     int64  `json:"abnormal_rows"`
+	AbnormalAmount   string `json:"abnormal_amount"`
 }
 
 func TokenRowsAsAggregates(rows []TokenDailyRow) []AggregateRow {

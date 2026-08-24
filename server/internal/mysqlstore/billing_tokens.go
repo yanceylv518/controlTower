@@ -3,11 +3,13 @@ package mysqlstore
 import (
 	"context"
 	"controltower/server/internal/billing"
+	"time"
 )
 
-func (s Store) QueryBillingTokenRows(ctx context.Context, jobID string, userID, tokenID int64) ([]billing.TokenDailyRow, error) {
-	query := `SELECT instance_id,user_id,token_id,token_name,username,model_name,group_name,tier_from,day,request_count,prompt_tokens,completion_tokens,cache_tokens,cache_write_tokens,cache_write_5m_tokens,cache_write_1h_tokens,quota,updated_at FROM billing_token_daily_versions WHERE job_id=? AND user_id=?`
-	args := []any{jobID, userID}
+func (s Store) QueryBillingTokenRows(ctx context.Context, jobID string, userID, tokenID int64, from, to time.Time) ([]billing.TokenDailyRow, error) {
+	dayFrom, dayTo := billingDayBounds(from, to)
+	query := `SELECT instance_id,user_id,token_id,token_name,username,model_name,group_name,tier_from,day,request_count,prompt_tokens,completion_tokens,cache_tokens,cache_write_tokens,cache_write_5m_tokens,cache_write_1h_tokens,quota,updated_at FROM billing_token_daily_versions WHERE job_id=? AND user_id=? AND day>=? AND day<?`
+	args := []any{jobID, userID, dayFrom, dayTo}
 	if tokenID >= 0 {
 		query += ` AND token_id=?`
 		args = append(args, tokenID)

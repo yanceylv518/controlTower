@@ -78,6 +78,17 @@ func TestBillingSummaryCanPinCompletedJobVersion(t *testing.T) {
 	}
 }
 
+func TestBillingJobForReadAcceptsCoveredSubrange(t *testing.T) {
+	store := fakeBillingSummaryStore{}
+	req := httptest.NewRequest("GET", "/api/dashboard/billing/detail?instance_id=site-a&from=2026-08-05+00%3A00%3A00&to=2026-08-10+00%3A00%3A00&job_id=job-1", nil)
+	from := time.Date(2026, 8, 5, 0, 0, 0, 0, billing.BusinessLocation)
+	to := time.Date(2026, 8, 10, 0, 0, 0, 0, billing.BusinessLocation)
+	job, err := billingJobForRead(req, store, "site-a", "generate", from, to)
+	if err != nil || job.ID != "job-1" {
+		t.Fatalf("job=%+v err=%v", job, err)
+	}
+}
+
 func TestBillingSummaryDoesNotFallBackToAnotherInterval(t *testing.T) {
 	billing.MonthlySummaryCache.InvalidateInstance("site-no-job")
 	store := fakeBillingSummaryStore{missingJob: true, rows: []billing.AggregateRow{{UserID: 1, RequestCount: 99}}}

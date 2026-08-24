@@ -45,7 +45,7 @@ func TestBillingAnomalyCSVUsesBusinessTimezone(t *testing.T) {
 	if len(records) != 2 {
 		t.Fatalf("expected header and one item, got %d rows", len(records))
 	}
-	if got := records[1][3]; got != "2026/07/01 00:30:00" {
+	if got := records[1][5]; got != "2026/07/01 00:30:00" {
 		t.Fatalf("expected business-local request time, got %q", got)
 	}
 }

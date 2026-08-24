@@ -144,6 +144,8 @@ type AnomalyOrder struct {
 	UpstreamRequestID                                                                              string    `json:"upstream_request_id"`
 	UserID                                                                                         int64     `json:"user_id"`
 	Username                                                                                       string    `json:"username"`
+	TokenID                                                                                        int64     `json:"token_id"`
+	TokenName                                                                                      string    `json:"token_name"`
 	ChannelID                                                                                      int64     `json:"channel_id"`
 	ChannelName                                                                                    string    `json:"channel_name"`
 	ModelName                                                                                      string    `json:"model_name"`
@@ -340,7 +342,7 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 			useTiers := !configured || setting.UseTieredPricing
 			reasons := AnomalyReasons(log, maxByModel[log.ModelName])
 			if len(reasons) > 0 {
-				item := AnomalyOrder{InstanceID: job.InstanceID, SourceLogID: log.ID, JobID: job.ID, CreatedAt: time.Unix(log.CreatedUnix, 0), RequestID: log.RequestID, UpstreamRequestID: log.UpstreamRequestID, UserID: log.UserID, Username: log.Username, ChannelID: log.ChannelID, ChannelName: log.ChannelName, ModelName: log.ModelName, GroupName: log.GroupName, PromptTokens: SourcePromptTokens(log), CompletionTokens: log.CompletionTokens, CacheTokens: log.CacheTokens, CacheWriteTokens: log.CacheWriteTokens, CacheWrite5mTokens: log.CacheWrite5mTokens, CacheWrite1hTokens: log.CacheWrite1hTokens, Quota: log.Quota, MaxContextTokens: maxByModel[log.ModelName], Reasons: strings.Join(reasons, ","), DetectedAt: time.Now().UTC()}
+				item := AnomalyOrder{InstanceID: job.InstanceID, SourceLogID: log.ID, JobID: job.ID, CreatedAt: time.Unix(log.CreatedUnix, 0), RequestID: log.RequestID, UpstreamRequestID: log.UpstreamRequestID, UserID: log.UserID, Username: log.Username, TokenID: log.TokenID, TokenName: log.TokenName, ChannelID: log.ChannelID, ChannelName: log.ChannelName, ModelName: log.ModelName, GroupName: log.GroupName, PromptTokens: SourcePromptTokens(log), CompletionTokens: log.CompletionTokens, CacheTokens: log.CacheTokens, CacheWriteTokens: log.CacheWriteTokens, CacheWrite5mTokens: log.CacheWrite5mTokens, CacheWrite1hTokens: log.CacheWrite1hTokens, Quota: log.Quota, MaxContextTokens: maxByModel[log.ModelName], Reasons: strings.Join(reasons, ","), DetectedAt: time.Now().UTC()}
 				fillAnomalyAmounts(&item, log, priceByModel[log.ModelName], ratioByGroup[log.GroupName], step.From, useTiers)
 				anomalies = append(anomalies, item)
 				continue

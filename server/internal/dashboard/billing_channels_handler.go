@@ -121,7 +121,7 @@ func (h BillingChannelsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 	}
 	if channelID > 0 {
 		details = billing.BuildDetails(rows, prices, ratios, snapshots)
-		applyDetailAnomalyCounts(details, counts, 0, channelID)
+		details = applyDetailAnomalyCounts(details, counts, 0, channelID)
 	}
 	if r.URL.Query().Get("format") == "csv" {
 		if channelID <= 0 {
