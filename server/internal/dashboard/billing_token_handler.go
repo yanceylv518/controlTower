@@ -105,9 +105,9 @@ func writeTokenCSV(w http.ResponseWriter, userID, tokenID int64, from, to time.T
 	_, _ = w.Write([]byte("\xef\xbb\xbf"))
 	cw := csv.NewWriter(w)
 	_ = cw.Write([]string{"令牌汇总"})
-	_ = cw.Write([]string{"令牌ID", "令牌名", "请求数", "异常订单数", "异常金额", "普通输入Token", "缓存读取Token", "缓存写入Token", "输出Token", "CT金额", "Quota"})
+	_ = cw.Write([]string{"令牌ID", "令牌名", "请求数", "异常订单数", "异常金额", "普通输入Token", "缓存读取Token", "缓存写入Token", "输出Token", "账单金额", "Quota"})
 	for _, v := range summaries {
-		_ = cw.Write([]string{strconv.FormatInt(v.TokenID, 10), v.TokenName, strconv.FormatInt(v.RequestCount, 10), strconv.FormatInt(v.AbnormalRows, 10), v.AbnormalAmount, strconv.FormatInt(v.PromptTokens, 10), strconv.FormatInt(v.CacheTokens, 10), strconv.FormatInt(v.CacheWriteTokens, 10), strconv.FormatInt(v.CompletionTokens, 10), v.CTAmount, strconv.FormatInt(v.Quota, 10)})
+		_ = cw.Write([]string{strconv.FormatInt(v.TokenID, 10), v.TokenName, strconv.FormatInt(v.RequestCount, 10), strconv.FormatInt(v.AbnormalRows, 10), v.AbnormalAmount, strconv.FormatInt(v.PromptTokens, 10), strconv.FormatInt(v.CacheTokens, 10), strconv.FormatInt(v.CacheWriteTokens, 10), strconv.FormatInt(v.CompletionTokens, 10), v.BillingAmount, strconv.FormatInt(v.Quota, 10)})
 	}
 	_ = cw.Write([]string{})
 	_ = cw.Write([]string{"令牌日账单"})

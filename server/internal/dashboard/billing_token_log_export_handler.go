@@ -78,7 +78,7 @@ func (h BillingTokenLogExportHandler) ServeHTTP(w http.ResponseWriter, r *http.R
 		_ = cw.Write([]string{"Token ID", strconv.FormatInt(tokenID, 10)})
 		_ = cw.Write([]string{"账单区间", billing.FormatBusinessTime(from.Unix()), billing.FormatBusinessTime(to.Unix())})
 		_ = cw.Write(nil)
-		_ = cw.Write([]string{"请求时间", "Request ID", "模型", "普通输入Token", "缓存读取Token", "缓存写入Token", "输出Token", "CT金额", "Quota"})
+		_ = cw.Write([]string{"请求时间", "Request ID", "模型", "普通输入Token", "缓存读取Token", "缓存写入Token", "输出Token", "账单金额", "Quota"})
 		headerWritten = true
 	}
 	cursor := billing.LogCursor{}

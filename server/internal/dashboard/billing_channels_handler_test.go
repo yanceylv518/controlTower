@@ -3,7 +3,6 @@ package dashboard
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -13,14 +12,17 @@ import (
 )
 
 type fakeBillingChannelReadStore struct {
-	latest       billing.Job
-	jobs         map[string]billing.Job
-	rowsByJob    map[string][]billing.AggregateRow
-	queriedJobID string
+	latest        billing.Job
+	jobs          map[string]billing.Job
+	rowsByJob     map[string][]billing.AggregateRow
+	queriedJobID  string
+	activeRows    []billing.AggregateRow
+	queriedActive bool
 }
 
 func (f *fakeBillingChannelReadStore) QueryBillingChannelAggregates(context.Context, string, time.Time, time.Time, int64) ([]billing.AggregateRow, error) {
-	return nil, nil
+	f.queriedActive = true
+	return f.activeRows, nil
 }
 func (f *fakeBillingChannelReadStore) QueryBillingChannelAggregatesForJob(_ context.Context, jobID string, _ int64) ([]billing.AggregateRow, error) {
 	f.queriedJobID = jobID
@@ -73,35 +75,31 @@ func runChannelRead(t *testing.T, store *fakeBillingChannelReadStore, jobID, for
 	return recorder
 }
 
-func TestBillingChannelsRejectsMismatchedJobID(t *testing.T) {
+func TestBillingChannelsIgnoresLegacyMismatchedJobID(t *testing.T) {
 	from, _ := time.ParseInLocation("2006-01-02 15:04:05", "2026-07-01 00:00:00", billing.BusinessLocation)
 	to := from.AddDate(0, 1, 0)
 	wrong := channelReadJob("wrong", "complete", from, to)
 	wrong.InstanceID = "site-b"
 	store := &fakeBillingChannelReadStore{jobs: map[string]billing.Job{"wrong": wrong}}
 	recorder := runChannelRead(t, store, "wrong", "")
-	if recorder.Code != 409 || !strings.Contains(recorder.Body.String(), `"error":"billing_not_generated"`) {
+	if recorder.Code != 200 || !store.queriedActive {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
 
-func TestBillingChannelsReportsGeneratingProgress(t *testing.T) {
+func TestBillingChannelsDoesNotDependOnGeneratingLegacyJob(t *testing.T) {
 	from, _ := time.ParseInLocation("2006-01-02 15:04:05", "2026-07-01 00:00:00", billing.BusinessLocation)
 	to := from.AddDate(0, 1, 0)
 	running := channelReadJob("running", "running", from, to)
 	running.TotalSteps, running.CompletedSteps = 20, 5
 	store := &fakeBillingChannelReadStore{jobs: map[string]billing.Job{"running": running}}
 	recorder := runChannelRead(t, store, "running", "")
-	var body map[string]any
-	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
-		t.Fatal(err)
-	}
-	if recorder.Code != 409 || body["error"] != "billing_generating" || body["progress"] != float64(25) || body["job_id"] != "running" {
-		t.Fatalf("status=%d body=%v", recorder.Code, body)
+	if recorder.Code != 200 || !store.queriedActive {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
 
-func TestBillingChannelsCSVUsesRequestedJobVersion(t *testing.T) {
+func TestBillingChannelsCSVUsesActiveDailyLedger(t *testing.T) {
 	from, _ := time.ParseInLocation("2006-01-02 15:04:05", "2026-07-01 00:00:00", billing.BusinessLocation)
 	to := from.AddDate(0, 1, 0)
 	requested := channelReadJob("requested", "complete", from, to)
@@ -113,12 +111,13 @@ func TestBillingChannelsCSVUsesRequestedJobVersion(t *testing.T) {
 			"requested": {{UserID: 7, Username: "channel-7", Day: from, ModelName: "model-a", GroupName: "default", RequestCount: 37}},
 			"latest":    {{UserID: 7, Username: "channel-7", Day: from, ModelName: "model-a", GroupName: "default", RequestCount: 99}},
 		},
+		activeRows: []billing.AggregateRow{{UserID: 7, Username: "channel-7", Day: from, ModelName: "model-a", GroupName: "default", RequestCount: 55}},
 	}
 	recorder := runChannelRead(t, store, "requested", "csv")
 	if recorder.Code != 200 {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if store.queriedJobID != "requested" || !strings.Contains(recorder.Body.String(), ",37,") || strings.Contains(recorder.Body.String(), ",99,") {
+	if !store.queriedActive || store.queriedJobID != "" || !strings.Contains(recorder.Body.String(), ",55,") {
 		t.Fatalf("queried job=%q csv=%s", store.queriedJobID, recorder.Body.String())
 	}
 }

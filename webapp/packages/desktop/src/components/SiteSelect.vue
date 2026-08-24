@@ -4,6 +4,8 @@ import { siteOf } from "@ct/shared";
 import { useAuthStore } from "../stores/auth";
 import { useFiltersStore } from "../stores/filters";
 
+const props = withDefaults(defineProps<{ readonlyOnly?: boolean }>(), { readonlyOnly: false });
+
 const auth = useAuthStore();
 const filters = useFiltersStore();
 const viewerSite = computed(() =>
@@ -23,9 +25,12 @@ onMounted(async () => {
 watch(viewerSite, lockViewerSite, { immediate: true });
 const sites = computed(() => [
   ...new Set(
-    filters.instances.filter((item) => item.enabled).map((item) => siteOf(item)),
+    filters.instances.filter((item) => item.enabled && (!props.readonlyOnly || item.logs_readonly_configured)).map((item) => siteOf(item)),
   ),
 ]);
+watch(sites, (available) => {
+  if (auth.user?.role !== "viewer" && !available.includes(filters.site_id)) filters.selectSite(available[0] || "");
+}, { immediate: true });
 </script>
 
 <template>
@@ -38,7 +43,7 @@ const sites = computed(() => [
     {{ viewerSite || filters.site_id }}
   </div>
   <el-select
-    v-else-if="sites.length > 1"
+    v-else-if="sites.length"
     :model-value="filters.site_id"
     aria-label="站点"
     style="width: 180px"
@@ -46,6 +51,7 @@ const sites = computed(() => [
   >
     <el-option v-for="site in sites" :key="site" :label="site" :value="site" />
   </el-select>
+  <el-tag v-else type="warning">无可用只读站点</el-tag>
 </template>
 
 <style scoped>

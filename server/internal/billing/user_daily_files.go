@@ -76,7 +76,7 @@ func (g UserDailyFileGenerator) GenerateJobFiles(ctx context.Context, job Job) e
 				_ = os.Remove(tmpName)
 			}
 		}()
-		if err = writeUserDailyWorkbook(tmp, job, group, details); err != nil {
+		if err = WriteUserDailyWorkbook(tmp, job, group, details); err != nil {
 			_ = tmp.Close()
 			return err
 		}
@@ -116,7 +116,7 @@ func dailyFileRelativePath(job Job, group UserDailyFile) string {
 	return filepath.Join(hex.EncodeToString(siteHash[:8]), day.Format("2006"), day.Format("01"), day.Format("02"), name)
 }
 
-func writeUserDailyWorkbook(out io.Writer, job Job, group UserDailyFile, rows []RequestDetail) error {
+func WriteUserDailyWorkbook(out io.Writer, job Job, group UserDailyFile, rows []RequestDetail) error {
 	wb := xlsxwriter.New()
 	sheet, err := wb.AddSheet("账单明细", []float64{20, 28, 12, 18, 14, 18, 14, 16, 14, 14, 14, 14, 14, 14, 16, 16, 16, 16, 16, 16, 16, 16})
 	if err != nil {

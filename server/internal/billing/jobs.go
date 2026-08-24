@@ -205,15 +205,41 @@ type DailyOverview struct {
 }
 
 type UserBillDay struct {
-	InstanceID   string    `json:"instance_id"`
-	JobID        string    `json:"job_id"`
-	Day          time.Time `json:"day"`
-	UserID       int64     `json:"user_id"`
-	Username     string    `json:"username"`
-	RequestCount int64     `json:"request_count"`
-	AnomalyRows  int64     `json:"anomaly_rows"`
-	Amount       string    `json:"amount"`
-	ActivatedAt  time.Time `json:"activated_at"`
+	InstanceID       string    `json:"instance_id"`
+	JobID            string    `json:"job_id"`
+	Day              time.Time `json:"day"`
+	UserID           int64     `json:"user_id"`
+	Username         string    `json:"username"`
+	ModelName        string    `json:"model_name"`
+	RequestCount     int64     `json:"request_count"`
+	PromptTokens     int64     `json:"prompt_tokens"`
+	CompletionTokens int64     `json:"completion_tokens"`
+	CacheReadTokens  int64     `json:"cache_read_tokens"`
+	CacheWriteTokens int64     `json:"cache_write_tokens"`
+	AnomalyRows      int64     `json:"anomaly_rows"`
+	Amount           string    `json:"amount"`
+	AnomalyAmount    string    `json:"anomaly_amount"`
+	ActivatedAt      time.Time `json:"activated_at"`
+}
+
+type UserTokenBillDay struct {
+	InstanceID       string    `json:"instance_id"`
+	JobID            string    `json:"job_id"`
+	Day              time.Time `json:"day"`
+	UserID           int64     `json:"user_id"`
+	Username         string    `json:"username"`
+	TokenID          int64     `json:"token_id"`
+	TokenName        string    `json:"token_name"`
+	ModelName        string    `json:"model_name"`
+	RequestCount     int64     `json:"request_count"`
+	PromptTokens     int64     `json:"prompt_tokens"`
+	CompletionTokens int64     `json:"completion_tokens"`
+	CacheReadTokens  int64     `json:"cache_read_tokens"`
+	CacheWriteTokens int64     `json:"cache_write_tokens"`
+	AnomalyRows      int64     `json:"anomaly_rows"`
+	Amount           string    `json:"amount"`
+	AnomalyAmount    string    `json:"anomaly_amount"`
+	ActivatedAt      time.Time `json:"activated_at"`
 }
 
 type JobStore interface {

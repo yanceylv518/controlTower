@@ -56,9 +56,8 @@ func (h BillingUpstreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 		writeDashboardError(w, 400, "invalid_range")
 		return
 	}
-	job, jobErr := billingJobForRead(r, h.Store, site, "channel_generate", from, to)
-	if jobErr != nil || job.Status != "complete" {
-		writeBillingReadConflict(w, jobErr)
+	if !billingReadonlyAvailable(h.Store, site) {
+		writeDashboardError(w, http.StatusConflict, "readonly_source_unavailable")
 		return
 	}
 	if h.Source != nil {
@@ -73,7 +72,7 @@ func (h BillingUpstreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 		writeDashboardError(w, 500, "billing_upstream_query_failed")
 		return
 	}
-	rows, err := h.Store.QueryBillingChannelAggregatesForJob(r.Context(), job.ID, 0)
+	rows, err := h.Store.QueryBillingChannelAggregates(r.Context(), site, from, to, 0)
 	if err != nil {
 		writeDashboardError(w, 500, "billing_upstream_query_failed")
 		return
@@ -99,7 +98,7 @@ func (h BillingUpstreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 		h.detail(w, r, from, to, groups, rows, prices, ratios, snapshots)
 		return
 	}
-	writeDashboardJSON(w, 200, map[string]any{"items": groups, "job": job})
+	writeDashboardJSON(w, 200, map[string]any{"items": groups, "coverage": billingCoverage(r.Context(), h.Store, site, from, to)})
 }
 
 func (h BillingUpstreamHandler) detail(w http.ResponseWriter, r *http.Request, from, to time.Time, groups []billing.UpstreamGroup, rows []billing.AggregateRow, prices []billing.PriceRecord, ratios []billing.GroupRatio, snapshots map[string]string) {

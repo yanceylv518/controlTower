@@ -9,7 +9,7 @@ type TokenSummary struct {
 	CacheTokens      int64  `json:"cache_tokens"`
 	CacheWriteTokens int64  `json:"cache_write_tokens"`
 	Quota            int64  `json:"quota"`
-	CTAmount         string `json:"ct_amount"`
+	BillingAmount    string `json:"billing_amount"`
 	AbnormalRows     int64  `json:"abnormal_rows"`
 	AbnormalAmount   string `json:"abnormal_amount"`
 }
@@ -34,7 +34,7 @@ func BuildTokenSummaries(rows []TokenDailyRow, prices []PriceRecord, ratios []Gr
 	out := make([]TokenSummary, 0, len(byToken))
 	for tokenID, tokenRows := range byToken {
 		_, total := BuildSummary(tokenRows, prices, ratios, snapshots, nil)
-		out = append(out, TokenSummary{TokenID: tokenID, TokenName: names[tokenID], RequestCount: total.RequestCount, PromptTokens: total.PromptTokens, CompletionTokens: total.CompletionTokens, CacheTokens: total.CacheTokens, CacheWriteTokens: total.CacheWriteTokens, Quota: total.Quota, CTAmount: total.Amount})
+		out = append(out, TokenSummary{TokenID: tokenID, TokenName: names[tokenID], RequestCount: total.RequestCount, PromptTokens: total.PromptTokens, CompletionTokens: total.CompletionTokens, CacheTokens: total.CacheTokens, CacheWriteTokens: total.CacheWriteTokens, Quota: total.Quota, BillingAmount: total.Amount})
 	}
 	sortTokenSummaries(out)
 	return out
@@ -43,8 +43,8 @@ func BuildTokenSummaries(rows []TokenDailyRow, prices []PriceRecord, ratios []Gr
 func sortTokenSummaries(items []TokenSummary) {
 	for i := 0; i < len(items); i++ {
 		for j := i + 1; j < len(items); j++ {
-			a, _ := decimalRat(items[i].CTAmount)
-			b, _ := decimalRat(items[j].CTAmount)
+			a, _ := decimalRat(items[i].BillingAmount)
+			b, _ := decimalRat(items[j].BillingAmount)
 			if b.Cmp(a) > 0 || (b.Cmp(a) == 0 && items[j].TokenID < items[i].TokenID) {
 				items[i], items[j] = items[j], items[i]
 			}

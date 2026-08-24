@@ -55,10 +55,30 @@ func (h BillingUserDaysHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 		writeDashboardError(w, http.StatusForbidden, "forbidden")
 		return
 	}
+	if !billingReadonlyAvailable(h.Store, site) {
+		writeDashboardError(w, http.StatusConflict, "readonly_source_unavailable")
+		return
+	}
 	from := time.Date(2000, 1, 1, 0, 0, 0, 0, billing.BusinessLocation)
-	to := time.Now().In(billing.BusinessLocation).AddDate(0, 0, 1)
+	today := time.Now().In(billing.BusinessLocation)
+	today = time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, billing.BusinessLocation)
+	to := today
 	period := ""
-	if raw := strings.TrimSpace(r.URL.Query().Get("month")); raw != "" {
+	fromRaw := strings.TrimSpace(r.URL.Query().Get("from"))
+	throughRaw := strings.TrimSpace(r.URL.Query().Get("through"))
+	if fromRaw != "" || throughRaw != "" {
+		if fromRaw == "" || throughRaw == "" {
+			writeDashboardError(w, http.StatusBadRequest, "invalid_date_range")
+			return
+		}
+		parsedFrom, fromErr := time.ParseInLocation("2006-01-02", fromRaw, billing.BusinessLocation)
+		parsedThrough, throughErr := time.ParseInLocation("2006-01-02", throughRaw, billing.BusinessLocation)
+		if fromErr != nil || throughErr != nil || parsedThrough.Before(parsedFrom) || !parsedThrough.Before(today) || parsedThrough.Sub(parsedFrom) >= 366*24*time.Hour {
+			writeDashboardError(w, http.StatusBadRequest, "invalid_date_range")
+			return
+		}
+		from, to, period = parsedFrom, parsedThrough.AddDate(0, 0, 1), fromRaw+":"+throughRaw
+	} else if raw := strings.TrimSpace(r.URL.Query().Get("month")); raw != "" {
 		parsed, err := time.ParseInLocation("2006-01", raw, billing.BusinessLocation)
 		if err != nil {
 			writeDashboardError(w, http.StatusBadRequest, "invalid_month")
@@ -71,5 +91,5 @@ func (h BillingUserDaysHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 		writeDashboardError(w, http.StatusInternalServerError, "billing_user_days_query_failed")
 		return
 	}
-	writeDashboardJSON(w, http.StatusOK, map[string]any{"items": items, "month": period})
+	writeDashboardJSON(w, http.StatusOK, map[string]any{"items": items, "period": period, "from": from.Format("2006-01-02"), "through": to.AddDate(0, 0, -1).Format("2006-01-02"), "coverage": billingCoverage(r.Context(), h.Store, site, from, to)})
 }

@@ -54,7 +54,7 @@ func TestTokenLogExportWritesIdentityOnceAndRequestAmount(t *testing.T) {
 	if rows[0][0] != "用户名" || rows[0][1] != "alice" || rows[2][0] != "Token 名称" || rows[2][1] != "production-key" {
 		t.Fatalf("identity rows=%v", rows[:4])
 	}
-	if got := strings.Join(rows[5], "|"); got != "请求时间|Request ID|模型|普通输入Token|缓存读取Token|缓存写入Token|输出Token|CT金额|Quota" {
+	if got := strings.Join(rows[5], "|"); got != "请求时间|Request ID|模型|普通输入Token|缓存读取Token|缓存写入Token|输出Token|账单金额|Quota" {
 		t.Fatalf("headers=%s", got)
 	}
 	if got := rows[6][7]; got != "2.000000" {

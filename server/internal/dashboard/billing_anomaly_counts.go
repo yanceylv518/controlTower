@@ -97,7 +97,7 @@ func applyTokenAnomalyCounts(items []billing.TokenSummary, counts []billing.Anom
 	}
 	for tokenID, count := range byToken {
 		if !seen[tokenID] {
-			items = append(items, billing.TokenSummary{TokenID: tokenID, TokenName: names[tokenID], AbnormalRows: count, AbnormalAmount: formatAnomalyAmount(byAmount[tokenID]), CTAmount: "0.000000"})
+			items = append(items, billing.TokenSummary{TokenID: tokenID, TokenName: names[tokenID], AbnormalRows: count, AbnormalAmount: formatAnomalyAmount(byAmount[tokenID]), BillingAmount: "0.000000"})
 		}
 	}
 	return items

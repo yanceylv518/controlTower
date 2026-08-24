@@ -62,27 +62,20 @@ func (h BillingChannelsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 		writeDashboardError(w, 403, "forbidden")
 		return
 	}
+	if !billingReadonlyAvailable(h.Store, site) {
+		writeDashboardError(w, http.StatusConflict, "readonly_source_unavailable")
+		return
+	}
 	from, to, period, e := billingPeriodQuery(r)
 	if e != nil {
 		writeDashboardError(w, 400, "invalid_range")
 		return
 	}
 	channelID, _ := strconv.ParseInt(r.URL.Query().Get("channel_id"), 10, 64)
-	strictRead := channelID > 0 || r.URL.Query().Get("format") == "csv" || strings.TrimSpace(r.URL.Query().Get("job_id")) != ""
-	var job billing.Job
-	var jobErr error
-	if strictRead {
-		job, jobErr = billingJobForRead(r, h.Store, site, "channel_generate", from, to)
-	} else {
-		job, jobErr = h.Store.LatestBillingJob(r.Context(), site, "channel_generate", from, to)
-	}
-	var rows []billing.AggregateRow
-	if jobErr == nil && job.Status == "complete" {
-		rows, e = h.Store.QueryBillingChannelAggregatesForJob(r.Context(), job.ID, channelID)
-	} else if strictRead {
-		writeBillingReadConflict(w, jobErr)
-		return
-	}
+	// Channel bills are a projection of the same active daily request ledger as
+	// user bills. A query range must never require an exactly matching legacy
+	// channel-generation job.
+	rows, e := h.Store.QueryBillingChannelAggregates(r.Context(), site, from, to, channelID)
 	if e != nil {
 		writeDashboardError(w, 500, "billing_channel_query_failed")
 		return
@@ -111,14 +104,6 @@ func (h BillingChannelsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 	billed := billing.BuildChannelSummary(rows, prices, ratios, snapshots, settings)
 	details := []billing.DetailItem{}
 	counts := []billing.AnomalyCount{}
-	if jobErr == nil && job.Status == "complete" {
-		counts, e = anomalyCounts(h.Store, r.Context(), job.ID)
-		if e != nil {
-			writeDashboardError(w, 500, "billing_channel_query_failed")
-			return
-		}
-		applyChannelAnomalyCounts(billed, counts)
-	}
 	if channelID > 0 {
 		details = billing.BuildDetails(rows, prices, ratios, snapshots)
 		details = applyDetailAnomalyCounts(details, counts, 0, channelID)
@@ -160,10 +145,6 @@ func (h BillingChannelsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 			}
 		}
 	}
-	var generationJob any
-	if jobErr == nil {
-		generationJob = job
-	}
 	if currencyErr != nil {
 		// Currency is display sugar. A dead new-api connection must not take
 		// down historical bill viewing - fall back to the generation-time
@@ -173,7 +154,7 @@ func (h BillingChannelsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 			currency = billing.CurrencyDisplay{Type: "USD", Symbol: "$", ExchangeRate: "1"}
 		}
 	}
-	writeDashboardJSON(w, 200, map[string]any{"items": items, "details": details, "period": period, "generation_job": generationJob, "warning": warning, "currency": currency})
+	writeDashboardJSON(w, 200, map[string]any{"items": items, "details": details, "period": period, "warning": warning, "currency": currency, "coverage": billingCoverage(r.Context(), h.Store, site, from, to)})
 }
 
 func currentBillingCurrency(ctx context.Context, source BillingCurrencySource, instanceID string) (billing.CurrencyDisplay, error) {
@@ -193,6 +174,16 @@ func currentBillingCurrency(ctx context.Context, source BillingCurrencySource, i
 
 func billingPeriodQuery(r *http.Request) (time.Time, time.Time, string, error) {
 	q := r.URL.Query()
+	if q.Get("through") != "" {
+		from, fromErr := time.ParseInLocation("2006-01-02", q.Get("from"), billing.BusinessLocation)
+		through, throughErr := time.ParseInLocation("2006-01-02", q.Get("through"), billing.BusinessLocation)
+		today := time.Now().In(billing.BusinessLocation)
+		today = time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, billing.BusinessLocation)
+		if fromErr != nil || throughErr != nil || through.Before(from) || !through.Before(today) || through.Sub(from) >= 366*24*time.Hour {
+			return time.Time{}, time.Time{}, "", errors.New("invalid date range")
+		}
+		return from, through.AddDate(0, 0, 1), q.Get("from") + "_" + q.Get("through"), nil
+	}
 	if q.Get("from") != "" || q.Get("to") != "" {
 		from, to, err := parseBillingInputRange(q.Get("from"), q.Get("to"))
 		if err != nil {

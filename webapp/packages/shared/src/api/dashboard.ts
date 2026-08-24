@@ -564,18 +564,20 @@ export interface BillingDailyOverview {
   amount: string;
   activated_at: string;
 }
-export interface BillingUserBillDay { instance_id:string;job_id:string;day:string;user_id:number;username:string;request_count:number;anomaly_rows:number;amount:string;activated_at:string }
+export interface BillingUserBillDay { instance_id:string;job_id:string;day:string;user_id:number;username:string;model_name:string;request_count:number;prompt_tokens:number;completion_tokens:number;cache_read_tokens:number;cache_write_tokens:number;anomaly_rows:number;anomaly_amount:string;amount:string;activated_at:string }
+export interface BillingUserTokenBillDay { instance_id:string;job_id:string;day:string;user_id:number;username:string;token_id:number;token_name:string;model_name:string;request_count:number;prompt_tokens:number;completion_tokens:number;cache_read_tokens:number;cache_write_tokens:number;anomaly_rows:number;anomaly_amount:string;amount:string;activated_at:string }
 export interface BillingUserSetting {
   instance_id: string;
   user_id: number;
   use_tiered_pricing: boolean;
 }
 export interface BillingChannelSummary { channel_id:number;channel_name:string;request_count:number;abnormal_rows:number;abnormal_amount?:string;prompt_tokens:number;completion_tokens:number;cache_tokens:number;cache_write_tokens?:number;quota:number;amount:string;discount:string;discounted_amount:string;unpriced_models:string[] }
+export interface BillingCoverage { expected_days:number;available_days:number;missing_days:string[];status:"complete"|"partial"|"missing"|"unknown" }
 export interface BillingUpstreamTotals { request_count:number;prompt_tokens:number;completion_tokens:number;cache_tokens:number;cache_write_tokens:number;quota:number;amount:string }
 export interface BillingUpstreamMember { channel_id:number;channel_name:string;model_name:string;totals:BillingUpstreamTotals }
 export interface BillingUpstreamGroup { upstream_fp:string;display_name:string;base_url:string;member_count:number;members:BillingUpstreamMember[];totals:BillingUpstreamTotals }
 export interface BillingUpstreamDetail { day:string;model_name:string;group_name:string;tier_from:number;request_count:number;prompt_tokens:number;completion_tokens:number;cache_tokens:number;cache_write_tokens:number;quota:number;amount:string;unpriced:boolean }
-export interface BillingTokenSummary { token_id:number;token_name:string;request_count:number;abnormal_rows:number;abnormal_amount:string;prompt_tokens:number;completion_tokens:number;cache_tokens:number;cache_write_tokens:number;quota:number;ct_amount:string }
+export interface BillingTokenSummary { token_id:number;token_name:string;request_count:number;abnormal_rows:number;abnormal_amount:string;prompt_tokens:number;completion_tokens:number;cache_tokens:number;cache_write_tokens:number;quota:number;billing_amount:string }
 export interface BillingReconciliationBreakdown { anomaly: string; cache_write_policy: string; residual: string }
 export interface BillingReconciliationRow {
   user_id: number;
@@ -585,7 +587,7 @@ export interface BillingReconciliationRow {
   group_name?: string;
   request_count: number;
   abnormal_rows: number;
-  ct_amount: string;
+  billing_amount: string;
   actual_amount: string;
   diff_amount: string;
   diff_rate: string;
@@ -595,7 +597,7 @@ export interface BillingReconciliationRow {
 }
 export interface BillingReconciliationResponse {
   items: BillingReconciliationRow[];
-  totals: { ct_amount: string; actual_amount: string; diff_amount: string; breakdown: BillingReconciliationBreakdown };
+  totals: { billing_amount: string; actual_amount: string; diff_amount: string; breakdown: BillingReconciliationBreakdown };
   job: BillingJob;
   range_from: string;
   range_to: string;
@@ -607,7 +609,7 @@ export interface BillingRequestReconciliation {
   created_at: string;
   actual_amount: string;
   rebuilt_amount: string;
-  ct_amount: string;
+  billing_amount: string;
   diff_amount: string;
   input_diff: string;
   output_diff: string;
@@ -903,12 +905,13 @@ export const dashboardApi = (client: ApiClient) => ({
     client.request<{ items: BillingJob[] }>(`/api/dashboard/billing/jobs${query(params)}`),
   billingOverview: (params: { instance_id?: string; month?: string } = {}) =>
     client.request<{ items: BillingDailyOverview[]; from: string; to: string }>(`/api/dashboard/billing/overview${query(params)}`),
-  billingUserDays: (params: { instance_id: string; month?: string; user_id?: number; search?: string }) =>
-    client.request<{ items: BillingUserBillDay[]; month: string }>(`/api/dashboard/billing/user-days${query(params)}`),
+  billingUserDays: (params: { instance_id: string; from?: string; through?: string; user_id?: number; search?: string }) =>
+    client.request<{ items: BillingUserBillDay[]; period: string; from: string; through: string; coverage: BillingCoverage }>(`/api/dashboard/billing/user-days${query(params)}`),
+  billingUserTokenDays: (params:{instance_id:string;user_id:number;from:string;through:string}) => client.request<{items:BillingUserTokenBillDay[]}>(`/api/dashboard/billing/user-token-days${query(params)}`),
   billingUserSettings: (instance_id: string) => client.request<{ items: Record<string, BillingUserSetting> }>(`/api/dashboard/billing/user-settings${query({ instance_id })}`),
   saveBillingUserSetting: (input: BillingUserSetting) => client.request<BillingUserSetting>("/api/dashboard/billing/user-settings", { method: "PUT", body: JSON.stringify(input) }),
-  billingChannels:(params:{instance_id:string;month?:string;from?:string;to?:string;channel_id?:number;job_id?:string})=>client.request<{items:BillingChannelSummary[];details:BillingDetailItem[];period:string;generation_job?:BillingJob|null;warning?:string;currency?:BillingCurrencyDisplay}>(`/api/dashboard/billing/channels${query(params)}`),
-  billingUpstreamChannels:(params:{instance_id:string;from:string;to:string;job_id?:string})=>client.request<{items:BillingUpstreamGroup[];job:BillingJob}>(`/api/dashboard/billing/upstream-channels${query(params)}`),
+  billingChannels:(params:{instance_id:string;from?:string;through?:string;to?:string;month?:string;channel_id?:number;job_id?:string})=>client.request<{items:BillingChannelSummary[];details:BillingDetailItem[];period:string;warning?:string;currency?:BillingCurrencyDisplay;coverage?:BillingCoverage}>(`/api/dashboard/billing/channels${query(params)}`),
+  billingUpstreamChannels:(params:{instance_id:string;from:string;to:string;job_id?:string})=>client.request<{items:BillingUpstreamGroup[];coverage?:BillingCoverage}>(`/api/dashboard/billing/upstream-channels${query(params)}`),
   billingUpstreamDetail:(params:{instance_id:string;fp:string;from:string;to:string;job_id?:string})=>client.request<{group:BillingUpstreamGroup;details:BillingUpstreamDetail[]}>(`/api/dashboard/billing/upstream-channels/detail${query(params)}`),
   billingTokens:(params:{instance_id:string;user_id:number;from:string;to:string;job_id?:string})=>client.request<{items:BillingTokenSummary[];token_data_missing:boolean;job:BillingJob}>(`/api/dashboard/billing/tokens${query(params)}`),
   billingTokenDaily:(params:{instance_id:string;user_id:number;token_id:number;from:string;to:string;job_id?:string})=>client.request<{items:BillingDetailItem[];token_id:number;job:BillingJob}>(`/api/dashboard/billing/tokens/daily${query(params)}`),

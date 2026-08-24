@@ -32,7 +32,7 @@ export const router = createRouter({ history: createWebHistory('/'), routes: [
   { path: '/billing', alias: ['/billing/overview', '/billing/generated'], component: BillingView, meta: { title: '用户账单' } },
   { path: '/billing/tasks', component: BillingTasksView, meta: { title: '账单任务', adminOnly: true } },
   { path: '/billing/channels', component: ChannelBillingView, meta: { title: '渠道账单', adminOnly: true } },
-  { path: '/billing/anomalies', alias: '/billing-reconciliation', component: BillingReconciliationView, meta: { title: '计费异常', adminOnly: true } },
+  { path: '/billing/anomalies', alias: '/billing-reconciliation', component: BillingReconciliationView, meta: { title: '账单核对', adminOnly: true } },
   { path: '/models/manage', alias: '/billing/pricing', component: BillingPricingView, meta: { title: '模型管理', adminOnly: true } },
   { path: '/customers', component: CustomerMonitorView, meta: { title: '客户监控' } },
   { path: '/login', name: 'login', component: LoginView, meta: { title: '登录' } }, { path: '/', name: 'overview', component: OverviewView, meta: { title: '运行总览' } },

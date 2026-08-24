@@ -163,6 +163,8 @@ func NewMux(options Options) *http.ServeMux {
 	if userDaysStore, ok := any(options.Store).(dashboard.BillingUserDaysStore); ok {
 		mux.Handle("GET /api/dashboard/billing/user-days", protect(dashboard.BillingUserDaysHandler{Store: userDaysStore}))
 	}
+	if tokenDaysStore, ok := any(options.Store).(dashboard.BillingUserTokenDaysStore); ok { mux.Handle("GET /api/dashboard/billing/user-token-days", protect(dashboard.BillingUserTokenDaysHandler{Store: tokenDaysStore})) }
+	if rangeStore, ok := any(options.Store).(dashboard.BillingRangeWorkbookStore); ok { mux.Handle("GET /api/dashboard/billing/range-workbook", protect(dashboard.BillingRangeWorkbookHandler{Store: rangeStore})) }
 	if anomalyStore, ok := any(options.Store).(dashboard.BillingAnomalyStore); ok {
 		mux.Handle("GET /api/dashboard/billing/anomalies", protect(dashboard.BillingAnomalyHandler{Store: anomalyStore}))
 	}

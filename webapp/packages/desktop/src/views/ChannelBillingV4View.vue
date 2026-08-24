@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { useRoute } from "vue-router";
-import { ElMessage, ElMessageBox } from "element-plus";
-import { ApiError, type BillingChannelSummary, type BillingJob, type BillingUpstreamGroup } from "@ct/shared";
+import { useRoute, useRouter } from "vue-router";
+import { ElMessage } from "element-plus";
+import { type BillingChannelSummary, type BillingCoverage, type BillingJob, type BillingUpstreamGroup } from "@ct/shared";
 import { dashboard } from "../api";
 import AppShell from "../components/AppShell.vue";
 import AsyncPanel from "../components/AsyncPanel.vue";
@@ -11,54 +11,58 @@ import { useAsyncData } from "../composables/useAsyncData";
 import { useFiltersStore } from "../stores/filters";
 import { usePrefsStore } from "../stores/prefs";
 import { formatNumber } from "../utils/format";
-import { formatDateTime, savedGenerationRange, timeRangeShortcuts, validateGenerationRange } from "../utils/billingRange";
-import { billingReadErrorMessage, billingTaskErrorMessage, downloadBillingFile, httpError } from "../utils/httpError";
+import { billingReadErrorMessage, downloadBillingFile, httpError } from "../utils/httpError";
 
-type PageData = { items: BillingChannelSummary[]; job: BillingJob | null; channelError: string; currencySymbol: string; currencyRate: number };
+type PageData = { items: BillingChannelSummary[]; job: BillingJob | null; channelError: string; currencySymbol: string; currencyRate: number; coverage?:BillingCoverage };
 const filters = useFiltersStore(), prefs = usePrefsStore(), route = useRoute();
-const generating = ref(false), progress = ref(0), page = ref(1), pageSize = ref(20);
+const router = useRouter();
+const page = ref(1), pageSize = ref(20);
 const exporting = ref<Record<number, boolean>>({});
 const detailOpen = ref(false), selected = ref<BillingChannelSummary>();
 const viewMode = ref<"channel"|"upstream">("channel"), upstreamSearch = ref("");
 const upstreamOpen = ref(false), selectedUpstream = ref<BillingUpstreamGroup>();
 const routedSite = typeof route.query.site === "string" ? route.query.site : "";
 if (routedSite) filters.selectSite(routedSite);
-const routedRange: [string, string] | undefined = typeof route.query.from === "string" && typeof route.query.to === "string" ? [route.query.from, route.query.to] : undefined;
-const routedJobID = typeof route.query.job_id === "string" ? route.query.job_id : "";
-const pinnedJobID = ref(routedJobID);
-const generationRange = ref<[string, string]>(routedRange || savedGenerationRange("ct.billing.channel.range"));
+const two=(value:number)=>String(value).padStart(2,"0");
+const dateValue=(value:Date)=>`${value.getFullYear()}-${two(value.getMonth()+1)}-${two(value.getDate())}`;
+const yesterday=new Date();yesterday.setHours(0,0,0,0);yesterday.setDate(yesterday.getDate()-1);
+const routedRange: [string, string] | undefined = typeof route.query.from === "string" && typeof route.query.through === "string" ? [route.query.from.slice(0,10), route.query.through.slice(0,10)] : undefined;
+const generationRange = ref<[string, string]>(routedRange || [dateValue(new Date(yesterday.getFullYear(),yesterday.getMonth(),1)),dateValue(yesterday)]);
+function rangeTimes(){const[from,through]=generationRange.value;const end=new Date(`${through}T00:00:00`);end.setDate(end.getDate()+1);return{from:`${from} 00:00:00`,to:`${dateValue(end)} 00:00:00`};}
 void prefs.load();
 const state = useAsyncData<PageData>(async () => {
   await filters.loadInstances();
-  if (!filters.site_id) return { items: [], job: null, channelError: "", currencySymbol: "", currencyRate: 1 };
-  const [from,to]=generationRange.value;
-  const bill = await dashboard.billingChannels({ instance_id: filters.site_id, from, to, job_id: pinnedJobID.value || undefined });
+  if (!filters.site_id) return { items: [], job: null, channelError: "", currencySymbol: "", currencyRate: 1, coverage:undefined };
+  const [from,through]=generationRange.value;
+  const bill = await dashboard.billingChannels({ instance_id: filters.site_id, from, through });
   return {
     items: (bill.items || []).sort((a, b) => Number(b.amount) - Number(a.amount) || a.channel_id - b.channel_id),
-    job: bill.generation_job || null,
+    job: null,
     channelError: bill.warning || "",
     currencySymbol: bill.currency?.type ? bill.currency.symbol : (prefs.currencySymbol || "$"),
     currencyRate: (() => { const rate = Number(bill.currency?.exchange_rate); return Number.isFinite(rate) && rate > 0 ? rate : 1; })(),
+    coverage: bill.coverage,
   };
 });
 const upstreamState = useAsyncData(async()=>{if(viewMode.value!=="upstream"||!filters.site_id)return undefined;const[from,to]=generationRange.value;return dashboard.billingUpstreamChannels({instance_id:filters.site_id,from,to,job_id:job.value?.id})});
 
 const items = computed(() => state.data.value?.items || []), job = computed(() => state.data.value?.job || null);
 const channelSearch = ref("");
+const showZeroChannels = ref(false);
 const filteredItems = computed(() => {
   const q = channelSearch.value.trim().toLowerCase();
-  if (!q) return items.value;
-  return items.value.filter(row => String(row.channel_id).includes(q) || (row.channel_name || "").toLowerCase().includes(q));
+  return items.value.filter(row => (showZeroChannels.value || row.request_count > 0 || row.abnormal_rows > 0) && (!q || String(row.channel_id).includes(q) || (row.channel_name || "").toLowerCase().includes(q)));
 });
 const upstreamItems = computed(()=>{const q=upstreamSearch.value.trim().toLowerCase();return (upstreamState.data.value?.items||[]).filter(g=>!q||g.base_url.toLowerCase().includes(q)||g.display_name.toLowerCase().includes(q)||g.members.some(m=>m.channel_name.toLowerCase().includes(q)||m.model_name.toLowerCase().includes(q))).map(g=>({...g,row_id:`g:${g.upstream_fp||'unmapped'}`,children:g.members.map(m=>({...m,row_id:`c:${m.channel_id}`,display_name:`${m.model_name||'未知模型'} · ${m.channel_name||`渠道 ${m.channel_id}`} · #${m.channel_id}`,request_count:m.totals.request_count,prompt_tokens:m.totals.prompt_tokens,completion_tokens:m.totals.completion_tokens,cache_tokens:m.totals.cache_tokens,cache_write_tokens:m.totals.cache_write_tokens,quota:m.totals.quota,amount:m.totals.amount})) ,request_count:g.totals.request_count,prompt_tokens:g.totals.prompt_tokens,completion_tokens:g.totals.completion_tokens,cache_tokens:g.totals.cache_tokens,cache_write_tokens:g.totals.cache_write_tokens,quota:g.totals.quota,amount:g.totals.amount}))});
 const upstreamExpanded=computed(()=>upstreamItems.value.filter(g=>g.upstream_fp).map(g=>g.row_id));
 const detail = useAsyncData(async () => {
   if (!selected.value || !filters.site_id) return undefined;
-  const [from, to] = generationRange.value;
-  return dashboard.billingChannels({ instance_id: filters.site_id, channel_id: selected.value.channel_id, from, to, job_id: job.value?.id });
+  const [from, through] = generationRange.value;
+  return dashboard.billingChannels({ instance_id: filters.site_id, channel_id: selected.value.channel_id, from, through });
 });
 const upstreamDetail=useAsyncData(async()=>{if(!selectedUpstream.value)return undefined;const[from,to]=generationRange.value;return dashboard.billingUpstreamDetail({instance_id:filters.site_id,fp:selectedUpstream.value.upstream_fp,from,to,job_id:job.value?.id})});
-const actualPeriod = computed(() => job.value?.status === "complete" ? jobRange(job.value) : "尚未生成，下方仅显示渠道配置");
+const actualPeriod = computed(() => `${generationRange.value[0]} 至 ${generationRange.value[1]}`);
+function createMissingBills(){void router.push({path:"/billing/tasks",query:{create:"1",site:filters.site_id,from:generationRange.value[0],through:generationRange.value[1]}})}
 const pagedItems = computed(() => filteredItems.value.slice((page.value - 1) * pageSize.value, page.value * pageSize.value));
 const currency = computed(() => state.data.value ? state.data.value.currencySymbol : (prefs.currencySymbol || "$"));
 // USD-based amounts must be converted by the site exchange rate, not just relabeled.
@@ -66,55 +70,6 @@ const currencyRate = computed(() => state.data.value?.currencyRate || 1);
 const money = (value: string) => `${currency.value}${(Number(value || 0) * currencyRate.value).toFixed(4)}`;
 const unitPrice = (value: string | undefined) => value ? `${currency.value}${(Number(value) * currencyRate.value).toFixed(4)}` : "—";
 const discountedMoney = (value: string | undefined) => money(String(Number(value || 0) * Number(selected.value?.discount || 1)));
-function jobRange(value: BillingJob | null) { if(!value?.range_from||!value.range_to)return"";return`[${formatDateTime(new Date(value.range_from))}, ${formatDateTime(new Date(value.range_to))})`; }
-const status = computed(() => {
-  if (generating.value || ["pending", "running"].includes(job.value?.status || "")) return { type: "info" as const, title: `渠道账单生成中（${progress.value}%）`, text: `${jobRange(job.value)}；后台正在按小时分段扫描日志，页面会自动刷新进度。` };
-  if (job.value?.status === "failed") return { type: "error" as const, title: "渠道账单生成失败", text: `${jobRange(job.value)}；${job.value.error_message || "可以重新创建任务。"}` };
-  if (job.value?.status === "complete") return { type: "success" as const, title: "渠道账单生成完成", text: `${jobRange(job.value)}；数据截至 ${job.value.updated_at ? new Date(job.value.updated_at).toLocaleString() : "任务完成时间"}；共完成 ${job.value.total_steps} 个小时步骤，异常订单 ${job.value.abnormal_rows} 条。` };
-  return { type: "warning" as const, title: "所选区间的渠道账单尚未生成", text: "下方仅显示当前渠道配置，所有数量和金额均为 0；生成后才会显示该区间的账单数据。" };
-});
-
-async function monitor(initial: BillingJob) {
-  if (generating.value) return;
-  generating.value = true;
-  let current = initial;
-  try {
-    while (["pending", "running"].includes(current.status)) {
-      progress.value = current.total_steps ? Math.round(current.completed_steps * 100 / current.total_steps) : 0;
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-      current = await dashboard.billingJob(current.id);
-    }
-    progress.value = current.status === "complete" ? 100 : progress.value;
-    await state.reload();
-    current.status === "failed" ? ElMessage.error(current.error_message || "渠道账单生成失败") : ElMessage.success("渠道账单生成完成");
-  } finally { generating.value = false; }
-}
-async function generate(force=false) {
-  if (generating.value || !filters.site_id) return;
-  const invalid=validateGenerationRange(generationRange.value);
-  if(invalid){ElMessage.warning(invalid);return;}
-  try {
-    pinnedJobID.value="";
-    const [from,to]=generationRange.value;
-    const result = await dashboard.generateBilling({ instance_id: filters.site_id, from, to, scope: "channel", force });
-    if(result.job.status==="complete"){await state.reload();ElMessage.success(result.reused?"该区间已有渠道账单，已直接加载":"所选时间范围的渠道账单已经生成完成");return;}
-    await monitor(result.job);
-  } catch (error) { if(await confirmRegenerate(error))return generate(true);ElMessage.warning(billingTaskErrorMessage(error)); }
-}
-// 生成是唯一写入口：区间已有账单时弹三选一——查看该账单/重新生成/关闭取消。
-async function confirmRegenerate(error:unknown):Promise<boolean>{
-  if(!(error instanceof ApiError)||error.code!=="billing_range_already_covered")return false;
-  const covering=error.details?.covering_job as BillingJob|undefined;
-  const range=covering?.range_from?`（覆盖区间 ${new Date(covering.range_from).toLocaleString()} 至 ${new Date(covering.range_to||"").toLocaleString()}）`:"";
-  try{
-    await ElMessageBox.confirm(`所选时间段已生成过渠道账单${range}。可直接查看该账单；重新生成将产生新的账单版本并替换查看数据。`,"该区间已生成渠道账单",{confirmButtonText:"查看账单",cancelButtonText:"重新生成",distinguishCancelAndClose:true,type:"info"});
-    if(covering?.range_from&&covering.range_to){generationRange.value=[toLocalInput(covering.range_from),toLocalInput(covering.range_to)];pinnedJobID.value=covering.id;await state.reload();}
-    return false;
-  }catch(action){
-    return action==="cancel";
-  }
-}
-function toLocalInput(iso:string){const d=new Date(iso);const two=(n:number)=>String(n).padStart(2,"0");return `${d.getFullYear()}-${two(d.getMonth()+1)}-${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`}
 async function save(row: BillingChannelSummary, value: string) {
   const discount = Number(value);
   if (!Number.isFinite(discount) || discount < 0 || discount > 1) { ElMessage.warning("折扣必须在 0 到 1 之间"); return; }
@@ -123,10 +78,10 @@ async function save(row: BillingChannelSummary, value: string) {
 }
 function openDetail(row: BillingChannelSummary) { selected.value = row; detailOpen.value = true; void detail.reload(); }
 function openUpstream(row: BillingUpstreamGroup){selectedUpstream.value=row;upstreamOpen.value=true;void upstreamDetail.reload()}
-function upstreamURL(row:BillingUpstreamGroup){const[from,to]=generationRange.value;const p=new URLSearchParams({instance_id:filters.site_id,fp:row.upstream_fp,from,to,format:"csv"});if(job.value?.id)p.set("job_id",job.value.id);return`/api/dashboard/billing/upstream-channels/detail?${p}`}
+function upstreamURL(row:BillingUpstreamGroup){const{from,to}=rangeTimes();const p=new URLSearchParams({instance_id:filters.site_id,fp:row.upstream_fp,from,to,format:"csv"});return`/api/dashboard/billing/upstream-channels/detail?${p}`}
 async function exportUpstream(row:BillingUpstreamGroup){try{await downloadBillingFile(upstreamURL(row),"导出上游渠道 CSV 失败")}catch(error){ElMessage.error(billingReadErrorMessage(error,"导出上游渠道 CSV 失败"))}}
 function channelReadURL(path: string, row: BillingChannelSummary, extra = "") {
-  const [from, to] = generationRange.value;
+  const {from, to} = rangeTimes();
   const params = new URLSearchParams({ instance_id: filters.site_id, channel_id: String(row.channel_id), from, to });
   if (job.value?.id) params.set("job_id", job.value.id);
   return `${path}?${params.toString()}${extra}`;
@@ -163,26 +118,26 @@ async function exportChannel(row: BillingChannelSummary) {
     exporting.value = { ...exporting.value, [row.channel_id]: false };
   }
 }
-watch(generationRange,(value)=>{pinnedJobID.value="";localStorage.setItem("ct.billing.channel.range",JSON.stringify(value))},{deep:true});
-watch([generationRange, () => filters.site_id], (_value, oldValue) => { if(oldValue && oldValue[1] !== filters.site_id)pinnedJobID.value="";page.value = 1; void state.reload(); if(viewMode.value==="upstream")void upstreamState.reload(); if (detailOpen.value) void detail.reload(); });
+watch(generationRange,(value)=>{localStorage.setItem("ct.billing.channel.range",JSON.stringify(value))},{deep:true});
+watch([generationRange, () => filters.site_id], () => { page.value = 1; void state.reload(); if(viewMode.value==="upstream")void upstreamState.reload(); if (detailOpen.value) void detail.reload(); });
 watch(viewMode,mode=>{if(mode==="upstream")void upstreamState.reload()});
 watch(channelSearch, () => { page.value = 1; });
 watch(pageSize, () => { page.value = 1; });
-watch(() => state.data.value?.job?.id, () => { const current = state.data.value?.job; if (current && ["pending", "running"].includes(current.status)) void monitor(current); if(viewMode.value==="upstream")void upstreamState.reload(); });
 void state.reload();
 </script>
 
 <template>
   <AppShell title="渠道账单">
     <template #tools>
-      <span class="period-label">账单周期</span><el-date-picker v-model="generationRange" type="datetimerange" value-format="YYYY-MM-DD HH:mm:ss" format="YYYY-MM-DD HH:mm:ss" range-separator="至" start-placeholder="开始时间" end-placeholder="结束时间" :shortcuts="timeRangeShortcuts" unlink-panels style="width:420px" />
-      <el-button type="primary" :loading="generating" @click="generate()">生成渠道账单</el-button><el-popconfirm title="强制重新生成会创建新的渠道账单版本，确定继续？" @confirm="generate(true)"><template #reference><el-button :disabled="generating">强制重新生成</el-button></template></el-popconfirm>
+      <span class="period-label">账单日期</span><el-date-picker v-model="generationRange" type="daterange" value-format="YYYY-MM-DD" format="YYYY-MM-DD" range-separator="至" start-placeholder="开始日期" end-placeholder="结束日期" :disabled-date="(date:Date)=>date>=new Date(new Date().setHours(0,0,0,0))" unlink-panels style="width:270px" />
+      <el-button @click="state.reload">刷新</el-button>
     </template>
     <div class="page">
-      <div class="period-summary"><span>选择区间</span><b>[{{ generationRange[0] }}, {{ generationRange[1] }})</b><span class="actual-period">下方数据区间 <strong>{{ actualPeriod }}</strong></span></div>
-      <el-alert :type="status.type" :title="status.title" :description="status.text" :closable="false" show-icon />
+      <div class="period-summary"><span>账单日期</span><b>{{ actualPeriod }}</b><span class="actual-period">账单由任务生成，页面仅查询已生效账单</span></div>
+      <div v-if="state.data.value?.coverage && state.data.value.coverage.status !== 'complete'" class="coverage-prompt"><el-alert type="warning" :closable="false" show-icon :title="`所选区间账单不完整：${state.data.value.coverage.available_days}/${state.data.value.coverage.expected_days} 天可用，当前金额仅供参考`" :description="state.data.value.coverage.missing_days.length <= 10 ? `缺失日期：${state.data.value.coverage.missing_days.join('、')}` : `缺失 ${state.data.value.coverage.missing_days.length} 天，请创建账单任务生成对应区间`" /><el-button type="warning" plain @click="createMissingBills">去生成账单</el-button></div>
+      <el-alert v-else-if="state.data.value?.coverage" type="success" :closable="false" show-icon :title="`所选区间 ${state.data.value.coverage.expected_days}/${state.data.value.coverage.expected_days} 天账单完整`" />
       <el-alert v-if="state.data.value?.channelError" type="warning" title="部分渠道配置加载失败" :description="state.data.value.channelError" :closable="false" show-icon />
-      <div class="view-switch"><el-radio-group v-model="viewMode" size="small"><el-radio-button value="channel">按渠道</el-radio-button><el-radio-button value="upstream">按上游 key</el-radio-button></el-radio-group><el-input v-if="viewMode==='upstream'" v-model="upstreamSearch" clearable placeholder="搜索渠道名、模型或 base_url" style="width:280px" /><el-input v-else v-model="channelSearch" clearable placeholder="搜索渠道名或 ID" style="width:240px" /></div>
+      <div class="view-switch"><el-radio-group v-model="viewMode" size="small"><el-radio-button value="channel">按渠道</el-radio-button><el-radio-button value="upstream">按上游 key</el-radio-button></el-radio-group><el-input v-if="viewMode==='upstream'" v-model="upstreamSearch" clearable placeholder="搜索渠道名、模型或 base_url" style="width:280px" /><template v-else><el-input v-model="channelSearch" clearable placeholder="搜索渠道名或 ID" style="width:240px" /><el-switch v-model="showZeroChannels" active-text="显示零用量渠道" /></template></div>
       <AsyncPanel v-if="viewMode==='channel'" class="content" :loading="state.loading.value" :error="state.error.value" :empty="!filteredItems.length" :empty-text="!filters.site_id ? '尚未选择站点' : channelSearch.trim() ? '没有匹配的渠道' : '当前站点没有渠道配置'" @retry="state.reload">
         <div class="table-wrap"><el-table :data="pagedItems" height="100%" class="channel-table" @row-click="openDetail">
           <el-table-column prop="channel_name" label="渠道" min-width="180"><template #default="scope"><b>{{ scope.row.channel_name || `渠道 ${scope.row.channel_id}` }}</b><small class="sub">ID {{ scope.row.channel_id }}</small></template></el-table-column>
@@ -232,5 +187,5 @@ void state.reload();
 </template>
 
 <style scoped>
-.page{display:flex;height:calc(100vh - 78px);min-height:0;flex-direction:column;gap:10px;overflow:hidden}.period-summary{display:flex;align-items:center;padding:8px 12px;border:1px solid var(--el-border-color-lighter);border-radius:6px;background:var(--el-fill-color-blank);color:var(--el-text-color-secondary)}.period-summary b{margin-left:8px;color:var(--el-text-color-primary)}.actual-period{margin-left:auto;font-size:12px}.actual-period strong{margin-left:6px;color:var(--el-text-color-primary)}.content{min-height:0;flex:1}.table-wrap{height:calc(100% - 58px);min-height:240px}.table-wrap :deep(.cell),.channel-detail-table :deep(.cell){font-variant-numeric:tabular-nums}.channel-table :deep(.el-table__row){cursor:pointer}.sub,.cell-secondary{display:block;margin-top:3px;color:var(--el-text-color-secondary)}.cell-primary{color:var(--el-text-color-primary)}.metric-pairs,.metric-grid{display:grid;grid-template-columns:auto 1fr;column-gap:8px;row-gap:3px;align-items:center}.metric-grid{grid-template-columns:auto minmax(0,1fr) auto minmax(0,1fr)}.metric-pairs span,.metric-grid span{color:var(--el-text-color-secondary);font-size:12px}.metric-pairs b,.metric-grid b{text-align:right;white-space:nowrap}.danger{color:var(--el-color-danger)}.period-label{color:var(--el-text-color-secondary);font-size:13px}.drawer-actions{display:flex;justify-content:flex-end;gap:8px;margin-bottom:12px}.drawer-summary{display:flex;justify-content:flex-end;gap:28px;margin-bottom:12px;padding:10px 12px;background:var(--el-fill-color-light);border-radius:6px}.drawer-summary b{margin-left:6px;color:var(--el-color-primary);font-variant-numeric:tabular-nums}
+.page{display:flex;height:calc(100vh - 78px);min-height:0;flex-direction:column;gap:10px;overflow:hidden}.period-summary{display:flex;align-items:center;padding:8px 12px;border:1px solid var(--el-border-color-lighter);border-radius:6px;background:var(--el-fill-color-blank);color:var(--el-text-color-secondary)}.period-summary b{margin-left:8px;color:var(--el-text-color-primary)}.actual-period{margin-left:auto;font-size:12px}.actual-period strong{margin-left:6px;color:var(--el-text-color-primary)}.coverage-prompt{display:flex;align-items:center;gap:12px}.coverage-prompt .el-alert{flex:1}.coverage-prompt .el-button{flex:none}.content{min-height:0;flex:1}.table-wrap{height:calc(100% - 58px);min-height:240px}.table-wrap :deep(.cell),.channel-detail-table :deep(.cell){font-variant-numeric:tabular-nums}.channel-table :deep(.el-table__row){cursor:pointer}.sub,.cell-secondary{display:block;margin-top:3px;color:var(--el-text-color-secondary)}.cell-primary{color:var(--el-text-color-primary)}.metric-pairs,.metric-grid{display:grid;grid-template-columns:auto 1fr;column-gap:8px;row-gap:3px;align-items:center}.metric-grid{grid-template-columns:auto minmax(0,1fr) auto minmax(0,1fr)}.metric-pairs span,.metric-grid span{color:var(--el-text-color-secondary);font-size:12px}.metric-pairs b,.metric-grid b{text-align:right;white-space:nowrap}.danger{color:var(--el-color-danger)}.period-label{color:var(--el-text-color-secondary);font-size:13px}.drawer-actions{display:flex;justify-content:flex-end;gap:8px;margin-bottom:12px}.drawer-summary{display:flex;justify-content:flex-end;gap:28px;margin-bottom:12px;padding:10px 12px;background:var(--el-fill-color-light);border-radius:6px}.drawer-summary b{margin-left:6px;color:var(--el-color-primary);font-variant-numeric:tabular-nums}
 </style>

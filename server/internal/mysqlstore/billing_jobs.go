@@ -319,8 +319,9 @@ func (s Store) AppendBillingHour(ctx context.Context, j billing.Job, st billing.
 	}
 	for _, v := range details {
 		charge := v.Charge
+		billDay := v.BillDay.In(billing.BusinessLocation).Format("2006-01-02")
 		_, e = tx.ExecContext(ctx, `INSERT INTO billing_request_details(job_id,instance_id,bill_day,source_log_id,created_at,request_id,user_id,username,token_id,token_name,channel_id,channel_name,model_name,billing_mode,matched_tier,prompt_tokens,completion_tokens,cache_read_tokens,cache_write_tokens,cache_write_5m_tokens,cache_write_1h_tokens,input_price,output_price,cache_read_price,cache_write_price,cache_write_5m_price,cache_write_1h_price,per_request_price,input_amount,output_amount,cache_read_amount,cache_write_amount,cache_write_5m_amount,cache_write_1h_amount,total_amount,calculated_quota,logged_quota,created_record_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE token_name=VALUES(token_name),channel_name=VALUES(channel_name),model_name=VALUES(model_name),billing_mode=VALUES(billing_mode),matched_tier=VALUES(matched_tier),prompt_tokens=VALUES(prompt_tokens),completion_tokens=VALUES(completion_tokens),cache_read_tokens=VALUES(cache_read_tokens),cache_write_tokens=VALUES(cache_write_tokens),cache_write_5m_tokens=VALUES(cache_write_5m_tokens),cache_write_1h_tokens=VALUES(cache_write_1h_tokens),input_price=VALUES(input_price),output_price=VALUES(output_price),cache_read_price=VALUES(cache_read_price),cache_write_price=VALUES(cache_write_price),cache_write_5m_price=VALUES(cache_write_5m_price),cache_write_1h_price=VALUES(cache_write_1h_price),per_request_price=VALUES(per_request_price),input_amount=VALUES(input_amount),output_amount=VALUES(output_amount),cache_read_amount=VALUES(cache_read_amount),cache_write_amount=VALUES(cache_write_amount),cache_write_5m_amount=VALUES(cache_write_5m_amount),cache_write_1h_amount=VALUES(cache_write_1h_amount),total_amount=VALUES(total_amount),calculated_quota=VALUES(calculated_quota),logged_quota=VALUES(logged_quota),created_record_at=VALUES(created_record_at)`,
-			v.JobID, v.InstanceID, v.BillDay, v.SourceLogID, time.Unix(v.CreatedUnix, 0).UTC(), v.RequestID, v.UserID, v.Username, v.TokenID, v.TokenName, v.ChannelID, v.ChannelName, v.ModelName, charge.Mode, charge.MatchedTier,
+			v.JobID, v.InstanceID, billDay, v.SourceLogID, time.Unix(v.CreatedUnix, 0).UTC(), v.RequestID, v.UserID, v.Username, v.TokenID, v.TokenName, v.ChannelID, v.ChannelName, v.ModelName, charge.Mode, charge.MatchedTier,
 			v.PromptTokens, v.CompletionTokens, v.CacheReadTokens, v.CacheWriteTokens, v.CacheWrite5mTokens, v.CacheWrite1hTokens,
 			decimalValue(charge.InputPrice), decimalValue(charge.OutputPrice), decimalValue(charge.CacheReadPrice), decimalValue(charge.CacheWritePrice), decimalValue(charge.CacheWrite5mPrice), decimalValue(charge.CacheWrite1hPrice), decimalValue(charge.PerRequestPrice),
 			decimalValue(charge.InputAmount), decimalValue(charge.OutputAmount), decimalValue(charge.CacheReadAmount), decimalValue(charge.CacheWriteAmount), decimalValue(charge.CacheWrite5mAmount), decimalValue(charge.CacheWrite1hAmount), decimalValue(charge.Total), v.CalculatedQuota, v.LoggedQuota, now)
@@ -486,6 +487,18 @@ func (s Store) FinalizeBillingJob(ctx context.Context, j billing.Job) error {
 				return e
 			}
 		}
+		var normalRequests, anomalyRequests int64
+		if e = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM billing_request_details WHERE job_id=? AND bill_day=?`, j.ID, billDay).Scan(&normalRequests); e != nil {
+			return e
+		}
+		if e = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM billing_anomaly_orders WHERE job_id=? AND DATE(CONVERT_TZ(created_at,'+00:00','+08:00'))=?`, j.ID, billDay).Scan(&anomalyRequests); e != nil {
+			return e
+		}
+		if j.UserID == 0 {
+			if _, e = tx.ExecContext(ctx, `INSERT INTO billing_day_status(instance_id,bill_day,active_job_id,calculation_version,status,normal_requests,anomaly_requests,activated_at) VALUES(?,?,?,'request-ledger-v1',?,?,?,?) ON DUPLICATE KEY UPDATE active_job_id=VALUES(active_job_id),calculation_version=VALUES(calculation_version),status=VALUES(status),normal_requests=VALUES(normal_requests),anomaly_requests=VALUES(anomaly_requests),activated_at=VALUES(activated_at)`, j.InstanceID, billDay, j.ID, "complete", normalRequests, anomalyRequests, now); e != nil {
+				return e
+			}
+		}
 		insertActive := `INSERT INTO billing_user_daily_active(instance_id,bill_day,user_id,job_id,activated_at) SELECT details.instance_id,details.bill_day,details.user_id,?,? FROM billing_request_details details WHERE details.job_id=? AND details.bill_day=?`
 		insertArgs := []any{j.ID, now, j.ID, billDay}
 		if j.UserID > 0 {
@@ -502,6 +515,35 @@ func (s Store) FinalizeBillingJob(ctx context.Context, j billing.Job) error {
 		return e
 	}
 	return tx.Commit()
+}
+
+func (s Store) BillingDayComplete(ctx context.Context, site string, day time.Time) (bool, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM billing_day_status WHERE instance_id=? AND bill_day=? AND status='complete'`, site, day.Format("2006-01-02")).Scan(&count)
+	return count > 0, err
+}
+
+func (s Store) EarliestCompletedBillingDay(ctx context.Context, site string) (time.Time, error) {
+	var day time.Time
+	err := s.db.QueryRowContext(ctx, `SELECT MIN(range_from) FROM billing_jobs WHERE instance_id=? AND job_type='generate' AND user_id=0 AND status='complete' AND requested_by<>'scheduler'`, site).Scan(&day)
+	return day, err
+}
+
+func (s Store) ListCompleteBillingDays(ctx context.Context, site string, from, to time.Time) ([]time.Time, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT bill_day FROM billing_day_status WHERE instance_id=? AND bill_day>=? AND bill_day<? AND status='complete' ORDER BY bill_day`, site, from.Format("2006-01-02"), to.Format("2006-01-02"))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []time.Time{}
+	for rows.Next() {
+		var day time.Time
+		if err = rows.Scan(&day); err != nil {
+			return nil, err
+		}
+		items = append(items, day)
+	}
+	return items, rows.Err()
 }
 
 func (s Store) ListBillingRequestDetailGroups(ctx context.Context, jobID string) ([]billing.UserDailyFile, error) {
@@ -523,7 +565,7 @@ func (s Store) ListBillingRequestDetailGroups(ctx context.Context, jobID string)
 }
 
 func (s Store) ListBillingRequestDetails(ctx context.Context, jobID string, day time.Time, userID int64) ([]billing.RequestDetail, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT instance_id,job_id,source_log_id,created_at,request_id,user_id,username,token_id,token_name,channel_id,channel_name,model_name,bill_day,billing_mode,matched_tier,prompt_tokens,completion_tokens,cache_read_tokens,cache_write_tokens,cache_write_5m_tokens,cache_write_1h_tokens,input_price,output_price,cache_read_price,cache_write_price,cache_write_5m_price,cache_write_1h_price,per_request_price,input_amount,output_amount,cache_read_amount,cache_write_amount,cache_write_5m_amount,cache_write_1h_amount,total_amount,calculated_quota,logged_quota FROM billing_request_details WHERE job_id=? AND bill_day=? AND user_id=? ORDER BY created_at,source_log_id`, jobID, day, userID)
+	rows, err := s.db.QueryContext(ctx, `SELECT instance_id,job_id,source_log_id,created_at,request_id,user_id,username,token_id,token_name,channel_id,channel_name,model_name,bill_day,billing_mode,matched_tier,prompt_tokens,completion_tokens,cache_read_tokens,cache_write_tokens,cache_write_5m_tokens,cache_write_1h_tokens,input_price,output_price,cache_read_price,cache_write_price,cache_write_5m_price,cache_write_1h_price,per_request_price,input_amount,output_amount,cache_read_amount,cache_write_amount,cache_write_5m_amount,cache_write_1h_amount,total_amount,calculated_quota,logged_quota FROM billing_request_details WHERE job_id=? AND bill_day=? AND user_id=? ORDER BY created_at,source_log_id`, jobID, day.In(billing.BusinessLocation).Format("2006-01-02"), userID)
 	if err != nil {
 		return nil, err
 	}
@@ -632,10 +674,10 @@ func (s Store) ListBillingDailyOverview(ctx context.Context, site string, from, 
 }
 
 func (s Store) ListBillingUserBillDays(ctx context.Context, site string, from, to time.Time, userID int64, search string, limit int) ([]billing.UserBillDay, error) {
-	if limit <= 0 || limit > 5000 {
-		limit = 5000
+	if limit <= 0 || limit > 100000 {
+		limit = 100000
 	}
-	query := `SELECT active.instance_id,active.job_id,active.bill_day,active.user_id,COALESCE(MAX(details.username),''),COUNT(details.source_log_id),CAST(COALESCE(SUM(details.total_amount),0) AS CHAR),(SELECT COUNT(*) FROM billing_anomaly_orders anomaly WHERE anomaly.job_id=active.job_id AND anomaly.user_id=active.user_id AND DATE(CONVERT_TZ(anomaly.created_at,'+00:00','+08:00'))=active.bill_day),active.activated_at FROM billing_user_daily_active active LEFT JOIN billing_request_details details ON details.job_id=active.job_id AND details.bill_day=active.bill_day AND details.user_id=active.user_id WHERE active.instance_id=? AND active.bill_day>=? AND active.bill_day<?`
+	query := `SELECT active.instance_id,active.job_id,active.bill_day,active.user_id,COALESCE(MAX(details.username),''),COALESCE(details.model_name,''),COUNT(details.source_log_id),COALESCE(SUM(details.prompt_tokens),0),COALESCE(SUM(details.completion_tokens),0),COALESCE(SUM(details.cache_read_tokens),0),COALESCE(SUM(details.cache_write_tokens),0),CAST(COALESCE(SUM(details.total_amount),0) AS CHAR),(SELECT COUNT(*) FROM billing_anomaly_orders anomaly WHERE anomaly.job_id=active.job_id AND anomaly.user_id=active.user_id AND anomaly.model_name=COALESCE(details.model_name,'') AND DATE(CONVERT_TZ(anomaly.created_at,'+00:00','+08:00'))=active.bill_day),(SELECT CAST(COALESCE(SUM(anomaly.actual_amount),0) AS CHAR) FROM billing_anomaly_orders anomaly WHERE anomaly.job_id=active.job_id AND anomaly.user_id=active.user_id AND anomaly.model_name=COALESCE(details.model_name,'') AND DATE(CONVERT_TZ(anomaly.created_at,'+00:00','+08:00'))=active.bill_day),active.activated_at FROM billing_user_daily_active active LEFT JOIN billing_request_details details ON details.job_id=active.job_id AND details.bill_day=active.bill_day AND details.user_id=active.user_id WHERE active.instance_id=? AND active.bill_day>=? AND active.bill_day<?`
 	args := []any{site, from, to}
 	if userID > 0 {
 		query += ` AND active.user_id=?`
@@ -645,7 +687,7 @@ func (s Store) ListBillingUserBillDays(ctx context.Context, site string, from, t
 		query += ` AND (CAST(active.user_id AS CHAR)=? OR EXISTS(SELECT 1 FROM billing_request_details named WHERE named.job_id=active.job_id AND named.bill_day=active.bill_day AND named.user_id=active.user_id AND named.username LIKE ?))`
 		args = append(args, search, "%"+search+"%")
 	}
-	query += ` GROUP BY active.instance_id,active.job_id,active.bill_day,active.user_id,active.activated_at ORDER BY active.bill_day DESC,active.user_id LIMIT ?`
+	query += ` GROUP BY active.instance_id,active.job_id,active.bill_day,active.user_id,details.model_name,active.activated_at ORDER BY active.bill_day DESC,active.user_id,details.model_name LIMIT ?`
 	args = append(args, limit)
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -655,7 +697,28 @@ func (s Store) ListBillingUserBillDays(ctx context.Context, site string, from, t
 	items := []billing.UserBillDay{}
 	for rows.Next() {
 		var item billing.UserBillDay
-		if err = rows.Scan(&item.InstanceID, &item.JobID, &item.Day, &item.UserID, &item.Username, &item.RequestCount, &item.Amount, &item.AnomalyRows, &item.ActivatedAt); err != nil {
+		if err = rows.Scan(&item.InstanceID, &item.JobID, &item.Day, &item.UserID, &item.Username, &item.ModelName, &item.RequestCount, &item.PromptTokens, &item.CompletionTokens, &item.CacheReadTokens, &item.CacheWriteTokens, &item.Amount, &item.AnomalyRows, &item.AnomalyAmount, &item.ActivatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s Store) ListBillingUserTokenBillDays(ctx context.Context, site string, from, to time.Time, userID int64, limit int) ([]billing.UserTokenBillDay, error) {
+	if limit <= 0 || limit > 100000 {
+		limit = 100000
+	}
+	query := `SELECT active.instance_id,active.job_id,active.bill_day,active.user_id,COALESCE(MAX(details.username),''),details.token_id,COALESCE(MAX(details.token_name),''),details.model_name,COUNT(details.source_log_id),COALESCE(SUM(details.prompt_tokens),0),COALESCE(SUM(details.completion_tokens),0),COALESCE(SUM(details.cache_read_tokens),0),COALESCE(SUM(details.cache_write_tokens),0),CAST(COALESCE(SUM(details.total_amount),0) AS CHAR),(SELECT COUNT(*) FROM billing_anomaly_orders anomaly WHERE anomaly.job_id=active.job_id AND anomaly.user_id=active.user_id AND anomaly.token_id=details.token_id AND anomaly.model_name=details.model_name AND DATE(CONVERT_TZ(anomaly.created_at,'+00:00','+08:00'))=active.bill_day),(SELECT CAST(COALESCE(SUM(anomaly.actual_amount),0) AS CHAR) FROM billing_anomaly_orders anomaly WHERE anomaly.job_id=active.job_id AND anomaly.user_id=active.user_id AND anomaly.token_id=details.token_id AND anomaly.model_name=details.model_name AND DATE(CONVERT_TZ(anomaly.created_at,'+00:00','+08:00'))=active.bill_day),active.activated_at FROM billing_user_daily_active active JOIN billing_request_details details ON details.job_id=active.job_id AND details.bill_day=active.bill_day AND details.user_id=active.user_id WHERE active.instance_id=? AND active.bill_day>=? AND active.bill_day<? AND active.user_id=? GROUP BY active.instance_id,active.job_id,active.bill_day,active.user_id,details.token_id,details.model_name,active.activated_at ORDER BY details.token_id,active.bill_day DESC,details.model_name LIMIT ?`
+	rows, err := s.db.QueryContext(ctx, query, site, from, to, userID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []billing.UserTokenBillDay{}
+	for rows.Next() {
+		var item billing.UserTokenBillDay
+		if err = rows.Scan(&item.InstanceID, &item.JobID, &item.Day, &item.UserID, &item.Username, &item.TokenID, &item.TokenName, &item.ModelName, &item.RequestCount, &item.PromptTokens, &item.CompletionTokens, &item.CacheReadTokens, &item.CacheWriteTokens, &item.Amount, &item.AnomalyRows, &item.AnomalyAmount, &item.ActivatedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, item)

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
   ArrowDown,
@@ -52,7 +52,7 @@ const nav = [
     items: [
       ["/billing", "用户账单", Coin],
       ["/billing/channels", "渠道账单", Coin],
-      ["/billing/anomalies", "计费异常", DataAnalysis],
+      ["/billing/anomalies", "账单核对", DataAnalysis],
       ["/billing/tasks", "账单任务", Operation],
     ],
   },
@@ -75,6 +75,7 @@ function groupForPath(path: string) {
   return nested?.group ?? "";
 }
 const activeGroup = ref<string>(groupForPath(route.path));
+const readonlySiteRequired = computed(() => ["数据查询", "账单管理"].includes(groupForPath(route.path)));
 watch(() => route.path, (path) => { activeGroup.value = groupForPath(path); });
 function toggleGroup(group: string) {
   activeGroup.value = activeGroup.value === group ? "" : group;
@@ -137,7 +138,7 @@ async function logout() {
         <div class="topbar-tools"><slot name="tools" /></div>
         <div class="topbar-spacer"></div>
         <div class="user">
-          <SiteSelect />
+          <SiteSelect :readonly-only="readonlySiteRequired" />
           <span>{{ auth.user?.username }}</span>
           <el-button text @click="logout">退出</el-button>
         </div>

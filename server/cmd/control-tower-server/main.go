@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"log"
@@ -103,7 +102,6 @@ func run() error {
 		startTuningRunner(directcontrol.Wrap(store, cfg.SecretKey))
 	}
 	startBillingJobRunner(store, cfg.SecretKey, time.Duration(cfg.BillingPagePauseMilliseconds)*time.Millisecond)
-	startDailyBillingScheduler(store)
 	startBillingFileCleanup(store)
 	startReadonlyLogRollupRunner(store, cfg.SecretKey)
 
@@ -152,11 +150,8 @@ func startBillingJobRunner(store mysqlstore.Store, secretKey string, pagePause t
 }
 
 func startDailyBillingScheduler(store mysqlstore.Store) {
-	runOnce := func(now time.Time) {
+	runOnce := func(now time.Time, startup bool) {
 		localNow := now.In(billing.BusinessLocation)
-		if localNow.Hour() < 2 {
-			return
-		}
 		if _, err := store.ActiveBillingJob(context.Background()); err == nil {
 			return
 		}
@@ -176,11 +171,21 @@ func startDailyBillingScheduler(store mysqlstore.Store) {
 				continue
 			}
 			seen[site] = true
+			lookbackDays := 30
+			if earliest, earliestErr := store.EarliestCompletedBillingDay(context.Background(), site); earliestErr == nil && !earliest.IsZero() {
+				lookbackDays = int(today.Sub(earliest.In(billing.BusinessLocation)).Hours() / 24)
+				if lookbackDays < 1 {
+					lookbackDays = 1
+				} else if lookbackDays > 365 {
+					lookbackDays = 365
+				}
+			}
 			var dayFrom, dayTo time.Time
-			for daysAgo := 30; daysAgo >= 1; daysAgo-- {
+			for daysAgo := lookbackDays; daysAgo >= 1; daysAgo-- {
 				candidateFrom := today.AddDate(0, 0, -daysAgo)
 				candidateTo := candidateFrom.AddDate(0, 0, 1)
-				if _, coverErr := store.LatestCoveringBillingJob(context.Background(), site, "generate", candidateFrom, candidateTo); errors.Is(coverErr, sql.ErrNoRows) {
+				complete, coverErr := store.BillingDayComplete(context.Background(), site, candidateFrom)
+				if coverErr == nil && !complete {
 					dayFrom, dayTo = candidateFrom, candidateTo
 					break
 				} else if coverErr != nil {
@@ -196,7 +201,7 @@ func startDailyBillingScheduler(store mysqlstore.Store) {
 				log.Printf("daily billing scheduler prepare site=%s: %v", site, createErr)
 				continue
 			}
-			job.RequestKey = fmt.Sprintf("billing:auto:v1:%s:%s:%s", site, dayFrom.Format("2006-01-02"), job.ID)
+			job.RequestKey = fmt.Sprintf("billing:auto:v2:%s:%s:%s", site, dayFrom.Format("2006-01-02"), job.ID)
 			if createErr = store.CreateBillingJob(context.Background(), job, steps); createErr != nil {
 				log.Printf("daily billing scheduler create site=%s day=%s: %v", site, dayFrom.Format("2006-01-02"), createErr)
 				continue
@@ -205,11 +210,11 @@ func startDailyBillingScheduler(store mysqlstore.Store) {
 		}
 	}
 	go func() {
-		runOnce(time.Now())
+		runOnce(time.Now(), true)
 		ticker := time.NewTicker(time.Minute)
 		defer ticker.Stop()
 		for now := range ticker.C {
-			runOnce(now)
+			runOnce(now, false)
 		}
 	}()
 }

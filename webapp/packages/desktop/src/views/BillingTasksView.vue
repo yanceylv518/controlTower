@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from "vue";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import type { BillingJob, BillingJobStep, ReadonlyUser } from "@ct/shared";
 import { dashboard, passthrough } from "../api";
@@ -14,6 +14,7 @@ import { formatNumber } from "../utils/format";
 type TaskTab = "active" | "failed" | "complete";
 const filters = useFiltersStore();
 const router = useRouter();
+const route = useRoute();
 const activeTab = ref<TaskTab>("active");
 const createVisible = ref(false);
 const creating = ref(false);
@@ -22,7 +23,7 @@ const userOptions = ref<ReadonlyUser[]>([]);
 const jobSteps = ref<Record<string, BillingJobStep[]>>({});
 const stepLoading = ref<Record<string, boolean>>({});
 const expandedJobIDs = ref<string[]>([]);
-const createForm = ref<{ instance_id: string; scope: "all" | "user"; user_id?: number; range: [Date, Date] | [] }>({ instance_id: "", scope: "all", range: [] });
+const createForm = ref<{ instance_id: string; scope: "all" | "user"; user_id?: number; range: [Date, Date] | []; force:boolean }>({ instance_id: "", scope: "all", range: [], force:false });
 const state = useAsyncData(async () => {
   await filters.loadInstances();
   if (!filters.site_id) return { items: [] as BillingJob[] };
@@ -38,7 +39,7 @@ const counts = computed(() => ({
 const visibleItems = computed(() => items.value.filter((job) => activeTab.value === "active"
   ? job.status === "pending" || job.status === "running"
   : activeTab.value === "failed" ? job.status === "failed" : job.status === "complete"));
-const typeLabel = (value?: string) => ({ generate: "用户账单生成", channel_generate: "渠道账单生成", verify: "账单核验" }[value || ""] || value || "后台任务");
+const typeLabel = (value?: string) => ({ generate: "用户账单生成", channel_generate: "渠道账单生成", verify: "账单核对" }[value || ""] || value || "后台任务");
 const statusMeta = (job: BillingJob) => isCancelled(job) ? { label: "已取消", type: "info" as const } : ({
   pending: { label: "等待中", type: "warning" as const }, running: { label: "运行中", type: "primary" as const },
   complete: { label: "已完成", type: "success" as const }, failed: { label: "失败", type: "danger" as const },
@@ -67,9 +68,12 @@ async function loadUsers(keyword = "") {
 }
 async function openCreate(job?: BillingJob) {
   const yesterday = new Date(); yesterday.setHours(0, 0, 0, 0); yesterday.setDate(yesterday.getDate() - 1);
-  const from = job?.range_from ? new Date(job.range_from) : yesterday;
-  const through = job?.range_to ? new Date(new Date(job.range_to).getTime() - 1) : yesterday;
-  createForm.value = { instance_id: job?.instance_id || filters.site_id || "", scope: job?.user_id ? "user" : "all", user_id: job?.user_id || undefined, range: [from, through] };
+  const queryFrom = typeof route.query.from === "string" ? route.query.from.slice(0, 10) : "";
+  const queryThrough = typeof route.query.through === "string" ? route.query.through.slice(0, 10) : "";
+  const querySite = typeof route.query.site === "string" ? route.query.site : "";
+  const from = job?.range_from ? new Date(job.range_from) : queryFrom ? new Date(`${queryFrom}T00:00:00`) : yesterday;
+  const through = job?.range_to ? new Date(new Date(job.range_to).getTime() - 1) : queryThrough ? new Date(`${queryThrough}T00:00:00`) : yesterday;
+  createForm.value = { instance_id: job?.instance_id || querySite || filters.site_id || "", scope: job?.user_id ? "user" : "all", user_id: job?.user_id || undefined, range: [from, through], force:Boolean(job) };
   createVisible.value = true;
   await loadUsers(job?.user_id ? String(job.user_id) : "");
 }
@@ -79,7 +83,7 @@ async function createJob() {
   if (!form.instance_id || form.range.length !== 2 || (form.scope === "user" && !form.user_id)) return;
   creating.value = true;
   try {
-    const result = await dashboard.generateBilling({ instance_id: form.instance_id, scope: form.scope, user_id: form.scope === "user" ? form.user_id : undefined, from: dayStart(form.range[0]), to: dayAfter(form.range[1]) });
+    const result = await dashboard.generateBilling({ instance_id: form.instance_id, scope: form.scope, user_id: form.scope === "user" ? form.user_id : undefined, from: dayStart(form.range[0]), to: dayAfter(form.range[1]), force:form.force });
     createVisible.value = false;
     activeTab.value = result.reused ? "complete" : "active";
     await state.reload();
@@ -119,18 +123,21 @@ async function poll() {
   while (!disposed) {
     await new Promise((resolve) => setTimeout(resolve, 3000));
     if (disposed) continue;
-    await state.reload();
+    // Only track live work. A full reload toggles the panel loading state and
+    // makes the whole task table flash every three seconds.
+    if (!counts.value.active) continue;
+    await state.refresh();
     await Promise.all(expandedJobIDs.value.map((jobID)=>loadJobSteps(jobID,true)));
   }
 }
 onUnmounted(() => { disposed = true; });
 watch(()=>filters.site_id,()=>void state.reload());
-void state.reload().then(poll);
+void state.reload().then(async()=>{if(route.query.create==="1")await openCreate();await poll()});
 </script>
 
 <template>
   <AppShell title="账单任务">
-    <template #tools><el-button type="primary" @click="openCreate()">新建账单任务</el-button><el-button @click="state.reload">刷新</el-button></template>
+    <template #tools><el-button type="primary" @click="openCreate()">新增账单任务</el-button><el-button @click="state.reload">刷新</el-button></template>
     <el-alert v-if="counts.active" type="warning" :title="`当前有 ${counts.active} 个任务正在处理`" description="账单任务串行执行，当前任务完成后才会继续处理下一个任务。" :closable="false" show-icon />
     <el-alert v-else type="success" title="当前没有正在处理的账单任务" :closable="false" show-icon />
     <el-tabs v-model="activeTab" class="task-tabs">
@@ -147,19 +154,20 @@ void state.reload().then(poll);
         <el-table-column label="账单日期" min-width="210"><template #default="s">{{ formatRange(s.row) }}</template></el-table-column>
         <el-table-column label="状态" width="95"><template #default="s"><el-tag :type="statusMeta(s.row).type">{{ statusMeta(s.row).label }}</el-tag></template></el-table-column>
         <el-table-column v-if="activeTab !== 'failed'" label="进度" min-width="170"><template #default="s"><el-progress :percentage="progress(s.row)" :status="s.row.status === 'complete' ? 'success' : undefined" /><small>{{ s.row.completed_steps }} / {{ s.row.total_steps }}</small></template></el-table-column>
-        <el-table-column v-if="activeTab === 'complete'" label="生成结果" min-width="190"><template #default="s"><span v-if="Number(s.row.output_days) > 0">生成 {{ s.row.output_days }} 天账单 · {{ formatNumber(s.row.billed_rows || 0) }} 条计费请求</span><el-tag v-else-if="s.row.output_days === 0" type="info">没有可计费请求</el-tag><span v-else class="muted">完成（重启服务后可见结果统计）</span><small v-if="s.row.abnormal_rows">异常请求 {{ formatNumber(s.row.abnormal_rows) }}</small></template></el-table-column>
+        <el-table-column v-if="activeTab === 'complete'" label="生成结果" min-width="190"><template #default="s"><span v-if="Number(s.row.output_days) > 0">生成 {{ s.row.output_days }} 天账单 · {{ formatNumber(s.row.billed_rows || 0) }} 条正常请求</span><el-tag v-else-if="s.row.output_days === 0 && !s.row.abnormal_rows" type="info">源区间没有请求</el-tag><el-tag v-else-if="s.row.output_days === 0 && s.row.abnormal_rows" type="warning">仅有异常请求，需处理</el-tag><span v-else class="muted">完成（重启服务后可见结果统计）</span><small v-if="s.row.abnormal_rows">异常请求 {{ formatNumber(s.row.abnormal_rows) }}</small></template></el-table-column>
         <el-table-column v-if="activeTab === 'failed'" label="原因" min-width="240" show-overflow-tooltip><template #default="s">{{ shortError(s.row) }}</template></el-table-column>
         <el-table-column label="创建时间" min-width="165"><template #default="s">{{ formatTime(s.row.created_at) }}</template></el-table-column>
         <el-table-column label="操作" :width="activeTab === 'failed' ? 190 : 130" fixed="right"><template #default="s"><el-button v-if="s.row.status === 'complete' && s.row.job_type !== 'verify'" link type="primary" @click="viewBill(s.row)">{{ s.row.user_id ? "查看用户账单" : "查看整站账单" }}</el-button><el-button v-if="s.row.status === 'pending' || s.row.status === 'running'" link type="danger" @click="stopJob(s.row)">停止</el-button><template v-if="s.row.status === 'failed'"><el-button v-if="!isCancelled(s.row) && s.row.job_type === 'generate'" link type="primary" @click="openCreate(s.row)">重新生成</el-button><el-button link type="danger" @click="deleteFailedJob(s.row)">删除</el-button></template></template></el-table-column>
       </el-table>
     </AsyncPanel>
-    <el-dialog v-model="createVisible" title="新建账单任务" width="560px">
+    <el-dialog v-model="createVisible" title="创建账单任务" width="560px">
       <el-form label-width="100px">
-        <el-form-item label="站点"><el-select v-model="createForm.instance_id" filterable style="width:100%" @change="changeCreateSite"><el-option v-for="item in filters.instances" :key="item.instance_id" :label="item.name || item.instance_id" :value="item.instance_id" /></el-select></el-form-item>
+        <el-form-item label="站点"><el-select v-model="createForm.instance_id" filterable style="width:100%" @change="changeCreateSite"><el-option v-for="item in filters.instances.filter(item=>item.enabled&&item.logs_readonly_configured)" :key="item.instance_id" :label="item.name || item.instance_id" :value="item.instance_id" /></el-select></el-form-item>
         <el-form-item label="生成范围"><el-radio-group v-model="createForm.scope"><el-radio-button value="all">整站全部用户</el-radio-button><el-radio-button value="user">指定用户</el-radio-button></el-radio-group></el-form-item>
         <el-form-item v-if="createForm.scope === 'user'" label="选择用户"><el-select v-model="createForm.user_id" filterable remote clearable :remote-method="loadUsers" :loading="userLoading" placeholder="搜索用户名或用户 ID" style="width:100%"><el-option v-for="user in userOptions" :key="user.id" :label="`${user.display_name || user.username || `用户 ${user.id}`}（ID: ${user.id}）`" :value="user.id" /></el-select></el-form-item>
         <el-form-item label="账单日期"><el-date-picker v-model="createForm.range" type="daterange" start-placeholder="开始日期" end-placeholder="结束日期（包含）" :disabled-date="(date: Date) => date >= new Date(new Date().setHours(0,0,0,0))" style="width:100%" /></el-form-item>
-        <el-alert type="info" :closable="false" title="每个用户每天生成一份账单；选择多天时系统会按天依次处理。" />
+        <el-form-item label="生成方式"><el-checkbox v-model="createForm.force">强制重算已有账单日期</el-checkbox></el-form-item>
+        <el-alert :type="createForm.force?'warning':'info'" :closable="false" :title="createForm.force?'已有日期也会生成新版本；完成前旧版本继续可用，完成后按日期切换。':'已完整生成的日期会自动跳过，只处理缺失或未完成的日期。'" />
       </el-form>
       <template #footer><el-button @click="createVisible=false">取消</el-button><el-button type="primary" :loading="creating" :disabled="!createForm.instance_id || createForm.range.length !== 2 || (createForm.scope === 'user' && !createForm.user_id)" @click="createJob">创建任务</el-button></template>
     </el-dialog>

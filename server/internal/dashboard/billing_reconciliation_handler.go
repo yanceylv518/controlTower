@@ -97,9 +97,9 @@ func writeBillingReconciliationCSV(w http.ResponseWriter, l1, l2 billing.Reconci
 	w.Header().Set("Content-Disposition", `attachment; filename="billing-reconciliation.csv"`)
 	_, _ = w.Write([]byte{0xef, 0xbb, 0xbf})
 	writer := csv.NewWriter(w)
-	_ = writer.Write([]string{"层级", "用户ID", "用户", "日期", "模型", "分组", "CT金额", "new-api实扣金额", "差额", "差额率", "异常订单差额", "缓存写策略差额", "剩余差额", "分类", "回退计价"})
+	_ = writer.Write([]string{"层级", "用户ID", "用户", "日期", "模型", "分组", "账单金额", "源日志金额", "差额", "差额率", "待确认金额差额", "缓存写策略差额", "剩余差额", "分类", "回退计价"})
 	write := func(level string, item billing.ReconciliationRow) {
-		_ = writer.Write([]string{level, strconv.FormatInt(item.UserID, 10), item.Username, item.Day, item.ModelName, item.GroupName, item.CTAmount, item.ActualAmount, item.DiffAmount, item.DiffRate, item.Breakdown.Anomaly, item.Breakdown.CacheWritePolicy, item.Breakdown.Residual, item.Classification, strconv.FormatBool(item.FallbackPriced)})
+		_ = writer.Write([]string{level, strconv.FormatInt(item.UserID, 10), item.Username, item.Day, item.ModelName, item.GroupName, item.BillingAmount, item.ActualAmount, item.DiffAmount, item.DiffRate, item.Breakdown.Anomaly, item.Breakdown.CacheWritePolicy, item.Breakdown.Residual, item.Classification, strconv.FormatBool(item.FallbackPriced)})
 	}
 	for _, item := range l1.Rows {
 		write("L1", item)
@@ -107,7 +107,7 @@ func writeBillingReconciliationCSV(w http.ResponseWriter, l1, l2 billing.Reconci
 	for _, item := range l2.Rows {
 		write("L2", item)
 	}
-	_ = writer.Write([]string{"分类小计", "", "", "", "", "", l1.Totals.CTAmount, l1.Totals.ActualAmount, l1.Totals.DiffAmount, "", l1.Totals.Breakdown.Anomaly, l1.Totals.Breakdown.CacheWritePolicy, l1.Totals.Breakdown.Residual})
+	_ = writer.Write([]string{"分类小计", "", "", "", "", "", l1.Totals.BillingAmount, l1.Totals.ActualAmount, l1.Totals.DiffAmount, "", l1.Totals.Breakdown.Anomaly, l1.Totals.Breakdown.CacheWritePolicy, l1.Totals.Breakdown.Residual})
 	writer.Flush()
 }
 

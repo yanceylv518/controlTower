@@ -56,8 +56,7 @@ func (s upstreamSourceStub) UpstreamChannelMappings(context.Context, string) ([]
 
 func TestBillingUpstreamRefreshFailureFallsBackToSnapshot(t *testing.T) {
 	from := time.Date(2026, 7, 1, 0, 0, 0, 0, billing.BusinessLocation)
-	to := from.AddDate(0, 1, 0)
-	base := &fakeBillingChannelReadStore{jobs: map[string]billing.Job{"job": channelReadJob("job", "complete", from, to)}, rowsByJob: map[string][]billing.AggregateRow{"job": {{UserID: 1, Day: from, ModelName: "m", RequestCount: 1}}}}
+	base := &fakeBillingChannelReadStore{activeRows: []billing.AggregateRow{{UserID: 1, Day: from, ModelName: "m", RequestCount: 1}}}
 	store := &upstreamStoreStub{fakeBillingChannelReadStore: base, mappings: []billing.UpstreamChannelMapping{{ChannelID: 1, UpstreamFP: "saved", BaseURL: "saved", KeyTail: "1234"}}}
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", "/api/dashboard/billing/upstream-channels?instance_id=site-a&from=2026-07-01+00%3A00%3A00&to=2026-08-01+00%3A00%3A00&job_id=job", nil)
@@ -69,8 +68,7 @@ func TestBillingUpstreamRefreshFailureFallsBackToSnapshot(t *testing.T) {
 
 func TestBillingUpstreamRefreshRetainsDeletedSnapshotAndGroupsRows(t *testing.T) {
 	from := time.Date(2026, 7, 1, 0, 0, 0, 0, billing.BusinessLocation)
-	to := from.AddDate(0, 1, 0)
-	base := &fakeBillingChannelReadStore{jobs: map[string]billing.Job{"job": channelReadJob("job", "complete", from, to)}, rowsByJob: map[string][]billing.AggregateRow{"job": {{UserID: 1, Username: "new", Day: from, ModelName: "m", RequestCount: 2}, {UserID: 2, Username: "deleted", Day: from, ModelName: "x", RequestCount: 3}}}}
+	base := &fakeBillingChannelReadStore{activeRows: []billing.AggregateRow{{UserID: 1, Username: "new", Day: from, ModelName: "m", RequestCount: 2}, {UserID: 2, Username: "deleted", Day: from, ModelName: "x", RequestCount: 3}}}
 	store := &upstreamStoreStub{fakeBillingChannelReadStore: base, mappings: []billing.UpstreamChannelMapping{{ChannelID: 1, UpstreamFP: "before", BaseURL: "before", KeyTail: "9999"}, {ChannelID: 2, UpstreamFP: "old", BaseURL: "old", KeyTail: "0002"}}}
 	source := upstreamSourceStub{items: []billing.UpstreamChannelMapping{{ChannelID: 1, UpstreamFP: "new", BaseURL: "new", KeyTail: "0001"}, {ChannelID: 3, UpstreamFP: "inserted", BaseURL: "inserted", KeyTail: "0003"}}}
 	w := httptest.NewRecorder()
@@ -107,12 +105,12 @@ func TestBillingUpstreamCSVHasTwoSections(t *testing.T) {
 	}
 }
 
-func TestBillingUpstreamUsesChannelJobReadConflict(t *testing.T) {
+func TestBillingUpstreamDoesNotRequireLegacyChannelJob(t *testing.T) {
 	store := &upstreamStoreStub{fakeBillingChannelReadStore: &fakeBillingChannelReadStore{jobs: map[string]billing.Job{}}}
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", "/api/dashboard/billing/upstream-channels?instance_id=site-a&month=2026-07&job_id=missing", nil)
 	BillingUpstreamHandler{Store: store}.ServeHTTP(w, r)
-	if w.Code != 409 || !strings.Contains(w.Body.String(), "billing_not_generated") {
+	if w.Code != 200 {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
 }

@@ -30,7 +30,7 @@ type ReconciliationRow struct {
 	GroupName      string                  `json:"group_name,omitempty"`
 	RequestCount   int64                   `json:"request_count"`
 	AbnormalRows   int64                   `json:"abnormal_rows"`
-	CTAmount       string                  `json:"ct_amount"`
+	BillingAmount  string                  `json:"billing_amount"`
 	ActualAmount   string                  `json:"actual_amount"`
 	DiffAmount     string                  `json:"diff_amount"`
 	DiffRate       string                  `json:"diff_rate"`
@@ -40,10 +40,10 @@ type ReconciliationRow struct {
 }
 
 type ReconciliationTotals struct {
-	CTAmount     string                  `json:"ct_amount"`
-	ActualAmount string                  `json:"actual_amount"`
-	DiffAmount   string                  `json:"diff_amount"`
-	Breakdown    ReconciliationBreakdown `json:"breakdown"`
+	BillingAmount string                  `json:"billing_amount"`
+	ActualAmount  string                  `json:"actual_amount"`
+	DiffAmount    string                  `json:"diff_amount"`
+	Breakdown     ReconciliationBreakdown `json:"breakdown"`
 }
 
 type ReconciliationReport struct {
@@ -57,7 +57,7 @@ type RequestReconciliation struct {
 	CreatedAt      string `json:"created_at"`
 	ActualAmount   string `json:"actual_amount"`
 	RebuiltAmount  string `json:"rebuilt_amount"`
-	CTAmount       string `json:"ct_amount"`
+	BillingAmount  string `json:"billing_amount"`
 	DiffAmount     string `json:"diff_amount"`
 	InputDiff      string `json:"input_diff"`
 	OutputDiff     string `json:"output_diff"`
@@ -192,7 +192,7 @@ func BuildReconciliation(rows []AggregateRow, prices []PriceRecord, ratios []Gro
 	for _, a := range values {
 		diff := new(big.Rat).Sub(a.actual, a.ct)
 		a.residual.Sub(new(big.Rat).Sub(diff, a.anomaly), a.cacheWrite)
-		a.row.CTAmount = FormatAmount(a.ct, 6)
+		a.row.BillingAmount = FormatAmount(a.ct, 6)
 		a.row.ActualAmount = FormatAmount(a.actual, 6)
 		a.row.DiffAmount = FormatAmount(diff, 6)
 		a.row.DiffRate = "0.000000"
@@ -223,7 +223,7 @@ func BuildReconciliation(rows []AggregateRow, prices []PriceRecord, ratios []Gro
 	})
 	totalDiff := new(big.Rat).Sub(totalActual, totalCT)
 	totalResidual := new(big.Rat).Sub(new(big.Rat).Sub(totalDiff, totalAnomaly), totalCache)
-	report.Totals = ReconciliationTotals{CTAmount: FormatAmount(totalCT, 6), ActualAmount: FormatAmount(totalActual, 6), DiffAmount: FormatAmount(totalDiff, 6), Breakdown: ReconciliationBreakdown{Anomaly: FormatAmount(totalAnomaly, 6), CacheWritePolicy: FormatAmount(totalCache, 6), Residual: FormatAmount(totalResidual, 6)}}
+	report.Totals = ReconciliationTotals{BillingAmount: FormatAmount(totalCT, 6), ActualAmount: FormatAmount(totalActual, 6), DiffAmount: FormatAmount(totalDiff, 6), Breakdown: ReconciliationBreakdown{Anomaly: FormatAmount(totalAnomaly, 6), CacheWritePolicy: FormatAmount(totalCache, 6), Residual: FormatAmount(totalResidual, 6)}}
 	return report
 }
 
@@ -334,7 +334,7 @@ func ReconcileRequests(logs []PagedLogRecord, model string, day time.Time, price
 		ctPrice, configured := SelectPrice(priceByModel[model], day, RequestContextTokens(log))
 		if !configured {
 			row.FallbackPriced, result.Uninformative = true, true
-			row.CTAmount, row.RebuiltAmount, row.DiffAmount = row.ActualAmount, row.ActualAmount, "0.000000"
+			row.BillingAmount, row.RebuiltAmount, row.DiffAmount = row.ActualAmount, row.ActualAmount, "0.000000"
 			result.Items = append(result.Items, row)
 			continue
 		}
@@ -344,11 +344,11 @@ func ReconcileRequests(logs []PagedLogRecord, model string, day time.Time, price
 			ctGroup = "1"
 		}
 		ctCharge := PriceRequest(log, ctPrice, ctGroup)
-		row.CTAmount = ctCharge.Total
+		row.BillingAmount = ctCharge.Total
 		if snapshotErr != nil || log.ModelRatio == "" || log.GroupRatio == "" || (nullablePositive(log.CompletionTokens) && log.CompletionRatio == "") || (log.CacheTokens > 0 && log.CacheRatio == "") || (log.CacheWriteTokens > 0 && log.CacheCreationRatio == "") {
 			row.Unexplained = true
 			row.RebuiltAmount = ""
-			row.DiffAmount = subtractDecimal(row.ActualAmount, row.CTAmount)
+			row.DiffAmount = subtractDecimal(row.ActualAmount, row.BillingAmount)
 			result.Items = append(result.Items, row)
 			continue
 		}
@@ -356,7 +356,7 @@ func ReconcileRequests(logs []PagedLogRecord, model string, day time.Time, price
 		qpu, qe := decimalRat(snapshot.QuotaPerUnit)
 		if e != nil || qe != nil || qpu.Sign() == 0 {
 			row.Unexplained = true
-			row.DiffAmount = subtractDecimal(row.ActualAmount, row.CTAmount)
+			row.DiffAmount = subtractDecimal(row.ActualAmount, row.BillingAmount)
 			result.Items = append(result.Items, row)
 			continue
 		}
@@ -373,7 +373,7 @@ func ReconcileRequests(logs []PagedLogRecord, model string, day time.Time, price
 		}
 		newCharge := PriceRequest(log, newPrice, log.GroupRatio)
 		row.RebuiltAmount = newCharge.Total
-		row.DiffAmount = subtractDecimal(row.ActualAmount, row.CTAmount)
+		row.DiffAmount = subtractDecimal(row.ActualAmount, row.BillingAmount)
 		newBase, ctBase := PriceRequest(log, newPrice, "1"), PriceRequest(log, ctPrice, "1")
 		row.InputDiff = subtractDecimal(newBase.InputAmount, ctBase.InputAmount)
 		row.OutputDiff = subtractDecimal(newBase.OutputAmount, ctBase.OutputAmount)

@@ -70,7 +70,7 @@ func TestBillingReconciliationCSVHasExpectedColumns(t *testing.T) {
 	req := httptest.NewRequest("GET", "/api/dashboard/billing/reconciliation?instance_id=site-a&from=2026-08-01+00:00:00&to=2026-08-02+00:00:00&job_id=job-r1&format=csv", nil)
 	w := httptest.NewRecorder()
 	BillingReconciliationHandler{Store: store}.ServeHTTP(w, req)
-	if w.Code != 200 || !strings.Contains(w.Body.String(), "异常订单差额") || !strings.Contains(w.Body.String(), "缓存写策略差额") || !strings.Contains(w.Body.String(), "分类小计") {
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "账单金额") || !strings.Contains(w.Body.String(), "源日志金额") || !strings.Contains(w.Body.String(), "待确认金额差额") || !strings.Contains(w.Body.String(), "缓存写策略差额") || !strings.Contains(w.Body.String(), "分类小计") {
 		t.Fatalf("unexpected CSV: %d %q", w.Code, w.Body.String())
 	}
 }

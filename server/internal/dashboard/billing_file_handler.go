@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
@@ -16,6 +17,11 @@ import (
 
 type BillingFileStore interface {
 	ActiveBillingUserDailyFile(context.Context, string, time.Time, int64) (billing.UserDailyFile, error)
+}
+
+type BillingFileDetailStore interface {
+	ListBillingRequestDetails(context.Context, string, time.Time, int64) ([]billing.RequestDetail, error)
+	BillingActiveDays(context.Context, string, int64, time.Time, time.Time) (map[string]string, error)
 }
 
 type BillingFileHandler struct {
@@ -35,13 +41,60 @@ func (h BillingFileHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeDashboardError(w, http.StatusForbidden, "forbidden")
 		return
 	}
+	modelName := strings.TrimSpace(r.URL.Query().Get("model_name"))
 	item, err := h.Store.ActiveBillingUserDailyFile(r.Context(), site, day, userID)
+	if err == sql.ErrNoRows && modelName != "" {
+		if detailStore, ok := h.Store.(BillingFileDetailStore); ok {
+			active, activeErr := detailStore.BillingActiveDays(r.Context(), site, userID, day, day.AddDate(0, 0, 1))
+			if activeErr != nil {
+				writeDashboardError(w, http.StatusInternalServerError, "billing_active_version_query_failed")
+				return
+			}
+			if jobID := active[day.Format("2006-01-02")]; jobID != "" {
+				item = billing.UserDailyFile{JobID: jobID, InstanceID: site, BillDay: day, UserID: userID}
+				err = nil
+			}
+		}
+	}
 	if err == sql.ErrNoRows {
 		writeDashboardError(w, http.StatusNotFound, "billing_file_not_found")
 		return
 	}
 	if err != nil {
 		writeDashboardError(w, http.StatusInternalServerError, "billing_file_query_failed")
+		return
+	}
+	if modelName != "" {
+		detailStore, ok := h.Store.(BillingFileDetailStore)
+		if !ok {
+			writeDashboardError(w, http.StatusNotImplemented, "billing_details_unavailable")
+			return
+		}
+		rows, queryErr := detailStore.ListBillingRequestDetails(r.Context(), item.JobID, day, userID)
+		if queryErr != nil {
+			writeDashboardError(w, http.StatusInternalServerError, "billing_details_query_failed")
+			return
+		}
+		filtered := make([]billing.RequestDetail, 0, len(rows))
+		for _, row := range rows {
+			if row.ModelName == modelName {
+				filtered = append(filtered, row)
+			}
+		}
+		if len(filtered) == 0 {
+			writeDashboardError(w, http.StatusNotFound, "billing_details_not_found")
+			return
+		}
+		var output bytes.Buffer
+		job := billing.Job{ID: item.JobID, InstanceID: site}
+		if writeErr := billing.WriteUserDailyWorkbook(&output, job, item, filtered); writeErr != nil {
+			writeDashboardError(w, http.StatusInternalServerError, "billing_file_write_failed")
+			return
+		}
+		w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="billing-user-%d-%s-model.xlsx"`, userID, day.Format("2006-01-02")))
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		_, _ = w.Write(output.Bytes())
 		return
 	}
 	root := h.Root

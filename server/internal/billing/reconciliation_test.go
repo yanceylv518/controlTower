@@ -53,7 +53,7 @@ func TestBuildReconciliationResidualFormula(t *testing.T) {
 	prices := []PriceRecord{{ModelName: "m", Price: Price{EffectiveFrom: day, Input: "10", Output: "0", Cache: "0", CacheWrite: "0"}}}
 	report := BuildReconciliation(rows, prices, nil, map[string]string{"2026-08-01": `{"QuotaPerUnit":500000}`}, []AnomalyCount{{UserID: 1, Day: day, ModelName: "m", GroupName: "default", Count: 1, Amount: "2"}}, false)
 	row := report.Rows[0]
-	if row.CTAmount != "10.000000" || row.ActualAmount != "22.000000" || row.DiffAmount != "12.000000" || row.Breakdown.Anomaly != "2.000000" || row.Breakdown.Residual != "10.000000" {
+	if row.BillingAmount != "10.000000" || row.ActualAmount != "22.000000" || row.DiffAmount != "12.000000" || row.Breakdown.Anomaly != "2.000000" || row.Breakdown.Residual != "10.000000" {
 		t.Fatalf("unexpected reconciliation: %+v", row)
 	}
 }
@@ -86,7 +86,7 @@ func TestBuildReconciliationDefaultCacheWriteMatchesNewAPI(t *testing.T) {
 	if len(report.Rows) != 1 {
 		t.Fatalf("rows = %d", len(report.Rows))
 	}
-	if report.Rows[0].CTAmount != "12.500000" || report.Rows[0].Breakdown.CacheWritePolicy != "0.000000" || report.Rows[0].DiffAmount != "0.000000" {
+	if report.Rows[0].BillingAmount != "12.500000" || report.Rows[0].Breakdown.CacheWritePolicy != "0.000000" || report.Rows[0].DiffAmount != "0.000000" {
 		t.Fatalf("default cache write did not match new-api: %+v", report.Rows[0])
 	}
 }
