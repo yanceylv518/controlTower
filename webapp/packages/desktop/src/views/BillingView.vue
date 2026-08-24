@@ -146,15 +146,18 @@ async function generateBill(force=false){
     await monitorJob(result.job,result.reused);
   } catch (error) { if(await confirmRegenerate(error))return generateBill(true);ElMessage.warning(billingTaskErrorMessage(error)); }
 }
-// A covered range 409 becomes a confirmation: the dialog's 重新生成 resubmits with force.
+// 生成是唯一写入口：区间已有账单时弹三选一——查看账单（安全默认）/重新生成/关闭取消。
 async function confirmRegenerate(error:unknown):Promise<boolean>{
   if(!(error instanceof ApiError)||error.code!=="billing_range_already_covered")return false;
-  const covering=error.details?.covering_job as {range_from?:string;range_to?:string;updated_at?:string}|undefined;
+  const covering=error.details?.covering_job as {range_from?:string;range_to?:string}|undefined;
   const range=covering?.range_from?`（覆盖区间 ${new Date(covering.range_from).toLocaleString()} 至 ${new Date(covering.range_to||"").toLocaleString()}）`:"";
   try{
-    await ElMessageBox.confirm(`所选时间段已生成过账单${range}。重新生成将产生新的账单版本并替换查看数据，确定继续？`,"该区间已生成账单",{confirmButtonText:"重新生成",cancelButtonText:"取消",type:"warning"});
-    return true;
-  }catch{return false}
+    await ElMessageBox.confirm(`所选时间段已生成过账单${range}。可直接查看现有账单；重新生成将产生新的账单版本并替换查看数据。`,"该区间已生成账单",{confirmButtonText:"查看账单",cancelButtonText:"重新生成",distinguishCancelAndClose:true,type:"info"});
+    await viewBill();
+    return false;
+  }catch(action){
+    return action==="cancel";
+  }
 }
 function useTiered(userID:number){return tierSettings.value[String(userID)]?.use_tiered_pricing!==false}
 async function changeTiered(userID:number,value:boolean){await dashboard.saveBillingUserSetting({instance_id:filters.site_id,user_id:userID,use_tiered_pricing:value});tierSettings.value={...tierSettings.value,[String(userID)]:{instance_id:filters.site_id,user_id:userID,use_tiered_pricing:value}};ElMessage.success("阶梯计价设置已保存，下次生成账单时生效")}
@@ -170,7 +173,7 @@ void state.reload().then(resumeActiveGeneration);
 </script>
 <template>
   <AppShell title="用户账单">
-    <template #tools><span class="period-label">账单周期</span><el-date-picker v-model="generationRange" type="datetimerange" value-format="YYYY-MM-DD HH:mm:ss" format="YYYY-MM-DD HH:mm:ss" range-separator="至" start-placeholder="开始时间" end-placeholder="结束时间" :shortcuts="timeRangeShortcuts" unlink-panels style="width:420px" /><el-input v-model="search" clearable placeholder="搜索用户名或用户 ID" style="width:220px" /><span v-if="generating" class="job-progress">生成 {{ jobProgress }}%</span><el-button @click="viewBill">查看账单</el-button><el-button v-if="auth.user?.role === 'admin'" type="primary" :loading="generating" @click="generateBill()">生成账单</el-button><el-button v-if="auth.user?.role === 'admin' && generating" type="danger" plain @click="stopGeneration">停止生成</el-button><el-popconfirm v-if="auth.user?.role === 'admin'" title="强制重新生成会创建新的账单版本，确定继续？" @confirm="generateBill(true)"><template #reference><el-button :disabled="generating">强制重新生成</el-button></template></el-popconfirm><el-button tag="a" :href="exportURL">导出汇总 CSV</el-button></template>
+    <template #tools><span class="period-label">账单周期</span><el-date-picker v-model="generationRange" type="datetimerange" value-format="YYYY-MM-DD HH:mm:ss" format="YYYY-MM-DD HH:mm:ss" range-separator="至" start-placeholder="开始时间" end-placeholder="结束时间" :shortcuts="timeRangeShortcuts" unlink-panels style="width:420px" /><el-input v-model="search" clearable placeholder="搜索用户名或用户 ID" style="width:220px" /><span v-if="generating" class="job-progress">生成 {{ jobProgress }}%</span><el-button @click="viewBill">查看账单</el-button><el-button v-if="auth.user?.role === 'admin'" type="primary" :loading="generating" @click="generateBill()">生成账单</el-button><el-button v-if="auth.user?.role === 'admin' && generating" type="danger" plain @click="stopGeneration">停止生成</el-button><el-button tag="a" :href="exportURL">导出汇总 CSV</el-button></template>
     <el-alert v-if="showingPrevious" class="pending-alert" type="info" title="所选区间尚未生成，当前继续展示上一次完成的账单" :description="`当前数据区间 ${periodText}；新账单完整生成后才会切换，生成过程中不会清空现有数据。`" :closable="false" show-icon />
     <el-alert v-else-if="!generated && (state.data.value?.items?.length || 0) > 0" class="pending-alert" type="warning" title="该站点尚无已完成账单" description="下方先显示用户列表；首次账单生成完成后才会出现请求量、Token 和金额。" :closable="false" show-icon />
     <AsyncPanel :loading="state.loading.value" :error="state.error.value" :empty="!(state.data.value?.items?.length || 0)" @retry="state.reload">

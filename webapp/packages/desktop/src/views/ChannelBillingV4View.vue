@@ -101,15 +101,20 @@ async function generate(force=false) {
     await monitor(result.job);
   } catch (error) { if(await confirmRegenerate(error))return generate(true);ElMessage.warning(billingTaskErrorMessage(error)); }
 }
+// 生成是唯一写入口：区间已有账单时弹三选一——查看该账单/重新生成/关闭取消。
 async function confirmRegenerate(error:unknown):Promise<boolean>{
   if(!(error instanceof ApiError)||error.code!=="billing_range_already_covered")return false;
-  const covering=error.details?.covering_job as {range_from?:string;range_to?:string}|undefined;
+  const covering=error.details?.covering_job as BillingJob|undefined;
   const range=covering?.range_from?`（覆盖区间 ${new Date(covering.range_from).toLocaleString()} 至 ${new Date(covering.range_to||"").toLocaleString()}）`:"";
   try{
-    await ElMessageBox.confirm(`所选时间段已生成过渠道账单${range}。重新生成将产生新的账单版本并替换查看数据，确定继续？`,"该区间已生成账单",{confirmButtonText:"重新生成",cancelButtonText:"取消",type:"warning"});
-    return true;
-  }catch{return false}
+    await ElMessageBox.confirm(`所选时间段已生成过渠道账单${range}。可直接查看该账单；重新生成将产生新的账单版本并替换查看数据。`,"该区间已生成渠道账单",{confirmButtonText:"查看账单",cancelButtonText:"重新生成",distinguishCancelAndClose:true,type:"info"});
+    if(covering?.range_from&&covering.range_to){generationRange.value=[toLocalInput(covering.range_from),toLocalInput(covering.range_to)];pinnedJobID.value=covering.id;await state.reload();}
+    return false;
+  }catch(action){
+    return action==="cancel";
+  }
 }
+function toLocalInput(iso:string){const d=new Date(iso);const two=(n:number)=>String(n).padStart(2,"0");return `${d.getFullYear()}-${two(d.getMonth()+1)}-${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`}
 async function save(row: BillingChannelSummary, value: string) {
   const discount = Number(value);
   if (!Number.isFinite(discount) || discount < 0 || discount > 1) { ElMessage.warning("折扣必须在 0 到 1 之间"); return; }

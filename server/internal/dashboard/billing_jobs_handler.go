@@ -138,7 +138,18 @@ func (h BillingJobsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if scope == "channel" {
 		jobType = "channel_generate"
 	}
+	// Generate is the sole write entry: any covered range (exact match
+	// included) 409s into the UI's view-or-regenerate dialog. It runs before
+	// request-key reuse so reuse keeps only its real job — deduplicating
+	// concurrent submits of a range whose job is still pending/running.
 	if !req.Force {
+		if covered, coverErr := h.Store.LatestCoveringBillingJob(r.Context(), req.InstanceID, jobType, from, to); coverErr == nil {
+			writeDashboardJSON(w, http.StatusConflict, map[string]any{"error": "billing_range_already_covered", "covering_job": covered})
+			return
+		} else if coverErr != sql.ErrNoRows {
+			writeDashboardError(w, 500, "billing_job_query_failed")
+			return
+		}
 		existing, findErr := h.Store.BillingJobByRequestKey(r.Context(), requestKey)
 		if findErr == nil {
 			if existing.Status != "failed" {
@@ -148,17 +159,6 @@ func (h BillingJobsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			req.Force = true
 		}
 		if findErr != nil && findErr != sql.ErrNoRows {
-			writeDashboardError(w, 500, "billing_job_query_failed")
-			return
-		}
-	}
-	// The covered gate is an interlock, not a wall: the UI surfaces it as a
-	// confirmation dialog whose "重新生成" resubmits with force=true.
-	if !req.Force {
-		if covered, coverErr := h.Store.LatestCoveringBillingJob(r.Context(), req.InstanceID, jobType, from, to); coverErr == nil {
-			writeDashboardJSON(w, http.StatusConflict, map[string]any{"error": "billing_range_already_covered", "covering_job": covered})
-			return
-		} else if coverErr != sql.ErrNoRows {
 			writeDashboardError(w, 500, "billing_job_query_failed")
 			return
 		}
