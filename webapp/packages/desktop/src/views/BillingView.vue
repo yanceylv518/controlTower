@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
-import { ElMessage } from "element-plus";
+import { ElMessageBox, ElMessage } from "element-plus";
 import { ApiError, type BillingJob, type BillingTokenSummary, type BillingUserSummary } from "@ct/shared";
 import { dashboard, passthrough } from "../api";
 import AppShell from "../components/AppShell.vue";
@@ -144,7 +144,17 @@ async function generateBill(force=false){
     const [from,to]=generationRange.value;const result=await dashboard.generateBilling({instance_id:filters.site_id,from,to,force});
     if(result.job.status==="complete"){jobProgress.value=100;await state.reload();ElMessage.success(result.reused?"该区间已有账单，已直接加载":"账单生成完成");return;}
     await monitorJob(result.job,result.reused);
-  } catch (error) { ElMessage.warning(billingTaskErrorMessage(error)); }
+  } catch (error) { if(await confirmRegenerate(error))return generateBill(true);ElMessage.warning(billingTaskErrorMessage(error)); }
+}
+// A covered range 409 becomes a confirmation: the dialog's 重新生成 resubmits with force.
+async function confirmRegenerate(error:unknown):Promise<boolean>{
+  if(!(error instanceof ApiError)||error.code!=="billing_range_already_covered")return false;
+  const covering=error.details?.covering_job as {range_from?:string;range_to?:string;updated_at?:string}|undefined;
+  const range=covering?.range_from?`（覆盖区间 ${new Date(covering.range_from).toLocaleString()} 至 ${new Date(covering.range_to||"").toLocaleString()}）`:"";
+  try{
+    await ElMessageBox.confirm(`所选时间段已生成过账单${range}。重新生成将产生新的账单版本并替换查看数据，确定继续？`,"该区间已生成账单",{confirmButtonText:"重新生成",cancelButtonText:"取消",type:"warning"});
+    return true;
+  }catch{return false}
 }
 function useTiered(userID:number){return tierSettings.value[String(userID)]?.use_tiered_pricing!==false}
 async function changeTiered(userID:number,value:boolean){await dashboard.saveBillingUserSetting({instance_id:filters.site_id,user_id:userID,use_tiered_pricing:value});tierSettings.value={...tierSettings.value,[String(userID)]:{instance_id:filters.site_id,user_id:userID,use_tiered_pricing:value}};ElMessage.success("阶梯计价设置已保存，下次生成账单时生效")}

@@ -12,7 +12,7 @@
 - **covered=1 读模式**（好设计）:账单查看支持"已生成大区间的任意子区间"——按 job 的 billing_hourly 子范围重聚合（业务时区日切）,summary 响应带 data_from/data_to 实际数据边界;
 - 生成预检两道新 409:`billing_job_busy`（全局单任务串行,带 active_job）与 `billing_range_already_covered`（带 covering_job）;api-contracts 已更新;httpError 工具统一错误文案。
 
-## ⚠️ 产品语义变更（须用户拍板确认）
+## 产品语义变更（已按用户方案闭环）
 
 **`billing_range_already_covered` 检查在 force 分支之后无条件执行,SQL `range_from<=? AND range_to>=?` 含等区间——强制重生成自此不存在**：任何被完成任务覆盖的区间,force=true 也 409。同区间重复请求走 request_key 复用返回旧任务（不重算）。后果：
 
@@ -20,8 +20,8 @@
 2. **rc63+ 部署清单里的"重生成账单一次(令牌数据)"在本笔之后无法执行**——若生产尚未做该步,须**先在旧版完成重生成再升级到含本笔的版本**,或要求 codex 恢复 force 旁路;
 3. 完成任务无删除界面/接口,覆盖区间的重算没有任何逃生口。
 
-若"账单生成后不可变+任务中心显式管理"正是你的产品意图,确认后本记录即收档（部署顺序警示保留）;若仍需重生成能力,需补 force 旁路或完成任务删除。
+**用户拍板方案（同日实施,验收方直接修）**:covered 拦截保留但改为确认交互——server 端 covered 检查对 force=true 放行（测试钉:无 force 409 带 covering_job/force 直通 202）;前端用户/渠道两账单页捕获 billing_range_already_covered 弹确认框（含覆盖区间信息,"重新生成"按钮带 force 重提)。既有"强制重新生成"工具栏按钮随 force 旁路恢复同步复活。重生成路径回归,rc63 部署顺序警示解除。
 
 ## 部署
 
-无新迁移。**部署顺序警示见上第 2 条**。
+无新迁移。部署顺序警示已随 force 旁路恢复解除;含本笔与闭环修正需新 tag。

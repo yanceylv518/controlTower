@@ -12,9 +12,10 @@ import (
 )
 
 type preflightJobsStore struct {
-	created bool
-	active  *billing.Job
-	jobs    []billing.Job
+	created  bool
+	active   *billing.Job
+	covering *billing.Job
+	jobs     []billing.Job
 }
 
 func (s *preflightJobsStore) CreateBillingJob(context.Context, billing.Job, []billing.JobStep) error {
@@ -37,6 +38,9 @@ func (s *preflightJobsStore) ListBillingJobs(context.Context, string, string, in
 	return s.jobs, nil
 }
 func (s *preflightJobsStore) LatestCoveringBillingJob(context.Context, string, string, time.Time, time.Time) (billing.Job, error) {
+	if s.covering != nil {
+		return *s.covering, nil
+	}
 	return billing.Job{}, sql.ErrNoRows
 }
 func (s *preflightJobsStore) CancelBillingJob(context.Context, string) error { return nil }
@@ -100,5 +104,25 @@ func TestBillingJobCreationBlocksWhileAnotherJobIsActive(t *testing.T) {
 	handler.ServeHTTP(rec, httptest.NewRequest("POST", "/api/dashboard/billing/jobs", strings.NewReader(body)))
 	if rec.Code != 409 || !strings.Contains(rec.Body.String(), "billing_job_busy") || !strings.Contains(rec.Body.String(), "active-job") || store.created {
 		t.Fatalf("code=%d created=%v body=%s", rec.Code, store.created, rec.Body.String())
+	}
+}
+
+// The covered gate is a confirmation interlock: without force it must 409
+// with the covering job attached, and force must pass straight through.
+func TestBillingJobCoveredGateYieldsToForce(t *testing.T) {
+	covering := billing.Job{ID: "covering-job", Status: "complete"}
+	store := &preflightJobsStore{covering: &covering}
+	handler := BillingJobsHandler{Store: store}
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest("POST", "/api/dashboard/billing/jobs", strings.NewReader(`{"instance_id":"demo","from":"2026-08-01 00:00:00","to":"2026-08-02 00:00:00"}`)))
+	if rec.Code != 409 || !strings.Contains(rec.Body.String(), "billing_range_already_covered") || !strings.Contains(rec.Body.String(), "covering-job") || store.created {
+		t.Fatalf("covered without force: code=%d created=%v body=%s", rec.Code, store.created, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest("POST", "/api/dashboard/billing/jobs", strings.NewReader(`{"instance_id":"demo","from":"2026-08-01 00:00:00","to":"2026-08-02 00:00:00","force":true}`)))
+	if rec.Code != 202 || !store.created {
+		t.Fatalf("force must bypass the covered gate: code=%d created=%v body=%s", rec.Code, store.created, rec.Body.String())
 	}
 }

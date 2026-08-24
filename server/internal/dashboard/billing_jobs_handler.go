@@ -152,12 +152,16 @@ func (h BillingJobsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if covered, coverErr := h.Store.LatestCoveringBillingJob(r.Context(), req.InstanceID, jobType, from, to); coverErr == nil {
-		writeDashboardJSON(w, http.StatusConflict, map[string]any{"error": "billing_range_already_covered", "covering_job": covered})
-		return
-	} else if coverErr != sql.ErrNoRows {
-		writeDashboardError(w, 500, "billing_job_query_failed")
-		return
+	// The covered gate is an interlock, not a wall: the UI surfaces it as a
+	// confirmation dialog whose "重新生成" resubmits with force=true.
+	if !req.Force {
+		if covered, coverErr := h.Store.LatestCoveringBillingJob(r.Context(), req.InstanceID, jobType, from, to); coverErr == nil {
+			writeDashboardJSON(w, http.StatusConflict, map[string]any{"error": "billing_range_already_covered", "covering_job": covered})
+			return
+		} else if coverErr != sql.ErrNoRows {
+			writeDashboardError(w, 500, "billing_job_query_failed")
+			return
+		}
 	}
 	if active, activeErr := h.Store.ActiveBillingJob(r.Context()); activeErr == nil {
 		writeDashboardJSON(w, http.StatusConflict, map[string]any{"error": "billing_job_busy", "active_job": active})

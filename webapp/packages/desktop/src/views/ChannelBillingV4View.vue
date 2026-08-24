@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { useRoute } from "vue-router";
-import { ElMessage } from "element-plus";
-import { type BillingChannelSummary, type BillingJob, type BillingUpstreamGroup } from "@ct/shared";
+import { ElMessage, ElMessageBox } from "element-plus";
+import { ApiError, type BillingChannelSummary, type BillingJob, type BillingUpstreamGroup } from "@ct/shared";
 import { dashboard } from "../api";
 import AppShell from "../components/AppShell.vue";
 import AsyncPanel from "../components/AsyncPanel.vue";
@@ -99,7 +99,16 @@ async function generate(force=false) {
     const result = await dashboard.generateBilling({ instance_id: filters.site_id, from, to, scope: "channel", force });
     if(result.job.status==="complete"){await state.reload();ElMessage.success(result.reused?"该区间已有渠道账单，已直接加载":"所选时间范围的渠道账单已经生成完成");return;}
     await monitor(result.job);
-  } catch (error) { ElMessage.warning(billingTaskErrorMessage(error)); }
+  } catch (error) { if(await confirmRegenerate(error))return generate(true);ElMessage.warning(billingTaskErrorMessage(error)); }
+}
+async function confirmRegenerate(error:unknown):Promise<boolean>{
+  if(!(error instanceof ApiError)||error.code!=="billing_range_already_covered")return false;
+  const covering=error.details?.covering_job as {range_from?:string;range_to?:string}|undefined;
+  const range=covering?.range_from?`（覆盖区间 ${new Date(covering.range_from).toLocaleString()} 至 ${new Date(covering.range_to||"").toLocaleString()}）`:"";
+  try{
+    await ElMessageBox.confirm(`所选时间段已生成过渠道账单${range}。重新生成将产生新的账单版本并替换查看数据，确定继续？`,"该区间已生成账单",{confirmButtonText:"重新生成",cancelButtonText:"取消",type:"warning"});
+    return true;
+  }catch{return false}
 }
 async function save(row: BillingChannelSummary, value: string) {
   const discount = Number(value);
