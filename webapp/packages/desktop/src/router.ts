@@ -26,12 +26,16 @@ import ChannelBillingView from './views/ChannelBillingV4View.vue'
 import BillingPricingView from './views/BillingPricingView.vue'
 import BillingReconciliationView from './views/BillingReconciliationView.vue'
 import BillingTasksView from './views/BillingTasksView.vue'
+import BillingUpstreamsView from './views/BillingUpstreamsView.vue'
+import BillingDiscountsView from './views/BillingDiscountsView.vue'
 export const router = createRouter({ history: createWebHistory('/'), routes: [
   { path: '/readonly-users', component: ReadonlyUsersView, meta: { title: '用户管理' } },
   { path: '/readonly-logs', component: ReadonlyLogsView, meta: { title: '使用日志' } },
   { path: '/billing', alias: ['/billing/overview', '/billing/generated'], component: BillingView, meta: { title: '用户账单' } },
   { path: '/billing/tasks', component: BillingTasksView, meta: { title: '账单任务', adminOnly: true } },
-  { path: '/billing/channels', component: ChannelBillingView, meta: { title: '渠道账单', adminOnly: true } },
+  { path: '/billing/channels', component: ChannelBillingView, meta: { title: '上游账单', adminOnly: true } },
+  { path: '/billing/upstreams', component: BillingUpstreamsView, meta: { title: '上游管理', adminOnly: true } },
+  { path: '/billing/discounts', component: BillingDiscountsView, meta: { title: '渠道折扣', adminOnly: true } },
   { path: '/billing/anomalies', alias: '/billing-reconciliation', component: BillingReconciliationView, meta: { title: '账单核对', adminOnly: true } },
   { path: '/models/manage', alias: '/billing/pricing', component: BillingPricingView, meta: { title: '模型管理', adminOnly: true } },
   { path: '/customers', component: CustomerMonitorView, meta: { title: '客户监控' } },

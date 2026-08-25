@@ -124,6 +124,12 @@ func startBillingFileCleanup(store mysqlstore.Store) {
 			} else if removed > 0 {
 				log.Printf("billing file cleanup removed=%d", removed)
 			}
+			channelRemoved, channelErr := cleaner.CleanupChannels(context.Background(), time.Now().UTC().AddDate(0, 0, -180))
+			if channelErr != nil {
+				log.Printf("billing channel file cleanup: %v", channelErr)
+			} else if channelRemoved > 0 {
+				log.Printf("billing channel file cleanup removed=%d", channelRemoved)
+			}
 		}
 		run()
 		ticker := time.NewTicker(24 * time.Hour)
@@ -139,7 +145,8 @@ func startBillingJobRunner(store mysqlstore.Store, secretKey string, pagePause t
 	runner := billing.JobRunner{
 		Source:    dashboard.BillingReadonlySource{Handler: readonly},
 		Store:     store,
-		Files:     billing.UserDailyFileGenerator{Store: store},
+		Spool:     billing.FileDetailSpool{},
+		Files:     billing.UserDailyFileGenerator{Store: store, Spool: billing.FileDetailSpool{}},
 		PagePause: pagePause,
 	}
 	go func() {

@@ -11,7 +11,7 @@ import (
 
 func (s Store) QueryBillingAggregates(ctx context.Context, instanceID string, from, to time.Time, userIDs []int64) ([]billing.AggregateRow, error) {
 	dayFrom, dayTo := billingDayBounds(from, to)
-	query := `SELECT details.instance_id,details.user_id,MAX(details.username),details.model_name,'' group_name,0 tier_from,details.bill_day,COUNT(*),SUM(details.prompt_tokens),SUM(details.completion_tokens),SUM(details.cache_read_tokens),SUM(details.cache_write_tokens),SUM(details.cache_write_5m_tokens),SUM(details.cache_write_1h_tokens),SUM(details.calculated_quota),CAST(SUM(details.total_amount) AS CHAR) FROM billing_request_details details JOIN billing_user_daily_active active ON active.instance_id=details.instance_id AND active.bill_day=details.bill_day AND active.user_id=details.user_id AND active.job_id=details.job_id WHERE details.instance_id=? AND details.bill_day>=? AND details.bill_day<?`
+	query := `SELECT details.instance_id,details.user_id,MAX(details.username),details.model_name,'' group_name,0 tier_from,details.bill_day,SUM(details.request_count),SUM(details.prompt_tokens),SUM(details.completion_tokens),SUM(details.cache_read_tokens),SUM(details.cache_write_tokens),SUM(details.cache_write_5m_tokens),SUM(details.cache_write_1h_tokens),SUM(details.calculated_quota),CAST(SUM(details.total_amount) AS CHAR) FROM billing_compact_daily_totals details JOIN billing_user_daily_active active ON active.instance_id=details.instance_id AND active.bill_day=details.bill_day AND active.user_id=details.user_id AND active.job_id=details.job_id WHERE details.instance_id=? AND details.bill_day>=? AND details.bill_day<?`
 	args := []any{instanceID, dayFrom, dayTo}
 	if len(userIDs) > 0 {
 		query += ` AND details.user_id IN (` + strings.TrimRight(strings.Repeat("?,", len(userIDs)), ",") + `)`
@@ -37,7 +37,7 @@ func (s Store) QueryBillingAggregates(ctx context.Context, instanceID string, fr
 }
 
 func (s Store) QueryBillingAggregatesForJob(ctx context.Context, jobID string, userIDs []int64) ([]billing.AggregateRow, error) {
-	query := `SELECT instance_id,user_id,MAX(username),model_name,'' group_name,0 tier_from,bill_day,COUNT(*),SUM(prompt_tokens),SUM(completion_tokens),SUM(cache_read_tokens),SUM(cache_write_tokens),SUM(cache_write_5m_tokens),SUM(cache_write_1h_tokens),SUM(calculated_quota),CAST(SUM(total_amount) AS CHAR) FROM billing_request_details WHERE job_id=?`
+	query := `SELECT instance_id,user_id,MAX(username),model_name,'' group_name,0 tier_from,bill_day,SUM(request_count),SUM(prompt_tokens),SUM(completion_tokens),SUM(cache_read_tokens),SUM(cache_write_tokens),SUM(cache_write_5m_tokens),SUM(cache_write_1h_tokens),SUM(calculated_quota),CAST(SUM(total_amount) AS CHAR) FROM billing_compact_daily_totals WHERE job_id=?`
 	args := []any{jobID}
 	if len(userIDs) > 0 {
 		query += ` AND user_id IN (` + strings.TrimRight(strings.Repeat("?,", len(userIDs)), ",") + `)`
@@ -63,8 +63,9 @@ func (s Store) QueryBillingAggregatesForJob(ctx context.Context, jobID string, u
 }
 
 func (s Store) QueryBillingAggregatesForJobRange(ctx context.Context, jobID string, from, to time.Time, userIDs []int64) ([]billing.AggregateRow, error) {
-	query := `SELECT instance_id,user_id,MAX(username),model_name,'' group_name,0 tier_from,bill_day,COUNT(*),SUM(prompt_tokens),SUM(completion_tokens),SUM(cache_read_tokens),SUM(cache_write_tokens),SUM(cache_write_5m_tokens),SUM(cache_write_1h_tokens),SUM(calculated_quota),CAST(SUM(total_amount) AS CHAR) FROM billing_request_details WHERE job_id=? AND created_at>=? AND created_at<?`
-	args := []any{jobID, from.UTC(), to.UTC()}
+	dayFrom, dayTo := billingDayBounds(from, to)
+	query := `SELECT instance_id,user_id,MAX(username),model_name,'' group_name,0 tier_from,bill_day,SUM(request_count),SUM(prompt_tokens),SUM(completion_tokens),SUM(cache_read_tokens),SUM(cache_write_tokens),SUM(cache_write_5m_tokens),SUM(cache_write_1h_tokens),SUM(calculated_quota),CAST(SUM(total_amount) AS CHAR) FROM billing_compact_daily_totals WHERE job_id=? AND bill_day>=? AND bill_day<?`
+	args := []any{jobID, dayFrom, dayTo}
 	if len(userIDs) > 0 {
 		query += ` AND user_id IN (` + strings.TrimRight(strings.Repeat("?,", len(userIDs)), ",") + `)`
 		for _, id := range userIDs {

@@ -8,9 +8,26 @@ import (
 )
 
 type UpstreamChannelMapping struct {
-	InstanceID, UpstreamFP, BaseURL, KeyTail, ChannelName string
-	ChannelID                                             int64
-	UpdatedAt                                             time.Time
+	InstanceID, UpstreamFP, UpstreamName, BaseURL, KeyTail, ChannelName string
+	ChannelID                                                           int64
+	UpdatedAt                                                           time.Time
+}
+
+type Upstream struct {
+	ID         int64             `json:"id"`
+	InstanceID string            `json:"instance_id"`
+	Name       string            `json:"name"`
+	Enabled    bool              `json:"enabled"`
+	Remark     string            `json:"remark"`
+	Channels   []UpstreamChannel `json:"channels"`
+	CreatedAt  time.Time         `json:"created_at"`
+	UpdatedAt  time.Time         `json:"updated_at"`
+	UpdatedBy  string            `json:"updated_by"`
+}
+
+type UpstreamChannel struct {
+	ChannelID   int64  `json:"channel_id"`
+	ChannelName string `json:"channel_name"`
 }
 
 type UpstreamTotals struct {
@@ -21,6 +38,102 @@ type UpstreamTotals struct {
 	CacheWriteTokens int64  `json:"cache_write_tokens"`
 	Quota            int64  `json:"quota"`
 	Amount           string `json:"amount"`
+	AbnormalRows     int64  `json:"abnormal_rows"`
+	AbnormalAmount   string `json:"abnormal_amount"`
+}
+
+type ChannelAnomalyRow struct {
+	ChannelID   int64
+	ChannelName string
+	Day         time.Time
+	ModelName   string
+	Rows        int64
+	Amount      string
+}
+
+func ApplyUpstreamAnomalies(groups []UpstreamGroup, mappings []UpstreamChannelMapping, anomalies []ChannelAnomalyRow) []UpstreamGroup {
+	byMapping := map[int64]UpstreamChannelMapping{}
+	for _, mapping := range mappings {
+		byMapping[mapping.ChannelID] = mapping
+	}
+	memberGroup := map[int64]int{}
+	for i := range groups {
+		for _, member := range groups[i].Members {
+			memberGroup[member.ChannelID] = i
+		}
+	}
+	for _, row := range anomalies {
+		if _, exists := memberGroup[row.ChannelID]; exists {
+			continue
+		}
+		mapping, mapped := byMapping[row.ChannelID]
+		fp, display := "", "未归属上游"
+		if mapped {
+			fp, display = mapping.UpstreamFP, strings.TrimSpace(mapping.UpstreamName)
+		}
+		groupIndex := -1
+		for i := range groups {
+			if groups[i].UpstreamFP == fp {
+				groupIndex = i
+				break
+			}
+		}
+		if groupIndex < 0 {
+			groups = append(groups, UpstreamGroup{UpstreamFP: fp, DisplayName: display})
+			groupIndex = len(groups) - 1
+		}
+		name := row.ChannelName
+		if mapped && mapping.ChannelName != "" {
+			name = mapping.ChannelName
+		}
+		groups[groupIndex].Members = append(groups[groupIndex].Members, UpstreamMember{ChannelID: row.ChannelID, ChannelName: name})
+		groups[groupIndex].MemberCount = len(groups[groupIndex].Members)
+		memberGroup[row.ChannelID] = groupIndex
+	}
+	byChannel := map[int64][]ChannelAnomalyRow{}
+	for _, row := range anomalies {
+		byChannel[row.ChannelID] = append(byChannel[row.ChannelID], row)
+	}
+	for i := range groups {
+		groupAmount := new(big.Rat)
+		for j := range groups[i].Members {
+			memberAmount := new(big.Rat)
+			daySet := map[string]bool{}
+			for _, day := range groups[i].Members[j].BillDays {
+				daySet[day] = true
+			}
+			for _, row := range byChannel[groups[i].Members[j].ChannelID] {
+				daySet[row.Day.Format("2006-01-02")] = true
+				groups[i].Members[j].Totals.AbnormalRows += row.Rows
+				groups[i].Totals.AbnormalRows += row.Rows
+				if value, ok := new(big.Rat).SetString(row.Amount); ok {
+					memberAmount.Add(memberAmount, value)
+					groupAmount.Add(groupAmount, value)
+				}
+			}
+			groups[i].Members[j].Totals.AbnormalAmount = FormatAmount(memberAmount, 6)
+			groups[i].Members[j].BillDays = groups[i].Members[j].BillDays[:0]
+			for day := range daySet {
+				groups[i].Members[j].BillDays = append(groups[i].Members[j].BillDays, day)
+			}
+			sort.Sort(sort.Reverse(sort.StringSlice(groups[i].Members[j].BillDays)))
+		}
+		groups[i].Totals.AbnormalAmount = FormatAmount(groupAmount, 6)
+	}
+	return groups
+}
+
+func uniqueStrings(values []string) []string {
+	if len(values) < 2 {
+		return values
+	}
+	out := values[:1]
+	for _, value := range values[1:] {
+		if value != out[len(out)-1] {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 func ApplyUpstreamAmounts(groups []UpstreamGroup, channels []ChannelSummary) {
@@ -45,6 +158,8 @@ type UpstreamMember struct {
 	ChannelID   int64          `json:"channel_id"`
 	ChannelName string         `json:"channel_name"`
 	ModelName   string         `json:"model_name"`
+	Historical  bool           `json:"historical"`
+	BillDays    []string       `json:"bill_days"`
 	Totals      UpstreamTotals `json:"totals"`
 }
 
@@ -55,6 +170,7 @@ type UpstreamGroup struct {
 	MemberCount int              `json:"member_count"`
 	Members     []UpstreamMember `json:"members"`
 	Totals      UpstreamTotals   `json:"totals"`
+	BillDays    []string         `json:"bill_days"`
 }
 
 func addUpstreamTotals(v *UpstreamTotals, row AggregateRow) {
@@ -87,12 +203,12 @@ func BuildUpstreamGroups(rows []AggregateRow, mappings []UpstreamChannelMapping)
 		base := ""
 		if mapped {
 			fp, base = m.UpstreamFP, m.BaseURL
-			display = strings.TrimSpace(m.BaseURL)
-			if m.KeyTail != "" {
-				display += " …" + m.KeyTail
-			}
+			display = strings.TrimSpace(m.UpstreamName)
 			if display == "" {
-				display = "…" + m.KeyTail
+				display = strings.TrimSpace(m.BaseURL)
+				if m.KeyTail != "" {
+					display += " …" + m.KeyTail
+				}
 			}
 		}
 		g := groups[fp]
@@ -110,11 +226,23 @@ func BuildUpstreamGroups(rows []AggregateRow, mappings []UpstreamChannelMapping)
 			g.members[row.UserID] = member
 		}
 		member.models[row.ModelName] = true
+		member.item.BillDays = append(member.item.BillDays, row.Day.Format("2006-01-02"))
 		addUpstreamTotals(&member.item.Totals, row)
 		addUpstreamTotals(&g.item.Totals, row)
 	}
 	out := make([]UpstreamGroup, 0, len(groups))
 	for _, g := range groups {
+		daySet := map[string]bool{}
+		for _, row := range rows {
+			mapping, mapped := byChannel[row.UserID]
+			if (g.item.UpstreamFP == "" && !mapped) || (mapped && mapping.UpstreamFP == g.item.UpstreamFP) {
+				daySet[row.Day.Format("2006-01-02")] = true
+			}
+		}
+		for day := range daySet {
+			g.item.BillDays = append(g.item.BillDays, day)
+		}
+		sort.Sort(sort.Reverse(sort.StringSlice(g.item.BillDays)))
 		for _, m := range g.members {
 			names := make([]string, 0, len(m.models))
 			for name := range m.models {
@@ -122,6 +250,8 @@ func BuildUpstreamGroups(rows []AggregateRow, mappings []UpstreamChannelMapping)
 			}
 			sort.Strings(names)
 			m.item.ModelName = strings.Join(names, ", ")
+			sort.Sort(sort.Reverse(sort.StringSlice(m.item.BillDays)))
+			m.item.BillDays = uniqueStrings(m.item.BillDays)
 			g.item.Members = append(g.item.Members, m.item)
 		}
 		sort.Slice(g.item.Members, func(i, j int) bool { return g.item.Members[i].ChannelID < g.item.Members[j].ChannelID })

@@ -87,6 +87,7 @@ type TokenDailyRow struct {
 	RequestCount, PromptTokens, CompletionTokens          int64
 	CacheTokens, CacheWriteTokens                         int64
 	CacheWrite5mTokens, CacheWrite1hTokens, Quota         int64
+	Amount                                                string
 	UpdatedAt                                             time.Time
 }
 

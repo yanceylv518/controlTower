@@ -69,8 +69,13 @@ func TestVerifyLogChargeUsesNewAPIHalfAwayRounding(t *testing.T) {
 	}
 	log.Quota = 0
 	result, err = VerifyLogCharge(log, "500000")
-	if err != nil || result.Verified || result.Difference != 1 {
-		t.Fatalf("mismatch verification = %#v err=%v", result, err)
+	if err != nil || !result.Verified || result.Difference != 1 {
+		t.Fatalf("one-quota rounding tolerance = %#v err=%v", result, err)
+	}
+	log.Quota = -1
+	result, err = VerifyLogCharge(log, "500000")
+	if err != nil || result.Verified || result.Difference != 2 {
+		t.Fatalf("difference beyond rounding tolerance = %#v err=%v", result, err)
 	}
 }
 
@@ -90,5 +95,27 @@ func TestVerifyLogChargeReasonSeparatesIncompleteAndMismatch(t *testing.T) {
 	log := PagedLogRecord{ModelPrice: "0.02", GroupRatio: "1", Quota: 999}
 	if result, reason := VerifyLogChargeReason(log, "500000"); reason != PricingReasonMismatch || result.Difference != 9001 {
 		t.Fatalf("mismatch = %#v reason=%q", result, reason)
+	}
+}
+
+func TestFallbackLogChargeUsesLoggedQuota(t *testing.T) {
+	got := FallbackLogCharge(PagedLogRecord{Quota: 250000}, "500000")
+	if got.Charge.Mode != "logged_quota_fallback" || got.Charge.Total != "0.500000" || got.CalculatedQuota != 250000 || got.LoggedQuota != 250000 {
+		t.Fatalf("unexpected fallback: %+v", got)
+	}
+}
+
+func TestIncompletePriceCreatesBillableReconciliationRecord(t *testing.T) {
+	log := PagedLogRecord{ID: 7, Quota: 250000, CompletionTokens: sql.NullInt64{Valid: true, Int64: 1}}
+	verification, reason := VerifyLogChargeReason(log, "500000")
+	if reason != PricingReasonIncomplete || len(AnomalyReasons(log, 0)) != 0 {
+		t.Fatalf("reason=%q anomalies=%v", reason, AnomalyReasons(log, 0))
+	}
+	record := NewReconciliationOrder(Job{ID: "job", InstanceID: "site"}, log, verification, reason, "500000")
+	if record.Reason != PricingReasonIncomplete || record.LoggedAmount != "0.500000" {
+		t.Fatalf("unexpected reconciliation record: %+v", record)
+	}
+	if billable := FallbackLogCharge(log, "500000"); billable.Charge.Total != "0.500000" {
+		t.Fatalf("unexpected billable amount: %+v", billable)
 	}
 }

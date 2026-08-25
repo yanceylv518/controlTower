@@ -51,9 +51,9 @@ const nav = [
     group: "账单管理",
     items: [
       ["/billing", "用户账单", Coin],
-      ["/billing/channels", "渠道账单", Coin],
-      ["/billing/anomalies", "账单核对", DataAnalysis],
+      ["/billing/channels", "上游账单", Coin],
       ["/billing/tasks", "账单任务", Operation],
+      ["/billing/discounts", "渠道折扣", SetUp],
     ],
   },
   {
@@ -63,6 +63,7 @@ const nav = [
       ["/instances", "实例管理", Management],
       ["/access-users", "访问账号", User],
       ["/models/manage", "模型管理", SetUp],
+      ["/billing/upstreams", "上游管理", Connection],
       ["/settings", "系统设置", SetUp],
     ],
   },

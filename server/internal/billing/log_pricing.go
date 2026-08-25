@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"math/big"
+	"time"
 )
 
 // LogCharge is the user-facing monetary reconstruction of one new-api consume
@@ -30,6 +31,10 @@ type LogChargeVerification struct {
 const (
 	PricingReasonIncomplete = "billing_price_incomplete"
 	PricingReasonMismatch   = "billing_quota_mismatch"
+	// new-api stores quota as an integer while several pricing paths carry
+	// decimal intermediates. A one-unit difference is a rounding boundary, not
+	// a materially different charge, and must remain in the normal bill.
+	quotaVerificationTolerance int64 = 1
 )
 
 // CalculateLogCharge converts the effective ratios recorded on an individual
@@ -143,7 +148,11 @@ func VerifyLogCharge(log PagedLogRecord, quotaPerUnit string) (LogChargeVerifica
 	calculated := quotaFromRat(value)
 	result := LogChargeVerification{Charge: charge, CalculatedQuota: calculated, LoggedQuota: log.Quota}
 	result.Difference = calculated - log.Quota
-	result.Verified = result.Difference == 0
+	difference := result.Difference
+	if difference < 0 {
+		difference = -difference
+	}
+	result.Verified = difference <= quotaVerificationTolerance
 	return result, nil
 }
 
@@ -156,6 +165,42 @@ func VerifyLogChargeReason(log PagedLogRecord, quotaPerUnit string) (LogChargeVe
 		return result, PricingReasonMismatch
 	}
 	return result, ""
+}
+
+// FallbackLogCharge keeps a successfully charged source order in the bill when
+// historical ratios are incomplete. The logged quota is the authoritative
+// amount; the order is separately marked for reconciliation.
+func FallbackLogCharge(log PagedLogRecord, quotaPerUnit string) LogChargeVerification {
+	qpu, err := decimalRat(quotaPerUnit)
+	if err != nil || qpu.Sign() <= 0 {
+		qpu, _ = decimalRat(defaultQuotaPerUnit)
+	}
+	amount := new(big.Rat).Quo(big.NewRat(log.Quota, 1), qpu)
+	return LogChargeVerification{
+		Charge:          LogCharge{Mode: "logged_quota_fallback", Total: FormatAmount(amount, 6)},
+		CalculatedQuota: log.Quota, LoggedQuota: log.Quota, Verified: false,
+	}
+}
+
+func NewReconciliationOrder(job Job, log PagedLogRecord, result LogChargeVerification, reason, quotaPerUnit string) ReconciliationOrder {
+	qpu, err := decimalRat(quotaPerUnit)
+	if err != nil || qpu.Sign() <= 0 {
+		qpu, _ = decimalRat(defaultQuotaPerUnit)
+	}
+	logged := new(big.Rat).Quo(big.NewRat(log.Quota, 1), qpu)
+	calculated, _ := decimalRat(result.Charge.Total)
+	if calculated == nil {
+		calculated = new(big.Rat)
+	}
+	return ReconciliationOrder{
+		JobID: job.ID, InstanceID: job.InstanceID, SourceLogID: log.ID, CreatedUnix: log.CreatedUnix,
+		RequestID: log.RequestID, UpstreamRequestID: log.UpstreamRequestID, UserID: log.UserID, Username: log.Username,
+		TokenID: log.TokenID, TokenName: log.TokenName, ChannelID: log.ChannelID, ChannelName: log.ChannelName, ModelName: log.ModelName,
+		PromptTokens: nullableInt64(log.PromptTokens), CompletionTokens: nullableInt64(log.CompletionTokens), CacheReadTokens: log.CacheTokens, CacheWriteTokens: log.CacheWriteTokens,
+		CalculatedQuota: result.CalculatedQuota, LoggedQuota: log.Quota, QuotaDifference: result.CalculatedQuota - log.Quota,
+		CalculatedAmount: FormatAmount(calculated, 6), LoggedAmount: FormatAmount(logged, 6), AmountDifference: FormatAmount(new(big.Rat).Sub(calculated, logged), 6),
+		Reason: reason, DetectedAt: time.Now().UTC(),
+	}
 }
 
 func quotaFromRat(value *big.Rat) int64 {

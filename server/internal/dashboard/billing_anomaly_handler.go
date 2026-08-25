@@ -36,7 +36,16 @@ func (h BillingAnomalyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	if channelID > 0 {
 		jobType = "channel_generate"
 	}
-	job, jobErr := billingJobForRead(r, h.Store, site, jobType, from, to)
+	var job billing.Job
+	var jobErr error
+	if requestedID := strings.TrimSpace(q.Get("job_id")); requestedID != "" {
+		job, jobErr = h.Store.BillingJob(r.Context(), requestedID)
+		if jobErr == nil && (job.InstanceID != site || (job.JobType != "user_statement" && job.JobType != "upstream_statement" && job.JobType != jobType) || job.From.After(from) || job.To.Before(to)) {
+			jobErr = sql.ErrNoRows
+		}
+	} else {
+		job, jobErr = billingJobForRead(r, h.Store, site, jobType, from, to)
+	}
 	if jobErr != nil || job.Status != "complete" {
 		writeBillingReadConflict(w, jobErr)
 		return
@@ -105,6 +114,10 @@ func localizedReasons(raw string) string {
 			parts[i] = "输出 Token 为 0"
 		case "context_limit_exceeded":
 			parts[i] = "输入 Token 超过模型上下文上限"
+		case "billing_quota_mismatch":
+			parts[i] = "日志扣费与计费结果不一致"
+		case "billing_price_incomplete":
+			parts[i] = "模型计费价格信息不完整"
 		}
 	}
 	return strings.Join(parts, "；")

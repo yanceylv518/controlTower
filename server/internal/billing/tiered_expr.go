@@ -127,29 +127,31 @@ func calculateTieredExprCharge(log PagedLogRecord, quotaPerUnit string) (LogChar
 	amount := new(big.Rat).Mul(new(big.Rat).SetFloat64(cost), group)
 	amount.Quo(amount, big.NewRat(tokensPerMillion, 1))
 	charge := LogCharge{Mode: "tiered_expr", MatchedTier: matchedTier, Total: FormatAmount(amount, 6)}
-	fillTieredLinearBreakdown(&charge, program, params, now, matchedTier, cost, group, log)
+	fillTieredLinearBreakdown(&charge, program, params, used, now, matchedTier, cost, group, log)
 	charge.ReconstructedQuota = new(big.Rat).Mul(new(big.Rat).Set(amount), qpu).FloatString(6)
 	return charge, nil
 }
 
-func fillTieredLinearBreakdown(charge *LogCharge, program anyProgram, params tieredParams, now time.Time, matchedTier string, totalCost float64, group *big.Rat, log PagedLogRecord) {
+func fillTieredLinearBreakdown(charge *LogCharge, program anyProgram, params tieredParams, used map[string]bool, now time.Time, matchedTier string, totalCost float64, group *big.Rat, log PagedLogRecord) {
 	type lane struct {
+		name   string
 		tokens float64
 		zero   func(*tieredParams)
+		one    func(*tieredParams)
 		price  *string
 		amount *string
 	}
 	lanes := []lane{
-		{params.P, func(p *tieredParams) { p.P = 0 }, &charge.InputPrice, &charge.InputAmount},
-		{params.C, func(p *tieredParams) { p.C = 0 }, &charge.OutputPrice, &charge.OutputAmount},
-		{params.CR, func(p *tieredParams) { p.CR = 0 }, &charge.CacheReadPrice, &charge.CacheReadAmount},
+		{"p", params.P, func(p *tieredParams) { p.P = 0 }, func(p *tieredParams) { p.P = 1 }, &charge.InputPrice, &charge.InputAmount},
+		{"c", params.C, func(p *tieredParams) { p.C = 0 }, func(p *tieredParams) { p.C = 1 }, &charge.OutputPrice, &charge.OutputAmount},
+		{"cr", params.CR, func(p *tieredParams) { p.CR = 0 }, func(p *tieredParams) { p.CR = 1 }, &charge.CacheReadPrice, &charge.CacheReadAmount},
 	}
 	if log.CacheWrite5mTokens > 0 {
-		lanes = append(lanes, lane{params.CC, func(p *tieredParams) { p.CC = 0 }, &charge.CacheWrite5mPrice, &charge.CacheWrite5mAmount})
+		lanes = append(lanes, lane{"cc", params.CC, func(p *tieredParams) { p.CC = 0 }, func(p *tieredParams) { p.CC = 1 }, &charge.CacheWrite5mPrice, &charge.CacheWrite5mAmount})
 	} else {
-		lanes = append(lanes, lane{params.CC, func(p *tieredParams) { p.CC = 0 }, &charge.CacheWritePrice, &charge.CacheWriteAmount})
+		lanes = append(lanes, lane{"cc", params.CC, func(p *tieredParams) { p.CC = 0 }, func(p *tieredParams) { p.CC = 1 }, &charge.CacheWritePrice, &charge.CacheWriteAmount})
 	}
-	lanes = append(lanes, lane{params.CC1h, func(p *tieredParams) { p.CC1h = 0 }, &charge.CacheWrite1hPrice, &charge.CacheWrite1hAmount})
+	lanes = append(lanes, lane{"cc1h", params.CC1h, func(p *tieredParams) { p.CC1h = 0 }, func(p *tieredParams) { p.CC1h = 1 }, &charge.CacheWrite1hPrice, &charge.CacheWrite1hAmount})
 	type calculated struct {
 		lane         lane
 		contribution float64
@@ -189,6 +191,28 @@ func fillTieredLinearBreakdown(charge *LogCharge, program anyProgram, params tie
 		amount := new(big.Rat).Mul(new(big.Rat).SetFloat64(part.contribution), group)
 		amount.Quo(amount, big.NewRat(tokensPerMillion, 1))
 		*part.lane.amount = FormatAmount(amount, 6)
+	}
+	// A zero-usage lane still has a model unit price. Probe one token while
+	// keeping the frozen request time/rules and matched tier unchanged, so
+	// invoices can display the configured price without inventing any charge.
+	for _, item := range lanes {
+		if item.tokens > 0 || !used[item.name] {
+			continue
+		}
+		withOne := params
+		item.one(&withOne)
+		tier := ""
+		out, err := expr.Run(program, tieredRuntimeEnv(withOne, now, &tier))
+		if err != nil || tier != matchedTier {
+			continue
+		}
+		value, ok := out.(float64)
+		if !ok || value-totalCost < -1e-9 {
+			continue
+		}
+		unit := new(big.Rat).Mul(new(big.Rat).SetFloat64(value-totalCost), group)
+		*item.price = unit.FloatString(6)
+		*item.amount = "0.000000"
 	}
 }
 

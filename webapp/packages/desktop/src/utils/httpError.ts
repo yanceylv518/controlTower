@@ -6,6 +6,7 @@ function billingErrorText(code: string, progress?: unknown): string | undefined 
     return `账单生成中（${Number.isFinite(value) ? Math.max(0, Math.min(100, Math.round(value))) : 0}%），完成后重试`;
   }
   if (code === "billing_not_generated") return "账单尚未生成，请先生成账单";
+  if (code === "billing_channel_daily_file_not_found" || code === "billing_channel_daily_file_missing") return "该日渠道明细尚未生成，请到账单任务重新生成当天整站账单";
   return undefined;
 }
 
@@ -16,6 +17,9 @@ export function billingReadErrorMessage(error: unknown, fallback = "数据加载
 }
 
 export function billingTaskErrorMessage(error: unknown, fallback = "创建后台任务失败"): string {
+  if (error instanceof ApiError && error.code === "billing_statement_duplicate") return "相同站点、账单类型、对象和账期的任务或账单已经存在，不能重复创建";
+  if (error instanceof ApiError && error.code === "billing_statement_queue_full") return "等待队列已满，最多允许 5 个任务排队";
+  if (error instanceof ApiError && error.code === "upstream_channels_missing") return "所选上游没有关联渠道，无法生成账单";
   if (error instanceof ApiError && error.code === "billing_job_busy") {
     const active = error.details.active_job as { completed_steps?: number; total_steps?: number } | undefined;
     const done = Number(active?.completed_steps || 0), total = Number(active?.total_steps || 0);

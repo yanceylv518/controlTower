@@ -17,7 +17,7 @@ type TokenSummary struct {
 func TokenRowsAsAggregates(rows []TokenDailyRow) []AggregateRow {
 	out := make([]AggregateRow, 0, len(rows))
 	for _, v := range rows {
-		out = append(out, AggregateRow{InstanceID: v.InstanceID, UserID: v.UserID, Username: v.Username, ModelName: v.ModelName, GroupName: v.GroupName, TierFrom: v.TierFrom, Day: v.Day, RequestCount: v.RequestCount, PromptTokens: v.PromptTokens, CompletionTokens: v.CompletionTokens, CacheTokens: v.CacheTokens, CacheWriteTokens: v.CacheWriteTokens, CacheWrite5mTokens: v.CacheWrite5mTokens, CacheWrite1hTokens: v.CacheWrite1hTokens, Quota: v.Quota})
+		out = append(out, AggregateRow{InstanceID: v.InstanceID, UserID: v.UserID, Username: v.Username, ModelName: v.ModelName, GroupName: v.GroupName, TierFrom: v.TierFrom, Day: v.Day, RequestCount: v.RequestCount, PromptTokens: v.PromptTokens, CompletionTokens: v.CompletionTokens, CacheTokens: v.CacheTokens, CacheWriteTokens: v.CacheWriteTokens, CacheWrite5mTokens: v.CacheWrite5mTokens, CacheWrite1hTokens: v.CacheWrite1hTokens, Quota: v.Quota, Amount: v.Amount})
 	}
 	return out
 }

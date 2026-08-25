@@ -3,6 +3,7 @@ package dashboard
 import (
 	"context"
 	"database/sql"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -20,6 +21,7 @@ type preflightJobsStore struct {
 	createdSteps []billing.JobStep
 	activeDays   map[string]string
 	jobsByID     map[string]billing.Job
+	requestJob   *billing.Job
 }
 
 func (s *preflightJobsStore) CreateBillingJob(_ context.Context, job billing.Job, steps []billing.JobStep) error {
@@ -50,6 +52,9 @@ func (s *preflightJobsStore) BillingActiveDays(context.Context, string, int64, t
 	return s.activeDays, nil
 }
 func (s *preflightJobsStore) BillingJobByRequestKey(context.Context, string) (billing.Job, error) {
+	if s.requestJob != nil {
+		return *s.requestJob, nil
+	}
 	return billing.Job{}, sql.ErrNoRows
 }
 func (s *preflightJobsStore) ActiveBillingJob(context.Context) (billing.Job, error) {
@@ -159,15 +164,14 @@ func TestBillingJobCreationBlocksWhileAnotherJobIsActive(t *testing.T) {
 	}
 }
 
-// The covered gate is a confirmation interlock: without force it must 409
-// with the covering job attached, and force must pass straight through.
+// Legacy channel-generation tasks still use the covered-range interlock.
 func TestBillingJobCoveredGateYieldsToForce(t *testing.T) {
 	covering := billing.Job{ID: "covering-job", Status: "complete"}
 	store := &preflightJobsStore{covering: &covering}
 	handler := BillingJobsHandler{Store: store}
 
 	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, httptest.NewRequest("POST", "/api/dashboard/billing/jobs", strings.NewReader(`{"instance_id":"demo","from":"2026-08-01 00:00:00","to":"2026-08-02 00:00:00"}`)))
+	handler.ServeHTTP(rec, httptest.NewRequest("POST", "/api/dashboard/billing/jobs", strings.NewReader(`{"instance_id":"demo","from":"2026-08-01 00:00:00","to":"2026-08-02 00:00:00","scope":"channel"}`)))
 	if rec.Code != 409 || !strings.Contains(rec.Body.String(), "billing_range_already_covered") || !strings.Contains(rec.Body.String(), "covering-job") || store.created {
 		t.Fatalf("covered without force: code=%d created=%v body=%s", rec.Code, store.created, rec.Body.String())
 	}
@@ -176,5 +180,17 @@ func TestBillingJobCoveredGateYieldsToForce(t *testing.T) {
 	handler.ServeHTTP(rec, httptest.NewRequest("POST", "/api/dashboard/billing/jobs", strings.NewReader(`{"instance_id":"demo","from":"2026-08-01 00:00:00","to":"2026-08-02 00:00:00","force":true}`)))
 	if rec.Code != 202 || !store.created {
 		t.Fatalf("force must bypass the covered gate: code=%d created=%v body=%s", rec.Code, store.created, rec.Body.String())
+	}
+}
+
+func TestBillingWholeSiteUsesActiveDaysInsteadOfCompletedTaskRange(t *testing.T) {
+	completed := billing.Job{ID: "old-range", InstanceID: "demo", Status: "complete"}
+	store := &preflightJobsStore{covering: &completed, requestJob: &completed, activeDays: map[string]string{"2026-08-02": completed.ID}}
+	handler := BillingJobsHandler{Store: store}
+	body := `{"instance_id":"demo","from":"2026-08-01 00:00:00","to":"2026-08-04 00:00:00","scope":"all"}`
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest("POST", "/api/dashboard/billing/jobs", strings.NewReader(body)))
+	if rec.Code != http.StatusAccepted || !store.created || len(store.createdSteps) != 2 || store.createdJob.TotalSteps != 2 || store.createdJob.RequestKey == billingRequestKey("demo", "all:0", store.createdJob.From, store.createdJob.To) {
+		t.Fatalf("code=%d created=%v steps=%#v job=%+v body=%s", rec.Code, store.created, store.createdSteps, store.createdJob, rec.Body.String())
 	}
 }

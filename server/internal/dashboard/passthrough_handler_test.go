@@ -143,13 +143,12 @@ func TestBillingLogsPageQueryUsesUserIDKeyset(t *testing.T) {
 	}
 	if !strings.Contains(query, "AND l.user_id=?") || strings.Contains(query, "AND l.channel_id=?") ||
 		!strings.Contains(query, "FORCE INDEX (idx_user_id_id)") ||
-		!strings.Contains(query, "lower_bound FORCE INDEX (idx_created_at_id)") ||
-		!strings.Contains(query, "upper_bound FORCE INDEX (idx_created_at_id)") ||
+		strings.Contains(query, "idx_created_at_id") ||
 		!strings.Contains(query, "AND l.id>?") || !strings.Contains(query, "ORDER BY l.id LIMIT ?") {
 		t.Fatalf("query filters do not match user export: %s", query)
 	}
-	if got := strings.Count(query, "?"); got != 7 {
-		t.Fatalf("user query placeholders=%d want=7: %s", got, query)
+	if got := strings.Count(query, "?"); got != 5 {
+		t.Fatalf("user query placeholders=%d want=5: %s", got, query)
 	}
 }
 

@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestAppendBillingHourWritesUserAndTokenRowsInOneTransaction(t *testing.T) {
+func TestAppendBillingHourWritesCompactRowsAndCursorInOneTransaction(t *testing.T) {
 	b, e := os.ReadFile("billing_jobs.go")
 	if e != nil {
 		t.Fatal(e)
@@ -18,7 +18,7 @@ func TestAppendBillingHourWritesUserAndTokenRowsInOneTransaction(t *testing.T) {
 		t.Fatal("AppendBillingHour source not found")
 	}
 	body := src[start : start+end]
-	for _, want := range []string{"s.db.BeginTx", "INSERT INTO billing_hourly", "INSERT INTO billing_token_daily_versions", "tx.Commit()"} {
+	for _, want := range []string{"s.db.BeginTx", "INSERT INTO billing_compact_daily_totals", "UPDATE billing_job_steps SET cursor_created_at", "tx.Commit()"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("transaction contract missing %q", want)
 		}

@@ -11,9 +11,10 @@ import (
 )
 
 type Cell struct {
-	Value  string
-	Number bool
-	Style  int
+	Value   string
+	Number  bool
+	Style   int
+	Formula string
 }
 type Sheet struct {
 	name   string
@@ -47,7 +48,9 @@ func (s *Sheet) Row(cells []Cell) error {
 		if c.Style > 0 {
 			style = ` s="` + strconv.Itoa(c.Style) + `"`
 		}
-		if c.Number && c.Value != "" {
+		if c.Formula != "" {
+			fmt.Fprintf(s.file, `<c r="%s"%s><f>%s</f><v>%s</v></c>`, ref, style, html.EscapeString(c.Formula), html.EscapeString(c.Value))
+		} else if c.Number && c.Value != "" {
 			fmt.Fprintf(s.file, `<c r="%s"%s><v>%s</v></c>`, ref, style, html.EscapeString(c.Value))
 		} else {
 			fmt.Fprintf(s.file, `<c r="%s" t="inlineStr"%s><is><t xml:space="preserve">%s</t></is></c>`, ref, style, html.EscapeString(c.Value))

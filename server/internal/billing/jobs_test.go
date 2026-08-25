@@ -63,9 +63,9 @@ func TestAnomalyReasons(t *testing.T) {
 		max  int64
 		want string
 	}{
-		{"missing", PagedLogRecord{}, 100, "input_token_missing,output_token_missing"},
-		{"zero", PagedLogRecord{PromptTokens: sql.NullInt64{Valid: true}, CompletionTokens: sql.NullInt64{Valid: true}}, 100, "input_token_zero,output_token_zero"},
-		{"context", PagedLogRecord{PromptTokens: sql.NullInt64{Valid: true, Int64: 101}, CompletionTokens: sql.NullInt64{Valid: true, Int64: 1}}, 100, "context_limit_exceeded"},
+		{"missing", PagedLogRecord{}, 100, "output_token_missing"},
+		{"zero", PagedLogRecord{PromptTokens: sql.NullInt64{Valid: true}, CompletionTokens: sql.NullInt64{Valid: true}}, 100, "output_token_zero"},
+		{"context does not make a billing anomaly", PagedLogRecord{PromptTokens: sql.NullInt64{Valid: true, Int64: 101}, CompletionTokens: sql.NullInt64{Valid: true, Int64: 1}}, 100, ""},
 		{"fully cached input remains valid", PagedLogRecord{SourcePromptTokens: sql.NullInt64{Valid: true, Int64: 100}, PromptTokens: sql.NullInt64{Valid: true, Int64: 0}, CompletionTokens: sql.NullInt64{Valid: true, Int64: 1}, ContextTokens: 100}, 100, ""},
 		{"unknown context accepted", PagedLogRecord{PromptTokens: sql.NullInt64{Valid: true, Int64: 1000000}, CompletionTokens: sql.NullInt64{Valid: true, Int64: 1}}, 0, ""},
 	}

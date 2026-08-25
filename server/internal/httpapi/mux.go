@@ -151,6 +151,15 @@ func NewMux(options Options) *http.ServeMux {
 		billingRollup := billing.RollupService{Source: dashboard.BillingReadonlySource{Handler: passthrough}, Store: billingStore}
 		mux.Handle("POST /api/dashboard/billing/backfill", protect(dashboard.BillingBackfillHandler{Rollup: billingRollup, Audit: options.Store}))
 	}
+	if statements, ok := any(options.Store).(dashboard.BillingStatementsStore); ok {
+		mux.Handle("POST /api/dashboard/billing/statements", protect(dashboard.BillingStatementsHandler{Store: statements}))
+	}
+	if discounts, ok := any(options.Store).(dashboard.BillingDiscountStore); ok {
+		mux.Handle("/api/dashboard/billing/discounts", protect(dashboard.BillingDiscountHandler{Store: discounts}))
+	}
+	if results, ok := any(options.Store).(dashboard.BillingStatementResultStore); ok {
+		mux.Handle("/api/dashboard/billing/statements/result", protect(dashboard.BillingStatementResultHandler{Store: results}))
+	}
 	if settingsStore, ok := any(options.Store).(dashboard.BillingUserSettingsStore); ok {
 		mux.Handle("/api/dashboard/billing/user-settings", protect(dashboard.BillingUserSettingsHandler{Store: settingsStore}))
 	}
@@ -163,8 +172,12 @@ func NewMux(options Options) *http.ServeMux {
 	if userDaysStore, ok := any(options.Store).(dashboard.BillingUserDaysStore); ok {
 		mux.Handle("GET /api/dashboard/billing/user-days", protect(dashboard.BillingUserDaysHandler{Store: userDaysStore}))
 	}
-	if tokenDaysStore, ok := any(options.Store).(dashboard.BillingUserTokenDaysStore); ok { mux.Handle("GET /api/dashboard/billing/user-token-days", protect(dashboard.BillingUserTokenDaysHandler{Store: tokenDaysStore})) }
-	if rangeStore, ok := any(options.Store).(dashboard.BillingRangeWorkbookStore); ok { mux.Handle("GET /api/dashboard/billing/range-workbook", protect(dashboard.BillingRangeWorkbookHandler{Store: rangeStore})) }
+	if tokenDaysStore, ok := any(options.Store).(dashboard.BillingUserTokenDaysStore); ok {
+		mux.Handle("GET /api/dashboard/billing/user-token-days", protect(dashboard.BillingUserTokenDaysHandler{Store: tokenDaysStore}))
+	}
+	if rangeStore, ok := any(options.Store).(dashboard.BillingRangeWorkbookStore); ok {
+		mux.Handle("GET /api/dashboard/billing/range-workbook", protect(dashboard.BillingRangeWorkbookHandler{Store: rangeStore}))
+	}
 	if anomalyStore, ok := any(options.Store).(dashboard.BillingAnomalyStore); ok {
 		mux.Handle("GET /api/dashboard/billing/anomalies", protect(dashboard.BillingAnomalyHandler{Store: anomalyStore}))
 	}
@@ -175,6 +188,10 @@ func NewMux(options Options) *http.ServeMux {
 		handler := dashboard.BillingUpstreamHandler{Store: upstreamStore, Source: dashboard.BillingReadonlySource{Handler: passthrough}}
 		mux.Handle("GET /api/dashboard/billing/upstream-channels", protect(handler))
 		mux.Handle("GET /api/dashboard/billing/upstream-channels/detail", protect(handler))
+		mux.Handle("GET /api/dashboard/billing/upstream-channels/requests", protect(handler))
+	}
+	if upstreamConfigStore, ok := any(options.Store).(dashboard.BillingUpstreamConfigStore); ok {
+		mux.Handle("/api/dashboard/billing/upstreams", protect(dashboard.BillingUpstreamConfigHandler{Store: upstreamConfigStore, Source: dashboard.BillingReadonlySource{Handler: passthrough}}))
 	}
 	if billingConfigStore, ok := any(options.Store).(dashboard.BillingConfigStore); ok {
 		mux.Handle("/api/dashboard/billing/prices", protect(dashboard.BillingPricesHandler{Store: billingConfigStore}))
@@ -187,7 +204,6 @@ func NewMux(options Options) *http.ServeMux {
 	if billingSummaryStore, ok := any(options.Store).(dashboard.BillingSummaryStore); ok {
 		mux.Handle("GET /api/dashboard/billing/summary", protect(dashboard.BillingSummaryHandler{Store: billingSummaryStore, Source: dashboard.BillingReadonlySource{Handler: passthrough}}))
 		mux.Handle("GET /api/dashboard/billing/detail", protect(dashboard.BillingDetailHandler{Store: billingSummaryStore}))
-		mux.Handle("GET /api/dashboard/billing/log-export", protect(dashboard.BillingLogExportHandler{Store: billingSummaryStore, Source: dashboard.BillingReadonlySource{Handler: passthrough}}))
 		mux.Handle("GET /api/dashboard/billing/reconciliation", protect(dashboard.BillingReconciliationHandler{Store: billingSummaryStore, Source: dashboard.BillingReadonlySource{Handler: passthrough}}))
 		mux.Handle("GET /api/dashboard/billing/reconciliation/requests", protect(dashboard.BillingReconciliationRequestsHandler{Store: billingSummaryStore, Source: dashboard.BillingReadonlySource{Handler: passthrough}, PagePause: options.BillingPagePause}))
 	}
@@ -196,22 +212,8 @@ func NewMux(options Options) *http.ServeMux {
 		mux.Handle("GET /api/dashboard/billing/tokens", protect(tokenHandler))
 		mux.Handle("GET /api/dashboard/billing/tokens/daily", protect(tokenHandler))
 	}
-	if tokenLogStore, ok := any(options.Store).(dashboard.BillingTokenLogStore); ok {
-		tokenLog := dashboard.BillingTokenLogExportHandler{Store: tokenLogStore, Source: dashboard.BillingReadonlySource{Handler: passthrough}, PagePause: options.BillingPagePause}
-		mux.Handle("/api/dashboard/billing/token-detail-jobs", protect(dashboard.BillingExportJobHandler{Workbook: tokenLog, Kind: "token"}))
-	}
 	if verificationStore, ok := any(options.Store).(dashboard.BillingVerificationStore); ok {
 		mux.Handle("/api/dashboard/billing/verification", protect(dashboard.BillingVerificationHandler{Store: verificationStore}))
-	}
-	if workbookStore, ok := any(options.Store).(dashboard.BillingWorkbookStore); ok {
-		workbook := dashboard.BillingWorkbookHandler{Store: workbookStore, Source: dashboard.BillingReadonlySource{Handler: passthrough}, PagePause: options.BillingPagePause}
-		mux.Handle("GET /api/dashboard/billing/workbook", protect(workbook))
-		mux.Handle("/api/dashboard/billing/workbook-jobs", protect(dashboard.BillingExportJobHandler{Workbook: workbook, Kind: "user"}))
-	}
-	if channelWorkbookStore, ok := any(options.Store).(dashboard.BillingChannelWorkbookStore); ok {
-		workbook := dashboard.BillingChannelWorkbookHandler{Store: channelWorkbookStore, Source: dashboard.BillingReadonlySource{Handler: passthrough}, PagePause: options.BillingPagePause}
-		mux.Handle("GET /api/dashboard/billing/channel-workbook", protect(workbook))
-		mux.Handle("/api/dashboard/billing/channel-workbook-jobs", protect(dashboard.BillingExportJobHandler{Workbook: workbook, Kind: "channel"}))
 	}
 
 	if options.WebAppDir == "" {

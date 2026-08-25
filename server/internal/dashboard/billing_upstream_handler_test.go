@@ -24,73 +24,34 @@ func TestUpstreamMappingQueryNeverProjectsPlainKey(t *testing.T) {
 
 type upstreamStoreStub struct {
 	*fakeBillingChannelReadStore
-	mappings []billing.UpstreamChannelMapping
+	upstreams []billing.Upstream
 }
 
-func (s *upstreamStoreStub) UpsertBillingUpstreamChannels(_ context.Context, items []billing.UpstreamChannelMapping) error {
-	byID := map[int64]billing.UpstreamChannelMapping{}
-	for _, v := range s.mappings {
-		byID[v.ChannelID] = v
-	}
-	for _, v := range items {
-		byID[v.ChannelID] = v
-	}
-	s.mappings = nil
-	for _, v := range byID {
-		s.mappings = append(s.mappings, v)
-	}
-	return nil
+func (s *upstreamStoreStub) ListBillingUpstreams(context.Context, string) ([]billing.Upstream, error) {
+	return s.upstreams, nil
 }
-func (s *upstreamStoreStub) ListBillingUpstreamChannels(context.Context, string) ([]billing.UpstreamChannelMapping, error) {
-	return s.mappings, nil
+func (s *upstreamStoreStub) QueryBillingChannelAnomalies(context.Context, string, time.Time, time.Time) ([]billing.ChannelAnomalyRow, error) {
+	return nil, nil
+}
+func (s *upstreamStoreStub) QueryBillingChannelRequestDetails(context.Context, string, int64, time.Time, time.Time) ([]billing.RequestDetail, error) {
+	return nil, nil
+}
+func (s *upstreamStoreStub) QueryBillingChannelAnomalyOrders(context.Context, string, int64, time.Time, time.Time) ([]billing.AnomalyOrder, error) {
+	return nil, nil
+}
+func (s *upstreamStoreStub) ActiveBillingChannelDailyFile(context.Context, string, time.Time, int64) (billing.ChannelDailyFile, error) {
+	return billing.ChannelDailyFile{}, errors.New("not found")
 }
 
-type upstreamSourceStub struct {
-	items []billing.UpstreamChannelMapping
-	err   error
-}
-
-func (s upstreamSourceStub) UpstreamChannelMappings(context.Context, string) ([]billing.UpstreamChannelMapping, error) {
-	return s.items, s.err
-}
-
-func TestBillingUpstreamRefreshFailureFallsBackToSnapshot(t *testing.T) {
+func TestBillingUpstreamUsesManualSiteConfiguration(t *testing.T) {
 	from := time.Date(2026, 7, 1, 0, 0, 0, 0, billing.BusinessLocation)
-	base := &fakeBillingChannelReadStore{activeRows: []billing.AggregateRow{{UserID: 1, Day: from, ModelName: "m", RequestCount: 1}}}
-	store := &upstreamStoreStub{fakeBillingChannelReadStore: base, mappings: []billing.UpstreamChannelMapping{{ChannelID: 1, UpstreamFP: "saved", BaseURL: "saved", KeyTail: "1234"}}}
+	base := &fakeBillingChannelReadStore{activeRows: []billing.AggregateRow{{UserID: 1, Day: from, ModelName: "m", RequestCount: 1}, {UserID: 2, Day: from, ModelName: "x", RequestCount: 2}}}
+	store := &upstreamStoreStub{fakeBillingChannelReadStore: base, upstreams: []billing.Upstream{{ID: 9, InstanceID: "site-a", Name: "生产上游", Enabled: true, Channels: []billing.UpstreamChannel{{ChannelID: 1, ChannelName: "渠道 A"}}}}}
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", "/api/dashboard/billing/upstream-channels?instance_id=site-a&from=2026-07-01+00%3A00%3A00&to=2026-08-01+00%3A00%3A00&job_id=job", nil)
-	BillingUpstreamHandler{Store: store, Source: upstreamSourceStub{err: errors.New("offline")}}.ServeHTTP(w, r)
-	if w.Code != 200 || !strings.Contains(w.Body.String(), `"upstream_fp":"saved"`) {
+	BillingUpstreamHandler{Store: store}.ServeHTTP(w, r)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"upstream_fp":"9"`) || !strings.Contains(w.Body.String(), `"display_name":"生产上游"`) || !strings.Contains(w.Body.String(), `"unmapped_channels":1`) {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
-	}
-}
-
-func TestBillingUpstreamRefreshRetainsDeletedSnapshotAndGroupsRows(t *testing.T) {
-	from := time.Date(2026, 7, 1, 0, 0, 0, 0, billing.BusinessLocation)
-	base := &fakeBillingChannelReadStore{activeRows: []billing.AggregateRow{{UserID: 1, Username: "new", Day: from, ModelName: "m", RequestCount: 2}, {UserID: 2, Username: "deleted", Day: from, ModelName: "x", RequestCount: 3}}}
-	store := &upstreamStoreStub{fakeBillingChannelReadStore: base, mappings: []billing.UpstreamChannelMapping{{ChannelID: 1, UpstreamFP: "before", BaseURL: "before", KeyTail: "9999"}, {ChannelID: 2, UpstreamFP: "old", BaseURL: "old", KeyTail: "0002"}}}
-	source := upstreamSourceStub{items: []billing.UpstreamChannelMapping{{ChannelID: 1, UpstreamFP: "new", BaseURL: "new", KeyTail: "0001"}, {ChannelID: 3, UpstreamFP: "inserted", BaseURL: "inserted", KeyTail: "0003"}}}
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest("GET", "/api/dashboard/billing/upstream-channels?instance_id=site-a&from=2026-07-01+00%3A00%3A00&to=2026-08-01+00%3A00%3A00&job_id=job", nil)
-	BillingUpstreamHandler{Store: store, Source: source}.ServeHTTP(w, r)
-	if w.Code != 200 || !strings.Contains(w.Body.String(), `"upstream_fp":"new"`) || !strings.Contains(w.Body.String(), `"upstream_fp":"old"`) || !strings.Contains(w.Body.String(), `"request_count":2`) {
-		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
-	}
-	if len(store.mappings) != 3 {
-		t.Fatalf("mappings=%#v", store.mappings)
-	}
-	inserted := false
-	for _, mapping := range store.mappings {
-		if mapping.ChannelID == 1 && mapping.UpstreamFP != "new" {
-			t.Fatalf("changed key did not update fingerprint: %#v", mapping)
-		}
-		if mapping.ChannelID == 3 && mapping.UpstreamFP == "inserted" {
-			inserted = true
-		}
-	}
-	if !inserted {
-		t.Fatalf("new channel snapshot was not inserted: %#v", store.mappings)
 	}
 }
 
@@ -100,7 +61,7 @@ func TestBillingUpstreamCSVHasTwoSections(t *testing.T) {
 	group := billing.UpstreamGroup{DisplayName: "https://up …1234", BaseURL: "https://up", Members: []billing.UpstreamMember{{ChannelID: 1, ChannelName: "渠道 A", ModelName: "m", Totals: billing.UpstreamTotals{Amount: "3.000000"}}}}
 	writeUpstreamCSV(w, "billing-upstream.csv", from, from.AddDate(0, 1, 0), group, []upstreamDetailItem{{Day: "2026-07-01", ModelName: "m", RequestCount: 2, Amount: "3.000000"}})
 	body := w.Body.String()
-	if !strings.HasPrefix(body, "\xef\xbb\xbf") || !strings.Contains(body, "上游 key,https://up …1234") || !strings.Contains(body, "成员渠道,渠道 A (#1)") || !strings.Contains(body, "日×模型明细") || !strings.Contains(body, "成员渠道小计") || !strings.Contains(body, "金额") {
+	if !strings.HasPrefix(body, "\xef\xbb\xbf") || !strings.Contains(body, "上游,https://up …1234") || !strings.Contains(body, "成员渠道,渠道 A (#1)") || !strings.Contains(body, "日×模型明细") || !strings.Contains(body, "成员渠道小计") || !strings.Contains(body, "金额") {
 		t.Fatalf("csv=%q", body)
 	}
 }

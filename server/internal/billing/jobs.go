@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"log"
 	"math/big"
 	"strings"
 	"time"
@@ -16,6 +15,8 @@ import (
 const BillingPageSize = 2000
 
 var ErrVerificationAlreadyExists = errors.New("billing verification already exists")
+var ErrStatementDuplicate = errors.New("billing statement already exists")
+var ErrStatementQueueFull = errors.New("billing statement queue is full")
 
 // BusinessLocation is explicit because production containers normally run
 // in UTC while new-api billing periods are defined in China Standard Time.
@@ -48,9 +49,18 @@ type PageSource interface {
 type UserPageSource interface {
 	DetailedLogsPage(context.Context, string, int64, time.Time, time.Time, LogCursor, int) ([]PagedLogRecord, error)
 }
+type UpstreamPageSource interface {
+	DetailedChannelsLogsPage(context.Context, string, []int64, time.Time, time.Time, LogCursor, int) ([]PagedLogRecord, error)
+}
+type statementChannelStore interface {
+	BillingStatementChannelIDs(context.Context, string) (map[int64]bool, error)
+}
 type SnapshotSource interface {
 	RatioSnapshot(context.Context, string) (string, error)
 	Balances(context.Context, string) (map[int64]int64, error)
+}
+type BillingIndexSource interface {
+	ValidateBillingIndexes(context.Context, string, bool) error
 }
 type SnapshotStore interface {
 	PutBillingRatioSnapshot(context.Context, string, time.Time, string) error
@@ -67,16 +77,21 @@ type UserSetting struct {
 
 type Job struct {
 	ID              string    `json:"id"`
+	BillNo          string    `json:"bill_no,omitempty"`
 	RequestKey      string    `json:"-"`
 	InstanceID      string    `json:"instance_id"`
 	JobType         string    `json:"job_type"`
 	UserID          int64     `json:"user_id"`
+	UserName        string    `json:"user_name,omitempty"`
+	UpstreamID      int64     `json:"upstream_id,omitempty"`
+	UpstreamName    string    `json:"upstream_name,omitempty"`
 	From            time.Time `json:"range_from"`
 	To              time.Time `json:"range_to"`
 	Status          string    `json:"status"`
 	TotalSteps      int       `json:"total_steps"`
 	CompletedSteps  int       `json:"completed_steps"`
 	AbnormalRows    int64     `json:"abnormal_rows"`
+	MismatchRows    int64     `json:"mismatch_rows"`
 	BilledRows      int64     `json:"billed_rows"`
 	OutputDays      int64     `json:"output_days"`
 	OutputLatestDay string    `json:"output_latest_day,omitempty"`
@@ -175,6 +190,18 @@ type AnomalyOrder struct {
 	DetectedAt                                                                                     time.Time `json:"detected_at"`
 }
 
+// ReconciliationOrder is billable, but requires an internal review because
+// its logged charge cannot be reproduced or differs from the reconstructed one.
+type ReconciliationOrder struct {
+	JobID, InstanceID, RequestID, UpstreamRequestID                   string
+	SourceLogID, CreatedUnix, UserID, TokenID, ChannelID              int64
+	Username, TokenName, ChannelName, ModelName                       string
+	PromptTokens, CompletionTokens, CacheReadTokens, CacheWriteTokens int64
+	CalculatedQuota, LoggedQuota, QuotaDifference                     int64
+	CalculatedAmount, LoggedAmount, AmountDifference, Reason          string
+	DetectedAt                                                        time.Time
+}
+
 type RequestDetail struct {
 	InstanceID, JobID, RequestID, Username, TokenName, ChannelName, ModelName string
 	SourceLogID, CreatedUnix, UserID, TokenID, ChannelID                      int64
@@ -190,6 +217,13 @@ type UserDailyFile struct {
 	JobID, InstanceID, RelativePath, SHA256 string
 	BillDay                                 time.Time
 	UserID, FileSize                        int64
+	CreatedAt                               time.Time
+}
+
+type ChannelDailyFile struct {
+	JobID, InstanceID, RelativePath, SHA256 string
+	BillDay                                 time.Time
+	ChannelID, FileSize                     int64
 	CreatedAt                               time.Time
 }
 
@@ -250,10 +284,12 @@ type JobStore interface {
 	ListBillingModelMetadata(context.Context, string) ([]ModelMetadata, error)
 	ListBillingPrices(context.Context, string) ([]PriceRecord, error)
 	ListBillingGroupRatios(context.Context, string) ([]GroupRatio, error)
-	AppendBillingHour(context.Context, Job, JobStep, []DailyRow, []TokenDailyRow, []ChannelDailyRow, []RequestDetail, []AnomalyOrder, LogCursor, int64) error
+	AppendBillingHour(context.Context, Job, JobStep, []DailyRow, []TokenDailyRow, []ChannelDailyRow, []RequestDetail, []AnomalyOrder, []ReconciliationOrder, LogCursor, int64) error
 	CompleteBillingStep(context.Context, Job, JobStep, int64, int64) error
 	FailBillingStep(context.Context, Job, JobStep, error) error
 	FinalizeBillingJob(context.Context, Job) error
+	ClaimBillingPublish(context.Context) (Job, bool, error)
+	FailBillingPublish(context.Context, Job, error) error
 }
 
 type VerificationJobStore interface {
@@ -278,6 +314,10 @@ type UserDailyFileStore interface {
 	ListBillingRequestDetailGroups(context.Context, string) ([]UserDailyFile, error)
 	ListBillingRequestDetails(context.Context, string, time.Time, int64) ([]RequestDetail, error)
 	PutBillingUserDailyFile(context.Context, UserDailyFile) error
+	ListBillingChannelRequestDetailGroups(context.Context, string) ([]ChannelDailyFile, error)
+	ListBillingChannelRequestDetails(context.Context, string, time.Time, int64) ([]RequestDetail, error)
+	ListBillingChannelAnomalyDetails(context.Context, string, time.Time, int64) ([]AnomalyOrder, error)
+	PutBillingChannelDailyFile(context.Context, ChannelDailyFile) error
 }
 
 func NewJob(instanceID string, from, to time.Time, requestedBy string) (Job, []JobStep, error) {
@@ -317,6 +357,7 @@ type JobRunner struct {
 	Source    PageSource
 	Store     JobStore
 	Files     JobFileGenerator
+	Spool     DetailPageSpool
 	Poll      time.Duration
 	PagePause time.Duration
 }
@@ -345,8 +386,18 @@ func (r JobRunner) Run(ctx context.Context) error {
 
 func (r JobRunner) RunOnce(ctx context.Context) (bool, error) {
 	job, step, ok, err := r.Store.ClaimBillingStep(ctx)
-	if err != nil || !ok {
-		return ok, err
+	if err != nil {
+		return false, err
+	}
+	if !ok {
+		job, ok, err = r.Store.ClaimBillingPublish(ctx)
+		if err != nil || !ok {
+			return ok, err
+		}
+		if err = r.publishJob(ctx, job); err != nil {
+			_ = r.Store.FailBillingPublish(ctx, job, err)
+		}
+		return true, nil
 	}
 	if err = r.processStep(ctx, job, step); err != nil {
 		_ = r.Store.FailBillingStep(ctx, job, step, err)
@@ -358,6 +409,11 @@ func (r JobRunner) RunOnce(ctx context.Context) (bool, error) {
 func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error {
 	if job.JobType == "verify" {
 		return r.processVerificationStep(ctx, job, step)
+	}
+	if source, ok := r.Source.(BillingIndexSource); ok && job.JobType != "upstream_statement" {
+		if err := source.ValidateBillingIndexes(ctx, job.InstanceID, job.UserID > 0); err != nil {
+			return err
+		}
 	}
 	quotaPerUnit := defaultQuotaPerUnit
 	if source, ok := r.Source.(SnapshotSource); ok {
@@ -380,6 +436,20 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 	}
 	cursor := step.Cursor
 	var processed, abnormal int64
+	var upstreamChannelIDs []int64
+	if job.JobType == "upstream_statement" {
+		store, ok := r.Store.(statementChannelStore)
+		if !ok {
+			return fmt.Errorf("billing statement channel store unavailable")
+		}
+		allowed, channelErr := store.BillingStatementChannelIDs(ctx, job.ID)
+		if channelErr != nil {
+			return channelErr
+		}
+		for id := range allowed {
+			upstreamChannelIDs = append(upstreamChannelIDs, id)
+		}
+	}
 	for {
 		logs, e := ReadPageWithRetry(ctx, fmt.Sprintf("site=%s page=generate", job.InstanceID), cursor, func() ([]PagedLogRecord, error) {
 			if job.UserID > 0 {
@@ -389,6 +459,13 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 				}
 				return source.DetailedLogsPage(ctx, job.InstanceID, job.UserID, step.From, step.To, cursor, BillingPageSize)
 			}
+			if job.JobType == "upstream_statement" {
+				source, ok := r.Source.(UpstreamPageSource)
+				if !ok {
+					return nil, fmt.Errorf("billing upstream page source unavailable")
+				}
+				return source.DetailedChannelsLogsPage(ctx, job.InstanceID, upstreamChannelIDs, step.From, step.To, cursor, BillingPageSize)
+			}
 			return r.Source.LogsPage(ctx, job.InstanceID, step.From, step.To, cursor, BillingPageSize)
 		})
 		if e != nil {
@@ -397,6 +474,8 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 		if len(logs) == 0 {
 			break
 		}
+		pageLast := logs[len(logs)-1]
+		pageRows := int64(len(logs))
 		type key struct {
 			user         int64
 			model, group string
@@ -415,18 +494,22 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 		}
 		tokenAcc := map[tokenKey]TokenDailyRow{}
 		anomalies := []AnomalyOrder{}
+		mismatches := []ReconciliationOrder{}
 		requestDetails := []RequestDetail{}
 		for _, log := range logs {
 			reasons := AnomalyReasons(log, maxByModel[log.ModelName])
 			verification, pricingReason := VerifyLogChargeReason(log, quotaPerUnit)
-			if pricingReason != "" {
-				reasons = append(reasons, pricingReason)
-			}
 			if len(reasons) > 0 {
 				item := AnomalyOrder{InstanceID: job.InstanceID, SourceLogID: log.ID, JobID: job.ID, CreatedAt: time.Unix(log.CreatedUnix, 0), RequestID: log.RequestID, UpstreamRequestID: log.UpstreamRequestID, UserID: log.UserID, Username: log.Username, TokenID: log.TokenID, TokenName: log.TokenName, ChannelID: log.ChannelID, ChannelName: log.ChannelName, ModelName: log.ModelName, GroupName: log.GroupName, PromptTokens: SourcePromptTokens(log), CompletionTokens: log.CompletionTokens, CacheTokens: log.CacheTokens, CacheWriteTokens: log.CacheWriteTokens, CacheWrite5mTokens: log.CacheWrite5mTokens, CacheWrite1hTokens: log.CacheWrite1hTokens, Quota: log.Quota, MaxContextTokens: maxByModel[log.ModelName], Reasons: strings.Join(reasons, ","), DetectedAt: time.Now().UTC()}
 				fillAnomalyCharge(&item, verification.Charge)
 				anomalies = append(anomalies, item)
 				continue
+			}
+			if pricingReason != "" && (job.JobType == "user_statement" || job.JobType == "upstream_statement") {
+				mismatches = append(mismatches, NewReconciliationOrder(job, log, verification, pricingReason, quotaPerUnit))
+			}
+			if pricingReason == PricingReasonIncomplete {
+				verification = FallbackLogCharge(log, quotaPerUnit)
 			}
 			requestDetails = append(requestDetails, RequestDetail{
 				InstanceID: job.InstanceID, JobID: job.ID, SourceLogID: log.ID, CreatedUnix: log.CreatedUnix, BillDay: dateOnly(step.From), RequestID: log.RequestID,
@@ -501,11 +584,15 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 		for _, row := range tokenAcc {
 			tokenRows = append(tokenRows, row)
 		}
-		last := logs[len(logs)-1]
-		cursor = LogCursor{last.CreatedUnix, last.ID}
-		processed += int64(len(logs))
+		cursor = LogCursor{pageLast.CreatedUnix, pageLast.ID}
+		processed += pageRows
 		abnormal += int64(len(anomalies))
-		if e = r.Store.AppendBillingHour(ctx, job, step, rows, tokenRows, channelRows, requestDetails, anomalies, cursor, int64(len(logs))); e != nil {
+		if r.Spool != nil {
+			if e = r.Spool.WritePage(ctx, job, step, cursor, requestDetails); e != nil {
+				return e
+			}
+		}
+		if e = r.Store.AppendBillingHour(ctx, job, step, rows, tokenRows, channelRows, requestDetails, anomalies, mismatches, cursor, pageRows); e != nil {
 			return e
 		}
 		if len(logs) < BillingPageSize {
@@ -524,50 +611,56 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 	if err = r.Store.CompleteBillingStep(ctx, job, step, processed, abnormal); err != nil {
 		return err
 	}
-	latest, err := r.Store.BillingJob(ctx, job.ID)
-	if err == nil && (latest.Status == "pending" || latest.Status == "running") && latest.CompletedSteps >= latest.TotalSteps {
-		if source, ok := r.Source.(SnapshotSource); ok {
-			if store, ok := r.Store.(SnapshotStore); ok {
-				raw, snapshotErr := source.RatioSnapshot(ctx, job.InstanceID)
-				if snapshotErr != nil {
-					return snapshotErr
+	return nil
+}
+
+func (r JobRunner) publishJob(ctx context.Context, job Job) error {
+	if source, ok := r.Source.(SnapshotSource); ok {
+		if store, ok := r.Store.(SnapshotStore); ok {
+			raw, err := source.RatioSnapshot(ctx, job.InstanceID)
+			if err != nil {
+				return err
+			}
+			balances, err := source.Balances(ctx, job.InstanceID)
+			if err != nil {
+				return err
+			}
+			for day := dateOnly(job.From); day.Before(job.To); day = day.AddDate(0, 0, 1) {
+				if err = store.PutBillingRatioSnapshot(ctx, job.InstanceID, day, raw); err != nil {
+					return err
 				}
-				balances, balanceErr := source.Balances(ctx, job.InstanceID)
-				if balanceErr != nil {
-					return balanceErr
+				if err = store.PutBillingBalanceSnapshots(ctx, job.InstanceID, day, balances); err != nil {
+					return err
 				}
-				for day := dateOnly(job.From); day.Before(job.To); day = day.AddDate(0, 0, 1) {
-					if snapshotErr = store.PutBillingRatioSnapshot(ctx, job.InstanceID, day, raw); snapshotErr != nil {
-						return snapshotErr
-					}
-					if snapshotErr = store.PutBillingBalanceSnapshots(ctx, job.InstanceID, day, balances); snapshotErr != nil {
-						return snapshotErr
-					}
-				}
-				quotaPerUnit, quotaErr := quotaPerUnitForReport(raw)
-				if quotaErr != nil {
-					return quotaErr
-				}
-				if anomalyStore, ok := r.Store.(anomalyActualAmountStore); ok {
-					if snapshotErr = anomalyStore.UpdateBillingAnomalyActualAmounts(ctx, job.ID, quotaPerUnit); snapshotErr != nil {
-						return snapshotErr
-					}
+			}
+			quotaPerUnit, err := quotaPerUnitForReport(raw)
+			if err != nil {
+				return err
+			}
+			if anomalyStore, ok := r.Store.(anomalyActualAmountStore); ok {
+				if err = anomalyStore.UpdateBillingAnomalyActualAmounts(ctx, job.ID, quotaPerUnit); err != nil {
+					return err
 				}
 			}
 		}
-		if err = r.Store.FinalizeBillingJob(ctx, latest); err != nil {
-			return err
-		}
-		// Files are delivery artifacts, not the source of truth. Workbook
-		// failures must not hide a successfully calculated and activated bill.
-		if r.Files != nil {
-			if fileErr := r.Files.GenerateJobFiles(ctx, job); fileErr != nil {
-				log.Printf("billing file generation job=%s: %v", job.ID, fileErr)
-			}
-		}
-		return nil
 	}
-	return err
+	if r.Files != nil {
+		if err := r.Files.GenerateJobFiles(ctx, job); err != nil {
+			return fmt.Errorf("generate billing files: %w", err)
+		}
+	}
+	if err := r.Store.FinalizeBillingJob(ctx, job); err != nil {
+		return err
+	}
+	if r.Spool != nil {
+		if err := r.Spool.RemoveJob(ctx, job); err != nil {
+			// The bill is already activated and all checksummed delivery files
+			// exist. Staging cleanup is best effort and can be retried by the
+			// retention worker without invalidating the bill.
+			return nil
+		}
+	}
+	return nil
 }
 
 func (r JobRunner) processVerificationStep(ctx context.Context, job Job, step JobStep) error {
@@ -698,20 +791,10 @@ func fillAnomalyCharge(out *AnomalyOrder, charge LogCharge) {
 // reimplementing token validation.
 func AnomalyReasons(log PagedLogRecord, maxContext int64) []string {
 	r := []string{}
-	inputTokens := SourcePromptTokens(log)
-	if !inputTokens.Valid {
-		r = append(r, "input_token_missing")
-	} else if inputTokens.Int64 <= 0 {
-		r = append(r, "input_token_zero")
-	}
 	if !log.CompletionTokens.Valid {
 		r = append(r, "output_token_missing")
 	} else if log.CompletionTokens.Int64 <= 0 {
 		r = append(r, "output_token_zero")
-	}
-	contextTokens := RequestContextTokens(log)
-	if log.PromptTokens.Valid && maxContext > 0 && contextTokens > maxContext {
-		r = append(r, "context_limit_exceeded")
 	}
 	return r
 }

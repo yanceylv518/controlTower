@@ -18,6 +18,14 @@ func TestBuildUpstreamGroupsMergesMembersAndKeepsUnmapped(t *testing.T) {
 	}
 }
 
+func TestApplyUpstreamAnomaliesKeepsAnomalyOnlyHistoricalChannel(t *testing.T) {
+	groups := []UpstreamGroup{{UpstreamFP: "fp", Members: []UpstreamMember{{ChannelID: 1}}}}
+	groups = ApplyUpstreamAnomalies(groups, nil, []ChannelAnomalyRow{{ChannelID: 9, ChannelName: "历史渠道", Rows: 2, Amount: "1.250000"}})
+	if len(groups) != 2 || groups[1].Members[0].ChannelID != 9 || groups[1].Totals.AbnormalRows != 2 || groups[1].Totals.AbnormalAmount != "1.250000" {
+		t.Fatalf("groups=%#v", groups)
+	}
+}
+
 func TestMergeUpstreamDetailsAddsSameModelAcrossChannels(t *testing.T) {
 	day := time.Now()
 	out := MergeUpstreamDetails([]AggregateRow{{UserID: 1, Day: day, ModelName: "m", RequestCount: 2, Quota: 3}, {UserID: 2, Day: day, ModelName: "m", RequestCount: 5, Quota: 7}})

@@ -16,6 +16,7 @@ type ConfiguredChannel struct {
 	ChannelID   int64  `json:"channel_id"`
 	ChannelName string `json:"channel_name"`
 	Status      int    `json:"status"`
+	Models      string `json:"models"`
 }
 type ChannelSummary struct {
 	ChannelID        int64    `json:"channel_id"`

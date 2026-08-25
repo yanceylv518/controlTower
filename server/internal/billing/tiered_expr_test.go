@@ -67,3 +67,25 @@ func TestTieredExpressionNeverFallsBackToRatios(t *testing.T) {
 		t.Fatalf("reason = %q, want %q", reason, PricingReasonIncomplete)
 	}
 }
+
+func TestTieredExpressionExposesUnusedCacheReadUnitPrice(t *testing.T) {
+	log := tieredLog(`tier("peak", p * 1.5 + c * 4.5 + cr * 0.3 + cc * 1.8)`, time.Date(2026, 8, 24, 10, 0, 0, 0, BusinessLocation))
+	log.SourcePromptTokens = sql.NullInt64{Int64: 5, Valid: true}
+	log.PromptTokens = sql.NullInt64{Int64: 5, Valid: true}
+	log.CompletionTokens = sql.NullInt64{Int64: 10, Valid: true}
+	log.CacheTokens, log.CacheWriteTokens = 0, 0
+	log.Quota = 26
+	result, err := VerifyLogCharge(log, "500000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Verified {
+		t.Fatalf("charge was not verified: %+v", result)
+	}
+	if result.Charge.CacheReadPrice != "0.300000" || result.Charge.CacheReadAmount != "0.000000" {
+		t.Fatalf("unexpected zero-usage cache read pricing: %+v", result.Charge)
+	}
+	if result.Charge.CacheWritePrice != "1.800000" || result.Charge.CacheWriteAmount != "0.000000" {
+		t.Fatalf("unexpected zero-usage cache write pricing: %+v", result.Charge)
+	}
+}

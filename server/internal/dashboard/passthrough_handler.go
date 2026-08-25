@@ -115,6 +115,71 @@ func (h *PassthroughHandler) ChannelLogsPageForBilling(ctx context.Context, site
 	return h.logsPageForBilling(ctx, site, 0, channelID, -1, start, end, cursor, limit)
 }
 
+func (h *PassthroughHandler) DetailedChannelsLogsPageForBilling(ctx context.Context, site string, channelIDs []int64, start, end time.Time, cursor billing.LogCursor, limit int) ([]billing.PagedLogRecord, error) {
+	items := make([]billing.PagedLogRecord, 0, limit*len(channelIDs))
+	for _, channelID := range channelIDs {
+		rows, err := h.ChannelLogsPageForBilling(ctx, site, channelID, start, end, cursor, limit)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, rows...)
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	return items, nil
+}
+
+func (h *PassthroughHandler) ValidateBillingIndexes(ctx context.Context, site string, userScoped bool) error {
+	db, configured, err := h.database(site)
+	if err != nil {
+		return err
+	}
+	if !configured {
+		return fmt.Errorf("readonly database is not configured for %s", site)
+	}
+	queryCtx, cancel := context.WithTimeout(ctx, readonlyQueryTimeout)
+	defer cancel()
+	rows, err := db.QueryContext(queryCtx, `SELECT INDEX_NAME,SEQ_IN_INDEX,COLUMN_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='logs' ORDER BY INDEX_NAME,SEQ_IN_INDEX`)
+	if err != nil {
+		return fmt.Errorf("billing index inspection site=%s: %w", site, err)
+	}
+	defer rows.Close()
+	indexes := map[string][]string{}
+	for rows.Next() {
+		var name, column string
+		var sequence int
+		if err = rows.Scan(&name, &sequence, &column); err != nil {
+			return err
+		}
+		indexes[name] = append(indexes[name], strings.ToLower(column))
+	}
+	hasPrefix := func(prefix ...string) bool {
+		for _, columns := range indexes {
+			if len(columns) < len(prefix) {
+				continue
+			}
+			matched := true
+			for i := range prefix {
+				matched = matched && columns[i] == prefix[i]
+			}
+			if matched {
+				return true
+			}
+		}
+		return false
+	}
+	if userScoped {
+		if !hasPrefix("user_id", "id") && !hasPrefix("user_id", "created_at", "id") {
+			return fmt.Errorf("newapi logs requires an index beginning with (user_id,id) for user billing")
+		}
+	} else if !hasPrefix("created_at", "id") {
+		return fmt.Errorf("newapi logs requires an index beginning with (created_at,id)")
+	}
+	return rows.Err()
+}
+
 const billingLogsPageTimeout = 2 * time.Minute
 
 func (h *PassthroughHandler) logsPageForBilling(ctx context.Context, site string, userID, channelID, tokenID int64, start, end time.Time, cursor billing.LogCursor, limit int) ([]billing.PagedLogRecord, error) {
@@ -134,11 +199,7 @@ func (h *PassthroughHandler) logsPageForBilling(ctx context.Context, site string
 	query, idCursor := billingLogsPageQuery(userID, channelID, tokenID)
 	args := []any{start.Unix(), end.Unix()}
 	if userID > 0 {
-		// Bound the user/id walk to the requested time window. The scalar
-		// boundary lookups use idx_created_at_id and the main scan uses
-		// idx_user_id_id, avoiding both a full user-history walk and a scan of
-		// every site's row in the requested month.
-		args = append(args, cursor.ID, start.Unix(), end.Unix())
+		args = append(args, cursor.ID)
 	} else if idCursor {
 		args = append(args, cursor.ID)
 	} else {
@@ -209,10 +270,9 @@ func billingLogsPageQuery(userID, channelID, tokenID int64) (string, bool) {
 		from += ` FORCE INDEX (idx_user_id_id)`
 	}
 	query := `SELECT l.id,l.created_at,COALESCE(l.request_id,''),COALESCE(l.upstream_request_id,''),l.user_id,COALESCE(l.username,''),COALESCE(l.token_id,0),COALESCE(l.token_name,''),COALESCE(l.channel_id,0),COALESCE(c.name,''),COALESCE(l.model_name,''),COALESCE(l.` + "`group`" + `,''),l.prompt_tokens,l.completion_tokens,l.quota,` + billingOtherProjection + from + ` LEFT JOIN channels c ON c.id=l.channel_id WHERE l.type=2 AND l.created_at>=? AND l.created_at<?`
-	// User exports combine two existing indexes without changing new-api:
-	// idx_created_at_id supplies cheap scalar ID bounds and idx_user_id_id
-	// pages only that user's rows inside those bounds. Channel exports keep
-	// their existing ID path; unfiltered generation keeps its time keyset.
+	// User jobs page directly through idx_user_id_id. The date predicate is
+	// evaluated inside that one user's rows, so a single-user statement does
+	// not require the site-wide idx_created_at_id index.
 	idCursor := userID > 0 || channelID > 0
 	if idCursor {
 		query += ` AND l.id>?`
@@ -220,8 +280,6 @@ func billingLogsPageQuery(userID, channelID, tokenID int64) (string, bool) {
 		query += ` AND (l.created_at>? OR (l.created_at=? AND l.id>?))`
 	}
 	if userID > 0 {
-		query += ` AND l.id>=COALESCE((SELECT lower_bound.id FROM logs lower_bound FORCE INDEX (idx_created_at_id) WHERE lower_bound.created_at>=? ORDER BY lower_bound.created_at,lower_bound.id LIMIT 1),0)`
-		query += ` AND l.id<COALESCE((SELECT upper_bound.id FROM logs upper_bound FORCE INDEX (idx_created_at_id) WHERE upper_bound.created_at>=? ORDER BY upper_bound.created_at,upper_bound.id LIMIT 1),9223372036854775807)`
 		query += ` AND l.user_id=?`
 	}
 	if channelID > 0 {
@@ -349,7 +407,7 @@ func (h *PassthroughHandler) CurrentChannelsForBilling(ctx context.Context, site
 	if !configured {
 		return nil, fmt.Errorf("readonly database is not configured for %s", site)
 	}
-	rows, err := db.QueryContext(ctx, `SELECT id,COALESCE(name,''),status FROM channels ORDER BY id`)
+	rows, err := db.QueryContext(ctx, `SELECT id,COALESCE(name,''),status,COALESCE(models,'') FROM channels ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -357,7 +415,7 @@ func (h *PassthroughHandler) CurrentChannelsForBilling(ctx context.Context, site
 	items := []billing.ConfiguredChannel{}
 	for rows.Next() {
 		var item billing.ConfiguredChannel
-		if err = rows.Scan(&item.ChannelID, &item.ChannelName, &item.Status); err != nil {
+		if err = rows.Scan(&item.ChannelID, &item.ChannelName, &item.Status, &item.Models); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
@@ -428,6 +486,9 @@ func (h *PassthroughHandler) UpstreamChannelMappingsForBilling(ctx context.Conte
 func (s BillingReadonlySource) LogsPage(ctx context.Context, site string, start, end time.Time, cursor billing.LogCursor, limit int) ([]billing.PagedLogRecord, error) {
 	return s.Handler.LogsPageForBilling(ctx, site, start, end, cursor, limit)
 }
+func (s BillingReadonlySource) ValidateBillingIndexes(ctx context.Context, site string, userScoped bool) error {
+	return s.Handler.ValidateBillingIndexes(ctx, site, userScoped)
+}
 func (s BillingReadonlySource) DetailedLogsPage(ctx context.Context, site string, userID int64, start, end time.Time, cursor billing.LogCursor, limit int) ([]billing.PagedLogRecord, error) {
 	return s.Handler.DetailedLogsPageForBilling(ctx, site, userID, start, end, cursor, limit)
 }
@@ -439,6 +500,9 @@ func (s BillingReadonlySource) UpstreamChannelMappings(ctx context.Context, site
 }
 func (s BillingReadonlySource) ChannelLogsPage(ctx context.Context, site string, channelID int64, start, end time.Time, cursor billing.LogCursor, limit int) ([]billing.PagedLogRecord, error) {
 	return s.Handler.ChannelLogsPageForBilling(ctx, site, channelID, start, end, cursor, limit)
+}
+func (s BillingReadonlySource) DetailedChannelsLogsPage(ctx context.Context, site string, channelIDs []int64, start, end time.Time, cursor billing.LogCursor, limit int) ([]billing.PagedLogRecord, error) {
+	return s.Handler.DetailedChannelsLogsPageForBilling(ctx, site, channelIDs, start, end, cursor, limit)
 }
 
 func (s BillingReadonlySource) Logs(ctx context.Context, site string, start, end time.Time) ([]billing.LogRecord, error) {

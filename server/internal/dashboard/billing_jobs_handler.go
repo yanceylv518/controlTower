@@ -93,10 +93,14 @@ func (h BillingJobsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				writeDashboardError(w, http.StatusInternalServerError, "billing_job_delete_failed")
 				return
 			}
+			// Database deletion and local spool cleanup are intentionally separate:
+			// the task is already gone even if an operator must later remove an
+			// unreadable staging directory manually.
+			_ = (billing.FileDetailSpool{}).RemoveJob(r.Context(), job)
 			writeDashboardJSON(w, http.StatusOK, map[string]any{"deleted": true, "id": id})
 			return
 		}
-		if job.Status != "pending" && job.Status != "running" {
+		if job.Status != "pending" && job.Status != "running" && job.Status != "publishing" {
 			writeDashboardError(w, http.StatusConflict, "billing_job_not_active")
 			return
 		}
@@ -120,7 +124,7 @@ func (h BillingJobsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				limit = 200
 			}
 			status := strings.TrimSpace(r.URL.Query().Get("status"))
-			if status != "" && status != "pending" && status != "running" && status != "complete" && status != "failed" {
+			if status != "" && status != "pending" && status != "running" && status != "publishing" && status != "complete" && status != "failed" {
 				writeDashboardError(w, 400, "invalid_status")
 				return
 			}
@@ -179,29 +183,30 @@ func (h BillingJobsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	requestKey := billingRequestKey(req.InstanceID, scope+fmt.Sprintf(":%d", req.UserID), from, to)
+	replaceCompletedRequest := false
 	jobType := "generate"
 	if scope == "channel" {
 		jobType = "channel_generate"
 	}
-	// Generate is the sole write entry: any covered range (exact match
-	// included) 409s into the UI's view-or-regenerate dialog. It runs before
-	// request-key reuse so reuse keeps only its real job — deduplicating
-	// concurrent submits of a range whose job is still pending/running.
+	// A completed task's requested range is not proof that every day still has
+	// an active bill: non-forced tasks can contain only the missing-day steps.
+	// Reuse request keys solely to deduplicate concurrent pending/running work;
+	// actual coverage is decided below from the per-day active-version ledger.
 	if !req.Force {
-		if covered, coverErr := h.Store.LatestCoveringBillingJob(r.Context(), req.InstanceID, jobType, from, to); scope != "user" && coverErr == nil {
+		if covered, coverErr := h.Store.LatestCoveringBillingJob(r.Context(), req.InstanceID, jobType, from, to); scope == "channel" && coverErr == nil {
 			writeDashboardJSON(w, http.StatusConflict, map[string]any{"error": "billing_range_already_covered", "covering_job": covered})
 			return
-		} else if scope != "user" && coverErr != sql.ErrNoRows {
+		} else if scope == "channel" && coverErr != sql.ErrNoRows {
 			writeDashboardError(w, 500, "billing_job_query_failed")
 			return
 		}
 		existing, findErr := h.Store.BillingJobByRequestKey(r.Context(), requestKey)
 		if findErr == nil {
-			if existing.Status != "failed" {
+			if existing.Status == "pending" || existing.Status == "running" || existing.Status == "publishing" {
 				writeDashboardJSON(w, http.StatusOK, map[string]any{"accepted": true, "reused": true, "job": existing})
 				return
 			}
-			req.Force = true
+			replaceCompletedRequest = true
 		}
 		if findErr != nil && findErr != sql.ErrNoRows {
 			writeDashboardError(w, 500, "billing_job_query_failed")
@@ -278,6 +283,8 @@ func (h BillingJobsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Force {
 		job.RequestKey = requestKey + ":force:" + job.ID
+	} else if replaceCompletedRequest {
+		job.RequestKey = requestKey + ":missing:" + job.ID
 	} else {
 		job.RequestKey = requestKey
 	}
