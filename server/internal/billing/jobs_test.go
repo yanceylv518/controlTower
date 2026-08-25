@@ -33,7 +33,7 @@ func TestNewJobPreservesShanghaiRangeAsUTCInstants(t *testing.T) {
 }
 
 func TestNewJobAlignsPartialStepsWithoutCrossingMidnight(t *testing.T) {
-	from := time.Date(2026, 8, 1, 23, 30, 0, 0, time.Local)
+	from := time.Date(2026, 8, 1, 23, 30, 0, 0, BusinessLocation)
 	job, steps, err := NewJob("site-a", from, from.Add(time.Hour), "admin")
 	if err != nil {
 		t.Fatal(err)
@@ -47,7 +47,7 @@ func TestNewJobAlignsPartialStepsWithoutCrossingMidnight(t *testing.T) {
 }
 
 func TestNewJobRejectsMoreThanSixtyDays(t *testing.T) {
-	from := time.Date(2026, 8, 1, 0, 0, 0, 0, time.Local)
+	from := time.Date(2026, 8, 1, 0, 0, 0, 0, BusinessLocation)
 	if _, _, err := NewJob("site-a", from, from.AddDate(0, 0, 61), "admin"); err == nil {
 		t.Fatal("expected a range longer than 60 days to be rejected")
 	}
