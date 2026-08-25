@@ -28,3 +28,7 @@ NewJob 两测试用 time.Local 造时间——codex Windows(东八区)本机绿,
 ## 部署
 
 迁移 048-060 增量+058 有界 cutover;**旧非空账单日启动后标 needs_regeneration,按新任务流程重生成**;下载路由改预生成文件（旧实时扫描路由已移除）。rc67 不含本系列。
+
+## 端到端实测结论（烟测栈,真库真文件）
+
+user_statement 全链路走通：创建入队（accepted）→ runner 拾取执行（1 步完成）→ billing_statements 登记（normal_orders=3 与种子数据吻合,UTC 区间=沪时 8/20 全天）→ 结果接口返回 日×模型×渠道 汇总（**金额 0.476400 与种子 quota/QuotaPerUnit 换算逐位吻合**、折扣 1.0 应用、count_balanced=true、明细 XLSX 文件名已登记）。过程中顺带三次实证"失败任务不占查重键,同参可重建"设计（schema 缺列致前两次失败,重建即重新入队）。旧 generate 任务的历史失败记录与新任务共存无干扰。
