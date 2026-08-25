@@ -20,3 +20,4 @@ mysql-test.config.ps1
 .idea/
 .DS_Store
 Thumbs.db
+data/
