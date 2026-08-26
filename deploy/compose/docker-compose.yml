@@ -55,6 +55,8 @@ services:
       CT_BILLING_PAGE_PAUSE_MILLISECONDS: ${CT_BILLING_PAGE_PAUSE_MILLISECONDS:-500}
     ports:
       - "8080:8080"
+    volumes:
+      - ct-billing-data:/app/data
     logging:
       options:
         max-size: 50m
@@ -62,3 +64,4 @@ services:
 
 volumes:
   ct-mysql-data:
+  ct-billing-data:

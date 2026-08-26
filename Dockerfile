@@ -33,6 +33,11 @@ COPY --from=server-builder --chown=1001:1001 /out/control-tower-server ./control
 COPY --from=server-builder --chown=1001:1001 /src/server/migrations/ ./server/migrations/
 COPY --from=web-builder --chown=1001:1001 /src/web/dist/desktop/ ./web/dist/desktop/
 
+# Billing tasks write staging files and generated ZIPs below /app/data.
+# Create the directory before dropping privileges so the runtime user can write it.
+RUN mkdir -p /app/data \
+    && chown -R 1001:1001 /app/data
+
 USER 1001:1001
 
 EXPOSE 8080
