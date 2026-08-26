@@ -29,7 +29,10 @@ const sites = computed(() => [
   ),
 ]);
 watch(sites, (available) => {
-  if (auth.user?.role !== "viewer" && !available.includes(filters.site_id)) filters.selectSite(available[0] || "");
+  // The immediate watcher runs before loadInstances() has populated the list.
+  // Do not erase the persisted selection during that initial empty state.
+  if (!filters.loaded || available.length === 0) return;
+  if (auth.user?.role !== "viewer" && !available.includes(filters.site_id)) filters.selectSite(available[0]);
 }, { immediate: true });
 </script>
 
