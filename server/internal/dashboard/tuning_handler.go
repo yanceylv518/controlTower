@@ -21,6 +21,11 @@ type ChannelBaseValueStore interface {
 type ContinuousStateStore interface {
 	ListContinuousStates(string) ([]tuning.ContinuousState, error)
 }
+type BasePrioritySyncStore interface {
+	ChannelBaseValueStore
+	ContinuousStateStore
+	CreateContinuousWeightChange(tuning.Recommendation, string, time.Time) (string, error)
+}
 type TuningPreflightStore interface {
 	CreateTuningPreflight(string, int64, string, time.Time) (storage.ChannelCommand, error)
 	GetTuningPreflight(string, string) (storage.ChannelCommand, bool, error)
@@ -102,9 +107,22 @@ func (h Handler) HandleTuningBaseValues(w http.ResponseWriter, r *http.Request) 
 			}
 			seen[v.ChannelID] = struct{}{}
 		}
-		if err := store.SaveChannelBaseValues(id, ctauth.Actor(r), req.Items, time.Now().UTC()); err != nil {
+		before, err := store.ListChannelBaseValues(id, "")
+		if err != nil {
+			writeDashboardError(w, 500, "query_failed")
+			return
+		}
+		now := time.Now().UTC()
+		actor := ctauth.Actor(r)
+		if err = store.SaveChannelBaseValues(id, actor, req.Items, now); err != nil {
 			writeDashboardError(w, 500, "save_failed")
 			return
+		}
+		if syncStore, supported := h.tuningStore.(BasePrioritySyncStore); supported {
+			if err = syncSavedBasePriorities(syncStore, id, actor, req.Items, before, now); err != nil {
+				writeDashboardError(w, 500, "priority_sync_failed")
+				return
+			}
 		}
 		items, err := store.ListChannelBaseValues(id, "")
 		if err != nil {
@@ -115,6 +133,46 @@ func (h Handler) HandleTuningBaseValues(w http.ResponseWriter, r *http.Request) 
 	default:
 		writeDashboardError(w, 405, "method_not_allowed")
 	}
+}
+
+func syncSavedBasePriorities(store BasePrioritySyncStore, siteID, actor string, saved, before []tuning.ChannelBaseValue, now time.Time) error {
+	current := make(map[int64]tuning.ChannelBaseValue, len(before))
+	for _, value := range before {
+		current[value.ChannelID] = value
+	}
+	states, err := store.ListContinuousStates(siteID)
+	if err != nil {
+		return err
+	}
+	phases := make(map[int64]string, len(states))
+	for _, state := range states {
+		phases[state.ChannelID] = state.Phase
+	}
+	for _, value := range saved {
+		phase := phases[value.ChannelID]
+		if phase == "circuit" || phase == "probing" {
+			continue
+		}
+		observed := current[value.ChannelID]
+		if observed.ChannelID == 0 {
+			observed = value
+		}
+		if value.BasePriority == observed.CurrentPriority {
+			continue
+		}
+		currentPriority, proposedPriority := observed.CurrentPriority, value.BasePriority
+		rec := tuning.Recommendation{
+			ID: tuning.NewID(now, siteID, value.ChannelID, "base_priority_sync"), InstanceID: siteID,
+			ChannelID: value.ChannelID, ChannelName: observed.ChannelName, CreatedAt: now, Rule: "base_priority_sync",
+			Evidence:      map[string]any{"model": value.ModelName, "trigger": "base_value_saved"},
+			CurrentWeight: observed.CurrentWeight, ProposedWeight: observed.CurrentWeight,
+			CurrentPriority: &currentPriority, ProposedPriority: &proposedPriority, ModeAtCreation: "manual", Status: "recorded",
+		}
+		if _, err = store.CreateContinuousWeightChange(rec, actor, now); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (h Handler) HandleTuningBaseValuesSync(w http.ResponseWriter, r *http.Request) {

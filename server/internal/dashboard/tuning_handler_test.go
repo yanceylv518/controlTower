@@ -23,6 +23,8 @@ type tuningStub struct {
 	preflight       storage.ChannelCommand
 	preflightStatus string
 	preflightError  string
+	states          []tuning.ContinuousState
+	priorityWrites  []tuning.Recommendation
 }
 
 func (s *tuningStub) GetPolicy(string) (tuning.PolicyRecord, bool, error) {
@@ -51,6 +53,13 @@ func (s *tuningStub) SaveChannelBaseValues(_ string, _ string, values []tuning.C
 	s.baseSaved = append([]tuning.ChannelBaseValue(nil), values...)
 	s.baseValues = append([]tuning.ChannelBaseValue(nil), values...)
 	return nil
+}
+func (s *tuningStub) ListContinuousStates(string) ([]tuning.ContinuousState, error) {
+	return s.states, nil
+}
+func (s *tuningStub) CreateContinuousWeightChange(value tuning.Recommendation, _ string, _ time.Time) (string, error) {
+	s.priorityWrites = append(s.priorityWrites, value)
+	return "command-1", nil
 }
 func (s *tuningStub) SyncChannelBaseValues(_ string, models []string) ([]tuning.ChannelBaseValue, error) {
 	s.syncModels = append([]string(nil), models...)
@@ -160,5 +169,28 @@ func TestTuningBaseValuesSyncDoesNotPersistAndPutValidates(t *testing.T) {
 	h.HandleTuningBaseValues(rr, httptest.NewRequest(http.MethodPut, "/api/dashboard/tuning/base-values?instance_id=i", bytes.NewBufferString(`{"items":[{"channel_id":7,"model_name":"m","base_weight":10,"base_priority":3}]}`)))
 	if rr.Code != http.StatusOK || len(s.baseSaved) != 1 {
 		t.Fatalf("valid values must persist: %d %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestSavingBasePrioritySyncsOnlineUnlessChannelIsCircuiting(t *testing.T) {
+	now := time.Now().UTC()
+	before := []tuning.ChannelBaseValue{
+		{ChannelID: 7, ChannelName: "normal", ModelName: "m", BaseWeight: 10, BasePriority: 1, CurrentWeight: 8, CurrentPriority: 1},
+		{ChannelID: 8, ChannelName: "circuit", ModelName: "m", BaseWeight: 10, BasePriority: 1, CurrentWeight: 0, CurrentPriority: 0},
+	}
+	s := &tuningStub{baseValues: before, states: []tuning.ContinuousState{{ChannelID: 8, Phase: "circuit"}}}
+	h := NewHandler(nil).WithTuningStore(s)
+	body := `{"items":[{"channel_id":7,"channel_name":"normal","model_name":"m","base_weight":10,"base_priority":3},{"channel_id":8,"channel_name":"circuit","model_name":"m","base_weight":10,"base_priority":4}]}`
+	rr := httptest.NewRecorder()
+	h.HandleTuningBaseValues(rr, httptest.NewRequest(http.MethodPut, "/api/dashboard/tuning/base-values?site_id=i", bytes.NewBufferString(body)))
+	if rr.Code != http.StatusOK || len(s.priorityWrites) != 1 {
+		t.Fatalf("expected only normal channel priority sync: %d %s %#v", rr.Code, rr.Body.String(), s.priorityWrites)
+	}
+	write := s.priorityWrites[0]
+	if write.ChannelID != 7 || write.CurrentPriority == nil || *write.CurrentPriority != 1 || write.ProposedPriority == nil || *write.ProposedPriority != 3 || write.Rule != "base_priority_sync" || write.CreatedAt.Before(now.Add(-time.Minute)) {
+		t.Fatalf("unexpected priority sync: %#v", write)
+	}
+	if len(s.baseSaved) != 2 || s.baseSaved[1].BasePriority != 4 {
+		t.Fatalf("circuit channel must still save latest base priority: %#v", s.baseSaved)
 	}
 }

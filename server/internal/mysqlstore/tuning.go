@@ -264,6 +264,9 @@ func (s Store) PutContinuousState(v tuning.ContinuousState) error {
 }
 
 func (s Store) CreateContinuousWeightChange(v tuning.Recommendation, actor string, now time.Time) (string, error) {
+	if v.Rule == "base_priority_sync" && (v.CurrentPriority == nil || v.ProposedPriority == nil) {
+		return "", fmt.Errorf("base priority sync requires current and proposed priority")
+	}
 	tx, err := s.db.BeginTx(context.Background(), nil)
 	if err != nil {
 		return "", err
@@ -275,8 +278,11 @@ func (s Store) CreateContinuousWeightChange(v tuning.Recommendation, actor strin
 	}
 	ev, _ := json.Marshal(v.Evidence)
 	commandID := randomCommandID()
-	payloadValues := map[string]any{"weight": v.ProposedWeight}
-	if v.ProposedPriority != nil && (v.Rule == "circuit_opened" || v.Rule == "circuit_recovered") {
+	payloadValues := map[string]any{}
+	if v.Rule != "base_priority_sync" {
+		payloadValues["weight"] = v.ProposedWeight
+	}
+	if v.ProposedPriority != nil && (v.Rule == "circuit_opened" || v.Rule == "circuit_recovered" || v.Rule == "base_priority_sync") {
 		payloadValues["priority"] = *v.ProposedPriority
 	}
 	payload, _ := json.Marshal(payloadValues)
@@ -288,6 +294,10 @@ func (s Store) CreateContinuousWeightChange(v tuning.Recommendation, actor strin
 	}
 	before := fmt.Sprintf(`{"weight":%d}`, v.CurrentWeight)
 	after := fmt.Sprintf(`{"weight":%d,"command_id":%q}`, v.ProposedWeight, commandID)
+	if v.Rule == "base_priority_sync" {
+		before = fmt.Sprintf(`{"priority":%d}`, *v.CurrentPriority)
+		after = fmt.Sprintf(`{"priority":%d,"command_id":%q}`, *v.ProposedPriority, commandID)
+	}
 	if _, err = tx.Exec(`INSERT INTO operation_audits(id,instance_id,operation_type,target_type,target_id,actor_id,before_summary,after_summary,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, commandID, v.InstanceID, "tuning.auto_execute", "channel", fmt.Sprint(v.ChannelID), actor, before, after, "success", now); err != nil {
 		return "", err
 	}
@@ -325,6 +335,9 @@ func (s Store) CreateContinuousProbe(v tuning.Recommendation, model string, coun
 // server already executed against new-api: the recommendation row, a terminal
 // channel_commands row (never delivered to an agent), and the audit entry.
 func (s Store) RecordDirectWeightChange(v tuning.Recommendation, actor string, now time.Time) (string, error) {
+	if v.Rule == "base_priority_sync" && (v.CurrentPriority == nil || v.ProposedPriority == nil) {
+		return "", fmt.Errorf("base priority sync requires current and proposed priority")
+	}
 	tx, err := s.db.BeginTx(context.Background(), nil)
 	if err != nil {
 		return "", err
@@ -336,8 +349,11 @@ func (s Store) RecordDirectWeightChange(v tuning.Recommendation, actor string, n
 	}
 	ev, _ := json.Marshal(v.Evidence)
 	commandID := randomCommandID()
-	payloadValues := map[string]any{"weight": v.ProposedWeight}
-	if v.ProposedPriority != nil && (v.Rule == "circuit_opened" || v.Rule == "circuit_recovered") {
+	payloadValues := map[string]any{}
+	if v.Rule != "base_priority_sync" {
+		payloadValues["weight"] = v.ProposedWeight
+	}
+	if v.ProposedPriority != nil && (v.Rule == "circuit_opened" || v.Rule == "circuit_recovered" || v.Rule == "base_priority_sync") {
 		payloadValues["priority"] = *v.ProposedPriority
 	}
 	payload, _ := json.Marshal(payloadValues)
@@ -349,6 +365,10 @@ func (s Store) RecordDirectWeightChange(v tuning.Recommendation, actor string, n
 	}
 	before := fmt.Sprintf(`{"weight":%d}`, v.CurrentWeight)
 	after := fmt.Sprintf(`{"weight":%d,"command_id":%q,"direct":true}`, v.ProposedWeight, commandID)
+	if v.Rule == "base_priority_sync" {
+		before = fmt.Sprintf(`{"priority":%d}`, *v.CurrentPriority)
+		after = fmt.Sprintf(`{"priority":%d,"command_id":%q,"direct":true}`, *v.ProposedPriority, commandID)
+	}
 	if _, err = tx.Exec(`INSERT INTO operation_audits(id,instance_id,operation_type,target_type,target_id,actor_id,before_summary,after_summary,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, commandID, v.InstanceID, "tuning.auto_execute", "channel", fmt.Sprint(v.ChannelID), actor, before, after, "success", now); err != nil {
 		return "", err
 	}

@@ -134,6 +134,13 @@ func recordExecutedWrite(record func() (string, error)) (string, error) {
 }
 
 func executeWeightUpdate(ctx context.Context, controller Controller, v tuning.Recommendation) error {
+	if v.Rule == "base_priority_sync" {
+		if v.ProposedPriority == nil || *v.ProposedPriority < 0 {
+			return fmt.Errorf("proposed priority must not be negative")
+		}
+		_, err := controller.Update(ctx, channelcontrol.UpdateRequest{ChannelID: v.ChannelID, Priority: v.ProposedPriority})
+		return err
+	}
 	if v.ProposedWeight < 0 {
 		return fmt.Errorf("proposed weight must not be negative")
 	}

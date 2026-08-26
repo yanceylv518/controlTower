@@ -236,9 +236,8 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 					state.Multiplier = p.SoftStartMultiplier
 					state.ProposedWeight = max(int64(1), int64(math.Round(float64(base.BaseWeight)*state.Multiplier)))
 					rec := continuousEvent(id, base, state, "circuit_recovered", mode, now)
-					if state.OriginalPriority != nil {
-						rec.ProposedPriority = state.OriginalPriority
-					}
+					latestPriority := base.BasePriority
+					rec.ProposedPriority = &latestPriority
 					if mode == "auto" {
 						if _, err = cs.CreateContinuousWeightChange(rec, "system:auto", now); err == nil {
 							recoveredNow = true

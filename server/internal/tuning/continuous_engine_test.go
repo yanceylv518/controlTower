@@ -461,9 +461,12 @@ func TestContinuousCircuitProbeAndSoftStart(t *testing.T) {
 	s.ProbeSuccesses = 10
 	s.ProbeDurationSum = 10
 	f.states[1] = s
+	// An operator may save a new base priority while the channel is circuiting;
+	// recovery must use that latest value rather than the priority captured at open.
+	f.bases[0].BasePriority = 9
 	e.evaluateContinuous("i", p, now.Add(6*time.Minute), f)
 	s = f.states[1]
-	if s.Phase != "soft_start" || s.ProposedWeight != 20 || !s.SoftStartPending || len(f.writes) != 2 {
+	if s.Phase != "soft_start" || s.ProposedWeight != 20 || !s.SoftStartPending || len(f.writes) != 2 || f.writes[1].ProposedPriority == nil || *f.writes[1].ProposedPriority != 9 {
 		t.Fatalf("successful probe must soft-start: %#v", s)
 	}
 }

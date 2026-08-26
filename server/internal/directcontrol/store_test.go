@@ -57,6 +57,18 @@ func TestExecuteWeightUpdateSkipsPriorityOutsideCircuitRules(t *testing.T) {
 	}
 }
 
+func TestExecuteWeightUpdateSendsOnlyPriorityForBasePrioritySync(t *testing.T) {
+	priority := int64(6)
+	c := &fakeController{}
+	v := tuning.Recommendation{ChannelID: 9, ProposedWeight: 25, ProposedPriority: &priority, Rule: "base_priority_sync"}
+	if err := executeWeightUpdate(context.Background(), c, v); err != nil {
+		t.Fatal(err)
+	}
+	if len(c.updates) != 1 || c.updates[0].Priority == nil || *c.updates[0].Priority != 6 || c.updates[0].Weight != nil {
+		t.Fatalf("base priority sync must not rewrite weight: %#v", c.updates)
+	}
+}
+
 func TestExecuteWeightUpdatePropagatesFailure(t *testing.T) {
 	f := &fakeController{err: fmt.Errorf("boom")}
 	if err := executeWeightUpdate(context.Background(), f, tuning.Recommendation{ChannelID: 9}); err == nil {
