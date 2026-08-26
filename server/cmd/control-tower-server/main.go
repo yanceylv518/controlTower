@@ -85,6 +85,8 @@ func run() error {
 	} else if count == 0 {
 		log.Printf("no users configured; legacy dashboard token authentication only")
 	}
+	controlStore := directcontrol.Wrap(store, cfg.SecretKey)
+	var fastCircuitSink tuning.FastCircuitSink
 	if cfg.APIOnly {
 		log.Printf("API-only mode enabled; operational runners are disabled (billing job worker remains enabled)")
 	} else {
@@ -99,7 +101,7 @@ func run() error {
 		startAggregationRunner(store, time.Duration(cfg.AggregationIntervalSeconds)*time.Second)
 		startChannelSnapshotHistoryCleanup(store)
 		startRetentionRunner(store, settingsProvider)
-		startTuningRunner(directcontrol.Wrap(store, cfg.SecretKey))
+		fastCircuitSink = startTuningRunner(controlStore)
 	}
 	startBillingJobRunner(store, cfg.SecretKey, time.Duration(cfg.BillingPagePauseMilliseconds)*time.Millisecond)
 	startBillingFileCleanup(store)
@@ -107,7 +109,7 @@ func run() error {
 
 	server := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           httpapi.NewMux(httpapi.Options{AgentToken: cfg.AgentToken, DashboardToken: cfg.DashboardToken, Store: store, TuningStore: directcontrol.Wrap(store, cfg.SecretKey), AuthManager: authManager, AgentTokenPepper: cfg.AgentTokenPepper, SecretKey: cfg.SecretKey, NotificationMaxAttempts: cfg.NotificationMaxAttempts, CommandExpiry: time.Duration(cfg.CommandExpiryMinutes) * time.Minute, SettingsProvider: settingsProvider, BillingPagePause: time.Duration(cfg.BillingPagePauseMilliseconds) * time.Millisecond}),
+		Handler:           httpapi.NewMux(httpapi.Options{AgentToken: cfg.AgentToken, DashboardToken: cfg.DashboardToken, Store: store, TuningStore: controlStore, FastCircuitSink: fastCircuitSink, AuthManager: authManager, AgentTokenPepper: cfg.AgentTokenPepper, SecretKey: cfg.SecretKey, NotificationMaxAttempts: cfg.NotificationMaxAttempts, CommandExpiry: time.Duration(cfg.CommandExpiryMinutes) * time.Minute, SettingsProvider: settingsProvider, BillingPagePause: time.Duration(cfg.BillingPagePauseMilliseconds) * time.Millisecond}),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	log.Printf("control tower server listening on %s", cfg.ListenAddr)
@@ -236,13 +238,14 @@ func startReadonlyLogRollupRunner(store mysqlstore.Store, secretKey string) {
 	}()
 }
 
-func startTuningRunner(store tuning.Store) {
+func startTuningRunner(store tuning.Store) *tuning.Engine {
 	runner := tuning.NewEngine(store)
 	go func() {
 		if err := runner.Run(context.Background()); err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("tuning runner stopped: %v", err)
 		}
 	}()
+	return runner
 }
 
 type retentionStore interface {

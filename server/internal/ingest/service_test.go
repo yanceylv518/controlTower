@@ -80,6 +80,18 @@ func TestServiceStoresReportIdempotentlyAndUpdatesOffset(t *testing.T) {
 	}
 }
 
+func TestFastCircuitBatchAggregatesOnlyChannelDimensions(t *testing.T) {
+	now := time.Now().UTC()
+	batch := fastCircuitBatch(agentgateway.AgentReportRequest{InstanceID: "inst", AgentID: "agent", MetricBatchID: "batch", ReportedAt: now, AggregatedMetrics: []agentgateway.AggregatedMetricPayload{
+		{DimensionType: "instance_channel", DimensionKey: "inst:channel:7", RequestCount: 30, ErrorCount: 20, UserErrorCount: 2},
+		{DimensionType: "instance_channel", DimensionKey: "inst:channel:7", RequestCount: 25, ErrorCount: 10, UserErrorCount: 1},
+		{DimensionType: "instance_model", DimensionKey: "inst:model:m", RequestCount: 99, ErrorCount: 99},
+	}})
+	if len(batch.Metrics) != 1 || batch.Metrics[0].ChannelID != 7 || batch.Metrics[0].RequestCount != 55 || batch.Metrics[0].ErrorCount != 30 || batch.Metrics[0].UserErrorCount != 3 {
+		t.Fatalf("unexpected fast circuit batch: %#v", batch)
+	}
+}
+
 func TestServiceStoresAggregatedMetrics(t *testing.T) {
 	store := NewMemoryStore()
 	service := NewService(store)

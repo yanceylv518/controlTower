@@ -18,6 +18,25 @@ func TestAggregateTracksTotalAndUserErrors(t *testing.T) {
 	}
 }
 
+func TestAggregateTreatsSuccessfulZeroOutputAsChannelError(t *testing.T) {
+	now := time.Now().UTC()
+	metrics := Aggregate("inst", []logcollector.Event{
+		{CreatedAt: now, LogType: "consume", CompletionTokens: 0},
+		{CreatedAt: now, LogType: "consume", CompletionTokens: 1},
+		{CreatedAt: now, LogType: "error", CompletionTokens: 0, ErrorSummary: "HTTP 502"},
+	}, 512)
+	if len(metrics) != 1 {
+		t.Fatalf("unexpected metrics: %#v", metrics)
+	}
+	metric := metrics[0]
+	if metric.RequestCount != 3 || metric.SuccessCount != 1 || metric.ErrorCount != 2 || metric.UserErrorCount != 0 {
+		t.Fatalf("unexpected zero-output attribution: %#v", metric)
+	}
+	if metric.SuccessRate == nil || *metric.SuccessRate != float64(1)/3 || metric.ErrorRate == nil || *metric.ErrorRate != float64(2)/3 {
+		t.Fatalf("unexpected zero-output rates: %#v", metric)
+	}
+}
+
 func TestAggregateBuildsCoreDimensions(t *testing.T) {
 	base := time.Date(2026, 7, 8, 10, 0, 10, 0, time.UTC)
 	cacheTokens := int64(8)

@@ -70,12 +70,13 @@ func Aggregate(instanceID string, events []logcollector.Event, cacheHitMinPrompt
 
 func (a *accumulator) add(event logcollector.Event, cacheHitMinPromptTokens int64, userCodes map[int]bool) {
 	a.metric.RequestCount++
-	if event.LogType == "consume" {
+	zeroOutput := event.LogType == "consume" && event.CompletionTokens == 0
+	if event.LogType == "consume" && !zeroOutput {
 		a.metric.SuccessCount++
 	}
-	if event.LogType == "error" {
+	if event.LogType == "error" || zeroOutput {
 		a.metric.ErrorCount++
-		if errorclass.IsUserError(event.ErrorSummary, userCodes) {
+		if event.LogType == "error" && errorclass.IsUserError(event.ErrorSummary, userCodes) {
 			a.metric.UserErrorCount++
 		}
 	}

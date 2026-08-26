@@ -8,11 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"controltower/server/internal/agentgateway"
 	"controltower/server/internal/aggregator"
 	"controltower/server/internal/storage"
+	"controltower/server/internal/tuning"
 )
 
 type Store interface {
@@ -40,6 +42,12 @@ type channelSnapshotBatchStore interface {
 type Service struct {
 	store         Store
 	commandExpiry time.Duration
+	fastCircuit   tuning.FastCircuitSink
+}
+
+func (s Service) WithFastCircuitSink(sink tuning.FastCircuitSink) Service {
+	s.fastCircuit = sink
+	return s
 }
 
 func NewService(store Store) Service {
@@ -223,6 +231,9 @@ func (s Service) SaveReport(req agentgateway.AgentReportRequest) error {
 		if err := s.store.ApplyMetricBatch(req.InstanceID, req.MetricBatchID, toAggregatorMetrics(req.InstanceID, req.AggregatedMetrics)); err != nil {
 			return err
 		}
+		if s.fastCircuit != nil {
+			s.fastCircuit.SubmitFastCircuitBatch(fastCircuitBatch(req))
+		}
 	}
 	for _, payload := range req.ServerMetrics {
 		if err := s.store.InsertServerMetric(storage.ServerMetric{
@@ -311,6 +322,35 @@ func (s Service) SaveReport(req agentgateway.AgentReportRequest) error {
 		return s.store.UpdateLogOffset(req.InstanceID, reportedLastLogID)
 	}
 	return nil
+}
+
+func fastCircuitBatch(req agentgateway.AgentReportRequest) tuning.FastCircuitBatch {
+	byChannel := map[int64]tuning.FastCircuitMetric{}
+	for _, payload := range req.AggregatedMetrics {
+		if payload.DimensionType != "instance_channel" {
+			continue
+		}
+		const marker = ":channel:"
+		at := strings.LastIndex(payload.DimensionKey, marker)
+		if at < 0 {
+			continue
+		}
+		channelID, err := strconv.ParseInt(payload.DimensionKey[at+len(marker):], 10, 64)
+		if err != nil || channelID <= 0 {
+			continue
+		}
+		metric := byChannel[channelID]
+		metric.ChannelID = channelID
+		metric.RequestCount += payload.RequestCount
+		metric.ErrorCount += payload.ErrorCount
+		metric.UserErrorCount += payload.UserErrorCount
+		byChannel[channelID] = metric
+	}
+	metrics := make([]tuning.FastCircuitMetric, 0, len(byChannel))
+	for _, metric := range byChannel {
+		metrics = append(metrics, metric)
+	}
+	return tuning.FastCircuitBatch{InstanceID: req.InstanceID, AgentID: req.AgentID, BatchID: req.MetricBatchID, ReportedAt: req.ReportedAt, Metrics: metrics}
 }
 
 func maxSamplePayloadLogID(payloads []agentgateway.LogSamplePayload) int64 {

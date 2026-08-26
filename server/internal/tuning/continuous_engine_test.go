@@ -200,13 +200,18 @@ type continuousFake struct {
 	writeErr        error
 	writeAttempts   int
 	metricsQueries  int
+	policy          *PolicyRecord
 }
 
 func (f *continuousFake) GetPolicy(string) (PolicyRecord, bool, error) {
+	if f.policy != nil {
+		return *f.policy, true, nil
+	}
 	return PolicyRecord{}, false, nil
 }
-func (f *continuousFake) PutPolicy(PolicyRecord) error        { return nil }
-func (f *continuousFake) ListEnabledSites() ([]string, error) { return nil, nil }
+func (f *continuousFake) SiteIDForInstance(string) (string, error) { return "i", nil }
+func (f *continuousFake) PutPolicy(PolicyRecord) error             { return nil }
+func (f *continuousFake) ListEnabledSites() ([]string, error)      { return nil, nil }
 func (f *continuousFake) QueryMetrics(string, time.Time, time.Time) ([]ChannelMetric, error) {
 	f.metricsQueries++
 	return f.metrics, nil

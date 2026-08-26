@@ -50,6 +50,9 @@ type ContinuousDispatchParams struct {
 	WindowMinutes         int     `json:"window_minutes"`
 	MinSamples            int64   `json:"min_samples"`
 	SparseLookbackMinutes int     `json:"sparse_lookback_minutes"`
+	FastCircuitEnabled    bool    `json:"fast_circuit_enabled"`
+	FastCircuitMinSamples int64   `json:"fast_circuit_min_samples"`
+	FastCircuitErrorRate  float64 `json:"fast_circuit_error_rate"`
 }
 
 type Policy struct {
@@ -75,6 +78,7 @@ func DefaultPolicy() Policy {
 			CircuitErrorRate: .30, RecoveryErrorRate: .10,
 			SilentMinutes: 5, ProbeIntervalSeconds: 5, ProbeCount: 10, SoftStartMultiplier: .2,
 			WindowMinutes: 15, MinSamples: 20, SparseLookbackMinutes: 360,
+			FastCircuitEnabled: true, FastCircuitMinSamples: 50, FastCircuitErrorRate: .50,
 		},
 	}
 }
@@ -168,6 +172,12 @@ func (p Policy) Validate() map[string]string {
 	}
 	if c.MinSamples < 1 {
 		e["continuous.min_samples"] = "must_be_positive"
+	}
+	if c.FastCircuitMinSamples < 1 || c.FastCircuitMinSamples > 100000 {
+		e["continuous.fast_circuit_min_samples"] = "must_be_between_1_and_100000"
+	}
+	if c.FastCircuitErrorRate <= 0 || c.FastCircuitErrorRate > 1 {
+		e["continuous.fast_circuit_error_rate"] = "must_be_greater_than_0_and_at_most_1"
 	}
 	if c.SparseLookbackMinutes < c.WindowMinutes || c.SparseLookbackMinutes > 2880 {
 		e["continuous.sparse_lookback_minutes"] = "must_be_between_window_and_2880"

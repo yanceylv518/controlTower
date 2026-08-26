@@ -364,6 +364,9 @@ export interface TuningContinuousDispatchParams {
   window_minutes: number;
   min_samples: number;
   sparse_lookback_minutes: number;
+  fast_circuit_enabled: boolean;
+  fast_circuit_min_samples: number;
+  fast_circuit_error_rate: number;
 }
 export interface TuningPolicy {
   scheduling: TuningSchedulingParams;

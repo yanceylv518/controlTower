@@ -63,6 +63,25 @@ func TestAggregate1mComputesInstanceMetrics(t *testing.T) {
 	}
 }
 
+func TestAggregate1mTreatsSuccessfulZeroOutputAsError(t *testing.T) {
+	bucket := time.Date(2026, 8, 26, 10, 0, 0, 0, time.UTC)
+	metrics := Aggregate1m([]storage.LogEvent{
+		{InstanceID: "inst-1", CreatedAt: bucket, LogType: "consume", CompletionTokens: 0},
+		{InstanceID: "inst-1", CreatedAt: bucket, LogType: "consume", CompletionTokens: 1},
+		{InstanceID: "inst-1", CreatedAt: bucket, LogType: "error", CompletionTokens: 0},
+	})
+	metric, ok := findMetric(metrics, "instance", "inst-1")
+	if !ok {
+		t.Fatalf("missing instance metric: %#v", metrics)
+	}
+	if metric.RequestCount != 3 || metric.SuccessCount != 1 || metric.ErrorCount != 2 {
+		t.Fatalf("unexpected zero-output attribution: %#v", metric)
+	}
+	if metric.SuccessRate == nil || *metric.SuccessRate != float64(1)/3 || metric.ErrorRate == nil || *metric.ErrorRate != float64(2)/3 {
+		t.Fatalf("unexpected zero-output rates: %#v", metric)
+	}
+}
+
 func TestAggregate1mBuildsDimensionMetrics(t *testing.T) {
 	bucket := time.Date(2026, 7, 2, 12, 35, 0, 0, time.UTC)
 	metrics := Aggregate1m([]storage.LogEvent{

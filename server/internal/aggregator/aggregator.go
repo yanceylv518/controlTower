@@ -96,10 +96,11 @@ func Aggregate1m(events []storage.LogEvent) []Metric {
 
 func (a *accumulator) add(event storage.LogEvent) {
 	a.metric.RequestCount++
-	if event.LogType == "consume" {
+	zeroOutput := event.LogType == "consume" && event.CompletionTokens == 0
+	if event.LogType == "consume" && !zeroOutput {
 		a.metric.SuccessCount++
 	}
-	if event.LogType == "error" {
+	if event.LogType == "error" || zeroOutput {
 		a.metric.ErrorCount++
 	}
 	a.metric.TPM += event.TotalTokens

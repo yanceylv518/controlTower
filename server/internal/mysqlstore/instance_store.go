@@ -39,6 +39,12 @@ func (s Store) UpdateInstance(id, siteID, n string, en bool, now time.Time) erro
 	_, e := s.db.Exec("UPDATE instances SET site_id=?,name=?,enabled=?,updated_at=? WHERE id=?", siteID, n, en, now, id)
 	return e
 }
+
+func (s Store) SiteIDForInstance(instanceID string) (string, error) {
+	var siteID string
+	err := s.db.QueryRow("SELECT CASE WHEN site_id='' THEN id ELSE site_id END FROM instances WHERE id=? AND enabled=1", instanceID).Scan(&siteID)
+	return siteID, err
+}
 func (s Store) ReadonlyDSNForSite(siteID string) (string, error) {
 	var encrypted string
 	err := s.db.QueryRow("SELECT logs_readonly_dsn FROM instances WHERE COALESCE(NULLIF(site_id,''),id)=? AND logs_readonly_dsn<>'' ORDER BY id LIMIT 1", siteID).Scan(&encrypted)

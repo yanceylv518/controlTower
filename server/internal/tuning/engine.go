@@ -19,12 +19,17 @@ type Store interface {
 	RecommendationReport(RecommendationQuery) (Report, error)
 }
 
-type Engine struct{ store Store }
+type Engine struct {
+	store       Store
+	fastCircuit chan FastCircuitBatch
+}
 
-func NewEngine(s Store) *Engine { return &Engine{store: s} }
+func NewEngine(s Store) *Engine {
+	return &Engine{store: s, fastCircuit: make(chan FastCircuitBatch, 256)}
+}
 
 func (e *Engine) Run(ctx context.Context) error {
-	ticker := time.NewTicker(time.Minute)
+	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	for {
 		select {
@@ -32,7 +37,22 @@ func (e *Engine) Run(ctx context.Context) error {
 			return ctx.Err()
 		case now := <-ticker.C:
 			e.Tick(now.UTC())
+		case batch := <-e.fastCircuit:
+			e.evaluateFastCircuit(batch, time.Now().UTC())
 		}
+	}
+}
+
+// SubmitFastCircuitBatch never blocks the Agent report request. A full queue
+// drops only the fast path; the durable minute metrics and normal EWMA circuit
+// evaluation remain intact.
+func (e *Engine) SubmitFastCircuitBatch(batch FastCircuitBatch) bool {
+	select {
+	case e.fastCircuit <- batch:
+		return true
+	default:
+		log.Printf("tuning fast circuit queue full instance=%s batch=%s", batch.InstanceID, batch.BatchID)
+		return false
 	}
 }
 
