@@ -32,3 +32,7 @@ NewJob 两测试用 time.Local 造时间——codex Windows(东八区)本机绿,
 ## 端到端实测结论（烟测栈,真库真文件）
 
 user_statement 全链路走通：创建入队（accepted）→ runner 拾取执行（1 步完成）→ billing_statements 登记（normal_orders=3 与种子数据吻合,UTC 区间=沪时 8/20 全天）→ 结果接口返回 日×模型×渠道 汇总（**金额 0.476400 与种子 quota/QuotaPerUnit 换算逐位吻合**、折扣 1.0 应用、count_balanced=true、明细 XLSX 文件名已登记）。过程中顺带三次实证"失败任务不占查重键,同参可重建"设计（schema 缺列致前两次失败,重建即重新入队）。旧 generate 任务的历史失败记录与新任务共存无干扰。
+
+## 跟进（1fadf3d,2026-08-26,验收通过零缺陷——容器化前置必需）
+
+Dockerfile 降权前预建 /app/data 并 chown 运行时用户（否则非 root 进程写出档目录必 Permission denied）;compose 加命名卷 ct-billing-data 挂 /app/data——出档文件跨容器替换持久（否则升级镜像即孤儿化全部已登记下载）。路径链核实:WORKDIR=/app+相对 data/billing-files 匹配;命名卷首挂载继承镜像目录属主;file_cleanup runner 兜卷增长。**statements 功能容器部署的前置条件,必须随下一 tag 的镜像构建生效**。
