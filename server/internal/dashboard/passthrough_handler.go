@@ -244,24 +244,33 @@ func (h *PassthroughHandler) logsPageForBilling(ctx context.Context, site string
 		v.ModelPrice, v.ModelRatio, v.CompletionRatio = cache.ModelPrice, cache.ModelRatio, cache.CompletionRatio
 		v.CacheRatio, v.CacheCreationRatio, v.GroupRatio = cache.CacheRatio, cache.CacheCreationRatio, cache.GroupRatio
 		v.CacheCreationRatio5m, v.CacheCreationRatio1h = cache.CacheCreationRatio5m, cache.CacheCreationRatio1h
+		v.ImageRatio = cache.ImageRatio
 		v.BillingMode, v.ExprBase64, v.MatchedTier, v.RequestRules = cache.BillingMode, cache.ExprBase64, cache.MatchedTier, cache.RequestRules
 		v.ImageInputTokens, v.ImageOutputTokens = cache.ImageInput, cache.ImageOutput
 		v.AudioInputTokens, v.AudioOutputTokens = cache.AudioInput, cache.AudioOutput
 		if v.PromptTokens.Valid {
-			rawPrompt := v.PromptTokens.Int64
-			if cache.Semantic == "anthropic" {
-				v.ContextTokens = rawPrompt + cache.Read + cache.Write
-			} else {
-				v.ContextTokens = rawPrompt
-				v.PromptTokens.Int64 = rawPrompt - cache.Read - cache.Write
-				if v.PromptTokens.Int64 < 0 {
-					v.PromptTokens.Int64 = 0
-				}
-			}
+			v.PromptTokens.Int64, v.ContextTokens = normalizedBillingPromptTokens(v.PromptTokens.Int64, cache)
 		}
 		out = append(out, v)
 	}
 	return out, rows.Err()
+}
+
+func normalizedBillingPromptTokens(rawPrompt int64, usage billingCacheUsage) (int64, int64) {
+	prompt, contextTokens := rawPrompt, rawPrompt
+	if usage.Semantic == "anthropic" {
+		contextTokens += usage.Read + usage.Write
+	} else {
+		prompt -= usage.Read + usage.Write
+	}
+	// NewAPI removes image input from the base prompt lane and adds it back
+	// with image_ratio. Clamp before charging because cache plus image usage can
+	// overlap and exceed the source prompt total.
+	prompt -= usage.ImageInput
+	if prompt < 0 {
+		prompt = 0
+	}
+	return prompt, contextTokens
 }
 
 func billingLogsPageQuery(userID, channelID, tokenID int64) (string, bool) {
@@ -320,8 +329,11 @@ const billingOtherProjection = `CASE WHEN JSON_VALID(l.other) THEN JSON_OBJECT(`
 	`'expr_b64',JSON_EXTRACT(l.other,'$.expr_b64'),` +
 	`'matched_tier',JSON_EXTRACT(l.other,'$.matched_tier'),` +
 	`'request_rules',JSON_EXTRACT(l.other,'$.request_rules'),` +
+	`'image_ratio',JSON_EXTRACT(l.other,'$.image_ratio'),` +
+	`'image_tokens',JSON_EXTRACT(l.other,'$.image_tokens'),` +
 	`'image_input',JSON_EXTRACT(l.other,'$.image_input'),` +
 	`'image_output',JSON_EXTRACT(l.other,'$.image_output'),` +
+	`'image_output_tokens',JSON_EXTRACT(l.other,'$.image_output_tokens'),` +
 	`'audio_input',JSON_EXTRACT(l.other,'$.audio_input'),` +
 	`'audio_output',JSON_EXTRACT(l.other,'$.audio_output')) ELSE '{}' END`
 
@@ -534,7 +546,7 @@ type billingCacheUsage struct {
 	ImageInput, ImageOutput, AudioInput, AudioOutput                        int64
 	Semantic                                                                string
 	ModelPrice, ModelRatio, CompletionRatio, CacheRatio, CacheCreationRatio string
-	CacheCreationRatio5m, CacheCreationRatio1h, GroupRatio                  string
+	CacheCreationRatio5m, CacheCreationRatio1h, GroupRatio, ImageRatio      string
 	BillingMode, ExprBase64, MatchedTier, RequestRules                      string
 }
 
@@ -609,13 +621,23 @@ func parseBillingCacheUsage(other string) billingCacheUsage {
 		}
 		return ""
 	}
+	imageInput := number("image_input", "image_tokens")
+	imageOutput := number("image_output_tokens")
+	// NewAPI historically writes PromptTokensDetails.ImageTokens to the
+	// misleading `image_output` log key. Treat it as image input unless an
+	// explicit input/output schema is present, otherwise the same lane can be
+	// charged twice and tiered `img`/`img_o` variables are reversed.
+	if imageInput == 0 && imageOutput == 0 {
+		imageInput = number("image_output")
+	}
 	return billingCacheUsage{
 		Read: read, Write: write, Write5m: write5m, Write1h: write1h, Semantic: semantic,
-		ImageInput: number("image_input", "image_tokens"), ImageOutput: number("image_output", "image_output_tokens"),
+		ImageInput: imageInput, ImageOutput: imageOutput,
 		AudioInput: number("audio_input"), AudioOutput: number("audio_output"),
 		ModelPrice: decimal("model_price"), ModelRatio: decimal("model_ratio"), CompletionRatio: decimal("completion_ratio"),
 		CacheRatio: decimal("cache_ratio"), CacheCreationRatio: decimal("cache_creation_ratio"),
 		CacheCreationRatio5m: decimal("cache_creation_ratio_5m"), CacheCreationRatio1h: decimal("cache_creation_ratio_1h"),
+		ImageRatio: decimal("image_ratio"),
 		GroupRatio: decimal("group_ratio"), BillingMode: stringValue(values, "billing_mode"), ExprBase64: stringValue(values, "expr_b64"),
 		MatchedTier: stringValue(values, "matched_tier"), RequestRules: jsonValue(values, "request_rules"),
 	}

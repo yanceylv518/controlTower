@@ -32,6 +32,7 @@ type PagedLogRecord struct {
 	// legacy log did not record that ratio.
 	ModelPrice, ModelRatio, CompletionRatio, CacheRatio, CacheCreationRatio  string
 	CacheCreationRatio5m, CacheCreationRatio1h, GroupRatio                   string
+	ImageRatio                                                               string
 	BillingMode, ExprBase64, MatchedTier, RequestRules                       string
 	ImageInputTokens, ImageOutputTokens, AudioInputTokens, AudioOutputTokens int64
 	RequestID, UpstreamRequestID, Username, TokenName, ModelName, GroupName  string

@@ -23,6 +23,32 @@ func TestCalculateLogChargeConvertsRecordedRatiosToPrices(t *testing.T) {
 	}
 }
 
+func TestCalculateLogChargeMatchesNewAPIImageBilling(t *testing.T) {
+	log := PagedLogRecord{
+		SourcePromptTokens: sql.NullInt64{Valid: true, Int64: 130983},
+		PromptTokens:       sql.NullInt64{Valid: true, Int64: 0}, CompletionTokens: sql.NullInt64{Valid: true, Int64: 566},
+		CacheTokens: 128768, ImageInputTokens: 3432,
+		ModelPrice: "-1", ModelRatio: "10", CompletionRatio: "5", CacheRatio: "0.1", ImageRatio: "1", GroupRatio: "1", Quota: 191388,
+	}
+	result, err := VerifyLogCharge(log, "500000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Verified || result.CalculatedQuota != 191388 || result.Charge.Total != "0.382776" {
+		t.Fatalf("unexpected image charge: %+v", result)
+	}
+	if result.Charge.ImagePrice != "20.000000" || result.Charge.ImageAmount != "0.068640" {
+		t.Fatalf("unexpected image lane: %+v", result.Charge)
+	}
+}
+
+func TestCalculateLogChargeRequiresImageRatio(t *testing.T) {
+	log := PagedLogRecord{PromptTokens: sql.NullInt64{Valid: true}, ImageInputTokens: 1, ModelRatio: "10", GroupRatio: "1"}
+	if _, reason := VerifyLogChargeReason(log, "500000"); reason != PricingReasonIncomplete {
+		t.Fatalf("reason=%q, want incomplete pricing", reason)
+	}
+}
+
 func TestCalculateLogChargeUsesRecordedCacheWriteDurations(t *testing.T) {
 	log := PagedLogRecord{
 		PromptTokens: sql.NullInt64{Valid: true, Int64: 2}, CacheWriteTokens: 30, CacheWrite5mTokens: 10, CacheWrite1hTokens: 20,

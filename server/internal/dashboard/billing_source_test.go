@@ -47,6 +47,25 @@ func TestParseBillingCacheUsagePreservesPerRequestRatios(t *testing.T) {
 	}
 }
 
+func TestParseBillingImageUsagePreservesNewAPILegacySemantics(t *testing.T) {
+	v := parseBillingCacheUsage(`{"image":true,"image_output":3432,"image_ratio":1}`)
+	if v.ImageInput != 3432 || v.ImageOutput != 0 || v.ImageRatio != "1" {
+		t.Fatalf("unexpected image usage: %#v", v)
+	}
+	explicit := parseBillingCacheUsage(`{"image_input":12,"image_output":999,"image_output_tokens":7,"image_ratio":1.5}`)
+	if explicit.ImageInput != 12 || explicit.ImageOutput != 7 || explicit.ImageRatio != "1.5" {
+		t.Fatalf("unexpected explicit image usage: %#v", explicit)
+	}
+}
+
+func TestNormalizeBillingPromptMatchesNewAPIImageCalculation(t *testing.T) {
+	usage := parseBillingCacheUsage(`{"cache_tokens":128768,"image_output":3432,"image_ratio":1}`)
+	prompt, contextTokens := normalizedBillingPromptTokens(130983, usage)
+	if prompt != 0 || contextTokens != 130983 {
+		t.Fatalf("prompt=%d context=%d", prompt, contextTokens)
+	}
+}
+
 // The accepted production example (prompt=298 already non-cache, cache=8507)
 // carries no usage_semantic marker on some new-api versions. OpenAI-style
 // cache is a subset of prompt, so cache exceeding prompt proves the row is

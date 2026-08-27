@@ -13,9 +13,9 @@ import (
 type LogCharge struct {
 	Mode                                                                   string
 	MatchedTier                                                            string
-	InputPrice, OutputPrice, CacheReadPrice                                string
+	InputPrice, OutputPrice, CacheReadPrice, ImagePrice                    string
 	CacheWritePrice, CacheWrite5mPrice, CacheWrite1hPrice, PerRequestPrice string
-	InputAmount, OutputAmount, CacheReadAmount                             string
+	InputAmount, OutputAmount, CacheReadAmount, ImageAmount                string
 	CacheWriteAmount, CacheWrite5mAmount, CacheWrite1hAmount, Total        string
 	ReconstructedQuota                                                     string
 }
@@ -66,6 +66,16 @@ func CalculateLogCharge(log PagedLogRecord, quotaPerUnit string) (LogCharge, err
 	inputAmount := tokenCost(nullableInt64(log.PromptTokens), inputUnit)
 	charge.InputAmount = FormatAmount(inputAmount, 6)
 	total := new(big.Rat).Set(inputAmount)
+	if log.ImageInputTokens > 0 {
+		ratio, ratioErr := requiredLogRatio(log.ImageRatio, "image_ratio")
+		if ratioErr != nil {
+			return LogCharge{}, ratioErr
+		}
+		unit := multipliedRat(inputUnit, ratio)
+		amount := tokenCost(log.ImageInputTokens, unit)
+		charge.ImagePrice, charge.ImageAmount = unit.FloatString(6), FormatAmount(amount, 6)
+		total.Add(total, amount)
+	}
 
 	if tokens := nullableInt64(log.CompletionTokens); tokens > 0 {
 		ratio, ratioErr := requiredLogRatio(log.CompletionRatio, "completion_ratio")
