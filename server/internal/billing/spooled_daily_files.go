@@ -319,16 +319,16 @@ func (g UserDailyFileGenerator) publishSpooledChannels(ctx context.Context, root
 		}
 		_, _ = tmp.Write([]byte{0xef, 0xbb, 0xbf})
 		writer := csv.NewWriter(tmp)
-		_ = writer.Write([]string{"请求时间", "请求 ID", "用户", "令牌", "模型", "计费模式", "命中价格层级", "输入 Token", "输出 Token", "缓存读取 Token", "缓存写入 Token", "5m 缓存写入 Token", "1h 缓存写入 Token", "输入单价", "输出单价", "缓存读取单价", "缓存写入单价", "5m 缓存写入单价", "1h 缓存写入单价", "按次单价", "金额", "订单状态", "异常原因"})
+		_ = writer.Write([]string{"请求时间", "Request ID", "上游 Request ID", "渠道", "模型", "计费模式", "命中价格层级", "输入 Token", "输出 Token", "缓存读取 Token", "缓存写入 Token", "5m 缓存写入 Token", "1h 缓存写入 Token", "输入单价", "输出单价", "缓存读取单价", "缓存写入单价", "5m 缓存写入单价", "1h 缓存写入单价", "按次单价", "金额", "订单状态", "异常原因"})
 		if err = visitJSONDetails(path, func(row RequestDetail) error {
-			return writer.Write([]string{time.Unix(row.CreatedUnix, 0).In(BusinessLocation).Format("2006-01-02 15:04:05"), row.RequestID, row.Username, row.TokenName, row.ModelName, billingModeLabel(row.Charge.Mode), row.Charge.MatchedTier, strconv.FormatInt(row.PromptTokens, 10), strconv.FormatInt(row.CompletionTokens, 10), strconv.FormatInt(row.CacheReadTokens, 10), strconv.FormatInt(row.CacheWriteTokens, 10), strconv.FormatInt(row.CacheWrite5mTokens, 10), strconv.FormatInt(row.CacheWrite1hTokens, 10), row.Charge.InputPrice, row.Charge.OutputPrice, row.Charge.CacheReadPrice, row.Charge.CacheWritePrice, row.Charge.CacheWrite5mPrice, row.Charge.CacheWrite1hPrice, row.Charge.PerRequestPrice, row.Charge.Total, "正常", ""})
+			return writer.Write([]string{time.Unix(row.CreatedUnix, 0).In(BusinessLocation).Format("2006-01-02 15:04:05"), row.RequestID, row.UpstreamRequestID, row.ChannelName, row.ModelName, billingModeLabel(row.Charge.Mode), row.Charge.MatchedTier, strconv.FormatInt(row.PromptTokens, 10), strconv.FormatInt(row.CompletionTokens, 10), strconv.FormatInt(row.CacheReadTokens, 10), strconv.FormatInt(row.CacheWriteTokens, 10), strconv.FormatInt(row.CacheWrite5mTokens, 10), strconv.FormatInt(row.CacheWrite1hTokens, 10), row.Charge.InputPrice, row.Charge.OutputPrice, row.Charge.CacheReadPrice, row.Charge.CacheWritePrice, row.Charge.CacheWrite5mPrice, row.Charge.CacheWrite1hPrice, row.Charge.PerRequestPrice, row.Charge.Total, "正常", ""})
 		}); err != nil {
 			_ = tmp.Close()
 			_ = os.Remove(tmp.Name())
 			return err
 		}
 		for _, row := range anomalies {
-			_ = writer.Write([]string{row.CreatedAt.In(BusinessLocation).Format("2006-01-02 15:04:05"), row.RequestID, row.Username, row.TokenName, row.ModelName, "异常订单", "未完成计价", strconv.FormatInt(row.PromptTokens.Int64, 10), strconv.FormatInt(row.CompletionTokens.Int64, 10), strconv.FormatInt(row.CacheTokens, 10), strconv.FormatInt(row.CacheWriteTokens, 10), strconv.FormatInt(row.CacheWrite5mTokens, 10), strconv.FormatInt(row.CacheWrite1hTokens, 10), row.InputPrice, row.OutputPrice, row.CachePrice, row.CacheWritePrice, "", "", "", row.ActualAmount, "异常订单", row.Reasons})
+			_ = writer.Write([]string{row.CreatedAt.In(BusinessLocation).Format("2006-01-02 15:04:05"), row.RequestID, row.UpstreamRequestID, row.ChannelName, row.ModelName, "异常订单", "未完成计价", strconv.FormatInt(row.PromptTokens.Int64, 10), strconv.FormatInt(row.CompletionTokens.Int64, 10), strconv.FormatInt(row.CacheTokens, 10), strconv.FormatInt(row.CacheWriteTokens, 10), strconv.FormatInt(row.CacheWrite5mTokens, 10), strconv.FormatInt(row.CacheWrite1hTokens, 10), row.InputPrice, row.OutputPrice, row.CachePrice, row.CacheWritePrice, "", "", "", row.ActualAmount, "异常订单", row.Reasons})
 		}
 		writer.Flush()
 		if err = writer.Error(); err == nil {

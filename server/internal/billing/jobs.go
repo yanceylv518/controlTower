@@ -204,14 +204,14 @@ type ReconciliationOrder struct {
 }
 
 type RequestDetail struct {
-	InstanceID, JobID, RequestID, Username, TokenName, ChannelName, ModelName string
-	SourceLogID, CreatedUnix, UserID, TokenID, ChannelID                      int64
-	BillDay                                                                   time.Time
-	PromptTokens, CompletionTokens                                            int64
-	CacheReadTokens, CacheWriteTokens                                         int64
-	CacheWrite5mTokens, CacheWrite1hTokens                                    int64
-	Charge                                                                    LogCharge
-	CalculatedQuota, LoggedQuota                                              int64
+	InstanceID, JobID, RequestID, UpstreamRequestID, Username, TokenName, ChannelName, ModelName string
+	SourceLogID, CreatedUnix, UserID, TokenID, ChannelID                                         int64
+	BillDay                                                                                      time.Time
+	PromptTokens, CompletionTokens                                                               int64
+	CacheReadTokens, CacheWriteTokens                                                            int64
+	CacheWrite5mTokens, CacheWrite1hTokens                                                       int64
+	Charge                                                                                       LogCharge
+	CalculatedQuota, LoggedQuota                                                                 int64
 }
 
 type UserDailyFile struct {
@@ -513,7 +513,7 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 				verification = FallbackLogCharge(log, quotaPerUnit)
 			}
 			requestDetails = append(requestDetails, RequestDetail{
-				InstanceID: job.InstanceID, JobID: job.ID, SourceLogID: log.ID, CreatedUnix: log.CreatedUnix, BillDay: dateOnly(step.From), RequestID: log.RequestID,
+				InstanceID: job.InstanceID, JobID: job.ID, SourceLogID: log.ID, CreatedUnix: log.CreatedUnix, BillDay: dateOnly(step.From), RequestID: log.RequestID, UpstreamRequestID: log.UpstreamRequestID,
 				UserID: log.UserID, Username: log.Username, TokenID: log.TokenID, TokenName: log.TokenName, ChannelID: log.ChannelID, ChannelName: log.ChannelName, ModelName: log.ModelName,
 				PromptTokens: nullableInt64(log.PromptTokens), CompletionTokens: nullableInt64(log.CompletionTokens), CacheReadTokens: log.CacheTokens, CacheWriteTokens: log.CacheWriteTokens,
 				CacheWrite5mTokens: log.CacheWrite5mTokens, CacheWrite1hTokens: log.CacheWrite1hTokens, Charge: verification.Charge, CalculatedQuota: verification.CalculatedQuota, LoggedQuota: log.Quota,

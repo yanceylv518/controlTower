@@ -230,14 +230,26 @@ func statementPreview(ctx context.Context, job billing.Job, rows []billing.State
 		return statementPreviewData{}, anomalyErr
 	}
 	for _, v := range anomalies {
-		out.Anomalies = append(out.Anomalies, map[string]any{"created_at": v.CreatedAt.In(billing.BusinessLocation).Format("2006-01-02 15:04:05"), "request_id": v.RequestID, "username": v.Username, "channel_name": v.ChannelName, "token_name": v.TokenName, "model_name": v.ModelName, "prompt_tokens": nullInt(v.PromptTokens), "completion_tokens": nullInt(v.CompletionTokens), "cache_read_tokens": v.CacheTokens, "cache_write_tokens": v.CacheWriteTokens, "actual_amount": v.ActualAmount, "reasons": localizedReasons(v.Reasons)})
+		item := map[string]any{"created_at": v.CreatedAt.In(billing.BusinessLocation).Format("2006-01-02 15:04:05"), "request_id": v.RequestID, "upstream_request_id": v.UpstreamRequestID, "model_name": v.ModelName, "prompt_tokens": nullInt(v.PromptTokens), "completion_tokens": nullInt(v.CompletionTokens), "cache_read_tokens": v.CacheTokens, "cache_write_tokens": v.CacheWriteTokens, "actual_amount": v.ActualAmount, "reasons": localizedReasons(v.Reasons)}
+		if job.JobType == "upstream_statement" {
+			item["channel_id"], item["channel_name"] = v.ChannelID, v.ChannelName
+		} else {
+			item["token_id"], item["token_name"] = v.TokenID, v.TokenName
+		}
+		out.Anomalies = append(out.Anomalies, item)
 	}
 	mismatches, mismatchErr := store.QueryBillingStatementReconciliation(ctx, job.ID, 500, 0)
 	if mismatchErr != nil {
 		return statementPreviewData{}, mismatchErr
 	}
 	for _, v := range mismatches {
-		out.Reconciliation = append(out.Reconciliation, map[string]any{"created_at": time.Unix(v.CreatedUnix, 0).In(billing.BusinessLocation).Format("2006-01-02 15:04:05"), "request_id": v.RequestID, "username": v.Username, "channel_name": v.ChannelName, "token_name": v.TokenName, "model_name": v.ModelName, "prompt_tokens": v.PromptTokens, "completion_tokens": v.CompletionTokens, "cache_read_tokens": v.CacheReadTokens, "cache_write_tokens": v.CacheWriteTokens, "calculated_quota": v.CalculatedQuota, "logged_quota": v.LoggedQuota, "quota_difference": v.QuotaDifference, "calculated_amount": v.CalculatedAmount, "logged_amount": v.LoggedAmount, "amount_difference": v.AmountDifference, "reason": localizedReasons(v.Reason)})
+		item := map[string]any{"created_at": time.Unix(v.CreatedUnix, 0).In(billing.BusinessLocation).Format("2006-01-02 15:04:05"), "request_id": v.RequestID, "upstream_request_id": v.UpstreamRequestID, "model_name": v.ModelName, "prompt_tokens": v.PromptTokens, "completion_tokens": v.CompletionTokens, "cache_read_tokens": v.CacheReadTokens, "cache_write_tokens": v.CacheWriteTokens, "calculated_quota": v.CalculatedQuota, "logged_quota": v.LoggedQuota, "quota_difference": v.QuotaDifference, "calculated_amount": v.CalculatedAmount, "logged_amount": v.LoggedAmount, "amount_difference": v.AmountDifference, "reason": localizedReasons(v.Reason)}
+		if job.JobType == "upstream_statement" {
+			item["channel_id"], item["channel_name"] = v.ChannelID, v.ChannelName
+		} else {
+			item["token_id"], item["token_name"] = v.TokenID, v.TokenName
+		}
+		out.Reconciliation = append(out.Reconciliation, item)
 	}
 	return out, nil
 }
@@ -248,14 +260,24 @@ func (h BillingStatementResultHandler) writeReconciliationCSV(w http.ResponseWri
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="billing-reconciliation-%s.csv"; filename*=UTF-8''%s`, job.ID, url.PathEscape(name)))
 	_, _ = w.Write([]byte{0xef, 0xbb, 0xbf})
 	cw := csv.NewWriter(w)
-	_ = cw.Write([]string{"请求时间", "Request ID", "用户", "令牌", "渠道", "模型", "输入 Token", "输出 Token", "缓存读取 Token", "缓存写入 Token", "重算 Quota", "日志 Quota", "Quota 差额", "重算金额", "日志金额", "金额差额", "差异原因"})
+	upstreamStatement := job.JobType == "upstream_statement"
+	if upstreamStatement {
+		_ = cw.Write([]string{"请求时间", "Request ID", "上游 Request ID", "渠道 ID", "渠道名称", "模型", "输入 Token", "输出 Token", "缓存读取 Token", "缓存写入 Token", "重算 Quota", "日志 Quota", "Quota 差额", "重算金额", "日志金额", "金额差额", "差异原因"})
+	} else {
+		_ = cw.Write([]string{"请求时间", "Request ID", "令牌 ID", "令牌", "模型", "输入 Token", "输出 Token", "缓存读取 Token", "缓存写入 Token", "重算 Quota", "日志 Quota", "Quota 差额", "重算金额", "日志金额", "金额差额", "差异原因"})
+	}
 	for offset := 0; ; offset += 5000 {
 		items, err := h.Store.QueryBillingStatementReconciliation(r.Context(), job.ID, 5000, offset)
 		if err != nil {
 			return
 		}
 		for _, v := range items {
-			_ = cw.Write([]string{time.Unix(v.CreatedUnix, 0).In(billing.BusinessLocation).Format("2006-01-02 15:04:05"), v.RequestID, v.Username, v.TokenName, v.ChannelName, v.ModelName, strconv.FormatInt(v.PromptTokens, 10), strconv.FormatInt(v.CompletionTokens, 10), strconv.FormatInt(v.CacheReadTokens, 10), strconv.FormatInt(v.CacheWriteTokens, 10), strconv.FormatInt(v.CalculatedQuota, 10), strconv.FormatInt(v.LoggedQuota, 10), strconv.FormatInt(v.QuotaDifference, 10), v.CalculatedAmount, v.LoggedAmount, v.AmountDifference, localizedReasons(v.Reason)})
+			usage := []string{v.ModelName, strconv.FormatInt(v.PromptTokens, 10), strconv.FormatInt(v.CompletionTokens, 10), strconv.FormatInt(v.CacheReadTokens, 10), strconv.FormatInt(v.CacheWriteTokens, 10), strconv.FormatInt(v.CalculatedQuota, 10), strconv.FormatInt(v.LoggedQuota, 10), strconv.FormatInt(v.QuotaDifference, 10), v.CalculatedAmount, v.LoggedAmount, v.AmountDifference, localizedReasons(v.Reason)}
+			if upstreamStatement {
+				_ = cw.Write(append([]string{time.Unix(v.CreatedUnix, 0).In(billing.BusinessLocation).Format("2006-01-02 15:04:05"), v.RequestID, v.UpstreamRequestID, strconv.FormatInt(v.ChannelID, 10), v.ChannelName}, usage...))
+			} else {
+				_ = cw.Write(append([]string{time.Unix(v.CreatedUnix, 0).In(billing.BusinessLocation).Format("2006-01-02 15:04:05"), v.RequestID, strconv.FormatInt(v.TokenID, 10), v.TokenName}, usage...))
+			}
 		}
 		if len(items) < 5000 {
 			break
