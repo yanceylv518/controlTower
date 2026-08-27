@@ -31,6 +31,8 @@
 
 > 2026-08-27 图片计费修正：普通 Token 计费必须与 NewAPI 一致，将图片 Token 从基础输入中扣除并按日志记录的 `image_ratio` 单独计费；NewAPI 历史日志键 `image_output` 实际承载图片输入 Token，CT 读取时需规范化到图片输入通道。包含图片的既有账单需要重新生成后才会采用新口径。
 
+> 2026-08-27 多模态缓存语义修正：`cache > prompt` 只能作为旧版纯文本日志缺少标记时的 Anthropic 兼容提示；图片或音频请求存在 Token 重叠，不能据此推断 Anthropic，否则会把普通输入重复计费。多模态日志仅在 NewAPI 明确记录 `usage_semantic=anthropic` 或 `claude=true` 时采用 Anthropic 语义。
+
 ## 1. 项目定位
 
 Control Tower 是独立于 new-api 的多站点监控与轻运维系统。各站点彼此隔离，不存在跨站点的同一客户。Control Tower 通过站点配置的只读查询连接读取业务数据，不修改 new-api 数据库，也不进入用户请求链路。

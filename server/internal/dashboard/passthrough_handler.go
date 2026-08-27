@@ -660,13 +660,14 @@ func jsonValue(values map[string]any, key string) string {
 	return string(raw)
 }
 
-// OpenAI-style usage counts cache reads inside prompt_tokens, so cache lanes
-// can never exceed prompt there. A row whose cache lanes exceed prompt is
-// Anthropic-shaped even without an explicit marker — production new-api
-// versions emit this shape with no usage_semantic field, and subtracting
-// would zero the input lane.
+// Legacy text-only logs can omit the Anthropic marker while reporting cache
+// outside prompt_tokens, so cache exceeding prompt remains a compatibility
+// hint. It is not valid for multimodal logs: image/audio lanes may overlap the
+// prompt/cache totals and legitimately make cache exceed prompt in OpenAI
+// semantics. Explicit markers always win, and multimodal rows stay OpenAI
+// unless NewAPI explicitly labels them Anthropic.
 func resolveBillingCacheSemantic(cache billingCacheUsage, promptTokens int64) billingCacheUsage {
-	if cache.Semantic != "anthropic" && cache.Read+cache.Write > promptTokens {
+	if cache.Semantic != "anthropic" && cache.ImageInput == 0 && cache.ImageOutput == 0 && cache.AudioInput == 0 && cache.AudioOutput == 0 && cache.Read+cache.Write > promptTokens {
 		cache.Semantic = "anthropic"
 	}
 	return cache

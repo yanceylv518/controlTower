@@ -59,10 +59,21 @@ func TestParseBillingImageUsagePreservesNewAPILegacySemantics(t *testing.T) {
 }
 
 func TestNormalizeBillingPromptMatchesNewAPIImageCalculation(t *testing.T) {
-	usage := parseBillingCacheUsage(`{"cache_tokens":128768,"image_output":3432,"image_ratio":1}`)
+	usage := resolveBillingCacheSemantic(parseBillingCacheUsage(`{"cache_tokens":128768,"image_output":3432,"image_ratio":1}`), 130983)
 	prompt, contextTokens := normalizedBillingPromptTokens(130983, usage)
-	if prompt != 0 || contextTokens != 130983 {
-		t.Fatalf("prompt=%d context=%d", prompt, contextTokens)
+	if usage.Semantic != "openai" || prompt != 0 || contextTokens != 130983 {
+		t.Fatalf("semantic=%s prompt=%d context=%d", usage.Semantic, prompt, contextTokens)
+	}
+}
+
+func TestMultimodalCacheOverflowDoesNotInferAnthropic(t *testing.T) {
+	usage := resolveBillingCacheSemantic(parseBillingCacheUsage(`{"cache_tokens":18688,"image_output":100,"image_ratio":1}`), 18686)
+	if usage.Semantic != "openai" {
+		t.Fatalf("multimodal row inferred as %q", usage.Semantic)
+	}
+	prompt, _ := normalizedBillingPromptTokens(18686, usage)
+	if prompt != 0 {
+		t.Fatalf("ordinary prompt=%d, want 0 after overlapping cache/image lanes", prompt)
 	}
 }
 
