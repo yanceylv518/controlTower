@@ -63,3 +63,15 @@ export async function downloadBillingFile(url: string, fallback: string, filenam
   // releases the in-memory URL and does not affect the downloaded file.
   window.setTimeout(() => URL.revokeObjectURL(href), 60_000);
 }
+
+// Large generated CSV exports should be streamed by the browser instead of
+// being fully buffered into a JavaScript Blob. The server supplies the final
+// Content-Disposition filename; `filename` is a fallback for older browsers.
+export function startBillingFileDownload(url: string, filename?: string): void {
+  const link = document.createElement("a");
+  link.href = url;
+  if (filename) link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+}

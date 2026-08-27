@@ -66,6 +66,10 @@ func (h BillingAnomalyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		_, _ = w.Write([]byte{0xef, 0xbb, 0xbf})
 		cw := csv.NewWriter(w)
 		_ = cw.Write([]string{"令牌 ID", "令牌名称", "模型名称", "Request ID", "上游 Request ID", "请求时间", "普通输入", "缓存读取 Token", "缓存写入 Token", "输出 Token", "模型上下文", "输入 Token 单价", "输出 Token 单价", "缓存读取单价", "缓存写入单价", "输入 Token 费用", "输出 Token 费用", "缓存读取费用", "缓存写入费用", "异常记录参考金额", "实际扣除 Quota", "实际扣费金额", "异常原因"})
+		cw.Flush()
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
 		for {
 			items, e := h.Store.QueryBillingAnomalies(r.Context(), site, jobID, uid, channelID, from, to, cursorTime, cursorID, 5000)
 			if e != nil {
@@ -73,6 +77,10 @@ func (h BillingAnomalyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 			}
 			for _, v := range items {
 				_ = cw.Write([]string{strconv.FormatInt(v.TokenID, 10), v.TokenName, v.ModelName, v.RequestID, v.UpstreamRequestID, v.CreatedAt.In(billing.BusinessLocation).Format("2006/01/02 15:04:05"), nullInt(v.PromptTokens), strconv.FormatInt(v.CacheTokens, 10), strconv.FormatInt(v.CacheWriteTokens, 10), nullInt(v.CompletionTokens), strconv.FormatInt(v.MaxContextTokens, 10), v.InputPrice, v.OutputPrice, v.CachePrice, v.CacheWritePrice, v.InputAmount, v.OutputAmount, v.CacheAmount, v.CacheWriteAmount, v.ReferenceAmount, strconv.FormatInt(v.Quota, 10), v.ActualAmount, localizedReasons(v.Reasons)})
+			}
+			cw.Flush()
+			if flusher, ok := w.(http.Flusher); ok {
+				flusher.Flush()
 			}
 			if len(items) < 5000 {
 				break

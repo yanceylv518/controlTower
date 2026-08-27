@@ -123,6 +123,35 @@ func TestModernNewAPICacheOverflowDoesNotInferAnthropic(t *testing.T) {
 	}
 }
 
+func TestChannelModelTestDoesNotApplyLoggedCacheDiagnostics(t *testing.T) {
+	usage := normalizeChannelTestBillingUsage("模型测试", parseBillingCacheUsage(`{"cache_tokens":86,"cache_ratio":0.1,"completion_ratio":5,"group_ratio":1,"model_price":-1,"model_ratio":10}`))
+	prompt, _ := normalizedBillingPromptTokens(86, usage)
+	if prompt != 86 || usage.Read != 0 || usage.Write != 0 {
+		t.Fatalf("channel test usage prompt=%d read=%d write=%d", prompt, usage.Read, usage.Write)
+	}
+	result, err := billing.VerifyLogCharge(billing.PagedLogRecord{
+		PromptTokens:     sql.NullInt64{Int64: prompt, Valid: true},
+		CompletionTokens: sql.NullInt64{Int64: 16, Valid: true},
+		CacheTokens:      usage.Read, CacheWriteTokens: usage.Write,
+		ModelPrice: usage.ModelPrice, ModelRatio: usage.ModelRatio,
+		CompletionRatio: usage.CompletionRatio, CacheRatio: usage.CacheRatio, GroupRatio: usage.GroupRatio,
+		Quota: 1660,
+	}, "500000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.CalculatedQuota != 1660 || !result.Verified {
+		t.Fatalf("channel test quota=%d verified=%v", result.CalculatedQuota, result.Verified)
+	}
+}
+
+func TestOrdinaryRequestStillUsesCacheBillingLane(t *testing.T) {
+	usage := normalizeChannelTestBillingUsage("ordinary-token", parseBillingCacheUsage(`{"cache_tokens":86,"cache_ratio":0.1}`))
+	if usage.Read != 86 {
+		t.Fatalf("ordinary request cache read=%d", usage.Read)
+	}
+}
+
 // The accepted production example (prompt=298 already non-cache, cache=8507)
 // carries no usage_semantic marker on some new-api versions. OpenAI-style
 // cache is a subset of prompt, so cache exceeding prompt proves the row is

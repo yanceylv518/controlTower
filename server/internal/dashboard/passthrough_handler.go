@@ -274,7 +274,7 @@ func scanBillingLogRows(rows *sql.Rows, out []billing.PagedLogRecord) ([]billing
 		if err := rows.Scan(&v.ID, &v.CreatedUnix, &v.RequestID, &v.UpstreamRequestID, &v.UserID, &v.Username, &v.TokenID, &v.TokenName, &v.ChannelID, &v.ChannelName, &v.ModelName, &v.GroupName, &v.PromptTokens, &v.CompletionTokens, &v.Quota, &other); err != nil {
 			return nil, err
 		}
-		cache := parseBillingCacheUsage(other)
+		cache := normalizeChannelTestBillingUsage(v.TokenName, parseBillingCacheUsage(other))
 		v.SourcePromptTokens = v.PromptTokens
 		if v.PromptTokens.Valid {
 			cache = resolveBillingCacheSemantic(cache, v.PromptTokens.Int64)
@@ -295,6 +295,17 @@ func scanBillingLogRows(rows *sql.Rows, out []billing.PagedLogRecord) ([]billing
 		out = append(out, v)
 	}
 	return out, rows.Err()
+}
+
+// NewAPI's channel-test controller records provider cache diagnostics in the
+// log, but settleTestQuota bills the complete prompt and does not apply cache
+// ratios. Keeping those diagnostics as billing lanes makes CT undercharge
+// every test request that reports cached tokens.
+func normalizeChannelTestBillingUsage(tokenName string, usage billingCacheUsage) billingCacheUsage {
+	if strings.TrimSpace(tokenName) == "模型测试" {
+		usage.Read, usage.Write, usage.Write5m, usage.Write1h = 0, 0, 0, 0
+	}
+	return usage
 }
 
 func normalizedBillingPromptTokens(rawPrompt int64, usage billingCacheUsage) (int64, int64) {
