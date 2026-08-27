@@ -662,12 +662,13 @@ func jsonValue(values map[string]any, key string) string {
 
 // Legacy text-only logs can omit the Anthropic marker while reporting cache
 // outside prompt_tokens, so cache exceeding prompt remains a compatibility
-// hint. It is not valid for multimodal logs: image/audio lanes may overlap the
-// prompt/cache totals and legitimately make cache exceed prompt in OpenAI
-// semantics. Explicit markers always win, and multimodal rows stay OpenAI
-// unless NewAPI explicitly labels them Anthropic.
+// hint only when the row has no per-request pricing snapshot. Modern NewAPI
+// rows can report cached tokens slightly above prompt_tokens while still using
+// OpenAI semantics; treating those rows as Anthropic charges prompt_tokens a
+// second time. Explicit markers always win.
 func resolveBillingCacheSemantic(cache billingCacheUsage, promptTokens int64) billingCacheUsage {
-	if cache.Semantic != "anthropic" && cache.ImageInput == 0 && cache.ImageOutput == 0 && cache.AudioInput == 0 && cache.AudioOutput == 0 && cache.Read+cache.Write > promptTokens {
+	modernSnapshot := cache.ModelPrice != "" || cache.ModelRatio != "" || cache.CompletionRatio != "" || cache.CacheRatio != "" || cache.CacheCreationRatio != "" || cache.CacheCreationRatio5m != "" || cache.CacheCreationRatio1h != "" || cache.GroupRatio != "" || cache.ImageRatio != "" || cache.BillingMode != "" || cache.ExprBase64 != "" || cache.MatchedTier != "" || cache.RequestRules != ""
+	if cache.Semantic != "anthropic" && !modernSnapshot && cache.ImageInput == 0 && cache.ImageOutput == 0 && cache.AudioInput == 0 && cache.AudioOutput == 0 && cache.Read+cache.Write > promptTokens {
 		cache.Semantic = "anthropic"
 	}
 	return cache

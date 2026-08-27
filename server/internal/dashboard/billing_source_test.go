@@ -77,6 +77,17 @@ func TestMultimodalCacheOverflowDoesNotInferAnthropic(t *testing.T) {
 	}
 }
 
+func TestModernNewAPICacheOverflowDoesNotInferAnthropic(t *testing.T) {
+	usage := resolveBillingCacheSemantic(parseBillingCacheUsage(`{"cache_tokens":18688,"cache_ratio":0.1,"completion_ratio":5,"group_ratio":1,"model_price":-1,"model_ratio":10}`), 18686)
+	if usage.Semantic != "openai" {
+		t.Fatalf("modern NewAPI row inferred as %q", usage.Semantic)
+	}
+	prompt, _ := normalizedBillingPromptTokens(18686, usage)
+	if prompt != 0 {
+		t.Fatalf("ordinary prompt=%d, want 0 after overlapping cache lane", prompt)
+	}
+}
+
 // The accepted production example (prompt=298 already non-cache, cache=8507)
 // carries no usage_semantic marker on some new-api versions. OpenAI-style
 // cache is a subset of prompt, so cache exceeding prompt proves the row is

@@ -33,6 +33,8 @@
 
 > 2026-08-27 多模态缓存语义修正：`cache > prompt` 只能作为旧版纯文本日志缺少标记时的 Anthropic 兼容提示；图片或音频请求存在 Token 重叠，不能据此推断 Anthropic，否则会把普通输入重复计费。多模态日志仅在 NewAPI 明确记录 `usage_semantic=anthropic` 或 `claude=true` 时采用 Anthropic 语义。
 
+> 2026-08-27 现代 NewAPI 缓存语义修正：带有 `model_ratio`、`cache_ratio`、`completion_ratio` 等请求级计费快照的日志，即使 `cache_tokens > prompt_tokens` 也按 OpenAI 语义处理，避免把普通输入通道重复计费；仅无计费元数据的旧日志保留形状推断，显式 Anthropic 标记始终优先。
+
 ## 1. 项目定位
 
 Control Tower 是独立于 new-api 的多站点监控与轻运维系统。各站点彼此隔离，不存在跨站点的同一客户。Control Tower 通过站点配置的只读查询连接读取业务数据，不修改 new-api 数据库，也不进入用户请求链路。
