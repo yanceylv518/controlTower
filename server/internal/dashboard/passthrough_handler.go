@@ -305,6 +305,7 @@ func billingLogsPageQuery(userID, channelID, tokenID int64) (string, bool) {
 
 const billingOtherProjection = `CASE WHEN JSON_VALID(l.other) THEN JSON_OBJECT(` +
 	`'usage_semantic',JSON_EXTRACT(l.other,'$.usage_semantic'),` +
+	`'usage_billing_path',JSON_EXTRACT(l.other,'$.admin_info.usage_billing_path'),` +
 	`'claude',JSON_EXTRACT(l.other,'$.claude'),` +
 	`'cache_tokens',JSON_EXTRACT(l.other,'$.cache_tokens'),` +
 	`'cached_tokens',JSON_EXTRACT(l.other,'$.cached_tokens'),` +
@@ -548,6 +549,7 @@ type billingCacheUsage struct {
 	ModelPrice, ModelRatio, CompletionRatio, CacheRatio, CacheCreationRatio string
 	CacheCreationRatio5m, CacheCreationRatio1h, GroupRatio, ImageRatio      string
 	BillingMode, ExprBase64, MatchedTier, RequestRules                      string
+	UsageBillingPath                                                        string
 }
 
 func parseBillingCacheUsage(other string) billingCacheUsage {
@@ -621,13 +623,20 @@ func parseBillingCacheUsage(other string) billingCacheUsage {
 		}
 		return ""
 	}
+	usageBillingPath := ""
+	if raw, ok := values["usage_billing_path"].(string); ok {
+		usageBillingPath = strings.ToLower(strings.TrimSpace(raw))
+	} else if admin, ok := values["admin_info"].(map[string]any); ok {
+		usageBillingPath = strings.ToLower(strings.TrimSpace(stringValue(admin, "usage_billing_path")))
+	}
 	imageInput := number("image_input", "image_tokens")
 	imageOutput := number("image_output_tokens")
 	// NewAPI historically writes PromptTokensDetails.ImageTokens to the
-	// misleading `image_output` log key. Treat it as image input unless an
-	// explicit input/output schema is present, otherwise the same lane can be
-	// charged twice and tiered `img`/`img_o` variables are reversed.
-	if imageInput == 0 && imageOutput == 0 {
+	// misleading `image_output` log key for upstream usage billing. For local
+	// wallet billing the same key is diagnostic metadata and NewAPI keeps those
+	// tokens in the ordinary prompt lane; charging it separately overstates the
+	// bill. Explicit image input/output fields remain authoritative.
+	if imageInput == 0 && imageOutput == 0 && usageBillingPath == "upstream" {
 		imageInput = number("image_output")
 	}
 	return billingCacheUsage{
@@ -639,7 +648,7 @@ func parseBillingCacheUsage(other string) billingCacheUsage {
 		CacheCreationRatio5m: decimal("cache_creation_ratio_5m"), CacheCreationRatio1h: decimal("cache_creation_ratio_1h"),
 		ImageRatio: decimal("image_ratio"),
 		GroupRatio: decimal("group_ratio"), BillingMode: stringValue(values, "billing_mode"), ExprBase64: stringValue(values, "expr_b64"),
-		MatchedTier: stringValue(values, "matched_tier"), RequestRules: jsonValue(values, "request_rules"),
+		MatchedTier: stringValue(values, "matched_tier"), RequestRules: jsonValue(values, "request_rules"), UsageBillingPath: usageBillingPath,
 	}
 }
 
