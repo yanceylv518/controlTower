@@ -8,6 +8,7 @@ import (
 	"controltower/agent/internal/errorclass"
 	"controltower/agent/internal/logcollector"
 	"controltower/agent/internal/reporter"
+	"controltower/internal/cachemetrics"
 	"controltower/internal/latencyhist"
 )
 
@@ -94,13 +95,18 @@ func (a *accumulator) add(event logcollector.Event, cacheHitMinPromptTokens int6
 		a.streamCount++
 		a.metric.StreamCount++
 	}
-	if event.LogType == "consume" && event.PromptTokens > cacheHitMinPromptTokens {
+	cacheTokens := int64(0)
+	if event.CacheTokens != nil {
+		cacheTokens = *event.CacheTokens
+	}
+	cachePromptTokens := cachemetrics.PromptTotal(event.PromptTokens, cacheTokens, event.CachePromptTokens)
+	if event.LogType == "consume" && cachePromptTokens > cacheHitMinPromptTokens {
 		a.bigInputCount++
 		if event.CacheFieldPresent && event.CacheTokens != nil {
 			a.cacheTokens += *event.CacheTokens
-			a.cachePromptTokens += event.PromptTokens
+			a.cachePromptTokens += cachePromptTokens
 			a.metric.CacheTokensTotal += *event.CacheTokens
-			a.metric.CachePromptTokens += event.PromptTokens
+			a.metric.CachePromptTokens += cachePromptTokens
 		}
 		if event.CacheTokens != nil && *event.CacheTokens > 0 {
 			a.bigInputCacheHits++

@@ -51,6 +51,7 @@ type Event struct {
 	ErrorSummary      string
 	CacheTokens       *int64
 	CacheFieldPresent bool
+	CachePromptTokens *int64
 	FirstResponseMs   *int64
 }
 
@@ -61,6 +62,7 @@ func ConvertRow(row Row) (Event, bool, error) {
 	}
 
 	cacheTokens, cachePresent, _ := parseCacheTokens(row.Other)
+	cachePromptTokens, _ := parseCachePromptTokens(row.Other, row.PromptTokens, cacheTokens)
 	firstResponseMs, _ := parseFirstResponseMs(row.Other)
 
 	return Event{
@@ -85,8 +87,43 @@ func ConvertRow(row Row) (Event, bool, error) {
 		ErrorSummary:      summarizeError(row.Content),
 		CacheTokens:       cacheTokens,
 		CacheFieldPresent: cachePresent,
+		CachePromptTokens: cachePromptTokens,
 		FirstResponseMs:   firstResponseMs,
 	}, true, nil
+}
+
+func parseCachePromptTokens(other string, promptTokens int64, cacheTokens *int64) (*int64, error) {
+	if strings.TrimSpace(other) == "" {
+		return nil, nil
+	}
+	var data map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(other), &data); err != nil {
+		return nil, err
+	}
+	if raw, ok := data["input_tokens_total"]; ok {
+		var total int64
+		if json.Unmarshal(raw, &total) == nil && total > 0 {
+			return &total, nil
+		}
+	}
+	var claude bool
+	if raw, ok := data["claude"]; !ok || json.Unmarshal(raw, &claude) != nil || !claude {
+		return nil, nil
+	}
+	total := promptTokens
+	if cacheTokens != nil && *cacheTokens > 0 {
+		total += *cacheTokens
+	}
+	if raw, ok := data["cache_creation_tokens"]; ok {
+		var creation int64
+		if json.Unmarshal(raw, &creation) == nil && creation > 0 {
+			total += creation
+		}
+	}
+	if total <= 0 {
+		return nil, nil
+	}
+	return &total, nil
 }
 
 func parseFirstResponseMs(other string) (*int64, error) {

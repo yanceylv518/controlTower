@@ -108,6 +108,26 @@ func TestAggregateExactQuantilesCacheBoundaryAndStreamTTFT(t *testing.T) {
 	}
 }
 
+func TestAggregateCacheRateUsesNormalizedTotalAndCannotExceedOne(t *testing.T) {
+	base := time.Date(2026, 8, 26, 17, 36, 0, 0, time.UTC)
+	cacheTokens, normalizedTotal := int64(1307), int64(2307)
+	metric := Aggregate("inst", []logcollector.Event{{
+		CreatedAt: base, LogType: "consume", PromptTokens: 1000,
+		CacheTokens: &cacheTokens, CacheFieldPresent: true, CachePromptTokens: &normalizedTotal,
+	}}, 512)[0]
+	if metric.CachePromptTokens != normalizedTotal || metric.CacheTokenRate == nil || *metric.CacheTokenRate != float64(cacheTokens)/float64(normalizedTotal) {
+		t.Fatalf("cache rate must use normalized total input: %#v", metric)
+	}
+
+	metric = Aggregate("inst", []logcollector.Event{{
+		CreatedAt: base, LogType: "consume", PromptTokens: 1000,
+		CacheTokens: &cacheTokens, CacheFieldPresent: true,
+	}}, 512)[0]
+	if metric.CacheTokenRate == nil || *metric.CacheTokenRate != 1 {
+		t.Fatalf("legacy malformed cache rate must be capped by its denominator: %#v", metric)
+	}
+}
+
 func TestAggregateOTPSUsesOnlyValidSuccessfulStreamGenerationTime(t *testing.T) {
 	base := time.Date(2026, 7, 21, 10, 0, 0, 0, time.UTC)
 	firstResponse := int64(1000)

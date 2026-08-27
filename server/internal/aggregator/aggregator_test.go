@@ -63,6 +63,18 @@ func TestAggregate1mComputesInstanceMetrics(t *testing.T) {
 	}
 }
 
+func TestAggregate1mCacheRateCannotExceedOneForLegacyEvents(t *testing.T) {
+	bucket := time.Date(2026, 8, 26, 17, 36, 0, 0, time.UTC)
+	cacheTokens := int64(1307)
+	metrics := Aggregate1m([]storage.LogEvent{{
+		InstanceID: "inst-1", CreatedAt: bucket, LogType: "consume", PromptTokens: 1000,
+		CacheTokens: &cacheTokens, CacheFieldPresent: true,
+	}})
+	if len(metrics) == 0 || metrics[0].CacheTokenRate == nil || *metrics[0].CacheTokenRate != 1 {
+		t.Fatalf("legacy cache rate must not exceed one: %#v", metrics)
+	}
+}
+
 func TestAggregate1mTreatsSuccessfulZeroOutputAsError(t *testing.T) {
 	bucket := time.Date(2026, 8, 26, 10, 0, 0, 0, time.UTC)
 	metrics := Aggregate1m([]storage.LogEvent{

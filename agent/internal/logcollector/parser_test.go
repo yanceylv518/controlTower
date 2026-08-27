@@ -48,6 +48,32 @@ func TestConvertRowBuildsConsumeEventWithCacheTokens(t *testing.T) {
 	}
 }
 
+func TestConvertRowUsesNormalizedInputTotalForCacheDenominator(t *testing.T) {
+	event, ok, err := ConvertRow(Row{
+		ID: 1005, CreatedAt: time.Now().UTC(), Type: 2, PromptTokens: 300,
+		Other: `{"cache_tokens":700,"input_tokens_total":1000}`,
+	})
+	if err != nil || !ok {
+		t.Fatalf("convert row: ok=%v err=%v", ok, err)
+	}
+	if event.CachePromptTokens == nil || *event.CachePromptTokens != 1000 {
+		t.Fatalf("unexpected normalized cache denominator: %#v", event.CachePromptTokens)
+	}
+}
+
+func TestConvertRowBuildsClaudeTotalInputForCacheDenominator(t *testing.T) {
+	event, ok, err := ConvertRow(Row{
+		ID: 1006, CreatedAt: time.Now().UTC(), Type: 2, PromptTokens: 300,
+		Other: `{"claude":true,"cache_tokens":700,"cache_creation_tokens":50}`,
+	})
+	if err != nil || !ok {
+		t.Fatalf("convert row: ok=%v err=%v", ok, err)
+	}
+	if event.CachePromptTokens == nil || *event.CachePromptTokens != 1050 {
+		t.Fatalf("unexpected Claude cache denominator: %#v", event.CachePromptTokens)
+	}
+}
+
 func TestConvertRowParsesValidFirstResponseMillisecondsIndependently(t *testing.T) {
 	event, ok, err := ConvertRow(Row{ID: 2001, CreatedAt: time.Now().UTC(), Type: 2, Other: `{"frt":1234,"cache_tokens":"invalid"}`})
 	if err != nil || !ok {

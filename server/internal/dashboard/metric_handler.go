@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"controltower/internal/cachemetrics"
+
 	"controltower/internal/latencyhist"
 	"controltower/server/internal/aggregator"
 	ctauth "controltower/server/internal/auth"
@@ -273,6 +275,11 @@ func (h Handler) filterMetricItemsByInstances(metrics []aggregator.Metric, dimen
 	allowed := instanceIDSet(instanceIDs)
 	items := make([]MetricItem, 0, len(metrics))
 	for _, metric := range metrics {
+		cacheTokenRate := metric.CacheTokenRate
+		if cacheTokenRate != nil {
+			bounded := cachemetrics.ClampRate(*cacheTokenRate)
+			cacheTokenRate = &bounded
+		}
 		if allowed != nil && !allowed[metric.InstanceID] {
 			continue
 		}
@@ -312,10 +319,10 @@ func (h Handler) filterMetricItemsByInstances(metrics []aggregator.Metric, dimen
 			P50UseTime:        p50,
 			P99UseTime:        p99,
 			StreamRate:        metric.StreamRate,
-			CacheTokenRate:    metric.CacheTokenRate,
+			CacheTokenRate:    cacheTokenRate,
 			BigInputCount:     metric.BigInputCount,
 			BigInputCacheHits: metric.BigInputCacheHits,
-			CacheHitRate:      metric.CacheTokenRate,
+			CacheHitRate:      cacheTokenRate,
 			TTFTCount:         metric.TTFTCount,
 			TTFTAvgMS:         nullableAverage(metric.TTFTSumMS, metric.TTFTCount),
 			TTFTP50MS:         metric.TTFTP50MS,
