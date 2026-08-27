@@ -116,19 +116,27 @@ func (h *PassthroughHandler) ChannelLogsPageForBilling(ctx context.Context, site
 }
 
 func (h *PassthroughHandler) DetailedChannelsLogsPageForBilling(ctx context.Context, site string, channelIDs []int64, start, end time.Time, cursor billing.LogCursor, limit int) ([]billing.PagedLogRecord, error) {
-	items := make([]billing.PagedLogRecord, 0, limit*len(channelIDs))
-	for _, channelID := range channelIDs {
-		rows, err := h.ChannelLogsPageForBilling(ctx, site, channelID, start, end, cursor, limit)
-		if err != nil {
-			return nil, err
+	channelIDs = uniquePositiveIDs(channelIDs)
+	if len(channelIDs) == 0 {
+		return []billing.PagedLogRecord{}, nil
+	}
+	return h.logsPageForBillingChannels(ctx, site, channelIDs, start, end, cursor, limit)
+}
+
+func uniquePositiveIDs(ids []int64) []int64 {
+	seen := make(map[int64]struct{}, len(ids))
+	out := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			continue
 		}
-		items = append(items, rows...)
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
 	}
-	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
-	if len(items) > limit {
-		items = items[:limit]
-	}
-	return items, nil
+	return out
 }
 
 func (h *PassthroughHandler) ValidateBillingIndexes(ctx context.Context, site string, userScoped bool) error {
@@ -227,10 +235,43 @@ func (h *PassthroughHandler) logsPageForBilling(ctx context.Context, site string
 	defer cancel()
 	defer rows.Close()
 	out := make([]billing.PagedLogRecord, 0, limit)
+	return scanBillingLogRows(rows, out)
+}
+
+func (h *PassthroughHandler) logsPageForBillingChannels(ctx context.Context, site string, channelIDs []int64, start, end time.Time, cursor billing.LogCursor, limit int) ([]billing.PagedLogRecord, error) {
+	db, configured, err := h.database(site)
+	if err != nil {
+		return nil, err
+	}
+	if !configured {
+		return nil, fmt.Errorf("readonly database is not configured for %s", site)
+	}
+	if limit <= 0 || limit > 5000 {
+		limit = billing.BillingPageSize
+	}
+	query := billingChannelsLogsPageQuery(len(channelIDs))
+	args := make([]any, 0, 6+len(channelIDs))
+	args = append(args, start.Unix(), end.Unix(), cursor.CreatedUnix, cursor.CreatedUnix, cursor.ID)
+	for _, id := range channelIDs {
+		args = append(args, id)
+	}
+	args = append(args, limit)
+	queryCtx, cancel := context.WithTimeout(ctx, billingLogsPageTimeout)
+	rows, err := db.QueryContext(queryCtx, query, args...)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("billing channel logs page site=%s channels=%d cursor=%d/%d: %w", site, len(channelIDs), cursor.CreatedUnix, cursor.ID, err)
+	}
+	defer cancel()
+	defer rows.Close()
+	return scanBillingLogRows(rows, make([]billing.PagedLogRecord, 0, limit))
+}
+
+func scanBillingLogRows(rows *sql.Rows, out []billing.PagedLogRecord) ([]billing.PagedLogRecord, error) {
 	for rows.Next() {
 		var v billing.PagedLogRecord
 		var other string
-		if err = rows.Scan(&v.ID, &v.CreatedUnix, &v.RequestID, &v.UpstreamRequestID, &v.UserID, &v.Username, &v.TokenID, &v.TokenName, &v.ChannelID, &v.ChannelName, &v.ModelName, &v.GroupName, &v.PromptTokens, &v.CompletionTokens, &v.Quota, &other); err != nil {
+		if err := rows.Scan(&v.ID, &v.CreatedUnix, &v.RequestID, &v.UpstreamRequestID, &v.UserID, &v.Username, &v.TokenID, &v.TokenName, &v.ChannelID, &v.ChannelName, &v.ModelName, &v.GroupName, &v.PromptTokens, &v.CompletionTokens, &v.Quota, &other); err != nil {
 			return nil, err
 		}
 		cache := parseBillingCacheUsage(other)
@@ -301,6 +342,12 @@ func billingLogsPageQuery(userID, channelID, tokenID int64) (string, bool) {
 		return query + ` ORDER BY l.id LIMIT ?`, true
 	}
 	return query + ` ORDER BY l.created_at,l.id LIMIT ?`, false
+}
+
+func billingChannelsLogsPageQuery(channelCount int) string {
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", channelCount), ",")
+	return `SELECT l.id,l.created_at,COALESCE(l.request_id,''),COALESCE(l.upstream_request_id,''),l.user_id,COALESCE(l.username,''),COALESCE(l.token_id,0),COALESCE(l.token_name,''),COALESCE(l.channel_id,0),COALESCE(c.name,''),COALESCE(l.model_name,''),COALESCE(l.` + "`group`" + `,''),l.prompt_tokens,l.completion_tokens,l.quota,` + billingOtherProjection +
+		` FROM logs l LEFT JOIN channels c ON c.id=l.channel_id WHERE l.type=2 AND l.created_at>=? AND l.created_at<? AND (l.created_at>? OR (l.created_at=? AND l.id>?)) AND l.channel_id IN (` + placeholders + `) ORDER BY l.created_at,l.id LIMIT ?`
 }
 
 const billingOtherProjection = `CASE WHEN JSON_VALID(l.other) THEN JSON_OBJECT(` +

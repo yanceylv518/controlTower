@@ -411,7 +411,7 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 	if job.JobType == "verify" {
 		return r.processVerificationStep(ctx, job, step)
 	}
-	if source, ok := r.Source.(BillingIndexSource); ok && job.JobType != "upstream_statement" {
+	if source, ok := r.Source.(BillingIndexSource); ok {
 		if err := source.ValidateBillingIndexes(ctx, job.InstanceID, job.UserID > 0); err != nil {
 			return err
 		}

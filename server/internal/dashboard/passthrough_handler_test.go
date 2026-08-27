@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -160,5 +161,32 @@ func TestBillingLogsPageQueryKeepsTimeKeysetForUnfilteredJobs(t *testing.T) {
 	if !strings.Contains(query, "(l.created_at>? OR (l.created_at=? AND l.id>?))") ||
 		!strings.Contains(query, "ORDER BY l.created_at,l.id LIMIT ?") {
 		t.Fatalf("unfiltered query does not use the time keyset: %s", query)
+	}
+}
+
+func TestBillingChannelsLogsPageQueryScansTimeRangeOnce(t *testing.T) {
+	query := billingChannelsLogsPageQuery(3)
+	for _, required := range []string{
+		"l.created_at>=? AND l.created_at<?",
+		"(l.created_at>? OR (l.created_at=? AND l.id>?))",
+		"l.channel_id IN (?,?,?)",
+		"ORDER BY l.created_at,l.id LIMIT ?",
+	} {
+		if !strings.Contains(query, required) {
+			t.Fatalf("multi-channel billing query missing %q: %s", required, query)
+		}
+	}
+	if strings.Contains(query, "OFFSET") || strings.Contains(query, "BETWEEN") || strings.Contains(query, "FORCE INDEX") {
+		t.Fatalf("multi-channel query must use the existing time index without forcing a site-specific index: %s", query)
+	}
+	if got := strings.Count(query, "?"); got != 9 {
+		t.Fatalf("multi-channel query placeholders=%d want=9: %s", got, query)
+	}
+}
+
+func TestUniquePositiveIDs(t *testing.T) {
+	got := uniquePositiveIDs([]int64{7, 0, 7, -2, 9})
+	if !reflect.DeepEqual(got, []int64{7, 9}) {
+		t.Fatalf("uniquePositiveIDs=%v", got)
 	}
 }
