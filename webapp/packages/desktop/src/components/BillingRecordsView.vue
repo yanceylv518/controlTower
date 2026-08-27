@@ -15,6 +15,7 @@ const props = defineProps<{ billType: "user" | "upstream" }>();
 const router = useRouter();
 const detailVisible = ref(false);
 const detailLoading = ref(false);
+const downloadingBillId = ref("");
 type PreviewRow = Record<string, unknown>;
 const detail = ref<{job:BillingJob;total_orders:number;normal_orders:number;billable_orders:number;anomaly_total:number;reconciliation_total:number;review_required:boolean;count_balanced:boolean;model_summary:PreviewRow[];daily_summary:PreviewRow[];token_summary:PreviewRow[];anomalies:PreviewRow[];reconciliation:PreviewRow[]} | null>(null);
 const filters = useFiltersStore();
@@ -41,7 +42,22 @@ const subject = (job: BillingJob) => props.billType === "user"
 const createBill = () => router.push({ path: "/billing/tasks", query: { create: "1", bill_type: props.billType } });
 async function viewBill(job:BillingJob){detailVisible.value=true;detailLoading.value=true;detail.value=null;try{detail.value=await dashboard.billingStatementResult(job.id)}catch(error){ElMessage.error(billingReadErrorMessage(error,"账单加载失败"))}finally{detailLoading.value=false}}
 const safeFilename=(value:string)=>value.replace(/[<>:"/\\|?*\x00-\x1f]/g,"-").trim();
-async function downloadBill(job:BillingJob){const kind=job.job_type==="upstream_statement"?"上游账单":"用户账单";const filename=`${kind}-${safeFilename(job.bill_no||job.id)}.zip`;try{await downloadBillingFile(`/api/dashboard/billing/statements/result?id=${encodeURIComponent(job.id)}&download=1`,"账单压缩包下载失败",filename)}catch(error){ElMessage.error(billingReadErrorMessage(error,"账单压缩包下载失败"))}}
+async function downloadBill(job:BillingJob){
+  if(downloadingBillId.value)return;
+  const kind=job.job_type==="upstream_statement"?"上游账单":"用户账单";
+  const filename=`${kind}-${safeFilename(job.bill_no||job.id)}.zip`;
+  downloadingBillId.value=job.id;
+  const preparing=ElMessage({message:"正在准备账单 ZIP，大账单可能需要一些时间，请勿重复点击",type:"info",duration:0});
+  try{
+    await downloadBillingFile(`/api/dashboard/billing/statements/result?id=${encodeURIComponent(job.id)}&download=1`,"账单压缩包下载失败",filename);
+    ElMessage.success("账单 ZIP 已开始下载");
+  }catch(error){
+    ElMessage.error(billingReadErrorMessage(error,"账单压缩包下载失败"));
+  }finally{
+    preparing.close();
+    downloadingBillId.value="";
+  }
+}
 const queryDate=(value?:string)=>{if(!value)return"";const d=new Date(value);return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`};
 async function downloadAnomalies(job:BillingJob){const url=`/api/dashboard/billing/anomalies?instance_id=${encodeURIComponent(job.instance_id)}&job_id=${encodeURIComponent(job.id)}&user_id=${job.user_id||0}&from=${queryDate(job.range_from)}&to=${queryDate(job.range_to)}&format=csv`;try{await downloadBillingFile(url,"异常订单下载失败",`${job.bill_no||job.id}-内部异常.csv`)}catch(error){ElMessage.error(billingReadErrorMessage(error,"异常订单下载失败"))}}
 async function downloadReconciliation(job:BillingJob){const url=`/api/dashboard/billing/statements/result?id=${encodeURIComponent(job.id)}&export=reconciliation`;try{await downloadBillingFile(url,"核对差异下载失败",`${job.bill_no||job.id}-核对差异.csv`)}catch(error){ElMessage.error(billingReadErrorMessage(error,"核对差异下载失败"))}}
@@ -64,7 +80,7 @@ watch(() => [filters.site_id, props.billType] as const, () => void state.reload(
         <el-table-column label="核对差异" width="110" align="right"><template #default="s"><span :class="{ danger: s.row.mismatch_rows }">{{ formatNumber(s.row.mismatch_rows || 0) }}</span></template></el-table-column>
         <el-table-column label="生成时间" min-width="170"><template #default="s">{{ formatTime(s.row.updated_at || s.row.created_at) }}</template></el-table-column>
         <el-table-column label="状态" width="110"><template #default="s"><el-tag :type="s.row.mismatch_rows ? 'warning' : 'success'">{{s.row.mismatch_rows ? '待复核' : '可使用'}}</el-tag></template></el-table-column>
-        <el-table-column label="操作" width="230" fixed="right"><template #default="s"><el-button link type="primary" @click="viewBill(s.row)">查看账单</el-button><el-button link type="primary" :disabled="!!s.row.mismatch_rows" @click="downloadBill(s.row)">下载 ZIP</el-button><el-button link type="danger" @click="deleteBill(s.row)">删除</el-button></template></el-table-column>
+        <el-table-column label="操作" width="230" fixed="right"><template #default="s"><el-button link type="primary" @click="viewBill(s.row)">查看账单</el-button><el-button link type="primary" :loading="downloadingBillId===s.row.id" :disabled="!!s.row.mismatch_rows||!!downloadingBillId" @click="downloadBill(s.row)">下载 ZIP</el-button><el-button link type="danger" @click="deleteBill(s.row)">删除</el-button></template></el-table-column>
       </el-table>
     </AsyncPanel>
     <el-dialog v-model="detailVisible" width="min(1180px, calc(100vw - 48px))" top="7vh" class="bill-preview-dialog" destroy-on-close>
@@ -81,7 +97,7 @@ watch(() => [filters.site_id, props.billType] as const, () => void state.reload(
           <el-tab-pane><template #label><span>核对差异 <el-badge :value="detail.reconciliation_total" :hidden="!detail.reconciliation_total" type="warning"/></span></template><div class="anomaly-toolbar"><el-alert type="warning" :closable="false" show-icon title="这些订单仍计入账单；存在记录时账单必须复核，不能直接交付。"/><el-button type="warning" plain :disabled="!detail.reconciliation_total" @click="downloadReconciliation(detail.job)">下载核对差异 CSV</el-button></div><el-table :data="detail.reconciliation" size="small" max-height="430" stripe><el-table-column prop="created_at" label="请求时间" width="165"/><el-table-column prop="request_id" label="Request ID" min-width="190" show-overflow-tooltip/><el-table-column prop="model_name" label="模型" width="140"/><el-table-column prop="logged_quota" label="日志 Quota" width="115" align="right"/><el-table-column prop="calculated_quota" label="重算 Quota" width="115" align="right"/><el-table-column prop="quota_difference" label="Quota 差额" width="110" align="right"/><el-table-column prop="logged_amount" label="日志金额" width="110" align="right"/><el-table-column prop="calculated_amount" label="重算金额" width="110" align="right"/><el-table-column prop="reason" label="差异原因" min-width="220" show-overflow-tooltip/></el-table><p v-if="detail.reconciliation_total>detail.reconciliation.length" class="preview-note">页面仅展示前 {{detail.reconciliation.length}} 条，完整 {{previewNumber(detail.reconciliation_total)}} 条请下载 CSV。</p></el-tab-pane>
         </el-tabs><el-empty v-if="!detail.normal_orders" description="该账期没有查询到正常订单" :image-size="60"/></template>
       </div>
-      <template #footer><div class="preview-footer"><span>{{detail?.review_required?'账单待复核，暂不可下载正式 ZIP':'下载包包含主账单及每日明细文件'}}</span><div><el-button @click="detailVisible=false">关闭</el-button><el-button v-if="detail" type="primary" :disabled="detail.review_required" @click="downloadBill(detail.job)">下载账单 ZIP</el-button></div></div></template>
+      <template #footer><div class="preview-footer"><span>{{detail?.review_required?'账单待复核，暂不可下载正式 ZIP':'下载包包含主账单及每日明细文件'}}</span><div><el-button @click="detailVisible=false">关闭</el-button><el-button v-if="detail" type="primary" :loading="downloadingBillId===detail.job.id" :disabled="detail.review_required||!!downloadingBillId" @click="downloadBill(detail.job)">下载账单 ZIP</el-button></div></div></template>
     </el-dialog>
   </AppShell>
 </template>

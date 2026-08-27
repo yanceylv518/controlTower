@@ -58,5 +58,8 @@ export async function downloadBillingFile(url: string, fallback: string, filenam
   document.body.appendChild(link);
   link.click();
   link.remove();
-  URL.revokeObjectURL(href);
+  // Revoking synchronously can cancel a large download before the browser has
+  // taken ownership of the blob URL. Keep it alive briefly; the timeout only
+  // releases the in-memory URL and does not affect the downloaded file.
+  window.setTimeout(() => URL.revokeObjectURL(href), 60_000);
 }
