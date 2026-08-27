@@ -61,6 +61,19 @@ func TestParseBillingImageUsagePreservesNewAPILegacySemantics(t *testing.T) {
 	}
 }
 
+// Image billing is version-gated, not path-gated: NewAPI versions that stamp
+// usage_billing_path bill the image lane on the conversion paths too
+// (usageFromGeminiBillingUsage / usageFromOpenAIBillingUsage carry
+// PromptTokensDetails.ImageTokens into the same split-and-charge calculation).
+func TestConversionPathImageOutputStaysBillableLane(t *testing.T) {
+	for _, path := range []string{"gemini", "openai", "openai_estimated"} {
+		v := parseBillingCacheUsage(`{"admin_info":{"usage_billing_path":"` + path + `"},"image":true,"image_output":100,"image_ratio":2}`)
+		if v.ImageInput != 100 || v.UsageBillingPath != path {
+			t.Fatalf("path %s: image lane lost: %#v", path, v)
+		}
+	}
+}
+
 func TestNormalizeBillingPromptMatchesNewAPIImageCalculation(t *testing.T) {
 	usage := resolveBillingCacheSemantic(parseBillingCacheUsage(`{"admin_info":{"usage_billing_path":"upstream"},"cache_tokens":128768,"image_output":3432,"image_ratio":1}`), 130983)
 	prompt, contextTokens := normalizedBillingPromptTokens(130983, usage)

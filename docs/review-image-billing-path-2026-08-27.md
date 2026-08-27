@@ -31,21 +31,25 @@ f09b7d5 把无显式 image 键的 `image_output` 一律归入图片输入通道�
 - `usage_billing_path` 取值集合:local/upstream/openai/anthropic/gemini
   （含 _estimated 变体）。
 
-## P3 覆盖缺口（记档,不阻验收）
+## P3 覆盖缺口（验收发现,当日已修——用户发令）
 
 newapi 的 BillingUsage 转换路径同样可产生计费图片通道:
 `usageFromGeminiBillingUsage` 按 IMAGE modality 累加
 `PromptTokensDetails.ImageTokens`,`usageFromOpenAIBillingUsage` 整结构体
 拷贝也可携带——这些行路径值为 `gemini`/`openai`（或 `_estimated`）,
-newapi 拆图片计费,CT 现守卫精确匹配 `upstream` 不拆。后果有界:该类行
-quota 对不上落 mismatch 异常桶（实扣保留,无错账;且 image_ratio=1 时拆与
-不拆算术等价,仅 ratio≠1 才显差）。**若部署后重生成仍见图片行滞留
-mismatch 桶且其路径值为 openai/gemini,守卫应扩为「路径非空且非 local」**。
+newapi 同样拆图片计费,codex 守卫精确匹配 `upstream` 会漏拆（落 mismatch
+桶,image_ratio=1 时无差）。
+
+**修正（我实施,用户发令）**:拆图片与否由 newapi **版本**决定,不由路径取值
+决定——`image_output` 唯一写入点位于计费路径,凡写 `usage_billing_path` 键
+的版本任意路径都拆;无该键的旧版行才是诊断元数据。守卫由
+`== "upstream"` 改为 `!= ""`（路径键非空）,与源码语义严格一致;新增
+转换路径测试（gemini/openai/openai_estimated 三值钉住拆分）,钱包空路径
+样例与 upstream 样例回归不变。PROJECT_PROGRESS 当日条目同步改写。
 
 ## 验证与测试
 
-- server 树 vet + test 全绿（含 CT_MYSQL_TEST_DSN 真库）;agent/internal
-  未触及;前端无改动。
-- 部署观察点:含图片账单日重生成后,upstream 路径图片行应归位正常桶;
-  rc72 历史样例（quota=191388）依赖其生产行确带 `upstream` 路径标记
-  （测试按此假设钉住）,若重生成后该类行仍 mismatch,按上条扩守卫。
+- server 树 vet + test 全绿（含 CT_MYSQL_TEST_DSN 真库,含守卫修正后重跑）;
+  agent/internal 未触及;前端无改动。
+- 部署观察点:含图片账单日重生成后,带路径键的图片行（任意路径值）应归位
+  正常桶;仍滞留 mismatch 的图片行应只剩无路径键且 ratio≠1 的旧版行。

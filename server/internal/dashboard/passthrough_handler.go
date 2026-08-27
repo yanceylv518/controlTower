@@ -631,12 +631,16 @@ func parseBillingCacheUsage(other string) billingCacheUsage {
 	}
 	imageInput := number("image_input", "image_tokens")
 	imageOutput := number("image_output_tokens")
-	// NewAPI historically writes PromptTokensDetails.ImageTokens to the
-	// misleading `image_output` log key for upstream usage billing. For local
-	// wallet billing the same key is diagnostic metadata and NewAPI keeps those
-	// tokens in the ordinary prompt lane; charging it separately overstates the
-	// bill. Explicit image input/output fields remain authoritative.
-	if imageInput == 0 && imageOutput == 0 && usageBillingPath == "upstream" {
+	// NewAPI writes PromptTokensDetails.ImageTokens to the misleading
+	// `image_output` log key. Whether those tokens were split out of the
+	// ordinary prompt lane and billed with image_ratio depends on the NewAPI
+	// version, not on which billing path produced the usage: every version
+	// that stamps admin_info.usage_billing_path bills the image lane on all
+	// paths (upstream passthrough and the openai/gemini conversion paths
+	// alike), while older versions without that key logged `image_output` as
+	// diagnostic metadata and kept the tokens in the ordinary prompt lane.
+	// Explicit image input/output fields remain authoritative.
+	if imageInput == 0 && imageOutput == 0 && usageBillingPath != "" {
 		imageInput = number("image_output")
 	}
 	return billingCacheUsage{
