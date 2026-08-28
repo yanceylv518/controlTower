@@ -478,26 +478,28 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 		pageLast := logs[len(logs)-1]
 		pageRows := int64(len(logs))
 		type key struct {
-			user         int64
-			model, group string
-			tier         int64
+			user              int64
+			day, model, group string
+			tier              int64
 		}
 		acc := map[key]DailyRow{}
 		type channelKey struct {
-			id           int64
-			model, group string
-			tier         int64
+			id                int64
+			day, model, group string
+			tier              int64
 		}
 		channelAcc := map[channelKey]ChannelDailyRow{}
 		type tokenKey struct {
 			user, token, tier int64
-			model, group      string
+			day, model, group string
 		}
 		tokenAcc := map[tokenKey]TokenDailyRow{}
 		anomalies := []AnomalyOrder{}
 		mismatches := []ReconciliationOrder{}
 		requestDetails := []RequestDetail{}
 		for _, log := range logs {
+			billDay := dateOnly(time.Unix(log.CreatedUnix, 0))
+			billDayKey := billDay.Format("2006-01-02")
 			reasons := AnomalyReasons(log, maxByModel[log.ModelName])
 			verification, pricingReason := VerifyLogChargeReason(log, quotaPerUnit)
 			if len(reasons) > 0 {
@@ -513,13 +515,13 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 				verification = FallbackLogCharge(log, quotaPerUnit)
 			}
 			requestDetails = append(requestDetails, RequestDetail{
-				InstanceID: job.InstanceID, JobID: job.ID, SourceLogID: log.ID, CreatedUnix: log.CreatedUnix, BillDay: dateOnly(step.From), RequestID: log.RequestID, UpstreamRequestID: log.UpstreamRequestID,
+				InstanceID: job.InstanceID, JobID: job.ID, SourceLogID: log.ID, CreatedUnix: log.CreatedUnix, BillDay: billDay, RequestID: log.RequestID, UpstreamRequestID: log.UpstreamRequestID,
 				UserID: log.UserID, Username: log.Username, TokenID: log.TokenID, TokenName: log.TokenName, ChannelID: log.ChannelID, ChannelName: log.ChannelName, ModelName: log.ModelName,
 				PromptTokens: nullableInt64(log.PromptTokens), CompletionTokens: nullableInt64(log.CompletionTokens), CacheReadTokens: log.CacheTokens, CacheWriteTokens: log.CacheWriteTokens,
 				CacheWrite5mTokens: log.CacheWrite5mTokens, CacheWrite1hTokens: log.CacheWrite1hTokens, Charge: verification.Charge, CalculatedQuota: verification.CalculatedQuota, LoggedQuota: log.Quota,
 			})
 			tier := int64(0)
-			k := key{log.UserID, log.ModelName, log.GroupName, tier}
+			k := key{log.UserID, billDayKey, log.ModelName, log.GroupName, tier}
 			row := acc[k]
 			row.InstanceID = job.InstanceID
 			row.UserID = log.UserID
@@ -527,7 +529,7 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 			row.ModelName = log.ModelName
 			row.GroupName = log.GroupName
 			row.TierFrom = tier
-			row.Day = dateOnly(step.From)
+			row.Day = billDay
 			row.RequestCount++
 			row.PromptTokens += log.PromptTokens.Int64
 			row.CompletionTokens += log.CompletionTokens.Int64
@@ -538,11 +540,11 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 			row.Quota += verification.CalculatedQuota
 			row.UpdatedAt = time.Now().UTC()
 			acc[k] = row
-			tk := tokenKey{log.UserID, log.TokenID, tier, log.ModelName, log.GroupName}
+			tk := tokenKey{log.UserID, log.TokenID, tier, billDayKey, log.ModelName, log.GroupName}
 			tr := tokenAcc[tk]
 			tr.InstanceID, tr.UserID, tr.Username = job.InstanceID, log.UserID, log.Username
 			tr.TokenID, tr.TokenName = log.TokenID, log.TokenName
-			tr.ModelName, tr.GroupName, tr.TierFrom, tr.Day = log.ModelName, log.GroupName, tier, dateOnly(step.From)
+			tr.ModelName, tr.GroupName, tr.TierFrom, tr.Day = log.ModelName, log.GroupName, tier, billDay
 			tr.RequestCount++
 			tr.PromptTokens += log.PromptTokens.Int64
 			tr.CompletionTokens += log.CompletionTokens.Int64
@@ -553,7 +555,7 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 			tr.Quota += verification.CalculatedQuota
 			tr.UpdatedAt = time.Now().UTC()
 			tokenAcc[tk] = tr
-			ck := channelKey{log.ChannelID, log.ModelName, log.GroupName, tier}
+			ck := channelKey{log.ChannelID, billDayKey, log.ModelName, log.GroupName, tier}
 			cr := channelAcc[ck]
 			cr.InstanceID = job.InstanceID
 			cr.ChannelID = log.ChannelID
@@ -561,7 +563,7 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 			cr.ModelName = log.ModelName
 			cr.GroupName = log.GroupName
 			cr.TierFrom = tier
-			cr.Day = dateOnly(step.From)
+			cr.Day = billDay
 			cr.RequestCount++
 			cr.PromptTokens += log.PromptTokens.Int64
 			cr.CompletionTokens += log.CompletionTokens.Int64

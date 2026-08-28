@@ -139,7 +139,7 @@ func uniquePositiveIDs(ids []int64) []int64 {
 	return out
 }
 
-func (h *PassthroughHandler) ValidateBillingIndexes(ctx context.Context, site string, userScoped bool) error {
+func (h *PassthroughHandler) ValidateBillingIndexes(ctx context.Context, site string, _ bool) error {
 	db, configured, err := h.database(site)
 	if err != nil {
 		return err
@@ -178,12 +178,11 @@ func (h *PassthroughHandler) ValidateBillingIndexes(ctx context.Context, site st
 		}
 		return false
 	}
-	if userScoped {
-		if !hasPrefix("user_id", "id") && !hasPrefix("user_id", "created_at", "id") {
-			return fmt.Errorf("newapi logs requires an index beginning with (user_id,id) for user billing")
-		}
-	} else if !hasPrefix("created_at", "id") {
-		return fmt.Errorf("newapi logs requires an index beginning with (created_at,id)")
+	// InnoDB secondary indexes contain the primary key, so NewAPI's existing
+	// created_at-leading index can also support the (created_at,id) keyset. CT
+	// must not require customers to alter the NewAPI schema for billing.
+	if !hasPrefix("created_at") {
+		return fmt.Errorf("newapi logs requires an existing index beginning with created_at")
 	}
 	return rows.Err()
 }
@@ -204,15 +203,9 @@ func (h *PassthroughHandler) logsPageForBilling(ctx context.Context, site string
 	// `other` can contain large provider diagnostics. Billing only needs the
 	// cache-usage fields below, so project a compact JSON value inside MySQL
 	// instead of transferring the complete payload over the RDS connection.
-	query, idCursor := billingLogsPageQuery(userID, channelID, tokenID)
+	query, _ := billingLogsPageQuery(userID, channelID, tokenID)
 	args := []any{start.Unix(), end.Unix()}
-	if userID > 0 {
-		args = append(args, cursor.ID)
-	} else if idCursor {
-		args = append(args, cursor.ID)
-	} else {
-		args = append(args, cursor.CreatedUnix, cursor.CreatedUnix, cursor.ID)
-	}
+	args = append(args, cursor.CreatedUnix, cursor.CreatedUnix, cursor.ID)
 	if userID > 0 {
 		args = append(args, userID)
 	}
@@ -327,19 +320,11 @@ func normalizedBillingPromptTokens(rawPrompt int64, usage billingCacheUsage) (in
 
 func billingLogsPageQuery(userID, channelID, tokenID int64) (string, bool) {
 	from := ` FROM logs l`
-	if userID > 0 {
-		from += ` FORCE INDEX (idx_user_id_id)`
-	}
 	query := `SELECT l.id,l.created_at,COALESCE(l.request_id,''),COALESCE(l.upstream_request_id,''),l.user_id,COALESCE(l.username,''),COALESCE(l.token_id,0),COALESCE(l.token_name,''),COALESCE(l.channel_id,0),COALESCE(c.name,''),COALESCE(l.model_name,''),COALESCE(l.` + "`group`" + `,''),l.prompt_tokens,l.completion_tokens,l.quota,` + billingOtherProjection + from + ` LEFT JOIN channels c ON c.id=l.channel_id WHERE l.type=2 AND l.created_at>=? AND l.created_at<?`
-	// User jobs page directly through idx_user_id_id. The date predicate is
-	// evaluated inside that one user's rows, so a single-user statement does
-	// not require the site-wide idx_created_at_id index.
-	idCursor := userID > 0 || channelID > 0
-	if idCursor {
-		query += ` AND l.id>?`
-	} else {
-		query += ` AND (l.created_at>? OR (l.created_at=? AND l.id>?))`
-	}
+	// Keep pagination aligned with the date range and NewAPI's existing
+	// created_at-leading index. Paging by user_id/id alone makes the first page
+	// scan a user's entire history before reaching the requested billing period.
+	query += ` AND (l.created_at>? OR (l.created_at=? AND l.id>?))`
 	if userID > 0 {
 		query += ` AND l.user_id=?`
 	}
@@ -348,9 +333,6 @@ func billingLogsPageQuery(userID, channelID, tokenID int64) (string, bool) {
 	}
 	if tokenID >= 0 {
 		query += ` AND COALESCE(l.token_id,0)=?`
-	}
-	if idCursor {
-		return query + ` ORDER BY l.id LIMIT ?`, true
 	}
 	return query + ` ORDER BY l.created_at,l.id LIMIT ?`, false
 }

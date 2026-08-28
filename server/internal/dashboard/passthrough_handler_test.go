@@ -114,19 +114,19 @@ func TestReadonlyLogsListQueryUsesTimeIndexOrder(t *testing.T) {
 	}
 }
 
-func TestBillingLogsPageQueryUsesChannelIDKeyset(t *testing.T) {
+func TestBillingLogsPageQueryUsesChannelTimeKeyset(t *testing.T) {
 	if billingLogsPageTimeout != 2*time.Minute {
 		t.Fatalf("large billing pages need a bounded two-minute query window: %s", billingLogsPageTimeout)
 	}
 	query, idCursor := billingLogsPageQuery(0, 23, -1)
-	if !idCursor {
-		t.Fatal("channel export must use an ID cursor")
+	if idCursor {
+		t.Fatal("channel export must use a time cursor")
 	}
 	for _, required := range []string{
 		"l.created_at>=? AND l.created_at<?",
-		"AND l.id>?",
+		"AND (l.created_at>? OR (l.created_at=? AND l.id>?))",
 		"AND l.channel_id=?",
-		"ORDER BY l.id LIMIT ?",
+		"ORDER BY l.created_at,l.id LIMIT ?",
 	} {
 		if !strings.Contains(query, required) {
 			t.Fatalf("billing page query missing %q: %s", required, query)
@@ -137,19 +137,19 @@ func TestBillingLogsPageQueryUsesChannelIDKeyset(t *testing.T) {
 	}
 }
 
-func TestBillingLogsPageQueryUsesUserIDKeyset(t *testing.T) {
+func TestBillingLogsPageQueryUsesUserTimeKeyset(t *testing.T) {
 	query, idCursor := billingLogsPageQuery(7, 0, -1)
-	if !idCursor {
-		t.Fatal("user export must use a bounded ID cursor")
+	if idCursor {
+		t.Fatal("user export must use a bounded time cursor")
 	}
 	if !strings.Contains(query, "AND l.user_id=?") || strings.Contains(query, "AND l.channel_id=?") ||
-		!strings.Contains(query, "FORCE INDEX (idx_user_id_id)") ||
-		strings.Contains(query, "idx_created_at_id") ||
-		!strings.Contains(query, "AND l.id>?") || !strings.Contains(query, "ORDER BY l.id LIMIT ?") {
+		strings.Contains(query, "FORCE INDEX") ||
+		!strings.Contains(query, "AND (l.created_at>? OR (l.created_at=? AND l.id>?))") ||
+		!strings.Contains(query, "ORDER BY l.created_at,l.id LIMIT ?") {
 		t.Fatalf("query filters do not match user export: %s", query)
 	}
-	if got := strings.Count(query, "?"); got != 5 {
-		t.Fatalf("user query placeholders=%d want=5: %s", got, query)
+	if got := strings.Count(query, "?"); got != 7 {
+		t.Fatalf("user query placeholders=%d want=7: %s", got, query)
 	}
 }
 
