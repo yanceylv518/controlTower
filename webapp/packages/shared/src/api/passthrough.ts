@@ -1,7 +1,7 @@
 import type { ApiClient } from '../client'
 
 export interface ReadonlyUser { id: number; username: string; display_name: string; quota: number; used_quota: number; status: number; created_at: number; last_login_at: number }
-export interface ReadonlyLog { id: number; user_id: number; created_at: string; type: number; username: string; model_name: string; channel_id: number; token_name: string; prompt_tokens: number; completion_tokens: number; quota: number; use_time: number; request_id: string; content_summary: string; group: string; ip: string; is_stream?: boolean | number | string; other: string }
+export interface ReadonlyLog { id: number; user_id: number; created_at: string; type: number; username: string; model_name: string; channel_id: number; token_name: string; prompt_tokens: number; completion_tokens: number; quota: number; use_time: number; request_id: string; upstream_request_id: string; content_summary: string; group: string; ip: string; is_stream?: boolean | number | string; other: string }
 export interface ReadonlyLogSummary { quota: number; rpm: number; tpm: number }
 export interface ReadonlyResponse<T> { items: T[]; configured: boolean; total: number; has_more?: boolean; summary?: ReadonlyLogSummary }
 export interface ReadonlyLogStatResponse { configured: boolean; summary: ReadonlyLogSummary }
