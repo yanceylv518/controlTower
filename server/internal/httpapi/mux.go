@@ -132,6 +132,9 @@ func NewMux(options Options) *http.ServeMux {
 	if settingsStore, ok := any(options.Store).(dashboard.SettingsStore); ok && options.SettingsProvider != nil {
 		mux.Handle("/api/dashboard/settings", protect(dashboard.SettingsHandler{Store: settingsStore, Provider: options.SettingsProvider}))
 	}
+	if balanceSettings, ok := any(options.Store).(dashboard.BalanceAlertSettingsStore); ok {
+		mux.Handle("/api/dashboard/balance-alert-users", protect(dashboard.BalanceAlertSettingsHandler{Store: balanceSettings}))
+	}
 	mux.Handle("GET /api/dashboard/instances", protect(http.HandlerFunc(instances.List)))
 	mux.Handle("POST /api/dashboard/instances", protect(http.HandlerFunc(instances.Create)))
 	mux.Handle("PUT /api/dashboard/instances/{id}", protect(http.HandlerFunc(instances.Update)))

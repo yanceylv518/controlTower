@@ -101,6 +101,7 @@ func run() error {
 		startAggregationRunner(store, time.Duration(cfg.AggregationIntervalSeconds)*time.Second)
 		startChannelSnapshotHistoryCleanup(store)
 		startRetentionRunner(store, settingsProvider)
+		startNotificationRunner(store, settingsProvider, cfg.SecretKey, time.Duration(cfg.NotificationIntervalSeconds)*time.Second)
 		fastCircuitSink = startTuningRunner(controlStore)
 	}
 	startBillingJobRunner(store, cfg.SecretKey, time.Duration(cfg.BillingPagePauseMilliseconds)*time.Millisecond)
@@ -325,8 +326,14 @@ func startAggregationRunner(store mysqlstore.Store, interval time.Duration) {
 	}()
 }
 
-func startNotificationRunner(store mysqlstore.Store, provider *settings.Provider, interval time.Duration) {
-	runner := dashboard.NewAlertNotificationRunner(store, store, store, store, store, interval).WithSettingsProvider(provider)
+func startNotificationRunner(store mysqlstore.Store, provider *settings.Provider, secretKey string, interval time.Duration) {
+	readonly := &dashboard.PassthroughHandler{Config: store, SecretKey: secretKey}
+	runner := dashboard.NewAlertNotificationRunner(store, store, store, store, store, interval).
+		WithSettingsProvider(provider).
+		WithMetricSource(store).
+		WithInstanceStore(store).
+		WithBalanceAlerts(readonly, store).
+		WithBalanceSettings(store)
 	go func() {
 		if err := runner.Run(context.Background()); err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("notification runner stopped: %v", err)

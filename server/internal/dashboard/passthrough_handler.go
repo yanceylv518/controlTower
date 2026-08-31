@@ -765,6 +765,33 @@ type PassthroughUser struct {
 	CreatedAt   int64  `json:"created_at"`
 	LastLoginAt int64  `json:"last_login_at"`
 }
+
+// ListUserBalances is the background-runner counterpart of Users. It performs
+// one bounded, read-only query for a site and deliberately omits pagination so
+// alert evaluation has a consistent snapshot.
+func (h *PassthroughHandler) ListUserBalances(ctx context.Context, site string) ([]PassthroughUser, error) {
+	db, configured, err := h.database(site)
+	if err != nil || !configured {
+		return nil, err
+	}
+	queryCtx, cancel := context.WithTimeout(ctx, readonlyQueryTimeout)
+	defer cancel()
+	rows, err := db.QueryContext(queryCtx, `SELECT id,username,COALESCE(display_name,''),quota,used_quota,status,COALESCE(created_at,0),COALESCE(last_login_at,0) FROM users`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []PassthroughUser{}
+	for rows.Next() {
+		var v PassthroughUser
+		if err := rows.Scan(&v.ID, &v.Username, &v.DisplayName, &v.Quota, &v.UsedQuota, &v.Status, &v.CreatedAt, &v.LastLoginAt); err != nil {
+			return nil, err
+		}
+		items = append(items, v)
+	}
+	return items, rows.Err()
+}
+
 type PassthroughLog struct {
 	ID                int64     `json:"id"`
 	UserID            int64     `json:"user_id"`

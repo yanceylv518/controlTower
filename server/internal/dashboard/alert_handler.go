@@ -232,6 +232,11 @@ func (h Handler) currentAlerts() ([]AlertItem, error) {
 		}
 	}
 	items := BuildCurrentAlertsWithSettings(metrics, serverMetrics, healthChecks, dockerStatuses, values)
+	balanceItems, err := h.balanceAlerts(values, time.Now().UTC())
+	if err != nil {
+		return nil, err
+	}
+	items = append(items, balanceItems...)
 	if h.logStore != nil {
 		events, err := h.logStore.QueryLogEvents(storage.LogQuery{Limit: storage.MaxLogQueryLimit})
 		if err != nil {

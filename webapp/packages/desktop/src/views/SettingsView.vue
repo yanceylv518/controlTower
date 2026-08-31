@@ -58,6 +58,16 @@ const sections: ReadonlyArray<{ title: string; note: string; fields: readonly Fi
       ["CT_P95_CRIT_SECONDS", "P95 严重（秒）", 0.5, 600],
     ],
   },
+  {
+    title: "用户余额预警",
+    note: "按最近一段时间的用户消费速度预测余额可用天数；严重天数必须小于警告天数",
+    fields: [
+      ["CT_BALANCE_LOOKBACK_HOURS", "消费统计窗口（小时）", 24, 168],
+      ["CT_BALANCE_WARN_DAYS", "预计可用警告（天）", 0.25, 90],
+      ["CT_BALANCE_CRIT_DAYS", "预计可用严重（天）", 0.25, 90],
+      ["CT_BALANCE_MIN_REQUESTS", "最小请求样本数", 1, 100000],
+    ],
+  },
 ];
 
 const sourceLabels: Record<string, string> = {
@@ -74,6 +84,8 @@ async function load() {
       ([key, item]) =>
         (values[key] =
           key === "CT_NOTIFICATIONS_ENABLED" ||
+          key === "CT_BALANCE_ALERT_ENABLED" ||
+          key === "CT_NOTIFY_BALANCE_ONLY" ||
           key === "CT_CURRENCY_SYMBOL"
             ? item.value
             : Number(item.value)),
@@ -138,7 +150,7 @@ onMounted(load);
               v-model="values[field[0]] as number"
               :min="field[2]"
               :max="field[3]"
-              :step="field[2] === 0.5 ? 0.5 : 1"
+              :step="field[2] < 1 ? field[2] : 1"
               controls-position="right"
               size="small"
             />
@@ -152,6 +164,15 @@ onMounted(load);
               >
               默认 {{ items[field[0]]?.default }}
             </span>
+          </div>
+          <div v-if="section.title === '用户余额预警'" class="field-item">
+            <label>用户余额速度预警</label>
+            <el-switch
+              v-model="values.CT_BALANCE_ALERT_ENABLED"
+              active-value="true"
+              inactive-value="false"
+            />
+            <span class="field-meta">关闭后不再读取用户余额或生成余额告警</span>
           </div>
         </div>
         </section>
@@ -179,6 +200,15 @@ onMounted(load);
                 }}</span
               >
             </span>
+          </div>
+          <div class="field-item">
+            <label>仅推送余额告警</label>
+            <el-switch
+              v-model="values.CT_NOTIFY_BALANCE_ONLY"
+              active-value="true"
+              inactive-value="false"
+            />
+            <span class="field-meta">开启后其他告警仍展示，但不会发送到通知渠道</span>
           </div>
         </div>
       </section>

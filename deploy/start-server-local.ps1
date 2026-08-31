@@ -7,7 +7,8 @@
     [string]$SecretKey = "control-tower-local-dev-secret-key-v1",
     [string]$DatabaseName = "control_tower_test",
     [int]$AggregationIntervalSeconds = 60,
-    [int]$NotificationIntervalSeconds = 30
+    [int]$NotificationIntervalSeconds = 30,
+    [bool]$APIOnly = $false
 )
 
 $ErrorActionPreference = "Stop"
@@ -39,7 +40,7 @@ $env:CT_AGENT_TOKEN = $AgentToken
 $env:CT_DASHBOARD_TOKEN = $DashboardToken
 $env:CT_AGENT_TOKEN_PEPPER = $AgentTokenPepper
 $env:CT_SECRET_KEY = $SecretKey
-$env:CT_API_ONLY = "true"
+$env:CT_API_ONLY = $APIOnly.ToString().ToLowerInvariant()
 $env:GOCACHE = Join-Path $PSScriptRoot "..\local\go-build-cache"
 New-Item -ItemType Directory -Force -Path $env:GOCACHE | Out-Null
 
@@ -49,7 +50,7 @@ try {
     Write-Host "Dashboard token: $DashboardToken"
     Write-Host "Agent token: $AgentToken"
     Write-Host "MySQL DSN is set in-process and password is not printed."
-Write-Host "API-only mode: operational background runners are disabled; billing job worker remains enabled."
+    Write-Host "API-only mode: $APIOnly"
     & "C:\Program Files\Go\bin\go.exe" run ./server/cmd/control-tower-server
     if ($LASTEXITCODE -ne 0) {
         throw "go run exited with code $LASTEXITCODE"

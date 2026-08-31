@@ -54,6 +54,20 @@ func TestSendDingTalkNotificationBuildsTextMessage(t *testing.T) {
 	}
 }
 
+func TestBalanceNotificationUsesBusinessTemplate(t *testing.T) {
+	alert := testAlert()
+	alert.RuleKey = "user_low_balance"
+	alert.Severity = "critical"
+	alert.Summary = "用户：张三（ID 123）\n当前余额：¥108.50\n预计可用：1.7 天"
+	payload := notificationPayload(alert, storage.NotificationChannel{ChannelType: "wecom"})
+	text := payload["text"].(map[string]string)["content"]
+	for _, want := range []string{"【余额严重告警】", "站点：inst-a", "用户：张三", "请及时联系用户充值"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q in %s", want, text)
+		}
+	}
+}
+
 func TestSendDingTalkNotificationFailsOnErrcode(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

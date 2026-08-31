@@ -60,6 +60,8 @@ const nav = [
     group: "系统管理",
     items: [
       ["/tuning", "调权中心", TrendCharts],
+      ["/alerts", "告警中心", Monitor],
+      ["/notifications", "通知设置", Connection],
       ["/instances", "实例管理", Management],
       ["/access-users", "访问账号", User],
       ["/models/manage", "模型管理", SetUp],

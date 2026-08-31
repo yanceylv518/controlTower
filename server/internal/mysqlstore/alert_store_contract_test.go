@@ -14,7 +14,7 @@ func TestAlertTransitionsPersistEventsTransactionally(t *testing.T) {
 		t.Fatal(e)
 	}
 	text := string(data)
-	for _, required := range []string{"BeginTx", "SELECT id,status FROM alerts", "if old, ok := states[alert.ID]; !ok", "event = \"firing\"", "else if old == \"resolved\"", "event = \"refired\"", "'resolved','system'", "'silence_expired','system'", "tx.Commit"} {
+	for _, required := range []string{"BeginTx", "SELECT id,status,severity FROM alerts", "if old, ok := states[alert.ID]; !ok", "event = \"firing\"", "else if old.status == \"resolved\"", "event = \"refired\"", "event = \"severity_changed\"", "'resolved','system'", "'silence_expired','system'", "tx.Commit"} {
 		if !strings.Contains(text, required) {
 			t.Fatalf("missing SQL contract %q", required)
 		}

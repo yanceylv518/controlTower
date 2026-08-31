@@ -25,18 +25,19 @@ func (s Store) UpsertCurrentAlerts(alerts []storage.Alert, now time.Time) error 
 		ids[i] = "?"
 		args[i] = a.ID
 	}
-	rows, err := tx.QueryContext(ctx, "SELECT id,status FROM alerts WHERE id IN ("+strings.Join(ids, ",")+")", args...)
+	rows, err := tx.QueryContext(ctx, "SELECT id,status,severity FROM alerts WHERE id IN ("+strings.Join(ids, ",")+")", args...)
 	if err != nil {
 		return err
 	}
-	states := map[string]string{}
+	type alertState struct{ status, severity string }
+	states := map[string]alertState{}
 	for rows.Next() {
-		var id, status string
-		if err = rows.Scan(&id, &status); err != nil {
+		var id, status, severity string
+		if err = rows.Scan(&id, &status, &severity); err != nil {
 			rows.Close()
 			return err
 		}
-		states[id] = status
+		states[id] = alertState{status: status, severity: severity}
 	}
 	if err = rows.Err(); err != nil {
 		rows.Close()
@@ -80,8 +81,15 @@ ON DUPLICATE KEY UPDATE
 		event := ""
 		if old, ok := states[alert.ID]; !ok {
 			event = "firing"
-		} else if old == "resolved" {
+		} else if old.status == "resolved" {
 			event = "refired"
+		} else if old.severity != alert.Severity {
+			event = "severity_changed"
+			// A warning becoming critical (or dropping back) is a new notification
+			// event even though the stable alert id is retained.
+			if _, err = tx.ExecContext(ctx, "UPDATE notification_deliveries SET status='expired',attempts=0,next_attempt_at=? WHERE alert_id=? AND status IN ('sent','exhausted')", now, alert.ID); err != nil {
+				return err
+			}
 		}
 		if event != "" {
 			if _, err = tx.ExecContext(ctx, "INSERT INTO alert_events(alert_id,event_type,actor,note,created_at) VALUES(?,?,'system','',?)", alert.ID, event, now); err != nil {

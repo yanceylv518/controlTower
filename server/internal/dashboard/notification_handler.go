@@ -141,11 +141,14 @@ func (h Handler) dispatchAlertNotifications(alerts []storage.Alert) error {
 	if h.notificationStore == nil {
 		return nil
 	}
+	balanceOnly := false
 	if h.settings != nil {
 		if current, err := h.settings.Current(); err != nil {
 			return err
 		} else if !current.NotificationsEnabled {
 			return nil
+		} else {
+			balanceOnly = current.NotifyBalanceOnly
 		}
 	}
 	// Release "sent" deliveries of resolved alerts so a later firing episode
@@ -163,6 +166,9 @@ func (h Handler) dispatchAlertNotifications(alerts []storage.Alert) error {
 	client := http.Client{Timeout: 3 * time.Second}
 	for _, alert := range alerts {
 		if alert.Status != "firing" {
+			continue
+		}
+		if balanceOnly && alert.RuleKey != "user_low_balance" {
 			continue
 		}
 		for _, channel := range channels {
@@ -269,6 +275,17 @@ func dingTalkSignedURL(raw, secret string, now time.Time) string {
 }
 
 func notificationPayload(alert storage.Alert, channel storage.NotificationChannel) map[string]any {
+	if alert.RuleKey == "user_low_balance" && (channel.ChannelType == "wecom" || channel.ChannelType == "dingtalk") {
+		level := "警告"
+		if alert.Severity == "critical" {
+			level = "严重"
+		}
+		content := fmt.Sprintf("【余额%s告警】\n\n站点：%s\n%s\n告警时间：%s\n\n请及时联系用户充值。", level, alert.InstanceID, alert.Summary, alert.LastSeenAt.Local().Format("2006-01-02 15:04:05"))
+		if channel.ChannelType == "wecom" {
+			return map[string]any{"msgtype": "text", "text": map[string]string{"content": content}}
+		}
+		return map[string]any{"msgtype": "text", "text": map[string]string{"content": content}}
+	}
 	if channel.ChannelType == "wecom" {
 		content := fmt.Sprintf("[告警] %s\n级别: %s\n实例: %s\n详情: %s\n时间: %s", alert.Title, alert.Severity, alert.InstanceID, alert.Summary, alert.LastSeenAt.Local().Format("2006-01-02 15:04:05"))
 		return map[string]any{"msgtype": "text", "text": map[string]string{"content": content}}

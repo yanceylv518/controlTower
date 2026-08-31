@@ -20,6 +20,23 @@ func (r AlertNotificationRunner) WithSettingsProvider(v *settings.Provider) Aler
 	return r
 }
 
+func (r AlertNotificationRunner) WithMetricSource(v MetricSource) AlertNotificationRunner {
+	r.handler = r.handler.WithMetricSource(v)
+	return r
+}
+func (r AlertNotificationRunner) WithInstanceStore(v InstanceStore) AlertNotificationRunner {
+	r.handler = r.handler.WithInstanceStore(v)
+	return r
+}
+func (r AlertNotificationRunner) WithBalanceAlerts(source BalanceSource, usage BalanceUsageSource) AlertNotificationRunner {
+	r.handler = r.handler.WithBalanceAlerts(source, usage)
+	return r
+}
+func (r AlertNotificationRunner) WithBalanceSettings(v BalanceAlertSettingsStore) AlertNotificationRunner {
+	r.handler = r.handler.WithBalanceSettings(v)
+	return r
+}
+
 func NewAlertNotificationRunner(source OverviewSource, logStore LogStore, runtimeStore RuntimeStore, alertStore AlertStore, notificationStore NotificationStore, interval time.Duration) AlertNotificationRunner {
 	handler := NewHandler(source).WithLogStore(logStore).WithRuntimeStore(runtimeStore).WithAlertStore(alertStore).WithNotificationStore(notificationStore)
 	return AlertNotificationRunner{handler: handler, interval: interval}

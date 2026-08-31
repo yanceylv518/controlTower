@@ -87,7 +87,7 @@ useAutoRefresh(deliveries.reload);
       >
         <template #empty>
           <el-empty
-            description="尚无通知渠道——添加企业微信/钉钉机器人后，Server 侧告警（离线/资源/错误率/P95）将推送到群"
+            description="尚无通知渠道——添加企业微信、钉钉机器人或 Webhook 后，用户余额告警将推送到对应渠道"
           />
         </template>
         <el-table :data="channels.data.value">

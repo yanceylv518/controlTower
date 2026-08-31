@@ -34,6 +34,12 @@ const (
 	TTFTP50Threshold     = "CT_TTFT_P50_THRESHOLD_SECONDS"
 	TTFTP90Threshold     = "CT_TTFT_P90_THRESHOLD_SECONDS"
 	TTFTP95Threshold     = "CT_TTFT_P95_THRESHOLD_SECONDS"
+	BalanceAlertEnabled  = "CT_BALANCE_ALERT_ENABLED"
+	BalanceLookbackHours = "CT_BALANCE_LOOKBACK_HOURS"
+	BalanceWarnDays      = "CT_BALANCE_WARN_DAYS"
+	BalanceCritDays      = "CT_BALANCE_CRIT_DAYS"
+	BalanceMinRequests   = "CT_BALANCE_MIN_REQUESTS"
+	NotifyBalanceOnly    = "CT_NOTIFY_BALANCE_ONLY"
 )
 
 var defaults = map[string]string{
@@ -42,6 +48,8 @@ var defaults = map[string]string{
 	ErrorRateWarn: "20", ErrorRateCrit: "50", P95Warn: "5", P95Crit: "10", NotificationsEnabled: "true",
 	QuotaPerUnit: "500000", CurrencySymbol: "¥",
 	TTFTP50Threshold: "3", TTFTP90Threshold: "30", TTFTP95Threshold: "60",
+	BalanceAlertEnabled: "true", BalanceLookbackHours: "72", BalanceWarnDays: "7", BalanceCritDays: "3", BalanceMinRequests: "10",
+	NotifyBalanceOnly: "true",
 }
 
 type Item struct {
@@ -54,6 +62,12 @@ type Values struct {
 	CPUWarn, CPUCrit, MemoryWarn, MemoryCrit, DiskWarn, DiskCrit, ErrorRateWarn, ErrorRateCrit, P95Warn, P95Crit                float64
 	TTFTP50Threshold, TTFTP90Threshold, TTFTP95Threshold                                                                        float64
 	NotificationsEnabled                                                                                                        bool
+	BalanceAlertEnabled                                                                                                         bool
+	NotifyBalanceOnly                                                                                                           bool
+	BalanceLookbackHours, BalanceMinRequests                                                                                    int
+	BalanceWarnDays, BalanceCritDays                                                                                            float64
+	QuotaPerUnit                                                                                                                int64
+	CurrencySymbol                                                                                                              string
 }
 type Provider struct {
 	store  storage.SystemSettingStore
@@ -72,7 +86,7 @@ func NewProvider(store storage.SystemSettingStore, ttl time.Duration) *Provider 
 func DefaultValue(key string) string { return defaults[key] }
 
 func Keys() []string {
-	return []string{RetentionDetail, RetentionMetric5m, RetentionRuntime, RetentionHealthHours, RetentionAlerts, OfflineSeconds, CPUWarn, CPUCrit, MemoryWarn, MemoryCrit, DiskWarn, DiskCrit, ErrorRateWarn, ErrorRateCrit, P95Warn, P95Crit, NotificationsEnabled, QuotaPerUnit, CurrencySymbol, TTFTP50Threshold, TTFTP90Threshold, TTFTP95Threshold}
+	return []string{RetentionDetail, RetentionMetric5m, RetentionRuntime, RetentionHealthHours, RetentionAlerts, OfflineSeconds, CPUWarn, CPUCrit, MemoryWarn, MemoryCrit, DiskWarn, DiskCrit, ErrorRateWarn, ErrorRateCrit, P95Warn, P95Crit, NotificationsEnabled, QuotaPerUnit, CurrencySymbol, TTFTP50Threshold, TTFTP90Threshold, TTFTP95Threshold, BalanceAlertEnabled, BalanceLookbackHours, BalanceWarnDays, BalanceCritDays, BalanceMinRequests, NotifyBalanceOnly}
 }
 func (p *Provider) Invalidate() { p.mu.Lock(); p.loaded = time.Time{}; p.mu.Unlock() }
 func (p *Provider) Items() (map[string]Item, error) {
@@ -141,6 +155,16 @@ func Parse(items map[string]Item) (Values, error) {
 	if v.OfflineSeconds, err = i(OfflineSeconds); err != nil {
 		return v, err
 	}
+	if v.BalanceLookbackHours, err = i(BalanceLookbackHours); err != nil {
+		return v, err
+	}
+	if v.BalanceMinRequests, err = i(BalanceMinRequests); err != nil {
+		return v, err
+	}
+	if v.QuotaPerUnit, err = strconv.ParseInt(items[QuotaPerUnit].Value, 10, 64); err != nil {
+		return v, err
+	}
+	v.CurrencySymbol = items[CurrencySymbol].Value
 	ptrs := []struct {
 		k string
 		p *float64
@@ -151,7 +175,24 @@ func Parse(items map[string]Item) (Values, error) {
 		}
 	}
 	v.NotificationsEnabled, err = strconv.ParseBool(items[NotificationsEnabled].Value)
-	return v, err
+	if err != nil {
+		return v, err
+	}
+	v.BalanceAlertEnabled, err = strconv.ParseBool(items[BalanceAlertEnabled].Value)
+	if err != nil {
+		return v, err
+	}
+	v.NotifyBalanceOnly, err = strconv.ParseBool(items[NotifyBalanceOnly].Value)
+	if err != nil {
+		return v, err
+	}
+	if v.BalanceWarnDays, err = f(BalanceWarnDays); err != nil {
+		return v, err
+	}
+	if v.BalanceCritDays, err = f(BalanceCritDays); err != nil {
+		return v, err
+	}
+	return v, nil
 }
 
 func Validate(values map[string]string) map[string]string {
@@ -187,6 +228,23 @@ func Validate(values map[string]string) map[string]string {
 	}
 	if v, ok := get(QuotaPerUnit); ok && (v < 1 || v > 1e9 || v != float64(int(v))) {
 		errs[QuotaPerUnit] = "must be an integer between 1 and 1000000000"
+	}
+	if v, ok := get(BalanceLookbackHours); ok && (v < 24 || v > 168 || v != float64(int(v))) {
+		errs[BalanceLookbackHours] = "must be an integer between 24 and 168"
+	}
+	if v, ok := get(BalanceMinRequests); ok && (v < 1 || v > 100000 || v != float64(int(v))) {
+		errs[BalanceMinRequests] = "must be an integer between 1 and 100000"
+	}
+	bw, bwok := get(BalanceWarnDays)
+	bc, bcok := get(BalanceCritDays)
+	if bwok && (bw < 0.25 || bw > 90) {
+		errs[BalanceWarnDays] = "must be between 0.25 and 90"
+	}
+	if bcok && (bc < 0.25 || bc > 90) {
+		errs[BalanceCritDays] = "must be between 0.25 and 90"
+	}
+	if bwok && bcok && bc >= bw {
+		errs[BalanceCritDays] = "must be lower than warning days"
 	}
 	if symbol, ok := values[CurrencySymbol]; ok {
 		trimmed := strings.TrimSpace(symbol)
@@ -237,6 +295,16 @@ func Validate(values map[string]string) map[string]string {
 	if s, ok := values[NotificationsEnabled]; ok {
 		if _, e := strconv.ParseBool(s); e != nil {
 			errs[NotificationsEnabled] = "must be true or false"
+		}
+	}
+	if s, ok := values[BalanceAlertEnabled]; ok {
+		if _, e := strconv.ParseBool(s); e != nil {
+			errs[BalanceAlertEnabled] = "must be true or false"
+		}
+	}
+	if s, ok := values[NotifyBalanceOnly]; ok {
+		if _, e := strconv.ParseBool(s); e != nil {
+			errs[NotifyBalanceOnly] = "must be true or false"
 		}
 	}
 	return errs

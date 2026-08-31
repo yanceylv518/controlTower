@@ -29,13 +29,26 @@ type Handler struct {
 	names                   *nameResolver
 	settings                *settings.Provider
 	instanceStore           InstanceStore
+	balanceSource           BalanceSource
+	balanceUsage            BalanceUsageSource
+	balanceCache            *balanceAlertCache
+	balanceSettings         BalanceAlertSettingsStore
 	alertGenerationDisabled bool
 }
 
 func (h Handler) WithNotificationMaxAttempts(v int) Handler         { h.notificationMaxAttempts = v; return h }
 func (h Handler) WithSettingsProvider(v *settings.Provider) Handler { h.settings = v; return h }
 func (h Handler) WithInstanceStore(v InstanceStore) Handler         { h.instanceStore = v; return h }
-func (h Handler) WithAlertGenerationDisabled() Handler              { h.alertGenerationDisabled = true; return h }
+func (h Handler) WithBalanceAlerts(source BalanceSource, usage BalanceUsageSource) Handler {
+	h.balanceSource, h.balanceUsage = source, usage
+	h.balanceCache = &balanceAlertCache{}
+	return h
+}
+func (h Handler) WithBalanceSettings(v BalanceAlertSettingsStore) Handler {
+	h.balanceSettings = v
+	return h
+}
+func (h Handler) WithAlertGenerationDisabled() Handler { h.alertGenerationDisabled = true; return h }
 
 func NewHandler(source OverviewSource) Handler {
 	return Handler{source: source}

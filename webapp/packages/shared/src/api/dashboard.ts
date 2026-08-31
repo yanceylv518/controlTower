@@ -85,6 +85,7 @@ export interface DashboardOKResponse {
 }
 export interface SystemSettingItem { value: string; source: "db" | "env" | "default"; default: string }
 export interface SystemSettingsResponse { items: Record<string, SystemSettingItem> }
+export interface BalanceAlertUserSetting { instance_id: string; user_id: number; enabled: boolean; updated_at: string; updated_by: string }
 export interface AlertActionInput {
   id: string;
   action: string;
@@ -859,6 +860,8 @@ export const dashboardApi = (client: ApiClient) => ({
     ),
   settings: () => client.request<SystemSettingsResponse>("/api/dashboard/settings"),
   saveSettings: (values: Record<string, string>) => client.request<SystemSettingsResponse>("/api/dashboard/settings", { method: "PUT", body: JSON.stringify({ values }) }),
+  balanceAlertUsers: (instance_id: string) => client.request<ListResponse<BalanceAlertUserSetting>>(`/api/dashboard/balance-alert-users${query({ instance_id })}`),
+  saveBalanceAlertUser: (instance_id: string, user_id: number, enabled: boolean) => client.request<BalanceAlertUserSetting>(`/api/dashboard/balance-alert-users${query({ instance_id })}`, { method: "PUT", body: JSON.stringify({ user_id, enabled }) }),
   nginxTiming: (params: { instance_id: string; hours: number }) =>
     client.request<NginxTimingResponse>(
       `/api/dashboard/nginx-timing${query(params)}`,
