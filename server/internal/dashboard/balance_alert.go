@@ -3,6 +3,7 @@ package dashboard
 import (
 	"context"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 	"sync"
@@ -35,12 +36,14 @@ func (h Handler) balanceAlerts(values settings.Values, now time.Time) ([]AlertIt
 	if !values.BalanceAlertEnabled || h.balanceSource == nil || h.balanceUsage == nil || h.instanceStore == nil || h.balanceSettings == nil {
 		return nil, nil
 	}
+	var previous []AlertItem
 	if h.balanceCache != nil {
 		h.balanceCache.mu.Lock()
 		defer h.balanceCache.mu.Unlock()
 		if now.Sub(h.balanceCache.loaded) < 5*time.Minute {
 			return append([]AlertItem(nil), h.balanceCache.items...), nil
 		}
+		previous = h.balanceCache.items
 	}
 	instances, err := h.instanceStore.ListInstances()
 	if err != nil {
@@ -96,13 +99,29 @@ func (h Handler) balanceAlerts(values settings.Values, now time.Time) ([]AlertIt
 
 	alerts := []AlertItem{}
 	for site, info := range sites {
+		// One site's failing store or readonly connection must not take down
+		// the whole alert cycle: degrade to that site's previous alerts.
 		enabledUsers, err := h.balanceSettings.ListBalanceAlertUserSettings(context.Background(), site)
 		if err != nil {
-			return nil, fmt.Errorf("balance settings for site %s: %w", site, err)
+			log.Printf("balance alerts degraded: settings for site %s: %v", site, err)
+			alerts = append(alerts, cachedBalanceAlerts(previous, info.alertInstance)...)
+			continue
+		}
+		enrolled := false
+		for _, setting := range enabledUsers {
+			if setting.Enabled {
+				enrolled = true
+				break
+			}
+		}
+		if !enrolled {
+			continue
 		}
 		users, err := h.balanceSource.ListUserBalances(context.Background(), site)
 		if err != nil {
-			return nil, fmt.Errorf("balance users for site %s: %w", site, err)
+			log.Printf("balance alerts degraded: users for site %s: %v", site, err)
+			alerts = append(alerts, cachedBalanceAlerts(previous, info.alertInstance)...)
+			continue
 		}
 		for _, user := range users {
 			if setting, ok := enabledUsers[user.ID]; !ok || !setting.Enabled {
@@ -163,6 +182,16 @@ func (h Handler) balanceAlerts(values settings.Values, now time.Time) ([]AlertIt
 		h.balanceCache.items = append([]AlertItem(nil), alerts...)
 	}
 	return alerts, nil
+}
+
+func cachedBalanceAlerts(items []AlertItem, instanceID string) []AlertItem {
+	var out []AlertItem
+	for _, item := range items {
+		if item.InstanceID == instanceID {
+			out = append(out, item)
+		}
+	}
+	return out
 }
 
 func userIDFromDimension(key string) (int64, bool) {

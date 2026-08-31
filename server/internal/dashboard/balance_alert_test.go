@@ -69,6 +69,58 @@ func TestBalanceAlertsUseRecentConsumptionRunway(t *testing.T) {
 	}
 }
 
+type balanceFailingSource struct{ err error }
+
+func (s balanceFailingSource) ListUserBalances(context.Context, string) ([]PassthroughUser, error) {
+	return nil, s.err
+}
+
+type balanceForbiddenSource struct{ t *testing.T }
+
+func (s balanceForbiddenSource) ListUserBalances(context.Context, string) ([]PassthroughUser, error) {
+	s.t.Fatal("ListUserBalances must not be called when no user is enrolled")
+	return nil, nil
+}
+
+// A failing readonly connection on one site must degrade to that site's
+// previously cached alerts instead of failing the whole alert cycle.
+func TestBalanceAlertsDegradePerSiteOnReadonlyFailure(t *testing.T) {
+	values := balanceTestSettings(t)
+	cache := &balanceAlertCache{items: []AlertItem{
+		{ID: "cached", InstanceID: "node-1", RuleKey: "user_low_balance", Severity: "warning"},
+		{ID: "other-site", InstanceID: "node-9", RuleKey: "user_low_balance", Severity: "critical"},
+	}}
+	h := Handler{
+		instanceStore:   balanceTestInstances{items: []storage.Instance{{ID: "node-1", Enabled: true}}},
+		balanceSource:   balanceFailingSource{err: context.DeadlineExceeded},
+		balanceUsage:    balanceTestUsage{},
+		balanceSettings: balanceTestSettingsStore{items: map[int64]storage.BalanceAlertUserSetting{7: {UserID: 7, Enabled: true}}},
+		balanceCache:    cache,
+	}
+	alerts, err := h.balanceAlerts(values, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("site failure must not fail the cycle: %v", err)
+	}
+	if len(alerts) != 1 || alerts[0].ID != "cached" {
+		t.Fatalf("expected the site's cached alert to carry over, got %#v", alerts)
+	}
+}
+
+// Sites without any enrolled user must not pay a readonly users-table scan.
+func TestBalanceAlertsSkipReadonlyQueryWithoutEnrolledUsers(t *testing.T) {
+	values := balanceTestSettings(t)
+	h := Handler{
+		instanceStore:   balanceTestInstances{items: []storage.Instance{{ID: "node-1", Enabled: true}}},
+		balanceSource:   balanceForbiddenSource{t: t},
+		balanceUsage:    balanceTestUsage{},
+		balanceSettings: balanceTestSettingsStore{items: map[int64]storage.BalanceAlertUserSetting{7: {UserID: 7, Enabled: false}}},
+	}
+	alerts, err := h.balanceAlerts(values, time.Now().UTC())
+	if err != nil || len(alerts) != 0 {
+		t.Fatalf("alerts=%#v err=%v", alerts, err)
+	}
+}
+
 func TestBalanceAlertsRequireEnabledUserAndMinimumSamples(t *testing.T) {
 	values := balanceTestSettings(t)
 	h := Handler{
