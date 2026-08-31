@@ -727,25 +727,29 @@ func (s Store) ListBillingChannelAnomalyDetails(ctx context.Context, jobID strin
 }
 
 func (s Store) PutBillingChannelDailyFile(ctx context.Context, item billing.ChannelDailyFile) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO billing_channel_daily_files(job_id,instance_id,bill_day,channel_id,relative_path,file_size,sha256,created_at) VALUES(?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE relative_path=VALUES(relative_path),file_size=VALUES(file_size),sha256=VALUES(sha256),created_at=VALUES(created_at)`, item.JobID, item.InstanceID, item.BillDay, item.ChannelID, item.RelativePath, item.FileSize, item.SHA256, item.CreatedAt)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO billing_channel_daily_files(job_id,instance_id,bill_day,channel_id,relative_path,file_size,sha256,created_at) VALUES(?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE relative_path=VALUES(relative_path),file_size=VALUES(file_size),sha256=VALUES(sha256),created_at=VALUES(created_at)`, item.JobID, item.InstanceID, billingCalendarDate(item.BillDay), item.ChannelID, item.RelativePath, item.FileSize, item.SHA256, item.CreatedAt)
 	return err
 }
 
 func (s Store) ActiveBillingChannelDailyFile(ctx context.Context, site string, day time.Time, channelID int64) (billing.ChannelDailyFile, error) {
 	var item billing.ChannelDailyFile
-	err := s.db.QueryRowContext(ctx, `SELECT files.job_id,files.instance_id,files.bill_day,files.channel_id,files.relative_path,files.file_size,files.sha256,files.created_at FROM billing_day_status day_status JOIN billing_channel_daily_files files ON files.job_id=day_status.active_job_id AND files.instance_id=day_status.instance_id AND files.bill_day=day_status.bill_day WHERE day_status.instance_id=? AND day_status.bill_day=? AND day_status.status='complete' AND files.channel_id=?`, site, day.In(billing.BusinessLocation).Format("2006-01-02"), channelID).Scan(&item.JobID, &item.InstanceID, &item.BillDay, &item.ChannelID, &item.RelativePath, &item.FileSize, &item.SHA256, &item.CreatedAt)
+	err := s.db.QueryRowContext(ctx, `SELECT files.job_id,files.instance_id,files.bill_day,files.channel_id,files.relative_path,files.file_size,files.sha256,files.created_at FROM billing_day_status day_status JOIN billing_channel_daily_files files ON files.job_id=day_status.active_job_id AND files.instance_id=day_status.instance_id AND files.bill_day=day_status.bill_day WHERE day_status.instance_id=? AND day_status.bill_day=? AND day_status.status='complete' AND files.channel_id=?`, site, billingCalendarDate(day), channelID).Scan(&item.JobID, &item.InstanceID, &item.BillDay, &item.ChannelID, &item.RelativePath, &item.FileSize, &item.SHA256, &item.CreatedAt)
 	return item, err
 }
 
 func (s Store) PutBillingUserDailyFile(ctx context.Context, item billing.UserDailyFile) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO billing_user_daily_files(job_id,instance_id,bill_day,user_id,relative_path,file_size,sha256,created_at) VALUES(?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE relative_path=VALUES(relative_path),file_size=VALUES(file_size),sha256=VALUES(sha256),created_at=VALUES(created_at)`, item.JobID, item.InstanceID, item.BillDay, item.UserID, item.RelativePath, item.FileSize, item.SHA256, item.CreatedAt)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO billing_user_daily_files(job_id,instance_id,bill_day,user_id,relative_path,file_size,sha256,created_at) VALUES(?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE relative_path=VALUES(relative_path),file_size=VALUES(file_size),sha256=VALUES(sha256),created_at=VALUES(created_at)`, item.JobID, item.InstanceID, billingCalendarDate(item.BillDay), item.UserID, item.RelativePath, item.FileSize, item.SHA256, item.CreatedAt)
 	return err
 }
 
 func (s Store) ActiveBillingUserDailyFile(ctx context.Context, site string, day time.Time, userID int64) (billing.UserDailyFile, error) {
 	var item billing.UserDailyFile
-	err := s.db.QueryRowContext(ctx, `SELECT files.job_id,files.instance_id,files.bill_day,files.user_id,files.relative_path,files.file_size,files.sha256,files.created_at FROM billing_user_daily_active active JOIN billing_user_daily_files files ON files.job_id=active.job_id AND files.instance_id=active.instance_id AND files.bill_day=active.bill_day AND files.user_id=active.user_id WHERE active.instance_id=? AND active.bill_day=? AND active.user_id=?`, site, day, userID).Scan(&item.JobID, &item.InstanceID, &item.BillDay, &item.UserID, &item.RelativePath, &item.FileSize, &item.SHA256, &item.CreatedAt)
+	err := s.db.QueryRowContext(ctx, `SELECT files.job_id,files.instance_id,files.bill_day,files.user_id,files.relative_path,files.file_size,files.sha256,files.created_at FROM billing_user_daily_active active JOIN billing_user_daily_files files ON files.job_id=active.job_id AND files.instance_id=active.instance_id AND files.bill_day=active.bill_day AND files.user_id=active.user_id WHERE active.instance_id=? AND active.bill_day=? AND active.user_id=?`, site, billingCalendarDate(day), userID).Scan(&item.JobID, &item.InstanceID, &item.BillDay, &item.UserID, &item.RelativePath, &item.FileSize, &item.SHA256, &item.CreatedAt)
 	return item, err
+}
+
+func billingCalendarDate(value time.Time) string {
+	return value.In(billing.BusinessLocation).Format("2006-01-02")
 }
 
 func (s Store) BillingActiveDays(ctx context.Context, site string, userID int64, from, to time.Time) (map[string]string, error) {
