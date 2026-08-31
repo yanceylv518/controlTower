@@ -30,6 +30,9 @@ type balanceAlertCache struct {
 	mu     sync.Mutex
 	loaded time.Time
 	items  []AlertItem
+	// knownSites distinguishes a successfully evaluated site with no active
+	// alerts from a cold cache that has no trustworthy state for that site.
+	knownSites map[string]bool
 }
 
 func (h Handler) balanceAlerts(values settings.Values, now time.Time) ([]AlertItem, error) {
@@ -37,6 +40,7 @@ func (h Handler) balanceAlerts(values settings.Values, now time.Time) ([]AlertIt
 		return nil, nil
 	}
 	var previous []AlertItem
+	previousKnownSites := map[string]bool{}
 	if h.balanceCache != nil {
 		h.balanceCache.mu.Lock()
 		defer h.balanceCache.mu.Unlock()
@@ -44,6 +48,9 @@ func (h Handler) balanceAlerts(values settings.Values, now time.Time) ([]AlertIt
 			return append([]AlertItem(nil), h.balanceCache.items...), nil
 		}
 		previous = h.balanceCache.items
+		for site := range h.balanceCache.knownSites {
+			previousKnownSites[site] = true
+		}
 	}
 	instances, err := h.instanceStore.ListInstances()
 	if err != nil {
@@ -98,13 +105,18 @@ func (h Handler) balanceAlerts(values settings.Values, now time.Time) ([]AlertIt
 	}
 
 	alerts := []AlertItem{}
+	evaluatedSites := map[string]bool{}
 	for site, info := range sites {
 		// One site's failing store or readonly connection must not take down
 		// the whole alert cycle: degrade to that site's previous alerts.
 		enabledUsers, err := h.balanceSettings.ListBalanceAlertUserSettings(context.Background(), site)
 		if err != nil {
 			log.Printf("balance alerts degraded: settings for site %s: %v", site, err)
+			if !previousKnownSites[site] {
+				return nil, fmt.Errorf("balance settings for uncached site %s: %w", site, err)
+			}
 			alerts = append(alerts, cachedBalanceAlerts(previous, info.alertInstance)...)
+			evaluatedSites[site] = true
 			continue
 		}
 		enrolled := false
@@ -115,14 +127,20 @@ func (h Handler) balanceAlerts(values settings.Values, now time.Time) ([]AlertIt
 			}
 		}
 		if !enrolled {
+			evaluatedSites[site] = true
 			continue
 		}
 		users, err := h.balanceSource.ListUserBalances(context.Background(), site)
 		if err != nil {
 			log.Printf("balance alerts degraded: users for site %s: %v", site, err)
+			if !previousKnownSites[site] {
+				return nil, fmt.Errorf("balance users for uncached site %s: %w", site, err)
+			}
 			alerts = append(alerts, cachedBalanceAlerts(previous, info.alertInstance)...)
+			evaluatedSites[site] = true
 			continue
 		}
+		evaluatedSites[site] = true
 		for _, user := range users {
 			if setting, ok := enabledUsers[user.ID]; !ok || !setting.Enabled {
 				continue
@@ -180,6 +198,7 @@ func (h Handler) balanceAlerts(values settings.Values, now time.Time) ([]AlertIt
 	if h.balanceCache != nil {
 		h.balanceCache.loaded = now
 		h.balanceCache.items = append([]AlertItem(nil), alerts...)
+		h.balanceCache.knownSites = evaluatedSites
 	}
 	return alerts, nil
 }

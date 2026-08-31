@@ -89,7 +89,7 @@ func TestBalanceAlertsDegradePerSiteOnReadonlyFailure(t *testing.T) {
 	cache := &balanceAlertCache{items: []AlertItem{
 		{ID: "cached", InstanceID: "node-1", RuleKey: "user_low_balance", Severity: "warning"},
 		{ID: "other-site", InstanceID: "node-9", RuleKey: "user_low_balance", Severity: "critical"},
-	}}
+	}, knownSites: map[string]bool{"node-1": true}}
 	h := Handler{
 		instanceStore:   balanceTestInstances{items: []storage.Instance{{ID: "node-1", Enabled: true}}},
 		balanceSource:   balanceFailingSource{err: context.DeadlineExceeded},
@@ -103,6 +103,22 @@ func TestBalanceAlertsDegradePerSiteOnReadonlyFailure(t *testing.T) {
 	}
 	if len(alerts) != 1 || alerts[0].ID != "cached" {
 		t.Fatalf("expected the site's cached alert to carry over, got %#v", alerts)
+	}
+}
+
+// After a restart there is no trustworthy in-memory state. A site failure
+// must abort the pass so the runner cannot resolve firing alerts from storage.
+func TestBalanceAlertsColdCacheFailureAbortsResolvePass(t *testing.T) {
+	values := balanceTestSettings(t)
+	h := Handler{
+		instanceStore:   balanceTestInstances{items: []storage.Instance{{ID: "node-1", Enabled: true}}},
+		balanceSource:   balanceFailingSource{err: context.DeadlineExceeded},
+		balanceUsage:    balanceTestUsage{},
+		balanceSettings: balanceTestSettingsStore{items: map[int64]storage.BalanceAlertUserSetting{7: {UserID: 7, Enabled: true}}},
+		balanceCache:    &balanceAlertCache{},
+	}
+	if alerts, err := h.balanceAlerts(values, time.Now().UTC()); err == nil {
+		t.Fatalf("cold failed site must abort the resolve pass, got alerts %#v", alerts)
 	}
 }
 
