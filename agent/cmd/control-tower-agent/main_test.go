@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"controltower/agent/internal/channelcollector"
 	"controltower/agent/internal/config"
 	"controltower/agent/internal/localbuffer"
 	"controltower/agent/internal/logcollector"
@@ -124,6 +125,22 @@ func TestBuildReportIncludesBacklogTelemetry(t *testing.T) {
 	}
 }
 
+func TestBuildReportReusesChannelCollectorStateAcrossPasses(t *testing.T) {
+	collector := &statefulChannelCollector{}
+	cfg := config.Config{InstanceID: "inst-1", AgentID: "agent-1", ChannelSnapshotLimit: 100}
+	first := buildReport(context.Background(), cfg, time.Now().UTC(), 1, 0, logcollector.BacklogStats{}, nil, nil, nil, nil, collector)
+	second := buildReport(context.Background(), cfg, time.Now().UTC(), 2, 0, logcollector.BacklogStats{}, nil, nil, nil, nil, collector)
+	if !first.ChannelSnapshotComplete || len(first.ChannelSnapshots) != 1 {
+		t.Fatalf("first pass should report the full snapshot: %#v", first.ChannelSnapshots)
+	}
+	if second.ChannelSnapshotComplete || len(second.ChannelSnapshots) != 0 {
+		t.Fatalf("second throttled pass should not report a snapshot: %#v", second.ChannelSnapshots)
+	}
+	if collector.calls != 2 {
+		t.Fatalf("collector calls = %d, want 2", collector.calls)
+	}
+}
+
 func TestStartNginxTimingDisabledAndStandalone(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -222,6 +239,18 @@ type fakeReporter struct {
 	heartbeatErr      error
 	heartbeatResponse reporter.AgentHeartbeatResponse
 	reports           []reporter.AgentReportRequest
+}
+
+type statefulChannelCollector struct {
+	calls int
+}
+
+func (c *statefulChannelCollector) Collect(context.Context, int) ([]channelcollector.Snapshot, error) {
+	c.calls++
+	if c.calls > 1 {
+		return nil, nil
+	}
+	return []channelcollector.Snapshot{{ChannelID: 1, ChannelName: "primary", Status: "enabled", Weight: 10}}, nil
 }
 
 func (f *fakeReporter) Heartbeat(context.Context, reporter.AgentHeartbeatRequest) (reporter.AgentHeartbeatResponse, error) {

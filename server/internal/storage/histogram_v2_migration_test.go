@@ -22,7 +22,7 @@ func TestHistogramV2MigrationIsAdditiveAndSafe(t *testing.T) {
 			t.Fatalf("012 migration missing %q", fragment)
 		}
 	}
-	// ApplyDir replays every file on each start; a re-pinning ALTER would
+	// Legacy installs replayed every file on each start; a re-pinning ALTER would
 	// force a full table rebuild every time, so its absence is contractual.
 	if strings.Contains(sql, "ENGINE=") {
 		t.Fatal("012 must not contain table-rebuild ALTER statements")

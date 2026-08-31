@@ -7,7 +7,10 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"sync"
+	"syscall"
 	"time"
 
 	"controltower/server/internal/aggregator"
@@ -34,6 +37,10 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	signalCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	workerCtx, cancelWorkers := context.WithCancel(context.Background())
+	defer cancelWorkers()
 
 	db, err := mysqlstore.Open(cfg.DatabaseDSN)
 	if err != nil {
@@ -41,7 +48,7 @@ func run() error {
 	}
 	defer db.Close()
 
-	pingCtx, cancelPing := context.WithTimeout(context.Background(), 10*time.Second)
+	pingCtx, cancelPing := context.WithTimeout(signalCtx, 10*time.Second)
 	if err := db.PingContext(pingCtx); err != nil {
 		cancelPing()
 		return fmt.Errorf("ping mysql: %w", err)
@@ -57,7 +64,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("open migration connection: %w", err)
 	}
-	migrationCtx, cancelMigration := context.WithTimeout(context.Background(), 30*time.Minute)
+	migrationCtx, cancelMigration := context.WithTimeout(signalCtx, 30*time.Minute)
 	err = mysqlstore.ApplyDir(migrationCtx, migrationDB, filepath.Dir(cfg.MigrationPath))
 	cancelMigration()
 	_ = migrationDB.Close()
@@ -86,27 +93,35 @@ func run() error {
 		log.Printf("no users configured; legacy dashboard token authentication only")
 	}
 	controlStore := directcontrol.Wrap(store, cfg.SecretKey)
+	workers := newWorkerGroup(workerCtx)
 	var fastCircuitSink tuning.FastCircuitSink
 	if cfg.APIOnly {
 		log.Printf("API-only mode enabled; operational runners are disabled (billing job worker remains enabled)")
 	} else {
-		go authManager.CleanupLoop(context.Background())
-		go func() {
+		workers.Go(func(ctx context.Context) {
+			authManager.CleanupLoop(ctx)
+		})
+		workers.Go(func(ctx context.Context) {
 			ticker := time.NewTicker(time.Hour)
 			defer ticker.Stop()
-			for now := range ticker.C {
-				_, _ = store.DeleteExpiredInstanceTokens(now.UTC())
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case now := <-ticker.C:
+					_, _ = store.DeleteExpiredInstanceTokens(now.UTC())
+				}
 			}
-		}()
-		startAggregationRunner(store, time.Duration(cfg.AggregationIntervalSeconds)*time.Second)
-		startChannelSnapshotHistoryCleanup(store)
-		startRetentionRunner(store, settingsProvider)
-		startNotificationRunner(store, settingsProvider, cfg.SecretKey, time.Duration(cfg.NotificationIntervalSeconds)*time.Second)
-		fastCircuitSink = startTuningRunner(controlStore)
+		})
+		startAggregationRunner(workers, store, time.Duration(cfg.AggregationIntervalSeconds)*time.Second)
+		startChannelSnapshotHistoryCleanup(workers, store)
+		startRetentionRunner(workers, store, settingsProvider)
+		startNotificationRunner(workers, store, settingsProvider, cfg.SecretKey, time.Duration(cfg.NotificationIntervalSeconds)*time.Second)
+		fastCircuitSink = startTuningRunner(workers, controlStore)
 	}
-	startBillingJobRunner(store, cfg.SecretKey, time.Duration(cfg.BillingPagePauseMilliseconds)*time.Millisecond)
-	startBillingFileCleanup(store)
-	startReadonlyLogRollupRunner(store, cfg.SecretKey)
+	startBillingJobRunner(workers, store, cfg.SecretKey, time.Duration(cfg.BillingPagePauseMilliseconds)*time.Millisecond)
+	startBillingFileCleanup(workers, store)
+	startReadonlyLogRollupRunner(workers, store, cfg.SecretKey)
 
 	server := &http.Server{
 		Addr:              cfg.ListenAddr,
@@ -114,20 +129,82 @@ func run() error {
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	log.Printf("control tower server listening on %s", cfg.ListenAddr)
-	return server.ListenAndServe()
+	serveErr := make(chan error, 1)
+	go func() {
+		serveErr <- server.ListenAndServe()
+	}()
+
+	var runErr error
+	select {
+	case err = <-serveErr:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			runErr = err
+		}
+		stop()
+	case <-signalCtx.Done():
+		// Restore the default signal behavior so a second termination signal can
+		// still force the process down if graceful shutdown stalls.
+		stop()
+		shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 30*time.Second)
+		shutdownErr := server.Shutdown(shutdownCtx)
+		cancelShutdown()
+		if shutdownErr != nil {
+			runErr = fmt.Errorf("shutdown http server: %w", shutdownErr)
+			_ = server.Close()
+		}
+		if err = <-serveErr; err != nil && !errors.Is(err, http.ErrServerClosed) {
+			runErr = errors.Join(runErr, err)
+		}
+	}
+	cancelWorkers()
+	if err = workers.Wait(30 * time.Second); err != nil {
+		runErr = errors.Join(runErr, err)
+	}
+	return runErr
 }
 
-func startBillingFileCleanup(store mysqlstore.Store) {
-	cleaner := billing.UserDailyFileCleaner{Store: store}
+type workerGroup struct {
+	ctx context.Context
+	wg  sync.WaitGroup
+}
+
+func newWorkerGroup(ctx context.Context) *workerGroup {
+	return &workerGroup{ctx: ctx}
+}
+
+func (g *workerGroup) Go(run func(context.Context)) {
+	g.wg.Add(1)
 	go func() {
+		defer g.wg.Done()
+		run(g.ctx)
+	}()
+}
+
+func (g *workerGroup) Wait(timeout time.Duration) error {
+	done := make(chan struct{})
+	go func() {
+		g.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-time.After(timeout):
+		return fmt.Errorf("background workers did not stop within %s", timeout)
+	}
+}
+
+func startBillingFileCleanup(workers *workerGroup, store mysqlstore.Store) {
+	cleaner := billing.UserDailyFileCleaner{Store: store}
+	workers.Go(func(ctx context.Context) {
 		run := func() {
-			removed, err := cleaner.Cleanup(context.Background(), time.Now().UTC().AddDate(0, 0, -180))
+			removed, err := cleaner.Cleanup(ctx, time.Now().UTC().AddDate(0, 0, -180))
 			if err != nil {
 				log.Printf("billing file cleanup: %v", err)
 			} else if removed > 0 {
 				log.Printf("billing file cleanup removed=%d", removed)
 			}
-			channelRemoved, channelErr := cleaner.CleanupChannels(context.Background(), time.Now().UTC().AddDate(0, 0, -180))
+			channelRemoved, channelErr := cleaner.CleanupChannels(ctx, time.Now().UTC().AddDate(0, 0, -180))
 			if channelErr != nil {
 				log.Printf("billing channel file cleanup: %v", channelErr)
 			} else if channelRemoved > 0 {
@@ -137,13 +214,18 @@ func startBillingFileCleanup(store mysqlstore.Store) {
 		run()
 		ticker := time.NewTicker(24 * time.Hour)
 		defer ticker.Stop()
-		for range ticker.C {
-			run()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				run()
+			}
 		}
-	}()
+	})
 }
 
-func startBillingJobRunner(store mysqlstore.Store, secretKey string, pagePause time.Duration) {
+func startBillingJobRunner(workers *workerGroup, store mysqlstore.Store, secretKey string, pagePause time.Duration) {
 	readonly := &dashboard.PassthroughHandler{Config: store, SecretKey: secretKey}
 	runner := billing.JobRunner{
 		Source:    dashboard.BillingReadonlySource{Handler: readonly},
@@ -152,17 +234,17 @@ func startBillingJobRunner(store mysqlstore.Store, secretKey string, pagePause t
 		Files:     billing.UserDailyFileGenerator{Store: store, Spool: billing.FileDetailSpool{}},
 		PagePause: pagePause,
 	}
-	go func() {
-		if err := runner.Run(context.Background()); err != nil && !errors.Is(err, context.Canceled) {
+	workers.Go(func(ctx context.Context) {
+		if err := runner.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("billing job runner stopped: %v", err)
 		}
-	}()
+	})
 }
 
-func startDailyBillingScheduler(store mysqlstore.Store) {
-	runOnce := func(now time.Time, startup bool) {
+func startDailyBillingScheduler(workers *workerGroup, store mysqlstore.Store) {
+	runOnce := func(ctx context.Context, now time.Time, startup bool) {
 		localNow := now.In(billing.BusinessLocation)
-		if _, err := store.ActiveBillingJob(context.Background()); err == nil {
+		if _, err := store.ActiveBillingJob(ctx); err == nil {
 			return
 		}
 		instances, err := store.ListInstances()
@@ -182,7 +264,7 @@ func startDailyBillingScheduler(store mysqlstore.Store) {
 			}
 			seen[site] = true
 			lookbackDays := 30
-			if earliest, earliestErr := store.EarliestCompletedBillingDay(context.Background(), site); earliestErr == nil && !earliest.IsZero() {
+			if earliest, earliestErr := store.EarliestCompletedBillingDay(ctx, site); earliestErr == nil && !earliest.IsZero() {
 				lookbackDays = int(today.Sub(earliest.In(billing.BusinessLocation)).Hours() / 24)
 				if lookbackDays < 1 {
 					lookbackDays = 1
@@ -194,7 +276,7 @@ func startDailyBillingScheduler(store mysqlstore.Store) {
 			for daysAgo := lookbackDays; daysAgo >= 1; daysAgo-- {
 				candidateFrom := today.AddDate(0, 0, -daysAgo)
 				candidateTo := candidateFrom.AddDate(0, 0, 1)
-				complete, coverErr := store.BillingDayComplete(context.Background(), site, candidateFrom)
+				complete, coverErr := store.BillingDayComplete(ctx, site, candidateFrom)
 				if coverErr == nil && !complete {
 					dayFrom, dayTo = candidateFrom, candidateTo
 					break
@@ -212,40 +294,45 @@ func startDailyBillingScheduler(store mysqlstore.Store) {
 				continue
 			}
 			job.RequestKey = fmt.Sprintf("billing:auto:v2:%s:%s:%s", site, dayFrom.Format("2006-01-02"), job.ID)
-			if createErr = store.CreateBillingJob(context.Background(), job, steps); createErr != nil {
+			if createErr = store.CreateBillingJob(ctx, job, steps); createErr != nil {
 				log.Printf("daily billing scheduler create site=%s day=%s: %v", site, dayFrom.Format("2006-01-02"), createErr)
 				continue
 			}
 			return
 		}
 	}
-	go func() {
-		runOnce(time.Now(), true)
+	workers.Go(func(ctx context.Context) {
+		runOnce(ctx, time.Now(), true)
 		ticker := time.NewTicker(time.Minute)
 		defer ticker.Stop()
-		for now := range ticker.C {
-			runOnce(now, false)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case now := <-ticker.C:
+				runOnce(ctx, now, false)
+			}
 		}
-	}()
+	})
 }
 
-func startReadonlyLogRollupRunner(store mysqlstore.Store, secretKey string) {
+func startReadonlyLogRollupRunner(workers *workerGroup, store mysqlstore.Store, secretKey string) {
 	source := &dashboard.PassthroughHandler{Config: store, SecretKey: secretKey}
 	runner := dashboard.ReadonlyLogRollupRunner{Source: source, Store: store, Interval: 30 * time.Second}
-	go func() {
-		if err := runner.Run(context.Background()); err != nil && !errors.Is(err, context.Canceled) {
+	workers.Go(func(ctx context.Context) {
+		if err := runner.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("readonly log rollup runner stopped: %v", err)
 		}
-	}()
+	})
 }
 
-func startTuningRunner(store tuning.Store) *tuning.Engine {
+func startTuningRunner(workers *workerGroup, store tuning.Store) *tuning.Engine {
 	runner := tuning.NewEngine(store)
-	go func() {
-		if err := runner.Run(context.Background()); err != nil && !errors.Is(err, context.Canceled) {
+	workers.Go(func(ctx context.Context) {
+		if err := runner.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("tuning runner stopped: %v", err)
 		}
-	}()
+	})
 	return runner
 }
 
@@ -255,7 +342,7 @@ type retentionStore interface {
 
 const analysisRetentionDays = 3
 
-func startRetentionRunner(store retentionStore, provider *settings.Provider) {
+func startRetentionRunner(workers *workerGroup, store retentionStore, provider *settings.Provider) {
 	prune := func() {
 		values, err := provider.Current()
 		if err != nil {
@@ -264,17 +351,26 @@ func startRetentionRunner(store retentionStore, provider *settings.Provider) {
 		}
 		pruneRetention(store, values.RetentionDetailDays, values.RetentionMetric5mDays, values.RetentionRuntimeDays, values.RetentionHealthHours, values.RetentionAlertsDays, time.Now().UTC())
 	}
-	go func() {
+	workers.Go(func(ctx context.Context) {
 		timer := time.NewTimer(time.Minute)
 		defer timer.Stop()
-		<-timer.C
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		}
 		prune()
 		ticker := time.NewTicker(time.Hour)
 		defer ticker.Stop()
-		for range ticker.C {
-			prune()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				prune()
+			}
 		}
-	}()
+	})
 }
 func pruneRetention(store retentionStore, detailDays, metric5mDays, runtimeDays, healthHours, alertsDays int, now time.Time) {
 	groups := []struct {
@@ -312,21 +408,21 @@ func pruneRetention(store retentionStore, detailDays, metric5mDays, runtimeDays,
 	}
 }
 
-func startAggregationRunner(store mysqlstore.Store, interval time.Duration) {
+func startAggregationRunner(workers *workerGroup, store mysqlstore.Store, interval time.Duration) {
 	runner := aggregator.NewRunner(
 		aggregator.NewScheduler(store),
 		store,
 		aggregator.NewMemoryLock(),
 		interval,
 	)
-	go func() {
-		if err := runner.Run(context.Background()); err != nil && !errors.Is(err, context.Canceled) {
+	workers.Go(func(ctx context.Context) {
+		if err := runner.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("aggregation runner stopped: %v", err)
 		}
-	}()
+	})
 }
 
-func startNotificationRunner(store mysqlstore.Store, provider *settings.Provider, secretKey string, interval time.Duration) {
+func startNotificationRunner(workers *workerGroup, store mysqlstore.Store, provider *settings.Provider, secretKey string, interval time.Duration) {
 	readonly := &dashboard.PassthroughHandler{Config: store, SecretKey: secretKey}
 	runner := dashboard.NewAlertNotificationRunner(store, store, store, store, store, interval).
 		WithSettingsProvider(provider).
@@ -334,18 +430,21 @@ func startNotificationRunner(store mysqlstore.Store, provider *settings.Provider
 		WithInstanceStore(store).
 		WithBalanceAlerts(readonly, store).
 		WithBalanceSettings(store)
-	go func() {
-		if err := runner.Run(context.Background()); err != nil && !errors.Is(err, context.Canceled) {
+	workers.Go(func(ctx context.Context) {
+		if err := runner.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("notification runner stopped: %v", err)
 		}
-	}()
+	})
 }
-func startChannelSnapshotHistoryCleanup(store mysqlstore.Store) {
+func startChannelSnapshotHistoryCleanup(workers *workerGroup, store mysqlstore.Store) {
 	const batchSize = 5000
 	const batchPause = 200 * time.Millisecond
-	go func() {
+	workers.Go(func(ctx context.Context) {
 		var deleted int64
 		for {
+			if ctx.Err() != nil {
+				return
+			}
 			rows, err := store.DeleteChannelSnapshotHistoryBatch(batchSize)
 			if err != nil {
 				log.Printf("channel snapshot history cleanup stopped after rows=%d: %v", deleted, err)
@@ -359,9 +458,13 @@ func startChannelSnapshotHistoryCleanup(store mysqlstore.Store) {
 			if deleted%100000 == 0 {
 				log.Printf("channel snapshot history cleanup progress rows=%d", deleted)
 			}
-			time.Sleep(batchPause)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(batchPause):
+			}
 		}
-	}()
+	})
 }
 
 func envValues(keys []string) map[string]string {

@@ -22,7 +22,7 @@ func TestMetricDataplaneMigrationContainsAdditiveNullableColumns(t *testing.T) {
 			t.Fatalf("010 migration missing %q", fragment)
 		}
 	}
-	// ApplyDir replays every migration file on each server start; a re-pinning
+	// Legacy installs replayed every migration file on each server start; a re-pinning
 	// ALTER ... ENGINE=... statement succeeds every time and forces a full
 	// table rebuild on every startup, so its absence is part of the contract.
 	if strings.Contains(sql, "ENGINE=") {

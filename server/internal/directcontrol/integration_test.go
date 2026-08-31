@@ -87,7 +87,8 @@ func TestDirectControlIntegration(t *testing.T) {
 	defer db.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	// Twice: 041 must replay cleanly on every startup like all migrations.
+	// Twice: the second application must be a clean no-op through
+	// schema_migrations.
 	if err := mysqlstore.ApplyDir(ctx, db, "../../migrations"); err != nil {
 		t.Fatalf("apply migrations: %v", err)
 	}

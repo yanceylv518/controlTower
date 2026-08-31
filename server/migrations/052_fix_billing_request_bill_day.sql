@@ -4,9 +4,7 @@ UPDATE billing_request_details
 SET bill_day=DATE(CONVERT_TZ(created_at,'+00:00','+08:00'))
 WHERE bill_day<>DATE(CONVERT_TZ(created_at,'+00:00','+08:00'));
 
-DELETE FROM billing_user_daily_active;
-
-INSERT INTO billing_user_daily_active(instance_id,bill_day,user_id,job_id,activated_at)
+INSERT IGNORE INTO billing_user_daily_active(instance_id,bill_day,user_id,job_id,activated_at)
 SELECT ranked.instance_id,ranked.bill_day,ranked.user_id,ranked.job_id,ranked.updated_at
 FROM (
   SELECT candidates.*,
@@ -20,6 +18,9 @@ FROM (
     JOIN billing_jobs jobs ON jobs.id=details.job_id AND jobs.status='complete'
   ) candidates
 ) ranked
+-- Preserve pointers published from billing_compact_daily_totals. Replaying
+-- this historical repair during schema_migrations adoption must never make a
+-- newer compact bill invisible.
 WHERE ranked.row_no=1;
 
 UPDATE billing_day_status day_status
@@ -41,4 +42,11 @@ SET day_status.normal_requests=(
    AND anomaly.job_id=active.job_id
    AND DATE(CONVERT_TZ(anomaly.created_at,'+00:00','+08:00'))=active.bill_day
   WHERE active.instance_id=day_status.instance_id AND active.bill_day=day_status.bill_day
+)
+WHERE EXISTS (
+  SELECT 1
+  FROM billing_request_details details
+  WHERE details.instance_id=day_status.instance_id
+    AND details.bill_day=day_status.bill_day
+    AND details.job_id=day_status.active_job_id
 );

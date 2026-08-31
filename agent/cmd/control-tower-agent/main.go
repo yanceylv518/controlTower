@@ -130,8 +130,20 @@ func run() error {
 	if cfg.DockerEnabled {
 		dockerCollector = dockercollector.New()
 	}
+	var sourceDB *sql.DB
+	var channelCollector channelSnapshotCollector
+	if cfg.LogCollectEnabled {
+		sourceDB, err = logcollector.OpenMySQL(cfg.LogDSN)
+		if err != nil {
+			return err
+		}
+		defer sourceDB.Close()
+		if cfg.ChannelSnapshotEnabled {
+			channelCollector = channelcollector.NewMySQLCollectorWithInterval(sourceDB, time.Duration(cfg.ChannelSnapshotIntervalSeconds)*time.Second)
+		}
+	}
 	return runCollectorLoop(ctx, cfg, func(passCtx context.Context) error {
-		return collectAndReportFullPass(passCtx, client, cfg, metricCollector, checker, dockerCollector, channelControllerClient, alertNotifier, nameRefresher)
+		return collectAndReportFullPass(passCtx, client, cfg, metricCollector, checker, dockerCollector, channelControllerClient, alertNotifier, nameRefresher, sourceDB, channelCollector)
 	})
 }
 
@@ -267,14 +279,14 @@ func collectPassTimeout(cfg config.Config) time.Duration {
 }
 
 func collectAndReportOnce(ctx context.Context, client controlTowerReporter, cfg config.Config, metricCollector serverMetricCollector, checker healthChecker, dockerCollector dockerStatusCollector) error {
-	return collectAndReportFullPass(ctx, client, cfg, metricCollector, checker, dockerCollector, nil, nil, nil)
+	return collectAndReportFullPass(ctx, client, cfg, metricCollector, checker, dockerCollector, nil, nil, nil, nil, nil)
 }
 
 func collectAndReportOnceWithController(ctx context.Context, client controlTowerReporter, cfg config.Config, metricCollector serverMetricCollector, checker healthChecker, dockerCollector dockerStatusCollector, controller channelController) error {
-	return collectAndReportFullPass(ctx, client, cfg, metricCollector, checker, dockerCollector, controller, nil, nil)
+	return collectAndReportFullPass(ctx, client, cfg, metricCollector, checker, dockerCollector, controller, nil, nil, nil, nil)
 }
 
-func collectAndReportFullPass(ctx context.Context, client controlTowerReporter, cfg config.Config, metricCollector serverMetricCollector, checker healthChecker, dockerCollector dockerStatusCollector, controller channelController, notifier *erroralert.Notifier, nameRefresher *channelNameRefresher) error {
+func collectAndReportFullPass(ctx context.Context, client controlTowerReporter, cfg config.Config, metricCollector serverMetricCollector, checker healthChecker, dockerCollector dockerStatusCollector, controller channelController, notifier *erroralert.Notifier, nameRefresher *channelNameRefresher, sourceDB *sql.DB, channelCollector channelSnapshotCollector) error {
 	stateStore := state.NewFileStore(filepath.Join(cfg.DataDir, "state.json"))
 	bufferStore := localbuffer.NewFileStore(filepath.Join(cfg.DataDir, "report-buffer.json"))
 	current, err := stateStore.Load()
@@ -287,20 +299,23 @@ func collectAndReportFullPass(ctx context.Context, client controlTowerReporter, 
 	var events []logcollector.Event
 	lastLogID := current.LastLogID
 	backlog := logcollector.BacklogStats{}
-	var channelCollector channelSnapshotCollector
 	if cfg.LogCollectEnabled {
 		// The local segment deliberately runs before every Server RPC. A sick or
 		// unreachable Control Tower must never stop new-api log collection or the
 		// independent local WeCom alert path.
-		db, openErr := logcollector.OpenMySQL(cfg.LogDSN)
-		if openErr != nil {
-			return openErr
+		db := sourceDB
+		if db == nil {
+			var openErr error
+			db, openErr = logcollector.OpenMySQL(cfg.LogDSN)
+			if openErr != nil {
+				return openErr
+			}
+			defer db.Close()
 		}
-		defer db.Close()
 		nameRefresher.maybeRefresh(ctx, db, notifier)
 
 		collector := logcollector.NewMySQLCollector(db)
-		if cfg.ChannelSnapshotEnabled {
+		if cfg.ChannelSnapshotEnabled && channelCollector == nil {
 			channelCollector = channelcollector.NewMySQLCollectorWithInterval(db, time.Duration(cfg.ChannelSnapshotIntervalSeconds)*time.Second)
 		}
 		events, lastLogID, err = collector.Collect(ctx, current.LastLogID, cfg.LogBatchSize)

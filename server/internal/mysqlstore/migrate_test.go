@@ -83,3 +83,61 @@ func TestAnomalyJobPKMigrationGuardsReplay(t *testing.T) {
 		t.Fatal("PK swap must ride with a sentinel ADD COLUMN in the same ALTER; a bare DROP/ADD PRIMARY KEY rebuilds the table on every startup replay")
 	}
 }
+
+func TestBillingActivePointerRepairMigrationsAreReplaySafe(t *testing.T) {
+	for _, name := range []string{
+		"051_repair_billing_daily_active.sql",
+		"052_fix_billing_request_bill_day.sql",
+	} {
+		t.Run(name, func(t *testing.T) {
+			data, err := os.ReadFile("../../migrations/" + name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sqlText := strings.ToLower(string(data))
+			if strings.Contains(sqlText, "delete from billing_user_daily_active") {
+				t.Fatal("historical repair must not clear active compact-billing pointers")
+			}
+			if !strings.Contains(sqlText, "insert ignore into billing_user_daily_active") {
+				t.Fatal("historical repair must only fill missing active pointers")
+			}
+			if !strings.Contains(sqlText, "where exists") {
+				t.Fatal("day status repair must be limited to active legacy-ledger days")
+			}
+			if !strings.Contains(sqlText, "details.job_id=day_status.active_job_id") {
+				t.Fatal("day status repair must not overwrite compact job counts")
+			}
+		})
+	}
+}
+
+func TestSchemaMigrationsTableContract(t *testing.T) {
+	sqlText := strings.ToLower(createSchemaMigrationsSQL)
+	for _, required := range []string{"create table if not exists schema_migrations", "version varchar(255) not null", "primary key (version)"} {
+		if !strings.Contains(sqlText, required) {
+			t.Fatalf("schema migration table missing %q", required)
+		}
+	}
+}
+
+func TestCompactBillingActivePointerRecoveryMigrationContract(t *testing.T) {
+	data, err := os.ReadFile("../../migrations/062_restore_compact_billing_daily_active.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlText := strings.ToLower(string(data))
+	for _, required := range []string{
+		"insert ignore into billing_user_daily_active",
+		"from billing_compact_daily_totals",
+		"jobs.job_type='generate'",
+		"jobs.status='complete'",
+		"partition by candidates.instance_id,candidates.bill_day,candidates.user_id",
+	} {
+		if !strings.Contains(sqlText, required) {
+			t.Fatalf("compact active pointer recovery missing %q", required)
+		}
+	}
+	if strings.Contains(sqlText, "delete from billing_user_daily_active") {
+		t.Fatal("compact active pointer recovery must not delete valid pointers")
+	}
+}
