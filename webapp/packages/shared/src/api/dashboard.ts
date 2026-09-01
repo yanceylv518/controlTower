@@ -546,6 +546,7 @@ export interface BillingJob {
   job_type?: string;
   user_id?: number;
   user_name?: string;
+  exclude_zero_output?: boolean;
   upstream_id?: number;
   upstream_name?: string;
   range_from?: string;
@@ -913,7 +914,7 @@ export const dashboardApi = (client: ApiClient) => ({
     client.request<BillingDetailResponse>(`/api/dashboard/billing/detail${query(params)}`),
   generateBilling: (input: { instance_id: string; from: string; to: string; force?: boolean; scope?: "all" | "channel" | "user" | "upstream"; user_id?: number; upstream_id?: number }) =>
     client.request<{ accepted: boolean; reused: boolean; job: BillingJob }>("/api/dashboard/billing/backfill", { method: "POST", body: JSON.stringify(input) }),
-  createBillingStatement: (input:{instance_id:string;statement_type:"user"|"upstream";user_id?:number;upstream_id?:number;from:string;to:string}) =>
+  createBillingStatement: (input:{instance_id:string;statement_type:"user"|"upstream";user_id?:number;upstream_id?:number;from:string;to:string;exclude_zero_output?:boolean}) =>
     client.request<{accepted:boolean;job:BillingJob}>("/api/dashboard/billing/statements",{method:"POST",body:JSON.stringify(input)}),
   billingStatementResult: (id:string) => client.request<{job:BillingJob;total_orders:number;normal_orders:number;billable_orders:number;anomaly_total:number;reconciliation_total:number;review_required:boolean;count_balanced:boolean;model_summary:Record<string,unknown>[];daily_summary:Record<string,unknown>[];token_summary:Record<string,unknown>[];anomalies:Record<string,unknown>[];reconciliation:Record<string,unknown>[]}>(`/api/dashboard/billing/statements/result${query({id})}`),
   deleteBillingStatement: (id:string) => client.request<{deleted:boolean;id:string}>(`/api/dashboard/billing/statements/result${query({id})}`,{method:"DELETE"}),

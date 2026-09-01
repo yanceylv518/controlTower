@@ -64,7 +64,8 @@ func TestAnomalyReasons(t *testing.T) {
 		want string
 	}{
 		{"missing", PagedLogRecord{}, 100, "output_token_missing"},
-		{"zero", PagedLogRecord{PromptTokens: sql.NullInt64{Valid: true}, CompletionTokens: sql.NullInt64{Valid: true}}, 100, "output_token_zero"},
+		{"zero output remains in the complete bill", PagedLogRecord{PromptTokens: sql.NullInt64{Valid: true}, CompletionTokens: sql.NullInt64{Valid: true}}, 100, ""},
+		{"negative output is not the zero-output filter", PagedLogRecord{PromptTokens: sql.NullInt64{Valid: true}, CompletionTokens: sql.NullInt64{Valid: true, Int64: -1}}, 100, ""},
 		{"context does not make a billing anomaly", PagedLogRecord{PromptTokens: sql.NullInt64{Valid: true, Int64: 101}, CompletionTokens: sql.NullInt64{Valid: true, Int64: 1}}, 100, ""},
 		{"fully cached input remains valid", PagedLogRecord{SourcePromptTokens: sql.NullInt64{Valid: true, Int64: 100}, PromptTokens: sql.NullInt64{Valid: true, Int64: 0}, CompletionTokens: sql.NullInt64{Valid: true, Int64: 1}, ContextTokens: 100}, 100, ""},
 		{"unknown context accepted", PagedLogRecord{PromptTokens: sql.NullInt64{Valid: true, Int64: 1000000}, CompletionTokens: sql.NullInt64{Valid: true, Int64: 1}}, 0, ""},
@@ -82,6 +83,20 @@ func TestAnomalyReasons(t *testing.T) {
 				t.Fatalf("got %q want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestStatementAnomalyReasonsUsesTaskZeroOutputPolicy(t *testing.T) {
+	zero := PagedLogRecord{PromptTokens: sql.NullInt64{Valid: true}, CompletionTokens: sql.NullInt64{Valid: true}}
+	if got := StatementAnomalyReasons(zero, 0, false); len(got) != 0 {
+		t.Fatalf("complete statement excluded zero output: %v", got)
+	}
+	if got := StatementAnomalyReasons(zero, 0, true); len(got) != 1 || got[0] != "output_token_zero" {
+		t.Fatalf("filtered statement did not retain zero output separately: %v", got)
+	}
+	negative := PagedLogRecord{CompletionTokens: sql.NullInt64{Valid: true, Int64: -1}}
+	if got := StatementAnomalyReasons(negative, 0, true); len(got) != 0 {
+		t.Fatalf("zero-output policy excluded a non-zero value: %v", got)
 	}
 }
 

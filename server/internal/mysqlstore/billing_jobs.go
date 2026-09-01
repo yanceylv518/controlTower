@@ -24,7 +24,7 @@ func (s Store) CreateBillingJob(ctx context.Context, j billing.Job, steps []bill
 }
 
 func createBillingJobTx(ctx context.Context, tx *sql.Tx, j billing.Job, steps []billing.JobStep) error {
-	if _, err := tx.ExecContext(ctx, `INSERT INTO billing_jobs(id,request_key,instance_id,job_type,user_id,range_from,range_to,status,total_steps,requested_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, j.ID, nullBillingRequestKey(j.RequestKey), j.InstanceID, j.JobType, j.UserID, j.From, j.To, j.Status, j.TotalSteps, j.RequestedBy, j.CreatedAt, j.UpdatedAt); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO billing_jobs(id,request_key,instance_id,job_type,user_id,exclude_zero_output,range_from,range_to,status,total_steps,requested_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, j.ID, nullBillingRequestKey(j.RequestKey), j.InstanceID, j.JobType, j.UserID, j.ExcludeZeroOutput, j.From, j.To, j.Status, j.TotalSteps, j.RequestedBy, j.CreatedAt, j.UpdatedAt); err != nil {
 		return err
 	}
 	for _, v := range steps {
@@ -169,7 +169,7 @@ func (s Store) ListBillingJobs(ctx context.Context, instanceID, status string, l
 	if limit <= 0 || limit > 200 {
 		limit = 100
 	}
-	query := `SELECT jobs.id,jobs.instance_id,jobs.job_type,jobs.user_id,jobs.range_from,jobs.range_to,jobs.status,jobs.total_steps,jobs.completed_steps,jobs.abnormal_rows,(SELECT COALESCE(SUM(details.request_count),0) FROM billing_compact_daily_totals details WHERE details.job_id=jobs.id),(SELECT COUNT(DISTINCT files.bill_day) FROM billing_user_daily_files files WHERE files.job_id=jobs.id),(SELECT COALESCE(DATE_FORMAT(MAX(files.bill_day),'%Y-%m-%d'),'') FROM billing_user_daily_files files WHERE files.job_id=jobs.id),jobs.error_message,jobs.output_path,jobs.requested_by,jobs.created_at,jobs.updated_at FROM billing_jobs jobs`
+	query := `SELECT jobs.id,jobs.instance_id,jobs.job_type,jobs.user_id,jobs.exclude_zero_output,jobs.range_from,jobs.range_to,jobs.status,jobs.total_steps,jobs.completed_steps,jobs.abnormal_rows,(SELECT COALESCE(SUM(details.request_count),0) FROM billing_compact_daily_totals details WHERE details.job_id=jobs.id),(SELECT COUNT(DISTINCT files.bill_day) FROM billing_user_daily_files files WHERE files.job_id=jobs.id),(SELECT COALESCE(DATE_FORMAT(MAX(files.bill_day),'%Y-%m-%d'),'') FROM billing_user_daily_files files WHERE files.job_id=jobs.id),jobs.error_message,jobs.output_path,jobs.requested_by,jobs.created_at,jobs.updated_at FROM billing_jobs jobs`
 	args := []any{}
 	conditions := []string{}
 	if instanceID != "" {
@@ -193,7 +193,7 @@ func (s Store) ListBillingJobs(ctx context.Context, instanceID, status string, l
 	items := []billing.Job{}
 	for rows.Next() {
 		var j billing.Job
-		if err = rows.Scan(&j.ID, &j.InstanceID, &j.JobType, &j.UserID, &j.From, &j.To, &j.Status, &j.TotalSteps, &j.CompletedSteps, &j.AbnormalRows, &j.BilledRows, &j.OutputDays, &j.OutputLatestDay, &j.ErrorMessage, &j.OutputPath, &j.RequestedBy, &j.CreatedAt, &j.UpdatedAt); err != nil {
+		if err = rows.Scan(&j.ID, &j.InstanceID, &j.JobType, &j.UserID, &j.ExcludeZeroOutput, &j.From, &j.To, &j.Status, &j.TotalSteps, &j.CompletedSteps, &j.AbnormalRows, &j.BilledRows, &j.OutputDays, &j.OutputLatestDay, &j.ErrorMessage, &j.OutputPath, &j.RequestedBy, &j.CreatedAt, &j.UpdatedAt); err != nil {
 			return nil, err
 		}
 		if err = s.enrichBillingStatement(ctx, &j); err != nil {
@@ -212,7 +212,7 @@ func (s Store) ClaimBillingStep(ctx context.Context) (billing.Job, billing.JobSt
 	defer tx.Rollback()
 	var j billing.Job
 	var st billing.JobStep
-	e = tx.QueryRowContext(ctx, `SELECT j.id,j.instance_id,j.job_type,j.user_id,j.range_from,j.range_to,j.status,j.total_steps,j.completed_steps,j.abnormal_rows,j.error_message,j.output_path,j.requested_by,j.created_at,j.updated_at,s.step_no,s.range_from,s.range_to,s.cursor_created_at,s.cursor_id FROM billing_jobs j JOIN billing_job_steps s ON s.job_id=j.id WHERE j.status IN ('pending','running') AND s.status IN ('pending','running') ORDER BY j.created_at,s.step_no LIMIT 1 FOR UPDATE`).Scan(&j.ID, &j.InstanceID, &j.JobType, &j.UserID, &j.From, &j.To, &j.Status, &j.TotalSteps, &j.CompletedSteps, &j.AbnormalRows, &j.ErrorMessage, &j.OutputPath, &j.RequestedBy, &j.CreatedAt, &j.UpdatedAt, &st.StepNo, &st.From, &st.To, &st.Cursor.CreatedUnix, &st.Cursor.ID)
+	e = tx.QueryRowContext(ctx, `SELECT j.id,j.instance_id,j.job_type,j.user_id,j.exclude_zero_output,j.range_from,j.range_to,j.status,j.total_steps,j.completed_steps,j.abnormal_rows,j.error_message,j.output_path,j.requested_by,j.created_at,j.updated_at,s.step_no,s.range_from,s.range_to,s.cursor_created_at,s.cursor_id FROM billing_jobs j JOIN billing_job_steps s ON s.job_id=j.id WHERE j.status IN ('pending','running') AND s.status IN ('pending','running') ORDER BY j.created_at,s.step_no LIMIT 1 FOR UPDATE`).Scan(&j.ID, &j.InstanceID, &j.JobType, &j.UserID, &j.ExcludeZeroOutput, &j.From, &j.To, &j.Status, &j.TotalSteps, &j.CompletedSteps, &j.AbnormalRows, &j.ErrorMessage, &j.OutputPath, &j.RequestedBy, &j.CreatedAt, &j.UpdatedAt, &st.StepNo, &st.From, &st.To, &st.Cursor.CreatedUnix, &st.Cursor.ID)
 	if e == sql.ErrNoRows {
 		return j, st, false, nil
 	}
@@ -237,7 +237,7 @@ func (s Store) ClaimBillingPublish(ctx context.Context) (billing.Job, bool, erro
 	}
 	defer tx.Rollback()
 	var j billing.Job
-	err = tx.QueryRowContext(ctx, `SELECT id,instance_id,job_type,user_id,range_from,range_to,status,total_steps,completed_steps,abnormal_rows,error_message,output_path,requested_by,created_at,updated_at FROM billing_jobs WHERE job_type IN ('generate','user_statement','upstream_statement') AND status IN ('running','publishing') AND completed_steps>=total_steps ORDER BY created_at LIMIT 1 FOR UPDATE`).Scan(&j.ID, &j.InstanceID, &j.JobType, &j.UserID, &j.From, &j.To, &j.Status, &j.TotalSteps, &j.CompletedSteps, &j.AbnormalRows, &j.ErrorMessage, &j.OutputPath, &j.RequestedBy, &j.CreatedAt, &j.UpdatedAt)
+	err = tx.QueryRowContext(ctx, `SELECT id,instance_id,job_type,user_id,exclude_zero_output,range_from,range_to,status,total_steps,completed_steps,abnormal_rows,error_message,output_path,requested_by,created_at,updated_at FROM billing_jobs WHERE job_type IN ('generate','user_statement','upstream_statement') AND status IN ('running','publishing') AND completed_steps>=total_steps ORDER BY created_at LIMIT 1 FOR UPDATE`).Scan(&j.ID, &j.InstanceID, &j.JobType, &j.UserID, &j.ExcludeZeroOutput, &j.From, &j.To, &j.Status, &j.TotalSteps, &j.CompletedSteps, &j.AbnormalRows, &j.ErrorMessage, &j.OutputPath, &j.RequestedBy, &j.CreatedAt, &j.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return billing.Job{}, false, nil
 	}
@@ -261,7 +261,7 @@ func (s Store) FailBillingPublish(ctx context.Context, j billing.Job, cause erro
 
 func (s Store) BillingJob(ctx context.Context, id string) (billing.Job, error) {
 	var j billing.Job
-	e := s.db.QueryRowContext(ctx, `SELECT id,instance_id,job_type,user_id,range_from,range_to,status,total_steps,completed_steps,abnormal_rows,error_message,output_path,requested_by,created_at,updated_at FROM billing_jobs WHERE id=?`, id).Scan(&j.ID, &j.InstanceID, &j.JobType, &j.UserID, &j.From, &j.To, &j.Status, &j.TotalSteps, &j.CompletedSteps, &j.AbnormalRows, &j.ErrorMessage, &j.OutputPath, &j.RequestedBy, &j.CreatedAt, &j.UpdatedAt)
+	e := s.db.QueryRowContext(ctx, `SELECT id,instance_id,job_type,user_id,exclude_zero_output,range_from,range_to,status,total_steps,completed_steps,abnormal_rows,error_message,output_path,requested_by,created_at,updated_at FROM billing_jobs WHERE id=?`, id).Scan(&j.ID, &j.InstanceID, &j.JobType, &j.UserID, &j.ExcludeZeroOutput, &j.From, &j.To, &j.Status, &j.TotalSteps, &j.CompletedSteps, &j.AbnormalRows, &j.ErrorMessage, &j.OutputPath, &j.RequestedBy, &j.CreatedAt, &j.UpdatedAt)
 	if e == nil {
 		e = s.enrichBillingStatement(ctx, &j)
 	}

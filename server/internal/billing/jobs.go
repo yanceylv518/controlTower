@@ -77,30 +77,31 @@ type UserSetting struct {
 }
 
 type Job struct {
-	ID              string    `json:"id"`
-	BillNo          string    `json:"bill_no,omitempty"`
-	RequestKey      string    `json:"-"`
-	InstanceID      string    `json:"instance_id"`
-	JobType         string    `json:"job_type"`
-	UserID          int64     `json:"user_id"`
-	UserName        string    `json:"user_name,omitempty"`
-	UpstreamID      int64     `json:"upstream_id,omitempty"`
-	UpstreamName    string    `json:"upstream_name,omitempty"`
-	From            time.Time `json:"range_from"`
-	To              time.Time `json:"range_to"`
-	Status          string    `json:"status"`
-	TotalSteps      int       `json:"total_steps"`
-	CompletedSteps  int       `json:"completed_steps"`
-	AbnormalRows    int64     `json:"abnormal_rows"`
-	MismatchRows    int64     `json:"mismatch_rows"`
-	BilledRows      int64     `json:"billed_rows"`
-	OutputDays      int64     `json:"output_days"`
-	OutputLatestDay string    `json:"output_latest_day,omitempty"`
-	ErrorMessage    string    `json:"error_message,omitempty"`
-	OutputPath      string    `json:"output_path,omitempty"`
-	RequestedBy     string    `json:"requested_by"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	ID                string    `json:"id"`
+	BillNo            string    `json:"bill_no,omitempty"`
+	RequestKey        string    `json:"-"`
+	InstanceID        string    `json:"instance_id"`
+	JobType           string    `json:"job_type"`
+	UserID            int64     `json:"user_id"`
+	ExcludeZeroOutput bool      `json:"exclude_zero_output"`
+	UserName          string    `json:"user_name,omitempty"`
+	UpstreamID        int64     `json:"upstream_id,omitempty"`
+	UpstreamName      string    `json:"upstream_name,omitempty"`
+	From              time.Time `json:"range_from"`
+	To                time.Time `json:"range_to"`
+	Status            string    `json:"status"`
+	TotalSteps        int       `json:"total_steps"`
+	CompletedSteps    int       `json:"completed_steps"`
+	AbnormalRows      int64     `json:"abnormal_rows"`
+	MismatchRows      int64     `json:"mismatch_rows"`
+	BilledRows        int64     `json:"billed_rows"`
+	OutputDays        int64     `json:"output_days"`
+	OutputLatestDay   string    `json:"output_latest_day,omitempty"`
+	ErrorMessage      string    `json:"error_message,omitempty"`
+	OutputPath        string    `json:"output_path,omitempty"`
+	RequestedBy       string    `json:"requested_by"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 type JobStep struct {
@@ -500,7 +501,7 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 		for _, log := range logs {
 			billDay := dateOnly(time.Unix(log.CreatedUnix, 0))
 			billDayKey := billDay.Format("2006-01-02")
-			reasons := AnomalyReasons(log, maxByModel[log.ModelName])
+			reasons := StatementAnomalyReasons(log, maxByModel[log.ModelName], job.ExcludeZeroOutput)
 			verification, pricingReason := VerifyLogChargeReason(log, quotaPerUnit)
 			if len(reasons) > 0 {
 				item := AnomalyOrder{InstanceID: job.InstanceID, SourceLogID: log.ID, JobID: job.ID, CreatedAt: time.Unix(log.CreatedUnix, 0), RequestID: log.RequestID, UpstreamRequestID: log.UpstreamRequestID, UserID: log.UserID, Username: log.Username, TokenID: log.TokenID, TokenName: log.TokenName, ChannelID: log.ChannelID, ChannelName: log.ChannelName, ModelName: log.ModelName, GroupName: log.GroupName, PromptTokens: SourcePromptTokens(log), CompletionTokens: log.CompletionTokens, CacheTokens: log.CacheTokens, CacheWriteTokens: log.CacheWriteTokens, CacheWrite5mTokens: log.CacheWrite5mTokens, CacheWrite1hTokens: log.CacheWrite1hTokens, Quota: log.Quota, MaxContextTokens: maxByModel[log.ModelName], Reasons: strings.Join(reasons, ","), DetectedAt: time.Now().UTC()}
@@ -796,7 +797,16 @@ func AnomalyReasons(log PagedLogRecord, maxContext int64) []string {
 	r := []string{}
 	if !log.CompletionTokens.Valid {
 		r = append(r, "output_token_missing")
-	} else if log.CompletionTokens.Int64 <= 0 {
+	}
+	return r
+}
+
+// StatementAnomalyReasons applies the immutable filtering policy selected
+// when a statement task was created. Zero-output rows remain normal billable
+// orders unless that task explicitly requested their exclusion.
+func StatementAnomalyReasons(log PagedLogRecord, maxContext int64, excludeZeroOutput bool) []string {
+	r := AnomalyReasons(log, maxContext)
+	if excludeZeroOutput && log.CompletionTokens.Valid && log.CompletionTokens.Int64 == 0 {
 		r = append(r, "output_token_zero")
 	}
 	return r

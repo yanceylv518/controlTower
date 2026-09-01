@@ -25,7 +25,7 @@ const upstreamOptions = ref<BillingUpstream[]>([]);
 const jobSteps = ref<Record<string, BillingJobStep[]>>({});
 const stepLoading = ref<Record<string, boolean>>({});
 const expandedJobIDs = ref<string[]>([]);
-const createForm = ref<{ instance_id: string; bill_type: "user" | "upstream"; user_id?: number; upstream_id?: number; range: [Date, Date] | [] }>({ instance_id: "", bill_type: "user", range: [] });
+const createForm = ref<{ instance_id: string; bill_type: "user" | "upstream"; user_id?: number; upstream_id?: number; exclude_zero_output: boolean; range: [Date, Date] | [] }>({ instance_id: "", bill_type: "user", exclude_zero_output: false, range: [] });
 const state = useAsyncData(async () => {
   await filters.loadInstances();
   if (!filters.site_id) return { items: [] as BillingJob[] };
@@ -86,7 +86,7 @@ async function openCreate(job?: BillingJob) {
   const queryBillType = route.query.bill_type === "upstream" ? "upstream" : "user";
   const from = job?.range_from ? new Date(job.range_from) : queryFrom ? new Date(`${queryFrom}T00:00:00`) : yesterday;
   const through = job?.range_to ? new Date(new Date(job.range_to).getTime() - 1) : queryThrough ? new Date(`${queryThrough}T00:00:00`) : yesterday;
-  createForm.value = { instance_id: job?.instance_id || querySite || filters.site_id || "", bill_type: job ? (job.job_type === "upstream_statement" ? "upstream" : "user") : queryBillType, user_id: job?.user_id || undefined, upstream_id: job?.upstream_id || undefined, range: [from, through] };
+  createForm.value = { instance_id: job?.instance_id || querySite || filters.site_id || "", bill_type: job ? (job.job_type === "upstream_statement" ? "upstream" : "user") : queryBillType, user_id: job?.user_id || undefined, upstream_id: job?.upstream_id || undefined, exclude_zero_output: !!job?.exclude_zero_output, range: [from, through] };
   createVisible.value = true;
   await Promise.all([loadUsers(job?.user_id ? String(job.user_id) : ""), loadUpstreams()]);
 }
@@ -101,11 +101,12 @@ async function createJob() {
   const duplicate = items.value.some((job) => job.status !== "failed" && job.job_type === wantedType
     && (form.bill_type === "user" ? job.user_id === form.user_id : job.upstream_id === form.upstream_id)
     && job.range_from?.slice(0, 10) === wantedFrom.slice(0, 10)
-    && job.range_to?.slice(0, 10) === wantedTo.slice(0, 10));
+    && job.range_to?.slice(0, 10) === wantedTo.slice(0, 10)
+    && !!job.exclude_zero_output === form.exclude_zero_output);
   if (duplicate) { ElMessage.warning("相同对象和账期的账单任务已存在，不能重复创建"); return; }
   creating.value = true;
   try {
-    await dashboard.createBillingStatement({instance_id:form.instance_id,statement_type:form.bill_type,user_id:form.bill_type==="user"?form.user_id:undefined,upstream_id:form.bill_type==="upstream"?form.upstream_id:undefined,from:wantedFrom,to:wantedTo});
+    await dashboard.createBillingStatement({instance_id:form.instance_id,statement_type:form.bill_type,user_id:form.bill_type==="user"?form.user_id:undefined,upstream_id:form.bill_type==="upstream"?form.upstream_id:undefined,from:wantedFrom,to:wantedTo,exclude_zero_output:form.exclude_zero_output});
     createVisible.value=false;activeTab.value="active";ElMessage.success("账单任务已加入队列");await state.reload();
   } catch(error) { ElMessage.error(billingTaskErrorMessage(error,"账单任务创建失败")); }
   finally { creating.value=false; }
@@ -166,7 +167,7 @@ void state.reload().then(async()=>{if(route.query.create==="1")await openCreate(
     <AsyncPanel :loading="state.loading.value" :error="state.error.value" :empty="!visibleItems.length" :empty-text="activeTab === 'active' ? '当前没有正在处理的任务' : activeTab === 'failed' ? '没有需要处理的失败任务' : '暂无已完成任务'" @retry="state.reload">
       <el-table :data="visibleItems" row-key="id" @expand-change="expandJob">
         <el-table-column type="expand" width="48"><template #default="s"><div class="step-panel"><p>按自然日执行；已有有效账单的日期会自动复用。</p><el-table v-loading="stepLoading[s.row.id]" :data="jobSteps[s.row.id]||[]" size="small"><el-table-column label="账单日期" min-width="130"><template #default="d"><b>{{dateText(d.row.range_from)}}</b></template></el-table-column><el-table-column label="状态" width="100"><template #default="d"><el-tag :type="stepStatus(d.row.status)[1]">{{stepStatus(d.row.status)[0]}}</el-tag></template></el-table-column><el-table-column label="计费请求" width="120" align="right"><template #default="d">{{formatNumber(d.row.processed_rows-d.row.abnormal_rows)}}</template></el-table-column><el-table-column prop="abnormal_rows" label="异常请求" width="110" align="right"/><el-table-column prop="attempts" label="尝试次数" width="100"/><el-table-column prop="error_message" label="失败原因" min-width="220" show-overflow-tooltip/></el-table></div></template></el-table-column>
-        <el-table-column label="任务" min-width="180"><template #default="s"><b>{{ typeLabel(s.row.job_type) }}</b><small>{{ s.row.requested_by === 'scheduler' ? '系统定时' : '管理员手动' }} · {{ s.row.id }}</small></template></el-table-column>
+        <el-table-column label="任务" min-width="200"><template #default="s"><b>{{ typeLabel(s.row.job_type) }}</b><small>{{ s.row.exclude_zero_output ? '排除零输出' : '完整账单' }} · {{ s.row.requested_by === 'scheduler' ? '系统定时' : '管理员手动' }}</small><small>{{ s.row.id }}</small></template></el-table-column>
         <el-table-column prop="instance_id" label="站点" min-width="125" />
         <el-table-column label="账单对象" min-width="180"><template #default="s">{{ s.row.upstream_id ? `${s.row.upstream_name || '上游'} #${s.row.upstream_id}` : s.row.user_id ? `${s.row.user_name || '用户'}（ID: ${s.row.user_id}）` : "历史整站任务" }}</template></el-table-column>
         <el-table-column label="账单日期" min-width="210"><template #default="s">{{ formatRange(s.row) }}</template></el-table-column>
@@ -185,6 +186,7 @@ void state.reload().then(async()=>{if(route.query.create==="1")await openCreate(
         <el-form-item v-if="createForm.bill_type === 'user'" label="选择用户"><el-select v-model="createForm.user_id" filterable remote clearable :remote-method="loadUsers" :loading="userLoading" placeholder="每个任务只能选择一个用户" style="width:100%"><el-option v-for="user in userOptions" :key="user.id" :label="`${user.display_name || user.username || `用户 ${user.id}`}（ID: ${user.id}）`" :value="user.id" /></el-select></el-form-item>
         <el-form-item v-else label="选择上游"><el-select v-model="createForm.upstream_id" filterable clearable :loading="upstreamLoading" placeholder="每个任务只能选择一个上游" style="width:100%"><el-option v-for="item in upstreamOptions" :key="item.id" :label="`${item.name}（${item.channels.length} 个渠道）`" :value="item.id" /></el-select></el-form-item>
         <el-form-item label="账单日期"><el-date-picker v-model="createForm.range" type="daterange" start-placeholder="开始日期" end-placeholder="结束日期（包含）" :disabled-date="(date: Date) => date >= new Date(new Date().setHours(0,0,0,0))" style="width:100%" /></el-form-item>
+        <el-form-item label="订单范围"><el-checkbox v-model="createForm.exclude_zero_output">排除输出 Token 为 0 的订单</el-checkbox></el-form-item>
         <el-alert type="info" :closable="false" title="每次任务都会完整生成一条新账单；相同站点、账单类型、对象和账期的任务或账单已经存在时，不能重复创建。" />
       </el-form>
       <template #footer><el-button @click="createVisible=false">取消</el-button><el-button type="primary" :loading="creating" :disabled="counts.queued >= 5 || !createForm.instance_id || createForm.range.length !== 2 || (createForm.bill_type === 'user' ? !createForm.user_id : !createForm.upstream_id)" @click="createJob">{{ counts.queued >= 5 ? '等待队列已满' : '创建任务' }}</el-button></template>

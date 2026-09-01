@@ -33,6 +33,23 @@ func TestBillingStatementsHandlerCreatesSingleUserStatement(t *testing.T) {
 		t.Fatalf("code=%d job=%+v body=%s", w.Code, s.job, w.Body.String())
 	}
 }
+
+func TestBillingStatementsHandlerSnapshotsZeroOutputPolicyInDedupKey(t *testing.T) {
+	create := func(exclude bool) billing.Job {
+		s := &statementStoreStub{}
+		body := `{"instance_id":"site-a","statement_type":"user","user_id":7,"from":"2026-08-01 00:00:00","to":"2026-08-03 00:00:00","exclude_zero_output":` + map[bool]string{true: "true", false: "false"}[exclude] + `}`
+		w := httptest.NewRecorder()
+		BillingStatementsHandler{Store: s}.ServeHTTP(w, httptest.NewRequest("POST", "/api/dashboard/billing/statements", strings.NewReader(body)))
+		if w.Code != 202 || s.job.ExcludeZeroOutput != exclude {
+			t.Fatalf("exclude=%v code=%d job=%+v body=%s", exclude, w.Code, s.job, w.Body.String())
+		}
+		return s.job
+	}
+	complete, filtered := create(false), create(true)
+	if complete.RequestKey == filtered.RequestKey {
+		t.Fatalf("different zero-output policies shared request key %q", complete.RequestKey)
+	}
+}
 func TestBillingStatementsHandlerRequiresBoundUpstream(t *testing.T) {
 	s := &statementStoreStub{upstream: billing.Upstream{ID: 3, InstanceID: "site-a", Name: "u", Enabled: true}}
 	h := BillingStatementsHandler{Store: s}
