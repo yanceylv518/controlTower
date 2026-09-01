@@ -8,6 +8,7 @@ import (
 	"math/big"
 	"strings"
 	"time"
+	_ "time/tzdata"
 
 	"github.com/expr-lang/expr"
 	"github.com/expr-lang/expr/ast"

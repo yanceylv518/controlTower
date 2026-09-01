@@ -46,6 +46,37 @@ func TestTieredExpressionUsesLogTimeForPeakPrice(t *testing.T) {
 	}
 }
 
+func TestTieredExpressionUsesEmbeddedShanghaiTimezone(t *testing.T) {
+	expression := `
+(
+  weekday("Asia/Shanghai") >= 1 &&
+  weekday("Asia/Shanghai") <= 5 &&
+  (
+    (hour("Asia/Shanghai") >= 9 && hour("Asia/Shanghai") < 12) ||
+    (hour("Asia/Shanghai") >= 14 && hour("Asia/Shanghai") < 18)
+  )
+)
+? tier("高峰时段", p * 9 + c * 27 + cr * 0.3)
+: tier("空闲时段", p * 4.5 + c * 13.5 + cr * 0.15)`
+	log := tieredLog(expression, time.Date(2026, 8, 18, 15, 55, 4, 0, BusinessLocation))
+	log.SourcePromptTokens = sql.NullInt64{Int64: 5, Valid: true}
+	log.PromptTokens = sql.NullInt64{Int64: 5, Valid: true}
+	log.CompletionTokens = sql.NullInt64{Int64: 10, Valid: true}
+	log.MatchedTier = "高峰时段"
+	log.Quota = 158
+
+	result, err := VerifyLogCharge(log, "500000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Verified || result.CalculatedQuota != 158 {
+		t.Fatalf("unexpected verification: %+v", result)
+	}
+	if result.Charge.MatchedTier != "高峰时段" || result.Charge.Total != "0.000315" {
+		t.Fatalf("unexpected tiered charge: %+v", result.Charge)
+	}
+}
+
 func TestTieredExpressionUsesFrozenRequestRuleTrace(t *testing.T) {
 	log := tieredLog(`tier("peak", p * 20) * (has(header("anthropic-beta"), "fast-mode") ? 2 : 1)`, time.Date(2026, 8, 24, 10, 0, 0, 0, BusinessLocation))
 	log.CompletionTokens = sql.NullInt64{}
