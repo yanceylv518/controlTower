@@ -101,6 +101,20 @@ func TestCalculateLogChargeSupportsFixedPerRequestPrice(t *testing.T) {
 	}
 }
 
+func TestCalculateLogChargeAddsToolSurchargeToFixedPrice(t *testing.T) {
+	log := PagedLogRecord{
+		ModelPrice: "0.02", GroupRatio: "1", Quota: 15000,
+		ToolSurcharges: `[{"name":"web_search","count":1,"price":10}]`,
+	}
+	result, err := VerifyLogCharge(log, "500000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Verified || result.Charge.Total != "0.030000" || result.Charge.ToolSurchargeAmount != "0.010000" {
+		t.Fatalf("unexpected fixed price tool surcharge: %+v", result)
+	}
+}
+
 func TestCalculateLogChargeRejectsIncompleteRecordedPricing(t *testing.T) {
 	_, err := CalculateLogCharge(PagedLogRecord{PromptTokens: sql.NullInt64{Valid: true, Int64: 1}, ModelRatio: "2.5", GroupRatio: ""}, "500000")
 	if err == nil {

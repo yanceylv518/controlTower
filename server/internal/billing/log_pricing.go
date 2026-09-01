@@ -1,7 +1,9 @@
 package billing
 
 import (
+	"bytes"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"math/big"
 	"time"
@@ -11,13 +13,13 @@ import (
 // log. Ratios are deliberately absent: they are only inputs used to derive the
 // effective per-million-token prices captured below.
 type LogCharge struct {
-	Mode                                                                   string
-	MatchedTier                                                            string
-	InputPrice, OutputPrice, CacheReadPrice, ImagePrice                    string
-	CacheWritePrice, CacheWrite5mPrice, CacheWrite1hPrice, PerRequestPrice string
-	InputAmount, OutputAmount, CacheReadAmount, ImageAmount                string
-	CacheWriteAmount, CacheWrite5mAmount, CacheWrite1hAmount, Total        string
-	ReconstructedQuota                                                     string
+	Mode                                                                                 string
+	MatchedTier                                                                          string
+	InputPrice, OutputPrice, CacheReadPrice, ImagePrice                                  string
+	CacheWritePrice, CacheWrite5mPrice, CacheWrite1hPrice, PerRequestPrice               string
+	InputAmount, OutputAmount, CacheReadAmount, ImageAmount                              string
+	CacheWriteAmount, CacheWrite5mAmount, CacheWrite1hAmount, ToolSurchargeAmount, Total string
+	ReconstructedQuota                                                                   string
 }
 
 type LogChargeVerification struct {
@@ -54,7 +56,11 @@ func CalculateLogCharge(log PagedLogRecord, quotaPerUnit string) (LogCharge, err
 	}
 	if modelPrice, priceErr := decimalRat(log.ModelPrice); priceErr == nil && modelPrice.Sign() >= 0 {
 		total := new(big.Rat).Mul(modelPrice, group)
-		return finishLogCharge(LogCharge{Mode: "per_request", PerRequestPrice: total.FloatString(6)}, total, qpu), nil
+		charge := LogCharge{Mode: "per_request", PerRequestPrice: total.FloatString(6)}
+		if err = addToolSurcharges(&charge, total, log.ToolSurcharges, group); err != nil {
+			return LogCharge{}, err
+		}
+		return finishLogCharge(charge, total, qpu), nil
 	}
 	modelRatio, err := requiredLogRatio(log.ModelRatio, "model_ratio")
 	if err != nil {
@@ -135,7 +141,49 @@ func CalculateLogCharge(log PagedLogRecord, quotaPerUnit string) (LogCharge, err
 		charge.CacheWrite1hPrice, charge.CacheWrite1hAmount = unit.FloatString(6), FormatAmount(amount, 6)
 		total.Add(total, amount)
 	}
+	if err = addToolSurcharges(&charge, total, log.ToolSurcharges, group); err != nil {
+		return LogCharge{}, err
+	}
 	return finishLogCharge(charge, total, qpu), nil
+}
+
+type toolSurchargeItem struct {
+	Name  string      `json:"name"`
+	Count int64       `json:"count"`
+	Price json.Number `json:"price"`
+}
+
+// NewAPI records tool prices in currency per 1000 calls. The surcharge is
+// independent of token pricing and is multiplied only by the effective group
+// ratio before being added to the request total.
+func addToolSurcharges(charge *LogCharge, total *big.Rat, raw string, group *big.Rat) error {
+	if raw == "" || raw == "null" || raw == "[]" {
+		return nil
+	}
+	decoder := json.NewDecoder(bytes.NewBufferString(raw))
+	decoder.UseNumber()
+	var items []toolSurchargeItem
+	if err := decoder.Decode(&items); err != nil {
+		return fmt.Errorf("invalid tool_surcharges: %w", err)
+	}
+	surcharge := new(big.Rat)
+	for _, item := range items {
+		if item.Count <= 0 {
+			continue
+		}
+		price, err := decimalRat(item.Price.String())
+		if err != nil || price.Sign() <= 0 {
+			return fmt.Errorf("invalid tool surcharge price for %s", item.Name)
+		}
+		amount := new(big.Rat).Mul(price, big.NewRat(item.Count, 1000))
+		amount.Mul(amount, group)
+		surcharge.Add(surcharge, amount)
+	}
+	if surcharge.Sign() > 0 {
+		charge.ToolSurchargeAmount = FormatAmount(surcharge, 6)
+		total.Add(total, surcharge)
+	}
+	return nil
 }
 
 func finishLogCharge(charge LogCharge, total, qpu *big.Rat) LogCharge {

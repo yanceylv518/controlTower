@@ -127,10 +127,12 @@ func calculateTieredExprCharge(log PagedLogRecord, quotaPerUnit string) (LogChar
 	}
 	amount := new(big.Rat).Mul(new(big.Rat).SetFloat64(cost), group)
 	amount.Quo(amount, big.NewRat(tokensPerMillion, 1))
-	charge := LogCharge{Mode: "tiered_expr", MatchedTier: matchedTier, Total: FormatAmount(amount, 6)}
+	charge := LogCharge{Mode: "tiered_expr", MatchedTier: matchedTier}
 	fillTieredLinearBreakdown(&charge, program, params, used, now, matchedTier, cost, group, log)
-	charge.ReconstructedQuota = new(big.Rat).Mul(new(big.Rat).Set(amount), qpu).FloatString(6)
-	return charge, nil
+	if err = addToolSurcharges(&charge, amount, log.ToolSurcharges, group); err != nil {
+		return LogCharge{}, err
+	}
+	return finishLogCharge(charge, amount, qpu), nil
 }
 
 func fillTieredLinearBreakdown(charge *LogCharge, program anyProgram, params tieredParams, used map[string]bool, now time.Time, matchedTier string, totalCost float64, group *big.Rat, log PagedLogRecord) {

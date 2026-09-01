@@ -33,7 +33,7 @@ type PagedLogRecord struct {
 	ModelPrice, ModelRatio, CompletionRatio, CacheRatio, CacheCreationRatio  string
 	CacheCreationRatio5m, CacheCreationRatio1h, GroupRatio                   string
 	ImageRatio                                                               string
-	BillingMode, ExprBase64, MatchedTier, RequestRules                       string
+	BillingMode, ExprBase64, MatchedTier, RequestRules, ToolSurcharges       string
 	ImageInputTokens, ImageOutputTokens, AudioInputTokens, AudioOutputTokens int64
 	RequestID, UpstreamRequestID, Username, TokenName, ModelName, GroupName  string
 	ChannelName                                                              string

@@ -77,6 +77,24 @@ func TestTieredExpressionUsesEmbeddedShanghaiTimezone(t *testing.T) {
 	}
 }
 
+func TestTieredExpressionIncludesToolSurcharge(t *testing.T) {
+	log := tieredLog(`tier("空闲时段", p * 4.5 + c * 13.5)`, time.Date(2026, 8, 31, 13, 21, 21, 0, BusinessLocation))
+	log.SourcePromptTokens = sql.NullInt64{Int64: 920597, Valid: true}
+	log.PromptTokens = sql.NullInt64{Int64: 920597, Valid: true}
+	log.CompletionTokens = sql.NullInt64{Int64: 2000, Valid: true}
+	log.MatchedTier = "空闲时段"
+	log.ToolSurcharges = `[{"name":"web_search","count":1,"price":10}]`
+	log.Quota = 2089843
+
+	result, err := VerifyLogCharge(log, "500000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Verified || result.Charge.ToolSurchargeAmount != "0.010000" {
+		t.Fatalf("unexpected tool surcharge charge: %+v", result)
+	}
+}
+
 func TestTieredExpressionUsesFrozenRequestRuleTrace(t *testing.T) {
 	log := tieredLog(`tier("peak", p * 20) * (has(header("anthropic-beta"), "fast-mode") ? 2 : 1)`, time.Date(2026, 8, 24, 10, 0, 0, 0, BusinessLocation))
 	log.CompletionTokens = sql.NullInt64{}

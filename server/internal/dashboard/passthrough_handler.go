@@ -280,6 +280,7 @@ func scanBillingLogRows(rows *sql.Rows, out []billing.PagedLogRecord) ([]billing
 		v.CacheCreationRatio5m, v.CacheCreationRatio1h = cache.CacheCreationRatio5m, cache.CacheCreationRatio1h
 		v.ImageRatio = cache.ImageRatio
 		v.BillingMode, v.ExprBase64, v.MatchedTier, v.RequestRules = cache.BillingMode, cache.ExprBase64, cache.MatchedTier, cache.RequestRules
+		v.ToolSurcharges = cache.ToolSurcharges
 		v.ImageInputTokens, v.ImageOutputTokens = cache.ImageInput, cache.ImageOutput
 		v.AudioInputTokens, v.AudioOutputTokens = cache.AudioInput, cache.AudioOutput
 		if v.PromptTokens.Valid {
@@ -370,6 +371,7 @@ const billingOtherProjection = `CASE WHEN JSON_VALID(l.other) THEN JSON_OBJECT(`
 	`'expr_b64',JSON_EXTRACT(l.other,'$.expr_b64'),` +
 	`'matched_tier',JSON_EXTRACT(l.other,'$.matched_tier'),` +
 	`'request_rules',JSON_EXTRACT(l.other,'$.request_rules'),` +
+	`'tool_surcharges',JSON_EXTRACT(l.other,'$.tool_surcharges'),` +
 	`'image_ratio',JSON_EXTRACT(l.other,'$.image_ratio'),` +
 	`'image_tokens',JSON_EXTRACT(l.other,'$.image_tokens'),` +
 	`'image_input',JSON_EXTRACT(l.other,'$.image_input'),` +
@@ -588,7 +590,7 @@ type billingCacheUsage struct {
 	Semantic                                                                string
 	ModelPrice, ModelRatio, CompletionRatio, CacheRatio, CacheCreationRatio string
 	CacheCreationRatio5m, CacheCreationRatio1h, GroupRatio, ImageRatio      string
-	BillingMode, ExprBase64, MatchedTier, RequestRules                      string
+	BillingMode, ExprBase64, MatchedTier, RequestRules, ToolSurcharges      string
 	UsageBillingPath                                                        string
 }
 
@@ -692,7 +694,8 @@ func parseBillingCacheUsage(other string) billingCacheUsage {
 		CacheCreationRatio5m: decimal("cache_creation_ratio_5m"), CacheCreationRatio1h: decimal("cache_creation_ratio_1h"),
 		ImageRatio: decimal("image_ratio"),
 		GroupRatio: decimal("group_ratio"), BillingMode: stringValue(values, "billing_mode"), ExprBase64: stringValue(values, "expr_b64"),
-		MatchedTier: stringValue(values, "matched_tier"), RequestRules: jsonValue(values, "request_rules"), UsageBillingPath: usageBillingPath,
+		MatchedTier: stringValue(values, "matched_tier"), RequestRules: jsonValue(values, "request_rules"),
+		ToolSurcharges: jsonValue(values, "tool_surcharges"), UsageBillingPath: usageBillingPath,
 	}
 }
 
@@ -720,7 +723,7 @@ func jsonValue(values map[string]any, key string) string {
 // OpenAI semantics; treating those rows as Anthropic charges prompt_tokens a
 // second time. Explicit markers always win.
 func resolveBillingCacheSemantic(cache billingCacheUsage, promptTokens int64) billingCacheUsage {
-	modernSnapshot := cache.ModelPrice != "" || cache.ModelRatio != "" || cache.CompletionRatio != "" || cache.CacheRatio != "" || cache.CacheCreationRatio != "" || cache.CacheCreationRatio5m != "" || cache.CacheCreationRatio1h != "" || cache.GroupRatio != "" || cache.ImageRatio != "" || cache.BillingMode != "" || cache.ExprBase64 != "" || cache.MatchedTier != "" || cache.RequestRules != ""
+	modernSnapshot := cache.ModelPrice != "" || cache.ModelRatio != "" || cache.CompletionRatio != "" || cache.CacheRatio != "" || cache.CacheCreationRatio != "" || cache.CacheCreationRatio5m != "" || cache.CacheCreationRatio1h != "" || cache.GroupRatio != "" || cache.ImageRatio != "" || cache.BillingMode != "" || cache.ExprBase64 != "" || cache.MatchedTier != "" || cache.RequestRules != "" || cache.ToolSurcharges != ""
 	if cache.Semantic != "anthropic" && !modernSnapshot && cache.ImageInput == 0 && cache.ImageOutput == 0 && cache.AudioInput == 0 && cache.AudioOutput == 0 && cache.Read+cache.Write > promptTokens {
 		cache.Semantic = "anthropic"
 	}
