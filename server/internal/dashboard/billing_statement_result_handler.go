@@ -93,10 +93,6 @@ func (h BillingStatementResultHandler) ServeHTTP(w http.ResponseWriter, r *http.
 		writeDashboardJSON(w, http.StatusOK, map[string]any{"job": job, "total_orders": billable + job.AbnormalRows, "normal_orders": verified, "billable_orders": billable, "anomaly_total": job.AbnormalRows, "reconciliation_total": job.MismatchRows, "review_required": job.MismatchRows > 0, "count_balanced": verified+job.AbnormalRows+job.MismatchRows == billable+job.AbnormalRows, "model_summary": preview.Models, "daily_summary": preview.Daily, "token_summary": preview.Tokens, "anomalies": preview.Anomalies, "reconciliation": preview.Reconciliation})
 		return
 	}
-	if job.MismatchRows > 0 {
-		writeDashboardError(w, http.StatusConflict, "billing_statement_review_required")
-		return
-	}
 	book, err := statementWorkbook(job, rows, h.Store)
 	if err != nil {
 		writeDashboardError(w, http.StatusInternalServerError, "billing_statement_xlsx_failed")
@@ -108,6 +104,15 @@ func (h BillingStatementResultHandler) ServeHTTP(w http.ResponseWriter, r *http.
 	z := zip.NewWriter(w)
 	main, _ := z.Create("账单.xlsx")
 	_, _ = main.Write(book)
+	if job.MismatchRows > 0 {
+		var reconciliation bytes.Buffer
+		if err := h.writeReconciliationCSVData(r.Context(), &reconciliation, job); err == nil {
+			entry, createErr := z.Create("核对差异.csv")
+			if createErr == nil {
+				_, _ = entry.Write(reconciliation.Bytes())
+			}
+		}
+	}
 	root := h.Root
 	if root == "" {
 		root = billing.DefaultBillingFileRoot
@@ -258,6 +263,10 @@ func (h BillingStatementResultHandler) writeReconciliationCSV(w http.ResponseWri
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 	name := strings.TrimSuffix(statementArchiveFilename(job), ".zip") + "-核对差异.csv"
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="billing-reconciliation-%s.csv"; filename*=UTF-8''%s`, job.ID, url.PathEscape(name)))
+	_ = h.writeReconciliationCSVData(r.Context(), w, job)
+}
+
+func (h BillingStatementResultHandler) writeReconciliationCSVData(ctx context.Context, w io.Writer, job billing.Job) error {
 	_, _ = w.Write([]byte{0xef, 0xbb, 0xbf})
 	cw := csv.NewWriter(w)
 	upstreamStatement := job.JobType == "upstream_statement"
@@ -267,9 +276,9 @@ func (h BillingStatementResultHandler) writeReconciliationCSV(w http.ResponseWri
 		_ = cw.Write([]string{"请求时间", "Request ID", "令牌 ID", "令牌", "模型", "输入 Token", "输出 Token", "缓存读取 Token", "缓存写入 Token", "重算 Quota", "日志 Quota", "Quota 差额", "重算金额", "日志金额", "金额差额", "差异原因"})
 	}
 	for offset := 0; ; offset += 5000 {
-		items, err := h.Store.QueryBillingStatementReconciliation(r.Context(), job.ID, 5000, offset)
+		items, err := h.Store.QueryBillingStatementReconciliation(ctx, job.ID, 5000, offset)
 		if err != nil {
-			return
+			return err
 		}
 		for _, v := range items {
 			usage := []string{v.ModelName, strconv.FormatInt(v.PromptTokens, 10), strconv.FormatInt(v.CompletionTokens, 10), strconv.FormatInt(v.CacheReadTokens, 10), strconv.FormatInt(v.CacheWriteTokens, 10), strconv.FormatInt(v.CalculatedQuota, 10), strconv.FormatInt(v.LoggedQuota, 10), strconv.FormatInt(v.QuotaDifference, 10), v.CalculatedAmount, v.LoggedAmount, v.AmountDifference, localizedReasons(v.Reason)}
@@ -284,6 +293,7 @@ func (h BillingStatementResultHandler) writeReconciliationCSV(w http.ResponseWri
 		}
 	}
 	cw.Flush()
+	return cw.Error()
 }
 
 func sumStatementRequests(rows []billing.StatementAggregateRow) int64 {

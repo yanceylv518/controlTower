@@ -42,6 +42,26 @@ func TestCalculateLogChargeMatchesNewAPIImageBilling(t *testing.T) {
 	}
 }
 
+func TestVerifyLogChargeMatchesNewAPICacheOverflowSettlement(t *testing.T) {
+	log := PagedLogRecord{
+		SourcePromptTokens: sql.NullInt64{Valid: true, Int64: 121854},
+		PromptTokens:       sql.NullInt64{Valid: true, Int64: 0},
+		CompletionTokens:   sql.NullInt64{Valid: true, Int64: 1151},
+		CacheTokens:        121856, ModelPrice: "-1", ModelRatio: "10", CompletionRatio: "5",
+		CacheRatio: "0.1", GroupRatio: "1", Quota: 179386,
+	}
+	result, err := VerifyLogCharge(log, "500000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Verified || result.CalculatedQuota != 179386 || result.Charge.Total != "0.358772" {
+		t.Fatalf("unexpected cache-overflow charge: %+v", result)
+	}
+	if log.PromptTokens.Int64 != 0 || result.Charge.InputAmount != "0.000000" {
+		t.Fatalf("displayed ordinary input must remain clamped: log=%+v charge=%+v", log, result.Charge)
+	}
+}
+
 func TestCalculateLogChargeRequiresImageRatio(t *testing.T) {
 	log := PagedLogRecord{PromptTokens: sql.NullInt64{Valid: true}, ImageInputTokens: 1, ModelRatio: "10", GroupRatio: "1"}
 	if _, reason := VerifyLogChargeReason(log, "500000"); reason != PricingReasonIncomplete {

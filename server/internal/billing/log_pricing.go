@@ -151,6 +151,10 @@ func VerifyLogCharge(log PagedLogRecord, quotaPerUnit string) (LogChargeVerifica
 	if err != nil {
 		return LogChargeVerification{}, err
 	}
+	charge, err = applyCacheOverflowAdjustment(log, charge, quotaPerUnit)
+	if err != nil {
+		return LogChargeVerification{}, err
+	}
 	value, err := decimalRat(charge.ReconstructedQuota)
 	if err != nil {
 		return LogChargeVerification{}, err
@@ -164,6 +168,44 @@ func VerifyLogCharge(log PagedLogRecord, quotaPerUnit string) (LogChargeVerifica
 	}
 	result.Verified = difference <= quotaVerificationTolerance
 	return result, nil
+}
+
+// applyCacheOverflowAdjustment reproduces new-api's legacy OpenAI-compatible
+// settlement when the provider reports cached tokens slightly above
+// prompt_tokens. new-api prices the resulting negative ordinary-input lane;
+// CT keeps the displayed/statistical ordinary-input lane clamped to zero, but
+// must retain the signed adjustment while reconstructing the charged amount.
+// Multimodal requests are excluded because their image/audio lanes can
+// legitimately overlap prompt_tokens and are settled by a different path.
+func applyCacheOverflowAdjustment(log PagedLogRecord, charge LogCharge, quotaPerUnit string) (LogCharge, error) {
+	if charge.Mode != "token" || !log.SourcePromptTokens.Valid || log.UsageSemantic == "anthropic" ||
+		log.ImageInputTokens > 0 || log.ImageOutputTokens > 0 || log.AudioInputTokens > 0 || log.AudioOutputTokens > 0 {
+		return charge, nil
+	}
+	ordinary := log.SourcePromptTokens.Int64 - log.CacheTokens - log.CacheWriteTokens
+	if ordinary >= 0 || nullableInt64(log.PromptTokens) != 0 {
+		return charge, nil
+	}
+	inputPrice, err := decimalRat(charge.InputPrice)
+	if err != nil {
+		return LogCharge{}, fmt.Errorf("invalid reconstructed input price")
+	}
+	total, err := decimalRat(charge.Total)
+	if err != nil {
+		return LogCharge{}, err
+	}
+	// tokenCost intentionally clamps negative quantities for normal billing
+	// lanes. This compatibility adjustment must preserve the signed quantity.
+	adjustment := new(big.Rat).Mul(big.NewRat(ordinary, 1), inputPrice)
+	adjustment.Quo(adjustment, big.NewRat(tokensPerMillion, 1))
+	total.Add(total, adjustment)
+	qpu, err := decimalRat(quotaPerUnit)
+	if err != nil || qpu.Sign() <= 0 {
+		return LogCharge{}, fmt.Errorf("invalid QuotaPerUnit")
+	}
+	charge.Total = FormatAmount(total, 6)
+	charge.ReconstructedQuota = new(big.Rat).Mul(new(big.Rat).Set(total), qpu).FloatString(6)
+	return charge, nil
 }
 
 func VerifyLogChargeReason(log PagedLogRecord, quotaPerUnit string) (LogChargeVerification, string) {
