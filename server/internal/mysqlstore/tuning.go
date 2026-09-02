@@ -205,12 +205,20 @@ func (s Store) QueryMetrics(id string, start, end time.Time) ([]tuning.ChannelMe
 	return out, rows.Err()
 }
 
-// QueryCurrentChannelRates returns the newest completed one-minute bucket
-// available for the site. Using the newest persisted bucket avoids showing an
-// incomplete current minute or briefly dropping rates to zero at minute
-// boundaries while Agent reports are still in flight.
+// metricBucketSettleDelay is how long after a one-minute bucket closes before
+// every Agent report contributing to it has landed. Agents poll logs every
+// CT_LOG_POLL_INTERVAL_SECONDS (30s default) and the server ADDS each report
+// into the bucket, so the newest closed bucket keeps filling for up to one poll
+// interval plus report latency. Reading it earlier undercounts the rate, and an
+// undercount lets the capacity guard allow a weight increase it should block.
+const metricBucketSettleDelay = 95 * time.Second
+
+// QueryCurrentChannelRates returns the newest settled one-minute bucket
+// available for the site: the newest bucket that closed at least
+// metricBucketSettleDelay ago, looked up within the last five minutes so an
+// idle site reads as zero instead of a stale rate.
 func (s Store) QueryCurrentChannelRates(id string, now time.Time) ([]tuning.ChannelMetric, error) {
-	end := now.Truncate(time.Minute)
+	end := now.Add(-metricBucketSettleDelay).Truncate(time.Minute).Add(time.Minute)
 	start := end.Add(-5 * time.Minute)
 	rows, err := s.db.QueryContext(context.Background(), `SELECT
 CAST(SUBSTRING_INDEX(dimension_key,':',-1) AS SIGNED),SUM(request_count),SUM(tpm)
