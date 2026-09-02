@@ -205,6 +205,38 @@ func (s Store) QueryMetrics(id string, start, end time.Time) ([]tuning.ChannelMe
 	return out, rows.Err()
 }
 
+// QueryCurrentChannelRates returns the newest completed one-minute bucket
+// available for the site. Using the newest persisted bucket avoids showing an
+// incomplete current minute or briefly dropping rates to zero at minute
+// boundaries while Agent reports are still in flight.
+func (s Store) QueryCurrentChannelRates(id string, now time.Time) ([]tuning.ChannelMetric, error) {
+	end := now.Truncate(time.Minute)
+	start := end.Add(-5 * time.Minute)
+	rows, err := s.db.QueryContext(context.Background(), `SELECT
+CAST(SUBSTRING_INDEX(dimension_key,':',-1) AS SIGNED),SUM(request_count),SUM(tpm)
+FROM metric_1m
+WHERE instance_id IN (SELECT id FROM instances WHERE enabled=1 AND CASE WHEN site_id='' THEN id ELSE site_id END=?)
+  AND dimension_type='instance_channel' AND bucket_time=(
+    SELECT MAX(bucket_time) FROM metric_1m
+    WHERE instance_id IN (SELECT id FROM instances WHERE enabled=1 AND CASE WHEN site_id='' THEN id ELSE site_id END=?)
+      AND dimension_type='instance_channel' AND bucket_time>=? AND bucket_time<?
+  )
+GROUP BY CAST(SUBSTRING_INDEX(dimension_key,':',-1) AS SIGNED)`, id, id, start, end)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []tuning.ChannelMetric
+	for rows.Next() {
+		var metric tuning.ChannelMetric
+		if err = rows.Scan(&metric.ChannelID, &metric.RequestCount, &metric.TPM); err != nil {
+			return nil, err
+		}
+		out = append(out, metric)
+	}
+	return out, rows.Err()
+}
+
 func (s Store) ListContinuousStates(id string) ([]tuning.ContinuousState, error) {
 	rows, err := s.db.QueryContext(context.Background(), `SELECT instance_id,channel_id,model_name,k_error,k_speed,k_cache,k_otps,multiplier,proposed_weight,last_written_weight,last_write_at,last_observed_requests,last_observed_errors,metric_rpm,metric_tpm,capacity_limited,metric_ready,baseline_ready,metric_ttft_p50,metric_ttft_p90,metric_ttft_p95,baseline_ttft_p50,baseline_ttft_p90,baseline_ttft_p95,metric_cache,baseline_cache,cache_ready,metric_otps,baseline_otps,otps_ready,smoothed_error_rate,last_bucket_at,paused_reason,phase,circuit_opened_at,next_probe_at,probe_command_id,probe_attempts,probe_successes,probe_duration_sum,original_priority,soft_start_pending,write_failure_streak,last_write_failure_at,last_write_error,last_observed_weight,updated_at FROM tuning_continuous_states WHERE instance_id=?`, id)
 	if err != nil {

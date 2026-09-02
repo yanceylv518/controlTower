@@ -409,7 +409,7 @@ export interface TuningContinuousState {
   k_error: number;
   multiplier: number;
   proposed_weight: number;
-  last_written_weight: number;
+  last_written_weight?: number;
   last_write_at?: string;
   last_observed_requests: number;
   last_observed_errors: number;

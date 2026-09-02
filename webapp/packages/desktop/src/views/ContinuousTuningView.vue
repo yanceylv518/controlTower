@@ -34,6 +34,15 @@ const activeRows = computed(() => bases.value.filter(x => x.model_name === activ
 const channelRowKey = (row: ChannelBaseValue) => `${row.channel_id}:${row.model_name}`;
 const stateMap = computed(() => new Map(states.value.map(x => [`${x.channel_id}:${x.model_name}`, x])));
 const stateFor = (row: ChannelBaseValue) => stateMap.value.get(`${row.channel_id}:${row.model_name}`);
+const applyEffectiveCurrentWeights = () => {
+  const runtime = new Map(states.value.map(state => [`${state.channel_id}:${state.model_name}`, state]));
+  for (const row of bases.value) {
+    const state = runtime.get(`${row.channel_id}:${row.model_name}`);
+    if (state?.last_written_weight == null || !state.last_write_at) continue;
+    const snapshotAt = row.snapshot_at ? new Date(row.snapshot_at).getTime() : 0;
+    if (new Date(state.last_write_at).getTime() > snapshotAt) row.current_weight = state.last_written_weight;
+  }
+};
 const validEvent = (item: TuningRecommendation) => item.rule !== "circuit_recovered" || item.proposed_weight > 0;
 const recentEvents = computed(() => events.value.filter(x => validEvent(x) && ["weight_observed", "weight_write", "manual_takeover", "auto_paused", "circuit_opened", "probe_started", "probe_failed", "circuit_recovered"].includes(x.rule)));
 const eventModel = (item: TuningRecommendation) => String(item.evidence?.model ?? bases.value.find(row => row.channel_id === item.channel_id)?.model_name ?? "");
@@ -139,7 +148,7 @@ async function load() {
     mode.value = p.mode; Object.assign(policy, p.policy); policy.continuous = Object.assign(defaults(), p.policy.continuous || {}); policy.dispatch_modes ||= {};
     bases.value = b.items ?? []; events.value = r.items ?? []; for (const model of models.value) policy.dispatch_modes[model] ||= "off";
     if (!models.value.includes(activeModel.value)) activeModel.value = models.value[0] || "";
-    try { states.value = (await dashboard.tuningContinuousStates(siteID.value)).items ?? []; } catch { states.value = []; }
+    try { states.value = (await dashboard.tuningContinuousStates(siteID.value)).items ?? []; applyEffectiveCurrentWeights(); } catch { states.value = []; }
     dirty.value = false; captureSavedState();
   } finally { loading.value = false; }
 }
@@ -161,6 +170,7 @@ async function refreshRuntime() {
     } else {
       bases.value = refreshed;
     }
+    applyEffectiveCurrentWeights();
     for (const model of models.value) policy.dispatch_modes[model] ||= "off";
     if (!models.value.includes(activeModel.value)) activeModel.value = models.value[0] || "";
     if (!dirty.value) captureSavedState();

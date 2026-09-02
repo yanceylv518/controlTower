@@ -18,6 +18,10 @@ type continuousRecentBucketsStore interface {
 	QueryRecentChannelBucketsBySite(string, time.Time) (map[int64][]RecentChannelBucket, error)
 }
 
+type currentChannelRatesStore interface {
+	QueryCurrentChannelRates(string, time.Time) ([]ChannelMetric, error)
+}
+
 type continuousBaseline struct {
 	ttft50, ttft90, ttft95 float64
 	cache, otps            float64
@@ -86,6 +90,16 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 		log.Printf("tuning continuous evaluation site=%s stage=metrics failed duration=%s error=%v", id, metricsDuration, err)
 		return 0, 0
 	}
+	currentMetrics := metrics
+	currentRatesAreWindowTotals := true
+	if rateStore, ok := e.store.(currentChannelRatesStore); ok {
+		if latest, rateErr := rateStore.QueryCurrentChannelRates(id, now); rateErr != nil {
+			log.Printf("tuning continuous evaluation site=%s stage=current_rates failed error=%v; falling back to window averages", id, rateErr)
+		} else {
+			currentMetrics = latest
+			currentRatesAreWindowTotals = false
+		}
+	}
 	stageStarted = time.Now()
 	states, err := cs.ListContinuousStates(id)
 	statesDuration := time.Since(stageStarted)
@@ -107,9 +121,13 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 	}
 	channelLoopStarted := time.Now()
 	metricByID := map[int64]ChannelMetric{}
+	currentMetricByID := map[int64]ChannelMetric{}
 	stateByID := map[int64]ContinuousState{}
 	for _, v := range metrics {
 		metricByID[v.ChannelID] = v
+	}
+	for _, v := range currentMetrics {
+		currentMetricByID[v.ChannelID] = v
 	}
 	for _, v := range states {
 		stateByID[v.ChannelID] = v
@@ -157,9 +175,13 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 			// evaluation window, not only error buckets folded since the last pass.
 			state.LastObservedRequests = m.RequestCount
 			state.LastObservedErrors = max(m.ErrorCount-m.UserErrorCount, 0)
-			windowMinutes := math.Max(float64(p.WindowMinutes), 1)
-			state.MetricRPM = float64(m.RequestCount) / windowMinutes
-			state.MetricTPM = float64(m.TPM) / windowMinutes
+			current := currentMetricByID[base.ChannelID]
+			divisor := 1.0
+			if currentRatesAreWindowTotals {
+				divisor = math.Max(float64(p.WindowMinutes), 1)
+			}
+			state.MetricRPM = float64(current.RequestCount) / divisor
+			state.MetricTPM = float64(current.TPM) / divisor
 			state.CapacityLimited = (base.MaxRPM > 0 && state.MetricRPM >= float64(base.MaxRPM)) || (base.MaxTPM > 0 && state.MetricTPM >= float64(base.MaxTPM))
 			state.MetricReady = m.RequestCount >= p.MinSamples && m.TTFTP50 > 0 && m.TTFTP90 > 0 && m.TTFTP95 > 0
 			state.BaselineReady = healthy

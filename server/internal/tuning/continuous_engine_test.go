@@ -149,7 +149,7 @@ func TestObservePublishesWindowProgressAndOnlyChangedProposals(t *testing.T) {
 
 func TestCapacityLimitBlocksOnlyWeightIncrease(t *testing.T) {
 	now := time.Now().UTC()
-	f := &continuousFake{
+	base := &continuousFake{
 		bases: []ChannelBaseValue{
 			{ChannelID: 1, ChannelName: "fast", ModelName: "m", Models: []string{"m"}, BaseWeight: 100, CurrentWeight: 100, MaxRPM: 2, MaxTPM: 100},
 			{ChannelID: 2, ChannelName: "slow", ModelName: "m", Models: []string{"m"}, BaseWeight: 100, CurrentWeight: 100},
@@ -159,6 +159,10 @@ func TestCapacityLimitBlocksOnlyWeightIncrease(t *testing.T) {
 			{ChannelID: 2, RequestCount: 30, TPM: 300, TTFTP50: 3, TTFTP90: 3, TTFTP95: 3},
 		},
 	}
+	f := &currentRatesFake{continuousFake: base, current: []ChannelMetric{
+		{ChannelID: 1, RequestCount: 2, TPM: 200},
+		{ChannelID: 2, RequestCount: 1, TPM: 20},
+	}}
 	p := DefaultPolicy()
 	p.DispatchModes = map[string]string{"m": "observe"}
 	NewEngine(f).evaluateContinuous("i", PolicyRecord{InstanceID: "i", Policy: p, Mode: "observe"}, now, f)
@@ -173,6 +177,15 @@ func TestCapacityLimitBlocksOnlyWeightIncrease(t *testing.T) {
 	if f.states[2].ProposedWeight >= 100 {
 		t.Fatalf("capacity guard must not block an ordinary downward adjustment: %#v", f.states[2])
 	}
+}
+
+type currentRatesFake struct {
+	*continuousFake
+	current []ChannelMetric
+}
+
+func (f *currentRatesFake) QueryCurrentChannelRates(string, time.Time) ([]ChannelMetric, error) {
+	return f.current, nil
 }
 
 // A creeping drift must eventually be recorded: the deadband anchors on the
