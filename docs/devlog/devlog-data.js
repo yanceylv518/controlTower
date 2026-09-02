@@ -2,6 +2,15 @@
 // type: release(发版) | bugfix(缺陷修复) | incident(生产事故) | review(代码评审) | decision(方案决策)
 window.DEVLOG = [
   {
+    date: "2026-09-02",
+    type: "review",
+    version: "",
+    title: "渠道 RPM/TPM 上限封顶加权验收",
+    summary: "Codex 交付按渠道负载封顶加权：基础值新增 max_rpm/max_tpm，连续评估折算窗口 RPM/TPM，达上限只允许维持或下调权重。后端零缺陷；验收修正前端两处 P2：脏状态 30 秒刷新丢失未保存上限、1366 宽度面板溢出。064 迁移，未动 agent，需重打 rc90。",
+    docs: ["docs/review-tuning-capacity-limits-2026-09-02.md"],
+    commits: ["e114fcc", "4c69f2e"]
+  },
+  {
     date: "2026-07-21",
     type: "release",
     version: "v2.0.0-rc16",
