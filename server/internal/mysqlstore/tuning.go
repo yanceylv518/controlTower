@@ -44,7 +44,7 @@ func (s Store) ListChannelBaseValues(instanceID, model string) ([]tuning.Channel
 		filter = " AND b.model_name=?"
 		args = append(args, model)
 	}
-	rows, err := s.db.QueryContext(context.Background(), `SELECT b.instance_id,b.channel_id,c.channel_name,COALESCE(c.group_name,''),b.model_name,b.base_weight,b.base_priority,c.weight,COALESCE(c.priority,0),c.captured_at,COALESCE(c.models_text,''),b.updated_at,b.updated_by
+	rows, err := s.db.QueryContext(context.Background(), `SELECT b.instance_id,b.channel_id,c.channel_name,COALESCE(c.group_name,''),b.model_name,b.base_weight,b.base_priority,b.max_rpm,b.max_tpm,c.weight,COALESCE(c.priority,0),c.captured_at,COALESCE(c.models_text,''),b.updated_at,b.updated_by
 FROM channel_base_values b
 JOIN (SELECT cs.* FROM channel_current cs JOIN instances i ON i.id=cs.instance_id
       JOIN (SELECT cs2.channel_id,MAX(cs2.captured_at) captured_at FROM channel_current cs2 JOIN instances i2 ON i2.id=cs2.instance_id WHERE CASE WHEN i2.site_id='' THEN i2.id ELSE i2.site_id END=? AND i2.enabled=1 GROUP BY cs2.channel_id) x
@@ -59,7 +59,7 @@ WHERE b.instance_id=? AND LOWER(c.status) IN ('enabled','enable','active','norma
 	for rows.Next() {
 		var v tuning.ChannelBaseValue
 		var modelsText string
-		if err = rows.Scan(&v.InstanceID, &v.ChannelID, &v.ChannelName, &v.GroupName, &v.ModelName, &v.BaseWeight, &v.BasePriority, &v.CurrentWeight, &v.CurrentPriority, &v.SnapshotAt, &modelsText, &v.UpdatedAt, &v.UpdatedBy); err != nil {
+		if err = rows.Scan(&v.InstanceID, &v.ChannelID, &v.ChannelName, &v.GroupName, &v.ModelName, &v.BaseWeight, &v.BasePriority, &v.MaxRPM, &v.MaxTPM, &v.CurrentWeight, &v.CurrentPriority, &v.SnapshotAt, &modelsText, &v.UpdatedAt, &v.UpdatedBy); err != nil {
 			return nil, err
 		}
 		v.Models = parseChannelModels(modelsText)
@@ -75,9 +75,9 @@ func (s Store) SaveChannelBaseValues(instanceID, actor string, values []tuning.C
 	}
 	defer tx.Rollback()
 	for _, v := range values {
-		var beforeWeight, beforePriority sql.NullInt64
-		_ = tx.QueryRow(`SELECT base_weight,base_priority FROM channel_base_values WHERE instance_id=? AND channel_id=?`, instanceID, v.ChannelID).Scan(&beforeWeight, &beforePriority)
-		if _, err = tx.Exec(`INSERT INTO channel_base_values(instance_id,channel_id,model_name,base_weight,base_priority,updated_at,updated_by) VALUES(?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE model_name=VALUES(model_name),base_weight=VALUES(base_weight),base_priority=VALUES(base_priority),updated_at=VALUES(updated_at),updated_by=VALUES(updated_by)`, instanceID, v.ChannelID, v.ModelName, v.BaseWeight, v.BasePriority, now, actor); err != nil {
+		var beforeWeight, beforePriority, beforeMaxRPM, beforeMaxTPM sql.NullInt64
+		_ = tx.QueryRow(`SELECT base_weight,base_priority,max_rpm,max_tpm FROM channel_base_values WHERE instance_id=? AND channel_id=?`, instanceID, v.ChannelID).Scan(&beforeWeight, &beforePriority, &beforeMaxRPM, &beforeMaxTPM)
+		if _, err = tx.Exec(`INSERT INTO channel_base_values(instance_id,channel_id,model_name,base_weight,base_priority,max_rpm,max_tpm,updated_at,updated_by) VALUES(?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE model_name=VALUES(model_name),base_weight=VALUES(base_weight),base_priority=VALUES(base_priority),max_rpm=VALUES(max_rpm),max_tpm=VALUES(max_tpm),updated_at=VALUES(updated_at),updated_by=VALUES(updated_by)`, instanceID, v.ChannelID, v.ModelName, v.BaseWeight, v.BasePriority, v.MaxRPM, v.MaxTPM, now, actor); err != nil {
 			return err
 		}
 		var beforeWeightValue, beforePriorityValue any
@@ -87,8 +87,15 @@ func (s Store) SaveChannelBaseValues(instanceID, actor string, values []tuning.C
 		if beforePriority.Valid {
 			beforePriorityValue = beforePriority.Int64
 		}
-		before, _ := json.Marshal(map[string]any{"weight": beforeWeightValue, "priority": beforePriorityValue})
-		after, _ := json.Marshal(map[string]any{"weight": v.BaseWeight, "priority": v.BasePriority, "model": v.ModelName})
+		var beforeMaxRPMValue, beforeMaxTPMValue any
+		if beforeMaxRPM.Valid {
+			beforeMaxRPMValue = beforeMaxRPM.Int64
+		}
+		if beforeMaxTPM.Valid {
+			beforeMaxTPMValue = beforeMaxTPM.Int64
+		}
+		before, _ := json.Marshal(map[string]any{"weight": beforeWeightValue, "priority": beforePriorityValue, "max_rpm": beforeMaxRPMValue, "max_tpm": beforeMaxTPMValue})
+		after, _ := json.Marshal(map[string]any{"weight": v.BaseWeight, "priority": v.BasePriority, "max_rpm": v.MaxRPM, "max_tpm": v.MaxTPM, "model": v.ModelName})
 		id := fmt.Sprintf("tbase-%d-%d", now.UnixNano(), v.ChannelID)
 		if _, err = tx.Exec(`INSERT INTO operation_audits(id,instance_id,operation_type,target_type,target_id,actor_id,before_summary,after_summary,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, id, instanceID, "tuning.base_update", "channel", fmt.Sprint(v.ChannelID), actor, string(before), string(after), "success", now); err != nil {
 			return err
@@ -150,7 +157,7 @@ func tuningChannelMetricsSQL() string {
 	}
 	return `SELECT
 CAST(SUBSTRING_INDEX(dimension_key,':',-1) AS SIGNED),
-SUM(request_count),SUM(error_count),SUM(user_error_count),
+SUM(request_count),SUM(error_count),SUM(user_error_count),SUM(tpm),
 COALESCE(MAX(p95_use_time),0),
 SUM(cache_tokens_total),SUM(cache_prompt_tokens),
 SUM(otps_output_tokens),SUM(otps_duration_seconds),` + strings.Join(histogramSums, ",") + `
@@ -171,7 +178,7 @@ func (s Store) QueryMetrics(id string, start, end time.Time) ([]tuning.ChannelMe
 		var cacheTokens int64
 		var otpsDuration float64
 		var buckets latencyhist.BucketsV2
-		dest := []any{&m.ChannelID, &m.RequestCount, &m.ErrorCount, &m.UserErrorCount, &m.P95, &cacheTokens, &m.CachePromptTokens, &m.OTPSSampleTokens, &otpsDuration}
+		dest := []any{&m.ChannelID, &m.RequestCount, &m.ErrorCount, &m.UserErrorCount, &m.TPM, &m.P95, &cacheTokens, &m.CachePromptTokens, &m.OTPSSampleTokens, &otpsDuration}
 		for i := range buckets {
 			dest = append(dest, &buckets[i])
 		}
@@ -199,7 +206,7 @@ func (s Store) QueryMetrics(id string, start, end time.Time) ([]tuning.ChannelMe
 }
 
 func (s Store) ListContinuousStates(id string) ([]tuning.ContinuousState, error) {
-	rows, err := s.db.QueryContext(context.Background(), `SELECT instance_id,channel_id,model_name,k_error,k_speed,k_cache,k_otps,multiplier,proposed_weight,last_written_weight,last_write_at,last_observed_requests,last_observed_errors,metric_ready,baseline_ready,metric_ttft_p50,metric_ttft_p90,metric_ttft_p95,baseline_ttft_p50,baseline_ttft_p90,baseline_ttft_p95,metric_cache,baseline_cache,cache_ready,metric_otps,baseline_otps,otps_ready,smoothed_error_rate,last_bucket_at,paused_reason,phase,circuit_opened_at,next_probe_at,probe_command_id,probe_attempts,probe_successes,probe_duration_sum,original_priority,soft_start_pending,write_failure_streak,last_write_failure_at,last_write_error,last_observed_weight,updated_at FROM tuning_continuous_states WHERE instance_id=?`, id)
+	rows, err := s.db.QueryContext(context.Background(), `SELECT instance_id,channel_id,model_name,k_error,k_speed,k_cache,k_otps,multiplier,proposed_weight,last_written_weight,last_write_at,last_observed_requests,last_observed_errors,metric_rpm,metric_tpm,capacity_limited,metric_ready,baseline_ready,metric_ttft_p50,metric_ttft_p90,metric_ttft_p95,baseline_ttft_p50,baseline_ttft_p90,baseline_ttft_p95,metric_cache,baseline_cache,cache_ready,metric_otps,baseline_otps,otps_ready,smoothed_error_rate,last_bucket_at,paused_reason,phase,circuit_opened_at,next_probe_at,probe_command_id,probe_attempts,probe_successes,probe_duration_sum,original_priority,soft_start_pending,write_failure_streak,last_write_failure_at,last_write_error,last_observed_weight,updated_at FROM tuning_continuous_states WHERE instance_id=?`, id)
 	if err != nil {
 		return nil, err
 	}
@@ -211,7 +218,7 @@ func (s Store) ListContinuousStates(id string) ([]tuning.ContinuousState, error)
 		var writeAt, bucketAt, openedAt, nextProbeAt, writeFailAt sql.NullTime
 		var probeID sql.NullString
 		var originalPriority sql.NullInt64
-		if err = rows.Scan(&v.InstanceID, &v.ChannelID, &v.ModelName, &v.KError, &v.KSpeed, &v.KCache, &v.KOTPS, &v.Multiplier, &v.ProposedWeight, &written, &writeAt, &v.LastObservedRequests, &v.LastObservedErrors, &v.MetricReady, &v.BaselineReady, &v.MetricTTFTP50, &v.MetricTTFTP90, &v.MetricTTFTP95, &v.BaselineTTFTP50, &v.BaselineTTFTP90, &v.BaselineTTFTP95, &v.MetricCache, &v.BaselineCache, &v.CacheReady, &v.MetricOTPS, &v.BaselineOTPS, &v.OTPSReady, &v.SmoothedErrorRate, &bucketAt, &v.PausedReason, &v.Phase, &openedAt, &nextProbeAt, &probeID, &v.ProbeAttempts, &v.ProbeSuccesses, &v.ProbeDurationSum, &originalPriority, &v.SoftStartPending, &v.WriteFailureStreak, &writeFailAt, &v.LastWriteError, &observed, &v.UpdatedAt); err != nil {
+		if err = rows.Scan(&v.InstanceID, &v.ChannelID, &v.ModelName, &v.KError, &v.KSpeed, &v.KCache, &v.KOTPS, &v.Multiplier, &v.ProposedWeight, &written, &writeAt, &v.LastObservedRequests, &v.LastObservedErrors, &v.MetricRPM, &v.MetricTPM, &v.CapacityLimited, &v.MetricReady, &v.BaselineReady, &v.MetricTTFTP50, &v.MetricTTFTP90, &v.MetricTTFTP95, &v.BaselineTTFTP50, &v.BaselineTTFTP90, &v.BaselineTTFTP95, &v.MetricCache, &v.BaselineCache, &v.CacheReady, &v.MetricOTPS, &v.BaselineOTPS, &v.OTPSReady, &v.SmoothedErrorRate, &bucketAt, &v.PausedReason, &v.Phase, &openedAt, &nextProbeAt, &probeID, &v.ProbeAttempts, &v.ProbeSuccesses, &v.ProbeDurationSum, &originalPriority, &v.SoftStartPending, &v.WriteFailureStreak, &writeFailAt, &v.LastWriteError, &observed, &v.UpdatedAt); err != nil {
 			return nil, err
 		}
 		if written.Valid {
@@ -257,6 +264,9 @@ func (s Store) ListContinuousStates(id string) ([]tuning.ContinuousState, error)
 func (s Store) PutContinuousState(v tuning.ContinuousState) error {
 	started := time.Now()
 	_, err := s.db.ExecContext(context.Background(), `INSERT INTO tuning_continuous_states(instance_id,channel_id,model_name,k_error,k_speed,k_cache,k_otps,multiplier,proposed_weight,last_written_weight,last_write_at,last_observed_requests,last_observed_errors,metric_ready,baseline_ready,metric_ttft_p50,metric_ttft_p90,metric_ttft_p95,baseline_ttft_p50,baseline_ttft_p90,baseline_ttft_p95,metric_cache,baseline_cache,cache_ready,metric_otps,baseline_otps,otps_ready,smoothed_error_rate,last_bucket_at,paused_reason,phase,circuit_opened_at,next_probe_at,probe_command_id,probe_attempts,probe_successes,probe_duration_sum,original_priority,soft_start_pending,write_failure_streak,last_write_failure_at,last_write_error,last_observed_weight,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE model_name=VALUES(model_name),k_error=VALUES(k_error),k_speed=VALUES(k_speed),k_cache=VALUES(k_cache),k_otps=VALUES(k_otps),multiplier=VALUES(multiplier),proposed_weight=VALUES(proposed_weight),last_written_weight=VALUES(last_written_weight),last_write_at=VALUES(last_write_at),last_observed_requests=VALUES(last_observed_requests),last_observed_errors=VALUES(last_observed_errors),metric_ready=VALUES(metric_ready),baseline_ready=VALUES(baseline_ready),metric_ttft_p50=VALUES(metric_ttft_p50),metric_ttft_p90=VALUES(metric_ttft_p90),metric_ttft_p95=VALUES(metric_ttft_p95),baseline_ttft_p50=VALUES(baseline_ttft_p50),baseline_ttft_p90=VALUES(baseline_ttft_p90),baseline_ttft_p95=VALUES(baseline_ttft_p95),metric_cache=VALUES(metric_cache),baseline_cache=VALUES(baseline_cache),cache_ready=VALUES(cache_ready),metric_otps=VALUES(metric_otps),baseline_otps=VALUES(baseline_otps),otps_ready=VALUES(otps_ready),smoothed_error_rate=VALUES(smoothed_error_rate),last_bucket_at=VALUES(last_bucket_at),paused_reason=VALUES(paused_reason),phase=VALUES(phase),circuit_opened_at=VALUES(circuit_opened_at),next_probe_at=VALUES(next_probe_at),probe_command_id=IF(@keep_probe:=(VALUES(probe_command_id) IS NOT NULL AND VALUES(probe_command_id)=last_probe_command_id),probe_command_id,VALUES(probe_command_id)),probe_attempts=IF(@keep_probe,probe_attempts,VALUES(probe_attempts)),probe_successes=IF(@keep_probe,probe_successes,VALUES(probe_successes)),probe_duration_sum=IF(@keep_probe,probe_duration_sum,VALUES(probe_duration_sum)),original_priority=VALUES(original_priority),soft_start_pending=VALUES(soft_start_pending),write_failure_streak=VALUES(write_failure_streak),last_write_failure_at=VALUES(last_write_failure_at),last_write_error=VALUES(last_write_error),last_observed_weight=VALUES(last_observed_weight),updated_at=VALUES(updated_at)`, v.InstanceID, v.ChannelID, v.ModelName, v.KError, v.KSpeed, v.KCache, v.KOTPS, v.Multiplier, v.ProposedWeight, v.LastWrittenWeight, v.LastWriteAt, v.LastObservedRequests, v.LastObservedErrors, v.MetricReady, v.BaselineReady, v.MetricTTFTP50, v.MetricTTFTP90, v.MetricTTFTP95, v.BaselineTTFTP50, v.BaselineTTFTP90, v.BaselineTTFTP95, v.MetricCache, v.BaselineCache, v.CacheReady, v.MetricOTPS, v.BaselineOTPS, v.OTPSReady, v.SmoothedErrorRate, v.LastBucketAt, v.PausedReason, v.Phase, v.CircuitOpenedAt, v.NextProbeAt, v.ProbeCommandID, v.ProbeAttempts, v.ProbeSuccesses, v.ProbeDurationSum, v.OriginalPriority, v.SoftStartPending, v.WriteFailureStreak, v.LastWriteFailureAt, v.LastWriteError, v.LastObservedWeight, v.UpdatedAt)
+	if err == nil {
+		_, err = s.db.ExecContext(context.Background(), `UPDATE tuning_continuous_states SET metric_rpm=?,metric_tpm=?,capacity_limited=? WHERE instance_id=? AND channel_id=?`, v.MetricRPM, v.MetricTPM, v.CapacityLimited, v.InstanceID, v.ChannelID)
+	}
 	if elapsed := time.Since(started); elapsed >= time.Second || err != nil {
 		log.Printf("tuning mysql operation=put_continuous_state site=%s channel=%d duration=%s error=%v", v.InstanceID, v.ChannelID, elapsed, err)
 	}

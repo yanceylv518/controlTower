@@ -147,6 +147,34 @@ func TestObservePublishesWindowProgressAndOnlyChangedProposals(t *testing.T) {
 	}
 }
 
+func TestCapacityLimitBlocksOnlyWeightIncrease(t *testing.T) {
+	now := time.Now().UTC()
+	f := &continuousFake{
+		bases: []ChannelBaseValue{
+			{ChannelID: 1, ChannelName: "fast", ModelName: "m", Models: []string{"m"}, BaseWeight: 100, CurrentWeight: 100, MaxRPM: 2, MaxTPM: 100},
+			{ChannelID: 2, ChannelName: "slow", ModelName: "m", Models: []string{"m"}, BaseWeight: 100, CurrentWeight: 100},
+		},
+		metrics: []ChannelMetric{
+			{ChannelID: 1, RequestCount: 30, TPM: 3000, TTFTP50: 1, TTFTP90: 1, TTFTP95: 1},
+			{ChannelID: 2, RequestCount: 30, TPM: 300, TTFTP50: 3, TTFTP90: 3, TTFTP95: 3},
+		},
+	}
+	p := DefaultPolicy()
+	p.DispatchModes = map[string]string{"m": "observe"}
+	NewEngine(f).evaluateContinuous("i", PolicyRecord{InstanceID: "i", Policy: p, Mode: "observe"}, now, f)
+
+	limited := f.states[1]
+	if !limited.CapacityLimited || limited.MetricRPM != 2 || limited.MetricTPM != 200 {
+		t.Fatalf("capacity evidence mismatch: %#v", limited)
+	}
+	if limited.ProposedWeight != 100 {
+		t.Fatalf("capacity-limited channel was allowed to increase: %#v", limited)
+	}
+	if f.states[2].ProposedWeight >= 100 {
+		t.Fatalf("capacity guard must not block an ordinary downward adjustment: %#v", f.states[2])
+	}
+}
+
 // A creeping drift must eventually be recorded: the deadband anchors on the
 // last RECORDED event, not on the previous tick, so small per-tick steps
 // accumulate against the anchor instead of resetting the reference.

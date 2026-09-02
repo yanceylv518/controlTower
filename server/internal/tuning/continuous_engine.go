@@ -157,6 +157,10 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 			// evaluation window, not only error buckets folded since the last pass.
 			state.LastObservedRequests = m.RequestCount
 			state.LastObservedErrors = max(m.ErrorCount-m.UserErrorCount, 0)
+			windowMinutes := math.Max(float64(p.WindowMinutes), 1)
+			state.MetricRPM = float64(m.RequestCount) / windowMinutes
+			state.MetricTPM = float64(m.TPM) / windowMinutes
+			state.CapacityLimited = (base.MaxRPM > 0 && state.MetricRPM >= float64(base.MaxRPM)) || (base.MaxTPM > 0 && state.MetricTPM >= float64(base.MaxTPM))
 			state.MetricReady = m.RequestCount >= p.MinSamples && m.TTFTP50 > 0 && m.TTFTP90 > 0 && m.TTFTP95 > 0
 			state.BaselineReady = healthy
 			state.MetricTTFTP50, state.MetricTTFTP90, state.MetricTTFTP95 = m.TTFTP50, m.TTFTP90, m.TTFTP95
@@ -356,6 +360,20 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 			state.ProposedWeight = int64(math.Round(float64(base.BaseWeight) * state.Multiplier))
 			if state.ProposedWeight < 1 && base.BaseWeight > 0 {
 				state.ProposedWeight = 1
+			}
+			// Capacity limits are a one-way guard: once the channel reaches either
+			// configured rate, performance factors may keep or reduce its effective
+			// weight but may not increase it. Prefer our last successful write over
+			// the slower channel snapshot when determining the live upper bound.
+			if state.CapacityLimited {
+				currentWeight := base.CurrentWeight
+				if state.LastWrittenWeight != nil {
+					currentWeight = *state.LastWrittenWeight
+				}
+				if state.ProposedWeight > currentWeight {
+					state.ProposedWeight = currentWeight
+					state.Multiplier = float64(state.ProposedWeight) / float64(base.BaseWeight)
+				}
 			}
 			// In auto mode entering circuit means "the zeroing write happened";
 			// during a write_failed pause the transition must wait for the slow

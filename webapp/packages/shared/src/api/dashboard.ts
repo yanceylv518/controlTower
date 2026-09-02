@@ -378,6 +378,7 @@ export interface ChannelBaseValue {
   instance_id: string; channel_id: number; channel_name: string; model_name: string;
   group_name: string;
   base_weight: number; base_priority: number; current_weight: number; current_priority: number;
+  max_rpm: number; max_tpm: number;
   snapshot_at?: string; models?: string[]; updated_at?: string; updated_by?: string;
 }
 export interface TuningPolicyResponse {
@@ -412,6 +413,9 @@ export interface TuningContinuousState {
   last_write_at?: string;
   last_observed_requests: number;
   last_observed_errors: number;
+  metric_rpm: number;
+  metric_tpm: number;
+  capacity_limited: boolean;
   metric_ready: boolean;
   baseline_ready: boolean;
   metric_ttft_p50: number;

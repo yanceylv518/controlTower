@@ -213,6 +213,8 @@ type ChannelBaseValue struct {
 	ModelName       string `json:"model_name"`
 	BaseWeight      int64  `json:"base_weight"`
 	BasePriority    int64  `json:"base_priority"`
+	MaxRPM          int64  `json:"max_rpm"`
+	MaxTPM          int64  `json:"max_tpm"`
 	CurrentWeight   int64  `json:"current_weight"`
 	CurrentPriority int64  `json:"current_priority"`
 	// SnapshotAt is when CurrentWeight/CurrentPriority were captured from
@@ -235,6 +237,7 @@ type PolicyRecord struct {
 type ChannelMetric struct {
 	ChannelID                                int64
 	RequestCount, ErrorCount, UserErrorCount int64
+	TPM                                      int64
 	P95                                      float64
 	TTFTP50, TTFTP90, TTFTP95                float64
 	CacheHitRate                             float64
@@ -256,6 +259,9 @@ type ContinuousState struct {
 	LastWriteAt          *time.Time `json:"last_write_at,omitempty"`
 	LastObservedRequests int64      `json:"last_observed_requests"`
 	LastObservedErrors   int64      `json:"last_observed_errors"`
+	MetricRPM            float64    `json:"metric_rpm"`
+	MetricTPM            float64    `json:"metric_tpm"`
+	CapacityLimited      bool       `json:"capacity_limited"`
 	MetricReady          bool       `json:"metric_ready"`
 	BaselineReady        bool       `json:"baseline_ready"`
 	MetricTTFTP50        float64    `json:"metric_ttft_p50"`

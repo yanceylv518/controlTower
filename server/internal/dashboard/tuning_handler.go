@@ -97,7 +97,7 @@ func (h Handler) HandleTuningBaseValues(w http.ResponseWriter, r *http.Request) 
 		}
 		seen := make(map[int64]struct{}, len(req.Items))
 		for _, v := range req.Items {
-			if v.ChannelID <= 0 || strings.TrimSpace(v.ModelName) == "" || v.BaseWeight < 0 || v.BasePriority < 0 {
+			if v.ChannelID <= 0 || strings.TrimSpace(v.ModelName) == "" || v.BaseWeight < 0 || v.BasePriority < 0 || v.MaxRPM < 0 || v.MaxTPM < 0 {
 				writeDashboardError(w, 400, "validation_failed")
 				return
 			}
