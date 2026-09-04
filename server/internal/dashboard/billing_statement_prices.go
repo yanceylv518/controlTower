@@ -28,6 +28,10 @@ type statementPriceKey struct {
 type statementPriceTuple [4]string
 type statementPrices map[statementPriceKey]map[statementPriceTuple]bool
 
+// Only a numeric zero paired with an explicitly zero token count is a
+// placeholder. Actual free usage (or missing usage evidence) must stay visible.
+const unusedStatementPrice = "\x00unused-zero"
+
 // Completed statements are immutable, so the resolved prices of a whole
 // statement are cached under a signature of every detail file it lists. A
 // per-file cache with a small hard cap would be cleared on every preview of a
@@ -154,10 +158,8 @@ func loadStatementPrices(ctx context.Context, job billing.Job, store BillingStat
 }
 
 // price lists the distinct unit prices actually charged for a day/model
-// (per channel for upstream statements), column by column. A request that did
-// not use a lane (no cache read, no output) carries a zero unit price for that
-// lane in the detail file; that zero is the absence of a charge, not a price,
-// so it is dropped whenever the lane was priced on any other request that day.
+// (per channel for upstream statements), column by column. Discard only zeros
+// proven unused by the corresponding detail token count, never real free prices.
 func (prices statementPrices) price(job billing.Job, row billing.StatementAggregateRow) billing.Price {
 	key := statementPriceKey{Day: row.Day.In(billing.BusinessLocation).Format("2006-01-02"), Model: row.ModelName}
 	if job.JobType == "upstream_statement" {
@@ -173,15 +175,25 @@ func (prices statementPrices) price(job billing.Job, row billing.StatementAggreg
 	}
 	values := statementPriceTuple{}
 	for i, column := range columns {
-		positive := make([]string, 0, len(column))
+		hasPrice := false
 		for _, value := range column {
-			if n, ok := new(big.Rat).SetString(value); ok && n.Sign() > 0 {
-				positive = append(positive, value)
+			if _, ok := new(big.Rat).SetString(value); ok {
+				hasPrice = true
 			}
 		}
-		if len(positive) > 0 {
-			column = positive
+		filtered := make([]string, 0, len(column))
+		for _, value := range column {
+			if hasPrice && (value == unusedStatementPrice || value == "未使用") {
+				continue
+			}
+			if value == unusedStatementPrice {
+				value = "0.000000"
+			}
+			if !slices.Contains(filtered, value) {
+				filtered = append(filtered, value)
+			}
 		}
+		column = filtered
 		sort.Slice(column, func(a, b int) bool {
 			x, okX := new(big.Rat).SetString(column[a])
 			y, okY := new(big.Rat).SetString(column[b])
@@ -314,6 +326,15 @@ func readStatementPriceSheet(ctx context.Context, in io.Reader, out statementPri
 			value := values[index]
 			if n, ok := new(big.Rat).SetString(value); ok {
 				value = n.FloatString(6)
+				tokenHeader := []string{"输入 Token", "输出 Token", "缓存读取 Token", "普通缓存写入 Token"}[i]
+				tokenIndex := headers[tokenHeader]
+				if i == 3 && tokenIndex == 0 {
+					tokenIndex = headers["缓存写入 Token"]
+				}
+				// Missing/invalid token cells are not evidence of unused usage.
+				if tokens, valid := new(big.Rat).SetString(values[tokenIndex]); n.Sign() == 0 && valid && tokens.Sign() == 0 {
+					value = unusedStatementPrice
+				}
 			}
 			if value == "" {
 				value = "未记录"
