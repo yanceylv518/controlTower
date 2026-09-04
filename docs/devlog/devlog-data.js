@@ -5,6 +5,15 @@ window.DEVLOG = [
     date: "2026-09-02",
     type: "review",
     version: "",
+    title: "调权中心当前速率与当前权重验收",
+    summary: "Codex 交付 RPM/TPM 改读最新分钟桶、当前权重优先最近写入。验收发现最新关闭桶在评估时仍被 Agent 30 秒拉取累加填充，低估会让只拦升的容量守卫单向放行；修正为只取关闭超过 95 秒的沉淀桶并加真库回归。无迁移，未动 agent，需重打 rc91。",
+    docs: ["docs/review-tuning-current-rates-2026-09-02.md"],
+    commits: ["bd49263", "582919b"]
+  },
+  {
+    date: "2026-09-02",
+    type: "review",
+    version: "",
     title: "渠道 RPM/TPM 上限封顶加权验收",
     summary: "Codex 交付按渠道负载封顶加权：基础值新增 max_rpm/max_tpm，连续评估折算窗口 RPM/TPM，达上限只允许维持或下调权重。后端零缺陷；验收修正前端两处 P2：脏状态 30 秒刷新丢失未保存上限、1366 宽度面板溢出。064 迁移，未动 agent，需重打 rc90。",
     docs: ["docs/review-tuning-capacity-limits-2026-09-02.md"],
