@@ -28,6 +28,9 @@ func OpenMySQL(dsn string) (*sql.DB, error) {
 type BacklogStats struct {
 	SourceLatestLogID int64
 	BacklogEstimate   int64
+	// SnapshotKnown marks a successful pre-collection upper-bound read. It is
+	// local coverage evidence, not a new field in the Server report contract.
+	SnapshotKnown bool
 }
 
 func (c MySQLCollector) Backlog(ctx context.Context, afterID int64) (BacklogStats, error) {

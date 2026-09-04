@@ -318,7 +318,7 @@ func collectAndReportFullPass(ctx context.Context, client controlTowerReporter, 
 		if cfg.ChannelSnapshotEnabled && channelCollector == nil {
 			channelCollector = channelcollector.NewMySQLCollectorWithInterval(db, time.Duration(cfg.ChannelSnapshotIntervalSeconds)*time.Second)
 		}
-		events, lastLogID, err = collector.Collect(ctx, current.LastLogID, cfg.LogBatchSize)
+		events, lastLogID, backlog, err = collectWithRateSnapshot(ctx, collector, current.LastLogID, cfg.LogBatchSize)
 		if err != nil {
 			current.ConsecutiveReportFailures++
 			_ = stateStore.Save(current)
@@ -332,12 +332,6 @@ func collectAndReportFullPass(ctx context.Context, client controlTowerReporter, 
 			current.LastLogID, lastLogID, alertStats.EventCount, alertStats.ErrorCount,
 			alertStats.ChannelDimensions, alertStats.UserDimensions, alertStats.AlertsTriggered,
 			alertStats.AlertsSent, alertStats.AlertsSendFailures)
-
-		if stats, backlogErr := collector.Backlog(ctx, lastLogID); backlogErr != nil {
-			log.Printf("control tower backlog telemetry failed: %v", backlogErr)
-		} else {
-			backlog = stats
-		}
 	}
 
 	report := buildReport(ctx, cfg, now, sequence+1, lastLogID, backlog, events, metricCollector, checker, dockerCollector, channelCollector)
@@ -428,6 +422,34 @@ func flushBufferedReports(ctx context.Context, client controlTowerReporter, stor
 	}
 }
 
+// Freeze the source upper bound before collection. Comparing against MAX(id)
+// after collection/alert delivery races with normal incoming traffic and can
+// suppress coverage forever on busy sites. Keep the existing one MAX(id) query
+// per pass; a failed snapshot must not stop local collection or claim coverage.
+func collectWithRateSnapshot(ctx context.Context, collector standaloneCollector, afterID int64, limit int) ([]logcollector.Event, int64, logcollector.BacklogStats, error) {
+	stats, snapshotErr := collector.Backlog(ctx, afterID)
+	if snapshotErr != nil {
+		log.Printf("control tower backlog snapshot failed; rate coverage withheld: %v", snapshotErr)
+		stats = logcollector.BacklogStats{}
+	}
+	events, lastID, err := collector.Collect(ctx, afterID, limit)
+	if err != nil {
+		return nil, afterID, stats, err
+	}
+	if snapshotErr == nil {
+		stats.SnapshotKnown = true
+		stats.BacklogEstimate = stats.SourceLatestLogID - lastID
+		if stats.BacklogEstimate < 0 {
+			stats.BacklogEstimate = 0
+		}
+		// The page can also include rows committed after the snapshot.
+		if lastID > stats.SourceLatestLogID {
+			stats.SourceLatestLogID = lastID
+		}
+	}
+	return events, lastID, stats, nil
+}
+
 func buildReport(ctx context.Context, cfg config.Config, reportedAt time.Time, sequence int64, lastLogID int64, backlog logcollector.BacklogStats, events []logcollector.Event, metricCollector serverMetricCollector, checker healthChecker, dockerCollector dockerStatusCollector, channelCollector channelSnapshotCollector) reporter.AgentReportRequest {
 	serverMetrics := make([]reporter.ServerMetricPayload, 0, 1)
 	if metricCollector != nil {
@@ -471,8 +493,9 @@ func buildReport(ctx context.Context, cfg config.Config, reportedAt time.Time, s
 		ChannelSnapshotComplete: channelSnapshotComplete,
 	}
 	rateMetrics := metricaggregator.ChannelRates(events, reportedAt)
-	if backlog.BacklogEstimate > 0 {
-		// Do not claim current coverage while still catching up on source logs.
+	if !cfg.LogCollectEnabled || !backlog.SnapshotKnown || backlog.BacklogEstimate > 0 {
+		// Only a log collector that reached a known pre-collection upper bound
+		// may claim coverage. Metrics-only Agents cannot certify log traffic.
 		rateMetrics = rateMetrics[1:]
 	}
 	report.AggregatedMetrics = append(report.AggregatedMetrics, rateMetrics...)
