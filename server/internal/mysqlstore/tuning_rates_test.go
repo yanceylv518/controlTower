@@ -28,6 +28,7 @@ func TestQueryCurrentChannelRatesRollingWindow(t *testing.T) {
 	}
 	const instanceID = "rates-test-instance"
 	cleanup := func() {
+		_, _ = db.Exec(`DELETE FROM log_offsets WHERE instance_id=?`, instanceID)
 		_, _ = db.Exec(`DELETE FROM channel_rate_seconds WHERE instance_id=?`, instanceID)
 		_, _ = db.Exec(`DELETE FROM instances WHERE id=?`, instanceID)
 	}
@@ -36,6 +37,9 @@ func TestQueryCurrentChannelRatesRollingWindow(t *testing.T) {
 	now := time.Date(2026, 9, 2, 10, 5, 10, 0, time.UTC)
 	if _, err := db.Exec(`INSERT INTO instances(id,name,env,region,base_url,enabled,created_at,updated_at) VALUES(?,?,?,?,?,1,?,?)`, instanceID, "rates", "test", "local", "http://127.0.0.1", now, now); err != nil {
 		t.Fatalf("insert instance: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO log_offsets(instance_id,last_log_id,updated_at) VALUES(?,100,?)`, instanceID, now); err != nil {
+		t.Fatal(err)
 	}
 	insert := func(bucket time.Time, requests, tpm int64) {
 		if _, err := db.Exec(`INSERT INTO channel_rate_seconds(instance_id,channel_id,bucket_time,request_count,tokens) VALUES(?,7,?,?,?)`, instanceID, bucket, requests, tpm); err != nil {
