@@ -9,10 +9,12 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"controltower/server/internal/billing"
 )
@@ -26,10 +28,19 @@ type statementPriceKey struct {
 type statementPriceTuple [4]string
 type statementPrices map[statementPriceKey]map[statementPriceTuple]bool
 
+// Completed statements are immutable, so the resolved prices of a whole
+// statement are cached under a signature of every detail file it lists. A
+// per-file cache with a small hard cap would be cleared on every preview of a
+// statement listing more files than the cap, re-parsing everything each time.
 var statementPriceCache = struct {
 	sync.Mutex
 	items map[string]statementPrices
 }{items: make(map[string]statementPrices)}
+
+const (
+	statementPriceCacheLimit = 32
+	statementPriceWorkers    = 4
+)
 
 func loadStatementPrices(ctx context.Context, job billing.Job, store BillingStatementResultStore, roots ...string) (statementPrices, error) {
 	files, err := store.ListBillingStatementUserFiles(ctx, job.ID)
@@ -44,7 +55,10 @@ func loadStatementPrices(ctx context.Context, job billing.Job, store BillingStat
 	if err != nil {
 		return nil, err
 	}
-	out := statementPrices{}
+	type source struct{ path, day string }
+	sources := make([]source, 0, len(files))
+	var signature strings.Builder
+	fmt.Fprintf(&signature, "%s|%s\n", job.ID, job.JobType)
 	for _, file := range files {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -61,101 +75,181 @@ func loadStatementPrices(ctx context.Context, job billing.Job, store BillingStat
 		if err != nil {
 			return nil, err
 		}
-		cacheKey := fmt.Sprintf("%s|%d|%d", path, info.Size(), info.ModTime().UnixNano())
-		statementPriceCache.Lock()
-		prices, found := statementPriceCache.items[cacheKey]
-		statementPriceCache.Unlock()
-		if !found {
-			prices, err = readStatementFilePrices(ctx, path)
-			if err != nil {
-				return nil, fmt.Errorf("read billing detail prices: %w", err)
-			}
-			statementPriceCache.Lock()
-			if len(statementPriceCache.items) >= 128 {
-				clear(statementPriceCache.items)
-			}
-			statementPriceCache.items[cacheKey] = prices
-			statementPriceCache.Unlock()
-		}
-		for key, tuples := range prices {
-			key.Day = file.BillDay.In(billing.BusinessLocation).Format("2006-01-02")
-			if job.JobType == "user_statement" {
-				key.Channel = 0
-			}
-			if out[key] == nil {
-				out[key] = map[statementPriceTuple]bool{}
-			}
-			for tuple := range tuples {
-				out[key][tuple] = true
-			}
-		}
+		sources = append(sources, source{path: path, day: file.BillDay.In(billing.BusinessLocation).Format("2006-01-02")})
+		fmt.Fprintf(&signature, "%s|%d|%d\n", path, info.Size(), info.ModTime().UnixNano())
 	}
+	cacheKey := signature.String()
+	statementPriceCache.Lock()
+	cached, found := statementPriceCache.items[cacheKey]
+	statementPriceCache.Unlock()
+	if found {
+		return cached, nil
+	}
+
+	// Detail files are parsed with encoding/xml, which costs on the order of
+	// ten seconds per hundred thousand rows; parse the statement's files
+	// concurrently so first-view latency is bounded by the largest file.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	out := statementPrices{}
+	var (
+		mu       sync.Mutex
+		wg       sync.WaitGroup
+		once     sync.Once
+		firstErr error
+	)
+	sem := make(chan struct{}, statementPriceWorkers)
+	for _, src := range sources {
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+		}
+		if ctx.Err() != nil {
+			break
+		}
+		wg.Add(1)
+		go func(src source) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			prices, declaredDay, err := readStatementFilePrices(ctx, src.path)
+			if err != nil {
+				once.Do(func() { firstErr = fmt.Errorf("read billing detail prices %s: %w", filepath.Base(src.path), err) })
+				cancel()
+				return
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			day := src.day
+			if declaredDay != "" {
+				day = declaredDay
+			}
+			for key, tuples := range prices {
+				key.Day = day
+				if job.JobType == "user_statement" {
+					key.Channel = 0
+				}
+				if out[key] == nil {
+					out[key] = map[statementPriceTuple]bool{}
+				}
+				for tuple := range tuples {
+					out[key][tuple] = true
+				}
+			}
+		}(src)
+	}
+	wg.Wait()
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	statementPriceCache.Lock()
+	if len(statementPriceCache.items) >= statementPriceCacheLimit {
+		clear(statementPriceCache.items)
+	}
+	statementPriceCache.items[cacheKey] = out
+	statementPriceCache.Unlock()
 	return out, nil
 }
 
+// price lists the distinct unit prices actually charged for a day/model
+// (per channel for upstream statements), column by column. A request that did
+// not use a lane (no cache read, no output) carries a zero unit price for that
+// lane in the detail file; that zero is the absence of a charge, not a price,
+// so it is dropped whenever the lane was priced on any other request that day.
 func (prices statementPrices) price(job billing.Job, row billing.StatementAggregateRow) billing.Price {
 	key := statementPriceKey{Day: row.Day.In(billing.BusinessLocation).Format("2006-01-02"), Model: row.ModelName}
 	if job.JobType == "upstream_statement" {
 		key.Channel = row.ChannelID
 	}
-	tuples := make([]statementPriceTuple, 0, len(prices[key]))
+	var columns [4][]string
 	for tuple := range prices[key] {
-		tuples = append(tuples, tuple)
+		for i, value := range tuple {
+			if value != "" && !slices.Contains(columns[i], value) {
+				columns[i] = append(columns[i], value)
+			}
+		}
 	}
-	sort.Slice(tuples, func(i, j int) bool { return strings.Join(tuples[i][:], "|") < strings.Join(tuples[j][:], "|") })
 	values := statementPriceTuple{}
-	for i := range values {
-		parts := []string{}
-		for _, tuple := range tuples {
-			parts = append(parts, tuple[i])
+	for i, column := range columns {
+		positive := make([]string, 0, len(column))
+		for _, value := range column {
+			if n, ok := new(big.Rat).SetString(value); ok && n.Sign() > 0 {
+				positive = append(positive, value)
+			}
 		}
-		values[i] = strings.Join(parts, " / ")
-		if len(parts) == 0 {
+		if len(positive) > 0 {
+			column = positive
+		}
+		sort.Slice(column, func(a, b int) bool {
+			x, okX := new(big.Rat).SetString(column[a])
+			y, okY := new(big.Rat).SetString(column[b])
+			if okX && okY {
+				return x.Cmp(y) < 0
+			}
+			if okX != okY {
+				return okX
+			}
+			return column[a] < column[b]
+		})
+		if len(column) == 0 {
 			values[i] = "明细价格不可用"
+			continue
 		}
+		values[i] = strings.Join(column, " / ")
 	}
 	return billing.Price{Input: values[0], Output: values[1], Cache: values[2], CacheWrite: values[3]}
 }
 
 // CT's writer uses inline strings and numeric cells; stream rows rather than
 // loading a potentially million-order workbook into memory.
-func readStatementFilePrices(ctx context.Context, path string) (statementPrices, error) {
+// readStatementFilePrices also returns the bill day the workbook declares in
+// its own header ("账单日期"). File registrations written before the calendar
+// date fix (f7a8fa4) can carry a bill_day shifted by one day, so the day the
+// file states about itself is the reliable join key.
+func readStatementFilePrices(ctx context.Context, path string) (statementPrices, string, error) {
 	z, err := zip.OpenReader(path)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer z.Close()
 	out := statementPrices{}
+	day := ""
 	for _, file := range z.File {
 		if !strings.HasPrefix(file.Name, "xl/worksheets/sheet") || !strings.HasSuffix(file.Name, ".xml") {
 			continue
 		}
 		in, err := file.Open()
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
-		err = readStatementPriceSheet(ctx, in, out)
+		sheetDay, err := readStatementPriceSheet(ctx, in, out)
 		in.Close()
 		if err != nil {
-			return nil, err
+			return nil, "", err
+		}
+		if day == "" {
+			day = sheetDay
 		}
 	}
-	return out, nil
+	return out, day, nil
 }
 
-func readStatementPriceSheet(ctx context.Context, in io.Reader, out statementPrices) error {
+func readStatementPriceSheet(ctx context.Context, in io.Reader, out statementPrices) (string, error) {
 	decoder := xml.NewDecoder(in)
 	headers := map[string]int{}
+	day := ""
 	for {
 		if err := ctx.Err(); err != nil {
-			return err
+			return day, err
 		}
 		token, err := decoder.Token()
 		if err == io.EOF {
-			return nil
+			return day, nil
 		}
 		if err != nil {
-			return err
+			return day, err
 		}
 		start, ok := token.(xml.StartElement)
 		if !ok || start.Name.Local != "row" {
@@ -169,7 +263,7 @@ func readStatementPriceSheet(ctx context.Context, in io.Reader, out statementPri
 			} `xml:"c"`
 		}
 		if err = decoder.DecodeElement(&row, &start); err != nil {
-			return err
+			return day, err
 		}
 		values := map[int]string{}
 		for _, cell := range row.Cells {
@@ -187,6 +281,11 @@ func readStatementPriceSheet(ctx context.Context, in io.Reader, out statementPri
 			values[index] = value
 		}
 		if len(headers) == 0 {
+			if values[1] == "账单日期" {
+				if _, parseErr := time.ParseInLocation("2006-01-02", values[2], billing.BusinessLocation); parseErr == nil {
+					day = values[2]
+				}
+			}
 			candidate := map[string]int{}
 			for index, value := range values {
 				candidate[value] = index
