@@ -27,7 +27,6 @@ type BillingStatementResultStore interface {
 	ListBillingStatementDiscounts(context.Context, string) ([]billing.StatementDiscount, error)
 	QueryBillingTokenRows(context.Context, string, int64, int64, time.Time, time.Time) ([]billing.TokenDailyRow, error)
 	ListBillingStatementUserFiles(context.Context, string) ([]billing.UserDailyFile, error)
-	ListBillingPrices(context.Context, string) ([]billing.PriceRecord, error)
 	QueryBillingAnomalies(context.Context, string, string, int64, int64, time.Time, time.Time, time.Time, int64, int) ([]billing.AnomalyOrder, error)
 	QueryBillingStatementReconciliation(context.Context, string, int, int) ([]billing.ReconciliationOrder, error)
 	DeleteBillingStatement(context.Context, string) ([]string, error)
@@ -80,7 +79,7 @@ func (h BillingStatementResultHandler) ServeHTTP(w http.ResponseWriter, r *http.
 		return
 	}
 	if r.URL.Query().Get("download") != "1" {
-		preview, previewErr := statementPreview(r.Context(), job, rows, h.Store)
+		preview, previewErr := statementPreview(r.Context(), job, rows, h.Store, h.Root)
 		if previewErr != nil {
 			writeDashboardError(w, http.StatusInternalServerError, "billing_statement_preview_failed")
 			return
@@ -93,7 +92,7 @@ func (h BillingStatementResultHandler) ServeHTTP(w http.ResponseWriter, r *http.
 		writeDashboardJSON(w, http.StatusOK, map[string]any{"job": job, "total_orders": billable + job.AbnormalRows, "normal_orders": verified, "billable_orders": billable, "anomaly_total": job.AbnormalRows, "reconciliation_total": job.MismatchRows, "review_required": job.MismatchRows > 0, "count_balanced": verified+job.AbnormalRows+job.MismatchRows == billable+job.AbnormalRows, "model_summary": preview.Models, "daily_summary": preview.Daily, "token_summary": preview.Tokens, "anomalies": preview.Anomalies, "reconciliation": preview.Reconciliation})
 		return
 	}
-	book, err := statementWorkbook(job, rows, h.Store)
+	book, err := statementWorkbook(job, rows, h.Store, h.Root)
 	if err != nil {
 		writeDashboardError(w, http.StatusInternalServerError, "billing_statement_xlsx_failed")
 		return
@@ -195,8 +194,8 @@ func groupStatementRows(job billing.Job, rows []billing.StatementAggregateRow, d
 	return out
 }
 
-func statementPreview(ctx context.Context, job billing.Job, rows []billing.StatementAggregateRow, store BillingStatementResultStore) (statementPreviewData, error) {
-	prices, err := store.ListBillingPrices(ctx, job.InstanceID)
+func statementPreview(ctx context.Context, job billing.Job, rows []billing.StatementAggregateRow, store BillingStatementResultStore, roots ...string) (statementPreviewData, error) {
+	prices, err := loadStatementPrices(ctx, job, store, roots...)
 	if err != nil {
 		return statementPreviewData{}, err
 	}
@@ -214,7 +213,7 @@ func statementPreview(ctx context.Context, job billing.Job, rows []billing.State
 	}
 	for _, grouped := range groupStatementRows(job, rows, discounts, true) {
 		v, discount := grouped.Row, grouped.Discount
-		price := statementPrice(prices, v.ModelName, v.Day)
+		price := prices.price(job, v)
 		out.Daily = append(out.Daily, map[string]any{"day": v.Day.Format("2006-01-02"), "channel_id": v.ChannelID, "channel_name": v.ChannelName, "model_name": statementModelLabel(job, v.ChannelName, v.ModelName), "request_count": v.RequestCount, "prompt_tokens": v.PromptTokens, "completion_tokens": v.CompletionTokens, "cache_read_tokens": v.CacheTokens, "cache_write_tokens": v.CacheWriteTokens, "input_price": price.Input, "output_price": price.Output, "cache_read_price": price.Cache, "cache_write_price": price.CacheWrite, "amount": v.Amount, "discount": discount, "final_amount": multiplyDecimal(v.Amount, discount), "detail_file": statementDailyFilename(job, v.Day)})
 	}
 	if job.JobType == "user_statement" {
@@ -304,9 +303,9 @@ func sumStatementRequests(rows []billing.StatementAggregateRow) int64 {
 	return total
 }
 
-func statementWorkbook(job billing.Job, rows []billing.StatementAggregateRow, store BillingStatementResultStore) ([]byte, error) {
+func statementWorkbook(job billing.Job, rows []billing.StatementAggregateRow, store BillingStatementResultStore, roots ...string) ([]byte, error) {
 	book := xlsxwriter.New()
-	prices, err := store.ListBillingPrices(context.Background(), job.InstanceID)
+	prices, err := loadStatementPrices(context.Background(), job, store, roots...)
 	if err != nil {
 		return nil, err
 	}
@@ -357,12 +356,12 @@ func statementWorkbook(job billing.Job, rows []billing.StatementAggregateRow, st
 	dailyTotal := "0"
 	for _, grouped := range groupStatementRows(job, rows, discounts, true) {
 		v, discount := grouped.Row, grouped.Discount
-		price := statementPrice(prices, v.ModelName, v.Day)
+		price := prices.price(job, v)
 		final := multiplyDecimal(v.Amount, discount)
 		key := statementSummaryKey(job, v, discount)
 		discountCell := d(discount)
 		discountCell.Formula = summaryRefs[key]
-		cells := []xlsxwriter.Cell{t(v.Day.Format("2006-01-02")), t(v.ModelName), n64(v.RequestCount), n64(v.PromptTokens), n64(v.CompletionTokens), n64(v.CacheTokens), n64(v.CacheWriteTokens), d(price.Input), d(price.Output), d(price.Cache), d(price.CacheWrite), d(v.Amount), discountCell, d(final), t(statementDailyFilename(job, v.Day))}
+		cells := []xlsxwriter.Cell{t(v.Day.Format("2006-01-02")), t(v.ModelName), n64(v.RequestCount), n64(v.PromptTokens), n64(v.CompletionTokens), n64(v.CacheTokens), n64(v.CacheWriteTokens), statementPriceCell(price.Input), statementPriceCell(price.Output), statementPriceCell(price.Cache), statementPriceCell(price.CacheWrite), d(v.Amount), discountCell, d(final), t(statementDailyFilename(job, v.Day))}
 		if job.JobType == "upstream_statement" {
 			cells = append([]xlsxwriter.Cell{t(v.ChannelName)}, cells...)
 		}
@@ -395,15 +394,11 @@ func statementWorkbook(job billing.Job, rows []billing.StatementAggregateRow, st
 	return out.Bytes(), nil
 }
 
-func statementPrice(records []billing.PriceRecord, model string, day time.Time) billing.Price {
-	items := make([]billing.Price, 0)
-	for _, record := range records {
-		if record.ModelName == model {
-			items = append(items, record.Price)
-		}
+func statementPriceCell(value string) xlsxwriter.Cell {
+	if _, ok := new(big.Rat).SetString(value); ok {
+		return d(value)
 	}
-	price, _ := billing.SelectPrice(items, day, 0)
-	return price
+	return t(value)
 }
 
 func statementDailyFilename(job billing.Job, day time.Time) string {
