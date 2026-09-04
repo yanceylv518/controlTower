@@ -52,14 +52,14 @@ func (h Handler) HandleTuningContinuousStates(w http.ResponseWriter, r *http.Req
 	}
 	if r.URL.Query().Get("rates_only") == "1" {
 		ratesStore, supported := h.tuningStore.(interface {
-			QueryCurrentChannelRates(string, time.Time) ([]tuning.ChannelMetric, error)
+			QueryCurrentChannelRateSnapshot(string, time.Time) ([]tuning.ChannelMetric, time.Time, error)
 		})
 		if !supported {
 			writeDashboardError(w, 503, "current_rates_unavailable")
 			return
 		}
 		now := time.Now().UTC()
-		rates, err := ratesStore.QueryCurrentChannelRates(id, now)
+		rates, asOf, err := ratesStore.QueryCurrentChannelRateSnapshot(id, now)
 		if err != nil {
 			writeDashboardError(w, 503, "current_rates_unavailable")
 			return
@@ -68,7 +68,7 @@ func (h Handler) HandleTuningContinuousStates(w http.ResponseWriter, r *http.Req
 		for _, rate := range rates {
 			items = append(items, map[string]any{"channel_id": rate.ChannelID, "rpm": rate.RequestCount, "tpm": rate.TPM})
 		}
-		writeDashboardJSON(w, 200, map[string]any{"items": items, "as_of": now, "window_seconds": 60})
+		writeDashboardJSON(w, 200, map[string]any{"items": items, "as_of": asOf, "window_start": asOf.Add(-60 * time.Second), "window_seconds": 60, "delay_seconds": int64(now.Sub(asOf).Seconds())})
 		return
 	}
 	items, err := store.ListContinuousStates(id)

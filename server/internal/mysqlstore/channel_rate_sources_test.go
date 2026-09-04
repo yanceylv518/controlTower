@@ -64,7 +64,7 @@ func TestRollingRatesIgnoreMetricsOnlyButRequireEveryCollector(t *testing.T) {
 	// The first collector is known through a durable cursor. The other two
 	// instances initially have no log collection evidence and no rate markers.
 	exec(`INSERT INTO log_offsets(instance_id,last_log_id,updated_at) VALUES(?,100,?)`, ids[0], now)
-	exec(`INSERT INTO channel_rate_seconds(instance_id,channel_id,bucket_time,request_count,tokens) VALUES(?,0,?,0,0),(?,7,?,5,500)`, ids[0], now, ids[0], now)
+	exec(`INSERT INTO channel_rate_seconds(instance_id,channel_id,bucket_time,request_count,tokens) VALUES(?,0,?,0,0),(?,7,?,5,500)`, ids[0], now, ids[0], now.Add(-20*time.Second))
 	store := New(db)
 	rates, err := store.QueryRollingChannelRates(site, now)
 	if err != nil || len(rates) != 1 || rates[0].RequestCount != 5 || rates[0].TPM != 500 {
@@ -77,7 +77,14 @@ func TestRollingRatesIgnoreMetricsOnlyButRequireEveryCollector(t *testing.T) {
 	if _, err := store.QueryRollingChannelRates(site, now); err == nil {
 		t.Fatal("uncovered second collector must block incomplete totals")
 	}
-	exec(`INSERT INTO channel_rate_seconds(instance_id,channel_id,bucket_time,request_count,tokens) VALUES(?,0,?,0,0),(?,7,?,3,300)`, ids[2], now, ids[2], now)
+	exec(`INSERT INTO channel_rate_seconds(instance_id,channel_id,bucket_time,request_count,tokens) VALUES(?,0,?,0,0),(?,7,?,3,300)`, ids[2], now.Add(-10*time.Second), ids[2], now.Add(-20*time.Second))
+	// Faster source has already reported a tail that the slower source has not
+	// covered. Both sources must be summed over the same earlier window.
+	exec(`INSERT INTO channel_rate_seconds(instance_id,channel_id,bucket_time,request_count,tokens) VALUES(?,7,?,99,9900)`, ids[0], now.Add(-5*time.Second))
+	_, asOf, err := store.QueryCurrentChannelRateSnapshot(site, now)
+	if err != nil || !asOf.Equal(now.Add(-10*time.Second)) {
+		t.Fatalf("common watermark = %s, err=%v", asOf, err)
+	}
 	rates, err = store.QueryRollingChannelRates(site, now)
 	if err != nil || len(rates) != 1 || rates[0].RequestCount != 8 {
 		t.Fatalf("two-source totals: %+v %v", rates, err)

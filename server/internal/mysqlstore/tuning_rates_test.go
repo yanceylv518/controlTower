@@ -78,4 +78,34 @@ func TestQueryCurrentChannelRatesRollingWindow(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected stale coverage error, got %#v", got)
 	}
+
+	// Reproduce 30s polling: the last report covered through now-20s. A
+	// wall-clock window would lose 20 requests despite having all 60 available.
+	if _, err := db.Exec(`DELETE FROM channel_rate_seconds WHERE instance_id=?`, instanceID); err != nil {
+		t.Fatal(err)
+	}
+	end := now.Add(-20 * time.Second)
+	if _, err := db.Exec(`INSERT INTO channel_rate_seconds(instance_id,channel_id,bucket_time) VALUES(?,0,?)`, instanceID, end); err != nil {
+		t.Fatal(err)
+	}
+	for second := -61; second <= 0; second++ {
+		insert(end.Add(time.Duration(second)*time.Second), 1, 10)
+	}
+	for _, queryTime := range []time.Time{now, now.Add(5 * time.Second), now.Add(25 * time.Second)} {
+		rates, asOf, err := New(db).QueryCurrentChannelRateSnapshot(instanceID, queryTime)
+		if err != nil || !asOf.Equal(end) || len(rates) != 1 || rates[0].RequestCount != 60 || rates[0].TPM != 600 {
+			t.Fatalf("complete stable window at %s: %+v, as_of=%s, err=%v", queryTime, rates, asOf, err)
+		}
+	}
+	// A newer marker advances the entire window. Add the intervening seconds.
+	for second := 1; second < 30; second++ {
+		insert(end.Add(time.Duration(second)*time.Second), 1, 10)
+	}
+	if _, err := db.Exec(`INSERT INTO channel_rate_seconds(instance_id,channel_id,bucket_time) VALUES(?,0,?)`, instanceID, end.Add(30*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	rates, asOf, err := New(db).QueryCurrentChannelRateSnapshot(instanceID, now.Add(15*time.Second))
+	if err != nil || !asOf.Equal(end.Add(30*time.Second)) || len(rates) != 1 || rates[0].RequestCount != 60 {
+		t.Fatalf("advanced window: %+v, as_of=%s, err=%v", rates, asOf, err)
+	}
 }
