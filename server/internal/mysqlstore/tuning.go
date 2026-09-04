@@ -205,36 +205,10 @@ func (s Store) QueryMetrics(id string, start, end time.Time) ([]tuning.ChannelMe
 	return out, rows.Err()
 }
 
-// QueryCurrentChannelRates returns the newest completed one-minute bucket
-// available for the site. Using the newest persisted bucket avoids showing an
-// incomplete current minute or briefly dropping rates to zero at minute
-// boundaries while Agent reports are still in flight.
+// QueryCurrentChannelRates reads reported second counters over a rolling 60s
+// window, including the current minute, independently of tuning evaluations.
 func (s Store) QueryCurrentChannelRates(id string, now time.Time) ([]tuning.ChannelMetric, error) {
-	end := now.Truncate(time.Minute)
-	start := end.Add(-5 * time.Minute)
-	rows, err := s.db.QueryContext(context.Background(), `SELECT
-CAST(SUBSTRING_INDEX(dimension_key,':',-1) AS SIGNED),SUM(request_count),SUM(tpm)
-FROM metric_1m
-WHERE instance_id IN (SELECT id FROM instances WHERE enabled=1 AND CASE WHEN site_id='' THEN id ELSE site_id END=?)
-  AND dimension_type='instance_channel' AND bucket_time=(
-    SELECT MAX(bucket_time) FROM metric_1m
-    WHERE instance_id IN (SELECT id FROM instances WHERE enabled=1 AND CASE WHEN site_id='' THEN id ELSE site_id END=?)
-      AND dimension_type='instance_channel' AND bucket_time>=? AND bucket_time<?
-  )
-GROUP BY CAST(SUBSTRING_INDEX(dimension_key,':',-1) AS SIGNED)`, id, id, start, end)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []tuning.ChannelMetric
-	for rows.Next() {
-		var metric tuning.ChannelMetric
-		if err = rows.Scan(&metric.ChannelID, &metric.RequestCount, &metric.TPM); err != nil {
-			return nil, err
-		}
-		out = append(out, metric)
-	}
-	return out, rows.Err()
+	return s.QueryRollingChannelRates(id, now)
 }
 
 func (s Store) ListContinuousStates(id string) ([]tuning.ContinuousState, error) {

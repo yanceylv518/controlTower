@@ -92,9 +92,13 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 	}
 	currentMetrics := metrics
 	currentRatesAreWindowTotals := true
+	currentRatesUnavailable := false
 	if rateStore, ok := e.store.(currentChannelRatesStore); ok {
 		if latest, rateErr := rateStore.QueryCurrentChannelRates(id, now); rateErr != nil {
-			log.Printf("tuning continuous evaluation site=%s stage=current_rates failed error=%v; falling back to window averages", id, rateErr)
+			log.Printf("tuning continuous evaluation site=%s stage=current_rates failed error=%v; blocking increases for capacity-configured channels", id, rateErr)
+			currentMetrics = nil
+			currentRatesAreWindowTotals = false
+			currentRatesUnavailable = true
 		} else {
 			currentMetrics = latest
 			currentRatesAreWindowTotals = false
@@ -183,6 +187,9 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 			state.MetricRPM = float64(current.RequestCount) / divisor
 			state.MetricTPM = float64(current.TPM) / divisor
 			state.CapacityLimited = (base.MaxRPM > 0 && state.MetricRPM >= float64(base.MaxRPM)) || (base.MaxTPM > 0 && state.MetricTPM >= float64(base.MaxTPM))
+			if currentRatesUnavailable && (base.MaxRPM > 0 || base.MaxTPM > 0) {
+				state.CapacityLimited = true
+			}
 			state.MetricReady = m.RequestCount >= p.MinSamples && m.TTFTP50 > 0 && m.TTFTP90 > 0 && m.TTFTP95 > 0
 			state.BaselineReady = healthy
 			state.MetricTTFTP50, state.MetricTTFTP90, state.MetricTTFTP95 = m.TTFTP50, m.TTFTP90, m.TTFTP95

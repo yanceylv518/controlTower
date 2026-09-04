@@ -470,6 +470,15 @@ func buildReport(ctx context.Context, cfg config.Config, reportedAt time.Time, s
 		ChannelSnapshots:        channelSnapshots,
 		ChannelSnapshotComplete: channelSnapshotComplete,
 	}
+	rateMetrics := metricaggregator.ChannelRates(events, reportedAt)
+	if backlog.BacklogEstimate > 0 {
+		// Do not claim current coverage while still catching up on source logs.
+		rateMetrics = rateMetrics[1:]
+	}
+	report.AggregatedMetrics = append(report.AggregatedMetrics, rateMetrics...)
+	if report.MetricBatchID == "" {
+		report.MetricBatchID = fmt.Sprintf("rates:%s:%d:%d", cfg.AgentID, reportedAt.UnixNano(), sequence)
+	}
 	if activeNginxTiming != nil {
 		buckets, slowSamples := activeNginxTiming.Snapshot()
 		for _, bucket := range buckets {

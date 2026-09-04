@@ -50,6 +50,27 @@ func (h Handler) HandleTuningContinuousStates(w http.ResponseWriter, r *http.Req
 		writeDashboardError(w, 501, "continuous_dispatch_not_supported")
 		return
 	}
+	if r.URL.Query().Get("rates_only") == "1" {
+		ratesStore, supported := h.tuningStore.(interface {
+			QueryCurrentChannelRates(string, time.Time) ([]tuning.ChannelMetric, error)
+		})
+		if !supported {
+			writeDashboardError(w, 503, "current_rates_unavailable")
+			return
+		}
+		now := time.Now().UTC()
+		rates, err := ratesStore.QueryCurrentChannelRates(id, now)
+		if err != nil {
+			writeDashboardError(w, 503, "current_rates_unavailable")
+			return
+		}
+		items := make([]map[string]any, 0, len(rates))
+		for _, rate := range rates {
+			items = append(items, map[string]any{"channel_id": rate.ChannelID, "rpm": rate.RequestCount, "tpm": rate.TPM})
+		}
+		writeDashboardJSON(w, 200, map[string]any{"items": items, "as_of": now, "window_seconds": 60})
+		return
+	}
 	items, err := store.ListContinuousStates(id)
 	if err != nil {
 		writeDashboardError(w, 500, "query_failed")

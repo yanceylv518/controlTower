@@ -900,6 +900,8 @@ export const dashboardApi = (client: ApiClient) => ({
     client.request<ListResponse<ChannelBaseValue>>(`/api/dashboard/tuning/base-values${query({ site_id, model })}`),
   tuningContinuousStates: (site_id: string) =>
     client.request<ListResponse<TuningContinuousState>>(`/api/dashboard/tuning/continuous-states${query({ site_id })}`),
+  tuningCurrentRates: (site_id: string) =>
+    client.request<{ items: { channel_id: number; rpm: number; tpm: number }[]; as_of: string; window_seconds: number }>(`/api/dashboard/tuning/continuous-states${query({ site_id, rates_only: 1 })}`),
   saveTuningBaseValues: (site_id: string, items: ChannelBaseValue[]) =>
     client.request<ListResponse<ChannelBaseValue>>(`/api/dashboard/tuning/base-values${query({ site_id })}`, { method: "PUT", body: JSON.stringify({ items }) }),
   syncTuningBaseValues: (site_id: string, models: string[]) =>

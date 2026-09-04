@@ -4,6 +4,7 @@ import (
 	"context"
 	"controltower/internal/latencyhist"
 	"database/sql"
+	"strconv"
 	"strings"
 	"time"
 
@@ -522,6 +523,38 @@ func (s Store) ApplyMetricBatch(instanceID string, batchID string, metrics []agg
 		return tx.Commit()
 	}
 
+	regular := make([]aggregator.Metric, 0, len(metrics))
+	rateValues := []string{}
+	rateArgs := []any{}
+	for _, metric := range metrics {
+		if metric.DimensionType != "channel_rate_second" {
+			regular = append(regular, metric)
+			continue
+		}
+		channel, parseErr := strconv.ParseInt(metric.DimensionKey, 10, 64)
+		if parseErr != nil || channel < 0 {
+			continue
+		}
+		rateValues = append(rateValues, "(?,?,?,?,?)")
+		rateArgs = append(rateArgs, instanceID, channel, metric.BucketTime, metric.RequestCount, metric.TPM)
+		if len(rateValues) == 100 {
+			if _, err := tx.ExecContext(ctx, channelRateMergeSQL(rateValues), rateArgs...); err != nil {
+				return err
+			}
+			rateValues, rateArgs = nil, nil
+		}
+	}
+	if len(rateValues) > 0 {
+		if _, err := tx.ExecContext(ctx, channelRateMergeSQL(rateValues), rateArgs...); err != nil {
+			return err
+		}
+	}
+	if len(regular) != len(metrics) {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM channel_rate_seconds WHERE bucket_time<? LIMIT ?", time.Now().UTC().Add(-10*time.Minute), max(1000, len(metrics)-len(regular))); err != nil {
+			return err
+		}
+	}
+	metrics = regular
 	const batchSize = 100
 	rollup5m := aggregator.Rollup5m(metrics)
 	for start := 0; start < len(metrics); start += batchSize {
