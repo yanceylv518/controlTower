@@ -49,7 +49,10 @@ FROM channel_base_values b
 JOIN (SELECT cs.* FROM channel_current cs JOIN instances i ON i.id=cs.instance_id
       JOIN (SELECT cs2.channel_id,MAX(cs2.captured_at) captured_at FROM channel_current cs2 JOIN instances i2 ON i2.id=cs2.instance_id WHERE CASE WHEN i2.site_id='' THEN i2.id ELSE i2.site_id END=? AND i2.enabled=1 GROUP BY cs2.channel_id) x
         ON x.channel_id=cs.channel_id AND x.captured_at=cs.captured_at
-      WHERE CASE WHEN i.site_id='' THEN i.id ELSE i.site_id END=? AND i.enabled=1) c ON c.channel_id=b.channel_id
+      WHERE CASE WHEN i.site_id='' THEN i.id ELSE i.site_id END=? AND i.enabled=1
+      AND NOT EXISTS (SELECT 1 FROM channel_current tie JOIN instances ti ON ti.id=tie.instance_id
+        WHERE tie.channel_id=cs.channel_id AND tie.captured_at=cs.captured_at AND tie.instance_id<cs.instance_id AND ti.enabled=1
+        AND CASE WHEN ti.site_id='' THEN ti.id ELSE ti.site_id END=CASE WHEN i.site_id='' THEN i.id ELSE i.site_id END)) c ON c.channel_id=b.channel_id
 WHERE b.instance_id=? AND LOWER(c.status) IN ('enabled','enable','active','normal','1')`+filter+` ORDER BY b.model_name,c.channel_name`, args...)
 	if err != nil {
 		return nil, err
@@ -605,7 +608,10 @@ JOIN (
 ) latest
   ON latest.channel_id=c.channel_id AND latest.captured_at=c.captured_at
 JOIN instances i ON i.id=c.instance_id
-WHERE i.enabled=1 AND CASE WHEN i.site_id='' THEN i.id ELSE i.site_id END=?`
+WHERE i.enabled=1 AND CASE WHEN i.site_id='' THEN i.id ELSE i.site_id END=?
+AND NOT EXISTS (SELECT 1 FROM channel_current tie JOIN instances ti ON ti.id=tie.instance_id
+  WHERE tie.channel_id=c.channel_id AND tie.captured_at=c.captured_at AND tie.instance_id<c.instance_id AND ti.enabled=1
+  AND CASE WHEN ti.site_id='' THEN ti.id ELSE ti.site_id END=CASE WHEN i.site_id='' THEN i.id ELSE i.site_id END)`
 
 func (s Store) InsertRecommendation(r tuning.Recommendation) error {
 	ev, _ := json.Marshal(r.Evidence)

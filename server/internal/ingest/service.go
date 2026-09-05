@@ -289,7 +289,13 @@ func (s Service) SaveReport(req agentgateway.AgentReportRequest) error {
 		})
 	}
 	if req.ChannelSnapshotComplete {
-		if batchStore, ok := s.store.(channelSnapshotBatchStore); ok {
+		if batchStore, ok := s.store.(interface {
+			SyncChannelSnapshotsAt(string, []storage.ChannelSnapshot, time.Time) error
+		}); ok {
+			if err := batchStore.SyncChannelSnapshotsAt(req.InstanceID, channelSnapshots, req.ReportedAt); err != nil {
+				return err
+			}
+		} else if batchStore, ok := s.store.(channelSnapshotBatchStore); ok {
 			if err := batchStore.SyncChannelSnapshots(req.InstanceID, channelSnapshots); err != nil {
 				return err
 			}

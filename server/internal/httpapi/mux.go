@@ -104,6 +104,8 @@ func NewMux(options Options) *http.ServeMux {
 	mux.Handle("GET /api/dashboard/nginx-timing/slow-samples", protect(http.HandlerFunc(dashboardHandler.HandleNginxSlowSamples)))
 	if tuningStore != nil {
 		mux.Handle("/api/dashboard/tuning/policy", protect(http.HandlerFunc(dashboardHandler.HandleTuningPolicy)))
+		mux.Handle("POST /api/dashboard/tuning/channels/refresh", protect(http.HandlerFunc(dashboardHandler.HandleRefreshTuningChannels)))
+		mux.Handle("GET /api/dashboard/tuning/channels/changes", protect(http.HandlerFunc(dashboardHandler.HandleTuningChannelChanges)))
 		mux.Handle("/api/dashboard/tuning/base-values", protect(http.HandlerFunc(dashboardHandler.HandleTuningBaseValues)))
 		mux.Handle("POST /api/dashboard/tuning/base-values/sync", protect(http.HandlerFunc(dashboardHandler.HandleTuningBaseValuesSync)))
 		mux.Handle("/api/dashboard/tuning/preflight", protect(http.HandlerFunc(dashboardHandler.HandleTuningPreflight)))

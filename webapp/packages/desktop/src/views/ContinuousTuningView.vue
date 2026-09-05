@@ -34,15 +34,6 @@ const activeRows = computed(() => bases.value.filter(x => x.model_name === activ
 const channelRowKey = (row: ChannelBaseValue) => `${row.channel_id}:${row.model_name}`;
 const stateMap = computed(() => new Map(states.value.map(x => [`${x.channel_id}:${x.model_name}`, x])));
 const stateFor = (row: ChannelBaseValue) => stateMap.value.get(`${row.channel_id}:${row.model_name}`);
-const applyEffectiveCurrentWeights = () => {
-  const runtime = new Map(states.value.map(state => [`${state.channel_id}:${state.model_name}`, state]));
-  for (const row of bases.value) {
-    const state = runtime.get(`${row.channel_id}:${row.model_name}`);
-    if (state?.last_written_weight == null || !state.last_write_at) continue;
-    const snapshotAt = row.snapshot_at ? new Date(row.snapshot_at).getTime() : 0;
-    if (new Date(state.last_write_at).getTime() > snapshotAt) row.current_weight = state.last_written_weight;
-  }
-};
 const validEvent = (item: TuningRecommendation) => item.rule !== "circuit_recovered" || item.proposed_weight > 0;
 const recentEvents = computed(() => events.value.filter(x => validEvent(x) && ["weight_observed", "weight_write", "manual_takeover", "auto_paused", "circuit_opened", "probe_started", "probe_failed", "circuit_recovered"].includes(x.rule)));
 const eventModel = (item: TuningRecommendation) => String(item.evidence?.model ?? bases.value.find(row => row.channel_id === item.channel_id)?.model_name ?? "");
@@ -168,38 +159,92 @@ const selectModel = (model: string) => {
   activeModel.value = model;
 };
 
-async function load() {
+let loadingSite = "", loadGeneration = 0;
+async function load(syncOnline = false) {
   await filters.loadInstances(); if (!siteID.value) return;
+  const site = siteID.value;
+  if (loading.value && loadingSite === site) return;
+  loadingSite = site;
+  const generation = ++loadGeneration;
   loading.value = true;
   try {
-    const [p, b, r] = await Promise.all([dashboard.tuningPolicy(siteID.value), dashboard.tuningBaseValues(siteID.value), dashboard.tuningRecommendations(siteID.value, 300)]);
+    if (syncOnline) {
+      try { await dashboard.refreshTuningChannels(site); refreshError.value = ""; }
+      catch (error) { refreshError.value = error instanceof Error ? error.message : "渠道同步失败"; }
+    }
+    const [p, b, r] = await Promise.all([dashboard.tuningPolicy(site), dashboard.tuningBaseValues(site), dashboard.tuningRecommendations(site, 300)]);
+    if (site !== siteID.value) return;
     mode.value = p.mode; Object.assign(policy, p.policy); policy.continuous = Object.assign(defaults(), p.policy.continuous || {}); policy.dispatch_modes ||= {};
     bases.value = b.items ?? []; events.value = r.items ?? []; for (const model of models.value) policy.dispatch_modes[model] ||= "off";
     if (!models.value.includes(activeModel.value)) activeModel.value = models.value[0] || "";
-    try { states.value = (await dashboard.tuningContinuousStates(siteID.value)).items ?? []; applyEffectiveCurrentWeights(); } catch { states.value = []; }
+    try { const result = await dashboard.tuningContinuousStates(site); if (site !== siteID.value) return; states.value = result.items ?? []; } catch { states.value = []; }
     dirty.value = false; captureSavedState();
-  } finally { loading.value = false; }
+  } finally { if (generation === loadGeneration) loading.value = false; }
 }
 let refreshTimer: ReturnType<typeof setInterval> | undefined;
 let ratesTimer: ReturnType<typeof setInterval> | undefined;
 const refreshError = ref("");
+const channelsRefreshing = ref(false);
+async function refreshChannelsNow() {
+  if (!siteID.value || channelsRefreshing.value || saving.value) return;
+  channelsRefreshing.value = true;
+  try {
+    await dashboard.refreshTuningChannels(siteID.value);
+    await refreshRuntime();
+    ElMessage.success("渠道信息已同步");
+  } catch (error) {
+    refreshError.value = error instanceof Error ? error.message : "渠道同步失败";
+    ElMessage.error(refreshError.value);
+  } finally { channelsRefreshing.value = false; }
+}
+
+function mergeOnlineRows(refreshed: ChannelBaseValue[]) {
+  const local = new Map(bases.value.map(row => [`${row.channel_id}:${row.model_name}`, row]));
+  bases.value = refreshed.map(row => {
+    const edited = local.get(`${row.channel_id}:${row.model_name}`);
+    // An earlier periodic request can finish after a write notification.
+    if (edited && new Date(edited.snapshot_at || 0).getTime() > new Date(row.snapshot_at || 0).getTime()) {
+      row = { ...row, current_weight: edited.current_weight, current_priority: edited.current_priority, snapshot_at: edited.snapshot_at };
+    }
+    return dirty.value && edited ? { ...row, base_weight: edited.base_weight, base_priority: edited.base_priority, max_rpm: edited.max_rpm, max_tpm: edited.max_tpm } : row;
+  });
+  if (!dirty.value) savedBases.value = clone(bases.value);
+}
+let changesAbort: AbortController | undefined;
+async function watchChannelChanges() {
+  changesAbort?.abort();
+  const abort = new AbortController(); changesAbort = abort;
+  const site = siteID.value;
+  if (!site) return;
+  let revision = "";
+  while (!abort.signal.aborted) {
+    try {
+      const result = await dashboard.tuningChannelChanges(site, revision, abort.signal);
+      if (abort.signal.aborted || site !== siteID.value) return;
+      if (result.revision !== revision) {
+        while ((loading.value || saving.value) && !abort.signal.aborted) await wait(200);
+        if (abort.signal.aborted) return;
+        const rows = await dashboard.tuningBaseValues(site);
+        if (abort.signal.aborted || site !== siteID.value) return;
+        if (loading.value || saving.value) { await wait(200); continue; }
+        mergeOnlineRows(rows.items ?? []);
+        revision = result.revision;
+      }
+    } catch {
+      if (abort.signal.aborted) return;
+      await wait(2000);
+    }
+  }
+}
 async function refreshRuntime() {
   if (!siteID.value || loading.value) return;
+  const site = siteID.value;
   refreshNow.value = Date.now();
   try {
-    const [s, r, b] = await Promise.all([dashboard.tuningContinuousStates(siteID.value), dashboard.tuningRecommendations(siteID.value, 300), dashboard.tuningBaseValues(siteID.value)]);
+    const [s, r, b] = await Promise.all([dashboard.tuningContinuousStates(site), dashboard.tuningRecommendations(site, 300), dashboard.tuningBaseValues(site)]);
+    if (site !== siteID.value || loading.value || saving.value) return;
     states.value = s.items ?? []; events.value = r.items ?? [];
-    const refreshed = b.items ?? [];
-    if (dirty.value) {
-      const local = new Map(bases.value.map(row => [`${row.channel_id}:${row.model_name}`, row]));
-      bases.value = refreshed.map(row => {
-        const edited = local.get(`${row.channel_id}:${row.model_name}`);
-        return edited ? { ...row, base_weight: edited.base_weight, base_priority: edited.base_priority, max_rpm: edited.max_rpm, max_tpm: edited.max_tpm } : row;
-      });
-    } else {
-      bases.value = refreshed;
-    }
-    applyEffectiveCurrentWeights();
+    mergeOnlineRows(b.items ?? []);
     for (const model of models.value) policy.dispatch_modes[model] ||= "off";
     if (!models.value.includes(activeModel.value)) activeModel.value = models.value[0] || "";
     if (!dirty.value) captureSavedState();
@@ -222,6 +267,7 @@ async function sync(kind: "weight" | "priority") {
   }
   saving.value = true;
   try {
+    await dashboard.refreshTuningChannels(siteID.value);
     const rows = (await dashboard.syncTuningBaseValues(siteID.value, models.value)).items ?? [];
     const index = new Map(bases.value.map(x => [`${x.channel_id}:${x.model_name}`, x]));
     for (const row of rows) { const old = index.get(`${row.channel_id}:${row.model_name}`); if (!old) bases.value.push(row); else if (kind === "weight") old.base_weight = row.current_weight; else old.base_priority = row.current_priority; }
@@ -266,23 +312,24 @@ async function save() {
     const preflightCommandID = await runAutoPreflight();
     await dashboard.saveTuningPolicy(siteID.value, policy, mode.value, preflightCommandID || undefined);
     bases.value = (await dashboard.saveTuningBaseValues(siteID.value, bases.value)).items ?? [];
-    ElMessage.success(preflightCommandID ? "控制能力验证通过，自动模式已启用" : "设置已保存，将在下一分钟生效");
+    ElMessage.success(preflightCommandID ? "控制能力验证通过，自动模式已启用" : "设置已保存，执行结果将实时同步");
     await load();
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : "保存失败");
   } finally { saving.value = false; }
 }
-watch(() => filters.site_id, () => void load());
+watch(() => filters.site_id, () => { void load(true); void watchChannelChanges(); });
 watch(siteID, () => { ratesReady.value = false; currentRates.value.clear(); void refreshCurrentRates(); });
 watch([eventModelFilter, eventRuleFilter, eventChannelQuery, activeModel], () => { eventPage.value = 1; });
-onMounted(() => { void load(); void refreshCurrentRates(); refreshTimer = setInterval(() => void refreshRuntime(), 30000); ratesTimer = setInterval(() => { if (!document.hidden) void refreshCurrentRates(); }, 5000); });
-onBeforeUnmount(() => { if (refreshTimer) clearInterval(refreshTimer); if (ratesTimer) clearInterval(ratesTimer); });
+onMounted(() => { void load(true); void watchChannelChanges(); void refreshCurrentRates(); refreshTimer = setInterval(() => void refreshRuntime(), 30000); ratesTimer = setInterval(() => { if (!document.hidden) void refreshCurrentRates(); }, 5000); });
+onBeforeUnmount(() => { changesAbort?.abort(); if (refreshTimer) clearInterval(refreshTimer); if (ratesTimer) clearInterval(ratesTimer); });
 </script>
 
 <template><AppShell title="调权中心"><div v-loading="loading" class="page" :class="{'events-page':activeTab==='events'}">
+  <el-alert v-if="refreshError" :title="refreshError" type="warning" :closable="false" show-icon />
   <el-tabs v-model="activeTab" class="tabs">
     <el-tab-pane label="运行概览" name="overview">
-      <el-card shadow="never" class="workspace-card"><template #header><div class="head"><div class="title-line"><b>模型与渠道</b><small>每个模型单独选择关闭、只观察或自动执行</small><div class="inline-metrics"><span>自动 <b>{{ counts.auto }}</b></span><span>观察 <b>{{ counts.observe }}</b></span><span>关闭 <b>{{ counts.off }}</b></span></div></div><div class="tools"><el-button @click="helpOpen=true">使用说明</el-button><el-button :loading="saving" @click="sync('weight')">初始化/刷新基础值</el-button><el-button v-if="dirty" :disabled="saving" @click="cancelChanges()">取消更改</el-button><el-button v-if="dirty" type="primary" :loading="saving" @click="save">保存更改</el-button></div></div></template>
+      <el-card shadow="never" class="workspace-card"><template #header><div class="head"><div class="title-line"><b>模型与渠道</b><small>每个模型单独选择关闭、只观察或自动执行</small><div class="inline-metrics"><span>自动 <b>{{ counts.auto }}</b></span><span>观察 <b>{{ counts.observe }}</b></span><span>关闭 <b>{{ counts.off }}</b></span></div></div><div class="tools"><el-button @click="helpOpen=true">使用说明</el-button><el-button :loading="channelsRefreshing" :disabled="saving" @click="refreshChannelsNow">刷新渠道信息</el-button><el-button :loading="saving" @click="sync('weight')">初始化/刷新基础值</el-button><el-button v-if="dirty" :disabled="saving" @click="cancelChanges()">取消更改</el-button><el-button v-if="dirty" type="primary" :loading="saving" @click="save">保存更改</el-button></div></div></template>
         <el-empty v-if="!models.length" description="还没有渠道基础值"><el-button type="primary" @click="sync('weight')">立即从 new-api 读取</el-button></el-empty>
         <div v-else class="model-workspace">
           <aside class="model-nav"><el-input v-model="modelQuery" clearable placeholder="搜索模型"/><div class="model-list"><button v-for="model in visibleModels" :key="model" :class="{active:activeModel===model}" @click="selectModel(model)"><span><b>{{ model }}</b><small>{{ bases.filter(x=>x.model_name===model).length }} 个渠道</small></span><span class="model-status"><el-tag :type="modeType(model)" effect="plain" size="small">{{ modeText(model) }}</el-tag></span></button><el-empty v-if="!visibleModels.length" :image-size="48" description="没有匹配模型"/></div></aside>
@@ -342,7 +389,7 @@ onBeforeUnmount(() => { if (refreshTimer) clearInterval(refreshTimer); if (rates
     <div class="help-guide">
       <section><h3>最简单的理解</h3><ol><li>系统每分钟计算一次渠道权重。</li><li>关闭模式不计算；只观察模式只展示；自动执行模式会写入 new-api。</li><li>自动模式下，整数计算权重只要变化就立即写入；没有变化就不重复写。</li></ol></section>
       <section><h3>第一次使用</h3><ol><li>点击“初始化/刷新基础值”，读取当前线上权重和优先级。</li><li>先选择“只观察”，确认计算结果合理。</li><li>再切换为“自动执行”并保存；系统会先验证 new-api 控制链路。</li></ol></section>
-      <section><h3>三个权重</h3><dl><div><dt>基础权重</dt><dd>计算基准，可手动修改。</dd></div><div><dt>计算权重</dt><dd>基础权重乘以速度、缓存、输出和错误四项系数后的整数结果。</dd></div><div><dt>当前权重</dt><dd>new-api 当前实际权重；渠道快照刷新后会与最近写入结果一致。</dd></div></dl></section>
+      <section><h3>三个权重</h3><dl><div><dt>基础权重</dt><dd>计算基准，可手动修改。</dd></div><div><dt>计算权重</dt><dd>基础权重乘以速度、缓存、输出和错误四项系数后的整数结果。</dd></div><div><dt>当前权重</dt><dd>new-api 已确认的当前权重；调权成功后立即同步，后台仍每 10 分钟采集核对。</dd></div></dl></section>
       <section><h3>自动模式</h3><p>每分钟重新计算。只要计算权重与上次成功写入值不同，就写入 new-api。不存在写入死区，也不等待最小写入间隔；如果线上权重被人工或其他系统修改，不会暂停调权，下一轮会重新写回当前计算权重。</p></section>
       <section><h3>保留的安全保护</h3><dl><div><dt>熔断</dt><dd>渠道错误率达到阈值且样本足够时，将权重和优先级置为 0。</dd></div><div><dt>恢复</dt><dd>静默期后主动探测；通过后先以低权重恢复，再回到正常计算。</dd></div><div><dt>多模型渠道</dt><dd>一个渠道同时服务多个模型时不自动调权，避免模型之间互相影响。</dd></div><div><dt>写入失败</dt><dd>连续失败 3 次后暂停每分钟写入，改为每 10 分钟重试，成功后自动恢复。</dd></div></dl></section>
       <section><h3>表格与记录</h3><p>“评估状态”直接显示样本不足、熔断、恢复中或写入失败等原因；“变更记录”保存每次自动写入、熔断和恢复。计算公式可点击“计算权重”旁的 i 查看。</p></section>

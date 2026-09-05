@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"controltower/server/internal/aggregator"
+	"controltower/server/internal/channelupdates"
 	"controltower/server/internal/storage"
 )
 
@@ -214,14 +215,14 @@ INSERT INTO channel_current (
   instance_id, channel_id, id, channel_name, status, weight, models_text, group_name, priority, captured_at
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON DUPLICATE KEY UPDATE
-  id = VALUES(id),
-  channel_name = VALUES(channel_name),
-  status = VALUES(status),
-  weight = VALUES(weight),
-  models_text = VALUES(models_text),
-  group_name = VALUES(group_name),
-  priority = VALUES(priority),
-  captured_at = VALUES(captured_at)`,
+  id = IF(VALUES(captured_at)>captured_at,VALUES(id),id),
+  channel_name = IF(VALUES(captured_at)>captured_at,VALUES(channel_name),channel_name),
+  status = IF(VALUES(captured_at)>captured_at,VALUES(status),status),
+  weight = IF(VALUES(captured_at)>captured_at,VALUES(weight),weight),
+  models_text = IF(VALUES(captured_at)>captured_at,VALUES(models_text),models_text),
+  group_name = IF(VALUES(captured_at)>captured_at,VALUES(group_name),group_name),
+  priority = IF(VALUES(captured_at)>captured_at,VALUES(priority),priority),
+  captured_at = GREATEST(captured_at,VALUES(captured_at))`,
 		snapshot.InstanceID,
 		snapshot.ChannelID,
 		snapshot.ID,
@@ -233,9 +234,20 @@ ON DUPLICATE KEY UPDATE
 		nullInt64(snapshot.Priority),
 		snapshot.CapturedAt,
 	)
+	if err == nil {
+		channelupdates.Notify()
+	}
 	return err
 }
 func (s Store) SyncChannelSnapshots(instanceID string, snapshots []storage.ChannelSnapshot) error {
+	at := time.Now().UTC()
+	if len(snapshots) > 0 {
+		at = snapshots[0].CapturedAt
+	}
+	return s.SyncChannelSnapshotsAt(instanceID, snapshots, at)
+}
+
+func (s Store) SyncChannelSnapshotsAt(instanceID string, snapshots []storage.ChannelSnapshot, at time.Time) error {
 	tx, err := s.db.BeginTx(context.Background(), nil)
 	if err != nil {
 		return err
@@ -248,12 +260,22 @@ func (s Store) SyncChannelSnapshots(instanceID string, snapshots []storage.Chann
 	}
 	channelIDs := make([]int64, 0, len(snapshots))
 	for _, snapshot := range snapshots {
+		channelIDs = append(channelIDs, snapshot.ChannelID)
+		var latest time.Time
+		// An in-flight older collection cannot overwrite a successful write,
+		// including its model assignment and anchor side effects.
+		err = tx.QueryRow(`SELECT captured_at FROM channel_current WHERE instance_id=? AND channel_id=? FOR UPDATE`, instanceID, snapshot.ChannelID).Scan(&latest)
+		if err != nil && err != sql.ErrNoRows {
+			return err
+		}
+		if err == nil && !snapshot.CapturedAt.After(latest) {
+			continue
+		}
 		if _, err = tx.Exec(`INSERT INTO channel_current (instance_id,channel_id,id,channel_name,status,weight,models_text,group_name,priority,captured_at)
 VALUES (?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE id=VALUES(id),channel_name=VALUES(channel_name),status=VALUES(status),weight=VALUES(weight),models_text=VALUES(models_text),group_name=VALUES(group_name),priority=VALUES(priority),captured_at=VALUES(captured_at)`,
 			snapshot.InstanceID, snapshot.ChannelID, snapshot.ID, snapshot.ChannelName, snapshot.Status, snapshot.Weight, snapshot.ModelsText, nullString(snapshot.GroupName), nullInt64(snapshot.Priority), snapshot.CapturedAt); err != nil {
 			return err
 		}
-		channelIDs = append(channelIDs, snapshot.ChannelID)
 		models := parseChannelModels(snapshot.ModelsText)
 		if len(models) == 1 {
 			priority := int64(0)
@@ -280,13 +302,13 @@ VALUES (?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE id=VALUES(id),channel_name=
 		}
 	}
 	if len(channelIDs) == 0 {
-		if _, err = tx.Exec(`DELETE FROM channel_current WHERE instance_id=?`, instanceID); err != nil {
+		if _, err = tx.Exec(`DELETE FROM channel_current WHERE instance_id=? AND captured_at<=?`, instanceID, at); err != nil {
 			return err
 		}
-		if _, err = tx.Exec(`DELETE FROM tuning_continuous_states WHERE instance_id=?`, siteID); err != nil {
+		if _, err = tx.Exec(`DELETE FROM tuning_continuous_states WHERE instance_id=? AND channel_id NOT IN (SELECT channel_id FROM channel_current WHERE instance_id=?)`, siteID, instanceID); err != nil {
 			return err
 		}
-		if _, err = tx.Exec(`DELETE FROM channel_base_values WHERE instance_id=?`, siteID); err != nil {
+		if _, err = tx.Exec(`DELETE FROM channel_base_values WHERE instance_id=? AND channel_id NOT IN (SELECT channel_id FROM channel_current WHERE instance_id=?)`, siteID, instanceID); err != nil {
 			return err
 		}
 	} else {
@@ -296,20 +318,26 @@ VALUES (?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE id=VALUES(id),channel_name=
 		for _, id := range channelIDs {
 			args = append(args, id)
 		}
-		if _, err = tx.Exec(`DELETE FROM channel_current WHERE instance_id=? AND channel_id NOT IN (`+placeholders+`)`, args...); err != nil {
+		deleteArgs := append(append([]any{}, args...), at)
+		if _, err = tx.Exec(`DELETE FROM channel_current WHERE instance_id=? AND channel_id NOT IN (`+placeholders+`) AND captured_at<=?`, deleteArgs...); err != nil {
 			return err
 		}
 		tuningArgs := make([]any, len(args))
 		copy(tuningArgs, args)
 		tuningArgs[0] = siteID
-		if _, err = tx.Exec(`DELETE FROM tuning_continuous_states WHERE instance_id=? AND channel_id NOT IN (`+placeholders+`)`, tuningArgs...); err != nil {
+		tuningArgs = append(tuningArgs, instanceID)
+		if _, err = tx.Exec(`DELETE FROM tuning_continuous_states WHERE instance_id=? AND channel_id NOT IN (`+placeholders+`) AND channel_id NOT IN (SELECT channel_id FROM channel_current WHERE instance_id=?)`, tuningArgs...); err != nil {
 			return err
 		}
-		if _, err = tx.Exec(`DELETE FROM channel_base_values WHERE instance_id=? AND channel_id NOT IN (`+placeholders+`)`, tuningArgs...); err != nil {
+		if _, err = tx.Exec(`DELETE FROM channel_base_values WHERE instance_id=? AND channel_id NOT IN (`+placeholders+`) AND channel_id NOT IN (SELECT channel_id FROM channel_current WHERE instance_id=?)`, tuningArgs...); err != nil {
 			return err
 		}
 	}
-	return tx.Commit()
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	channelupdates.Notify()
+	return nil
 }
 func (s Store) UpdateLogOffset(instanceID string, lastLogID int64) error {
 	_, err := s.db.ExecContext(context.Background(), `

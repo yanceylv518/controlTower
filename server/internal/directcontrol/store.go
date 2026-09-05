@@ -110,7 +110,22 @@ func (s Store) CreateContinuousWeightChange(v tuning.Recommendation, actor strin
 		log.Printf("direct control: weight write site=%s channel=%d target=%d duration=%s failed: %v", v.InstanceID, v.ChannelID, v.ProposedWeight, time.Since(started), err)
 		return "", fmt.Errorf("direct weight write: %w", err)
 	}
-	commandID, err := recordExecutedWrite(func() (string, error) { return s.Store.RecordDirectWeightChange(v, actor, now) })
+	var weight *uint
+	if v.Rule != "base_priority_sync" {
+		value := uint(v.ProposedWeight)
+		weight = &value
+	}
+	var priority *int64
+	if v.Rule == "base_priority_sync" || v.Rule == "circuit_opened" || v.Rule == "circuit_recovered" {
+		priority = v.ProposedPriority
+	}
+	writtenAt := time.Now().UTC()
+	commandID, err := recordExecutedWrite(func() (string, error) {
+		if err := s.Store.ApplyChannelWrite(v.InstanceID, v.ChannelID, weight, priority, nil, writtenAt); err != nil {
+			return "", fmt.Errorf("new-api write succeeded but channel state sync failed: %w", err)
+		}
+		return s.Store.RecordDirectWeightChange(v, actor, now)
+	})
 	log.Printf("direct control: weight write site=%s channel=%d target=%d duration=%s succeeded", v.InstanceID, v.ChannelID, v.ProposedWeight, time.Since(started))
 	return commandID, err
 }

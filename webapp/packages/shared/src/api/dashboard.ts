@@ -898,6 +898,10 @@ export const dashboardApi = (client: ApiClient) => ({
     client.request<TuningReport>(`/api/dashboard/tuning/report${query({ site_id, days })}`),
   tuningBaseValues: (site_id: string, model?: string) =>
     client.request<ListResponse<ChannelBaseValue>>(`/api/dashboard/tuning/base-values${query({ site_id, model })}`),
+  refreshTuningChannels: (site_id: string) =>
+    client.request<{ synced: boolean }>(`/api/dashboard/tuning/channels/refresh${query({ site_id })}`, { method: "POST" }),
+  tuningChannelChanges: (site_id: string, after: string, signal: AbortSignal) =>
+    client.request<{ revision: string }>(`/api/dashboard/tuning/channels/changes${query({ site_id, after })}`, { signal }),
   tuningContinuousStates: (site_id: string) =>
     client.request<ListResponse<TuningContinuousState>>(`/api/dashboard/tuning/continuous-states${query({ site_id })}`),
   tuningCurrentRates: (site_id: string) =>

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"controltower/server/internal/channelupdates"
 	"controltower/server/internal/storage"
 )
 
@@ -87,9 +88,15 @@ func (s Store) CompleteChannelCommand(id, status, errorSummary string, now time.
 	v.Status = status
 	v.ErrorSummary = errorSummary
 	v.UpdatedAt = now
+	if status == "succeeded" && v.CommandType == "channel.update" {
+		if err = applyCompletedChannelWrite(tx, v, now); err != nil {
+			return storage.ChannelCommand{}, false, err
+		}
+	}
 	if err = tx.Commit(); err != nil {
 		return storage.ChannelCommand{}, false, err
 	}
+	channelupdates.Notify()
 	return v, true, nil
 }
 
