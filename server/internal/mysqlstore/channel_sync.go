@@ -14,12 +14,15 @@ import (
 
 // ApplyChannelWrite updates only fields confirmed written, preserving the
 // anchor and all other metadata. All collectors for the site share the result.
+// A confirmed write is authoritative at the moment it happened, so it is
+// applied even when the row carries a later captured_at from an Agent whose
+// clock runs ahead; captured_at only ever moves forward.
 func (s Store) ApplyChannelWrite(siteID string, channelID int64, weight *uint, priority *int64, status *int, at time.Time) error {
 	_, err := s.db.ExecContext(context.Background(), `UPDATE channel_current c JOIN instances i ON i.id=c.instance_id
-SET c.weight=COALESCE(?,c.weight),c.priority=COALESCE(?,c.priority),c.status=COALESCE(?,c.status),c.captured_at=?
-WHERE CASE WHEN i.site_id='' THEN i.id ELSE i.site_id END=? AND c.channel_id=? AND c.captured_at<=?`, weight, priority, status, at, siteID, channelID, at)
+SET c.weight=COALESCE(?,c.weight),c.priority=COALESCE(?,c.priority),c.status=COALESCE(?,c.status),c.captured_at=GREATEST(c.captured_at,?)
+WHERE CASE WHEN i.site_id='' THEN i.id ELSE i.site_id END=? AND c.channel_id=?`, weight, priority, status, at, siteID, channelID)
 	if err == nil {
-		channelupdates.Notify()
+		channelupdates.Notify(siteID)
 	}
 	return err
 }
@@ -55,8 +58,20 @@ func applyCompletedChannelWrite(tx *sql.Tx, command storage.ChannelCommand, at t
 	}
 	_, err := tx.Exec(`UPDATE channel_current c JOIN instances i ON i.id=c.instance_id
 JOIN instances source ON source.id=?
-SET c.weight=COALESCE(?,c.weight),c.priority=COALESCE(?,c.priority),c.status=COALESCE(?,c.status),c.captured_at=?
+SET c.weight=COALESCE(?,c.weight),c.priority=COALESCE(?,c.priority),c.status=COALESCE(?,c.status),c.captured_at=GREATEST(c.captured_at,?)
 WHERE CASE WHEN i.site_id='' THEN i.id ELSE i.site_id END=CASE WHEN source.site_id='' THEN source.id ELSE source.site_id END
-AND c.channel_id=? AND c.captured_at<=?`, command.InstanceID, payload.Weight, payload.Priority, payload.Status, at, command.ChannelID, at)
+AND c.channel_id=?`, command.InstanceID, payload.Weight, payload.Priority, payload.Status, at, command.ChannelID)
 	return err
+}
+
+// siteIDForInstance resolves the notification scope; an unknown instance
+// yields "" which wakes every site rather than dropping the notification.
+func siteIDForInstance(q interface {
+	QueryRow(string, ...any) *sql.Row
+}, instanceID string) string {
+	var siteID string
+	if err := q.QueryRow(`SELECT CASE WHEN site_id='' THEN id ELSE site_id END FROM instances WHERE id=?`, instanceID).Scan(&siteID); err != nil {
+		return ""
+	}
+	return siteID
 }

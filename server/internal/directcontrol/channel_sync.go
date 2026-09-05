@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"controltower/internal/channelcontrol"
+	"controltower/server/internal/tuning"
 )
 
 func (s Store) RefreshChannels(ctx context.Context, siteID, actor string) error {
@@ -14,7 +15,7 @@ func (s Store) RefreshChannels(ctx context.Context, siteID, actor string) error 
 		return err
 	}
 	if !direct {
-		return fmt.Errorf("请先完成站点的 new-api 直连配置，再刷新渠道信息")
+		return tuning.ErrDirectControlNotConfigured
 	}
 	lister, ok := controller.(interface {
 		List(context.Context) ([]channelcontrol.Channel, error)

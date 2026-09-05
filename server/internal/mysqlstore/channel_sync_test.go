@@ -97,3 +97,72 @@ func TestChannelSyncPreservesAnchorsAndRejectsOldSnapshots(t *testing.T) {
 	}
 	assertValues(30, 4)
 }
+
+// An Agent whose clock runs ahead stamps snapshots in the future. A confirmed
+// write that follows must still become the displayed value instead of being
+// skipped until the next snapshot, and captured_at must only move forward.
+func TestApplyChannelWriteIgnoresFutureSnapshotClock(t *testing.T) {
+	dsn := os.Getenv("CT_MYSQL_TEST_DSN")
+	if dsn == "" {
+		t.Skip("set CT_MYSQL_TEST_DSN to run channel write clock test")
+	}
+	db, err := Open(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	if err := ApplyDir(ctx, db, "../../migrations"); err != nil {
+		t.Fatal(err)
+	}
+	const id = "channel-write-clock-test"
+	cleanup := func() {
+		for _, table := range []string{"channel_current", "channel_commands"} {
+			_, _ = db.Exec("DELETE FROM "+table+" WHERE instance_id=?", id)
+		}
+		for _, table := range []string{"channel_base_values", "tuning_continuous_states"} {
+			_, _ = db.Exec("DELETE FROM "+table+" WHERE instance_id=?", id)
+		}
+		_, _ = db.Exec("DELETE FROM instances WHERE id=?", id)
+	}
+	cleanup()
+	defer cleanup()
+	now := time.Now().UTC().Truncate(time.Second)
+	if _, err := db.Exec(`INSERT INTO instances(id,site_id,name,env,region,base_url,enabled,created_at,updated_at) VALUES(?,'',?,'test','local','',1,?,?)`, id, id, now, now); err != nil {
+		t.Fatal(err)
+	}
+	s := New(db)
+	ahead := now.Add(20 * time.Second) // Agent clock 20s ahead of the server
+	if err := s.StoreInstanceChannels(id, []channelcontrol.Channel{{ID: 7, Name: "channel", Models: "m", Weight: 10, Priority: 1, Status: 1}}, ahead); err != nil {
+		t.Fatal(err)
+	}
+	weight := uint(42)
+	if err := s.ApplyChannelWrite(id, 7, &weight, nil, nil, now); err != nil {
+		t.Fatal(err)
+	}
+	var got int64
+	var captured time.Time
+	if err := db.QueryRow(`SELECT weight,captured_at FROM channel_current WHERE instance_id=? AND channel_id=7`, id).Scan(&got, &captured); err != nil {
+		t.Fatal(err)
+	}
+	if got != 42 {
+		t.Fatalf("confirmed write skipped because of a future snapshot clock: weight=%d", got)
+	}
+	if captured.Before(ahead) {
+		t.Fatalf("captured_at moved backwards: %s < %s", captured, ahead)
+	}
+	command := storage.ChannelCommand{ID: id + "-cmd", InstanceID: id, ChannelID: 7, CommandType: "channel.update", PayloadJSON: `{"weight":43}`, Status: "delivered", CreatedBy: "test", CreatedAt: now, UpdatedAt: now}
+	if err := s.CreateChannelCommand(command); err != nil {
+		t.Fatal(err)
+	}
+	if _, changed, err := s.CompleteChannelCommand(command.ID, "succeeded", "", now.Add(time.Second)); err != nil || !changed {
+		t.Fatalf("complete: %v %v", changed, err)
+	}
+	if err := db.QueryRow(`SELECT weight FROM channel_current WHERE instance_id=? AND channel_id=7`, id).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != 43 {
+		t.Fatalf("confirmed Agent write skipped because of a future snapshot clock: weight=%d", got)
+	}
+}

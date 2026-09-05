@@ -88,6 +88,7 @@ func (s Store) CompleteChannelCommand(id, status, errorSummary string, now time.
 	v.Status = status
 	v.ErrorSummary = errorSummary
 	v.UpdatedAt = now
+	siteID := siteIDForInstance(tx, v.InstanceID)
 	if status == "succeeded" && v.CommandType == "channel.update" {
 		if err = applyCompletedChannelWrite(tx, v, now); err != nil {
 			return storage.ChannelCommand{}, false, err
@@ -96,7 +97,7 @@ func (s Store) CompleteChannelCommand(id, status, errorSummary string, now time.
 	if err = tx.Commit(); err != nil {
 		return storage.ChannelCommand{}, false, err
 	}
-	channelupdates.Notify()
+	channelupdates.Notify(siteID)
 	return v, true, nil
 }
 

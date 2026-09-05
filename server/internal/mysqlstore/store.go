@@ -235,7 +235,7 @@ ON DUPLICATE KEY UPDATE
 		snapshot.CapturedAt,
 	)
 	if err == nil {
-		channelupdates.Notify()
+		channelupdates.Notify(siteIDForInstance(s.db, snapshot.InstanceID))
 	}
 	return err
 }
@@ -336,7 +336,7 @@ VALUES (?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE id=VALUES(id),channel_name=
 	if err = tx.Commit(); err != nil {
 		return err
 	}
-	channelupdates.Notify()
+	channelupdates.Notify(siteID)
 	return nil
 }
 func (s Store) UpdateLogOffset(instanceID string, lastLogID int64) error {

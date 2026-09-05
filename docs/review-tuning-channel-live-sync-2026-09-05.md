@@ -53,3 +53,30 @@
 - 只改 Server 与前端，067 迁移首启自动套用，未动 Agent（Agent 保持 rc94）。
 - 部署后"保存基础值同步优先级"功能才真正可用。
 - rc95 打在 86f1286 不含本批，上线需重打 rc96。
+
+## 追加：P3 修复批（2026-09-05，用户令）
+
+修了记档中的四项，另修一项验收时漏掉的功能回归：
+
+- **无直连站点的自动刷新**：refresh 端点对未配置直连的站点返回 409
+  `direct_control_not_configured`（`tuning.ErrDirectControlNotConfigured`），
+  页面自动刷新静默跳过、不挂横幅，只在点击"刷新渠道信息"时提示"未配置直连"。
+  真正的直连失败仍 502 并挂横幅。
+- **漏掉的回归（P2）**："初始化/刷新基础值"在无直连站点会因先调 refresh 抛错而
+  整个失败。改为无直连时直接用 Agent 快照继续，直连失败才中止。
+- **重复提示**：渠道同步错误改用独立的 `channelSyncError` 只显示顶部横幅；模型
+  标题行的"刷新失败"仅保留给运行时轮询错误。
+- **首屏不等直连**：`load(true)` 把直连刷新与页面数据加载并行，刷新完成后合并
+  基础值（变更通知也会再校准）。
+- **通知按站点分发**：`channelupdates.Listen/Notify` 以站点为键，一站点的写入不再
+  唤醒其它站点页面；写入侧只有实例 ID 时解析站点，解析失败退化为全站唤醒。
+  跨进程仍不通知（需换机制，未动）。
+- **确认写入不受 Agent 时钟偏快影响**：`ApplyChannelWrite` 与 Agent 成功回执的
+  回写去掉 `captured_at<=at` 守卫，改为无条件应用并 `GREATEST` 推进 captured_at。
+  已确认的写入在其发生时刻就是权威值，旧快照保护仍只作用于快照路径。
+- 测试：hub 按站点作用域单测；真库 `TestApplyChannelWriteIgnoresFutureSnapshotClock`
+  （快照 captured_at 超前 20 秒后直连写与 Agent 回执写均生效、captured_at 不倒退）；
+  handler 409 单测。`go test ./...` 全绿，`pnpm typecheck`/`build` 通过。
+- 烟测：demo（无直连）打开页面无横幅、标题行无"刷新失败"，refresh 返回 409；
+  改配不可达直连地址后 refresh 502、页面仅顶部一条横幅；已恢复。
+- 部署：server + 前端，无迁移，未动 agent；随本批一起进 rc96。

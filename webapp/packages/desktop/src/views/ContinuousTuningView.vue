@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { type ChannelBaseValue, type TuningContinuousState, type TuningPolicy, type TuningRecommendation } from "@ct/shared";
+import { ApiError, type ChannelBaseValue, type TuningContinuousState, type TuningPolicy, type TuningRecommendation } from "@ct/shared";
 import { dashboard } from "../api";
 import AppShell from "../components/AppShell.vue";
 import { useFiltersStore } from "../stores/filters";
@@ -168,10 +168,10 @@ async function load(syncOnline = false) {
   const generation = ++loadGeneration;
   loading.value = true;
   try {
-    if (syncOnline) {
-      try { await dashboard.refreshTuningChannels(site); refreshError.value = ""; }
-      catch (error) { refreshError.value = error instanceof Error ? error.message : "渠道同步失败"; }
-    }
+    // The live refresh runs alongside the page load instead of gating it: a
+    // slow new-api must not delay first paint. A completed refresh is folded
+    // in below (and also arrives through the change notification).
+    const synced = syncOnline ? syncChannels(site, false) : Promise.resolve(false);
     const [p, b, r] = await Promise.all([dashboard.tuningPolicy(site), dashboard.tuningBaseValues(site), dashboard.tuningRecommendations(site, 300)]);
     if (site !== siteID.value) return;
     mode.value = p.mode; Object.assign(policy, p.policy); policy.continuous = Object.assign(defaults(), p.policy.continuous || {}); policy.dispatch_modes ||= {};
@@ -179,7 +179,36 @@ async function load(syncOnline = false) {
     if (!models.value.includes(activeModel.value)) activeModel.value = models.value[0] || "";
     try { const result = await dashboard.tuningContinuousStates(site); if (site !== siteID.value) return; states.value = result.items ?? []; } catch { states.value = []; }
     dirty.value = false; captureSavedState();
+    if (await synced) {
+      const rows = await dashboard.tuningBaseValues(site);
+      if (site !== siteID.value) return;
+      mergeOnlineRows(rows.items ?? []);
+    }
   } finally { if (generation === loadGeneration) loading.value = false; }
+}
+const channelSyncError = ref("");
+const directControlConfigured = ref<boolean | undefined>();
+const isAgentOnlySite = (error: unknown) => error instanceof ApiError && error.code === "direct_control_not_configured";
+// Pull the latest channels from new-api. Returns true when a fresh snapshot was
+// stored, false when the site is Agent-managed (nothing to refresh) or the call
+// failed; failures surface in the banner, Agent-only sites only when explicit.
+async function syncChannels(site: string, explicit: boolean): Promise<boolean> {
+  try {
+    await dashboard.refreshTuningChannels(site);
+    if (site !== siteID.value) return false;
+    directControlConfigured.value = true; channelSyncError.value = "";
+    return true;
+  } catch (error) {
+    if (site !== siteID.value) return false;
+    if (isAgentOnlySite(error)) {
+      directControlConfigured.value = false; channelSyncError.value = "";
+      if (explicit) ElMessage.info(String((error as ApiError).details.message || "该站点未配置 new-api 直连，渠道信息由 Agent 定期采集"));
+      return false;
+    }
+    channelSyncError.value = error instanceof ApiError && typeof error.details.error === "string" ? error.details.error : (error instanceof Error ? error.message : "渠道同步失败");
+    if (explicit) ElMessage.error(channelSyncError.value);
+    return false;
+  }
 }
 let refreshTimer: ReturnType<typeof setInterval> | undefined;
 let ratesTimer: ReturnType<typeof setInterval> | undefined;
@@ -189,12 +218,10 @@ async function refreshChannelsNow() {
   if (!siteID.value || channelsRefreshing.value || saving.value) return;
   channelsRefreshing.value = true;
   try {
-    await dashboard.refreshTuningChannels(siteID.value);
-    await refreshRuntime();
-    ElMessage.success("渠道信息已同步");
-  } catch (error) {
-    refreshError.value = error instanceof Error ? error.message : "渠道同步失败";
-    ElMessage.error(refreshError.value);
+    if (await syncChannels(siteID.value, true)) {
+      await refreshRuntime();
+      ElMessage.success("渠道信息已同步");
+    }
   } finally { channelsRefreshing.value = false; }
 }
 
@@ -267,7 +294,10 @@ async function sync(kind: "weight" | "priority") {
   }
   saving.value = true;
   try {
-    await dashboard.refreshTuningChannels(siteID.value);
+    // Agent-managed sites fall back to the Agent-collected snapshot; only a
+    // failed live refresh aborts, so stale values are never saved as current.
+    try { await dashboard.refreshTuningChannels(siteID.value); }
+    catch (error) { if (!isAgentOnlySite(error)) throw error; }
     const rows = (await dashboard.syncTuningBaseValues(siteID.value, models.value)).items ?? [];
     const index = new Map(bases.value.map(x => [`${x.channel_id}:${x.model_name}`, x]));
     for (const row of rows) { const old = index.get(`${row.channel_id}:${row.model_name}`); if (!old) bases.value.push(row); else if (kind === "weight") old.base_weight = row.current_weight; else old.base_priority = row.current_priority; }
@@ -326,7 +356,7 @@ onBeforeUnmount(() => { changesAbort?.abort(); if (refreshTimer) clearInterval(r
 </script>
 
 <template><AppShell title="调权中心"><div v-loading="loading" class="page" :class="{'events-page':activeTab==='events'}">
-  <el-alert v-if="refreshError" :title="refreshError" type="warning" :closable="false" show-icon />
+  <el-alert v-if="channelSyncError" :title="channelSyncError" type="warning" :closable="false" show-icon />
   <el-tabs v-model="activeTab" class="tabs">
     <el-tab-pane label="运行概览" name="overview">
       <el-card shadow="never" class="workspace-card"><template #header><div class="head"><div class="title-line"><b>模型与渠道</b><small>每个模型单独选择关闭、只观察或自动执行</small><div class="inline-metrics"><span>自动 <b>{{ counts.auto }}</b></span><span>观察 <b>{{ counts.observe }}</b></span><span>关闭 <b>{{ counts.off }}</b></span></div></div><div class="tools"><el-button @click="helpOpen=true">使用说明</el-button><el-button :loading="channelsRefreshing" :disabled="saving" @click="refreshChannelsNow">刷新渠道信息</el-button><el-button :loading="saving" @click="sync('weight')">初始化/刷新基础值</el-button><el-button v-if="dirty" :disabled="saving" @click="cancelChanges()">取消更改</el-button><el-button v-if="dirty" type="primary" :loading="saving" @click="save">保存更改</el-button></div></div></template>
