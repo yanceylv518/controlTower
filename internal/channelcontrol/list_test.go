@@ -2,8 +2,12 @@ package channelcontrol
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sort"
+	"strconv"
 	"testing"
 )
 
@@ -42,5 +46,41 @@ func TestListChannelsRejectsIncompleteOrRepeatedPages(t *testing.T) {
 				t.Fatalf("incomplete snapshot accepted: %#v %v", items, err)
 			}
 		})
+	}
+}
+
+// A channel deleted while paging shifts every later offset left by one, so the
+// row that would have opened the next page is never returned. The list must be
+// rejected instead of being stored as a full snapshot that drops a live
+// channel's local configuration.
+func TestListChannelsRejectsDeletionDuringPagination(t *testing.T) {
+	ids := map[int64]bool{}
+	for i := int64(1); i <= 250; i++ {
+		ids[i] = true
+	}
+	page := func(p int) ([]Channel, int) {
+		sorted := make([]int64, 0, len(ids))
+		for id := range ids {
+			sorted = append(sorted, id)
+		}
+		sort.Slice(sorted, func(i, j int) bool { return sorted[i] > sorted[j] }) // id_sort: id desc
+		out := []Channel{}
+		for i := (p - 1) * 100; i < p*100 && i < len(sorted); i++ {
+			out = append(out, Channel{ID: sorted[i], Name: strconv.FormatInt(sorted[i], 10)})
+		}
+		return out, len(sorted)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p, _ := strconv.Atoi(r.URL.Query().Get("p"))
+		if p == 2 {
+			delete(ids, 200) // already listed on page 1; page 2 now starts one row later
+		}
+		items, total := page(p)
+		_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "data": map[string]any{"items": items, "total": total}})
+	}))
+	defer server.Close()
+	items, err := New(server.URL, "token", 7, server.Client()).List(context.Background())
+	if !errors.Is(err, ErrListChanged) || items != nil {
+		t.Fatalf("shifted pagination accepted as a full snapshot: %d items, err=%v", len(items), err)
 	}
 }

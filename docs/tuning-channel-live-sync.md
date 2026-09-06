@@ -14,7 +14,7 @@
 
 ## 接口与升级
 
-- `POST /api/dashboard/tuning/channels/refresh?site_id=...`：Server 直连分页获取渠道；未配置直连返回 409 `direct_control_not_configured`（页面据此静默），不回退到 Agent。直连失败返回 502 并明确提示，旧缓存不会被当作同步成功。
+- `POST /api/dashboard/tuning/channels/refresh?site_id=...`：Server 直连分页获取渠道（分页期间 total 变化、出现重复或最终条数不等于 total 一律判定“列表变化”并整体重读，最多 3 次；偏移分页下一次删除会让后页整体左移、静默漏掉一个健康渠道，绝不能当全量快照）；未配置直连返回 409 `direct_control_not_configured`（页面据此静默），不回退到 Agent。直连失败返回 502 并明确提示，旧缓存不会被当作同步成功。
 - `GET /api/dashboard/tuning/channels/changes?site_id=...&after=...`：最长 25 秒的变更通知等待，随后自动重连。通知按站点分发、在当前 Server 进程内广播（多进程部署跨进程不通知）；保留原周期读取作为兜底。
 - 发布只需更新 Server 和前端，无新增 Agent 刷新命令。原有 Agent 定期采集和成功 `channel.update` 回执保留。
 - 新增 `067_tuning_rule_length.sql`：`tuning_recommendations.rule` 从 16 扩到 64 字符，修复 18 字符的 `base_priority_sync` 无法落库的问题。没有在本次工作中部署生产环境。

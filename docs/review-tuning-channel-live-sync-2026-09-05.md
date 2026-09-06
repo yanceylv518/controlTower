@@ -80,3 +80,22 @@
 - 烟测：demo（无直连）打开页面无横幅、标题行无"刷新失败"，refresh 返回 409；
   改配不可达直连地址后 refresh 502、页面仅顶部一条横幅；已恢复。
 - 部署：server + 前端，无迁移，未动 agent；随本批一起进 rc96。
+
+## 追加：分页期间渠道被删导致误删健康渠道本地配置（2026-09-06，用户指出，P1，已修）
+
+- **复现**：new-api 列表按 id 倒序、按偏移分页（每页 100）。250 个渠道，翻到第 2 页
+  前删除第 1 页里的 id 200：后续所有偏移左移一位，原本应在第 2 页开头的 id 150
+  滑到第 1 页末尾之后、永远不会被返回。原实现只查"重复"与"条数 ≥ total"，而 total
+  已同步减一，于是 249 条被当作完整列表返回，无任何报错——刷新随即把这份列表当
+  全量快照，删除 150 的 channel_current 行、基础权重/优先级/RPM·TPM 上限
+  （channel_base_values）与连续评估状态。健康渠道的本地配置就此丢失。
+- **修正**：`channelcontrol.List` 要求分页期间每页返回的 total 完全一致、无重复 id、
+  最终条数严格等于 total，任一不满足返回 `ErrListChanged` 并丢弃整份列表（新增
+  删除会使 total 减一、插入在 id 倒序下落到最前会造成重复，均被捕获）；
+  `RefreshChannels` 对 `ErrListChanged` 自动重读最多 3 次（间隔 500ms），快照时间
+  在每次尝试前重取，持续变动才向操作者报错。Agent 的渠道快照是单条 SQL 读取
+  channels 表，没有这个竞态。
+- 测试：`TestListChannelsRejectsDeletionDuringPagination`（上述复现场景必须拒绝）；
+  真库 `TestRefreshChannelsRetriesChangedListThenGivesUp`（变动两次后成功且落库、
+  持续变动三次后失败）。`go test ./...` 全绿。
+- 部署：只改 server，无迁移，未动 agent；随本批进 rc96。
