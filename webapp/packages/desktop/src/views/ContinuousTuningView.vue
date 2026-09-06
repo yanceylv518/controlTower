@@ -227,15 +227,22 @@ async function refreshChannelsNow() {
 
 function mergeOnlineRows(refreshed: ChannelBaseValue[]) {
   const local = new Map(bases.value.map(row => [`${row.channel_id}:${row.model_name}`, row]));
-  bases.value = refreshed.map(row => {
+  const merged = refreshed.map(row => {
     const edited = local.get(`${row.channel_id}:${row.model_name}`);
     // An earlier periodic request can finish after a write notification.
     if (edited && new Date(edited.snapshot_at || 0).getTime() > new Date(row.snapshot_at || 0).getTime()) {
       row = { ...row, current_weight: edited.current_weight, current_priority: edited.current_priority, snapshot_at: edited.snapshot_at };
     }
+    return row;
+  });
+  // The saved baseline always tracks the server: cancelling unsaved edits must
+  // restore the latest persisted base values and keep the online columns that
+  // arrived while editing, not roll them back to the last load.
+  savedBases.value = clone(merged);
+  bases.value = merged.map(row => {
+    const edited = local.get(`${row.channel_id}:${row.model_name}`);
     return dirty.value && edited ? { ...row, base_weight: edited.base_weight, base_priority: edited.base_priority, max_rpm: edited.max_rpm, max_tpm: edited.max_tpm } : row;
   });
-  if (!dirty.value) savedBases.value = clone(bases.value);
 }
 let changesAbort: AbortController | undefined;
 async function watchChannelChanges() {
