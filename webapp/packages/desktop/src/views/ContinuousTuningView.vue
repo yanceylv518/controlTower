@@ -167,24 +167,29 @@ async function load(syncOnline = false) {
   loadingSite = site;
   const generation = ++loadGeneration;
   loading.value = true;
+  const isCurrentLoad = () => generation === loadGeneration && site === siteID.value;
+  // Only cached page reads own the loading overlay. Live synchronization
+  // continues independently and is merged after the overlay is released.
+  const synced = syncOnline ? syncChannels(site, false) : Promise.resolve(false);
   try {
-    // The live refresh runs alongside the page load instead of gating it: a
-    // slow new-api must not delay first paint. A completed refresh is folded
-    // in below (and also arrives through the change notification).
-    const synced = syncOnline ? syncChannels(site, false) : Promise.resolve(false);
     const [p, b, r] = await Promise.all([dashboard.tuningPolicy(site), dashboard.tuningBaseValues(site), dashboard.tuningRecommendations(site, 300)]);
-    if (site !== siteID.value) return;
+    if (!isCurrentLoad()) return;
     mode.value = p.mode; Object.assign(policy, p.policy); policy.continuous = Object.assign(defaults(), p.policy.continuous || {}); policy.dispatch_modes ||= {};
     bases.value = b.items ?? []; events.value = r.items ?? []; for (const model of models.value) policy.dispatch_modes[model] ||= "off";
     if (!models.value.includes(activeModel.value)) activeModel.value = models.value[0] || "";
-    try { const result = await dashboard.tuningContinuousStates(site); if (site !== siteID.value) return; states.value = result.items ?? []; } catch { states.value = []; }
+    try { const result = await dashboard.tuningContinuousStates(site); if (!isCurrentLoad()) return; states.value = result.items ?? []; } catch { if (!isCurrentLoad()) return; states.value = []; }
     dirty.value = false; captureSavedState();
+  } finally { if (generation === loadGeneration) loading.value = false; }
+  try {
     if (await synced) {
+      if (!isCurrentLoad() || saving.value) return;
       const rows = await dashboard.tuningBaseValues(site);
-      if (site !== siteID.value) return;
+      if (!isCurrentLoad() || saving.value) return;
       mergeOnlineRows(rows.items ?? []);
     }
-  } finally { if (generation === loadGeneration) loading.value = false; }
+  } catch (error) {
+    if (isCurrentLoad()) refreshError.value = error instanceof Error ? error.message : "刷新失败";
+  }
 }
 const channelSyncError = ref("");
 const directControlConfigured = ref<boolean | undefined>();
@@ -243,6 +248,8 @@ function mergeOnlineRows(refreshed: ChannelBaseValue[]) {
     const edited = local.get(`${row.channel_id}:${row.model_name}`);
     return dirty.value && edited ? { ...row, base_weight: edited.base_weight, base_priority: edited.base_priority, max_rpm: edited.max_rpm, max_tpm: edited.max_tpm } : row;
   });
+  for (const model of models.value) policy.dispatch_modes[model] ||= "off";
+  if (!models.value.includes(activeModel.value)) activeModel.value = models.value[0] || "";
 }
 let changesAbort: AbortController | undefined;
 async function watchChannelChanges() {
@@ -359,7 +366,7 @@ watch(() => filters.site_id, () => { void load(true); void watchChannelChanges()
 watch(siteID, () => { ratesReady.value = false; currentRates.value.clear(); void refreshCurrentRates(); });
 watch([eventModelFilter, eventRuleFilter, eventChannelQuery, activeModel], () => { eventPage.value = 1; });
 onMounted(() => { void load(true); void watchChannelChanges(); void refreshCurrentRates(); refreshTimer = setInterval(() => void refreshRuntime(), 30000); ratesTimer = setInterval(() => { if (!document.hidden) void refreshCurrentRates(); }, 5000); });
-onBeforeUnmount(() => { changesAbort?.abort(); if (refreshTimer) clearInterval(refreshTimer); if (ratesTimer) clearInterval(ratesTimer); });
+onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); if (refreshTimer) clearInterval(refreshTimer); if (ratesTimer) clearInterval(ratesTimer); });
 </script>
 
 <template><AppShell title="调权中心"><div v-loading="loading" class="page" :class="{'events-page':activeTab==='events'}">
