@@ -49,9 +49,9 @@ group message. The dimension does not notify again until it first recovers
 spam the group. Failed sends are retried on the next collector pass.
 
 `CT_USER_ERROR_CODES` is a comma-separated list of HTTP status codes attributed
-to caller/request problems (default `400,413,422`; values must be 100–599).
-They remain in total error and customer/user alert statistics, but are excluded
-from channel alerts and automatic dispatch demotion. Unknown statuses remain
+to caller/request problems (default `400,413,422,424`; values must be 100–599).
+They remain in total error statistics, but are excluded from both channel and
+customer/user alert windows and automatic dispatch demotion. Unknown statuses remain
 channel-side. Calibrate this list against production gateway semantics; `403`
 is intentionally channel-side by default because it may be a channel credential
 failure.
@@ -75,15 +75,8 @@ failure.
   cumulative error count, so a channel that never recovers is not silent
   after its first alert. Reminders only continue while new errors keep
   arriving: a dimension quiet for the decay window ends its episode.
-- Cache-miss monitoring is enabled by default. On each channel, successful
-  requests with `prompt_tokens > CT_ALERT_NOCACHE_MIN_PROMPT_TOKENS`
-  (default 512) enter a separate window of `CT_ALERT_NOCACHE_WINDOW`
-  (default 10); when the window is full and every entry reports zero cached
-  tokens, a cache-broken alert fires. Any cache hit re-arms the episode.
-  Disable with `CT_ALERT_NOCACHE_ENABLED=false`. Channels whose models never
-  report cache usage will alert once and then remind per
-  `CT_ALERT_REMIND_MINUTES`; disable the rule or raise the token floor if
-  that is noise for your deployment.
+- Cache-miss alerts have been removed. Legacy `CT_ALERT_NOCACHE_*` settings
+  are ignored; cache usage collection and reporting remain available.
 - Episode transitions are appended to `CT_DATA_DIR/alert-events.jsonl` as
   JSON lines. Records identify the dimension, rule, alert/remind/rearm kind,
   window count, threshold, and episode totals. The file rotates at 5 MiB and

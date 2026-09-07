@@ -105,9 +105,6 @@ func run() error {
 			WithWindowMaxAge(time.Duration(cfg.AlertWindowMaxAgeMinutes) * time.Minute).
 			WithRemindInterval(time.Duration(cfg.AlertRemindMinutes) * time.Minute).
 			WithEventLog(filepath.Join(cfg.DataDir, "alert-events.jsonl"))
-		if cfg.AlertNoCacheEnabled {
-			alertNotifier.WithNoCacheRule(cfg.AlertNoCacheMinPromptTokens, cfg.AlertNoCacheWindow)
-		}
 		nameRefresher = newChannelNameRefresher()
 	}
 

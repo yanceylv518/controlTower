@@ -55,12 +55,7 @@ CT_ALERT_ERROR_THRESHOLD=3
 CT_USER_ERROR_CODES=400,413,422,424
 CT_ALERT_WINDOW_MAX_AGE_MINUTES=60
 CT_ALERT_REMIND_MINUTES=60
-# Cache-miss alert: fires when the most recent CT_ALERT_NOCACHE_WINDOW
-# successful requests with prompt_tokens > CT_ALERT_NOCACHE_MIN_PROMPT_TOKENS
-# on one channel all report zero cached tokens. Any cache hit re-arms.
-CT_ALERT_NOCACHE_ENABLED=true
-CT_ALERT_NOCACHE_MIN_PROMPT_TOKENS=512
-CT_ALERT_NOCACHE_WINDOW=10
+
 
 # Dashboard cache-hit metric uses the system-wide fixed prompt-token threshold of 512.
 

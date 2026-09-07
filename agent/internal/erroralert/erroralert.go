@@ -35,9 +35,6 @@ type Notifier struct {
 	logf           func(format string, args ...any)
 	windowMaxAge   time.Duration // 0 = no time decay
 	remindInterval time.Duration // 0 = no reminders
-	nocacheEnabled bool
-	nocacheMin     int64
-	nocacheWindow  int
 	eventLog       *eventLogger
 	userErrorCodes map[int]bool
 
@@ -53,11 +50,6 @@ type dimensionState struct {
 	outcomes         []outcome // newest last, capped at window
 	lastErrorSummary string
 	errorRule        ruleState
-	// cache-miss tracking, channel dimensions only: qualifying requests are
-	// successful completions whose prompt exceeds the configured size.
-	cacheOutcomes []cacheOutcome
-	lastNoCache   string
-	nocacheRule   ruleState
 }
 
 type ruleState struct {
@@ -70,22 +62,6 @@ type ruleState struct {
 type outcome struct {
 	isError bool
 	at      time.Time
-}
-
-type cacheOutcome struct {
-	cached bool
-	at     time.Time
-}
-
-// WithNoCacheRule enables the per-channel cache-miss rule: when the most
-// recent `window` successful requests with prompt_tokens > minPromptTokens
-// all report no cached tokens, the channel's prompt cache is presumed broken.
-func (n *Notifier) WithNoCacheRule(minPromptTokens int64, window int) *Notifier {
-	if window <= 0 {
-		window = DefaultWindow
-	}
-	n.nocacheEnabled, n.nocacheMin, n.nocacheWindow = true, minPromptTokens, window
-	return n
 }
 
 // WithEventLog persists episode transitions as rotating JSON lines.
@@ -135,7 +111,7 @@ func New(webhookURL string, instanceID string, window int, threshold int, logf f
 }
 
 // WithUserErrorCodes configures errors attributable to the caller. These
-// errors remain visible in customer windows but do not enter channel windows.
+// errors do not enter either channel or customer alert windows.
 func (n *Notifier) WithUserErrorCodes(codes map[int]bool) *Notifier {
 	if n != nil && codes != nil {
 		n.userErrorCodes = codes
@@ -177,21 +153,25 @@ func (n *Notifier) Process(ctx context.Context, events []logcollector.Event) Pro
 		if event.LogType == "error" {
 			stats.ErrorCount++
 		}
+		includeInWindow := event.LogType != "error" || !errorclass.IsUserError(event.ErrorSummary, n.userErrorCodes)
 		if event.ChannelID > 0 && !n.disabledChannels[event.ChannelID] {
 			channelDimensions[event.ChannelID] = struct{}{}
-			if event.LogType != "error" || !errorclass.IsUserError(event.ErrorSummary, n.userErrorCodes) {
+			if includeInWindow {
 				key := "channel:" + strconv.FormatInt(event.ChannelID, 10)
-				n.observeLocked(key, "渠道错误激增", n.channelLabelLocked(event.ChannelID), event, true)
+				n.observeLocked(key, "渠道错误激增", n.channelLabelLocked(event.ChannelID), event)
 			}
 		}
 		if event.UserID > 0 {
 			userDimensions[event.UserID] = struct{}{}
+			if !includeInWindow {
+				continue
+			}
 			label := fmt.Sprintf("客户 %d", event.UserID)
 			if event.Username != "" {
 				label = fmt.Sprintf("客户 %s(%d)", event.Username, event.UserID)
 			}
 			key := "user:" + strconv.FormatInt(event.UserID, 10)
-			n.observeLocked(key, "客户错误激增", label, event, false)
+			n.observeLocked(key, "客户错误激增", label, event)
 		}
 	}
 	pending, records := n.evaluateLocked()
@@ -266,7 +246,7 @@ func (n *Notifier) channelLabelLocked(channelID int64) string {
 	return fmt.Sprintf("渠道 %d", channelID)
 }
 
-func (n *Notifier) observeLocked(key string, title string, label string, event logcollector.Event, channelDim bool) {
+func (n *Notifier) observeLocked(key string, title string, label string, event logcollector.Event) {
 	state := n.states[key]
 	if state == nil {
 		state = &dimensionState{title: title, label: label}
@@ -293,21 +273,6 @@ func (n *Notifier) observeLocked(key string, title string, label string, event l
 			state.lastErrorSummary = truncate(event.ErrorSummary, 120)
 		}
 	}
-	if channelDim && n.nocacheEnabled && event.LogType == "consume" && event.PromptTokens > n.nocacheMin {
-		cached := event.CacheFieldPresent && event.CacheTokens != nil && *event.CacheTokens > 0
-		state.cacheOutcomes = append(state.cacheOutcomes, cacheOutcome{cached: cached, at: at})
-		if len(state.cacheOutcomes) > n.nocacheWindow {
-			state.cacheOutcomes = state.cacheOutcomes[len(state.cacheOutcomes)-n.nocacheWindow:]
-		}
-		if !cached {
-			if state.nocacheRule.alerted {
-				state.nocacheRule.episodeTotal++
-			}
-			if event.ModelName != "" {
-				state.lastNoCache = fmt.Sprintf("%s, prompt %d tokens", event.ModelName, event.PromptTokens)
-			}
-		}
-	}
 }
 
 type pendingMessage struct {
@@ -319,9 +284,6 @@ type pendingMessage struct {
 }
 
 func (m pendingMessage) ruleState(state *dimensionState) *ruleState {
-	if m.rule == "nocache" {
-		return &state.nocacheRule
-	}
 	return &state.errorRule
 }
 
@@ -331,7 +293,7 @@ func (n *Notifier) evaluateLocked() ([]pendingMessage, []EventRecord) {
 	var records []EventRecord
 	for key, state := range n.states {
 		if id, isChannel := channelIDFromKey(key); isChannel && n.disabledChannels[id] {
-			if state.errorRule.alerted || state.nocacheRule.alerted {
+			if state.errorRule.alerted {
 				n.logf("control tower alert trigger: dimension=%s kind=disposed (channel disabled)", key)
 				records = append(records, EventRecord{Time: now, Dimension: key, Label: state.label, Rule: "channel", Kind: "disposed"})
 			}
@@ -347,32 +309,12 @@ func (n *Notifier) evaluateLocked() ([]pendingMessage, []EventRecord) {
 				}
 			}
 			state.outcomes = kept
-			keptCache := state.cacheOutcomes[:0]
-			for _, item := range state.cacheOutcomes {
-				if item.at.After(cutoff) {
-					keptCache = append(keptCache, item)
-				}
-			}
-			state.cacheOutcomes = keptCache
+
 		}
 		errors := countMatches(state.outcomes, func(o outcome) bool { return o.isError })
 		p, r := n.evaluateRuleLocked(key, state, "error", &state.errorRule, errors, len(state.outcomes), n.threshold, now)
 		pending, records = append(pending, p...), append(records, r...)
-		if n.nocacheEnabled && len(state.cacheOutcomes) > 0 {
-			misses := 0
-			for _, item := range state.cacheOutcomes {
-				if !item.cached {
-					misses++
-				}
-			}
-			// The rule fires only on a full window of misses: threshold equals
-			// the window size, and any cached hit breaks the streak count.
-			if len(state.cacheOutcomes) == n.nocacheWindow || state.nocacheRule.alerted {
-				p, r = n.evaluateRuleLocked(key, state, "nocache", &state.nocacheRule, misses, len(state.cacheOutcomes), n.nocacheWindow, now)
-				pending, records = append(pending, p...), append(records, r...)
-			}
-		}
-		if len(state.outcomes) == 0 && len(state.cacheOutcomes) == 0 && !state.errorRule.alerted && !state.nocacheRule.alerted {
+		if len(state.outcomes) == 0 && !state.errorRule.alerted {
 			delete(n.states, key)
 		}
 	}
@@ -412,15 +354,6 @@ func countMatches(items []outcome, match func(outcome) bool) int {
 }
 
 func (n *Notifier) alertContent(state *dimensionState, rule string, matches, windowCount int, now time.Time) string {
-	if rule == "nocache" {
-		content := fmt.Sprintf("[\u544a\u8b66] 【Control Tower 告警】渠道缓存疑似失效\n实例: %s\n%s 最近 %d 条输入超过 %d tokens 的请求全部未命中缓存",
-			n.instanceID, state.label, windowCount, n.nocacheMin)
-		if state.lastNoCache != "" {
-			content += "\n最新一条: " + state.lastNoCache
-		}
-		content += "\n时间: " + now.Local().Format("2006-01-02 15:04:05")
-		return content
-	}
 	content := fmt.Sprintf("[\u544a\u8b66] 【Control Tower 告警】%s\n实例: %s\n%s 最近 %d 条请求中 %d 条失败",
 		state.title, n.instanceID, state.label, windowCount, matches)
 	if state.lastErrorSummary != "" {
@@ -431,10 +364,6 @@ func (n *Notifier) alertContent(state *dimensionState, rule string, matches, win
 }
 
 func (n *Notifier) remindContent(state *dimensionState, rule string, matches, windowCount int, rs *ruleState, now time.Time) string {
-	if rule == "nocache" {
-		return fmt.Sprintf("[\u544a\u8b66] 【Control Tower 告警】渠道缓存持续未命中\n实例: %s\n%s 自 %s 起大输入请求持续无缓存，累计 %d 条（输入 > %d tokens）\n时间: %s",
-			n.instanceID, state.label, rs.episodeStartAt.Local().Format("01-02 15:04"), rs.episodeTotal, n.nocacheMin, now.Local().Format("2006-01-02 15:04:05"))
-	}
 	title := strings.TrimSuffix(state.title, "激增") + "持续"
 	content := fmt.Sprintf("[\u544a\u8b66] 【Control Tower 告警】%s\n实例: %s\n%s 自 %s 起持续异常，累计 %d 条错误，最近 %d 条请求中 %d 条失败",
 		title, n.instanceID, state.label, rs.episodeStartAt.Local().Format("01-02 15:04"), rs.episodeTotal, windowCount, matches)

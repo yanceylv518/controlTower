@@ -319,31 +319,9 @@ func TestLoadFromMapRejectsInvalidAlertSettings(t *testing.T) {
 	}
 }
 
-func TestNoCacheAlertDefaultsAndValidation(t *testing.T) {
-	base := map[string]string{"CT_AGENT_ID": "a", "CT_INSTANCE_ID": "i", "CT_LOG_DSN": "dsn", "CT_WECOM_WEBHOOK_URL": "https://example.com/hook"}
-	cfg, err := LoadFromMap(base)
+func TestRetiredNoCacheSettingsAreIgnored(t *testing.T) {
+	_, err := LoadFromMap(map[string]string{"CT_AGENT_ID": "a", "CT_INSTANCE_ID": "i", "CT_LOG_DSN": "dsn", "CT_WECOM_WEBHOOK_URL": "https://example.com/hook", "CT_ALERT_NOCACHE_ENABLED": "true", "CT_ALERT_NOCACHE_MIN_PROMPT_TOKENS": "0", "CT_ALERT_NOCACHE_WINDOW": "0"})
 	if err != nil {
 		t.Fatal(err)
-	}
-	if !cfg.AlertNoCacheEnabled || cfg.AlertNoCacheMinPromptTokens != 512 || cfg.AlertNoCacheWindow != 10 {
-		t.Fatalf("unexpected nocache defaults: %+v", cfg)
-	}
-	legacy := map[string]string{}
-	for key, value := range base {
-		legacy[key] = value
-	}
-	legacy["CT_CACHE_HIT_MIN_PROMPT_TOKENS"] = "2048"
-	if _, err := LoadFromMap(legacy); err != nil {
-		t.Fatalf("retired cache metric threshold must be ignored: %v", err)
-	}
-	for key, value := range map[string]string{"CT_ALERT_NOCACHE_MIN_PROMPT_TOKENS": "0", "CT_ALERT_NOCACHE_WINDOW": "0"} {
-		values := map[string]string{}
-		for k, v := range base {
-			values[k] = v
-		}
-		values[key] = value
-		if _, err := LoadFromMap(values); err == nil {
-			t.Fatalf("expected %s=%s to fail", key, value)
-		}
 	}
 }

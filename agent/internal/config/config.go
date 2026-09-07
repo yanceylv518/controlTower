@@ -44,9 +44,6 @@ type Config struct {
 	AlertErrorThreshold            int
 	AlertWindowMaxAgeMinutes       int
 	AlertRemindMinutes             int
-	AlertNoCacheEnabled            bool
-	AlertNoCacheMinPromptTokens    int64
-	AlertNoCacheWindow             int
 	UserErrorCodes                 map[int]bool
 }
 
@@ -117,9 +114,6 @@ func LoadFromMap(values map[string]string) (Config, error) {
 		AlertErrorThreshold:            intOrDefault(values, "CT_ALERT_ERROR_THRESHOLD", 3),
 		AlertWindowMaxAgeMinutes:       intOrDefault(values, "CT_ALERT_WINDOW_MAX_AGE_MINUTES", 60),
 		AlertRemindMinutes:             intOrDefault(values, "CT_ALERT_REMIND_MINUTES", 60),
-		AlertNoCacheEnabled:            boolOrDefault(values, "CT_ALERT_NOCACHE_ENABLED", true),
-		AlertNoCacheMinPromptTokens:    int64(intOrDefault(values, "CT_ALERT_NOCACHE_MIN_PROMPT_TOKENS", 512)),
-		AlertNoCacheWindow:             intOrDefault(values, "CT_ALERT_NOCACHE_WINDOW", 10),
 		UserErrorCodes:                 userErrorCodes,
 	}
 
@@ -160,12 +154,6 @@ func LoadFromMap(values map[string]string) (Config, error) {
 	}
 	if cfg.AlertRemindMinutes < 0 {
 		return Config{}, errors.New("CT_ALERT_REMIND_MINUTES must be >= 0 (0 disables reminders)")
-	}
-	if cfg.AlertNoCacheMinPromptTokens < 1 {
-		return Config{}, errors.New("CT_ALERT_NOCACHE_MIN_PROMPT_TOKENS must be >= 1")
-	}
-	if cfg.AlertNoCacheWindow < 1 || cfg.AlertNoCacheWindow > 1000 {
-		return Config{}, errors.New("CT_ALERT_NOCACHE_WINDOW must be between 1 and 1000")
 	}
 	if cfg.LogPollIntervalSeconds < 1 || cfg.LogPollIntervalSeconds > 3600 {
 		return Config{}, errors.New("CT_LOG_POLL_INTERVAL_SECONDS must be between 1 and 3600")
@@ -236,9 +224,6 @@ func envMap() map[string]string {
 		"CT_ALERT_ERROR_THRESHOLD",
 		"CT_ALERT_WINDOW_MAX_AGE_MINUTES",
 		"CT_ALERT_REMIND_MINUTES",
-		"CT_ALERT_NOCACHE_ENABLED",
-		"CT_ALERT_NOCACHE_MIN_PROMPT_TOKENS",
-		"CT_ALERT_NOCACHE_WINDOW",
 		"CT_USER_ERROR_CODES",
 	}
 	values := make(map[string]string, len(keys))

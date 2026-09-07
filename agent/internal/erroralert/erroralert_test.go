@@ -23,57 +23,53 @@ type capture struct {
 	contents []string
 }
 
-func TestUserErrorExcludedFromChannelButKeptForCustomer(t *testing.T) {
-	n := New("", "inst", 10, 3, nil).WithUserErrorCodes(map[int]bool{400: true})
-	n.Process(context.Background(), []logcollector.Event{{
-		ChannelID: 7, UserID: 9, LogType: "error",
-		ErrorSummary: "status_code=400, Extra inputs are not permitted", CreatedAt: time.Now(),
-	}})
-	if _, ok := n.states["channel:7"]; ok {
-		t.Fatalf("user-side error entered channel window: %#v", n.states["channel:7"])
-	}
-	if state := n.states["user:9"]; state == nil || len(state.outcomes) != 1 || !state.outcomes[0].isError {
-		t.Fatalf("user-side error missing from customer window: %#v", state)
-	}
-}
-
-func TestNoCacheRuleTriggersAndRearms(t *testing.T) {
-	c := &capture{}
-	server := c.server()
-	defer server.Close()
-	n := New(server.URL, "inst-a", 10, 3, nil).WithNoCacheRule(512, 10)
-
-	// Nine misses do not fire; the tenth qualifying miss fills the window.
-	for i := int64(1); i <= 9; i++ {
-		n.Process(context.Background(), []logcollector.Event{cacheEvent(i, 1, 600, 0, false, "consume")})
-	}
-	if got := c.matching("渠道缓存疑似失效"); got != 0 {
-		t.Fatalf("fired before window full: %d (%v)", got, c.contents)
-	}
-	n.Process(context.Background(), []logcollector.Event{cacheEvent(10, 1, 600, 0, false, "consume")})
-	if got := c.matching("渠道缓存疑似失效"); got != 1 {
-		t.Fatalf("expected alert on full window of misses, got %d (%v)", got, c.contents)
-	}
-
-	// A single cache hit re-arms the episode; a fresh full window of misses
-	// alerts again once the hit has left the window.
-	n.Process(context.Background(), []logcollector.Event{cacheEvent(11, 1, 600, 42, true, "consume")})
-	for i := int64(12); i <= 21; i++ {
-		n.Process(context.Background(), []logcollector.Event{cacheEvent(i, 1, 600, 0, false, "consume")})
-	}
-	if got := c.matching("渠道缓存疑似失效"); got != 2 {
-		t.Fatalf("expected rearmed second alert, got %d (%v)", got, c.contents)
-	}
-
-	// Small prompts and error logs never enter the cache window.
-	for i := int64(30); i < 45; i++ {
-		n.Process(context.Background(), []logcollector.Event{cacheEvent(i, 2, 512, 0, false, "consume")})
-	}
-	for i := int64(50); i < 65; i++ {
-		n.Process(context.Background(), []logcollector.Event{cacheEvent(i, 3, 600, 0, false, "error")})
-	}
-	if got := c.matching("渠道缓存疑似失效"); got != 2 {
-		t.Fatalf("small prompts or errors entered the window: %d (%v)", got, c.contents)
+func TestChannelAndCustomerUseSameErrorFilter(t *testing.T) {
+	for _, tc := range []struct {
+		name, summary string
+		codes         map[int]bool
+		excluded      bool
+	}{
+		{name: "400", summary: "status_code=400", excluded: true},
+		{name: "413", summary: "HTTP 413", excluded: true},
+		{name: "422", summary: "status code 422", excluded: true},
+		{name: "424", summary: "status_code=424", excluded: true},
+		{name: "429", summary: "status_code=429"},
+		{name: "403", summary: "HTTP 403"},
+		{name: "502", summary: "HTTP 502"},
+		{name: "unknown", summary: "upstream timeout"},
+		{name: "custom exclude", summary: "HTTP 429", codes: map[int]bool{429: true}, excluded: true},
+		{name: "custom allow", summary: "HTTP 400", codes: map[int]bool{429: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &capture{}
+			server := c.server()
+			defer server.Close()
+			n := New(server.URL, "inst", 10, 3, nil).WithUserErrorCodes(tc.codes)
+			batch := events("error", 3, 7, 9, "alice")
+			for i := range batch {
+				batch[i].ErrorSummary = tc.summary
+			}
+			stats := n.Process(context.Background(), batch)
+			want := 2
+			if tc.excluded {
+				want = 0
+			}
+			if stats.AlertsSent != want {
+				t.Fatalf("sent %d alerts, want %d", stats.AlertsSent, want)
+			}
+			if stats.ErrorCount != 3 {
+				t.Fatalf("raw error count changed: %d", stats.ErrorCount)
+			}
+			for _, key := range []string{"channel:7", "user:9"} {
+				state := n.states[key]
+				if tc.excluded && state != nil {
+					t.Fatalf("excluded errors entered %s: %#v", key, state)
+				}
+				if !tc.excluded && (state == nil || len(state.outcomes) != 3) {
+					t.Fatalf("missing errors for %s", key)
+				}
+			}
+		})
 	}
 }
 
@@ -107,12 +103,12 @@ func TestEventLogRotatesAndFailsSafe(t *testing.T) {
 	}
 	logger := newEventLogger(path, nil)
 	logger.logf = func(string, ...any) {}
-	logger.append([]EventRecord{{Time: time.Now(), Dimension: "channel:1", Rule: "nocache", Kind: "alert", WindowCount: 3, Threshold: 3}})
+	logger.append([]EventRecord{{Time: time.Now(), Dimension: "channel:1", Rule: "error", Kind: "alert", WindowCount: 3, Threshold: 3}})
 	if _, err := os.Stat(path + ".1"); err != nil {
 		t.Fatalf("rotated file missing: %v", err)
 	}
 	data, err := os.ReadFile(path)
-	if err != nil || !bytes.Contains(data, []byte(`"rule":"nocache"`)) {
+	if err != nil || !bytes.Contains(data, []byte(`"rule":"error"`)) {
 		t.Fatalf("new event log invalid: %v %s", err, data)
 	}
 	failCount := 0
@@ -477,69 +473,6 @@ func cacheEvent(id int64, channelID int64, prompt int64, cachedTokens int64, has
 	return logcollector.Event{SourceLogID: id, ChannelID: channelID, LogType: logType, PromptTokens: prompt, CacheTokens: ct, CacheFieldPresent: hasCacheField, CreatedAt: time.Now()}
 }
 
-func TestNoCacheAndErrorEpisodesAreIndependent(t *testing.T) {
-	c := &capture{}
-	server := c.server()
-	defer server.Close()
-	n := New(server.URL, "inst-a", 10, 3, nil).WithRemindInterval(time.Hour).WithNoCacheRule(512, 10)
-	base := time.Date(2026, 7, 14, 10, 0, 0, 0, time.UTC)
-	n.now = func() time.Time { return base }
-
-	// Errors fill the error window without touching the cache window.
-	for i := int64(1); i <= 3; i++ {
-		n.Process(context.Background(), []logcollector.Event{cacheEvent(i, 18, 600, 0, false, "error")})
-	}
-	if got := c.matching("渠道错误激增"); got != 1 {
-		t.Fatalf("expected error alert, got %d (%v)", got, c.contents)
-	}
-	if got := c.matching("渠道缓存疑似失效"); got != 0 {
-		t.Fatalf("error logs must not fill the cache window, got %d", got)
-	}
-
-	// Ten uncached successes fire the cache rule on the same channel.
-	for i := int64(10); i < 20; i++ {
-		n.Process(context.Background(), []logcollector.Event{cacheEvent(i, 18, 600, 0, false, "consume")})
-	}
-	if got := c.matching("渠道缓存疑似失效"); got != 1 {
-		t.Fatalf("expected cache alert, got %d (%v)", got, c.contents)
-	}
-
-	// Both episodes remind independently past the interval; the ten successes
-	// above already re-armed the error rule silently.
-	n.now = func() time.Time { return base.Add(61 * time.Minute) }
-	n.Process(context.Background(), nil)
-	if got := c.matching("渠道缓存持续未命中"); got != 1 {
-		t.Fatalf("expected cache reminder, got %d (%v)", got, c.contents)
-	}
-	if got := c.matching("渠道错误持续"); got != 0 {
-		t.Fatalf("error episode should have re-armed, got reminder %d", got)
-	}
-}
-
-func TestNoCacheAlertSendFailureRetriesIndependently(t *testing.T) {
-	c := &capture{}
-	server := c.server()
-	defer server.Close()
-	n := New(server.URL, "inst-a", 10, 3, nil).WithNoCacheRule(512, 10)
-
-	c.setErrcode(`{"errcode":93000,"errmsg":"invalid webhook url"}`)
-	for i := int64(1); i <= 10; i++ {
-		n.Process(context.Background(), []logcollector.Event{cacheEvent(i, 18, 600, 0, false, "consume")})
-	}
-	c.setErrcode("")
-	n.Process(context.Background(), nil)
-	if got := c.matching("渠道缓存疑似失效"); got != 2 {
-		t.Fatalf("expected rejected then retried cache alert, got %d (%v)", got, c.contents)
-	}
-	if got := c.matching("渠道错误激增"); got != 0 {
-		t.Fatalf("error rule must stay untouched, got %d", got)
-	}
-	n.Process(context.Background(), nil)
-	if got := c.matching("渠道缓存疑似失效"); got != 2 {
-		t.Fatalf("expected no duplicate after successful retry, got %d (%v)", got, c.contents)
-	}
-}
-
 func TestDisabledChannelIsNotMonitored(t *testing.T) {
 	c := &capture{}
 	server := c.server()
@@ -583,5 +516,26 @@ func TestDisablingChannelClosesOngoingEpisodeSilently(t *testing.T) {
 	n.Process(context.Background(), timedEvents(100, base.Add(2*time.Hour), "error", 3, 26))
 	if got := c.matching("渠道错误激增"); got != 2 {
 		t.Fatalf("re-enabled channel must alert on new errors, got %d (%v)", got, c.contents)
+	}
+}
+
+func TestCacheMissesDoNotAlert(t *testing.T) {
+	c := &capture{}
+	server := c.server()
+	defer server.Close()
+	now := time.Now()
+	n := New(server.URL, "inst", 10, 3, nil).WithRemindInterval(time.Hour)
+	n.now = func() time.Time { return now }
+	for i := int64(1); i <= 20; i++ {
+		n.Process(context.Background(), []logcollector.Event{cacheEvent(i, 7, 2048, 0, true, "consume")})
+	}
+	now = now.Add(2 * time.Hour)
+	n.Process(context.Background(), nil)
+	if len(c.contents) != 0 {
+		t.Fatalf("unexpected cache notifications: %v", c.contents)
+	}
+	n.Process(context.Background(), events("error", 3, 7, 9, "alice"))
+	if len(c.contents) != 2 {
+		t.Fatalf("error alerts stopped working: %v", c.contents)
 	}
 }
