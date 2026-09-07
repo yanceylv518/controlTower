@@ -39,6 +39,9 @@ type BillingStatementResultHandler struct {
 
 func (h BillingStatementResultHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimSpace(r.URL.Query().Get("id"))
+	if !requireBillingJobPermission(w, r, h.Store, id) {
+		return
+	}
 	if r.Method == http.MethodDelete {
 		paths, err := h.Store.DeleteBillingStatement(r.Context(), id)
 		if err != nil {

@@ -282,3 +282,44 @@ func TestViewerLoginWritesAudit(t *testing.T) {
 		t.Fatalf("viewer login must be audited: %#v", rec.rows)
 	}
 }
+
+func TestChangePasswordRevokesAllOwnSessions(t *testing.T) {
+	m, store := setup(t)
+	now := time.Now().UTC()
+	u, first, err := m.Login("admin", "password1", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, second, err := m.Login("admin", "password1", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateSession(storage.Session{ID: "other-user-session", UserID: u.ID + 1, ExpiresAt: now.Add(time.Hour), CreatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.ChangePassword(u.ID, "wrong", "password2", now); err == nil {
+		t.Fatal("wrong password accepted")
+	}
+	for _, id := range []string{first.ID, second.ID} {
+		if _, ok := m.Validate(id, now); !ok {
+			t.Fatal("failed change revoked session")
+		}
+	}
+	if err := m.ChangePassword(u.ID, "password1", "password2", now); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{first.ID, second.ID} {
+		if _, ok := m.Validate(id, now); ok {
+			t.Fatal("old session remains valid")
+		}
+	}
+	if _, ok, err := store.SessionByID("other-user-session"); err != nil || !ok {
+		t.Fatal("other user's session removed", err)
+	}
+	if _, _, err := m.Login("admin", "password1", now); err == nil {
+		t.Fatal("old password accepted")
+	}
+	if _, _, err := m.Login("admin", "password2", now); err != nil {
+		t.Fatal(err)
+	}
+}

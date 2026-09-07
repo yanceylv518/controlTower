@@ -7,9 +7,27 @@ type User struct {
 	Username, PasswordHash, Role string
 	ScopeSite                    string
 	ScopeUserIDs                 []int64
+	DisplayName                  string
+	Permissions                  []string // nil preserves legacy administrator access; [] grants nothing.
 	Enabled                      bool
 	CreatedAt, UpdatedAt         time.Time
 }
+
+func IsFullAdmin(u User) bool {
+	if u.Role != "admin" {
+		return false
+	}
+	if u.Permissions == nil {
+		return true
+	}
+	for _, p := range u.Permissions {
+		if p == "*" {
+			return true
+		}
+	}
+	return false
+}
+
 type Session struct {
 	ID                   string
 	UserID               int64

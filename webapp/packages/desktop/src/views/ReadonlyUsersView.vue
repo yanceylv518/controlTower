@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { RefreshLeft, Search } from '@element-plus/icons-vue'
+import { can } from '../permissions'
 import AppShell from '../components/AppShell.vue'
 import { dashboard, passthrough } from '../api'
 import { useAuthStore } from '../stores/auth'
@@ -49,7 +50,7 @@ async function load() {
   await Promise.all([state.reload(), loadBalanceAlertUsers()])
 }
 async function loadBalanceAlertUsers() {
-  if (auth.user?.role !== 'admin' || !filters.site_id) { balanceAlertUsers.value = new Set(); return }
+  if (!can(auth.user, 'alerts.manage') || !filters.site_id) { balanceAlertUsers.value = new Set(); return }
   const response = await dashboard.balanceAlertUsers(filters.site_id)
   balanceAlertUsers.value = new Set(response.items.filter(item => item.enabled).map(item => item.user_id))
 }
@@ -98,7 +99,7 @@ watch(() => filters.site_id, (site, previous) => {
           <el-table-column label="状态" width="100"><template #default="s"><span class="status-pill" :class="s.row.status===1?'is-active':'is-disabled'"><i/>{{s.row.status===1?'正常':'停用'}}</span></template></el-table-column>
           <el-table-column label="余额 / 总额度" min-width="330"><template #default="s"><div class="quota-cell"><div class="quota-line"><strong>{{money(s.row.quota)}}</strong><span>共 {{money(totalQuota(s.row))}}</span><em>{{remainingPercent(s.row)}}%</em></div><el-progress :percentage="remainingPercent(s.row)" :color="quotaColor(s.row)" :stroke-width="5" :show-text="false"/></div></template></el-table-column>
           <el-table-column label="已用额度" min-width="130"><template #default="s"><span class="used-quota">{{money(s.row.used_quota)}}</span></template></el-table-column>
-          <el-table-column v-if="auth.user?.role==='admin'" label="余额告警" width="120"><template #default="s"><el-switch :model-value="balanceAlertUsers.has(s.row.id)" :loading="savingAlertUser===s.row.id" :disabled="s.row.status!==1" @change="(value: string | number | boolean)=>changeBalanceAlert(s.row.id, value)"/></template></el-table-column>
+          <el-table-column v-if="can(auth.user, 'alerts.manage')" label="余额告警" width="120"><template #default="s"><el-switch :model-value="balanceAlertUsers.has(s.row.id)" :loading="savingAlertUser===s.row.id" :disabled="s.row.status!==1" @change="(value: string | number | boolean)=>changeBalanceAlert(s.row.id, value)"/></template></el-table-column>
           <el-table-column label="创建时间" width="180"><template #default="s"><time>{{formatUnixTime(s.row.created_at)}}</time></template></el-table-column>
           <el-table-column label="最后登录时间" width="180"><template #default="s"><time :class="{'is-empty':!s.row.last_login_at}">{{formatUnixTime(s.row.last_login_at)}}</time></template></el-table-column>
         </el-table>

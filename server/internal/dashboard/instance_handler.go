@@ -138,6 +138,16 @@ func (i InstanceHandler) List(w http.ResponseWriter, r *http.Request) {
 			item.ControlAdminUserID = 0
 			item.ControlConfigured = false
 		}
+		if scoped && current.Role == "admin" {
+			if !ctauth.HasPermission(current, "instances.manage") {
+				item.ControlAPIURL = ""
+				item.ControlAdminUserID = 0
+				item.ControlConfigured = false
+			}
+			if !ctauth.HasPermission(current, "monitor.runtime") && !ctauth.HasPermission(current, "tuning.manage") && !ctauth.HasPermission(current, "instances.manage") {
+				item.Agents = []InstanceAgent{}
+			}
+		}
 		items = append(items, item)
 	}
 	writeDashboardJSON(w, 200, map[string]any{"items": items})

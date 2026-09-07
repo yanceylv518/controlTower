@@ -45,6 +45,10 @@ func (h BillingStatementsHandler) ServeHTTP(w http.ResponseWriter, r *http.Reque
 		writeDashboardError(w, 400, "invalid_request")
 		return
 	}
+	if !billingTypeAllowed(r, req.StatementType+"_statement") {
+		writeDashboardError(w, 403, "forbidden")
+		return
+	}
 	from, to, err := parseBillingInputRange(req.From, req.To)
 	if err != nil {
 		writeDashboardError(w, 400, "invalid_range")

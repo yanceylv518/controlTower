@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { can } from "../permissions";
 import { computed, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { ArrowLeft, ArrowRight } from "@element-plus/icons-vue";
@@ -79,7 +80,7 @@ const state = useAsyncData(async () => {
           limit: 500,
         })
       : Promise.resolve({ items: [] as ChannelSnapshot[] }),
-    auth.user?.role === "admin"
+    can(auth.user, "alerts.manage") || can(auth.user, "overview.read")
       ? dashboard.alerts({ limit: 200 })
       : Promise.resolve({ items: [] as AlertItem[] }),
   ]);
@@ -495,7 +496,7 @@ const firingCount = computed(
               </el-table>
             </div>
           </el-tab-pane>
-          <el-tab-pane v-if="auth.user?.role === 'admin'" label="慢样本" name="samples">
+          <el-tab-pane v-if="can(auth.user, 'monitor.samples')" label="慢样本" name="samples">
             <div v-loading="samplesLoading" class="dim-table">
               <el-table :data="samples" :max-height="480">
                 <el-table-column label="时间" width="160">
@@ -543,7 +544,7 @@ const firingCount = computed(
               />
             </div>
           </el-tab-pane>
-          <el-tab-pane v-if="auth.user?.role === 'admin'" name="alerts">
+          <el-tab-pane v-if="can(auth.user, 'alerts.manage') || can(auth.user, 'overview.read')" name="alerts">
             <template #label>
               告警<span v-if="firingCount" class="tab-badge">{{
                 firingCount

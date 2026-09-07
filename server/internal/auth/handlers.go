@@ -156,16 +156,25 @@ func (h Handlers) Me(w http.ResponseWriter, r *http.Request) {
 }
 
 type userResponseDTO struct {
-	ID           int64   `json:"id,omitempty"`
-	Username     string  `json:"username"`
-	Role         string  `json:"role"`
-	ScopeSite    string  `json:"scope_site"`
-	ScopeUserIDs []int64 `json:"scope_user_ids"`
-	Enabled      bool    `json:"enabled"`
+	ID           int64    `json:"id,omitempty"`
+	Username     string   `json:"username"`
+	Role         string   `json:"role"`
+	ScopeSite    string   `json:"scope_site"`
+	ScopeUserIDs []int64  `json:"scope_user_ids"`
+	Enabled      bool     `json:"enabled"`
+	DisplayName  string   `json:"display_name"`
+	Permissions  []string `json:"permissions"`
 }
 
 func userResponse(u storage.User) userResponseDTO {
-	return userResponseDTO{u.ID, u.Username, u.Role, u.ScopeSite, u.ScopeUserIDs, u.Enabled}
+	permissions := ExpandPermissions(u.Permissions)
+	if storage.IsFullAdmin(u) {
+		permissions = []string{"*"}
+	}
+	if permissions == nil {
+		permissions = []string{}
+	}
+	return userResponseDTO{u.ID, u.Username, u.Role, u.ScopeSite, u.ScopeUserIDs, u.Enabled, u.DisplayName, permissions}
 }
 
 func (h Handlers) Users(w http.ResponseWriter, r *http.Request) {
@@ -174,7 +183,7 @@ func (h Handlers) Users(w http.ResponseWriter, r *http.Request) {
 		write(w, 401, map[string]string{"error": "unauthorized"})
 		return
 	}
-	if u.Role != "admin" {
+	if !HasPermission(u, "accounts.manage") {
 		write(w, 403, map[string]string{"error": "forbidden"})
 		return
 	}
@@ -188,7 +197,7 @@ func (h Handlers) Users(w http.ResponseWriter, r *http.Request) {
 		for _, item := range items {
 			out = append(out, userResponse(item))
 		}
-		write(w, 200, map[string]any{"items": out})
+		write(w, 200, map[string]any{"items": out, "permissions": PermissionCatalog})
 		return
 	}
 	if r.Method == http.MethodPost {
@@ -196,17 +205,17 @@ func (h Handlers) Users(w http.ResponseWriter, r *http.Request) {
 			write(w, 403, map[string]string{"error": "csrf"})
 			return
 		}
-		var q struct {
-			Username     string  `json:"username"`
-			Password     string  `json:"password"`
-			Role         string  `json:"role"`
-			ScopeSite    string  `json:"scope_site"`
-			ScopeUserIDs []int64 `json:"scope_user_ids"`
-		}
-		if json.NewDecoder(r.Body).Decode(&q) != nil || h.M.CreateScopedUser(q.Username, q.Password, q.Role, q.ScopeSite, q.ScopeUserIDs, time.Now().UTC()) != nil {
+		var q AccountInput
+		if json.NewDecoder(r.Body).Decode(&q) != nil {
 			write(w, 400, map[string]string{"error": "invalid_user"})
 			return
 		}
+		created, err := h.M.CreateAccount(u.ID, q, time.Now().UTC())
+		if err != nil {
+			accountError(w, err)
+			return
+		}
+		h.accountAudit(r, u, storage.User{}, created, "auth.account_create")
 		write(w, 201, map[string]bool{"ok": true})
 		return
 	}
@@ -218,7 +227,7 @@ func (h Handlers) User(w http.ResponseWriter, r *http.Request) {
 		write(w, 401, map[string]string{"error": "unauthorized"})
 		return
 	}
-	if u.Role != "admin" {
+	if !HasPermission(u, "accounts.manage") {
 		write(w, 403, map[string]string{"error": "forbidden"})
 		return
 	}
@@ -231,16 +240,17 @@ func (h Handlers) User(w http.ResponseWriter, r *http.Request) {
 		write(w, 403, map[string]string{"error": "csrf"})
 		return
 	}
-	var q struct {
-		Role         string  `json:"role"`
-		ScopeSite    string  `json:"scope_site"`
-		ScopeUserIDs []int64 `json:"scope_user_ids"`
-		Enabled      bool    `json:"enabled"`
-	}
-	if r.Method != http.MethodPut || json.NewDecoder(r.Body).Decode(&q) != nil || h.M.UpdateScopedUser(id, q.Role, q.ScopeSite, q.ScopeUserIDs, q.Enabled, time.Now().UTC()) != nil {
+	var q AccountInput
+	if r.Method != http.MethodPut || json.NewDecoder(r.Body).Decode(&q) != nil {
 		write(w, 400, map[string]string{"error": "invalid_user"})
 		return
 	}
+	before, after, err := h.M.UpdateAccount(u.ID, id, q, time.Now().UTC())
+	if err != nil {
+		accountError(w, err)
+		return
+	}
+	h.accountAudit(r, u, before, after, "auth.account_update")
 	write(w, 200, map[string]bool{"ok": true})
 }
 func (h Handlers) Password(w http.ResponseWriter, r *http.Request) {
@@ -283,6 +293,10 @@ func RequireSessionOrToken(m *Manager, token string, next http.Handler) http.Han
 					q.Set("site", u.ScopeSite)
 					q.Del("instance_id")
 					r.URL.RawQuery = q.Encode()
+				}
+				if u.Role != "viewer" && !allowAdminRequest(u, r) {
+					write(w, 403, map[string]string{"error": "forbidden"})
+					return
 				}
 				next.ServeHTTP(w, withUser(withActor(r, u.Username), u))
 				return

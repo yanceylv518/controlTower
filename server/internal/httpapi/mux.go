@@ -82,6 +82,7 @@ func NewMux(options Options) *http.ServeMux {
 	mux.HandleFunc("/api/auth/password", a.Password)
 	mux.HandleFunc("/api/auth/users", a.Users)
 	mux.HandleFunc("/api/auth/users/{id}", a.User)
+	mux.HandleFunc("POST /api/auth/users/{id}/password", a.ResetPassword)
 	mux.Handle("/api/dashboard/overview", protect(http.HandlerFunc(dashboardHandler.HandleOverview)))
 	mux.Handle("/api/dashboard/log-samples", protect(http.HandlerFunc(dashboardHandler.HandleLogSamples)))
 	mux.Handle("/api/dashboard/logs", protect(http.HandlerFunc(dashboardHandler.HandleLogs)))

@@ -64,6 +64,14 @@ type BillingJobsHandler struct {
 }
 
 func (h BillingJobsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if id := strings.TrimSpace(r.URL.Query().Get("id")); id != "" && !requireBillingJobPermission(w, r, h.Store, id) {
+		return
+	}
+	if r.Method == http.MethodPost && !billingTypeAllowed(r, "rollup") {
+		writeDashboardError(w, 403, "forbidden")
+		return
+	}
+
 	if r.Method == http.MethodDelete {
 		if user, ok := ctauth.CurrentUser(r); ok && user.Role != "admin" {
 			writeDashboardError(w, http.StatusForbidden, "forbidden")
@@ -133,7 +141,13 @@ func (h BillingJobsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				writeDashboardError(w, 500, "billing_job_query_failed")
 				return
 			}
-			writeDashboardJSON(w, 200, map[string]any{"items": items})
+			visible := make([]billing.Job, 0, len(items))
+			for _, job := range items {
+				if billingTypeAllowed(r, job.JobType) {
+					visible = append(visible, job)
+				}
+			}
+			writeDashboardJSON(w, 200, map[string]any{"items": visible})
 			return
 		}
 		job, err := h.Store.BillingJob(r.Context(), id)

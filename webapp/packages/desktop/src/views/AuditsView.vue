@@ -23,7 +23,7 @@ const state = useAsyncData(
   async () => {
     await filters.loadInstances();
     const items = (await dashboard.operationAudits({ limit: 200 })).items;
-    return items.filter((item) => siteInstanceIDs.value.has(item.instance_id));
+    return items.filter((item) => !item.instance_id || siteInstanceIDs.value.has(item.instance_id));
   },
 );
 const pageItems = computed(() =>
@@ -57,7 +57,7 @@ useAutoRefresh(state.reload);
         ><el-table-column label="实例"
           ><template #default="s"
             ><el-tooltip :content="s.row.instance_id"
-              ><span>{{ s.row.instance_name }}</span></el-tooltip
+              ><span>{{ s.row.instance_name || '全局账号管理' }}</span></el-tooltip
             ></template
           ></el-table-column
         ><el-table-column prop="operation_type" label="类型" /><el-table-column

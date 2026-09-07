@@ -2,23 +2,15 @@
 import { onMounted, reactive, ref } from "vue";
 import { ApiError, type SystemSettingItem } from "@ct/shared";
 import { ElMessage } from "element-plus";
-import { auth, dashboard } from "../api";
+import { dashboard } from "../api";
 import AppShell from "../components/AppShell.vue";
-import { useAuthStore } from "../stores/auth";
 import { usePrefsStore } from "../stores/prefs";
 
-const store = useAuthStore();
 const prefs = usePrefsStore();
 const loading = ref(false);
 const saving = ref(false);
 const items = ref<Record<string, SystemSettingItem>>({});
 const values = reactive<Record<string, string | number>>({});
-const password = reactive({
-  old_password: "",
-  new_password: "",
-  confirm_password: "",
-});
-
 type Field = readonly [string, string, number, number];
 const sections: ReadonlyArray<{ title: string; note: string; fields: readonly Field[] }> = [
   {
@@ -113,17 +105,6 @@ async function save() {
   } finally {
     saving.value = false;
   }
-}
-async function changePassword() {
-  if (
-    password.new_password.length < 8 ||
-    password.new_password !== password.confirm_password
-  ) {
-    ElMessage.error("请确认新密码至少 8 位且两次输入一致");
-    return;
-  }
-  await auth.changePassword(password.old_password, password.new_password);
-  ElMessage.success("密码修改成功");
 }
 onMounted(load);
 </script>
@@ -260,44 +241,6 @@ onMounted(load);
           </div>
         </div>
       </section>
-      <section class="panel sub-panel">
-        <h2>账户</h2>
-        <p class="sub-note">
-          当前用户 {{ store.user?.username }} · 角色 {{ store.user?.role }}
-        </p>
-        <div class="field-grid">
-          <div class="field-item">
-            <label>旧密码</label>
-            <el-input
-              v-model="password.old_password"
-              type="password"
-              show-password
-              size="small"
-            />
-          </div>
-          <div class="field-item">
-            <label>新密码</label>
-            <el-input
-              v-model="password.new_password"
-              type="password"
-              show-password
-              size="small"
-            />
-          </div>
-          <div class="field-item">
-            <label>确认新密码</label>
-            <el-input
-              v-model="password.confirm_password"
-              type="password"
-              show-password
-              size="small"
-            />
-          </div>
-          <div class="field-item field-action">
-            <el-button @click="changePassword">修改密码</el-button>
-          </div>
-        </div>
-        </section>
       </div>
     </div>
   </AppShell>

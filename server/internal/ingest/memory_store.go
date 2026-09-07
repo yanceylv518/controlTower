@@ -219,17 +219,43 @@ func (s *MemoryStore) UpdateUser(u storage.User) error {
 	if _, ok := s.users[u.ID]; !ok {
 		return nil
 	}
+	if existing := s.users[u.ID]; existing.Enabled && storage.IsFullAdmin(existing) && (!u.Enabled || !storage.IsFullAdmin(u)) {
+		count := 0
+		for _, item := range s.users {
+			if item.Enabled && storage.IsFullAdmin(item) {
+				count++
+			}
+		}
+		if count <= 1 {
+			return fmt.Errorf("last_full_admin")
+		}
+	}
 	s.users[u.ID] = u
+	if !u.Enabled {
+		for key, session := range s.sessions {
+			if session.UserID == u.ID {
+				delete(s.sessions, key)
+			}
+		}
+	}
 	return nil
 }
-func (s *MemoryStore) UpdateUserPassword(id int64, h string, n time.Time) error {
+func (s *MemoryStore) ResetUserPassword(id int64, hash string, now time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	u := s.users[id]
-	u.PasswordHash = h
-	u.UpdatedAt = n
+	u.PasswordHash = hash
+	u.UpdatedAt = now
 	s.users[id] = u
+	for key, session := range s.sessions {
+		if session.UserID == id {
+			delete(s.sessions, key)
+		}
+	}
 	return nil
+}
+func (s *MemoryStore) UpdateUserPassword(id int64, h string, n time.Time) error {
+	return s.ResetUserPassword(id, h, n)
 }
 func (s *MemoryStore) CountUsers() (int, error) {
 	s.mu.Lock()
