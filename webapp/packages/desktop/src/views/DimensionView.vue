@@ -153,7 +153,8 @@ function totalTokens(item: MetricItem) {
   return item.prompt_tokens + item.completion_tokens;
 }
 function rowKind(item: DimRow): string {
-  if (item.channelStatus && item.channelStatus !== "enabled") return "disabled";
+  // Agent 旧快照使用 enabled，直连渠道同步使用 new-api 的数字状态 1。
+  if (item.channelStatus && !["enabled", "1"].includes(String(item.channelStatus))) return "disabled";
   if (item.request_count === 0) return "idle";
   if ((item.error_rate || 0) >= 0.1) return "crit";
   if ((item.error_rate || 0) > 0) return "warn";
