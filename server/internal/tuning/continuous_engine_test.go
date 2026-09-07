@@ -189,6 +189,15 @@ func TestLimitWeightIncreaseCapsOnlyUpwardMovement(t *testing.T) {
 	if got := limitWeightIncrease(150, 101, 10); got != 111 {
 		t.Fatalf("fractional upper bound must round down: %d", got)
 	}
+	// Single-digit weights must still be able to climb one step per cycle.
+	for _, current := range []int64{1, 5, 9} {
+		if got := limitWeightIncrease(150, current, 10); got != current+1 {
+			t.Fatalf("weight %d stuck: %d", current, got)
+		}
+	}
+	if got := limitWeightIncrease(6, 5, 10); got != 6 {
+		t.Fatalf("one-step increase blocked: %d", got)
+	}
 }
 
 type currentRatesFake struct {

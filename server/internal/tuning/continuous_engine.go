@@ -622,11 +622,15 @@ func effectiveCurrentWeight(base ChannelBaseValue, state ContinuousState) int64 
 	return base.CurrentWeight
 }
 
+// limitWeightIncrease caps one cycle's upward move at maxPercent of the
+// current weight. Weights below 100/maxPercent would otherwise floor to
+// themselves and never move (new-api weights are often single digits), so a
+// step of at least one is always allowed; decreases are never limited.
 func limitWeightIncrease(proposed, current int64, maxPercent float64) int64 {
 	if proposed <= current || current <= 0 {
 		return proposed
 	}
-	maximum := int64(math.Floor(float64(current) * (1 + maxPercent/100)))
+	maximum := max(current+1, int64(math.Floor(float64(current)*(1+maxPercent/100))))
 	return min(proposed, maximum)
 }
 
