@@ -84,7 +84,13 @@ const state = useAsyncData(async () => {
 });
 watch(
   () => [props.kind, filters.site_id, hours.value],
-  () => {
+  ([kind], [previousKind]) => {
+    if (kind !== previousKind) {
+      // 渠道和模型共用组件，切换维度时不能沿用上一页的筛选与选中项。
+      activeKinds.value = [];
+      search.value = "";
+      selectedKeys.value = [];
+    }
     if (initialized) void state.reload();
   },
 );
