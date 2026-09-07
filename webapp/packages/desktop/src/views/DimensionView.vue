@@ -377,7 +377,7 @@ function rowClass({ row }: { row: DimRow }) {
                   <i class="dim-id">{{ row.dimension_key.split(":").pop() }}</i>
                 </el-tooltip>
                 <StatusTag
-                  v-if="row.channelStatus && row.channelStatus !== 'enabled'"
+                  v-if="row.channelStatus && !['enabled', '1'].includes(String(row.channelStatus))"
                   :value="row.channelStatus"
                 />
               </span>

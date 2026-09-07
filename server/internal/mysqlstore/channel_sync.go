@@ -20,7 +20,7 @@ import (
 func (s Store) ApplyChannelWrite(siteID string, channelID int64, weight *uint, priority *int64, status *int, at time.Time) error {
 	_, err := s.db.ExecContext(context.Background(), `UPDATE channel_current c JOIN instances i ON i.id=c.instance_id
 SET c.weight=COALESCE(?,c.weight),c.priority=COALESCE(?,c.priority),c.status=COALESCE(?,c.status),c.captured_at=GREATEST(c.captured_at,?)
-WHERE CASE WHEN i.site_id='' THEN i.id ELSE i.site_id END=? AND c.channel_id=?`, weight, priority, status, at, siteID, channelID)
+WHERE CASE WHEN i.site_id='' THEN i.id ELSE i.site_id END=? AND c.channel_id=?`, weight, priority, channelStatusLabelPtr(status), at, siteID, channelID)
 	if err == nil {
 		channelupdates.Notify(siteID)
 	}
@@ -39,7 +39,7 @@ func (s Store) StoreInstanceChannels(instanceID string, channels []channelcontro
 	snapshots := make([]storage.ChannelSnapshot, 0, len(channels))
 	for _, c := range channels {
 		priority := c.Priority
-		snapshots = append(snapshots, storage.ChannelSnapshot{ID: randomCommandID(), InstanceID: instanceID, ChannelID: c.ID, ChannelName: c.Name, Status: strconv.Itoa(c.Status), Weight: int64(c.Weight), Priority: &priority, ModelsText: c.Models, GroupName: &c.Group, CapturedAt: at})
+		snapshots = append(snapshots, storage.ChannelSnapshot{ID: randomCommandID(), InstanceID: instanceID, ChannelID: c.ID, ChannelName: c.Name, Status: channelStatusLabel(c.Status), Weight: int64(c.Weight), Priority: &priority, ModelsText: c.Models, GroupName: &c.Group, CapturedAt: at})
 	}
 	return s.SyncChannelSnapshotsAt(instanceID, snapshots, at)
 }
@@ -60,8 +60,33 @@ func applyCompletedChannelWrite(tx *sql.Tx, command storage.ChannelCommand, at t
 JOIN instances source ON source.id=?
 SET c.weight=COALESCE(?,c.weight),c.priority=COALESCE(?,c.priority),c.status=COALESCE(?,c.status),c.captured_at=GREATEST(c.captured_at,?)
 WHERE CASE WHEN i.site_id='' THEN i.id ELSE i.site_id END=CASE WHEN source.site_id='' THEN source.id ELSE source.site_id END
-AND c.channel_id=?`, command.InstanceID, payload.Weight, payload.Priority, payload.Status, at, command.ChannelID)
+AND c.channel_id=?`, command.InstanceID, payload.Weight, payload.Priority, channelStatusLabelPtr(payload.Status), at, command.ChannelID)
 	return err
+}
+
+// channel_current.status is stored as the Agent's normalized label
+// (enabled / disabled / auto_disabled). Server-side refreshes and confirmed
+// writes receive new-api's numeric status and must store the same labels,
+// otherwise every reader has to understand both encodings.
+func channelStatusLabel(status int) string {
+	switch status {
+	case 1:
+		return "enabled"
+	case 2:
+		return "disabled"
+	case 3:
+		return "auto_disabled"
+	default:
+		return strconv.Itoa(status)
+	}
+}
+
+func channelStatusLabelPtr(status *int) *string {
+	if status == nil {
+		return nil
+	}
+	label := channelStatusLabel(*status)
+	return &label
 }
 
 // siteIDForInstance resolves the notification scope; an unknown instance

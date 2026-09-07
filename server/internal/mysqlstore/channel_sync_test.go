@@ -166,3 +166,71 @@ func TestApplyChannelWriteIgnoresFutureSnapshotClock(t *testing.T) {
 		t.Fatalf("confirmed Agent write skipped because of a future snapshot clock: weight=%d", got)
 	}
 }
+
+// Server-side refreshes and confirmed writes carry new-api's numeric status;
+// channel_current must hold the Agent's labels so readers see one encoding.
+func TestServerChannelWritesStoreNormalizedStatus(t *testing.T) {
+	if got := channelStatusLabel(1); got != "enabled" {
+		t.Fatalf("1 = %s", got)
+	}
+	if got := channelStatusLabel(2); got != "disabled" {
+		t.Fatalf("2 = %s", got)
+	}
+	if got := channelStatusLabel(3); got != "auto_disabled" {
+		t.Fatalf("3 = %s", got)
+	}
+	if channelStatusLabelPtr(nil) != nil {
+		t.Fatal("nil status must stay nil so COALESCE keeps the stored value")
+	}
+	dsn := os.Getenv("CT_MYSQL_TEST_DSN")
+	if dsn == "" {
+		t.Skip("set CT_MYSQL_TEST_DSN to run status normalization integration test")
+	}
+	db, err := Open(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	if err := ApplyDir(ctx, db, "../../migrations"); err != nil {
+		t.Fatal(err)
+	}
+	const id = "channel-status-label-test"
+	cleanup := func() {
+		for _, table := range []string{"channel_current", "channel_commands", "channel_base_values", "tuning_continuous_states"} {
+			_, _ = db.Exec("DELETE FROM "+table+" WHERE instance_id=?", id)
+		}
+		_, _ = db.Exec("DELETE FROM instances WHERE id=?", id)
+	}
+	cleanup()
+	defer cleanup()
+	now := time.Now().UTC().Truncate(time.Second)
+	if _, err := db.Exec(`INSERT INTO instances(id,site_id,name,env,region,base_url,enabled,created_at,updated_at) VALUES(?,'',?,'test','local','',1,?,?)`, id, id, now, now); err != nil {
+		t.Fatal(err)
+	}
+	s := New(db)
+	if err := s.StoreInstanceChannels(id, []channelcontrol.Channel{{ID: 7, Name: "c", Models: "m", Weight: 1, Status: 1}, {ID: 8, Name: "d", Models: "m", Weight: 1, Status: 3}}, now); err != nil {
+		t.Fatal(err)
+	}
+	var status7, status8 string
+	if err := db.QueryRow(`SELECT status FROM channel_current WHERE instance_id=? AND channel_id=7`, id).Scan(&status7); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT status FROM channel_current WHERE instance_id=? AND channel_id=8`, id).Scan(&status8); err != nil {
+		t.Fatal(err)
+	}
+	if status7 != "enabled" || status8 != "auto_disabled" {
+		t.Fatalf("refresh stored raw numeric status: %s %s", status7, status8)
+	}
+	disabled := 2
+	if err := s.ApplyChannelWrite(id, 7, nil, nil, &disabled, now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT status FROM channel_current WHERE instance_id=? AND channel_id=7`, id).Scan(&status7); err != nil {
+		t.Fatal(err)
+	}
+	if status7 != "disabled" {
+		t.Fatalf("confirmed write stored raw numeric status: %s", status7)
+	}
+}
