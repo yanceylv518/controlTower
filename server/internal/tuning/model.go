@@ -39,6 +39,7 @@ type ContinuousDispatchParams struct {
 	ErrorMinFactor        float64 `json:"error_min_factor"`
 	CombinedMinFactor     float64 `json:"combined_min_factor"`
 	CombinedMaxFactor     float64 `json:"combined_max_factor"`
+	MaxIncreasePercent    float64 `json:"max_increase_percent"`
 	CircuitThreshold      float64 `json:"circuit_threshold"`
 	RecoveryThreshold     float64 `json:"recovery_threshold"`
 	CircuitErrorRate      float64 `json:"circuit_error_rate"`
@@ -73,7 +74,7 @@ func DefaultPolicy() Policy {
 			OTPSExponent: .25, OTPSMinFactor: .80, OTPSMaxFactor: 1.20,
 			ErrorHealthyRate: .01, ErrorDegradedRate: .05, ErrorPoorRate: .15, ErrorFloorRate: .30,
 			ErrorDegradedFactor: .85, ErrorPoorFactor: .50, ErrorMinFactor: .20,
-			CombinedMinFactor: .50, CombinedMaxFactor: 1.50,
+			CombinedMinFactor: .50, CombinedMaxFactor: 1.50, MaxIncreasePercent: 10,
 			CircuitThreshold: .1, RecoveryThreshold: .2,
 			CircuitErrorRate: .30, RecoveryErrorRate: .10,
 			SilentMinutes: 5, ProbeIntervalSeconds: 5, ProbeCount: 10, SoftStartMultiplier: .2,
@@ -145,6 +146,9 @@ func (p Policy) Validate() map[string]string {
 	}
 	if c.CombinedMinFactor <= 0 || c.CombinedMinFactor > 1 || c.CombinedMaxFactor < 1 || c.CombinedMaxFactor > 5 || c.CombinedMaxFactor <= c.CombinedMinFactor {
 		e["continuous.combined_factor_range"] = "must_include_1_and_be_ordered"
+	}
+	if c.MaxIncreasePercent < 1 || c.MaxIncreasePercent > 100 {
+		e["continuous.max_increase_percent"] = "must_be_between_1_and_100"
 	}
 	if c.CircuitThreshold <= 0 || c.CircuitThreshold >= c.RecoveryThreshold {
 		e["continuous.circuit_threshold"] = "must_be_positive_and_less_than_recovery"

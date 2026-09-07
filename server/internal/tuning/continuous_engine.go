@@ -395,14 +395,16 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 			// weight but may not increase it. Prefer our last successful write over
 			// the slower channel snapshot when determining the live upper bound.
 			if state.CapacityLimited {
-				currentWeight := base.CurrentWeight
-				if state.LastWrittenWeight != nil {
-					currentWeight = *state.LastWrittenWeight
-				}
+				currentWeight := effectiveCurrentWeight(base, state)
 				if state.ProposedWeight > currentWeight {
 					state.ProposedWeight = currentWeight
 					state.Multiplier = float64(state.ProposedWeight) / float64(base.BaseWeight)
 				}
+			}
+			if mode == "auto" {
+				currentWeight := effectiveCurrentWeight(base, state)
+				state.ProposedWeight = limitWeightIncrease(state.ProposedWeight, currentWeight, p.MaxIncreasePercent)
+				state.Multiplier = float64(state.ProposedWeight) / float64(base.BaseWeight)
 			}
 			// In auto mode entering circuit means "the zeroing write happened";
 			// during a write_failed pause the transition must wait for the slow
@@ -611,6 +613,21 @@ func performanceFactors(m ChannelMetric, b continuousBaseline, p ContinuousDispa
 
 func combinedFactor(state ContinuousState, p ContinuousDispatchParams) float64 {
 	return clamp(state.KSpeed*state.KCache*state.KOTPS*state.KError, p.CombinedMinFactor, p.CombinedMaxFactor)
+}
+
+func effectiveCurrentWeight(base ChannelBaseValue, state ContinuousState) int64 {
+	if state.LastWrittenWeight != nil && state.LastWriteAt != nil && (base.SnapshotAt.IsZero() || state.LastWriteAt.After(base.SnapshotAt)) {
+		return *state.LastWrittenWeight
+	}
+	return base.CurrentWeight
+}
+
+func limitWeightIncrease(proposed, current int64, maxPercent float64) int64 {
+	if proposed <= current || current <= 0 {
+		return proposed
+	}
+	maximum := int64(math.Floor(float64(current) * (1 + maxPercent/100)))
+	return min(proposed, maximum)
 }
 
 // legacyErrorRate inverts reliabilityFactor's piecewise mapping so a v1

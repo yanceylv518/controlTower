@@ -354,6 +354,7 @@ export interface TuningContinuousDispatchParams {
   error_min_factor: number;
   combined_min_factor: number;
   combined_max_factor: number;
+  max_increase_percent?: number;
   circuit_threshold: number;
   recovery_threshold: number;
   circuit_error_rate: number;

@@ -36,6 +36,9 @@ func TestDecodePolicyJSONIgnoresRetiredDutyFields(t *testing.T) {
 
 func TestPolicyValidationCoversContinuousAndRetainedScheduling(t *testing.T) {
 	p := DefaultPolicy()
+	if p.Continuous.MaxIncreasePercent != 10 {
+		t.Fatalf("default max increase percent = %v", p.Continuous.MaxIncreasePercent)
+	}
 	if fields := p.Validate(); len(fields) != 0 {
 		t.Fatalf("default invalid: %#v", fields)
 	}
@@ -52,8 +55,9 @@ func TestPolicyValidationCoversEvaluationCurveRanges(t *testing.T) {
 	p.Continuous.CacheMinFactor = 1.1
 	p.Continuous.ErrorPoorRate = p.Continuous.ErrorDegradedRate
 	p.Continuous.CombinedMaxFactor = p.Continuous.CombinedMinFactor
+	p.Continuous.MaxIncreasePercent = 0
 	fields := p.Validate()
-	for _, field := range []string{"continuous.cache_factor_range", "continuous.error_rate_breakpoints", "continuous.combined_factor_range"} {
+	for _, field := range []string{"continuous.cache_factor_range", "continuous.error_rate_breakpoints", "continuous.combined_factor_range", "continuous.max_increase_percent"} {
 		if fields[field] == "" {
 			t.Fatalf("missing validation for %s: %#v", field, fields)
 		}

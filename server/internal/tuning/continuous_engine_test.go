@@ -179,6 +179,18 @@ func TestCapacityLimitBlocksOnlyWeightIncrease(t *testing.T) {
 	}
 }
 
+func TestLimitWeightIncreaseCapsOnlyUpwardMovement(t *testing.T) {
+	if got := limitWeightIncrease(150, 100, 10); got != 110 {
+		t.Fatalf("increase = %d, want 110", got)
+	}
+	if got := limitWeightIncrease(80, 100, 10); got != 80 {
+		t.Fatalf("decrease was limited: %d", got)
+	}
+	if got := limitWeightIncrease(150, 101, 10); got != 111 {
+		t.Fatalf("fractional upper bound must round down: %d", got)
+	}
+}
+
 type currentRatesFake struct {
 	*continuousFake
 	current []ChannelMetric
@@ -328,12 +340,12 @@ func TestContinuousAutoDedupesAgainstOwnLastWrite(t *testing.T) {
 	}}}
 	e := NewEngine(f)
 	e.evaluateContinuous("i", autoPolicy(), now, f)
-	// Snapshot stays stale at 90 for minutes after the write; the identical
-	// proposal must not be re-issued every evaluation.
+	// Snapshot stays stale at 90. The ramp advances from the last successful
+	// write (99) to the final target (100), then deduplicates there.
 	e.evaluateContinuous("i", autoPolicy(), now.Add(time.Minute), f)
 	e.evaluateContinuous("i", autoPolicy(), now.Add(2*time.Minute), f)
-	if len(f.writes) != 1 {
-		t.Fatalf("stale snapshot must not re-issue identical writes: %d", len(f.writes))
+	if len(f.writes) != 2 || f.writes[0].ProposedWeight != 99 || f.writes[1].ProposedWeight != 100 {
+		t.Fatalf("stale snapshot must ramp from last write without duplicates: %#v", f.writes)
 	}
 }
 
@@ -401,7 +413,7 @@ func TestAutoReassertsCalculatedWeightAfterConfirmedExternalChange(t *testing.T)
 			KError: 1, LastWrittenWeight: &written, LastWriteAt: &writeAt}},
 	}
 	NewEngine(fresh).evaluateContinuous("i", autoPolicy(), now, fresh)
-	if fresh.states[1].PausedReason != "" || len(fresh.writes) != 1 || fresh.writes[0].ProposedWeight != 100 {
+	if fresh.states[1].PausedReason != "" || len(fresh.writes) != 1 || fresh.writes[0].ProposedWeight != 99 {
 		t.Fatalf("fresh external change must be overwritten by auto: %#v writes=%#v", fresh.states[1], fresh.writes)
 	}
 }
