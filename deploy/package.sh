@@ -36,6 +36,13 @@ build_agent() {
     -o "$package_dir/control-tower-agent" \
     "$ROOT_DIR/agent/cmd/control-tower-agent"
 
+  CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build \
+    -trimpath -ldflags "-s -w" \
+    -o "$package_dir/control-tower-log-reader" \
+    "$ROOT_DIR/agent/cmd/control-tower-log-reader"
+  cp "$ROOT_DIR/deploy/control-tower-log-reader.service" "$package_dir/control-tower-log-reader.service"
+  cp "$ROOT_DIR/deploy/install-log-reader.sh" "$package_dir/install-log-reader.sh"
+  sed -i 's/\r$//' "$package_dir/install-log-reader.sh"
   cp "$ROOT_DIR/deploy/install-agent.sh" "$package_dir/install-agent.sh"
   cp "$ROOT_DIR/deploy/control-tower-agent.service" "$package_dir/control-tower-agent.service"
   cp "$ROOT_DIR/deploy/agent.config.example" "$package_dir/agent.config.example"

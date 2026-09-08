@@ -19,6 +19,7 @@ type OperationAuditQuery struct {
 func IsConfigurationAuditOperation(operation string) bool {
 	switch operation {
 	case "settings.update",
+		"logs.query",
 		"auth.account_create",
 		"auth.account_update",
 		"auth.password_reset",

@@ -1,0 +1,25 @@
+[Unit]
+Description=Control Tower Docker log reader
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=root
+Group=ct-agent
+EnvironmentFile=-/etc/control-tower/log-reader.env
+ExecStart=/usr/local/bin/control-tower-log-reader
+RuntimeDirectory=control-tower-log-reader
+RuntimeDirectoryMode=0750
+UMask=0007
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+RestrictAddressFamilies=AF_UNIX
+ReadWritePaths=/run/control-tower-log-reader
+
+[Install]
+WantedBy=multi-user.target

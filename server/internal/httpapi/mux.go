@@ -83,6 +83,14 @@ func NewMux(options Options) *http.ServeMux {
 	mux.HandleFunc("/api/auth/users", a.Users)
 	mux.HandleFunc("/api/auth/users/{id}", a.User)
 	mux.HandleFunc("POST /api/auth/users/{id}/password", a.ResetPassword)
+	if logStore, ok := any(options.Store).(dashboard.ContainerLogStore); ok {
+		logHandler := dashboard.ContainerLogHandler{Store: logStore}
+		mux.Handle("GET /api/dashboard/container-log-targets", protect(logHandler))
+		mux.Handle("GET /api/dashboard/container-log-tasks", protect(logHandler))
+		mux.Handle("POST /api/dashboard/container-log-tasks", protect(logHandler))
+		mux.Handle("GET /api/dashboard/container-log-tasks/{id}", protect(logHandler))
+		mux.HandleFunc("POST /api/agent/container-logs/poll", agentHandler.ContainerLogs(logStore))
+	}
 	mux.Handle("/api/dashboard/overview", protect(http.HandlerFunc(dashboardHandler.HandleOverview)))
 	mux.Handle("/api/dashboard/log-samples", protect(http.HandlerFunc(dashboardHandler.HandleLogSamples)))
 	mux.Handle("/api/dashboard/logs", protect(http.HandlerFunc(dashboardHandler.HandleLogs)))

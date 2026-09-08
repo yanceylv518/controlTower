@@ -46,6 +46,7 @@ const nav = [
       ["/usage", "用量统计", Coin],
       ["/readonly-users", "用户管理", User],
       ["/readonly-logs", "使用日志", Document],
+      ["/container-logs", "容器日志", Document],
     ],
   },
   {
@@ -81,7 +82,7 @@ function groupForPath(path: string) {
   return nested?.group ?? "";
 }
 const activeGroup = ref<string>(groupForPath(route.path));
-const readonlySiteRequired = computed(() => ["数据查询", "账单管理"].includes(groupForPath(route.path)));
+const readonlySiteRequired = computed(() => route.path !== "/container-logs" && ["数据查询", "账单管理"].includes(groupForPath(route.path)));
 watch(() => route.path, (path) => { activeGroup.value = groupForPath(path); });
 function toggleGroup(group: string) {
   activeGroup.value = activeGroup.value === group ? "" : group;

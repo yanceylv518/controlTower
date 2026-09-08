@@ -63,3 +63,6 @@ CT_ALERT_REMIND_MINUTES=60
 # Missing/unreadable files only produce one warning and retry; standalone mode does not support this module.
 CT_NGINX_ACCESS_LOG=
 CT_NGINX_SLOW_RT_SECONDS=10
+
+# Optional container log queries (requires local log reader and per-instance Agent token).
+# CT_CONTAINER_LOG_SOCKET=/run/control-tower-log-reader/reader.sock

@@ -35,6 +35,7 @@ type Config struct {
 	NewAPIAdminUserID              int64
 	NewAPIControlEnabled           bool
 	DockerEnabled                  bool
+	ContainerLogSocket             string
 	ChannelSnapshotEnabled         bool
 	ChannelSnapshotLimit           int
 	ChannelSnapshotIntervalSeconds int
@@ -105,6 +106,7 @@ func LoadFromMap(values map[string]string) (Config, error) {
 		NewAPIAdminUserID:              int64(intOrDefault(values, "CT_NEW_API_ADMIN_USER_ID", 0)),
 		NewAPIControlEnabled:           boolOrDefault(values, "CT_NEW_API_CONTROL_ENABLED", false),
 		DockerEnabled:                  boolOrDefault(values, "CT_DOCKER_ENABLED", true),
+		ContainerLogSocket:             values["CT_CONTAINER_LOG_SOCKET"],
 		ChannelSnapshotEnabled:         boolOrDefault(values, "CT_CHANNEL_SNAPSHOT_ENABLED", true),
 		ChannelSnapshotLimit:           intOrDefault(values, "CT_CHANNEL_SNAPSHOT_LIMIT", 1000),
 		ChannelSnapshotIntervalSeconds: intOrDefault(values, "CT_CHANNEL_SNAPSHOT_INTERVAL_SECONDS", 600),
@@ -215,6 +217,7 @@ func envMap() map[string]string {
 		"CT_NEW_API_ADMIN_USER_ID",
 		"CT_NEW_API_CONTROL_ENABLED",
 		"CT_DOCKER_ENABLED",
+		"CT_CONTAINER_LOG_SOCKET",
 		"CT_CHANNEL_SNAPSHOT_ENABLED",
 		"CT_CHANNEL_SNAPSHOT_LIMIT",
 		"CT_CHANNEL_SNAPSHOT_INTERVAL_SECONDS",

@@ -16,6 +16,7 @@ import (
 	"controltower/agent/internal/channelcollector"
 	"controltower/agent/internal/channeltoken"
 	"controltower/agent/internal/config"
+	"controltower/agent/internal/containerlogs"
 	"controltower/agent/internal/dockercollector"
 	"controltower/agent/internal/erroralert"
 	"controltower/agent/internal/healthcheck"
@@ -118,6 +119,9 @@ func run() error {
 	}
 
 	metricCollector := syscollector.New(cfg.DataDir)
+	if cfg.ContainerLogSocket != "" && !cfg.RunOnce {
+		go containerlogs.Run(ctx, cfg.ServerURL, cfg.AgentToken, cfg.AgentID, cfg.ContainerLogSocket)
+	}
 	checker := healthcheck.New(time.Duration(cfg.LogQueryTimeoutSeconds) * time.Second)
 	var channelControllerClient channelController
 	if cfg.NewAPIControlEnabled {

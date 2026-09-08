@@ -13,6 +13,7 @@ type Permission struct {
 }
 
 var PermissionCatalog = []Permission{
+	{"logs.query", "容器日志", "查询已配置容器的日志，查看本人查询任务及结果"},
 	{"overview.read", "运行总览", "查看运行总览和实例汇总"},
 	{"monitor.customers", "客户监控", "查看客户指标及客户维度明细"},
 	{"monitor.channels", "渠道监控", "查看渠道指标、快照及渠道维度明细"},
@@ -124,6 +125,9 @@ func allowAdminRequest(u storage.User, r *http.Request) bool {
 		return true
 	}
 	path := strings.TrimPrefix(r.URL.Path, "/api/dashboard/")
+	if strings.HasPrefix(path, "container-log-") {
+		return HasPermission(u, "logs.query")
+	}
 	read := r.Method == http.MethodGet
 	any := func(keys ...string) bool {
 		for _, k := range keys {
