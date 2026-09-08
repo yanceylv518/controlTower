@@ -51,16 +51,33 @@ func Run(ctx context.Context, server, token, agent, socket string) {
 			continue
 		}
 		task := response.Task
-		result := cl.Result{Status: "failed", Lines: []string{}, Error: "本机日志读取服务不可用"}
-		if task.Query.Validate(time.Now().UTC()) == nil {
-			if err := request(ctx, local, "POST", "http://unix/query", "", task.Query, &result); err != nil {
-				result = cl.Result{Status: "failed", Lines: []string{}, Error: "本机日志读取失败或超时"}
-			}
-		}
+		result := executeQuery(ctx, local, task.Query)
 		pending = &result
 		taskID = task.ID
 	}
 }
+
+// executeQuery decodes the reader's reply into a fresh Result. Decoding into a
+// pre-filled failure value would keep its error text on success, because the
+// reader omits empty fields.
+func executeQuery(ctx context.Context, local *http.Client, q cl.Query) cl.Result {
+	if q.Validate(time.Now().UTC()) != nil {
+		return cl.Result{Status: "failed", Lines: []string{}, Error: "本机日志读取服务不可用"}
+	}
+	var result cl.Result
+	if err := request(ctx, local, "POST", "http://unix/query", "", q, &result); err != nil {
+		return cl.Result{Status: "failed", Lines: []string{}, Error: "本机日志读取失败或超时"}
+	}
+	if result.Lines == nil {
+		result.Lines = []string{}
+	}
+	if result.Status == "" {
+		result.Status = "failed"
+		result.Error = "本机日志读取服务返回不完整"
+	}
+	return result
+}
+
 func request(ctx context.Context, c *http.Client, method, url, token string, input, output any) error {
 	var body io.Reader
 	if input != nil {
