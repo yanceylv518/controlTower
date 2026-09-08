@@ -21,15 +21,36 @@ export function isValidZone(tz: string): boolean {
   try { new Intl.DateTimeFormat('en-US', { timeZone: tz }); return true } catch { return false }
 }
 
-/** `YYYY-MM-DD HH:mm:ss` wall time in `tz` -> instant. */
-export function wallToDate(wall: string, tz: string): Date | null {
+export type WallTimeResult = { date: Date; error?: never } | { date?: never; error: 'invalid' | 'nonexistent' | 'ambiguous' }
+
+/** Reject invalid dates, DST gaps and repeated wall times rather than guessing. */
+export function parseWallTime(wall: string, tz: string): WallTimeResult {
   const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/.exec(wall.trim())
-  if (!m) return null
+  if (!m || !isValidZone(tz)) return { error: 'invalid' }
   const asUTC = Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0))
-  let guess = new Date(asUTC - zoneOffsetMinutes(new Date(asUTC), tz) * 60000)
-  const again = asUTC - zoneOffsetMinutes(guess, tz) * 60000 // DST edge: settle on the second pass
-  if (again !== guess.getTime()) guess = new Date(again)
-  return guess
+  const normalized = `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}:${m[6] || '00'}`
+  if (dateToWall(new Date(asUTC), 'UTC') !== normalized) return { error: 'invalid' }
+  // Gather offsets on both sides of a nearby transition (including half-hour
+  // DST and date-line changes), then verify each candidate by round-trip.
+  const offsets = new Set<number>()
+  for (let hours = -48; hours <= 48; hours += 6) offsets.add(zoneOffsetMinutes(new Date(asUTC + hours * 3600000), tz))
+  const candidates = [...offsets].map(offset => new Date(asUTC - offset * 60000)).filter(date => dateToWall(date, tz) === normalized)
+  if (!candidates.length) return { error: 'nonexistent' }
+  if (candidates.length > 1) return { error: 'ambiguous' }
+  return { date: candidates[0] }
+}
+
+export function wallToDate(wall: string, tz: string): Date | null {
+  return parseWallTime(wall, tz).date || null
+}
+
+/** Change the displayed zone only if both endpoints retain their exact instant. */
+export function rezoneRange(range: [string, string], fromZone: string, toZone: string): [string, string] | null {
+  const from = wallToDate(range[0], fromZone), to = wallToDate(range[1], fromZone)
+  if (!from || !to || !isValidZone(toZone)) return null
+  const converted: [string, string] = [dateToWall(from, toZone), dateToWall(to, toZone)]
+  if (wallToDate(converted[0], toZone)?.getTime() !== from.getTime() || wallToDate(converted[1], toZone)?.getTime() !== to.getTime()) return null
+  return converted
 }
 
 const two = (n: number) => String(n).padStart(2, '0')

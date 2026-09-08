@@ -5,7 +5,7 @@ import { ApiError, siteOf } from '@ct/shared'
 import { client } from '../api'
 import AppShell from '../components/AppShell.vue'
 import { useFiltersStore } from '../stores/filters'
-import { dateToWall, isValidZone, wallToDate, zoneLabel } from '../utils/zoned'
+import { dateToWall, isValidZone, parseWallTime, rezoneRange, zoneLabel } from '../utils/zoned'
 
 interface Query { keyword?: string; source_id: string; container: string; from: string; to: string; request_id?: string; error_code?: string }
 interface Result { note?: string; files_scanned?: number; scanned_bytes?: number; status: string; lines: string[]; truncated?: boolean; error?: string }
@@ -20,14 +20,15 @@ const activeFilters = computed(() => [requestID.value.trim(), errorCode.value.tr
 // The picker holds wall-clock strings in the log source's zone (not the
 // browser's), so what the operator types matches the timestamps in the logs.
 const DEFAULT_ZONE = 'Asia/Shanghai'
-const range = ref<[string, string]>(['', ''])
 const defaultRange = (tz: string): [string, string] => [dateToWall(new Date(Date.now() - 15 * 60000), tz), dateToWall(new Date(), tz)]
+const range = ref<[string, string]>(defaultRange(DEFAULT_ZONE))
+const logZone = ref(DEFAULT_ZONE), zoneNotice = ref('')
 const submitting = ref(false), loading = ref(false), error = ref('')
 const key = (t: Target) => JSON.stringify([t.instance_id, t.agent_id])
 const siteIDs = computed(() => new Set(filters.instances.filter(i => siteOf(i) === filters.site_id).map(i => i.instance_id)))
 const available = computed(() => targets.value.filter(t => siteIDs.value.has(t.instance_id)))
 const sources = computed(() => available.value.flatMap(target => (target.sources || []).filter(source => source.available).map(source => ({ target, source }))))
-const logZone = computed(() => { const tz = sources.value[0]?.source.timezone || DEFAULT_ZONE; return isValidZone(tz) ? tz : DEFAULT_ZONE })
+const sourceZone = computed(() => { const tz = sources.value[0]?.source.timezone || DEFAULT_ZONE; return isValidZone(tz) ? tz : DEFAULT_ZONE })
 const mixedZones = computed(() => new Set(sources.value.map(s => s.source.timezone || DEFAULT_ZONE)).size > 1)
 const zoneText = computed(() => zoneLabel(logZone.value))
 const history = computed(() => tasks.value.filter(t => siteIDs.value.has(t.instance_id)))
@@ -42,8 +43,18 @@ const targetLabel = (t: Target) => `${filters.instances.find(i => i.instance_id 
 let timer: ReturnType<typeof setInterval> | undefined
 let refreshing = false, selection = 0, disposed = false
 watch(() => filters.site_id, () => { selection++; current.value = []; loading.value = false; error.value = ''; submissionError.value = '' })
-// Re-express the default window whenever the zone changes (first load, site switch).
-watch(logZone, (tz, previous) => { if (!range.value[0] || !range.value[1] || (previous && tz !== previous)) range.value = defaultRange(tz) }, { immediate: true })
+// Refreshes and site changes may change the preferred zone, never the selected instants.
+watch(sourceZone, tz => {
+  if (tz === logZone.value) { zoneNotice.value = ''; return }
+  const converted = rezoneRange(range.value, logZone.value, tz)
+  if (!converted) {
+    zoneNotice.value = `来源时区已变化，当前区间无法无歧义地转换；已保留原时间及 ${logZone.value} 时区。`
+    return
+  }
+  range.value = converted
+  logZone.value = tz
+  zoneNotice.value = ''
+})
 function failure(e: unknown) { return e instanceof ApiError && e.status === 409 ? '目标离线、容器不可用或查询队列已满，请刷新后重试' : '加载失败，请检查网络或登录状态' }
 async function refresh() {
   if (refreshing) return
@@ -68,8 +79,13 @@ async function refresh() {
 }
 async function submit() {
   if (submitting.value || !sources.value.length) return
-  const from = wallToDate(range.value?.[0] || '', logZone.value), to = wallToDate(range.value?.[1] || '', logZone.value)
-  if (!from || !to) { ElMessage.warning('请选择时间范围'); return }
+  const start = parseWallTime(range.value?.[0] || '', logZone.value), end = parseWallTime(range.value?.[1] || '', logZone.value)
+  const timeError = start.error || end.error
+  if (timeError) {
+    ElMessage.warning(timeError === 'nonexistent' ? '所选时间因时区切换而不存在，请选择其他时间' : timeError === 'ambiguous' ? '所选时间因时区回拨而出现两次，请选择不重复的时间' : '请选择有效的时间范围')
+    return
+  }
+  const from = start.date!, to = end.date!
   if (+to <= +from || +to - +from > 3600000 || +from < Date.now() - 7 * 86400000 || +to > Date.now() + 60000) { ElMessage.warning('请选择最近 7 天内、跨度不超过 1 小时的时间范围'); return }
   const query: Omit<Query, 'source_id' | 'container'> = { from: from.toISOString(), to: to.toISOString() }
   if (keyword.value.trim()) query.keyword = keyword.value.trim()
@@ -113,7 +129,7 @@ onBeforeUnmount(() => { disposed = true; selection++; if (timer) clearInterval(t
       <section class="query-panel">
         <form class="toolbar" @submit.prevent="submit">
           <el-date-picker v-model="range" class="toolbar-time" type="datetimerange" value-format="YYYY-MM-DD HH:mm:ss" start-placeholder="开始时间" end-placeholder="结束时间" :clearable="false" aria-label="查询时间区间" />
-          <el-tooltip :content="mixedZones ? '站点内日志来源时区不一致，按第一个来源的时区解释' : '时间按日志来源的时区解释和显示，与浏览器时区无关'" placement="bottom"><span class="toolbar-zone" :class="{ mixed: mixedZones }">{{ zoneText }}</span></el-tooltip>
+          <el-tooltip :content="mixedZones ? '站点内日志来源时区不一致，查询按此处标注时区解释' : '查询按此处标注时区解释；来源变化时保留已选实际时间'" placement="bottom"><span class="toolbar-zone" :class="{ mixed: mixedZones }">{{ zoneText }}</span></el-tooltip>
           <el-input v-model="keyword" class="toolbar-keyword" maxlength="128" placeholder="关键词，匹配日志原文" aria-label="关键词" clearable />
           <el-button :type="expanded || activeFilters ? 'primary' : 'default'" plain :aria-expanded="expanded" @click="expanded = !expanded">更多筛选{{ activeFilters ? `（${activeFilters}）` : '' }}</el-button>
           <el-button type="primary" native-type="submit" :loading="submitting" :disabled="!sources.length || busy">查询</el-button>
@@ -126,6 +142,7 @@ onBeforeUnmount(() => { disposed = true; selection++; if (timer) clearInterval(t
           <span class="query-note">所有条件同时满足，收起后仍生效</span>
         </div>
         <div class="target-status"><span>{{ filters.site_id || '未选择站点' }} · {{ sources.length }} 个可查询来源</span><el-tooltip content="查询当前站点全部在线可用来源。最近 7 天内，单次跨度最多 1 小时；每个来源最多扫描 256 个文件、64 MiB，返回 2,000 行 / 512 KiB。关键词按原文包含匹配，不支持正则或命令。" placement="bottom"><button type="button" class="help-button" aria-label="查询范围及限制">ⓘ 查询说明</button></el-tooltip></div>
+        <el-alert v-if="zoneNotice" :title="zoneNotice" type="warning" :closable="false" />
         <el-alert v-if="!sources.length" title="当前站点暂无可查询日志，请检查日志读取服务是否已接入。" type="info" :closable="false" />
         <el-alert v-if="missing.length" :title="`${missing.length} 个站点实例尚未接入或已离线，本次查询无法覆盖这些实例。`" type="warning" :closable="false" />
         <template v-for="t in available" :key="key(t)">
