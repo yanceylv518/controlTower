@@ -1,7 +1,6 @@
 package containerlogs
 
 import (
-	"bytes"
 	"compress/gzip"
 	"context"
 	cl "controltower/internal/containerlog"
@@ -12,12 +11,33 @@ import (
 	"time"
 )
 
-func indexTestQuery() cl.Query {
+func streamTestQuery() cl.Query {
 	now := time.Now().UTC().Truncate(time.Second)
 	return cl.Query{SourceID: strings.Repeat("a", 64), Container: "new-api", From: now.Add(-time.Minute), To: now, Keyword: "needle"}
 }
 
-func finishIndexed(t *testing.T, e *IndexEngine, dir string, q cl.Query) ([]string, int64, int) {
+func TestStreamReturnsMatchesBeforeReadingWholeFile(t *testing.T) {
+	dir := t.TempDir()
+	q := streamTestQuery()
+	stamp := q.From.Add(time.Second).Format(time.RFC3339)
+	data := stamp + " needle first\n" + strings.Repeat(stamp+" other\n", 500)
+	if err := os.WriteFile(filepath.Join(dir, "app.log"), []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+	e := NewStreamEngine()
+	e.pageBytes = 256
+	first := e.Query(context.Background(), dir, q, time.UTC)
+	if first.Phase != "querying" || first.IndexedBytes != 0 || first.Complete || first.NextCursor == "" || len(first.Lines) != 1 || first.ScannedBytes != 256 {
+		t.Fatalf("not streamed: %+v", first)
+	}
+	q.Cursor = first.NextCursor
+	lines, rest, _ := finishStream(t, e, dir, q)
+	if len(lines) != 0 || rest+first.ScannedBytes != int64(len(data)) {
+		t.Fatalf("rescanned or duplicated: lines=%v bytes=%d", lines, rest)
+	}
+}
+
+func finishStream(t *testing.T, e *StreamEngine, dir string, q cl.Query) ([]string, int64, int) {
 	t.Helper()
 	var lines []string
 	var bytes int64
@@ -43,15 +63,15 @@ func finishIndexed(t *testing.T, e *IndexEngine, dir string, q cl.Query) ([]stri
 	return nil, 0, 0
 }
 
-func TestIndexFindsMiddleBeyondBoth64MiBWindows(t *testing.T) {
+func TestStreamFindsMiddleBeyondBoth64MiBWindows(t *testing.T) {
 	dir := t.TempDir()
-	q := indexTestQuery()
+	q := streamTestQuery()
 	f, err := os.Create(filepath.Join(dir, "large.log"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Sparse zero regions deliberately include unparseable records, but a valid
-	// middle record must still be located after incremental indexing.
+	// middle record must still be located after incremental streaming.
 	if _, err = f.Seek(70*1024*1024, 0); err != nil {
 		t.Fatal(err)
 	}
@@ -60,16 +80,16 @@ func TestIndexFindsMiddleBeyondBoth64MiBWindows(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.Close()
-	engine := NewIndexEngine()
-	lines, _, pages := finishIndexed(t, engine, dir, q)
-	if len(lines) != 1 || !strings.Contains(lines[0], "needle-middle") || pages < 3 {
+	engine := NewStreamEngine()
+	lines, scanned, pages := finishStream(t, engine, dir, q)
+	if len(lines) != 1 || !strings.Contains(lines[0], "needle-middle") || pages < 3 || scanned != 140*1024*1024 {
 		t.Fatal("middle was lost", pages, lines)
 	}
 }
 
-func TestSparseIndexReuseAppendAndContinuationIdentity(t *testing.T) {
+func TestStreamRereadsNewQueriesAndPreservesContinuationIdentity(t *testing.T) {
 	dir := t.TempDir()
-	q := indexTestQuery()
+	q := streamTestQuery()
 	old := q.From.Add(-time.Hour).Format(time.RFC3339) + " " + strings.Repeat("x", 1024) + "\n"
 	filename := filepath.Join(dir, "app.log")
 	f, err := os.Create(filename)
@@ -81,10 +101,10 @@ func TestSparseIndexReuseAppendAndContinuationIdentity(t *testing.T) {
 	}
 	_, _ = f.WriteString(q.From.Add(time.Second).Format(time.RFC3339) + " needle-one\n")
 	f.Close()
-	engine := NewIndexEngine()
+	engine := NewStreamEngine()
 	engine.pageBytes = 256 * 1024
 	first := engine.Query(context.Background(), dir, q, time.UTC)
-	if first.NextCursor == "" || first.Complete || first.Phase != "indexing" {
+	if first.NextCursor == "" || first.Complete || first.Phase != "querying" {
 		t.Fatal(first)
 	}
 	bad := q
@@ -97,17 +117,21 @@ func TestSparseIndexReuseAppendAndContinuationIdentity(t *testing.T) {
 	resume.Cursor = first.NextCursor
 	second := engine.Query(context.Background(), dir, resume, time.UTC)
 	replay := engine.Query(context.Background(), dir, resume, time.UTC)
-	if second.NextCursor != replay.NextCursor || second.IndexedBytes != replay.IndexedBytes {
+	if second.NextCursor != replay.NextCursor || second.ScannedBytes != replay.ScannedBytes {
 		t.Fatal("retry advanced cursor")
 	}
 	resume.Cursor = second.NextCursor
-	lines, _, _ := finishIndexed(t, engine, dir, resume)
+	lines, _, _ := finishStream(t, engine, dir, resume)
 	if len(lines) != 1 {
 		t.Fatal(lines)
 	}
-	_, cachedBytes, _ := finishIndexed(t, engine, dir, q)
-	if cachedBytes > 1024*1024 {
-		t.Fatal("cached time lookup scanned unrelated prefix", cachedBytes)
+	_, cachedBytes, _ := finishStream(t, engine, dir, q)
+	info, err := os.Stat(filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cachedBytes != info.Size() {
+		t.Fatal("new query must read each byte once", cachedBytes)
 	}
 	f, err = os.OpenFile(filename, os.O_APPEND|os.O_WRONLY, 0600)
 	if err != nil {
@@ -115,15 +139,19 @@ func TestSparseIndexReuseAppendAndContinuationIdentity(t *testing.T) {
 	}
 	_, _ = f.WriteString(q.From.Add(2*time.Second).Format(time.RFC3339) + " needle-two\n")
 	f.Close()
-	lines, appendBytes, _ := finishIndexed(t, engine, dir, q)
-	if len(lines) != 2 || appendBytes > 2*1024*1024 {
-		t.Fatal("append failed to reuse index", appendBytes, lines)
+	lines, appendBytes, _ := finishStream(t, engine, dir, q)
+	info, err = os.Stat(filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lines) != 2 || appendBytes != info.Size() {
+		t.Fatal("new query did not include append", appendBytes, lines)
 	}
 }
 
 func TestCompressedContinuationAndResultPagination(t *testing.T) {
 	dir := t.TempDir()
-	q := indexTestQuery()
+	q := streamTestQuery()
 	f, err := os.Create(filepath.Join(dir, "history.log.gz"))
 	if err != nil {
 		t.Fatal(err)
@@ -134,23 +162,23 @@ func TestCompressedContinuationAndResultPagination(t *testing.T) {
 	}
 	z.Close()
 	f.Close()
-	engine := NewIndexEngine()
+	engine := NewStreamEngine()
 	engine.pageBytes = fileScanLimit
-	lines, _, pages := finishIndexed(t, engine, dir, q)
+	lines, _, pages := finishStream(t, engine, dir, q)
 	if len(lines) != cl.MaxLines+25 || pages < 2 {
 		t.Fatal("archive page lost/duplicated records", len(lines), pages)
 	}
 }
 
-func TestIndexCursorExpiresAndDetectsRotation(t *testing.T) {
+func TestStreamCursorExpiresAndDetectsRotation(t *testing.T) {
 	dir := t.TempDir()
-	q := indexTestQuery()
+	q := streamTestQuery()
 	filename := filepath.Join(dir, "app.log")
 	data := strings.Repeat(q.From.Format(time.RFC3339)+" needle\n", 100)
 	if err := os.WriteFile(filename, []byte(data), 0600); err != nil {
 		t.Fatal(err)
 	}
-	engine := NewIndexEngine()
+	engine := NewStreamEngine()
 	engine.pageBytes = 100
 	first := engine.Query(context.Background(), dir, q, time.UTC)
 	q.Cursor = first.NextCursor
@@ -172,9 +200,9 @@ func TestIndexCursorExpiresAndDetectsRotation(t *testing.T) {
 	}
 }
 
-func TestIndexedParserAcrossPagesAndAppendToLastRecord(t *testing.T) {
+func TestStreamParserAcrossPagesAndAppendToLastRecord(t *testing.T) {
 	dir := t.TempDir()
-	q := indexTestQuery()
+	q := streamTestQuery()
 	q.RequestID = "req-1"
 	q.ErrorCode = "500"
 	name := filepath.Join(dir, "app.log")
@@ -182,9 +210,9 @@ func TestIndexedParserAcrossPagesAndAppendToLastRecord(t *testing.T) {
 	if err := os.WriteFile(name, []byte(header+"code="), 0600); err != nil {
 		t.Fatal(err)
 	}
-	engine := NewIndexEngine()
+	engine := NewStreamEngine()
 	engine.pageBytes = 7
-	lines, _, _ := finishIndexed(t, engine, dir, q)
+	lines, _, _ := finishStream(t, engine, dir, q)
 	if len(lines) != 0 {
 		t.Fatal(lines)
 	}
@@ -194,53 +222,8 @@ func TestIndexedParserAcrossPagesAndAppendToLastRecord(t *testing.T) {
 	}
 	_, _ = f.WriteString("500 password=private\n")
 	f.Close()
-	lines, _, _ = finishIndexed(t, engine, dir, q)
+	lines, _, _ = finishStream(t, engine, dir, q)
 	if len(lines) != 2 || strings.Contains(strings.Join(lines, "\n"), "private") {
 		t.Fatal("partial-line append or multiline match failed", lines)
-	}
-}
-
-// Whole-file pruning requires a complete index; file metadata alone is insufficient.
-func TestCompleteIndexPrunesFilesOutsideWindow(t *testing.T) {
-	dir := t.TempDir()
-	loc, _ := time.LoadLocation("Asia/Shanghai")
-	now := time.Date(2026, 9, 8, 12, 0, 0, 0, loc)
-	line := func(at time.Time, text string) string {
-		return "[GIN] " + at.Format("2006/01/02 - 15:04:05") + " | 200 | 1ms | 10.0.0.1 | POST /v1 " + text + "\n"
-	}
-	write := func(name, content string, mod time.Time) {
-		path := filepath.Join(dir, name)
-		if strings.HasSuffix(name, ".gz") {
-			var buf bytes.Buffer
-			w := gzip.NewWriter(&buf)
-			_, _ = w.Write([]byte(content))
-			_ = w.Close()
-			if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
-				t.Fatal(err)
-			}
-		} else if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Chtimes(path, mod, mod); err != nil {
-			t.Fatal(err)
-		}
-	}
-	// Rotated two days ago: last write long before the window.
-	write("app.log.2026-09-06.gz", line(now.Add(-48*time.Hour), "old NEEDLE"), now.Add(-47*time.Hour))
-	// Written after the window: first record already past the window end.
-	write("app.log.future", line(now.Add(3*time.Hour), "future NEEDLE"), now.Add(4*time.Hour))
-	// Overlapping: must be indexed and matched.
-	write("app.log", line(now.Add(-2*time.Hour), "early")+line(now.Add(-10*time.Minute), "hit NEEDLE"), now)
-	q := cl.Query{SourceID: strings.Repeat("a", 64), Container: "c", From: now.Add(-30 * time.Minute), To: now, Keyword: "NEEDLE"}
-	s := &searchSession{query: q, dir: dir}
-	if err := s.snapshot(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if len(s.files) != 3 || s.pruned != 0 {
-		t.Fatalf("pruning wrong: files=%v pruned=%d", s.files, s.pruned)
-	}
-	result := NewIndexEngine().Query(context.Background(), dir, q, loc)
-	if result.Status != "succeeded" || !result.Complete || len(result.Lines) != 1 || !strings.Contains(result.Lines[0], "hit NEEDLE") || !strings.Contains(result.Note, "跳过 1 个") {
-		t.Fatalf("pruned query wrong: %+v", result)
 	}
 }

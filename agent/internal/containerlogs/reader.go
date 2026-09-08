@@ -19,7 +19,7 @@ const scanLimit = 8 * 1024 * 1024
 const tailLines = 10000
 
 type Reader struct {
-	index      *IndexEngine
+	stream     *StreamEngine
 	Containers []string
 	Discover   func(context.Context) cl.Inventory
 	Location   *time.Location
@@ -38,7 +38,7 @@ func NewReaderWithTimezone(names []string, timezone string) (*Reader, error) {
 	if err != nil {
 		return nil, err
 	}
-	h := &Reader{index: NewIndexEngine(), Containers: names, Location: loc, busy: make(chan struct{}, 1)}
+	h := &Reader{stream: NewStreamEngine(), Containers: names, Location: loc, busy: make(chan struct{}, 1)}
 	h.Discover = func(ctx context.Context) cl.Inventory { return Discover(ctx, discoveryCommand, names, timezone) }
 	return h, nil
 }
@@ -76,7 +76,7 @@ func (h *Reader) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "busy", 429)
 			return
 		}
-		h.index.Release(input.Cursor)
+		h.stream.Release(input.Cursor)
 		_, _ = w.Write([]byte(`{}`))
 		return
 	}
@@ -114,7 +114,7 @@ func (h *Reader) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if q.SourceID == "" || q.SourceID != source.ID {
 			break
 		}
-		result = h.index.Query(ctx, source.HostDir, q, h.Location)
+		result = h.stream.Query(ctx, source.HostDir, q, h.Location)
 		break
 	}
 	if inv.Error != "" && len(inv.Sources) == 0 {

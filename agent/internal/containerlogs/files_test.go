@@ -37,7 +37,7 @@ func TestFilesHistoryTimeAndMultiline(t *testing.T) {
 	if e = os.WriteFile(filepath.Join(dir, "secret.env"), []byte(data), 0600); e != nil {
 		t.Fatal(e)
 	}
-	got := NewIndexEngine().Query(context.Background(), dir, q, loc)
+	got := NewStreamEngine().Query(context.Background(), dir, q, loc)
 	if got.Status != "succeeded" || got.Truncated || len(got.Lines) != 4 || got.FilesScanned != 2 {
 		t.Fatalf("unexpected result: %#v", got)
 	}
@@ -60,13 +60,13 @@ func TestFilesSkippedContentAndLimits(t *testing.T) {
 	if e := os.WriteFile(filepath.Join(dir, "app.log"), []byte(data), 0600); e != nil {
 		t.Fatal(e)
 	}
-	got := NewIndexEngine().Query(context.Background(), dir, q, time.UTC)
+	got := NewStreamEngine().Query(context.Background(), dir, q, time.UTC)
 	if !got.Truncated || len(got.Lines) != cl.MaxLines {
 		t.Fatalf("missing cap or skipped notice: %#v", got)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if r := NewIndexEngine().Query(ctx, dir, q, time.UTC); r.Status == "succeeded" {
+	if r := NewStreamEngine().Query(ctx, dir, q, time.UTC); r.Status == "succeeded" {
 		t.Fatal("canceled query reported complete")
 	}
 }

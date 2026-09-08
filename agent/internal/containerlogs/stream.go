@@ -18,50 +18,42 @@ import (
 )
 
 const continuationTTL = 10 * time.Minute
+const recentLogFiles = 2
 
-type indexSnapshot struct {
+type fileSnapshot struct {
 	name      string
 	info      os.FileInfo
 	signature string
 }
-type cachedIndex struct {
-	snapshot indexSnapshot
-	index    *sparseIndex
-}
 type searchSession struct {
 	query             cl.Query
 	dir               string
-	files             []indexSnapshot
+	files             []fileSnapshot
 	filePos           int
-	index             *sparseIndex
-	spanPos           int
 	readPos           int64
 	parser            *recordParser
 	compressed        *gzip.Reader
 	compressedFile    *os.File
 	pending           []string
-	pruned            int
+	excluded          int
 	skipped           bool
 	partial           bool
-	indexedBytes      int64
 	current, previous string
 	lastResult        cl.Result
 	expires           time.Time
 }
 
-// Indexes and cursors live only in this privileged local process. The Agent
-// never receives file paths or an index; restart/expiry fails an old cursor.
-type IndexEngine struct {
+// Stream cursors live only in this local process. Restart/expiry fails old cursors.
+type StreamEngine struct {
 	sessions  []*searchSession
-	cache     map[string]cachedIndex
 	pageBytes int64
 }
 
-func NewIndexEngine() *IndexEngine {
-	return &IndexEngine{cache: map[string]cachedIndex{}, pageBytes: fileScanLimit}
+func NewStreamEngine() *StreamEngine {
+	return &StreamEngine{pageBytes: fileScanLimit}
 }
 
-func (e *IndexEngine) Release(cursor string) {
+func (e *StreamEngine) Release(cursor string) {
 	if cursor == "" {
 		return
 	}
@@ -86,8 +78,6 @@ func (s *searchSession) close() {
 func (s *searchSession) nextFile() {
 	s.close()
 	s.filePos++
-	s.index = nil
-	s.spanPos = 0
 	s.readPos = 0
 	s.parser = nil
 }
@@ -103,7 +93,7 @@ func snapshotSignature(f *os.File, size int64) (string, error) {
 	}
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }
-func snapshotMatches(f *os.File, s indexSnapshot) bool {
+func snapshotMatches(f *os.File, s fileSnapshot) bool {
 	info, e := f.Stat()
 	if e != nil || !os.SameFile(info, s.info) || info.Size() < s.info.Size() {
 		return false
@@ -118,7 +108,7 @@ func snapshotMatches(f *os.File, s indexSnapshot) bool {
 }
 func queryIdentity(q cl.Query) string { q.Cursor = ""; b, _ := json.Marshal(q); return string(b) }
 
-func (e *IndexEngine) Query(ctx context.Context, dir string, q cl.Query, loc *time.Location) cl.Result {
+func (e *StreamEngine) Query(ctx context.Context, dir string, q cl.Query, loc *time.Location) cl.Result {
 	now := time.Now()
 	live := e.sessions[:0]
 	for _, s := range e.sessions {
@@ -172,7 +162,6 @@ func (e *IndexEngine) Query(ctx context.Context, dir string, q cl.Query, loc *ti
 	pageCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	result := e.page(pageCtx, session, loc)
-	result.IndexedBytes = session.indexedBytes
 	if result.Status == "failed" {
 		session.close()
 	}
@@ -186,10 +175,9 @@ func (e *IndexEngine) Query(ctx context.Context, dir string, q cl.Query, loc *ti
 	} else if result.Status == "succeeded" {
 		result.Complete = true
 		result.Phase = "complete"
-		if len(session.files) == 0 && session.pruned == 0 {
+		if len(session.files) == 0 {
 			result.Note = "日志目录中没有可查询的日志文件"
-		} else if session.pruned > 0 {
-			result.Note = fmt.Sprintf("按完整时间索引跳过 %d 个不在查询窗口内的文件。", session.pruned)
+
 		}
 	}
 	result.Truncated = session.partial || session.skipped
@@ -241,59 +229,55 @@ func (s *searchSession) snapshot(ctx context.Context) error {
 		if !d.Type().IsRegular() || !logName.MatchString(d.Name()) {
 			return nil
 		}
-		file, err := openLogFile(root, name)
-		if err != nil {
-			return err
-		}
-		defer file.Close()
-		info, err := file.Stat()
+		// Enumerate metadata only: do not read samples or bodies of older files.
+		info, err := d.Info()
 		if err != nil {
 			return err
 		}
 		if !info.Mode().IsRegular() {
 			return nil
 		}
-		signature, err := snapshotSignature(file, info.Size())
-		if err != nil {
-			return err
-		}
-		s.files = append(s.files, indexSnapshot{name, info, signature})
+		s.files = append(s.files, fileSnapshot{name: name, info: info})
 		return nil
 	})
 	sort.Slice(s.files, func(i, j int) bool {
 		a, b := s.files[i], s.files[j]
-		az, bz := strings.HasSuffix(strings.ToLower(a.name), ".gz"), strings.HasSuffix(strings.ToLower(b.name), ".gz")
-		if az != bz {
-			return !az
-		}
 		if a.info.ModTime().Equal(b.info.ModTime()) {
 			return a.name < b.name
 		}
 		return a.info.ModTime().After(b.info.ModTime())
 	})
-	return err
-}
-
-func (e *IndexEngine) cached(file *os.File, s *searchSession, snap indexSnapshot, loc *time.Location) *sparseIndex {
-	old, ok := e.cache[s.query.SourceID+"\n"+snap.name]
-	if ok && snapshotMatches(file, old.snapshot) {
-		if snap.info.Size() == old.snapshot.info.Size() {
-			return old.index
+	if err != nil {
+		return err
+	}
+	if len(s.files) > recentLogFiles {
+		s.excluded = len(s.files) - recentLogFiles
+		s.files = s.files[:recentLogFiles]
+	}
+	// Freeze the chosen set for every continuation of this task. A newly
+	// rotated file is picked up by the next new query, never substituted midway.
+	for n := range s.files {
+		snap := &s.files[n]
+		file, err := openLogFile(root, snap.name)
+		if err != nil {
+			return err
 		}
-		// Rebuild the final span because an append may extend its last record/line.
-		if len(old.index.spans) > 0 {
-			start := old.index.spans[len(old.index.spans)-1].start
-			index := newSparseIndex(start, loc)
-			index.spans = append(index.spans, old.index.spans[:len(old.index.spans)-1]...)
-			index.blockSize = old.index.blockSize
-			index.skipped = old.index.skipped
-			return index
+		info, err := file.Stat()
+		if err != nil || !info.Mode().IsRegular() || !os.SameFile(info, snap.info) || info.Size() < snap.info.Size() || (info.Size() == snap.info.Size() && !info.ModTime().Equal(snap.info.ModTime())) {
+			file.Close()
+			return fmt.Errorf("log changed during snapshot")
+		}
+		snap.info = info
+		snap.signature, err = snapshotSignature(file, info.Size())
+		file.Close()
+		if err != nil {
+			return err
 		}
 	}
-	return newSparseIndex(0, loc)
+	return nil
 }
 
-func (e *IndexEngine) page(ctx context.Context, s *searchSession, loc *time.Location) cl.Result {
+func (e *StreamEngine) page(ctx context.Context, s *searchSession, loc *time.Location) cl.Result {
 	result := cl.Result{Status: "succeeded", Lines: []string{}, Phase: "querying"}
 	total := 0
 	buf := make([]byte, 64*1024)
@@ -306,7 +290,7 @@ func (e *IndexEngine) page(ctx context.Context, s *searchSession, loc *time.Loca
 	}
 	defer root.Close()
 	matches := newMatcher(s.query)
-	emit := func(record indexedRecord) {
+	emit := func(record logRecord) {
 		if record.oversized || record.stamp.IsZero() {
 			s.skipped = true
 			return
@@ -391,90 +375,27 @@ func (e *IndexEngine) page(ctx context.Context, s *searchSession, loc *time.Loca
 			}
 			continue
 		}
-		if s.index == nil {
-			s.index = e.cached(file, s, snap, loc)
-		}
-		index := s.index
-		if !index.complete {
-			result.Phase = "indexing"
-			count := min(int64(len(buf)), snap.info.Size()-index.offset, e.pageBytes-result.ScannedBytes)
-			n, readErr := file.ReadAt(buf[:count], index.offset)
-			file.Close()
-			if readErr != nil && !(readErr == io.EOF && int64(n) == count) {
-				result.Status = "failed"
-				result.Error = "索引建立期间日志发生变化，请重新查询"
-				return result
-			}
-			index.offset += int64(n)
-			result.ScannedBytes += int64(n)
-			s.indexedBytes += int64(n)
-			index.parser.feed(buf[:n], index.offset == snap.info.Size(), index.add)
-			if index.offset == snap.info.Size() {
-				index.flush()
-				index.complete = true
-				s.skipped = s.skipped || index.skipped
-				if len(e.cache) >= 32 {
-					for key := range e.cache {
-						delete(e.cache, key)
-						break
-					}
-				}
-				e.cache[s.query.SourceID+"\n"+snap.name] = cachedIndex{snap, index}
-			}
-			continue
-		}
 		result.Phase = "querying"
-		s.skipped = s.skipped || index.skipped
-		// Only a complete, validated index can prove that no record overlaps.
-		// mtime and the first record are not bounds on event timestamps.
-		if s.spanPos == 0 && !index.overlaps(s.query.From, s.query.To) {
-			file.Close()
-			s.pruned++
-			s.nextFile()
-			continue
-		}
-		if s.spanPos >= len(index.spans) {
-			file.Close()
-			s.nextFile()
-			continue
-		}
-		span := index.spans[s.spanPos]
-		if span.min.IsZero() || span.max.Before(s.query.From) || !span.min.Before(s.query.To) {
-			file.Close()
-			s.spanPos++
-			continue
-		}
 		if s.parser == nil {
-			s.readPos = span.start
-			s.parser = &recordParser{offset: span.start, lineStart: span.start, loc: loc}
+			s.parser = &recordParser{loc: loc}
 		}
-		count := min(int64(len(buf)), span.end-s.readPos, e.pageBytes-result.ScannedBytes)
+		count := min(int64(len(buf)), snap.info.Size()-s.readPos, e.pageBytes-result.ScannedBytes)
 		n, readErr := file.ReadAt(buf[:count], s.readPos)
 		file.Close()
-		if readErr != nil {
+		if readErr != nil && !(readErr == io.EOF && int64(n) == count) {
 			result.Status = "failed"
-			result.Error = "日志区间读取失败，请重新查询"
+			result.Error = "日志读取失败，请重新查询"
 			return result
 		}
 		s.readPos += int64(n)
 		result.ScannedBytes += int64(n)
-		s.parser.feed(buf[:n], s.readPos == span.end, emit)
-		if s.readPos == span.end {
-			s.parser = nil
-			s.spanPos++
+		s.parser.feed(buf[:n], s.readPos == snap.info.Size(), emit)
+		if s.readPos == snap.info.Size() {
+			s.nextFile()
 		}
-	}
-}
-func snapshotMatchesSafe(file *os.File, snap indexSnapshot) bool {
-	return file != nil && snapshotMatches(file, snap)
-}
 
-// Unknown/oversized records remain reported through index.skipped.
-func (index *sparseIndex) overlaps(from, to time.Time) bool {
-	for _, span := range index.spans {
-		if !span.min.IsZero() && !span.max.Before(from) && span.min.Before(to) {
-			return true
-		}
 	}
-	return false
+}
+func snapshotMatchesSafe(file *os.File, snap fileSnapshot) bool {
+	return file != nil && snapshotMatches(file, snap)
 }

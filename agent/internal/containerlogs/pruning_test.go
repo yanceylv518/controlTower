@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-func TestCompleteIndexPruningReusesCacheAndRebuildsAppend(t *testing.T) {
+func TestStreamNewQueryIncludesAppend(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Now().UTC().Truncate(time.Second)
 	path := filepath.Join(dir, "app.log")
@@ -20,11 +20,11 @@ func TestCompleteIndexPruningReusesCacheAndRebuildsAppend(t *testing.T) {
 		t.Fatal(err)
 	}
 	q := cl.Query{SourceID: strings.Repeat("a", 64), Container: "c", From: now.Add(-15 * time.Minute), To: now, Keyword: "NEEDLE"}
-	engine := NewIndexEngine()
+	engine := NewStreamEngine()
 	first := engine.Query(context.Background(), dir, q, time.UTC)
 	second := engine.Query(context.Background(), dir, q, time.UTC)
-	if !first.Complete || first.IndexedBytes == 0 || !second.Complete || second.ScannedBytes != 0 || len(second.Lines) != 0 {
-		t.Fatalf("cache reuse: first=%+v second=%+v", first, second)
+	if !first.Complete || first.IndexedBytes != 0 || !second.Complete || second.ScannedBytes != first.ScannedBytes || len(second.Lines) != 0 {
+		t.Fatalf("stream reads: first=%+v second=%+v", first, second)
 	}
 	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0600)
 	if err != nil {
@@ -63,10 +63,10 @@ func TestSnapshotDoesNotProbeGzipAndPageBoundsContent(t *testing.T) {
 	if err = s.snapshot(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(s.files) != 1 || s.compressed != nil || s.indexedBytes != 0 {
+	if len(s.files) != 1 || s.compressed != nil {
 		t.Fatal("snapshot processed content")
 	}
-	engine := NewIndexEngine()
+	engine := NewStreamEngine()
 	engine.pageBytes = 1024
 	result := engine.Query(context.Background(), dir, q, time.UTC)
 	if result.Status != "succeeded" || result.Complete || result.NextCursor == "" || result.ScannedBytes != 1024 {
@@ -98,7 +98,7 @@ func TestPruningMustKeepMatchingRecords(t *testing.T) {
 				t.Fatal(err)
 			}
 			q := cl.Query{SourceID: strings.Repeat("a", 64), Container: "c", From: now.Add(-15 * time.Minute), To: now, Keyword: "NEEDLE"}
-			result := NewIndexEngine().Query(context.Background(), dir, q, loc)
+			result := NewStreamEngine().Query(context.Background(), dir, q, loc)
 			if len(result.Lines) != 1 {
 				t.Fatalf("matching record lost: %+v", result)
 			}

@@ -9,7 +9,7 @@ import (
 )
 
 func TestAutomaticQueryAggregatesPagesIntoOneTask(t *testing.T) {
-	q := indexTestQuery()
+	q := streamTestQuery()
 	a := newAutomaticQuery(cl.Task{ID: "same-task", Query: q})
 	calls := 0
 	read := func(_ context.Context, got cl.Query) cl.Result {
@@ -44,14 +44,14 @@ func TestAutomaticQueryAggregatesPagesIntoOneTask(t *testing.T) {
 }
 
 func TestAutomaticQueryResultCapAndTimeoutAreExplicit(t *testing.T) {
-	a := newAutomaticQuery(cl.Task{Query: indexTestQuery()})
+	a := newAutomaticQuery(cl.Task{Query: streamTestQuery()})
 	r := a.step(context.Background(), func(context.Context, cl.Query) cl.Result {
 		return cl.Result{Status: "succeeded", Lines: strings.Split(strings.Repeat("line,", cl.MaxLines), ",")[:cl.MaxLines], NextCursor: strings.Repeat("a", 64)}
 	})
 	if r.Status != "succeeded" || !r.Truncated || r.Complete || r.NextCursor != "" {
 		t.Fatal("cap reported complete", r)
 	}
-	a = newAutomaticQuery(cl.Task{Query: indexTestQuery()})
+	a = newAutomaticQuery(cl.Task{Query: streamTestQuery()})
 	a.started = time.Now().Add(-automaticQueryTimeout - time.Second)
 	r = a.step(context.Background(), func(context.Context, cl.Query) cl.Result { t.Fatal("ran expired query"); return cl.Result{} })
 	if r.Status != "timed_out" || r.Complete || r.Error == "" {
