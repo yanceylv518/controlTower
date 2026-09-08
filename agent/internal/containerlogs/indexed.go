@@ -1,7 +1,6 @@
 package containerlogs
 
 import (
-	"bufio"
 	"compress/gzip"
 	"context"
 	cl "controltower/internal/containerlog"
@@ -164,7 +163,7 @@ func (e *IndexEngine) Query(ctx context.Context, dir string, q cl.Query, loc *ti
 			return fail("进行中的查询过多，请稍后重试（进度保留 10 分钟）")
 		}
 		session = &searchSession{query: q, dir: dir, expires: now.Add(continuationTTL)}
-		if err := session.snapshot(ctx, loc); err != nil {
+		if err := session.snapshot(ctx); err != nil {
 			return fail("无法建立日志文件快照，请检查目录读取权限")
 		}
 		e.sessions = append(e.sessions, session)
@@ -190,7 +189,7 @@ func (e *IndexEngine) Query(ctx context.Context, dir string, q cl.Query, loc *ti
 		if len(session.files) == 0 && session.pruned == 0 {
 			result.Note = "日志目录中没有可查询的日志文件"
 		} else if session.pruned > 0 {
-			result.Note = fmt.Sprintf("按文件时间跳过 %d 个不在查询窗口内的文件。", session.pruned)
+			result.Note = fmt.Sprintf("按完整时间索引跳过 %d 个不在查询窗口内的文件。", session.pruned)
 		}
 	}
 	result.Truncated = session.partial || session.skipped
@@ -210,47 +209,7 @@ func (e *IndexEngine) Query(ctx context.Context, dir string, q cl.Query, loc *ti
 	return result
 }
 
-// fileTimeTolerance absorbs slightly out-of-order timestamps and clock drift
-// between the application and the filesystem when pruning whole files.
-const fileTimeTolerance = time.Hour
-
-// firstRecordTime returns the timestamp of the first parseable record in the
-// file head (decompressing a bounded prefix for gzip). false when none is found
-// within the prefix, in which case the file is kept.
-func firstRecordTime(file *os.File, name string, loc *time.Location) (time.Time, bool) {
-	var reader io.Reader = io.NewSectionReader(file, 0, 64*1024)
-	if strings.HasSuffix(strings.ToLower(name), ".gz") {
-		gz, err := gzip.NewReader(io.NewSectionReader(file, 0, 256*1024))
-		if err != nil {
-			return time.Time{}, false
-		}
-		defer gz.Close()
-		reader = io.LimitReader(gz, 64*1024)
-	}
-	scan := bufio.NewScanner(reader)
-	scan.Buffer(make([]byte, 4096), 256*1024)
-	for scan.Scan() {
-		if stamp, ok := lineTime(strings.TrimSuffix(scan.Text(), "\r"), loc); ok {
-			return stamp, true
-		}
-	}
-	return time.Time{}, false
-}
-
-// prunable reports whether a whole file can be skipped without indexing it:
-// its last write predates the window (append-only logs cannot hold later
-// lines) or its first record already postdates the window.
-func (s *searchSession) prunable(file *os.File, name string, info os.FileInfo, loc *time.Location) bool {
-	if info.ModTime().Before(s.query.From.Add(-fileTimeTolerance)) {
-		return true
-	}
-	if first, ok := firstRecordTime(file, name, loc); ok && first.After(s.query.To.Add(fileTimeTolerance)) {
-		return true
-	}
-	return false
-}
-
-func (s *searchSession) snapshot(ctx context.Context, loc *time.Location) error {
+func (s *searchSession) snapshot(ctx context.Context) error {
 	root, err := os.OpenRoot(s.dir)
 	if err != nil {
 		return err
@@ -292,10 +251,6 @@ func (s *searchSession) snapshot(ctx context.Context, loc *time.Location) error 
 			return err
 		}
 		if !info.Mode().IsRegular() {
-			return nil
-		}
-		if s.prunable(file, name, info, loc) {
-			s.pruned++
 			return nil
 		}
 		signature, err := snapshotSignature(file, info.Size())
@@ -470,6 +425,14 @@ func (e *IndexEngine) page(ctx context.Context, s *searchSession, loc *time.Loca
 		}
 		result.Phase = "querying"
 		s.skipped = s.skipped || index.skipped
+		// Only a complete, validated index can prove that no record overlaps.
+		// mtime and the first record are not bounds on event timestamps.
+		if s.spanPos == 0 && !index.overlaps(s.query.From, s.query.To) {
+			file.Close()
+			s.pruned++
+			s.nextFile()
+			continue
+		}
 		if s.spanPos >= len(index.spans) {
 			file.Close()
 			s.nextFile()
@@ -504,4 +467,14 @@ func (e *IndexEngine) page(ctx context.Context, s *searchSession, loc *time.Loca
 }
 func snapshotMatchesSafe(file *os.File, snap indexSnapshot) bool {
 	return file != nil && snapshotMatches(file, snap)
+}
+
+// Unknown/oversized records remain reported through index.skipped.
+func (index *sparseIndex) overlaps(from, to time.Time) bool {
+	for _, span := range index.spans {
+		if !span.min.IsZero() && !span.max.Before(from) && span.min.Before(to) {
+			return true
+		}
+	}
+	return false
 }

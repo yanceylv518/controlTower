@@ -200,10 +200,8 @@ func TestIndexedParserAcrossPagesAndAppendToLastRecord(t *testing.T) {
 	}
 }
 
-// Whole files outside the window are skipped before any indexing: rotated
-// logs whose last write predates the window, and files whose first record
-// already postdates it. Files that could overlap are still indexed.
-func TestSnapshotPrunesFilesOutsideWindowBeforeIndexing(t *testing.T) {
+// Whole-file pruning requires a complete index; file metadata alone is insufficient.
+func TestCompleteIndexPrunesFilesOutsideWindow(t *testing.T) {
 	dir := t.TempDir()
 	loc, _ := time.LoadLocation("Asia/Shanghai")
 	now := time.Date(2026, 9, 8, 12, 0, 0, 0, loc)
@@ -235,14 +233,14 @@ func TestSnapshotPrunesFilesOutsideWindowBeforeIndexing(t *testing.T) {
 	write("app.log", line(now.Add(-2*time.Hour), "early")+line(now.Add(-10*time.Minute), "hit NEEDLE"), now)
 	q := cl.Query{SourceID: strings.Repeat("a", 64), Container: "c", From: now.Add(-30 * time.Minute), To: now, Keyword: "NEEDLE"}
 	s := &searchSession{query: q, dir: dir}
-	if err := s.snapshot(context.Background(), loc); err != nil {
+	if err := s.snapshot(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(s.files) != 1 || s.files[0].name != "app.log" || s.pruned != 2 {
+	if len(s.files) != 3 || s.pruned != 0 {
 		t.Fatalf("pruning wrong: files=%v pruned=%d", s.files, s.pruned)
 	}
 	result := NewIndexEngine().Query(context.Background(), dir, q, loc)
-	if result.Status != "succeeded" || !result.Complete || len(result.Lines) != 1 || !strings.Contains(result.Lines[0], "hit NEEDLE") || !strings.Contains(result.Note, "跳过 2 个") {
+	if result.Status != "succeeded" || !result.Complete || len(result.Lines) != 1 || !strings.Contains(result.Lines[0], "hit NEEDLE") || !strings.Contains(result.Note, "跳过 1 个") {
 		t.Fatalf("pruned query wrong: %+v", result)
 	}
 }
