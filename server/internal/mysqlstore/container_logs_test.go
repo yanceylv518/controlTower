@@ -129,3 +129,62 @@ func TestContainerLogsLifecycle(t *testing.T) {
 		t.Fatal("queued task not expired", e)
 	}
 }
+
+// Multi-batch tasks upload cumulative partial results; losing the lease must
+// mark the task timed out without discarding the lines already uploaded.
+func TestContainerLogsLeaseExpiryKeepsPartialLines(t *testing.T) {
+	dsn := os.Getenv("CT_MYSQL_TEST_DSN")
+	if dsn == "" {
+		t.Skip("requires test MySQL")
+	}
+	db, err := Open(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	if err = ApplyDir(ctx, db, "../../migrations"); err != nil {
+		t.Fatal(err)
+	}
+	s := New(db)
+	id := fmt.Sprintf("clog-lease-%d", time.Now().UnixNano())
+	defer func() {
+		for _, table := range []string{"container_log_tasks", "container_log_targets", "operation_audits"} {
+			_, _ = db.Exec("DELETE FROM "+table+" WHERE instance_id=?", id)
+		}
+	}()
+	source := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	p := cl.Poll{AgentID: "agent-lease", Sources: []cl.Source{{ID: source, Container: "new-api", Available: true}}}
+	if _, e := s.PollContainerLogs(ctx, id, p); e != nil {
+		t.Fatal(e)
+	}
+	now := time.Now().UTC()
+	task := cl.Task{ID: id + "-t", InstanceID: id, AgentID: "agent-lease", ActorID: 7, Actor: "u", Query: cl.Query{SourceID: source, Container: "new-api", From: now.Add(-10 * time.Minute), To: now}, CreatedAt: now, Result: cl.Result{Status: "pending", Lines: []string{}}}
+	if e := s.CreateContainerLog(ctx, task); e != nil {
+		t.Fatal(e)
+	}
+	claimed, e := s.PollContainerLogs(ctx, id, p)
+	if e != nil || claimed == nil {
+		t.Fatalf("claim: %v %v", claimed, e)
+	}
+	progress := p
+	progress.TaskID = task.ID
+	progress.Result = &cl.Result{Status: "running", Lines: []string{"a.log [byte 1] first batch"}, NextCursor: source, Note: "后台正在自动处理下一批"}
+	if _, e = s.PollContainerLogs(ctx, id, progress); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = db.Exec(`UPDATE container_log_tasks SET claimed_at=UTC_TIMESTAMP()-INTERVAL 120 SECOND WHERE id=?`, task.ID); e != nil {
+		t.Fatal(e)
+	}
+	got, e := s.GetContainerLog(ctx, task.ID, 7) // read path runs expiry
+	if e != nil {
+		t.Fatal(e)
+	}
+	if got.Result.Status != "timed_out" || got.Result.Complete || len(got.Result.Lines) != 1 || got.Result.Error == "" {
+		t.Fatalf("lease expiry discarded partial lines or status wrong: %+v", got.Result)
+	}
+	var status string
+	if e = db.QueryRow(`SELECT status FROM container_log_tasks WHERE id=?`, task.ID).Scan(&status); e != nil || status != "timed_out" {
+		t.Fatalf("row status = %s %v", status, e)
+	}
+}

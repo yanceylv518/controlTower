@@ -11,7 +11,12 @@ import (
 
 // Housekeeping retains query bodies/results for 24 hours; operation_audits retains metadata.
 func (s Store) expireContainerLogs(ctx context.Context) error {
-	if _, err := s.db.ExecContext(ctx, `UPDATE container_log_tasks SET status='timed_out',result_json='{"status":"timed_out","lines":[],"error":"Agent 未在时限内返回结果"}' WHERE (status='pending' AND created_at < UTC_TIMESTAMP() - INTERVAL 1 HOUR) OR (status='running' AND claimed_at < UTC_TIMESTAMP() - INTERVAL 90 SECOND)`); err != nil {
+	if _, err := s.db.ExecContext(ctx, `UPDATE container_log_tasks SET status='timed_out',result_json='{"status":"timed_out","lines":[],"error":"Agent 未在时限内返回结果"}' WHERE status='pending' AND created_at < UTC_TIMESTAMP() - INTERVAL 1 HOUR`); err != nil {
+		return err
+	}
+	// A running task has usually uploaded partial batches already; losing the
+	// lease must not throw those lines away. Only the status and notes change.
+	if _, err := s.db.ExecContext(ctx, `UPDATE container_log_tasks SET status='timed_out',result_json=COALESCE(JSON_SET(result_json,'$.status','timed_out','$.complete',false,'$.truncated',true,'$.error','Agent 未在时限内返回进度','$.note','已返回内容仅为部分结果，请重新查询'),'{"status":"timed_out","lines":[],"error":"Agent 未在时限内返回进度"}') WHERE status='running' AND claimed_at < UTC_TIMESTAMP() - INTERVAL 90 SECOND`); err != nil {
 		return err
 	}
 	if _, err := s.db.ExecContext(ctx, `UPDATE operation_audits a JOIN container_log_tasks t ON a.id=t.id SET a.status='timed_out' WHERE a.operation_type='logs.query' AND t.status='timed_out' AND a.status<>'timed_out'`); err != nil {
