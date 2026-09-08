@@ -59,3 +59,17 @@
   `sudo bash ./install-log-reader.sh` 并给 agent.config 加 `CT_CONTAINER_LOG_SOCKET`。
 - 该实例的 Agent 必须使用实例专属 Token。
 - rc99 打在 000aff2 不含本批，上线需重打 rc100（server + 前端 + agent，069 迁移）。
+
+## 追加：时区按日志来源解释（2026-09-08，用户令，P3 修复）
+
+- 原页面时间选择器与历史时间用浏览器本地时区，结果行保留日志原文时间（reader 按
+  Asia/Shanghai 解释无时区日志）；浏览器不在东八区时两者错位。
+- 修正：页面以站点内日志来源自带的 `timezone`（默认 Asia/Shanghai）为准——选择器改为
+  该时区的墙钟字符串（`value-format`），提交时按该时区换算成 UTC；结果说明与历史记录
+  的时间同样按该时区显示；选择器旁标注 `Asia/Shanghai (UTC+08:00)`，站点内来源时区
+  不一致时标黄提示按第一个来源解释。新增 `utils/zoned.ts`（Intl 两次求偏移，覆盖
+  DST 边界）。
+- 实证（无头浏览器时区为 UTC）：选择器显示 14:35–14:50 并带时区标签，提交的任务
+  from/to 为 06:35Z–06:50Z，返回的两条日志时间 14:44/14:46 落在区间内，结果说明
+  按东八区显示。`pnpm typecheck`/`build` 通过。
+- 只改前端，随本批进 rc100。
