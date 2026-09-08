@@ -8,7 +8,7 @@ import { useFiltersStore } from '../stores/filters'
 import { dateToWall, isValidZone, parseWallTime, rezoneRange, zoneLabel } from '../utils/zoned'
 
 interface Query { keyword?: string; source_id: string; container: string; from: string; to: string; request_id?: string; error_code?: string }
-interface Result { note?: string; files_scanned?: number; scanned_bytes?: number; status: string; lines: string[]; truncated?: boolean; error?: string }
+interface Result { total_scanned_bytes?: number; next_cursor?: string; complete?: boolean; phase?: string; indexed_bytes?: number; note?: string; files_scanned?: number; scanned_bytes?: number; status: string; lines: string[]; truncated?: boolean; error?: string }
 interface Task { id: string; instance_id: string; agent_id: string; actor: string; actor_name: string; query: Query; result: Result; created_at: string }
 interface Source { id: string; container: string; log_dir: string; timezone: string; available: boolean; reason?: string }
 interface Target { sources: Source[]; discovery_error?: string; instance_id: string; agent_id: string; containers: string[]; seen_at: string }
@@ -34,6 +34,7 @@ const zoneText = computed(() => zoneLabel(logZone.value))
 const history = computed(() => tasks.value.filter(t => siteIDs.value.has(t.instance_id)))
 const pending = (task: Task) => ['pending', 'running'].includes(task.result.status)
 const busy = computed(() => current.value.some(pending))
+const phases: Record<string,string> = { indexing:'建立时间索引', querying:'按索引查询', archive:'分批解压归档', complete:'扫描结束' }
 const submissionError = ref('')
 const missing = computed(() => filters.instances.filter(i => siteIDs.value.has(i.instance_id) && !available.value.some(t => t.instance_id === i.instance_id)))
 const output = computed(() => current.value.filter(t => t.result.lines?.length).map(t => `[${t.agent_id} / ${t.query.container}]\n${t.result.lines.join('\n')}`).join('\n\n'))
@@ -86,7 +87,7 @@ async function submit() {
     return
   }
   const from = start.date!, to = end.date!
-  if (+to <= +from || +to - +from > 3600000 || +from < Date.now() - 7 * 86400000 || +to > Date.now() + 60000) { ElMessage.warning('请选择最近 7 天内、跨度不超过 1 小时的时间范围'); return }
+  if (+to <= +from || +to - +from > 3600000 || +from < Date.now() - 3 * 86400000 || +to > Date.now() + 60000) { ElMessage.warning('请选择最近 3 天内、跨度不超过 1 小时的时间范围'); return }
   const query: Omit<Query, 'source_id' | 'container'> = { from: from.toISOString(), to: to.toISOString() }
   if (keyword.value.trim()) query.keyword = keyword.value.trim()
   if (requestID.value.trim()) query.request_id = requestID.value.trim()
@@ -141,7 +142,7 @@ onBeforeUnmount(() => { disposed = true; selection++; if (timer) clearInterval(t
           <el-button link @click="requestID = ''; errorCode = ''">清空附加条件</el-button>
           <span class="query-note">所有条件同时满足，收起后仍生效</span>
         </div>
-        <div class="target-status"><span>{{ filters.site_id || '未选择站点' }} · {{ sources.length }} 个可查询来源</span><el-tooltip content="查询当前站点全部在线可用来源。最近 7 天内，单次跨度最多 1 小时；每个来源最多扫描 256 个文件、64 MiB，返回 2,000 行 / 512 KiB。关键词按原文包含匹配，不支持正则或命令。" placement="bottom"><button type="button" class="help-button" aria-label="查询范围及限制">ⓘ 查询说明</button></el-tooltip></div>
+        <div class="target-status"><span>{{ filters.site_id || '未选择站点' }} · {{ sources.length }} 个可查询来源</span><el-tooltip content="查询当前站点全部在线可用来源。最近 3 天内，单次跨度最多 1 小时；每批最多处理 256 个文件、64 MiB，返回 2,000 行 / 512 KiB；未结束时后台自动继续，无需重复提交。首次建立时间索引，后续复用；服务重启后需重建。关键词按原文包含匹配，不支持正则或命令。" placement="bottom"><button type="button" class="help-button" aria-label="查询范围及限制">ⓘ 查询说明</button></el-tooltip></div>
         <el-alert v-if="zoneNotice" :title="zoneNotice" type="warning" :closable="false" />
         <el-alert v-if="!sources.length" title="当前站点暂无可查询日志，请检查日志读取服务是否已接入。" type="info" :closable="false" />
         <el-alert v-if="missing.length" :title="`${missing.length} 个站点实例尚未接入或已离线，本次查询无法覆盖这些实例。`" type="warning" :closable="false" />
@@ -158,12 +159,13 @@ onBeforeUnmount(() => { disposed = true; selection++; if (timer) clearInterval(t
         <div v-for="item in current" :key="item.id" class="source-result">
           <h3>{{ item.agent_id }} / {{ item.query.container }} <el-tag type="info">{{ labels[item.result.status] }}</el-tag></h3>
           <p class="query-note">{{ item.query.container }} · {{ format(item.query.from) }} 至 {{ format(item.query.to) }} · 发起人 {{ item.actor_name || item.actor }} <span v-if="item.query.keyword"> · 关键词：{{ item.query.keyword }}</span><span v-if="item.query.request_id"> · Request ID：{{ item.query.request_id }}</span><span v-if="item.query.error_code"> · 错误码：{{ item.query.error_code }}</span></p>
-          <el-alert v-if="item.result.truncated" title="结果已截断：达到扫描量、行数或大小限制。请缩小时间范围后重新查询。" type="warning" :closable="false" />
+          <div v-if="item.result.phase" class="query-note">{{ phases[item.result.phase] }} · 本次索引处理 {{ ((item.result.indexed_bytes || 0) / 1048576).toFixed(2) }} MiB<span v-if="item.result.complete"> · 本次文件快照已扫描结束</span></div>
+          <el-alert v-if="item.result.truncated" title="部分目录或记录未能处理，结果可能不完整，请查看下方说明。" type="warning" :closable="false" />
           <el-alert v-if="item.result.note" :title="item.result.note" type="warning" :closable="false" />
-          <p v-if="item.result.files_scanned" class="query-note">已扫描 {{ item.result.files_scanned }} 个文件 · {{ ((item.result.scanned_bytes || 0) / 1048576).toFixed(2) }} MiB</p>
+          <p v-if="item.result.files_scanned" class="query-note">累计读取 {{ ((item.result.total_scanned_bytes ?? item.result.scanned_bytes ?? 0) / 1048576).toFixed(2) }} MiB</p>
           <el-alert v-if="item.result.error" :title="item.result.error" type="error" :closable="false" />
           <pre v-if="item.result.lines?.length" class="log-output">{{ item.result.lines.join('\n') }}</pre>
-          <el-empty v-else :description="pending(item) ? '正在等待查询结果…' : item.result.status === 'succeeded' ? '在本次扫描范围内没有匹配日志' : '本次查询没有返回日志'" :image-size="70" />
+          <el-empty v-else :description="pending(item) ? '正在等待查询结果…' : item.result.truncated ? '存在未处理记录，不能判断该时段没有日志' : item.result.status === 'succeeded' ? '在本次扫描范围内没有匹配日志' : '本次查询没有返回日志'" :image-size="70" />
         </div>
         <el-empty v-if="!current.length" description="设置时间范围后点击查询" :image-size="70" />
       </section>

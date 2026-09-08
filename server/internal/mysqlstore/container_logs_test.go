@@ -72,11 +72,11 @@ func TestContainerLogsLifecycle(t *testing.T) {
 	if got, e = s.PollContainerLogs(ctx, id, p); e != nil || got != nil {
 		t.Fatal("duplicate claim", e)
 	}
-	result := &cl.Result{Status: "succeeded", Lines: []string{"redacted log"}}
+	result := &cl.Result{Phase: "indexing", IndexedBytes: 64 * 1024 * 1024, TotalScannedBytes: 64 * 1024 * 1024, Status: "running", Lines: []string{"redacted log"}}
 	wrong.TaskID = id
 	wrong.Result = result
-	if _, e = s.PollContainerLogs(ctx, id, wrong); e != nil {
-		t.Fatal(e)
+	if ack, err := s.PollContainerLogs(ctx, id, wrong); err != nil || ack != nil {
+		t.Fatal("foreign progress acknowledged", ack, err)
 	}
 	value, e := s.GetContainerLog(ctx, id, task.ActorID)
 	if e != nil || value.Result.Status != "running" {
@@ -84,11 +84,25 @@ func TestContainerLogsLifecycle(t *testing.T) {
 	}
 	p.TaskID = id
 	p.Result = result
+	if _, e = db.Exec(`UPDATE container_log_tasks SET claimed_at=UTC_TIMESTAMP()-INTERVAL 60 SECOND WHERE id=?`, id); e != nil {
+		t.Fatal(e)
+	}
+	if ack, err := s.PollContainerLogs(ctx, id, p); err != nil || ack == nil || ack.ID != id {
+		t.Fatal("progress not acknowledged on same task", ack, err)
+	}
+	var renewed bool
+	if e = db.QueryRow(`SELECT claimed_at > UTC_TIMESTAMP()-INTERVAL 10 SECOND FROM container_log_tasks WHERE id=?`, id).Scan(&renewed); e != nil || !renewed {
+		t.Fatal("progress did not renew lease", e)
+	}
+	result.Status = "succeeded"
+	result.Complete = true
+	result.Phase = "complete"
+	result.TotalScannedBytes *= 2
 	if _, e = s.PollContainerLogs(ctx, id, p); e != nil {
 		t.Fatal(e)
 	}
 	value, e = s.GetContainerLog(ctx, id, task.ActorID)
-	if e != nil || value.Result.Status != "succeeded" || len(value.Result.Lines) != 1 {
+	if e != nil || value.Result.Status != "succeeded" || len(value.Result.Lines) != 1 || value.Result.TotalScannedBytes != result.TotalScannedBytes || value.Result.IndexedBytes != result.IndexedBytes || !value.Result.Complete {
 		t.Fatal("result not stored", value, e)
 	}
 	p.Result = &cl.Result{Status: "failed"}
@@ -107,7 +121,7 @@ func TestContainerLogsLifecycle(t *testing.T) {
 	if e = s.CreateContainerLog(ctx, task); e != nil {
 		t.Fatal(e)
 	}
-	if _, e = db.Exec(`UPDATE container_log_tasks SET created_at=UTC_TIMESTAMP()-INTERVAL 3 MINUTE WHERE id=?`, task.ID); e != nil {
+	if _, e = db.Exec(`UPDATE container_log_tasks SET created_at=UTC_TIMESTAMP()-INTERVAL 61 MINUTE WHERE id=?`, task.ID); e != nil {
 		t.Fatal(e)
 	}
 	value, e = s.GetContainerLog(ctx, task.ID, task.ActorID)

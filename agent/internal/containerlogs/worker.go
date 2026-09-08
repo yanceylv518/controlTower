@@ -24,17 +24,18 @@ func Run(ctx context.Context, server, token, agent, socket string) {
 	remote := &http.Client{Timeout: 15 * time.Second}
 	var pending *cl.Result
 	var taskID string
-	tick := time.NewTicker(5 * time.Second)
-	defer tick.Stop()
+	var active *automaticQuery
+	delay := 5 * time.Second
 	for {
+		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return
-		case <-tick.C:
+		case <-timer.C:
 		}
 		inventory := cl.Inventory{}
 		if err := request(ctx, local, "GET", "http://unix/containers", "", nil, &inventory); err != nil {
-			log.Printf("container logs: local reader unavailable")
 			inventory.Error = "本机日志读取服务不可用，请检查服务运行状态"
 		}
 		poll := cl.Poll{AgentID: agent, Sources: inventory.Sources, DiscoveryError: inventory.Error, TaskID: taskID, Result: pending}
@@ -43,17 +44,36 @@ func Run(ctx context.Context, server, token, agent, socket string) {
 		}
 		if err := request(ctx, remote, "POST", strings.TrimRight(server, "/")+"/api/agent/container-logs/poll", token, poll, &response); err != nil {
 			log.Printf("container logs: poll failed: %v", err)
+			delay = 5 * time.Second
 			continue
 		}
 		pending = nil
 		taskID = ""
+		// Server echoes a running task only to acknowledge its owner's progress.
+		// A missing/different task means the lease ended; never keep scanning it.
 		if response.Task == nil {
+			active = nil
+			delay = 5 * time.Second
 			continue
 		}
-		task := response.Task
-		result := executeQuery(ctx, local, task.Query)
+		if active == nil || active.task.ID != response.Task.ID {
+			active = newAutomaticQuery(*response.Task)
+		}
+		result := active.step(ctx, func(stepCtx context.Context, q cl.Query) cl.Result { return executeQuery(stepCtx, local, q) })
 		pending = &result
-		taskID = task.ID
+		taskID = active.task.ID
+		delay = time.Second
+		if result.Status != "running" {
+			cursor := active.releaseCursor
+			if cursor == "" {
+				cursor = active.query.Cursor
+			}
+			if cursor != "" {
+				var ack map[string]any
+				_ = request(ctx, local, "POST", "http://unix/release", "", map[string]string{"cursor": cursor}, &ack)
+			}
+			active = nil
+		}
 	}
 }
 

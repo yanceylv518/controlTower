@@ -37,7 +37,7 @@ func TestFilesHistoryTimeAndMultiline(t *testing.T) {
 	if e = os.WriteFile(filepath.Join(dir, "secret.env"), []byte(data), 0600); e != nil {
 		t.Fatal(e)
 	}
-	got := ReadFiles(context.Background(), dir, q, loc)
+	got := NewIndexEngine().Query(context.Background(), dir, q, loc)
 	if got.Status != "succeeded" || got.Truncated || len(got.Lines) != 4 || got.FilesScanned != 2 {
 		t.Fatalf("unexpected result: %#v", got)
 	}
@@ -47,7 +47,7 @@ func TestFilesHistoryTimeAndMultiline(t *testing.T) {
 			t.Fatalf("unexpected %q: %s", bad, all)
 		}
 	}
-	if !strings.Contains(all, "app.log.1.gz:2") || !strings.Contains(all, "[REDACTED]") {
+	if !strings.Contains(all, "app.log.1.gz [byte ") || !strings.Contains(all, "[REDACTED]") {
 		t.Fatal(all)
 	}
 }
@@ -60,13 +60,13 @@ func TestFilesSkippedContentAndLimits(t *testing.T) {
 	if e := os.WriteFile(filepath.Join(dir, "app.log"), []byte(data), 0600); e != nil {
 		t.Fatal(e)
 	}
-	got := ReadFiles(context.Background(), dir, q, time.UTC)
-	if !got.Truncated || len(got.Lines) != cl.MaxLines || got.Note == "" {
+	got := NewIndexEngine().Query(context.Background(), dir, q, time.UTC)
+	if !got.Truncated || len(got.Lines) != cl.MaxLines {
 		t.Fatalf("missing cap or skipped notice: %#v", got)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if r := ReadFiles(ctx, dir, q, time.UTC); r.Status == "succeeded" {
+	if r := NewIndexEngine().Query(ctx, dir, q, time.UTC); r.Status == "succeeded" {
 		t.Fatal("canceled query reported complete")
 	}
 }

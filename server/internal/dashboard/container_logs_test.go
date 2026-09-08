@@ -6,6 +6,7 @@ import (
 	"controltower/server/internal/auth"
 	"controltower/server/internal/ingest"
 	"controltower/server/internal/storage"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,8 +15,9 @@ import (
 )
 
 type testLogStore struct {
-	created cl.Task
-	reader  int64
+	previous *cl.Task
+	created  cl.Task
+	reader   int64
 }
 
 func (s *testLogStore) ContainerLogTargets(context.Context) ([]cl.Target, error) {
@@ -29,9 +31,12 @@ func (s *testLogStore) ListContainerLogs(_ context.Context, id int64) ([]cl.Task
 	s.reader = id
 	return []cl.Task{}, nil
 }
-func (s *testLogStore) GetContainerLog(_ context.Context, _ string, id int64) (cl.Task, error) {
+func (s *testLogStore) GetContainerLog(_ context.Context, taskID string, id int64) (cl.Task, error) {
 	s.reader = id
-	return cl.Task{}, nil
+	if s.previous != nil && s.previous.ID == taskID && s.previous.ActorID == id {
+		return *s.previous, nil
+	}
+	return cl.Task{}, errors.New("not found")
 }
 func (s *testLogStore) PollContainerLogs(context.Context, string, cl.Poll) (*cl.Task, error) {
 	return nil, nil
@@ -81,6 +86,15 @@ func TestContainerLogPermissionsAndSessionActor(t *testing.T) {
 			if w.Code != 202 || store.created.ActorID != u.ID || store.created.Actor != "allowed" {
 				t.Fatal("actor not from session", w.Code)
 			}
+			request := httptest.NewRequest("POST", "/api/dashboard/container-log-tasks", strings.NewReader(strings.Replace(body, `"query":{`, `"query":{"cursor":"`+strings.Repeat("b", 64)+`",`, 1)))
+			request.AddCookie(&http.Cookie{Name: "ct_session", Value: session.ID})
+			request.Header.Set("X-Requested-With", "XMLHttpRequest")
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != 400 {
+				t.Fatal("browser submitted an internal cursor", response.Code)
+			}
+
 		}
 	}
 	r := httptest.NewRequest("GET", "/api/dashboard/container-log-tasks", nil)

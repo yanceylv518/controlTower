@@ -32,7 +32,11 @@ func (h Handler) ContainerLogs(store ContainerLogPoller) http.HandlerFunc {
 			seen[n.Container] = true
 		}
 		if p.Result != nil {
-			if p.TaskID == "" || len(p.Result.Lines) > cl.MaxLines || len(p.Result.Error) > 256 || len(p.Result.Note) > 2048 || p.Result.FilesScanned < 0 || p.Result.FilesScanned > 256 || p.Result.ScannedBytes < 0 || p.Result.ScannedBytes > 64*1024*1024 || (p.Result.Status != "succeeded" && p.Result.Status != "failed" && p.Result.Status != "timed_out") {
+			if (p.Result.NextCursor != "" && !cl.ValidSourceID(p.Result.NextCursor)) || (p.Result.Complete && p.Result.NextCursor != "") || p.Result.IndexedBytes < 0 || p.Result.TotalScannedBytes < 0 || (p.Result.Phase != "" && p.Result.Phase != "indexing" && p.Result.Phase != "querying" && p.Result.Phase != "archive" && p.Result.Phase != "complete") {
+				writeError(w, 400, "invalid_progress")
+				return
+			}
+			if p.TaskID == "" || len(p.Result.Lines) > cl.MaxLines || len(p.Result.Error) > 256 || len(p.Result.Note) > 2048 || p.Result.FilesScanned < 0 || p.Result.FilesScanned > 256 || p.Result.ScannedBytes < 0 || p.Result.ScannedBytes > 64*1024*1024 || (p.Result.Status != "running" && p.Result.Status != "succeeded" && p.Result.Status != "failed" && p.Result.Status != "timed_out") {
 				writeError(w, 400, "invalid_result")
 				return
 			}

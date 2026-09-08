@@ -11,7 +11,7 @@ import (
 
 // Housekeeping retains query bodies/results for 24 hours; operation_audits retains metadata.
 func (s Store) expireContainerLogs(ctx context.Context) error {
-	if _, err := s.db.ExecContext(ctx, `UPDATE container_log_tasks SET status='timed_out',result_json='{"status":"timed_out","lines":[],"error":"Agent 未在时限内返回结果"}' WHERE (status='pending' AND created_at < UTC_TIMESTAMP() - INTERVAL 2 MINUTE) OR (status='running' AND claimed_at < UTC_TIMESTAMP() - INTERVAL 90 SECOND)`); err != nil {
+	if _, err := s.db.ExecContext(ctx, `UPDATE container_log_tasks SET status='timed_out',result_json='{"status":"timed_out","lines":[],"error":"Agent 未在时限内返回结果"}' WHERE (status='pending' AND created_at < UTC_TIMESTAMP() - INTERVAL 1 HOUR) OR (status='running' AND claimed_at < UTC_TIMESTAMP() - INTERVAL 90 SECOND)`); err != nil {
 		return err
 	}
 	if _, err := s.db.ExecContext(ctx, `UPDATE operation_audits a JOIN container_log_tasks t ON a.id=t.id SET a.status='timed_out' WHERE a.operation_type='logs.query' AND t.status='timed_out' AND a.status<>'timed_out'`); err != nil {
@@ -152,7 +152,7 @@ func (s Store) PollContainerLogs(ctx context.Context, instance string, p cl.Poll
 	}
 	if p.Result != nil {
 		b, _ := json.Marshal(p.Result)
-		result, e := tx.ExecContext(ctx, `UPDATE container_log_tasks SET status=?,result_json=? WHERE id=? AND instance_id=? AND agent_id=? AND status='running'`, p.Result.Status, string(b), p.TaskID, instance, p.AgentID)
+		result, e := tx.ExecContext(ctx, `UPDATE container_log_tasks SET status=?,result_json=?,claimed_at=IF(?='running',UTC_TIMESTAMP(),claimed_at) WHERE id=? AND instance_id=? AND agent_id=? AND status='running'`, p.Result.Status, string(b), p.Result.Status, p.TaskID, instance, p.AgentID)
 		if e != nil {
 			return nil, e
 		}
@@ -167,6 +167,18 @@ func (s Store) PollContainerLogs(ctx context.Context, instance string, p cl.Poll
 		return nil, err
 	}
 	if running > 0 {
+		if p.Result != nil && p.Result.Status == "running" {
+			task, e := scanContainerLog(tx.QueryRowContext(ctx, `SELECT `+containerLogColumns+` FROM container_log_tasks WHERE id=? AND instance_id=? AND agent_id=? AND status='running'`, p.TaskID, instance, p.AgentID))
+			if e == nil {
+				if err := tx.Commit(); err != nil {
+					return nil, err
+				}
+				return &task, nil
+			}
+			if !errors.Is(e, sql.ErrNoRows) {
+				return nil, e
+			}
+		}
 		return nil, tx.Commit()
 	}
 	t, err := scanContainerLog(tx.QueryRowContext(ctx, `SELECT `+containerLogColumns+` FROM container_log_tasks WHERE instance_id=? AND agent_id=? AND status='pending' ORDER BY created_at LIMIT 1 FOR UPDATE`, instance, p.AgentID))

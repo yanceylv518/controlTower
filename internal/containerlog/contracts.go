@@ -22,6 +22,7 @@ func ValidSourceID(s string) bool { return sourcePattern.MatchString(s) }
 func ValidName(s string) bool { return namePattern.MatchString(s) }
 
 type Query struct {
+	Cursor    string    `json:"cursor,omitempty"`
 	Keyword   string    `json:"keyword,omitempty"`
 	SourceID  string    `json:"source_id,omitempty"`
 	Container string    `json:"container"`
@@ -32,7 +33,7 @@ type Query struct {
 }
 
 func (q Query) Validate(now time.Time) error {
-	if !ValidSourceID(q.SourceID) || !ValidName(q.Container) || q.From.IsZero() || !q.To.After(q.From) || q.To.Sub(q.From) > time.Hour || q.To.After(now.Add(time.Minute)) || q.From.Before(now.Add(-7*24*time.Hour)) {
+	if (q.Cursor != "" && !ValidSourceID(q.Cursor)) || !ValidSourceID(q.SourceID) || !ValidName(q.Container) || q.From.IsZero() || !q.To.After(q.From) || q.To.Sub(q.From) > time.Hour || q.To.After(now.Add(time.Minute)) || q.From.Before(now.Add(-3*24*time.Hour)) {
 		return errors.New("invalid query range or container")
 	}
 	if utf8.RuneCountInString(q.Keyword) > 128 || strings.ContainsAny(q.Keyword, "\x00\r\n") {
@@ -45,13 +46,18 @@ func (q Query) Validate(now time.Time) error {
 }
 
 type Result struct {
-	Note         string   `json:"note,omitempty"`
-	FilesScanned int      `json:"files_scanned,omitempty"`
-	ScannedBytes int64    `json:"scanned_bytes,omitempty"`
-	Status       string   `json:"status"`
-	Lines        []string `json:"lines"`
-	Truncated    bool     `json:"truncated"`
-	Error        string   `json:"error,omitempty"`
+	TotalScannedBytes int64    `json:"total_scanned_bytes,omitempty"`
+	NextCursor        string   `json:"next_cursor,omitempty"`
+	Complete          bool     `json:"complete"`
+	Phase             string   `json:"phase,omitempty"`
+	IndexedBytes      int64    `json:"indexed_bytes,omitempty"`
+	Note              string   `json:"note,omitempty"`
+	FilesScanned      int      `json:"files_scanned,omitempty"`
+	ScannedBytes      int64    `json:"scanned_bytes,omitempty"`
+	Status            string   `json:"status"`
+	Lines             []string `json:"lines"`
+	Truncated         bool     `json:"truncated"`
+	Error             string   `json:"error,omitempty"`
 }
 type Task struct {
 	ID         string    `json:"id"`

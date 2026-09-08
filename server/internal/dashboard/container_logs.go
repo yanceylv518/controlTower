@@ -62,7 +62,16 @@ func (h ContainerLogHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
-	if dec.Decode(&input) != nil || input.Query.Validate(time.Now().UTC()) != nil || input.InstanceID == "" || len(input.InstanceID) > 128 || !cl.ValidName(input.AgentID) {
+	if dec.Decode(&input) != nil {
+		http.Error(w, "invalid query", 400)
+		return
+	}
+	if input.Query.Cursor != "" {
+		http.Error(w, "cursor is internal to Agent", 400)
+		return
+	}
+
+	if input.Query.Validate(time.Now().UTC()) != nil || input.InstanceID == "" || len(input.InstanceID) > 128 || !cl.ValidName(input.AgentID) {
 		http.Error(w, "invalid query", 400)
 		return
 	}
