@@ -4,10 +4,13 @@ import (
 	"context"
 	cl "controltower/internal/containerlog"
 	"controltower/server/internal/auth"
+	"controltower/server/internal/storage"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -15,6 +18,7 @@ type ContainerLogStore interface {
 	ContainerLogTargets(context.Context) ([]cl.Target, error)
 	CreateContainerLog(context.Context, cl.Task) error
 	ListContainerLogs(context.Context, int64) ([]cl.Task, error)
+	ListContainerLogHistory(context.Context, cl.HistoryFilter) (cl.HistoryPage, error)
 	GetContainerLog(context.Context, string, int64) (cl.Task, error)
 	PollContainerLogs(context.Context, string, cl.Poll) (*cl.Task, error)
 }
@@ -37,12 +41,17 @@ func (h ContainerLogHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == "/api/dashboard/container-log-targets" {
 		v, e := h.Store.ContainerLogTargets(r.Context())
-		reply(map[string]any{"items": v}, e)
+		reply(map[string]any{"items": v, "supports_query_batch": true, "supports_history_pagination": true}, e)
 		return
 	}
 	if r.Method == http.MethodGet {
+		// Only full administrators may inspect other requesters' history.
+		historyActor := u.ID
+		if storage.IsFullAdmin(u) {
+			historyActor = 0
+		}
 		if id := r.PathValue("id"); id != "" {
-			v, e := h.Store.GetContainerLog(r.Context(), id, u.ID)
+			v, e := h.Store.GetContainerLog(r.Context(), id, historyActor)
 			if e != nil {
 				http.Error(w, "not found or expired", 404)
 				return
@@ -50,7 +59,42 @@ func (h ContainerLogHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			reply(v, nil)
 			return
 		}
-		v, e := h.Store.ListContainerLogs(r.Context(), u.ID)
+		if r.URL.Query().Get("paged") == "1" {
+			params := r.URL.Query()
+			f := cl.HistoryFilter{ActorID: historyActor, Site: strings.TrimSpace(params.Get("site")), Actor: strings.TrimSpace(params.Get("actor")), RequestID: strings.TrimSpace(params.Get("request_id")), Page: 1, PageSize: 20}
+			if f.Actor != "" && !storage.IsFullAdmin(u) {
+				http.Error(w, "forbidden", 403)
+				return
+			}
+			valid := len(f.Site) <= 128 && len(f.Actor) <= 128 && len(f.RequestID) <= 128
+			for key, target := range map[string]*int{"page": &f.Page, "page_size": &f.PageSize} {
+				if value := params.Get(key); value != "" {
+					n, err := strconv.Atoi(value)
+					if err != nil {
+						valid = false
+					}
+					*target = n
+				}
+			}
+			for key, target := range map[string]*time.Time{"from": &f.From, "to": &f.To} {
+				if value := params.Get(key); value != "" {
+					t, err := time.Parse(time.RFC3339, value)
+					if err != nil {
+						valid = false
+					}
+					*target = t
+				}
+			}
+			if !valid || f.Page < 1 || f.Page > 1000000 || f.PageSize < 1 || f.PageSize > 100 || (!f.From.IsZero() && !f.To.IsZero() && f.To.Before(f.From)) {
+				http.Error(w, "invalid history filter", 400)
+				return
+			}
+			v, e := h.Store.ListContainerLogHistory(r.Context(), f)
+			v.CanFilterActor = storage.IsFullAdmin(u)
+			reply(v, e)
+			return
+		}
+		v, e := h.Store.ListContainerLogs(r.Context(), historyActor)
 		reply(map[string]any{"items": v}, e)
 		return
 	}

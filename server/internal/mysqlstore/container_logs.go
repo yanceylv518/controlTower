@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"net/url"
 	"time"
 )
 
@@ -27,7 +28,7 @@ func (s Store) expireContainerLogs(ctx context.Context) error {
 }
 
 func (s Store) ContainerLogTargets(ctx context.Context) ([]cl.Target, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT instance_id,agent_id,containers_json,seen_at FROM container_log_targets WHERE seen_at > UTC_TIMESTAMP() - INTERVAL 1 MINUTE ORDER BY instance_id,agent_id`)
+	rows, err := s.db.QueryContext(ctx, `SELECT t.instance_id,t.agent_id,t.containers_json,t.seen_at,i.base_url FROM container_log_targets t JOIN instances i ON i.id=t.instance_id AND i.enabled=1 AND i.deleted=0 WHERE t.seen_at > UTC_TIMESTAMP() - INTERVAL 1 MINUTE ORDER BY t.instance_id,t.agent_id`)
 	if err != nil {
 		return nil, err
 	}
@@ -35,8 +36,8 @@ func (s Store) ContainerLogTargets(ctx context.Context) ([]cl.Target, error) {
 	out := []cl.Target{}
 	for rows.Next() {
 		var t cl.Target
-		var b string
-		if err = rows.Scan(&t.InstanceID, &t.AgentID, &b, &t.SeenAt); err != nil {
+		var b, baseURL string
+		if err = rows.Scan(&t.InstanceID, &t.AgentID, &b, &t.SeenAt, &baseURL); err != nil {
 			return nil, err
 		}
 		var inv cl.Inventory
@@ -44,7 +45,19 @@ func (s Store) ContainerLogTargets(ctx context.Context) ([]cl.Target, error) {
 			inv.Error = "日志读取服务需要升级"
 		}
 		t.Sources, t.DiscoveryError = inv.Sources, inv.Error
-		for _, source := range inv.Sources {
+		base, _ := url.Parse(baseURL)
+		for i := range t.Sources {
+			source := &t.Sources[i]
+			if source.Kind == "nginx_access" || source.Kind == "nginx_error" {
+				if base != nil && cl.MatchesDomain(base.Hostname(), source.Domains) {
+					source.QueryHost = base.Hostname()
+				} else {
+					source.Available = false
+					source.Reason = "日志域名与实例地址不匹配，请检查实例地址及 Nginx server_name"
+				}
+			}
+		}
+		for _, source := range t.Sources {
 			if source.Available {
 				t.Containers = append(t.Containers, source.Container)
 			}
@@ -62,6 +75,10 @@ func (s Store) CreateContainerLog(ctx context.Context, t cl.Task) error {
 		return err
 	}
 	defer tx.Rollback()
+	var enabled bool
+	if err = tx.QueryRowContext(ctx, "SELECT enabled FROM instances WHERE id=? AND deleted=0 FOR UPDATE", t.InstanceID).Scan(&enabled); err != nil || !enabled {
+		return errors.New("instance unavailable")
+	}
 	// Lock the target row to serialize submissions and enforce the bounded queue.
 	var containers string
 	if err = tx.QueryRowContext(ctx, `SELECT containers_json FROM container_log_targets WHERE instance_id=? AND agent_id=? AND seen_at > UTC_TIMESTAMP() - INTERVAL 1 MINUTE FOR UPDATE`, t.InstanceID, t.AgentID).Scan(&containers); err != nil {
@@ -74,6 +91,19 @@ func (s Store) CreateContainerLog(ctx context.Context, t cl.Task) error {
 	allowed := false
 	for _, n := range inv.Sources {
 		if n.Available && cl.ValidSourceID(n.ID) && n.Container == t.Query.Container && n.ID == t.Query.SourceID {
+			if cl.ValidateSourceQuery(n, t.Query) != nil {
+				return errors.New("invalid source filters")
+			}
+			if n.Kind == "nginx_access" || n.Kind == "nginx_error" {
+				var baseURL string
+				if err = tx.QueryRowContext(ctx, "SELECT base_url FROM instances WHERE id=?", t.InstanceID).Scan(&baseURL); err != nil {
+					return err
+				}
+				u, e := url.Parse(baseURL)
+				if e != nil || u.Hostname() != t.Query.Host {
+					return errors.New("site domain mismatch")
+				}
+			}
 			allowed = true
 		}
 	}
@@ -120,7 +150,8 @@ func (s Store) ListContainerLogs(ctx context.Context, actor int64) ([]cl.Task, e
 		return nil, err
 	}
 	// Task history omits result bodies; details are fetched separately.
-	rows, err := s.db.QueryContext(ctx, `SELECT id,instance_id,agent_id,actor_id,actor,actor_name,query_json,JSON_OBJECT('status',status,'lines',JSON_ARRAY()),created_at FROM container_log_tasks WHERE actor_id=? ORDER BY created_at DESC LIMIT 50`, actor)
+	// actor=0 is the administrator scope, selected only by the authorized handler.
+	rows, err := s.db.QueryContext(ctx, `SELECT id,instance_id,agent_id,actor_id,actor,actor_name,query_json,JSON_OBJECT('status',status,'lines',JSON_ARRAY()),created_at FROM container_log_tasks WHERE (?=0 OR actor_id=?) ORDER BY created_at DESC LIMIT 50`, actor, actor)
 	if err != nil {
 		return nil, err
 	}
@@ -139,7 +170,7 @@ func (s Store) GetContainerLog(ctx context.Context, id string, actor int64) (cl.
 	if err := s.expireContainerLogs(ctx); err != nil {
 		return cl.Task{}, err
 	}
-	return scanContainerLog(s.db.QueryRowContext(ctx, `SELECT `+containerLogColumns+` FROM container_log_tasks WHERE id=? AND actor_id=?`, id, actor))
+	return scanContainerLog(s.db.QueryRowContext(ctx, `SELECT `+containerLogColumns+` FROM container_log_tasks WHERE id=? AND (?=0 OR actor_id=?)`, id, actor, actor))
 }
 func (s Store) PollContainerLogs(ctx context.Context, instance string, p cl.Poll) (*cl.Task, error) {
 	if err := s.expireContainerLogs(ctx); err != nil {

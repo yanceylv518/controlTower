@@ -1,4 +1,4 @@
-// A local Docker log-only broker. The query Agent connects over a Unix socket.
+// A local application/Nginx log-only broker. Agent connects over a Unix socket.
 package main
 
 import (
@@ -16,7 +16,7 @@ import (
 
 func main() {
 	socket := flag.String("socket", "/run/control-tower-log-reader/reader.sock", "Unix socket path")
-	containers := flag.String("containers", os.Getenv("CT_LOG_CONTAINERS"), "optional comma-separated container names; empty auto-discovers new-api")
+	containers := flag.String("containers", os.Getenv("CT_LOG_CONTAINERS"), "optional new-api container names; Nginx sources are discovered separately")
 	timezone := flag.String("timezone", os.Getenv("CT_LOG_TIMEZONE"), "timezone for timestamps without offset (default Asia/Shanghai)")
 	flag.Parse()
 	if *timezone == "" {

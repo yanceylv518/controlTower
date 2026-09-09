@@ -39,7 +39,26 @@ func NewReaderWithTimezone(names []string, timezone string) (*Reader, error) {
 		return nil, err
 	}
 	h := &Reader{stream: NewStreamEngine(), Containers: names, Location: loc, busy: make(chan struct{}, 1)}
-	h.Discover = func(ctx context.Context) cl.Inventory { return Discover(ctx, discoveryCommand, names, timezone) }
+	h.Discover = func(ctx context.Context) cl.Inventory {
+		hostSources := discoverHostNginx(ctx, timezone)
+		inv := Discover(ctx, discoveryCommand, names, timezone)
+		inv.Sources = append(inv.Sources, hostSources...)
+		seen := map[string]bool{}
+		unique := inv.Sources[:0]
+		for _, source := range inv.Sources {
+			key := source.Container + "/" + source.ID + "/" + source.Kind
+			if !seen[key] {
+				unique = append(unique, source)
+				seen[key] = true
+			}
+		}
+		inv.Sources = unique
+		if len(inv.Sources) > 100 {
+			inv.Sources = inv.Sources[:100]
+			inv.Error = "日志来源超过 100 个发现上限"
+		}
+		return inv
+	}
 	return h, nil
 }
 func (h *Reader) Refresh(ctx context.Context, force bool) cl.Inventory {
@@ -104,7 +123,7 @@ func (h *Reader) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	inv := h.Refresh(ctx, true)
 	result := cl.Result{Status: "failed", Lines: []string{}, Error: "容器或日志来源已变化，请刷新目标后重新查询"}
 	for _, source := range inv.Sources {
-		if source.Container != q.Container {
+		if source.Container != q.Container || q.SourceID != source.ID {
 			continue
 		}
 		if !source.Available {
@@ -114,7 +133,11 @@ func (h *Reader) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if q.SourceID == "" || q.SourceID != source.ID {
 			break
 		}
-		result = h.stream.Query(ctx, source.HostDir, q, h.Location)
+		if err := cl.ValidateSourceQuery(source, q); err != nil {
+			result.Error = err.Error()
+			break
+		}
+		result = h.stream.QuerySource(ctx, source, q, h.Location)
 		break
 	}
 	if inv.Error != "" && len(inv.Sources) == 0 {

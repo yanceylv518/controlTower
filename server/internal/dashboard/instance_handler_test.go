@@ -44,6 +44,42 @@ func TestInstanceCreateRotateAndDisable(t *testing.T) {
 	}
 }
 
+func TestDeleteDisabledInstance(t *testing.T) {
+	s := ingest.NewMemoryStore()
+	h := InstanceHandler{Store: s}
+	now := time.Now().UTC()
+	s.CreateInstance(storage.Instance{ID: "unused", Enabled: true, CreatedAt: now, UpdatedAt: now})
+	call := func() int {
+		r := httptest.NewRequest(http.MethodDelete, "/", nil)
+		r.SetPathValue("id", "unused")
+		w := httptest.NewRecorder()
+		h.Delete(w, r)
+		return w.Code
+	}
+	if code := call(); code != 409 {
+		t.Fatalf("active deletion accepted: %d", code)
+	}
+	s.UpdateInstance("unused", "site", "unused", false, now)
+	if code := call(); code != 200 {
+		t.Fatal(code)
+	}
+	items, _ := s.ListInstances()
+	if len(items) != 0 {
+		t.Fatal("deleted item visible")
+	}
+	if err := s.UpdateInstance("unused", "site", "unused", true, now); err == nil {
+		t.Fatal("deleted instance re-enabled")
+	}
+	if code := call(); code != 404 {
+		t.Fatal(code)
+	}
+	w := httptest.NewRecorder()
+	h.Create(w, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"instance_id":"unused"}`)))
+	if w.Code != 409 {
+		t.Fatal("deleted identity reused", w.Code)
+	}
+}
+
 func TestInstanceListUsesSnakeCaseDTO(t *testing.T) {
 	s := ingest.NewMemoryStore()
 	h := InstanceHandler{Store: s, Runtime: s, Pepper: "pep"}

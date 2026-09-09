@@ -22,17 +22,35 @@ func ValidSourceID(s string) bool { return sourcePattern.MatchString(s) }
 func ValidName(s string) bool { return namePattern.MatchString(s) }
 
 type Query struct {
-	Cursor    string    `json:"cursor,omitempty"`
-	Keyword   string    `json:"keyword,omitempty"`
-	SourceID  string    `json:"source_id,omitempty"`
-	Container string    `json:"container"`
-	From      time.Time `json:"from"`
-	To        time.Time `json:"to"`
-	RequestID string    `json:"request_id,omitempty"`
-	ErrorCode string    `json:"error_code,omitempty"`
+	Kind          string    `json:"kind,omitempty"`
+	Host          string    `json:"host,omitempty"`
+	Path          string    `json:"path,omitempty"`
+	MinDurationMS int       `json:"min_duration_ms,omitempty"`
+	Level         string    `json:"level,omitempty"`
+	BatchID       string    `json:"batch_id,omitempty"`
+	Cursor        string    `json:"cursor,omitempty"`
+	Keyword       string    `json:"keyword,omitempty"`
+	SourceID      string    `json:"source_id,omitempty"`
+	Container     string    `json:"container"`
+	From          time.Time `json:"from"`
+	To            time.Time `json:"to"`
+	RequestID     string    `json:"request_id,omitempty"`
+	ErrorCode     string    `json:"error_code,omitempty"`
 }
 
 func (q Query) Validate(now time.Time) error {
+	if q.Kind != "" && q.Kind != "app" && q.Kind != "nginx_access" && q.Kind != "nginx_error" {
+		return errors.New("invalid log kind")
+	}
+	if len(q.Host) > 253 || len(q.Path) > 256 || strings.ContainsAny(q.Host+q.Path, "\x00\r\n") || q.MinDurationMS < 0 || q.MinDurationMS > 3600000 {
+		return errors.New("invalid nginx filter")
+	}
+	if q.Level != "" && !strings.Contains("|debug|info|notice|warn|error|crit|alert|emerg|", "|"+q.Level+"|") {
+		return errors.New("invalid log level")
+	}
+	if q.BatchID != "" && !ValidName(q.BatchID) {
+		return errors.New("invalid query batch")
+	}
 	if (q.Cursor != "" && !ValidSourceID(q.Cursor)) || !ValidSourceID(q.SourceID) || !ValidName(q.Container) || q.From.IsZero() || !q.To.After(q.From) || q.To.Sub(q.From) > time.Hour || q.To.After(now.Add(time.Minute)) || q.From.Before(now.Add(-3*24*time.Hour)) {
 		return errors.New("invalid query range or container")
 	}
@@ -89,14 +107,21 @@ type Poll struct {
 
 // Source never includes environment variables, credentials or arbitrary Docker metadata.
 type Source struct {
-	ID          string `json:"id"`
-	Container   string `json:"container"`
-	ContainerID string `json:"container_id"`
-	LogDir      string `json:"log_dir"`
-	Timezone    string `json:"timezone"`
-	Available   bool   `json:"available"`
-	Reason      string `json:"reason,omitempty"`
-	HostDir     string `json:"-"`
+	Kind        string   `json:"kind,omitempty"`
+	Domains     []string `json:"domains,omitempty"`
+	Fields      []string `json:"fields,omitempty"`
+	QueryHost   string   `json:"query_host,omitempty"`
+	FileName    string   `json:"-"`
+	LogFormat   string   `json:"-"`
+	Shared      bool     `json:"-"`
+	ID          string   `json:"id"`
+	Container   string   `json:"container"`
+	ContainerID string   `json:"container_id"`
+	LogDir      string   `json:"log_dir"`
+	Timezone    string   `json:"timezone"`
+	Available   bool     `json:"available"`
+	Reason      string   `json:"reason,omitempty"`
+	HostDir     string   `json:"-"`
 }
 type Inventory struct {
 	Sources []Source `json:"sources"`

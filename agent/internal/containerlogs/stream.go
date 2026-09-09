@@ -26,6 +26,7 @@ type fileSnapshot struct {
 	signature string
 }
 type searchSession struct {
+	source            cl.Source
 	query             cl.Query
 	dir               string
 	files             []fileSnapshot
@@ -109,6 +110,11 @@ func snapshotMatches(f *os.File, s fileSnapshot) bool {
 func queryIdentity(q cl.Query) string { q.Cursor = ""; b, _ := json.Marshal(q); return string(b) }
 
 func (e *StreamEngine) Query(ctx context.Context, dir string, q cl.Query, loc *time.Location) cl.Result {
+	return e.QuerySource(ctx, cl.Source{HostDir: dir}, q, loc)
+}
+
+func (e *StreamEngine) QuerySource(ctx context.Context, source cl.Source, q cl.Query, loc *time.Location) cl.Result {
+	dir := source.HostDir
 	now := time.Now()
 	live := e.sessions[:0]
 	for _, s := range e.sessions {
@@ -152,7 +158,7 @@ func (e *StreamEngine) Query(ctx context.Context, dir string, q cl.Query, loc *t
 		if len(e.sessions) >= 16 {
 			return fail("进行中的查询过多，请稍后重试（进度保留 10 分钟）")
 		}
-		session = &searchSession{query: q, dir: dir, expires: now.Add(continuationTTL)}
+		session = &searchSession{query: q, dir: dir, source: source, expires: now.Add(continuationTTL)}
 		if err := session.snapshot(ctx); err != nil {
 			return fail("无法建立日志文件快照，请检查目录读取权限")
 		}
@@ -220,13 +226,20 @@ func (s *searchSession) snapshot(ctx context.Context) error {
 			return nil
 		}
 		if d.IsDir() {
+			if s.source.FileName != "" && name != "." {
+				return fs.SkipDir
+			}
 			if strings.Count(name, "/") >= 3 {
 				s.partial = true
 				return fs.SkipDir
 			}
 			return nil
 		}
-		if !d.Type().IsRegular() || !logName.MatchString(d.Name()) {
+		allowed := logName.MatchString(d.Name())
+		if s.source.FileName != "" {
+			allowed = nginxLogFile(d.Name(), s.source.FileName)
+		}
+		if !d.Type().IsRegular() || !allowed {
 			return nil
 		}
 		// Enumerate metadata only: do not read samples or bodies of older files.
@@ -290,6 +303,15 @@ func (e *StreamEngine) page(ctx context.Context, s *searchSession, loc *time.Loc
 	}
 	defer root.Close()
 	matches := newMatcher(s.query)
+	redact := Redact
+	if strings.HasPrefix(s.source.Kind, "nginx_") {
+		matches = nginxMatcher(s.source, s.query)
+		redact = redactNginx
+		if s.source.Kind == "nginx_access" {
+			format := compileNginxFormat(s.source.LogFormat)
+			redact = func(line string) string { return redactNginx(format.redact(line)) }
+		}
+	}
 	emit := func(record logRecord) {
 		if record.oversized || record.stamp.IsZero() {
 			s.skipped = true
@@ -306,7 +328,7 @@ func (e *StreamEngine) page(ctx context.Context, s *searchSession, loc *time.Loc
 			return
 		}
 		for _, line := range record.lines {
-			s.pending = append(s.pending, fmt.Sprintf("%s [byte %d] %s", s.files[s.filePos].name, line.offset, Redact(line.text)))
+			s.pending = append(s.pending, fmt.Sprintf("%s [byte %d] %s", s.files[s.filePos].name, line.offset, redact(line.text)))
 		}
 	}
 	for {
@@ -359,7 +381,7 @@ func (e *StreamEngine) page(ctx context.Context, s *searchSession, loc *time.Loc
 					result.Error = "压缩日志损坏或格式不支持"
 					return result
 				}
-				s.parser = &recordParser{loc: loc}
+				s.parser = parserForSource(s.source, loc)
 			} else {
 				file.Close()
 			}
@@ -377,7 +399,7 @@ func (e *StreamEngine) page(ctx context.Context, s *searchSession, loc *time.Loc
 		}
 		result.Phase = "querying"
 		if s.parser == nil {
-			s.parser = &recordParser{loc: loc}
+			s.parser = parserForSource(s.source, loc)
 		}
 		count := min(int64(len(buf)), snap.info.Size()-s.readPos, e.pageBytes-result.ScannedBytes)
 		n, readErr := file.ReadAt(buf[:count], s.readPos)

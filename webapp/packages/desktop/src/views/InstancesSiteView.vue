@@ -33,6 +33,8 @@ function message(error: unknown) {
       instance_exists: "实例 ID 已存在",
       instance_not_found: "实例不存在",
       instance_disabled: "实例已停用",
+      disable_instance_first: "请先停用实例再删除",
+      instance_delete_conflict: "实例状态已变化，请刷新后重试",
       invalid_site_id: "站点 ID 格式不正确",
       logs_readonly_connection_test_failed: "连接测试失败，请检查地址、账号权限、数据库名称以及 users/logs 表是否可读",
       logs_readonly_config_not_persisted: "连接测试已通过，但配置未能写入数据库，请检查 Control Tower 数据库状态",
@@ -89,6 +91,15 @@ async function toggle(item: InstanceItem, value: boolean) {
     if ((error as string) !== "cancel") ElMessage.error(message(error));
     await state.reload();
   }
+}
+async function removeInstance(item: InstanceItem) {
+  try {
+    await ElMessageBox.confirm(`删除实例「${item.name || item.instance_id}」？删除后将从列表移除，原 Token 失效，历史数据保留，实例 ID 不可重复使用。`, "删除实例", { type: "warning", confirmButtonText: "删除" });
+    await client.request(`/api/dashboard/instances/${encodeURIComponent(item.instance_id)}`, { method: "DELETE" });
+    filters.loaded = false;
+    await Promise.all([state.reload(), filters.loadInstances()]);
+    ElMessage.success("实例已删除");
+  } catch (error) { if (error !== "cancel" && error !== "close") ElMessage.error(message(error)); }
 }
 function configureReadonly(item: ReadonlyInstanceItem) {
   readonlyTarget.value = item;
@@ -186,7 +197,7 @@ useAutoRefresh(state.reload);
         <el-table-column prop="created_at" label="创建时间" width="180"><template #default="scope">{{ new Date(scope.row.created_at).toLocaleString() }}</template></el-table-column>
         <el-table-column label="Agent" min-width="230"><template #default="scope"><div v-for="agent in scope.row.agents" :key="agent.id" class="agent-line"><StatusTag :value="agent.online ? 'online' : 'offline'" /><span>{{ agent.version }} · 积压 {{ agent.backlog_estimate }}</span></div><span v-if="!scope.row.agents.length">—</span></template></el-table-column>
         <el-table-column label="站点连接" width="190"><template #default="scope"><div v-if="isFirstSiteRow(scope.row)"><div class="status-line"><StatusTag :value="scope.row.logs_readonly_configured ? 'online' : 'offline'" /><span>只读查询{{ scope.row.logs_readonly_configured ? '已配置' : '未配置' }}</span></div><div class="status-line"><StatusTag :value="scope.row.control_configured ? 'online' : 'offline'" /><span>调权直连{{ scope.row.control_configured ? '已配置' : '未配置' }}</span></div></div><span v-else class="shared-hint">随站点共享</span></template></el-table-column>
-        <el-table-column label="操作" width="360" align="right" header-align="right"><template #default="scope"><div class="action-line"><el-button size="small" @click="rotate(scope.row)">轮换 Token</el-button><el-button v-if="isFirstSiteRow(scope.row)" size="small" @click="configureReadonly(scope.row)">只读查询</el-button><el-button v-if="isFirstSiteRow(scope.row)" size="small" @click="configureControl(scope.row)">调权直连</el-button></div></template></el-table-column>
+        <el-table-column label="操作" width="360" align="right" header-align="right"><template #default="scope"><div class="action-line"><el-button v-if="!scope.row.enabled" size="small" type="danger" plain @click="removeInstance(scope.row)">删除</el-button><el-button size="small" @click="rotate(scope.row)">轮换 Token</el-button><el-button v-if="isFirstSiteRow(scope.row)" size="small" @click="configureReadonly(scope.row)">只读查询</el-button><el-button v-if="isFirstSiteRow(scope.row)" size="small" @click="configureControl(scope.row)">调权直连</el-button></div></template></el-table-column>
       </el-table>
     </AsyncPanel>
     <el-dialog v-model="createOpen" title="创建实例" width="480px">

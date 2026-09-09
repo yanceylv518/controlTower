@@ -1,7 +1,6 @@
 [Unit]
-Description=Control Tower Docker log reader
+Description=Control Tower application and Nginx log reader
 After=docker.service
-Requires=docker.service
 
 [Service]
 Type=simple

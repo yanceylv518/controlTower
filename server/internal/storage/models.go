@@ -35,6 +35,7 @@ type Session struct {
 }
 
 type Instance struct {
+	Deleted         bool
 	ID              string
 	SiteID          string
 	Name            string

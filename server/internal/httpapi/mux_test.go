@@ -188,6 +188,7 @@ func TestMuxRegistersInstanceRoutes(t *testing.T) {
 		{http.MethodGet, "/api/dashboard/instances"},
 		{http.MethodPost, "/api/dashboard/instances"},
 		{http.MethodPut, "/api/dashboard/instances/inst-x"},
+		{http.MethodDelete, "/api/dashboard/instances/inst-x"},
 		{http.MethodPost, "/api/dashboard/instances/inst-x/rotate-token"},
 	} {
 		request := httptest.NewRequest(tc.method, tc.path, nil)

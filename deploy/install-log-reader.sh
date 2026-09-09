@@ -2,7 +2,6 @@
 # Opt-in log reader installation. Does not edit the running Agent configuration.
 set -euo pipefail
 [[ $EUID -eq 0 ]] || { echo 'Run with sudo'; exit 1; }
-[[ -x /usr/bin/docker ]] || { echo '/usr/bin/docker is required'; exit 1; }
 id ct-agent >/dev/null
 here="$(cd "$(dirname "$0")" && pwd)"
 [[ -f "$here/control-tower-log-reader" && -f "$here/control-tower-log-reader.service" ]]

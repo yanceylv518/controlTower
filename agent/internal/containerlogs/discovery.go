@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -18,6 +19,7 @@ import (
 
 type dockerMount struct{ Type, Source, Destination string }
 type dockerMeta struct {
+	PID                               int
 	ID, Name, Image, Path, WorkingDir string
 	Args                              []string
 	Mounts                            []dockerMount
@@ -25,7 +27,7 @@ type dockerMeta struct {
 type DockerRun func(context.Context, []string) ([]byte, error)
 
 // Docker's projection deliberately excludes Config.Env and labels.
-const inspectFormat = `{"ID":{{json .Id}},"Name":{{json .Name}},"Image":{{json .Config.Image}},"Path":{{json .Path}},"Args":{{json .Args}},"WorkingDir":{{json .Config.WorkingDir}},"Mounts":{{json .Mounts}}}`
+const inspectFormat = `{"ID":{{json .Id}},"PID":{{json .State.Pid}},"Name":{{json .Name}},"Image":{{json .Config.Image}},"Path":{{json .Path}},"Args":{{json .Args}},"WorkingDir":{{json .Config.WorkingDir}},"Mounts":{{json .Mounts}}}`
 
 var dockerID = regexp.MustCompile(`^[a-f0-9]{12,64}$`)
 
@@ -74,6 +76,26 @@ func Discover(ctx context.Context, run DockerRun, names []string, timezone strin
 			continue
 		}
 		source, found := sourceFromMeta(m, names, timezone)
+		if strings.Contains(strings.ToLower(m.Image), "nginx") || path.Base(m.Path) == "nginx" {
+			name := strings.TrimPrefix(m.Name, "/")
+			if cl.ValidName(name) && m.PID > 0 {
+				config, prefix := "/etc/nginx/nginx.conf", ""
+				for i, a := range m.Args {
+					if i+1 < len(m.Args) {
+						if a == "-c" {
+							config = m.Args[i+1]
+						}
+						if a == "-p" {
+							prefix = m.Args[i+1]
+						}
+					}
+				}
+				if path.IsAbs(config) {
+					inv.Sources = append(inv.Sources, discoverNginxConfig(ctx, fmt.Sprintf("/proc/%d/root", m.PID), config, prefix, name, m.ID, timezone)...)
+				}
+			}
+			continue
+		}
 		if !found {
 			continue
 		}

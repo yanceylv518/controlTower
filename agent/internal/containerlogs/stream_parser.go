@@ -2,6 +2,7 @@ package containerlogs
 
 import (
 	"bytes"
+	cl "controltower/internal/containerlog"
 	"strings"
 	"time"
 )
@@ -20,6 +21,8 @@ type logRecord struct {
 
 // Parser state survives page boundaries, including a split timestamp or record.
 type recordParser struct {
+	parseTime         func(string) (time.Time, bool)
+	singleLine        bool
 	offset, lineStart int64
 	fragment          []byte
 	longLine          bool
@@ -69,10 +72,17 @@ func (p *recordParser) finish(end int64, emit func(logRecord)) {
 
 func (p *recordParser) line(emit func(logRecord)) {
 	text := strings.TrimSuffix(strings.TrimSuffix(string(p.fragment), "\n"), "\r")
+	parseTime := p.parseTime
+	if parseTime == nil {
+		parseTime = func(s string) (time.Time, bool) { return lineTime(s, p.loc) }
+	}
+	if p.singleLine {
+		p.finish(p.lineStart, emit)
+	}
 	if p.longLine {
 		p.finish(p.lineStart, emit)
 		emit(logRecord{start: p.lineStart, end: p.offset, oversized: true})
-	} else if stampTime, ok := lineTime(text, p.loc); ok {
+	} else if stampTime, ok := parseTime(text); ok {
 		p.finish(p.lineStart, emit)
 		p.record = &logRecord{start: p.lineStart, stamp: stampTime}
 	} else if strings.HasPrefix(strings.TrimSpace(text), "{") || (stamp.MatchString(text) && strings.HasPrefix(text, "[")) {
@@ -94,4 +104,17 @@ func (p *recordParser) line(emit func(logRecord)) {
 	p.fragment = nil
 	p.longLine = false
 	p.lineStart = p.offset
+}
+
+func parserForSource(source cl.Source, loc *time.Location) *recordParser {
+	p := &recordParser{loc: loc}
+	if source.Kind == "nginx_access" {
+		f := compileNginxFormat(source.LogFormat)
+		p.singleLine = true
+		p.parseTime = func(line string) (time.Time, bool) { return nginxTime(f.values(line)) }
+	}
+	if source.Kind == "nginx_error" {
+		p.singleLine = true
+	}
+	return p
 }

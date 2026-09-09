@@ -25,11 +25,24 @@ func (h Handler) ContainerLogs(store ContainerLogPoller) http.HandlerFunc {
 		}
 		seen := map[string]bool{}
 		for _, n := range p.Sources {
-			if !cl.ValidName(n.Container) || seen[n.Container] || len(n.ContainerID) > 64 || len(n.LogDir) > 1024 || len(n.Timezone) > 128 || len(n.Reason) > 1024 || (n.Available && !cl.ValidSourceID(n.ID)) || len(n.ID) > 64 {
+			key := n.Container + "/" + n.ID + "/" + n.Kind
+			if !cl.ValidName(n.Container) || seen[key] || len(n.ContainerID) > 64 || len(n.LogDir) > 1024 || len(n.Timezone) > 128 || len(n.Reason) > 1024 || (n.Available && !cl.ValidSourceID(n.ID)) || len(n.ID) > 64 || len(n.Domains) > 100 || len(n.Fields) > 10 || (n.Kind != "" && n.Kind != "app" && n.Kind != "nginx_access" && n.Kind != "nginx_error") {
 				writeError(w, 400, "invalid_container")
 				return
 			}
-			seen[n.Container] = true
+			for _, domain := range n.Domains {
+				if len(domain) > 253 {
+					writeError(w, 400, "invalid_domain")
+					return
+				}
+			}
+			for _, field := range n.Fields {
+				if len(field) > 32 {
+					writeError(w, 400, "invalid_field")
+					return
+				}
+			}
+			seen[key] = true
 		}
 		if p.Result != nil {
 			if (p.Result.NextCursor != "" && !cl.ValidSourceID(p.Result.NextCursor)) || (p.Result.Complete && p.Result.NextCursor != "") || p.Result.IndexedBytes < 0 || p.Result.TotalScannedBytes < 0 || (p.Result.Phase != "" && p.Result.Phase != "indexing" && p.Result.Phase != "querying" && p.Result.Phase != "archive" && p.Result.Phase != "complete") {
@@ -56,6 +69,7 @@ func (h Handler) ContainerLogs(store ContainerLogPoller) http.HandlerFunc {
 		}
 		// Do not send requester metadata or query history to Agent.
 		if task != nil {
+			task.Query.BatchID = ""
 			task.Actor = ""
 			task.ActorName = ""
 			task.ActorID = 0

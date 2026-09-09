@@ -149,6 +149,7 @@ func NewMux(options Options) *http.ServeMux {
 	mux.Handle("GET /api/dashboard/instances", protect(http.HandlerFunc(instances.List)))
 	mux.Handle("POST /api/dashboard/instances", protect(http.HandlerFunc(instances.Create)))
 	mux.Handle("PUT /api/dashboard/instances/{id}", protect(http.HandlerFunc(instances.Update)))
+	mux.Handle("DELETE /api/dashboard/instances/{id}", protect(http.HandlerFunc(instances.Delete)))
 	mux.Handle("POST /api/dashboard/instances/{id}/rotate-token", protect(http.HandlerFunc(instances.Rotate)))
 	mux.Handle("GET /api/dashboard/passthrough/users", protect(http.HandlerFunc(passthrough.Users)))
 	mux.Handle("GET /api/dashboard/passthrough/logs", protect(http.HandlerFunc(passthrough.Logs)))

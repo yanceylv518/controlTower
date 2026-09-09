@@ -8,7 +8,7 @@ import (
 )
 
 func (s Store) ListInstances() ([]storage.Instance, error) {
-	r, e := s.db.Query("SELECT id,site_id,name,env,region,base_url,logs_readonly_dsn,enabled,created_at,updated_at FROM instances ORDER BY id")
+	r, e := s.db.Query("SELECT id,site_id,name,env,region,base_url,logs_readonly_dsn,enabled,created_at,updated_at FROM instances WHERE deleted=0 ORDER BY id")
 	if e != nil {
 		return nil, e
 	}
@@ -25,7 +25,7 @@ func (s Store) ListInstances() ([]storage.Instance, error) {
 }
 func (s Store) InstanceByID(id string) (storage.Instance, bool, error) {
 	var v storage.Instance
-	e := s.db.QueryRow("SELECT id,site_id,name,env,region,base_url,logs_readonly_dsn,enabled,created_at,updated_at FROM instances WHERE id=?", id).Scan(&v.ID, &v.SiteID, &v.Name, &v.Env, &v.Region, &v.BaseURL, &v.LogsReadonlyDSN, &v.Enabled, &v.CreatedAt, &v.UpdatedAt)
+	e := s.db.QueryRow("SELECT id,site_id,name,env,region,base_url,logs_readonly_dsn,enabled,created_at,updated_at,deleted FROM instances WHERE id=?", id).Scan(&v.ID, &v.SiteID, &v.Name, &v.Env, &v.Region, &v.BaseURL, &v.LogsReadonlyDSN, &v.Enabled, &v.CreatedAt, &v.UpdatedAt, &v.Deleted)
 	if errors.Is(e, sql.ErrNoRows) {
 		return v, false, nil
 	}
@@ -36,7 +36,7 @@ func (s Store) CreateInstance(v storage.Instance) error {
 	return e
 }
 func (s Store) UpdateInstance(id, siteID, n string, en bool, now time.Time) error {
-	_, e := s.db.Exec("UPDATE instances SET site_id=?,name=?,enabled=?,updated_at=? WHERE id=?", siteID, n, en, now, id)
+	_, e := s.db.Exec("UPDATE instances SET site_id=?,name=?,enabled=?,updated_at=? WHERE id=? AND deleted=0", siteID, n, en, now, id)
 	return e
 }
 
@@ -92,4 +92,29 @@ func (s Store) DeleteExpiredInstanceTokens(n time.Time) (int, error) {
 	}
 	x, e := r.RowsAffected()
 	return int(x), e
+}
+
+// Retain identity and history, including site-shared connection configuration.
+// The conditional write serializes deletion against a concurrent re-enable.
+func (s Store) DeleteInstance(id string, now time.Time) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.Exec("UPDATE instances SET deleted=1,updated_at=? WHERE id=? AND enabled=0 AND deleted=0", now, id)
+	if err != nil {
+		return err
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n != 1 {
+		return errors.New("instance must be disabled")
+	}
+	if _, err = tx.Exec("UPDATE instance_tokens SET expires_at=? WHERE instance_id=?", now, id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

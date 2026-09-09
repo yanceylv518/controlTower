@@ -190,7 +190,7 @@ func (i InstanceHandler) Create(w http.ResponseWriter, r *http.Request) {
 func (i InstanceHandler) Update(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	v, ok, e := i.Store.InstanceByID(id)
-	if e != nil || !ok {
+	if e != nil || !ok || v.Deleted {
 		writeDashboardError(w, 404, "instance_not_found")
 		return
 	}
@@ -349,7 +349,7 @@ func (i InstanceHandler) Rotate(w http.ResponseWriter, r *http.Request) {
 		writeDashboardError(w, 500, "query_failed")
 		return
 	}
-	if !ok {
+	if !ok || instance.Deleted {
 		writeDashboardError(w, 404, "instance_not_found")
 		return
 	}
@@ -373,4 +373,31 @@ func (i InstanceHandler) Rotate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeDashboardJSON(w, 200, map[string]any{"token": t, "grace_until": g})
+}
+
+func (i InstanceHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	v, ok, err := i.Store.InstanceByID(id)
+	if err != nil {
+		writeDashboardError(w, 500, "query_failed")
+		return
+	}
+	if !ok || v.Deleted {
+		writeDashboardError(w, 404, "instance_not_found")
+		return
+	}
+	if v.Enabled {
+		writeDashboardError(w, 409, "disable_instance_first")
+		return
+	}
+	store, ok := i.Store.(interface{ DeleteInstance(string, time.Time) error })
+	if !ok {
+		writeDashboardError(w, 501, "delete_unavailable")
+		return
+	}
+	if err := store.DeleteInstance(id, time.Now().UTC()); err != nil {
+		writeDashboardError(w, 409, "instance_delete_conflict")
+		return
+	}
+	writeDashboardJSON(w, 200, map[string]bool{"deleted": true})
 }

@@ -105,6 +105,9 @@ func (s *MemoryStore) ListInstances() ([]storage.Instance, error) {
 	defer s.mu.Unlock()
 	o := make([]storage.Instance, 0, len(s.instances))
 	for _, v := range s.instances {
+		if v.Deleted {
+			continue
+		}
 		o = append(o, v)
 	}
 	sort.Slice(o, func(i, j int) bool { return o[i].ID < o[j].ID })
@@ -129,6 +132,9 @@ func (s *MemoryStore) UpdateInstance(id, siteID, n string, e bool, now time.Time
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	v := s.instances[id]
+	if v.Deleted {
+		return fmt.Errorf("instance deleted")
+	}
 	v.SiteID = siteID
 	v.Name = n
 	v.Enabled = e
@@ -870,4 +876,22 @@ func (s *MemoryStore) DeleteAlertsByStatus(statuses []string) (int64, error) {
 	}
 	s.alertEvents = kept
 	return deleted, nil
+}
+
+func (s *MemoryStore) DeleteInstance(id string, now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, ok := s.instances[id]
+	if !ok || v.Deleted || v.Enabled {
+		return fmt.Errorf("instance must be disabled")
+	}
+	v.Deleted = true
+	v.UpdatedAt = now
+	s.instances[id] = v
+	for n := range s.instanceTokens {
+		if s.instanceTokens[n].InstanceID == id {
+			s.instanceTokens[n].ExpiresAt = &now
+		}
+	}
+	return nil
 }
