@@ -35,9 +35,7 @@ master 进程的 -c/-p 参数补充绝对配置路径。Docker Nginx 通过 insp
 
 解析 include、server_name、log_format，以及 access_log/error_log 的继承和 access_log off。
 只上报来源、域名和支持的字段；完整配置、格式字符串与宿主机内部路径不上传。
-CT 以实例 Base URL 的 hostname 匹配 server_name，任务提交时再次校验域名；读取服务按
-来源 ID 重新发现文件，不接受浏览器指定文件路径。共享访问日志需要包含 host/http_host/server_name
-才能按站点过滤；无法确定域名或共享错误日志会标记不可用，需管理员调整为明确的站点日志配置。
+CT 按 Agent 所属实例将本机日志归入当前站点，无需配置域名，也不使用实例连接地址匹配 Nginx server_name。查询多个实例时合并结果。读取服务按来源 ID 重新发现文件，不接受浏览器指定文件路径。
 
 访问日志支持 combined 和由 log_format 描述的文本/JSON 格式。需要 time_local、time_iso8601
 或 msec 时间字段。根据实际记录的变量开放 HTTP 状态码、Request ID、请求路径包含匹配、

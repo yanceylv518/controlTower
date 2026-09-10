@@ -68,8 +68,8 @@ func TestNginxSharedLogDomainIsolation(t *testing.T) {
 	sources := discoverNginxConfig(context.Background(), root, "/etc/nginx/nginx.conf", "", "nginx-host", "host", "Asia/Shanghai")
 	for _, s := range sources {
 		if s.Kind == "nginx_error" {
-			if s.Available {
-				t.Fatal("shared error log available")
+			if !s.Available {
+				t.Fatal("local error log unavailable")
 			}
 			continue
 		}
@@ -85,12 +85,19 @@ func TestNginxSharedLogDomainIsolation(t *testing.T) {
 		if cl.ValidateSourceQuery(s, q) == nil {
 			t.Fatal("foreign domain allowed")
 		}
+		q.Host = ""
+		if err := cl.ValidateSourceQuery(s, q); err != nil {
+			t.Fatal(err)
+		}
+		got = NewStreamEngine().QuerySource(context.Background(), s, q, time.UTC)
+		if len(got.Lines) != 2 {
+			t.Fatalf("local query should include both records: %+v", got)
+		}
 	}
 }
 
 func TestNginxDiscoveryUnsupportedAndOff(t *testing.T) {
 	for _, cfg := range []string{
-		`http {server {server_name one.example; access_log /logs/access.log combined;}server {server_name two.example;access_log /logs/access.log combined;}}`,
 		`http {server {server_name one.example;access_log /logs/$host.log;}}`,
 		`http {server {server_name one.example;access_log /dev/stdout;}}`,
 	} {
@@ -115,6 +122,31 @@ func TestNginxDiscoveryUnsupportedAndOff(t *testing.T) {
 	for _, name := range []string{"error.log", "access.log.secret", "access.log/secret"} {
 		if nginxLogFile(name, "access.log") {
 			t.Fatal(name)
+		}
+	}
+}
+
+func TestNginxLocalLogsWithoutDomain(t *testing.T) {
+	root := nginxFixture(t, `http { server { listen 80; server_name _; access_log /logs/access.log combined; error_log /logs/error.log; } }`, map[string]string{
+		"logs/access.log": "127.0.0.1 - - [09/Sep/2026:10:00:00 +0800] \"GET / HTTP/1.1\" 200 12 \"-\" \"agent\"\n",
+		"logs/error.log":  "2026/09/09 10:00:00 [error] 1#1: local failure\n",
+	})
+	sources := discoverNginxConfig(context.Background(), root, "/etc/nginx/nginx.conf", "", "nginx-host", "host", "Asia/Shanghai")
+	if len(sources) != 2 {
+		t.Fatalf("sources: %+v", sources)
+	}
+	zone := time.FixedZone("CST", 8*3600)
+	for _, source := range sources {
+		if !source.Available {
+			t.Fatalf("local log unavailable: %+v", source)
+		}
+		q := cl.Query{Kind: source.Kind, From: time.Date(2026, 9, 9, 2, 0, 0, 0, time.UTC), To: time.Date(2026, 9, 9, 2, 1, 0, 0, time.UTC)}
+		if err := cl.ValidateSourceQuery(source, q); err != nil {
+			t.Fatal(err)
+		}
+		got := NewStreamEngine().QuerySource(context.Background(), source, q, zone)
+		if len(got.Lines) != 1 {
+			t.Fatalf("local query: %+v", got)
 		}
 	}
 }

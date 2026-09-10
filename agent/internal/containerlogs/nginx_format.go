@@ -162,7 +162,7 @@ func nginxMatcher(source cl.Source, q cl.Query) func(string) bool {
 			if len(m) < 2 || q.Level != "" && m[1] != q.Level {
 				return false
 			}
-			if source.Shared {
+			if source.Shared && q.Host != "" {
 				h := nginxErrorHost.FindStringSubmatch(line)
 				return len(h) > 1 && normalizedHost(h[1]) == normalizedHost(q.Host)
 			}

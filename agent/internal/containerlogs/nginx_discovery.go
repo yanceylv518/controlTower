@@ -372,12 +372,10 @@ func discoverNginxConfig(ctx context.Context, rootPath, config, prefix, containe
 	for _, s := range sources {
 		if len(s.Domains) > 100 {
 			s.Domains = s.Domains[:100]
-			s.Reason = "同一日志来源的域名超过发现上限"
 		}
 		for _, domain := range s.Domains {
 			if len(domain) > 253 {
 				s.Domains = nil
-				s.Reason = "日志域名格式无法识别"
 				break
 			}
 		}
@@ -387,17 +385,8 @@ func discoverNginxConfig(ctx context.Context, rootPath, config, prefix, containe
 				s.Shared = true
 			}
 		}
-		if len(s.Domains) == 0 && s.Reason == "" {
-			s.Reason = "无法确认日志所属域名，需在 Nginx server_name 中明确站点"
-		}
 		if s.Kind == "nginx_access" && !hasField(*s, "time") && s.Reason == "" {
 			s.Reason = "日志格式未包含可识别的时间字段"
-		}
-		if s.Shared && s.Kind == "nginx_access" && !hasField(*s, "host") && s.Reason == "" {
-			s.Reason = "共享访问日志未记录域名，无法按站点安全查询"
-		}
-		if s.Shared && s.Kind == "nginx_error" && s.Reason == "" {
-			s.Reason = "共享错误日志不能保证每条记录包含域名，请按站点拆分错误日志"
 		}
 		info, err := root.Lstat(strings.TrimPrefix(s.LogDir, "/"))
 		if err != nil || !info.Mode().IsRegular() {

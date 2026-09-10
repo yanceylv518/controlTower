@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-func TestNginxLogSiteBinding(t *testing.T) {
+func TestNginxLogInstanceSources(t *testing.T) {
 	if os.Getenv("CT_MYSQL_TEST_DSN") == "" {
 		t.Skip("requires test MySQL")
 	}
@@ -27,7 +27,7 @@ func TestNginxLogSiteBinding(t *testing.T) {
 	s := New(db)
 	id := fmt.Sprintf("nginx-%d", time.Now().UnixNano())
 	now := time.Now().UTC()
-	if err = s.CreateInstance(storage.Instance{ID: id, BaseURL: "https://one.example", Enabled: true, CreatedAt: now, UpdatedAt: now}); err != nil {
+	if err = s.CreateInstance(storage.Instance{ID: id, BaseURL: "http://127.0.0.1:3000", Enabled: true, CreatedAt: now, UpdatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
 	defer db.Exec("DELETE FROM instances WHERE id=?", id)
@@ -48,19 +48,19 @@ func TestNginxLogSiteBinding(t *testing.T) {
 	for _, target := range targets {
 		if target.InstanceID == id {
 			found = true
-			if target.Sources[0].QueryHost != "one.example" {
-				t.Fatal("missing authoritative host")
+			if !target.Sources[0].Available || target.Sources[0].QueryHost != "" {
+				t.Fatal("local source should not require a domain binding")
 			}
 		}
 	}
 	if !found {
 		t.Fatal("missing target")
 	}
-	task := cl.Task{ID: id, InstanceID: id, AgentID: "agent", ActorID: 1, Actor: "admin", CreatedAt: now, Query: cl.Query{Kind: "nginx_access", Host: "two.example", SourceID: source.ID, Container: source.Container, From: now.Add(-time.Minute), To: now}}
+	task := cl.Task{ID: id, InstanceID: id, AgentID: "agent", ActorID: 1, Actor: "admin", CreatedAt: now, Query: cl.Query{Kind: "nginx_access", Host: "unknown.example", SourceID: source.ID, Container: source.Container, From: now.Add(-time.Minute), To: now}}
 	if s.CreateContainerLog(ctx, task) == nil {
-		t.Fatal("cross-site query accepted")
+		t.Fatal("undiscovered domain filter accepted")
 	}
-	task.Query.Host = "one.example"
+	task.Query.Host = ""
 	task.Query.Path = "/unsupported"
 	if s.CreateContainerLog(ctx, task) == nil {
 		t.Fatal("unsupported filter accepted")

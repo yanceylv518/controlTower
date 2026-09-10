@@ -43,7 +43,7 @@ func ValidateSourceQuery(s Source, q Query) error {
 		}
 		return nil
 	}
-	if !MatchesDomain(q.Host, s.Domains) {
+	if q.Host != "" && !MatchesDomain(q.Host, s.Domains) {
 		return errors.New("日志来源与当前站点域名不匹配")
 	}
 	has := func(field string) bool {
