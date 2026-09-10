@@ -70,6 +70,10 @@ func (h BillingStatementResultHandler) ServeHTTP(w http.ResponseWriter, r *http.
 		writeDashboardError(w, http.StatusNotFound, "billing_statement_not_found")
 		return
 	}
+	if r.URL.Query().Get("export") == "daily" {
+		h.writeDailyFile(w, r, job)
+		return
+	}
 	rows, err := h.Store.QueryBillingStatementAggregates(r.Context(), job.ID)
 	if err != nil {
 		writeDashboardError(w, http.StatusInternalServerError, "billing_statement_query_failed")
@@ -107,7 +111,16 @@ func (h BillingStatementResultHandler) ServeHTTP(w http.ResponseWriter, r *http.
 		if verified < 0 {
 			verified = 0
 		}
-		writeDashboardJSON(w, http.StatusOK, map[string]any{"job": job, "total_orders": billable + job.AbnormalRows, "normal_orders": verified, "billable_orders": billable, "anomaly_total": job.AbnormalRows, "reconciliation_total": job.MismatchRows, "review_required": job.MismatchRows > 0, "count_balanced": verified+job.AbnormalRows+job.MismatchRows == billable+job.AbnormalRows, "model_summary": preview.Models, "daily_summary": preview.Daily, "token_summary": preview.Tokens, "anomalies": preview.Anomalies, "reconciliation": preview.Reconciliation})
+		files, err := h.Store.ListBillingStatementUserFiles(r.Context(), job.ID)
+		if err != nil {
+			writeDashboardError(w, http.StatusInternalServerError, "billing_statement_files_failed")
+			return
+		}
+		dailyFiles := []map[string]any{}
+		for _, file := range files {
+			dailyFiles = append(dailyFiles, map[string]any{"day": file.BillDay.In(billing.BusinessLocation).Format("2006-01-02"), "filename": statementDailyFilename(job, file.BillDay)})
+		}
+		writeDashboardJSON(w, http.StatusOK, map[string]any{"daily_files": dailyFiles, "job": job, "total_orders": billable + job.AbnormalRows, "normal_orders": verified, "billable_orders": billable, "anomaly_total": job.AbnormalRows, "reconciliation_total": job.MismatchRows, "review_required": job.MismatchRows > 0, "count_balanced": verified+job.AbnormalRows+job.MismatchRows == billable+job.AbnormalRows, "model_summary": preview.Models, "daily_summary": preview.Daily, "token_summary": preview.Tokens, "anomalies": preview.Anomalies, "reconciliation": preview.Reconciliation})
 		return
 	}
 	files, err := h.Store.ListBillingStatementUserFiles(r.Context(), job.ID)
@@ -118,6 +131,13 @@ func (h BillingStatementResultHandler) ServeHTTP(w http.ResponseWriter, r *http.
 	book, err := statementWorkbook(job, rows, h.Store, h.Root)
 	if err != nil {
 		writeDashboardError(w, http.StatusInternalServerError, "billing_statement_xlsx_failed")
+		return
+	}
+	if r.URL.Query().Get("export") == "summary" {
+		name := strings.TrimSuffix(statementArchiveFilename(job), ".zip") + ".xlsx"
+		w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="billing-statement.xlsx"; filename*=UTF-8''%s`, url.PathEscape(name)))
+		http.ServeContent(w, r, name, time.Time{}, bytes.NewReader(book))
 		return
 	}
 	w.Header().Set("Content-Type", "application/zip")
@@ -156,6 +176,57 @@ func (h BillingStatementResultHandler) ServeHTTP(w http.ResponseWriter, r *http.
 		_ = in.Close()
 	}
 	_ = z.Close()
+}
+
+// Resolve files through the statement snapshot, never the currently active daily bill.
+func (h BillingStatementResultHandler) writeDailyFile(w http.ResponseWriter, r *http.Request, job billing.Job) {
+	day, err := time.ParseInLocation("2006-01-02", r.URL.Query().Get("day"), billing.BusinessLocation)
+	if err != nil {
+		writeDashboardError(w, http.StatusBadRequest, "invalid_query")
+		return
+	}
+	files, err := h.Store.ListBillingStatementUserFiles(r.Context(), job.ID)
+	if err != nil {
+		writeDashboardError(w, http.StatusInternalServerError, "billing_statement_files_failed")
+		return
+	}
+	for _, item := range files {
+		if item.BillDay.In(billing.BusinessLocation).Format("2006-01-02") != day.Format("2006-01-02") {
+			continue
+		}
+		root := h.Root
+		if root == "" {
+			root = billing.DefaultBillingFileRoot
+		}
+		root, err = filepath.Abs(root)
+		if err != nil {
+			writeDashboardError(w, http.StatusInternalServerError, "billing_file_unavailable")
+			return
+		}
+		path := filepath.Join(root, filepath.FromSlash(item.RelativePath))
+		rel, err := filepath.Rel(root, path)
+		if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+			writeDashboardError(w, http.StatusInternalServerError, "billing_file_path_invalid")
+			return
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			writeDashboardError(w, http.StatusNotFound, "billing_file_missing")
+			return
+		}
+		defer file.Close()
+		info, err := file.Stat()
+		if err != nil || !info.Mode().IsRegular() {
+			writeDashboardError(w, http.StatusInternalServerError, "billing_file_unavailable")
+			return
+		}
+		w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="billing-daily-%s.xlsx"; filename*=UTF-8''%s`, day.Format("2006-01-02"), url.PathEscape(statementDailyFilename(job, day))))
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		http.ServeContent(w, r, info.Name(), info.ModTime(), file)
+		return
+	}
+	writeDashboardError(w, http.StatusNotFound, "billing_file_not_found")
 }
 
 type statementPreviewData struct {

@@ -41,15 +41,14 @@ func TestStatementPreviewDefersOnlyPrices(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			day := time.Date(2026, 9, 1, 0, 0, 0, 0, billing.BusinessLocation)
 			s := &statementLoadingStore{
-				job:     billing.Job{ID: "preview", JobType: kind, Status: "complete", UserID: 1},
-				rows:    []billing.StatementAggregateRow{{AggregateRow: billing.AggregateRow{Day: day, ModelName: "m", RequestCount: 12, Amount: "7.5"}}},
-				fileErr: errors.New("detail storage unavailable"),
+				job:  billing.Job{ID: "preview", JobType: kind, Status: "complete", UserID: 1},
+				rows: []billing.StatementAggregateRow{{AggregateRow: billing.AggregateRow{Day: day, ModelName: "m", RequestCount: 12, Amount: "7.5"}}},
 			}
 			h := BillingStatementResultHandler{Store: s, Root: t.TempDir()}
 			w := httptest.NewRecorder()
 			h.ServeHTTP(w, httptest.NewRequest("GET", "/?id=preview&defer_prices=1", nil))
-			if w.Code != 200 || s.fileCalls != 0 {
-				t.Fatalf("preview accessed detail files: status=%d calls=%d body=%s", w.Code, s.fileCalls, w.Body)
+			if w.Code != 200 || s.fileCalls != 1 {
+				t.Fatalf("preview should list file metadata once: status=%d calls=%d body=%s", w.Code, s.fileCalls, w.Body)
 			}
 			var result struct {
 				Billable int              `json:"billable_orders"`
@@ -61,6 +60,7 @@ func TestStatementPreviewDefersOnlyPrices(t *testing.T) {
 			if result.Billable != 12 || len(result.Daily) != 1 || result.Daily[0]["amount"] != "7.50000000" || result.Daily[0]["input_price"] != "待加载" {
 				t.Fatalf("wrong deferred preview: %+v", result)
 			}
+			s.fileErr = errors.New("detail storage unavailable")
 			for _, query := range []string{"", "&section=prices"} {
 				w = httptest.NewRecorder()
 				h.ServeHTTP(w, httptest.NewRequest("GET", "/?id=preview"+query, nil))
