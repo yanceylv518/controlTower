@@ -123,7 +123,10 @@ func (h BillingStatementResultHandler) ServeHTTP(w http.ResponseWriter, r *http.
 		writeDashboardJSON(w, http.StatusOK, map[string]any{"daily_files": dailyFiles, "job": job, "total_orders": billable + job.AbnormalRows, "normal_orders": verified, "billable_orders": billable, "anomaly_total": job.AbnormalRows, "reconciliation_total": job.MismatchRows, "review_required": job.MismatchRows > 0, "count_balanced": verified+job.AbnormalRows+job.MismatchRows == billable+job.AbnormalRows, "model_summary": preview.Models, "daily_summary": preview.Daily, "token_summary": preview.Tokens, "anomalies": preview.Anomalies, "reconciliation": preview.Reconciliation})
 		return
 	}
-	files, err := h.Store.ListBillingStatementUserFiles(r.Context(), job.ID)
+	var files []billing.UserDailyFile
+	if r.URL.Query().Get("download") != "1" || r.URL.Query().Get("export") != "summary" {
+		files, err = h.Store.ListBillingStatementUserFiles(r.Context(), job.ID)
+	}
 	if err != nil {
 		writeDashboardError(w, http.StatusInternalServerError, "billing_statement_files_failed")
 		return
@@ -416,10 +419,7 @@ func sumStatementRequests(rows []billing.StatementAggregateRow) int64 {
 
 func statementWorkbook(job billing.Job, rows []billing.StatementAggregateRow, store BillingStatementResultStore, roots ...string) ([]byte, error) {
 	book := xlsxwriter.New()
-	prices, err := loadStatementPrices(context.Background(), job, store, roots...)
-	if err != nil {
-		return nil, err
-	}
+	var err error
 	discounts := []billing.StatementDiscount{}
 	if job.JobType == "upstream_statement" {
 		discounts, err = store.ListBillingStatementDiscounts(context.Background(), job.ID)
@@ -453,8 +453,8 @@ func statementWorkbook(job billing.Job, rows []billing.StatementAggregateRow, st
 		}
 		summaryRefs[grouped.Key] = fmt.Sprintf("'区间统计'!%s%d", column, index+2)
 	}
-	dailyWidths := []float64{14, 28, 14, 18, 18, 18, 18, 16, 16, 16, 16, 16, 12, 16, 34}
-	dailyHeaders := []xlsxwriter.Cell{t("日期"), t("模型"), t("订单数"), t("输入 Token"), t("输出 Token"), t("缓存读取 Token"), t("缓存写入 Token"), t("输入单价"), t("输出单价"), t("缓存读取单价"), t("缓存写入单价"), t("总费用"), t("折扣"), t("最终费用"), t("明细文件")}
+	dailyWidths := []float64{14, 28, 14, 18, 18, 18, 18, 16, 12, 16, 34}
+	dailyHeaders := []xlsxwriter.Cell{t("日期"), t("模型"), t("订单数"), t("输入 Token"), t("输出 Token"), t("缓存读取 Token"), t("缓存写入 Token"), t("总费用"), t("折扣"), t("最终费用"), t("明细文件")}
 	if job.JobType == "upstream_statement" {
 		dailyWidths = append([]float64{24}, dailyWidths...)
 		dailyHeaders = append([]xlsxwriter.Cell{t("渠道")}, dailyHeaders...)
@@ -467,19 +467,21 @@ func statementWorkbook(job billing.Job, rows []billing.StatementAggregateRow, st
 	dailyTotal := "0"
 	for _, grouped := range groupStatementRows(job, rows, discounts, true) {
 		v, discount := grouped.Row, grouped.Discount
-		price := prices.price(job, v)
 		final := multiplyDecimal(v.Amount, discount)
 		key := statementSummaryKey(job, v, discount)
 		discountCell := d(discount)
 		discountCell.Formula = summaryRefs[key]
-		cells := []xlsxwriter.Cell{t(v.Day.Format("2006-01-02")), t(v.ModelName), n64(v.RequestCount), n64(v.PromptTokens), n64(v.CompletionTokens), n64(v.CacheTokens), n64(v.CacheWriteTokens), statementPriceCell(price.Input), statementPriceCell(price.Output), statementPriceCell(price.Cache), statementPriceCell(price.CacheWrite), d(v.Amount), discountCell, d(final), t(statementDailyFilename(job, v.Day))}
+		cells := []xlsxwriter.Cell{t(v.Day.Format("2006-01-02")), t(v.ModelName), n64(v.RequestCount), n64(v.PromptTokens), n64(v.CompletionTokens), n64(v.CacheTokens), n64(v.CacheWriteTokens), d(v.Amount), discountCell, d(final), t(statementDailyFilename(job, v.Day))}
 		if job.JobType == "upstream_statement" {
 			cells = append([]xlsxwriter.Cell{t(v.ChannelName)}, cells...)
 		}
 		_ = daily.Row(cells)
 		dailyTotal = addDecimal(dailyTotal, final)
 	}
-	_ = daily.Row([]xlsxwriter.Cell{t("合计"), t(""), t(""), t(""), t(""), t(""), t(""), t(""), t(""), t(""), t(""), t(""), t(""), d(dailyTotal), t("")})
+	totalCells := make([]xlsxwriter.Cell, len(dailyHeaders))
+	totalCells[0] = t("合计")
+	totalCells[len(totalCells)-2] = d(dailyTotal)
+	_ = daily.Row(totalCells)
 	if job.JobType == "user_statement" {
 		tokens, tokenErr := store.QueryBillingTokenRows(context.Background(), job.ID, job.UserID, -1, job.From, job.To)
 		if tokenErr != nil {

@@ -91,8 +91,8 @@ func TestStatementPricesUseImmutableDetails(t *testing.T) {
 		in, _ := f.Open()
 		data, _ := io.ReadAll(in)
 		in.Close()
-		if !strings.Contains(string(data), "1.000000 / 4.000000") {
-			t.Fatalf("missing prices: %s", data)
+		if strings.Contains(string(data), "输入单价") || strings.Contains(string(data), "1.000000 / 4.000000") {
+			t.Fatalf("summary must not include unit prices: %s", data)
 		}
 		if !strings.Contains(string(data), `t="inlineStr"`) {
 			t.Fatal("multi-price values must be text")
