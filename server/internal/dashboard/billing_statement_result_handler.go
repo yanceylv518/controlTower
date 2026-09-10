@@ -59,6 +59,9 @@ func (h BillingStatementResultHandler) ServeHTTP(w http.ResponseWriter, r *http.
 				_ = os.Remove(full)
 			}
 		}
+		for _, jobType := range []string{"user_statement", "upstream_statement"} {
+			_ = os.Remove(statementPriceSnapshotPath(root, id, jobType))
+		}
 		writeDashboardJSON(w, http.StatusOK, map[string]any{"deleted": true, "id": id})
 		return
 	}
@@ -76,13 +79,25 @@ func (h BillingStatementResultHandler) ServeHTTP(w http.ResponseWriter, r *http.
 		h.writeReconciliationCSV(w, r, job)
 		return
 	}
-	files, err := h.Store.ListBillingStatementUserFiles(r.Context(), job.ID)
-	if err != nil {
-		writeDashboardError(w, http.StatusInternalServerError, "billing_statement_files_failed")
-		return
-	}
 	if r.URL.Query().Get("download") != "1" {
-		preview, previewErr := statementPreview(r.Context(), job, rows, h.Store, h.Root)
+		if r.URL.Query().Get("section") == "prices" {
+			prices, err := loadStatementPrices(r.Context(), job, h.Store, h.Root)
+			if err != nil {
+				writeDashboardError(w, http.StatusInternalServerError, "billing_statement_preview_failed")
+				return
+			}
+			discounts := []billing.StatementDiscount{}
+			if job.JobType == "upstream_statement" {
+				discounts, err = h.Store.ListBillingStatementDiscounts(r.Context(), job.ID)
+				if err != nil {
+					writeDashboardError(w, http.StatusInternalServerError, "billing_statement_query_failed")
+					return
+				}
+			}
+			writeDashboardJSON(w, http.StatusOK, map[string]any{"daily_summary": statementDailySummary(job, rows, discounts, prices)})
+			return
+		}
+		preview, previewErr := statementPreviewOptions(r.Context(), job, rows, h.Store, r.URL.Query().Get("defer_prices") == "1", h.Root)
 		if previewErr != nil {
 			writeDashboardError(w, http.StatusInternalServerError, "billing_statement_preview_failed")
 			return
@@ -93,6 +108,11 @@ func (h BillingStatementResultHandler) ServeHTTP(w http.ResponseWriter, r *http.
 			verified = 0
 		}
 		writeDashboardJSON(w, http.StatusOK, map[string]any{"job": job, "total_orders": billable + job.AbnormalRows, "normal_orders": verified, "billable_orders": billable, "anomaly_total": job.AbnormalRows, "reconciliation_total": job.MismatchRows, "review_required": job.MismatchRows > 0, "count_balanced": verified+job.AbnormalRows+job.MismatchRows == billable+job.AbnormalRows, "model_summary": preview.Models, "daily_summary": preview.Daily, "token_summary": preview.Tokens, "anomalies": preview.Anomalies, "reconciliation": preview.Reconciliation})
+		return
+	}
+	files, err := h.Store.ListBillingStatementUserFiles(r.Context(), job.ID)
+	if err != nil {
+		writeDashboardError(w, http.StatusInternalServerError, "billing_statement_files_failed")
 		return
 	}
 	book, err := statementWorkbook(job, rows, h.Store, h.Root)
@@ -198,9 +218,17 @@ func groupStatementRows(job billing.Job, rows []billing.StatementAggregateRow, d
 }
 
 func statementPreview(ctx context.Context, job billing.Job, rows []billing.StatementAggregateRow, store BillingStatementResultStore, roots ...string) (statementPreviewData, error) {
-	prices, err := loadStatementPrices(ctx, job, store, roots...)
-	if err != nil {
-		return statementPreviewData{}, err
+	return statementPreviewOptions(ctx, job, rows, store, false, roots...)
+}
+
+func statementPreviewOptions(ctx context.Context, job billing.Job, rows []billing.StatementAggregateRow, store BillingStatementResultStore, deferPrices bool, roots ...string) (statementPreviewData, error) {
+	var prices statementPrices
+	var err error
+	if !deferPrices {
+		prices, err = loadStatementPrices(ctx, job, store, roots...)
+		if err != nil {
+			return statementPreviewData{}, err
+		}
 	}
 	discounts := []billing.StatementDiscount{}
 	if job.JobType == "upstream_statement" {
@@ -214,11 +242,7 @@ func statementPreview(ctx context.Context, job billing.Job, rows []billing.State
 		v, discount := grouped.Row, grouped.Discount
 		out.Models = append(out.Models, map[string]any{"channel_id": v.ChannelID, "channel_name": v.ChannelName, "model_name": statementModelLabel(job, v.ChannelName, v.ModelName), "request_count": v.RequestCount, "prompt_tokens": v.PromptTokens, "completion_tokens": v.CompletionTokens, "cache_read_tokens": v.CacheTokens, "cache_write_tokens": v.CacheWriteTokens, "amount": v.Amount, "discount": discount, "final_amount": multiplyDecimal(v.Amount, discount)})
 	}
-	for _, grouped := range groupStatementRows(job, rows, discounts, true) {
-		v, discount := grouped.Row, grouped.Discount
-		price := prices.price(job, v)
-		out.Daily = append(out.Daily, map[string]any{"day": v.Day.Format("2006-01-02"), "channel_id": v.ChannelID, "channel_name": v.ChannelName, "model_name": statementModelLabel(job, v.ChannelName, v.ModelName), "request_count": v.RequestCount, "prompt_tokens": v.PromptTokens, "completion_tokens": v.CompletionTokens, "cache_read_tokens": v.CacheTokens, "cache_write_tokens": v.CacheWriteTokens, "input_price": price.Input, "output_price": price.Output, "cache_read_price": price.Cache, "cache_write_price": price.CacheWrite, "amount": v.Amount, "discount": discount, "final_amount": multiplyDecimal(v.Amount, discount), "detail_file": statementDailyFilename(job, v.Day)})
-	}
+	out.Daily = statementDailySummary(job, rows, discounts, prices)
 	if job.JobType == "user_statement" {
 		tokens, tokenErr := store.QueryBillingTokenRows(ctx, job.ID, job.UserID, -1, job.From, job.To)
 		if tokenErr != nil {
@@ -259,6 +283,19 @@ func statementPreview(ctx context.Context, job billing.Job, rows []billing.State
 		out.Reconciliation = append(out.Reconciliation, item)
 	}
 	return out, nil
+}
+
+func statementDailySummary(job billing.Job, rows []billing.StatementAggregateRow, discounts []billing.StatementDiscount, prices statementPrices) []map[string]any {
+	out := []map[string]any{}
+	for _, grouped := range groupStatementRows(job, rows, discounts, true) {
+		v, discount := grouped.Row, grouped.Discount
+		price := prices.price(job, v)
+		if prices == nil {
+			price = billing.Price{Input: "待加载", Output: "待加载", Cache: "待加载", CacheWrite: "待加载"}
+		}
+		out = append(out, map[string]any{"day": v.Day.Format("2006-01-02"), "channel_id": v.ChannelID, "channel_name": v.ChannelName, "model_name": statementModelLabel(job, v.ChannelName, v.ModelName), "request_count": v.RequestCount, "prompt_tokens": v.PromptTokens, "completion_tokens": v.CompletionTokens, "cache_read_tokens": v.CacheTokens, "cache_write_tokens": v.CacheWriteTokens, "input_price": price.Input, "output_price": price.Output, "cache_read_price": price.Cache, "cache_write_price": price.CacheWrite, "amount": v.Amount, "discount": discount, "final_amount": multiplyDecimal(v.Amount, discount), "detail_file": statementDailyFilename(job, v.Day)})
+	}
+	return out
 }
 
 func (h BillingStatementResultHandler) writeReconciliationCSV(w http.ResponseWriter, r *http.Request, job billing.Job) {

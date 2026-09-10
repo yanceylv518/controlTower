@@ -3,6 +3,8 @@ package dashboard
 import (
 	"archive/zip"
 	"context"
+	"crypto/sha256"
+	"encoding/gob"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -46,7 +48,73 @@ const (
 	statementPriceWorkers    = 4
 )
 
+// Bound concurrent cold loads and coalesce requests for the same signature.
+// Waiting requests can leave immediately when the browser cancels them.
+var statementPriceGates = func() [32]chan struct{} {
+	var gates [32]chan struct{}
+	for i := range gates {
+		gates[i] = make(chan struct{}, 1)
+	}
+	return gates
+}()
+
+type statementPriceSnapshot struct {
+	Signature string
+	Prices    statementPrices
+}
+
+func statementPriceSnapshotPath(root, id, jobType string) string {
+	digest := sha256.Sum256([]byte(id + "|" + jobType))
+	return filepath.Join(root, ".statement-prices", fmt.Sprintf("%x.gob", digest))
+}
+
+func readStatementPriceSnapshot(path, signature string) (statementPrices, bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, false
+	}
+	defer f.Close()
+	var snapshot statementPriceSnapshot
+	if gob.NewDecoder(f).Decode(&snapshot) != nil || snapshot.Signature != signature || snapshot.Prices == nil {
+		return nil, false
+	}
+	return snapshot.Prices, true
+}
+
+// Cache failures must not prevent reading a bill, including read-only deployments.
+// Publish atomically so concurrent processes never read a partial snapshot.
+func writeStatementPriceSnapshot(path, signature string, prices statementPrices) {
+	if os.MkdirAll(filepath.Dir(path), 0o700) != nil {
+		return
+	}
+	f, err := os.CreateTemp(filepath.Dir(path), ".prices-*")
+	if err != nil {
+		return
+	}
+	defer os.Remove(f.Name())
+	err = gob.NewEncoder(f).Encode(statementPriceSnapshot{Signature: signature, Prices: prices})
+	closeErr := f.Close()
+	if err == nil && closeErr == nil {
+		_ = os.Rename(f.Name(), path)
+	}
+}
+
+func rememberStatementPrices(key string, prices statementPrices) {
+	statementPriceCache.Lock()
+	defer statementPriceCache.Unlock()
+	if len(statementPriceCache.items) >= statementPriceCacheLimit {
+		for old := range statementPriceCache.items {
+			delete(statementPriceCache.items, old)
+			break
+		}
+	}
+	statementPriceCache.items[key] = prices
+}
+
 func loadStatementPrices(ctx context.Context, job billing.Job, store BillingStatementResultStore, roots ...string) (statementPrices, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	files, err := store.ListBillingStatementUserFiles(ctx, job.ID)
 	if err != nil {
 		return nil, err
@@ -61,8 +129,15 @@ func loadStatementPrices(ctx context.Context, job billing.Job, store BillingStat
 	}
 	type source struct{ path, day string }
 	sources := make([]source, 0, len(files))
+	files = slices.Clone(files)
+	sort.Slice(files, func(i, j int) bool {
+		if files[i].RelativePath == files[j].RelativePath {
+			return files[i].BillDay.Before(files[j].BillDay)
+		}
+		return files[i].RelativePath < files[j].RelativePath
+	})
 	var signature strings.Builder
-	fmt.Fprintf(&signature, "%s|%s\n", job.ID, job.JobType)
+	fmt.Fprintf(&signature, "v1|%s|%s|%s\n", root, job.ID, job.JobType)
 	for _, file := range files {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -80,13 +155,35 @@ func loadStatementPrices(ctx context.Context, job billing.Job, store BillingStat
 			return nil, err
 		}
 		sources = append(sources, source{path: path, day: file.BillDay.In(billing.BusinessLocation).Format("2006-01-02")})
-		fmt.Fprintf(&signature, "%s|%d|%d\n", path, info.Size(), info.ModTime().UnixNano())
+		fmt.Fprintf(&signature, "%s|%s|%d|%d\n", path, file.BillDay.Format(time.RFC3339Nano), info.Size(), info.ModTime().UnixNano())
 	}
 	cacheKey := signature.String()
 	statementPriceCache.Lock()
 	cached, found := statementPriceCache.items[cacheKey]
 	statementPriceCache.Unlock()
 	if found {
+		return cached, nil
+	}
+	digest := sha256.Sum256([]byte(cacheKey))
+	gate := statementPriceGates[int(digest[0])%len(statementPriceGates)]
+	select {
+	case gate <- struct{}{}:
+		defer func() { <-gate }()
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	statementPriceCache.Lock()
+	cached, found = statementPriceCache.items[cacheKey]
+	statementPriceCache.Unlock()
+	if found {
+		return cached, nil
+	}
+	cachePath := statementPriceSnapshotPath(root, job.ID, job.JobType)
+	if cached, found = readStatementPriceSnapshot(cachePath, cacheKey); found {
+		rememberStatementPrices(cacheKey, cached)
 		return cached, nil
 	}
 
@@ -148,12 +245,8 @@ func loadStatementPrices(ctx context.Context, job billing.Job, store BillingStat
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	statementPriceCache.Lock()
-	if len(statementPriceCache.items) >= statementPriceCacheLimit {
-		clear(statementPriceCache.items)
-	}
-	statementPriceCache.items[cacheKey] = out
-	statementPriceCache.Unlock()
+	writeStatementPriceSnapshot(cachePath, cacheKey, out)
+	rememberStatementPrices(cacheKey, out)
 	return out, nil
 }
 

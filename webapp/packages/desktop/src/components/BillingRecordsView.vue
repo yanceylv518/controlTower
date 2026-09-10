@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import type { BillingJob } from "@ct/shared";
@@ -15,6 +15,11 @@ const props = defineProps<{ billType: "user" | "upstream" }>();
 const router = useRouter();
 const detailVisible = ref(false);
 const detailLoading = ref(false);
+const previewTab = ref("summary");
+const pricesLoading = ref(false);
+const pricesLoaded = ref(false);
+const pricesError = ref("");
+let previewRequest: AbortController | null = null;
 const downloadingBillId = ref("");
 const downloadingAnomalyId = ref("");
 const downloadingReconciliationId = ref("");
@@ -42,7 +47,47 @@ const formatRange = (job: BillingJob) => job.range_from && job.range_to
 const subject = (job: BillingJob) => props.billType === "user"
   ? `${job.user_name || "用户"}（ID: ${job.user_id}）` : `${job.upstream_name || "上游"} #${job.upstream_id}`;
 const createBill = () => router.push({ path: "/billing/tasks", query: { create: "1", bill_type: props.billType } });
-async function viewBill(job:BillingJob){detailVisible.value=true;detailLoading.value=true;detail.value=null;try{detail.value=await dashboard.billingStatementResult(job.id)}catch(error){ElMessage.error(billingReadErrorMessage(error,"账单加载失败"))}finally{detailLoading.value=false}}
+async function viewBill(job: BillingJob) {
+  previewRequest?.abort();
+  const request = new AbortController();
+  previewRequest = request;
+  previewTab.value = "summary";
+  pricesLoaded.value = false;
+  pricesLoading.value = false;
+  pricesError.value = "";
+  detailVisible.value = true;
+  detailLoading.value = true;
+  detail.value = null;
+  try {
+    const result = await dashboard.billingStatementResult(job.id, true, request.signal);
+    if (previewRequest === request && !request.signal.aborted) detail.value = result;
+  } catch (error) {
+    if (previewRequest === request && !request.signal.aborted) ElMessage.error(billingReadErrorMessage(error, "账单加载失败"));
+  } finally {
+    if (previewRequest === request) detailLoading.value = false;
+  }
+}
+async function loadDailyPrices() {
+  const request = previewRequest;
+  const current = detail.value;
+  if (!request || request.signal.aborted || !current || pricesLoaded.value || pricesLoading.value) return;
+  pricesLoading.value = true;
+  pricesError.value = "";
+  try {
+    const result = await dashboard.billingStatementPrices(current.job.id, request.signal);
+    if (previewRequest === request && !request.signal.aborted) {
+      current.daily_summary = result.daily_summary;
+      pricesLoaded.value = true;
+    }
+  } catch (error) {
+    if (previewRequest === request && !request.signal.aborted) pricesError.value = billingReadErrorMessage(error, "历史单价加载失败");
+  } finally {
+    if (previewRequest === request) pricesLoading.value = false;
+  }
+}
+watch(previewTab, tab => { if (tab === "daily") void loadDailyPrices(); });
+watch(detailVisible, visible => { if (!visible) previewRequest?.abort(); });
+onBeforeUnmount(() => previewRequest?.abort());
 const safeFilename=(value:string)=>value.replace(/[<>:"/\\|?*\x00-\x1f]/g,"-").trim();
 async function downloadBill(job:BillingJob){
   if(downloadingBillId.value)return;
@@ -106,9 +151,11 @@ watch(() => [filters.site_id, props.billType] as const, () => void state.reload(
         <template v-if="detail"><div class="preview-meta"><div><span>账单对象</span><strong>{{subject(detail.job)}}</strong></div><div><span>账单周期</span><strong>{{formatRange(detail.job)}}</strong></div><div><span>内部任务 ID</span><strong class="mono">{{detail.job.id}}</strong></div></div>
         <el-alert v-if="detail.review_required" class="review-alert" type="warning" :closable="false" show-icon title="该账单存在核对差异，下载包会附带核对差异 CSV；交付前请先复核。"/>
         <div class="preview-metrics"><div class="metric-card"><span>原始总订单</span><strong>{{previewNumber(detail.total_orders)}}</strong><small>{{detail.count_balanced?'三类数量核对一致':'数量核对异常'}}</small></div><div class="metric-card"><span>核对正常</span><strong>{{previewNumber(detail.normal_orders)}}</strong><small>金额核对一致</small></div><div class="metric-card"><span>异常订单</span><strong :class="{danger:detail.anomaly_total}">{{previewNumber(detail.anomaly_total)}}</strong><small>不进入账单</small></div><div class="metric-card"><span>核对差异</span><strong :class="{danger:detail.reconciliation_total}">{{previewNumber(detail.reconciliation_total)}}</strong><small>仍计入账单，需复核</small></div><div class="metric-card"><span>账单天数</span><strong>{{previewDays}}</strong><small>{{detail.model_summary.length}} 个计费模型</small></div><div class="metric-card accent"><span>最终费用</span><strong>¥ {{previewMoney(previewTotal)}}</strong><small>计费订单 {{previewNumber(detail.billable_orders)}}</small></div></div>
-        <el-tabs class="preview-tabs">
-          <el-tab-pane label="区间统计"><el-table :data="detail.model_summary" size="small" max-height="460" stripe><el-table-column prop="model_name" label="模型" min-width="180"><template #default="s"><b class="model-name">{{s.row.model_name}}</b></template></el-table-column><el-table-column prop="request_count" label="订单数" width="110" align="right"><template #default="s">{{previewNumber(s.row.request_count)}}</template></el-table-column><el-table-column prop="prompt_tokens" label="输入 Token" width="145" align="right"><template #default="s">{{previewNumber(s.row.prompt_tokens)}}</template></el-table-column><el-table-column prop="completion_tokens" label="输出 Token" width="145" align="right"><template #default="s">{{previewNumber(s.row.completion_tokens)}}</template></el-table-column><el-table-column prop="cache_read_tokens" label="缓存读取 Token" width="150" align="right"><template #default="s">{{previewNumber(s.row.cache_read_tokens)}}</template></el-table-column><el-table-column prop="cache_write_tokens" label="缓存写入 Token" width="150" align="right"><template #default="s">{{previewNumber(s.row.cache_write_tokens)}}</template></el-table-column><el-table-column prop="amount" label="总费用" width="130" align="right"><template #default="s">¥ {{previewMoney(s.row.amount)}}</template></el-table-column><el-table-column prop="discount" label="折扣" width="90" align="right"><template #default="s"><el-tag size="small" type="info">{{previewDiscount(s.row.discount)}}</el-tag></template></el-table-column><el-table-column prop="final_amount" label="最终费用" width="140" align="right"><template #default="s"><b class="money">¥ {{previewMoney(s.row.final_amount)}}</b></template></el-table-column></el-table></el-tab-pane>
-          <el-tab-pane label="日账单统计"><el-table :data="detail.daily_summary" size="small" max-height="520"><el-table-column prop="day" label="日期" width="110"/><el-table-column prop="model_name" label="模型" min-width="150"/><el-table-column prop="request_count" label="订单数" width="100" align="right"/><el-table-column prop="prompt_tokens" label="输入 Token" width="135" align="right"/><el-table-column prop="completion_tokens" label="输出 Token" width="135" align="right"/><el-table-column prop="cache_read_tokens" label="缓存读取 Token" width="145" align="right"/><el-table-column prop="cache_write_tokens" label="缓存写入 Token" width="145" align="right"/><el-table-column prop="input_price" label="输入单价" width="110" align="right"/><el-table-column prop="output_price" label="输出单价" width="110" align="right"/><el-table-column prop="cache_read_price" label="缓存读取单价" width="130" align="right"/><el-table-column prop="cache_write_price" label="缓存写入单价" width="130" align="right"/><el-table-column prop="amount" label="总费用" width="120" align="right"/><el-table-column prop="discount" label="折扣" width="80" align="right"/><el-table-column prop="final_amount" label="最终费用" width="120" align="right"/><el-table-column prop="detail_file" label="明细文件" min-width="230"/></el-table></el-tab-pane>
+        <el-tabs v-model="previewTab" class="preview-tabs">
+          <el-tab-pane label="区间统计" name="summary"><el-table :data="detail.model_summary" size="small" max-height="460" stripe><el-table-column prop="model_name" label="模型" min-width="180"><template #default="s"><b class="model-name">{{s.row.model_name}}</b></template></el-table-column><el-table-column prop="request_count" label="订单数" width="110" align="right"><template #default="s">{{previewNumber(s.row.request_count)}}</template></el-table-column><el-table-column prop="prompt_tokens" label="输入 Token" width="145" align="right"><template #default="s">{{previewNumber(s.row.prompt_tokens)}}</template></el-table-column><el-table-column prop="completion_tokens" label="输出 Token" width="145" align="right"><template #default="s">{{previewNumber(s.row.completion_tokens)}}</template></el-table-column><el-table-column prop="cache_read_tokens" label="缓存读取 Token" width="150" align="right"><template #default="s">{{previewNumber(s.row.cache_read_tokens)}}</template></el-table-column><el-table-column prop="cache_write_tokens" label="缓存写入 Token" width="150" align="right"><template #default="s">{{previewNumber(s.row.cache_write_tokens)}}</template></el-table-column><el-table-column prop="amount" label="总费用" width="130" align="right"><template #default="s">¥ {{previewMoney(s.row.amount)}}</template></el-table-column><el-table-column prop="discount" label="折扣" width="90" align="right"><template #default="s"><el-tag size="small" type="info">{{previewDiscount(s.row.discount)}}</el-tag></template></el-table-column><el-table-column prop="final_amount" label="最终费用" width="140" align="right"><template #default="s"><b class="money">¥ {{previewMoney(s.row.final_amount)}}</b></template></el-table-column></el-table></el-tab-pane>
+          <el-tab-pane label="日账单统计" name="daily">
+            <el-alert v-if="pricesLoading" type="info" :closable="false" show-icon title="正在加载历史单价，账单金额已可查看；大账单首次解析可能需要一些时间。" />
+            <div v-if="pricesError" class="anomaly-toolbar"><el-alert type="error" :closable="false" show-icon :title="pricesError"/><el-button @click="loadDailyPrices">重试单价加载</el-button></div><el-table :data="detail.daily_summary" size="small" max-height="520"><el-table-column prop="day" label="日期" width="110"/><el-table-column prop="model_name" label="模型" min-width="150"/><el-table-column prop="request_count" label="订单数" width="100" align="right"/><el-table-column prop="prompt_tokens" label="输入 Token" width="135" align="right"/><el-table-column prop="completion_tokens" label="输出 Token" width="135" align="right"/><el-table-column prop="cache_read_tokens" label="缓存读取 Token" width="145" align="right"/><el-table-column prop="cache_write_tokens" label="缓存写入 Token" width="145" align="right"/><el-table-column prop="input_price" label="输入单价" width="110" align="right"/><el-table-column prop="output_price" label="输出单价" width="110" align="right"/><el-table-column prop="cache_read_price" label="缓存读取单价" width="130" align="right"/><el-table-column prop="cache_write_price" label="缓存写入单价" width="130" align="right"/><el-table-column prop="amount" label="总费用" width="120" align="right"/><el-table-column prop="discount" label="折扣" width="80" align="right"/><el-table-column prop="final_amount" label="最终费用" width="120" align="right"/><el-table-column prop="detail_file" label="明细文件" min-width="230"/></el-table></el-tab-pane>
           <el-tab-pane v-if="props.billType==='user'" label="按令牌统计"><el-table :data="detail.token_summary" size="small" max-height="520"><el-table-column prop="token_id" label="令牌 ID" width="100"/><el-table-column prop="token_name" label="令牌" min-width="150"/><el-table-column prop="day" label="日期" width="110"/><el-table-column prop="model_name" label="模型" min-width="150"/><el-table-column prop="request_count" label="订单数" width="100" align="right"/><el-table-column prop="prompt_tokens" label="输入 Token" width="140" align="right"/><el-table-column prop="completion_tokens" label="输出 Token" width="140" align="right"/><el-table-column prop="cache_read_tokens" label="缓存读取 Token" width="145" align="right"/><el-table-column prop="cache_write_tokens" label="缓存写入 Token" width="145" align="right"/><el-table-column prop="amount" label="总费用" width="130" align="right"/></el-table></el-tab-pane>
           <el-tab-pane><template #label><span>内部异常 <el-badge :value="detail.anomaly_total" :hidden="!detail.anomaly_total" type="danger"/></span></template><div class="anomaly-toolbar"><el-alert type="warning" :closable="false" show-icon title="异常订单仅供内部核对，不会写入客户账单或账单 ZIP。"/><el-button type="danger" plain :loading="downloadingAnomalyId===detail.job.id" :disabled="!detail.anomaly_total||!!downloadingAnomalyId" @click="downloadAnomalies(detail.job)">下载异常 CSV</el-button></div><el-table :data="detail.anomalies" size="small" max-height="430" stripe><el-table-column prop="created_at" label="请求时间" width="165"/><el-table-column prop="request_id" label="Request ID" min-width="190" show-overflow-tooltip/><el-table-column prop="upstream_request_id" label="上游 Request ID" min-width="190" show-overflow-tooltip/><el-table-column v-if="props.billType==='upstream'" prop="channel_name" label="渠道" width="150"/><el-table-column v-else prop="token_name" label="令牌" width="130"/><el-table-column prop="model_name" label="模型" width="140"/><el-table-column prop="actual_amount" label="实际扣费" width="110" align="right"/><el-table-column prop="reasons" label="异常原因" min-width="220" show-overflow-tooltip/></el-table><p v-if="detail.anomaly_total>detail.anomalies.length" class="preview-note">页面仅展示前 {{detail.anomalies.length}} 条，完整 {{previewNumber(detail.anomaly_total)}} 条请下载 CSV。</p></el-tab-pane>
           <el-tab-pane><template #label><span>核对差异 <el-badge :value="detail.reconciliation_total" :hidden="!detail.reconciliation_total" type="warning"/></span></template><div class="anomaly-toolbar"><el-alert type="warning" :closable="false" show-icon title="这些订单仍计入账单；存在记录时账单必须复核，不能直接交付。"/><el-button type="warning" plain :loading="downloadingReconciliationId===detail.job.id" :disabled="!detail.reconciliation_total||!!downloadingReconciliationId" @click="downloadReconciliation(detail.job)">下载核对差异 CSV</el-button></div><el-table :data="detail.reconciliation" size="small" max-height="430" stripe><el-table-column prop="created_at" label="请求时间" width="165"/><el-table-column prop="request_id" label="Request ID" min-width="190" show-overflow-tooltip/><el-table-column prop="upstream_request_id" label="上游 Request ID" min-width="190" show-overflow-tooltip/><el-table-column v-if="props.billType==='upstream'" prop="channel_name" label="渠道" width="150"/><el-table-column v-else prop="token_name" label="令牌" width="130"/><el-table-column prop="model_name" label="模型" width="140"/><el-table-column prop="logged_quota" label="日志 Quota" width="115" align="right"/><el-table-column prop="calculated_quota" label="重算 Quota" width="115" align="right"/><el-table-column prop="quota_difference" label="Quota 差额" width="110" align="right"/><el-table-column prop="logged_amount" label="日志金额" width="110" align="right"/><el-table-column prop="calculated_amount" label="重算金额" width="110" align="right"/><el-table-column prop="reason" label="差异原因" min-width="220" show-overflow-tooltip/></el-table><p v-if="detail.reconciliation_total>detail.reconciliation.length" class="preview-note">页面仅展示前 {{detail.reconciliation.length}} 条，完整 {{previewNumber(detail.reconciliation_total)}} 条请下载 CSV。</p></el-tab-pane>
