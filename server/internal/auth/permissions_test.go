@@ -15,6 +15,9 @@ func TestRestrictedAdminEndpointMatrix(t *testing.T) {
 		permission, method, path string
 		want                     bool
 	}{
+		{"archive.manage", "GET", "log-archives", true},
+		{"archive.manage", "PUT", "log-archives/inst", true},
+		{"instances.manage", "PUT", "log-archives/inst", false},
 		{"monitor.customers", "GET", "metrics?dimension_type=instance_user", true},
 		{"monitor.customers", "GET", "metric-history?dimension_type=instance_user_model", true},
 		{"monitor.customers", "GET", "metrics?dimension_type=instance_channel", false},

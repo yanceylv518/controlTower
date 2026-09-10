@@ -11,6 +11,9 @@ import (
 )
 
 func (h Handler) authenticate(r *http.Request) (string, bool) {
+	if instance, ok := r.Context().Value(controlIdentityKey{}).(string); ok && instance != "" {
+		return instance, true
+	}
 	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	if token == "" {
 		return "", false

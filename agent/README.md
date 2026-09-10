@@ -13,6 +13,16 @@ Phase 1 agent responsibilities:
 
 The agent does not expose an inbound port and does not read or modify `.env`.
 
+Optional raw `logs` archival to a dedicated MySQL RDS is available with
+`CT_LOG_ARCHIVE_ENABLED=true`. It retains source rows, has independent progress,
+and requires a matching target `logs` template. Monthly detail tables and daily/monthly
+totals are maintained together without double-counting retries.
+See [setup and recovery](../docs/newapi-log-archive.md).
+
+Set `CT_LOG_ARCHIVE_MANAGED=true` to manage archival from CT's Log Archives page.
+This requires `CT_SERVER_URL` and a per-instance Agent token. Managed mode waits
+for CT authorization before reading logs and polls independently of monitoring.
+
 ## Run Modes
 
 By default the agent runs continuously and polls/uploads every 30 seconds (`CT_LOG_POLL_INTERVAL_SECONDS=30`). Increase this to 60 seconds for very low-priority monitoring, or decrease only during local debugging.

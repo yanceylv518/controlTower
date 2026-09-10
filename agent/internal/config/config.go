@@ -16,6 +16,12 @@ type Config struct {
 	AgentToken                     string
 	LogCollectEnabled              bool
 	LogDSN                         string
+	LogArchiveEnabled              bool
+	LogArchiveManaged              bool
+	LogArchiveDSN                  string
+	LogArchiveBatchSize            int
+	LogArchiveIntervalSeconds      int
+	LogArchiveDelaySeconds         int
 	DataDir                        string
 	LogPollIntervalSeconds         int
 	LogBatchSize                   int
@@ -87,6 +93,12 @@ func LoadFromMap(values map[string]string) (Config, error) {
 		AgentToken:                     values["CT_AGENT_TOKEN"],
 		LogCollectEnabled:              boolOrDefault(values, "CT_LOG_COLLECT_ENABLED", true),
 		LogDSN:                         values["CT_LOG_DSN"],
+		LogArchiveEnabled:              boolOrDefault(values, "CT_LOG_ARCHIVE_ENABLED", false),
+		LogArchiveManaged:              boolOrDefault(values, "CT_LOG_ARCHIVE_MANAGED", false),
+		LogArchiveDSN:                  values["CT_LOG_ARCHIVE_DSN"],
+		LogArchiveBatchSize:            intOrDefault(values, "CT_LOG_ARCHIVE_BATCH_SIZE", 500),
+		LogArchiveIntervalSeconds:      intOrDefault(values, "CT_LOG_ARCHIVE_INTERVAL_SECONDS", 30),
+		LogArchiveDelaySeconds:         intOrDefault(values, "CT_LOG_ARCHIVE_DELAY_SECONDS", 300),
 		DataDir:                        valueOrDefault(values, "CT_DATA_DIR", "data"),
 		LogPollIntervalSeconds:         intOrDefault(values, "CT_LOG_POLL_INTERVAL_SECONDS", 30),
 		LogBatchSize:                   intOrDefault(values, "CT_LOG_BATCH_SIZE", 1000),
@@ -121,6 +133,20 @@ func LoadFromMap(values map[string]string) (Config, error) {
 
 	if !cfg.LogCollectEnabled && values["CT_CHANNEL_SNAPSHOT_ENABLED"] == "" {
 		cfg.ChannelSnapshotEnabled = false
+	}
+	if cfg.LogArchiveEnabled {
+		if cfg.LogArchiveDelaySeconds < 60 || cfg.LogArchiveDelaySeconds > 86400 {
+			return Config{}, errors.New("archive delay must be 60-86400 seconds")
+		}
+		if cfg.LogDSN == "" || cfg.LogArchiveDSN == "" {
+			return Config{}, errors.New("log archival requires CT_LOG_DSN and CT_LOG_ARCHIVE_DSN")
+		}
+		if cfg.LogArchiveBatchSize < 1 || cfg.LogArchiveBatchSize > 5000 || cfg.LogArchiveIntervalSeconds < 1 || cfg.LogArchiveIntervalSeconds > 3600 {
+			return Config{}, errors.New("archive batch size must be 1-5000 and interval 1-3600 seconds")
+		}
+	}
+	if cfg.LogArchiveManaged && (cfg.ServerURL == "" || cfg.AgentToken == "" || cfg.RunOnce) {
+		return Config{}, errors.New("managed archival requires CT_SERVER_URL, CT_AGENT_TOKEN and continuous mode")
 	}
 	if cfg.AgentID == "" || cfg.InstanceID == "" || (cfg.LogCollectEnabled && cfg.LogDSN == "") {
 		return Config{}, errors.New("missing required control tower agent config")
@@ -198,6 +224,12 @@ func envMap() map[string]string {
 		"CT_AGENT_TOKEN",
 		"CT_LOG_COLLECT_ENABLED",
 		"CT_LOG_DSN",
+		"CT_LOG_ARCHIVE_ENABLED",
+		"CT_LOG_ARCHIVE_MANAGED",
+		"CT_LOG_ARCHIVE_DSN",
+		"CT_LOG_ARCHIVE_BATCH_SIZE",
+		"CT_LOG_ARCHIVE_INTERVAL_SECONDS",
+		"CT_LOG_ARCHIVE_DELAY_SECONDS",
 		"CT_DATA_DIR",
 		"CT_LOG_POLL_INTERVAL_SECONDS",
 		"CT_LOG_BATCH_SIZE",

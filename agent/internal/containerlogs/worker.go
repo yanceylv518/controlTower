@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"controltower/agent/internal/controlpoll"
 	cl "controltower/internal/containerlog"
 	"encoding/json"
 	"fmt"
@@ -21,7 +22,7 @@ func Run(ctx context.Context, server, token, agent, socket string) {
 	local := &http.Client{Timeout: 40 * time.Second, Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, "unix", socket)
 	}}}
-	remote := &http.Client{Timeout: 15 * time.Second}
+	remote := &http.Client{Timeout: 15 * time.Second, Transport: controlpoll.Transport(ctx)}
 	var pending *cl.Result
 	var taskID string
 	var active *automaticQuery

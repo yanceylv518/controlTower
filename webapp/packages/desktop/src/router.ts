@@ -8,6 +8,7 @@ import LoginView from './views/LoginView.vue'
 import OverviewView from './views/OverviewView.vue'
 import DimensionView from './views/DimensionView.vue'
 import ContainerLogsView from './views/ContainerLogsView.vue'
+import LogArchiveView from './views/LogArchiveView.vue'
 import CustomerMonitorView from './views/CustomerMonitorView.vue'
 import DimensionDetailView from './views/DimensionDetailView.vue'
 import SamplesView from './views/SamplesView.vue'
@@ -32,6 +33,7 @@ import BillingTasksView from './views/BillingTasksView.vue'
 import BillingUpstreamsView from './views/BillingUpstreamsView.vue'
 import BillingDiscountsView from './views/BillingDiscountsView.vue'
 export const router = createRouter({ history: createWebHistory('/'), routes: [
+  { path: '/log-archives', component: LogArchiveView, meta: { title: '日志归档' } },
   { path: '/container-logs', component: ContainerLogsView, meta: { title: '容器日志' } },
   { path: '/readonly-users', component: ReadonlyUsersView, meta: { title: '用户管理' } },
   { path: '/readonly-logs', component: ReadonlyLogsView, meta: { title: '使用日志' } },

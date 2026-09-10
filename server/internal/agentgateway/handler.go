@@ -117,7 +117,12 @@ func (h Handler) HandleReport(w http.ResponseWriter, r *http.Request) {
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, target any) error {
-	r.Body = http.MaxBytesReader(w, r.Body, maxAgentCompressedBytes)
+	limit := int64(maxAgentCompressedBytes)
+	if _, internal := r.Context().Value(controlIdentityKey{}).(string); internal {
+		// The outer compressed envelope has already passed both size limits.
+		limit = maxAgentDecodedBytes
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	defer r.Body.Close()
 	reader, closeReader, err := requestBodyReader(r)
 	if err != nil {

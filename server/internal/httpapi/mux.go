@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	ac "controltower/internal/archivecontrol"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -76,6 +77,15 @@ func NewMux(options Options) *http.ServeMux {
 		return dashboard.RequireBearerToken(options.DashboardToken, h)
 	}
 	a := ctauth.Handlers{M: options.AuthManager, Limiter: ctauth.NewIPLimiter(), Audit: options.Store}
+	controlSections := map[string]http.HandlerFunc{}
+	mux.HandleFunc("POST /api/agent/control/poll", agentHandler.Control(controlSections))
+	if archiveStore, ok := any(options.Store).(ac.Store); ok {
+		h := dashboard.LogArchiveHandler{Store: archiveStore}
+		mux.Handle("GET /api/dashboard/log-archives", protect(h))
+		mux.Handle("PUT /api/dashboard/log-archives/{id}", protect(h))
+		controlSections["archive"] = agentHandler.LogArchive(archiveStore)
+		mux.HandleFunc("POST /api/agent/log-archive/poll", controlSections["archive"])
+	}
 	mux.HandleFunc("/api/auth/login", a.Login)
 	mux.HandleFunc("/api/auth/logout", a.Logout)
 	mux.HandleFunc("/api/auth/me", a.Me)
@@ -89,7 +99,8 @@ func NewMux(options Options) *http.ServeMux {
 		mux.Handle("GET /api/dashboard/container-log-tasks", protect(logHandler))
 		mux.Handle("POST /api/dashboard/container-log-tasks", protect(logHandler))
 		mux.Handle("GET /api/dashboard/container-log-tasks/{id}", protect(logHandler))
-		mux.HandleFunc("POST /api/agent/container-logs/poll", agentHandler.ContainerLogs(logStore))
+		controlSections["container_logs"] = agentHandler.ContainerLogs(logStore)
+		mux.HandleFunc("POST /api/agent/container-logs/poll", controlSections["container_logs"])
 	}
 	mux.Handle("/api/dashboard/overview", protect(http.HandlerFunc(dashboardHandler.HandleOverview)))
 	mux.Handle("/api/dashboard/log-samples", protect(http.HandlerFunc(dashboardHandler.HandleLogSamples)))

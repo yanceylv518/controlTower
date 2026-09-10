@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"controltower/agent/internal/config"
+	"controltower/agent/internal/logarchive"
 	"controltower/agent/internal/logcollector"
 )
 
@@ -54,6 +55,18 @@ func Run(ctx context.Context, cfg config.Config) Result {
 	r.add(StatusPass, "config", "required configuration loaded")
 	r.checkDataDir(cfg.DataDir)
 	r.checkServer(ctx, cfg)
+	if cfg.LogArchiveEnabled {
+		w, err := logarchive.Open(cfg.LogDSN, cfg.LogArchiveDSN, cfg.InstanceID, cfg.DataDir, cfg.LogArchiveBatchSize)
+		if err == nil {
+			err = w.Check(ctx)
+			w.Close()
+		}
+		if err != nil {
+			r.add(StatusFail, "log_archive", err.Error())
+		} else {
+			r.add(StatusPass, "log_archive", "source and dedicated target verified; write permissions are checked on first batch")
+		}
+	}
 	if cfg.LogCollectEnabled {
 		r.checkMySQL(ctx, cfg)
 	} else {

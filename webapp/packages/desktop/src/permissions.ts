@@ -13,7 +13,7 @@ export const permissionPages: Array<[string, string]> = [
   ['/models/manage', 'models.manage'], ['/billing/pricing', 'models.manage'],
   ['/billing/upstreams', 'upstreams.manage'], ['/billing/discounts', 'discounts.manage'],
   ['/tuning', 'tuning.manage'], ['/alerts', 'alerts.manage'], ['/notifications', 'notifications.manage'],
-  ['/instances', 'instances.manage'], ['/audits', 'audits.read'], ['/settings', 'settings.manage'],
+  ['/instances', 'instances.manage'], ['/log-archives', 'archive.manage'], ['/audits', 'audits.read'], ['/settings', 'settings.manage'],
   ['/access-users', 'accounts.manage'],
 ]
 

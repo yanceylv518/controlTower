@@ -66,3 +66,14 @@ CT_NGINX_SLOW_RT_SECONDS=10
 
 # Optional container log queries (requires local log reader and per-instance Agent token).
 # CT_CONTAINER_LOG_SOCKET=/run/control-tower-log-reader/reader.sock
+
+# Raw logs archive to a dedicated MySQL database; see docs/newapi-log-archive.md.
+# Provision a matching logs template first; target needs CREATE for month/stat tables.
+# Source rows are never deleted. See the guide for all target permissions.
+CT_LOG_ARCHIVE_ENABLED=false
+# Enable CT page control; requires a per-instance Agent token. Waits for CT activation.
+CT_LOG_ARCHIVE_MANAGED=false
+CT_LOG_ARCHIVE_DSN=
+CT_LOG_ARCHIVE_BATCH_SIZE=500
+CT_LOG_ARCHIVE_INTERVAL_SECONDS=30
+CT_LOG_ARCHIVE_DELAY_SECONDS=300

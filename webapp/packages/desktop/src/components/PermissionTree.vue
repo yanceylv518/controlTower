@@ -14,7 +14,7 @@ const groupDefinitions = [
   { label: '监控分析', keys: ['monitor.customers', 'monitor.channels', 'monitor.models', 'monitor.runtime'] },
   { label: '数据查询', keys: ['data.usage', 'data.users', 'data.logs', 'logs.query'] },
   { label: '账单管理', keys: ['billing.users', 'billing.channels', 'billing.tasks', 'discounts.manage'] },
-  { label: '系统管理', keys: ['tuning.manage', 'alerts.manage', 'notifications.manage', 'instances.manage', 'accounts.manage', 'models.manage', 'upstreams.manage', 'settings.manage', 'audits.read'] },
+  { label: '系统管理', keys: ['tuning.manage', 'alerts.manage', 'notifications.manage', 'instances.manage', 'archive.manage', 'accounts.manage', 'models.manage', 'upstreams.manage', 'settings.manage', 'audits.read'] },
 ]
 const groups = computed(() => {
   const options = new Map(props.options.map(option => [option.key, option]))

@@ -17,6 +17,7 @@ import (
 	"controltower/agent/internal/channeltoken"
 	"controltower/agent/internal/config"
 	"controltower/agent/internal/containerlogs"
+	"controltower/agent/internal/controlpoll"
 	"controltower/agent/internal/dockercollector"
 	"controltower/agent/internal/erroralert"
 	"controltower/agent/internal/healthcheck"
@@ -97,6 +98,13 @@ func run() error {
 		defer cancel()
 		return sendFakeReport(passCtx, client, cfg)
 	}
+
+	ctx = controlpoll.WithTransport(ctx)
+	stopArchive, err := startLogArchive(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer stopArchive()
 
 	var alertNotifier *erroralert.Notifier
 	var nameRefresher *channelNameRefresher

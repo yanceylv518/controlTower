@@ -13,6 +13,7 @@ type Permission struct {
 }
 
 var PermissionCatalog = []Permission{
+	{"archive.manage", "日志归档", "管理归档启停、限速参数并查看归档与校验状态"},
 	{"logs.query", "容器日志", "查询已配置容器的日志，查看本人查询任务及结果"},
 	{"overview.read", "运行总览", "查看运行总览和实例汇总"},
 	{"monitor.customers", "客户监控", "查看客户指标及客户维度明细"},
@@ -125,6 +126,9 @@ func allowAdminRequest(u storage.User, r *http.Request) bool {
 		return true
 	}
 	path := strings.TrimPrefix(r.URL.Path, "/api/dashboard/")
+	if path == "log-archives" || strings.HasPrefix(path, "log-archives/") {
+		return HasPermission(u, "archive.manage")
+	}
 	if strings.HasPrefix(path, "container-log-") {
 		return HasPermission(u, "logs.query")
 	}

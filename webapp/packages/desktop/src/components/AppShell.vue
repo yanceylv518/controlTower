@@ -65,6 +65,7 @@ const nav = [
       ["/alerts", "告警中心", Monitor],
       ["/notifications", "通知设置", Connection],
       ["/instances", "实例管理", Management],
+      ["/log-archives", "日志归档", Document],
       ["/access-users", "账号管理", User],
       ["/models/manage", "模型管理", SetUp],
       ["/billing/upstreams", "上游管理", Connection],
