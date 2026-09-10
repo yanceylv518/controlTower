@@ -21,6 +21,7 @@ type Sheet struct {
 	file   *os.File
 	row    int
 	closed bool
+	merges []string
 }
 type Workbook struct{ sheets []*Sheet }
 
@@ -59,12 +60,38 @@ func (s *Sheet) Row(cells []Cell) error {
 	_, e := io.WriteString(s.file, `</row>`)
 	return e
 }
+func (s *Sheet) Title(value string, columns int) error {
+	cells := make([]Cell, columns)
+	for i := range cells {
+		cells[i].Style = 6
+	}
+	cells[0].Value = value
+	s.merges = append(s.merges, "A1:"+column(columns)+"2")
+	if err := s.Row(cells); err != nil {
+		return err
+	}
+	if err := s.Row(nil); err != nil {
+		return err
+	}
+	return s.Row(nil)
+}
 func (s *Sheet) Close() error {
 	if s.closed {
 		return nil
 	}
 	s.closed = true
-	_, e := io.WriteString(s.file, `</sheetData></worksheet>`)
+	_, e := io.WriteString(s.file, `</sheetData>`)
+	if e != nil {
+		return e
+	}
+	if len(s.merges) > 0 {
+		fmt.Fprintf(s.file, `<mergeCells count="%d">`, len(s.merges))
+		for _, ref := range s.merges {
+			fmt.Fprintf(s.file, `<mergeCell ref="%s"/>`, ref)
+		}
+		io.WriteString(s.file, `</mergeCells>`)
+	}
+	_, e = io.WriteString(s.file, `</worksheet>`)
 	if e != nil {
 		return e
 	}
@@ -149,4 +176,4 @@ func workbookRels(n int) string {
 	return b.String()
 }
 
-const stylesXML = `<?xml version="1.0" encoding="UTF-8"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="2"><numFmt numFmtId="164" formatCode="#,##0"/><numFmt numFmtId="165" formatCode="0.000000"/></numFmts><fonts count="3"><font><sz val="11"/><name val="Microsoft YaHei"/></font><font><b/><color rgb="FFFFFFFF"/><sz val="11"/><name val="Microsoft YaHei"/></font><font><b/><sz val="14"/><name val="Microsoft YaHei"/></font></fonts><fills count="4"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF5B9BD5"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFDDEBF7"/></patternFill></fill></fills><borders count="2"><border/><border><left style="thin"/><right style="thin"/><top style="thin"/><bottom style="thin"/></border></borders><cellXfs count="6"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf><xf numFmtId="0" fontId="2" fillId="3" borderId="0"/><xf numFmtId="164" fontId="0" fillId="0" borderId="1"/><xf numFmtId="165" fontId="0" fillId="0" borderId="1"/><xf numFmtId="0" fontId="0" fillId="0" borderId="1"/></cellXfs></styleSheet>`
+const stylesXML = `<?xml version="1.0" encoding="UTF-8"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="2"><numFmt numFmtId="164" formatCode="#,##0"/><numFmt numFmtId="165" formatCode="0.000000"/></numFmts><fonts count="5"><font><sz val="11"/><name val="Microsoft YaHei"/></font><font><b/><color rgb="FFFFFFFF"/><sz val="11"/><name val="Microsoft YaHei"/></font><font><b/><sz val="14"/><name val="Microsoft YaHei"/></font><font><b/><sz val="11"/><name val="Microsoft YaHei"/></font><font><b/><color rgb="FFFF0000"/><sz val="12"/><name val="Microsoft YaHei"/></font></fonts><fills count="6"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF5B9BD5"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFDDEBF7"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFFF2CC"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFFD966"/></patternFill></fill></fills><borders count="2"><border/><border><left style="thin"/><right style="thin"/><top style="thin"/><bottom style="thin"/></border></borders><cellXfs count="11"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf><xf numFmtId="0" fontId="2" fillId="3" borderId="0"/><xf numFmtId="164" fontId="0" fillId="0" borderId="1"/><xf numFmtId="165" fontId="0" fillId="0" borderId="1"/><xf numFmtId="0" fontId="0" fillId="0" borderId="1"/><xf numFmtId="0" fontId="2" fillId="3" borderId="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf><xf numFmtId="0" fontId="3" fillId="4" borderId="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf><xf numFmtId="164" fontId="3" fillId="4" borderId="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf><xf numFmtId="165" fontId="3" fillId="4" borderId="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf><xf numFmtId="165" fontId="4" fillId="5" borderId="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf></cellXfs></styleSheet>`

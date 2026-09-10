@@ -417,6 +417,73 @@ func sumStatementRequests(rows []billing.StatementAggregateRow) int64 {
 	return total
 }
 
+type statementSheet struct {
+	sheet   *xlsxwriter.Sheet
+	headers []xlsxwriter.Cell
+	totals  []string
+}
+
+func newStatementSheet(book *xlsxwriter.Workbook, job billing.Job, name string, widths []float64) (*statementSheet, error) {
+	sheet, err := book.AddSheet(name, widths)
+	if err != nil {
+		return nil, err
+	}
+	subject := job.UserName
+	if job.JobType == "upstream_statement" {
+		subject = job.UpstreamName
+	}
+	if strings.TrimSpace(subject) == "" {
+		subject = job.BillNo
+	}
+	if strings.TrimSpace(subject) == "" {
+		subject = job.ID
+	}
+	title := subject + " · " + job.From.In(billing.BusinessLocation).Format("20060102") + "至" + job.To.In(billing.BusinessLocation).AddDate(0, 0, -1).Format("20060102") + " · 对账单"
+	if err := sheet.Title(title, len(widths)); err != nil {
+		return nil, err
+	}
+	return &statementSheet{sheet: sheet}, nil
+}
+func (s *statementSheet) Row(cells []xlsxwriter.Cell) error {
+	if s.headers == nil {
+		s.headers = append([]xlsxwriter.Cell(nil), cells...)
+		s.totals = make([]string, len(cells))
+		for i := range cells {
+			cells[i].Style = 1
+		}
+	} else {
+		for i, c := range cells {
+			label := s.headers[i].Value
+			if c.Number && (label == "订单数" || strings.Contains(label, "Token") || label == "总费用" || label == "最终费用") {
+				s.totals[i] = addDecimal(s.totals[i], c.Value)
+			}
+		}
+	}
+	return s.sheet.Row(cells)
+}
+func (s *statementSheet) Total() error {
+	cells := make([]xlsxwriter.Cell, len(s.headers))
+	for i, h := range s.headers {
+		cells[i] = xlsxwriter.Cell{Style: 7}
+		if h.Value == "订单数" || strings.Contains(h.Value, "Token") || h.Value == "总费用" || h.Value == "最终费用" {
+			value := s.totals[i]
+			if value == "" {
+				value = "0"
+			}
+			style := 8
+			if h.Value == "总费用" {
+				style = 9
+			}
+			if h.Value == "最终费用" {
+				style = 10
+			}
+			cells[i] = xlsxwriter.Cell{Value: value, Number: true, Style: style}
+		}
+	}
+	cells[0].Value = "合计"
+	return s.sheet.Row(cells)
+}
+
 func statementWorkbook(job billing.Job, rows []billing.StatementAggregateRow, store BillingStatementResultStore, roots ...string) ([]byte, error) {
 	book := xlsxwriter.New()
 	var err error
@@ -434,7 +501,7 @@ func statementWorkbook(job billing.Job, rows []billing.StatementAggregateRow, st
 		widths = append([]float64{24}, widths...)
 		headers = append([]xlsxwriter.Cell{t("渠道")}, headers...)
 	}
-	s, err := book.AddSheet("区间统计", widths)
+	s, err := newStatementSheet(book, job, "账单总览", widths)
 	if err != nil {
 		return nil, err
 	}
@@ -451,7 +518,10 @@ func statementWorkbook(job billing.Job, rows []billing.StatementAggregateRow, st
 		if job.JobType == "upstream_statement" {
 			column = "I"
 		}
-		summaryRefs[grouped.Key] = fmt.Sprintf("'区间统计'!%s%d", column, index+2)
+		summaryRefs[grouped.Key] = fmt.Sprintf("'账单总览'!%s%d", column, index+5)
+	}
+	if err := s.Total(); err != nil {
+		return nil, err
 	}
 	dailyWidths := []float64{14, 28, 14, 18, 18, 18, 18, 16, 12, 16, 34}
 	dailyHeaders := []xlsxwriter.Cell{t("日期"), t("模型"), t("订单数"), t("输入 Token"), t("输出 Token"), t("缓存读取 Token"), t("缓存写入 Token"), t("总费用"), t("折扣"), t("最终费用"), t("明细文件")}
@@ -459,12 +529,11 @@ func statementWorkbook(job billing.Job, rows []billing.StatementAggregateRow, st
 		dailyWidths = append([]float64{24}, dailyWidths...)
 		dailyHeaders = append([]xlsxwriter.Cell{t("渠道")}, dailyHeaders...)
 	}
-	daily, err := book.AddSheet("日账单统计", dailyWidths)
+	daily, err := newStatementSheet(book, job, "每日账单", dailyWidths)
 	if err != nil {
 		return nil, err
 	}
 	_ = daily.Row(dailyHeaders)
-	dailyTotal := "0"
 	for _, grouped := range groupStatementRows(job, rows, discounts, true) {
 		v, discount := grouped.Row, grouped.Discount
 		final := multiplyDecimal(v.Amount, discount)
@@ -476,29 +545,57 @@ func statementWorkbook(job billing.Job, rows []billing.StatementAggregateRow, st
 			cells = append([]xlsxwriter.Cell{t(v.ChannelName)}, cells...)
 		}
 		_ = daily.Row(cells)
-		dailyTotal = addDecimal(dailyTotal, final)
 	}
-	totalCells := make([]xlsxwriter.Cell, len(dailyHeaders))
-	totalCells[0] = t("合计")
-	totalCells[len(totalCells)-2] = d(dailyTotal)
-	_ = daily.Row(totalCells)
+	if err := daily.Total(); err != nil {
+		return nil, err
+	}
 	if job.JobType == "user_statement" {
 		tokens, tokenErr := store.QueryBillingTokenRows(context.Background(), job.ID, job.UserID, -1, job.From, job.To)
 		if tokenErr != nil {
 			return nil, tokenErr
 		}
-		ts, sheetErr := book.AddSheet("按令牌统计", []float64{14, 26, 14, 28, 14, 18, 18, 18, 18, 16})
+		summary, summaryErr := newStatementSheet(book, job, "令牌用量汇总", []float64{14, 26, 14, 18, 18, 18, 18, 16})
+		if summaryErr != nil {
+			return nil, summaryErr
+		}
+		_ = summary.Row([]xlsxwriter.Cell{t("令牌 ID"), t("令牌"), t("订单数"), t("输入 Token"), t("输出 Token"), t("缓存读取 Token"), t("缓存写入 Token"), t("最终费用")})
+		groupedTokens := map[int64][]xlsxwriter.Cell{}
+		for _, v := range tokens {
+			cells, exists := groupedTokens[v.TokenID]
+			if !exists {
+				cells = []xlsxwriter.Cell{n64(v.TokenID), t(v.TokenName), n64(0), n64(0), n64(0), n64(0), n64(0), d("0")}
+			}
+			values := []xlsxwriter.Cell{n64(v.RequestCount), n64(v.PromptTokens), n64(v.CompletionTokens), n64(v.CacheTokens), n64(v.CacheWriteTokens), d(v.Amount)}
+			for i, c := range values {
+				cells[i+2].Value = addDecimal(cells[i+2].Value, c.Value)
+			}
+			groupedTokens[v.TokenID] = cells
+		}
+		ids := make([]int64, 0, len(groupedTokens))
+		for id := range groupedTokens {
+			ids = append(ids, id)
+		}
+		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+		for _, id := range ids {
+			if err := summary.Row(groupedTokens[id]); err != nil {
+				return nil, err
+			}
+		}
+		if err := summary.Total(); err != nil {
+			return nil, err
+		}
+		ts, sheetErr := newStatementSheet(book, job, "令牌每日用量", []float64{14, 26, 14, 28, 14, 18, 18, 18, 18, 16})
 		if sheetErr != nil {
 			return nil, sheetErr
 		}
 		_ = ts.Row([]xlsxwriter.Cell{t("令牌 ID"), t("令牌"), t("日期"), t("模型"), t("订单数"), t("输入 Token"), t("输出 Token"), t("缓存读取 Token"), t("缓存写入 Token"), t("最终费用")})
-		tokenTotal := "0"
 		for _, v := range tokens {
 			final := v.Amount
 			_ = ts.Row([]xlsxwriter.Cell{n64(v.TokenID), t(v.TokenName), t(v.Day.Format("2006-01-02")), t(v.ModelName), n64(v.RequestCount), n64(v.PromptTokens), n64(v.CompletionTokens), n64(v.CacheTokens), n64(v.CacheWriteTokens), d(final)})
-			tokenTotal = addDecimal(tokenTotal, final)
 		}
-		_ = ts.Row([]xlsxwriter.Cell{t("合计"), t(""), t(""), t(""), t(""), t(""), t(""), t(""), t(""), d(tokenTotal)})
+		if err := ts.Total(); err != nil {
+			return nil, err
+		}
 	}
 	var out bytes.Buffer
 	if err = book.Write(&out); err != nil {
