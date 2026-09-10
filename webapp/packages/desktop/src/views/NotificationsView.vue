@@ -68,6 +68,7 @@ async function resend(id: string) {
     ElMessage.error(e instanceof Error ? e.message : "重发失败");
   }
 }
+useAutoRefresh(channels.reload);
 useAutoRefresh(deliveries.reload);
 </script>
 <template>
@@ -83,13 +84,9 @@ useAutoRefresh(deliveries.reload);
         :loading="channels.loading.value"
         :error="channels.error.value"
         :empty="!channels.data.value?.length"
+        empty-text="尚无通知渠道，请添加企业微信、钉钉机器人或 Webhook"
         @retry="channels.reload"
       >
-        <template #empty>
-          <el-empty
-            description="尚无通知渠道——添加企业微信、钉钉机器人或 Webhook 后，用户余额告警将推送到对应渠道"
-          />
-        </template>
         <el-table :data="channels.data.value">
           <el-table-column prop="name" label="名称" min-width="140" />
           <el-table-column label="类型" width="150">
