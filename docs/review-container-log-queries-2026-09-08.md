@@ -204,3 +204,42 @@ status/complete/truncated/error/note，保留 lines（JSON 异常时回退整体
 ### 部署
 - 只改 reader（agent 包）与前端文案；随本批进 rc101（server + 前端 + agent + reader，
   service 需重装以套用低调度优先级）。
+
+## 追加：4f8c825 查询错误处理、关键词、结果复用、时间块索引、HTTP 复制（2026-09-11 复验通过，验收修正一处 P1）
+
+### 变更
+- 详情 GET 只读不再夹带清理写操作（24 小时可见性仍由查询条件保证）；只有不存在/不可见
+  返回 404，内部错误 500 并在 Server 日志记录任务与用户；页面部分失败保留进度继续轮询，
+  404 终止该任务轮询。关键词忽略大小写（应用与 Nginx），Request ID 仍精确。
+- 相同发起人、实例、Agent、来源与完整条件的历史结果（已结束区间、完整、未截断、无错误、
+  24 小时内）直接复用，不再下发 Agent，响应带 `X-CT-Log-Reused: true`。
+- reader 在正常读取过程中顺带建立有界内存时间块索引（约 1 MiB/块，最多 64 文件/8192 块，
+  仅内存、不预扫、压缩文件仍顺序读），不同条件的重复查询只读可能命中的块。
+- HTTP 下复制结果：Clipboard API → 用户手势触发的选区复制 → 手动复制框三级回退。
+- codex 自述：真实 MySQL 集成测试**未运行**、未做 Agent 联调。
+
+### 缺陷与修正（P1）
+**结果复用 SQL 用了 MySQL 专有的 `CAST('true' AS JSON)`**：MariaDB 报语法错误，复用查询
+失败被当作内部错误，**每次提交查询都 500，容器日志功能整体不可用**（生产 compose 是
+mysql:8 不受影响，但测试库与任何 MariaDB 部署都会挂）。修正：改为
+`JSON_UNQUOTE(JSON_EXTRACT(result_json,'$.complete'))='true'`（MySQL 8 与 MariaDB 均可）。
+另修两处 codex 未跑过的真库测试本身：区间 To 带纳秒而 created_at 经 DATETIME(6) 截断导致
+"快照晚于区间结束"判定失败（改为秒级 now，与页面一致）；GET 不再触发过期后，Lifecycle 测试
+仍指望 GET 触发（改为先走列表路径）。
+
+### 实证
+- `go vet`、`go test ./...` 全绿（含真库复用/生命周期/历史分页）；前端 5 组 node 单测通过；
+  `pnpm typecheck`/`build` 通过。
+- 端到端（真实 reader 代码 + 假 docker 发现，真跑 agent，142 MiB 日志、目标在正中）：
+  小写 `needle` 命中 `Needle-Xyz` 3 行（16 秒，读 144 MiB）；相同条件再查 → 200、
+  `X-CT-Log-Reused: true`、同一任务 ID、0 秒；同窗口改为 `error_code=500` → 新任务、
+  **只读 2 MiB**、6 秒、3 行；不存在的任务 ID → 404。
+
+### 记档（P3）
+- 复用只看"同发起人"，不同管理员提交相同条件仍各自扫描；无强制重查开关（改一个条件即可）。
+- 索引只在 reader 内存，重启后按查询重建。
+- MySQL 8 上的真库测试仍由 codex 侧发布门禁脚本 `-RequireMySQL` 负责，本机只能在 MariaDB 验证。
+
+### 部署
+- server + 前端 + agent/reader（关键词大小写与索引在 reader 侧，只升 CT 不改变旧 Agent 的匹配方式）。
+  rc107 打在 6ecfaf2 不含本批，上线需重打 rc108。

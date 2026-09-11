@@ -40,7 +40,7 @@ func TestContainerLogsLifecycle(t *testing.T) {
 	if task, e := s.PollContainerLogs(ctx, id, p); e != nil || task != nil {
 		t.Fatal(task, e)
 	}
-	now := time.Now().UTC()
+	now := time.Now().UTC().Truncate(time.Second) // mirrors second-precision UI ranges; DATETIME(6) round-trips keep created_at >= to
 	task := cl.Task{ID: id, InstanceID: id, AgentID: agent, ActorID: 987654321, Actor: "test-operator", ActorName: "Test Operator", CreatedAt: now, Query: cl.Query{SourceID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Container: "new-api", From: now.Add(-time.Minute), To: now}}
 	invalid := task
 	invalid.Query.SourceID = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -175,6 +175,10 @@ func TestContainerLogsLifecycle(t *testing.T) {
 		t.Fatal(e)
 	}
 	if _, e = db.Exec(`UPDATE container_log_tasks SET created_at=UTC_TIMESTAMP()-INTERVAL 61 MINUTE WHERE id=?`, task.ID); e != nil {
+		t.Fatal(e)
+	}
+	// Detail reads no longer run housekeeping; the list/poll paths do.
+	if _, e = s.ListContainerLogs(ctx, task.ActorID); e != nil {
 		t.Fatal(e)
 	}
 	value, e = s.GetContainerLog(ctx, task.ID, task.ActorID)

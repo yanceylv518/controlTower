@@ -9,8 +9,10 @@ import (
 
 // Query metadata is bounded; log bodies are fetched only after an exact match.
 // Never reuse another operator's result or an incomplete scan.
+// JSON booleans are compared through JSON_UNQUOTE so the predicate runs on
+// both MySQL 8 and MariaDB; CAST(... AS JSON) is MySQL-only syntax.
 func (s Store) FindReusableContainerLog(ctx context.Context, instance, agent string, actor int64, q cl.Query) (cl.Task, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,query_json FROM container_log_tasks WHERE instance_id=? AND agent_id=? AND actor_id=? AND status='succeeded' AND created_at >= UTC_TIMESTAMP()-INTERVAL 1 DAY AND JSON_EXTRACT(result_json,'$.complete')=CAST('true' AS JSON) AND JSON_EXTRACT(result_json,'$.truncated')=CAST('false' AS JSON) ORDER BY created_at DESC LIMIT 1000`, instance, agent, actor)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,query_json FROM container_log_tasks WHERE instance_id=? AND agent_id=? AND actor_id=? AND status='succeeded' AND created_at >= UTC_TIMESTAMP()-INTERVAL 1 DAY AND JSON_UNQUOTE(JSON_EXTRACT(result_json,'$.complete'))='true' AND JSON_UNQUOTE(JSON_EXTRACT(result_json,'$.truncated'))='false' ORDER BY created_at DESC LIMIT 1000`, instance, agent, actor)
 	if err != nil {
 		return cl.Task{}, err
 	}
