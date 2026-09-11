@@ -198,6 +198,8 @@ export interface UsageItem {
   quota: number;
 }
 export interface NotificationChannelItem {
+  site_id: string;
+  rule_keys: string[];
   id: string;
   channel_type: string;
   name: string;
@@ -208,6 +210,8 @@ export interface NotificationChannelItem {
   has_secret: boolean;
 }
 export interface NotificationChannelInput {
+  site_id: string;
+  rule_keys: string[];
   id: string;
   channel_type: "webhook" | "dingtalk" | "wecom";
   name: string;
@@ -801,9 +805,9 @@ export const dashboardApi = (client: ApiClient) => ({
     client.request<ListResponse<UsageItem>>(
       `/api/dashboard/usage${query({ hours, instance_id })}`,
     ),
-  notificationChannels: () =>
+  notificationChannels: (params: { site_id?: string; unassigned?: boolean }) =>
     client.request<ListResponse<NotificationChannelItem>>(
-      "/api/dashboard/notification-channels",
+      `/api/dashboard/notification-channels${query(params)}`,
     ),
   saveNotificationChannel: (input: NotificationChannelInput) =>
     client.request<ListResponse<NotificationChannelItem>>(
@@ -812,6 +816,7 @@ export const dashboardApi = (client: ApiClient) => ({
     ),
   notificationDeliveries: (
     params: {
+      site_id?: string;
       alert_id?: string;
       channel_id?: string;
       status?: string;
@@ -822,9 +827,9 @@ export const dashboardApi = (client: ApiClient) => ({
     client.request<ListResponse<NotificationDeliveryItem>>(
       `/api/dashboard/notification-deliveries${query(params)}`,
     ),
-  resendDelivery: (id: string) =>
+  resendDelivery: (id: string, site_id: string) =>
     client.request<DashboardOKResponse>(
-      `/api/dashboard/notification-deliveries/${encodeURIComponent(id)}/resend`,
+      `/api/dashboard/notification-deliveries/${encodeURIComponent(id)}/resend${query({ site_id })}`,
       { method: "POST" },
     ),
   createInstance: (input: { instance_id: string; site_id?: string; name: string }) =>

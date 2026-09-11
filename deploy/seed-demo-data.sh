@@ -74,6 +74,6 @@ seed_instance inst-demo-a "$token_a" 77 "OpenAI-主力" 9 "alice" "gpt-4o"
 seed_instance inst-demo-b "$token_b" 88 "Claude-备用" 12 "bob" "claude-sonnet"
 
 step "notification channel that always fails (feeds failed deliveries for resend test)"
-curl -fsS -b "$jar" -H 'X-Requested-With: XMLHttpRequest' -H 'Content-Type: application/json' -d '{"id":"seed-failing","channel_type":"dingtalk","name":"演示-必失败","webhook_url":"http://127.0.0.1:1","enabled":true,"secret":"seed"}' "$base/api/dashboard/notification-channels" >/dev/null
+curl -fsS -b "$jar" -H 'X-Requested-With: XMLHttpRequest' -H 'Content-Type: application/json' -d '{"id":"seed-failing","site_id":"inst-demo-a","rule_keys":["recent_errors"],"channel_type":"dingtalk","name":"演示-必失败","webhook_url":"http://127.0.0.1:1","enabled":true,"secret":"seed"}' "$base/api/dashboard/notification-channels" >/dev/null
 
 echo '[seed] done. 打开 / 走查：两实例切换、渠道快照、样本、告警(触发后由通知 runner 产出 failed 投递供重发)。'

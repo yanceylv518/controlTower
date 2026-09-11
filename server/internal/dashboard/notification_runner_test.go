@@ -54,8 +54,11 @@ func TestNotificationRunnerSendsRecentErrorAlertToDingTalkAndRenotifiesAfterReco
 	defer dingTalk.Close()
 
 	store := ingest.NewMemoryStore()
+	if err := store.CreateInstance(storage.Instance{ID: "inst-a", SiteID: "site-a", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
 	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
-	if err := store.UpsertNotificationChannel(storage.NotificationChannel{ID: "chan-dingtalk", ChannelType: "dingtalk", Name: "ops", WebhookURL: dingTalk.URL, Enabled: true, CreatedAt: now, UpdatedAt: now}); err != nil {
+	if err := store.UpsertNotificationChannel(storage.NotificationChannel{ID: "chan-dingtalk", SiteID: "site-a", ChannelType: "dingtalk", Name: "ops", WebhookURL: dingTalk.URL, Enabled: true, CreatedAt: now, UpdatedAt: now}); err != nil {
 		t.Fatalf("upsert channel: %v", err)
 	}
 
@@ -78,7 +81,7 @@ func TestNotificationRunnerSendsRecentErrorAlertToDingTalkAndRenotifiesAfterReco
 		}
 	}
 
-	runner := NewAlertNotificationRunner(store, store, store, store, store, time.Second)
+	runner := NewAlertNotificationRunner(store, store, store, store, store, time.Second).WithInstanceStore(store)
 
 	// Episode 1: 3 errors among the latest events fire channel + user alerts.
 	insertEvents("consume", 2)

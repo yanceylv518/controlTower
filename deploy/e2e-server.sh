@@ -25,7 +25,7 @@ printf '%s' "{\"instance_id\":\"$id\",\"agent_id\":\"e2e\",\"agent_version\":\"e
 commands=$(curl -fsS -b "$jar" "$base/api/dashboard/channel-commands?instance_id=$id&status=succeeded"); printf '%s' "$commands" | grep -q "\"id\":\"$command_id\""
 audits=$(curl -fsS -b "$jar" "$base/api/dashboard/operation-audits?instance_id=$id"); printf '%s' "$audits" | grep -q '"actor_id":"'"$CT_ADMIN_USER"'"'; printf '%s' "$audits" | grep -q '"target_id":"77"'
 step notification-channel
-curl -fsS -b "$jar" -H 'X-Requested-With: XMLHttpRequest' -H 'Content-Type: application/json' -d '{"id":"e2e-failing","channel_type":"wecom","name":"e2e-failing","webhook_url":"http://127.0.0.1:1","enabled":true}' "$base/api/dashboard/notification-channels" >/dev/null
+curl -fsS -b "$jar" -H 'X-Requested-With: XMLHttpRequest' -H 'Content-Type: application/json' -d "{\"id\":\"$id-notify\",\"site_id\":\"$id\",\"rule_keys\":[\"recent_errors\"],\"channel_type\":\"wecom\",\"name\":\"e2e-failing\",\"webhook_url\":\"http://127.0.0.1:1\",\"enabled\":true}" "$base/api/dashboard/notification-channels" >/dev/null
 step error-report
 now="$(date -u +%FT%TZ)"
 events=''
@@ -37,9 +37,9 @@ alert_id=$(printf '%s' "$alerts" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p'); test -
 curl -fsS -b "$jar" -H 'X-Requested-With: XMLHttpRequest' -H 'Content-Type: application/json' -d "{\"id\":\"$alert_id\",\"action\":\"acknowledge\",\"note\":\"e2e\"}" "$base/api/dashboard/alerts/action" >/dev/null
 timeline=$(curl -fsS -b "$jar" "$base/api/dashboard/alerts/$alert_id/events"); printf '%s' "$timeline" | grep -q '"event_type":"firing"'; printf '%s' "$timeline" | grep -q '"event_type":"acknowledged"'; printf '%s' "$timeline" | grep -q '"note":"e2e"'; printf '%s' "$timeline" | grep -q "\"actor\":\"$CT_ADMIN_USER\""
 step notification-resend
-deliveries=$(curl -fsS -b "$jar" "$base/api/dashboard/notification-deliveries?alert_id=$alert_id&status=failed")
+deliveries=$(curl -fsS -b "$jar" "$base/api/dashboard/notification-deliveries?site_id=$id&alert_id=$alert_id&status=failed")
 delivery_id=$(printf '%s' "$deliveries" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
-if [ -n "$delivery_id" ]; then curl -fsS -b "$jar" -H 'X-Requested-With: XMLHttpRequest' -X POST "$base/api/dashboard/notification-deliveries/$delivery_id/resend" >/dev/null; else echo '[e2e] notification delivery not ready; skip resend (runner interval/configuration)'; fi
+if [ -n "$delivery_id" ]; then curl -fsS -b "$jar" -H 'X-Requested-With: XMLHttpRequest' -X POST "$base/api/dashboard/notification-deliveries/$delivery_id/resend?site_id=$id" >/dev/null; else echo '[e2e] notification delivery not ready; skip resend (runner interval/configuration)'; fi
 step mismatch; if heartbeat wrong-instance "$token" >/dev/null 2>&1; then exit 1; fi
 step rotate; rotated=$(curl -fsS -b "$jar" -H 'X-Requested-With: XMLHttpRequest' -X POST "$base/api/dashboard/instances/$id/rotate-token"); new_token=$(printf '%s' "$rotated" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p'); test -n "$new_token"
 step rotation-grace; heartbeat "$id" "$token" >/dev/null; heartbeat "$id" "$new_token" >/dev/null

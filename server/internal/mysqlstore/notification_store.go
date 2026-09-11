@@ -3,17 +3,24 @@ package mysqlstore
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"time"
 
 	"controltower/server/internal/storage"
 )
 
 func (s Store) UpsertNotificationChannel(channel storage.NotificationChannel) error {
-	_, err := s.db.ExecContext(context.Background(), `
+	ruleKeys, err := json.Marshal(channel.RuleKeys)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(context.Background(), `
 INSERT INTO notification_channels (
-  id, channel_type, name, webhook_url, secret_value, enabled, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  id, channel_type, name, webhook_url, secret_value, enabled, created_at, updated_at, site_id, rule_keys
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON DUPLICATE KEY UPDATE
+  site_id = VALUES(site_id),
+  rule_keys = VALUES(rule_keys),
   channel_type = VALUES(channel_type),
   name = VALUES(name),
   webhook_url = VALUES(webhook_url),
@@ -28,12 +35,14 @@ ON DUPLICATE KEY UPDATE
 		channel.Enabled,
 		channel.CreatedAt,
 		channel.UpdatedAt,
+		channel.SiteID,
+		string(ruleKeys),
 	)
 	return err
 }
 
 func (s Store) QueryNotificationChannels(enabledOnly bool) ([]storage.NotificationChannel, error) {
-	sqlText := `SELECT id, channel_type, name, webhook_url, secret_value, enabled, created_at, updated_at
+	sqlText := `SELECT id, channel_type, name, webhook_url, secret_value, enabled, created_at, updated_at, site_id, rule_keys
 FROM notification_channels`
 	args := []any{}
 	if enabledOnly {
@@ -49,8 +58,14 @@ FROM notification_channels`
 	var channels []storage.NotificationChannel
 	for rows.Next() {
 		var channel storage.NotificationChannel
-		if err := rows.Scan(&channel.ID, &channel.ChannelType, &channel.Name, &channel.WebhookURL, &channel.SecretValue, &channel.Enabled, &channel.CreatedAt, &channel.UpdatedAt); err != nil {
+		var ruleKeys []byte
+		if err := rows.Scan(&channel.ID, &channel.ChannelType, &channel.Name, &channel.WebhookURL, &channel.SecretValue, &channel.Enabled, &channel.CreatedAt, &channel.UpdatedAt, &channel.SiteID, &ruleKeys); err != nil {
 			return nil, err
+		}
+		if len(ruleKeys) > 0 {
+			if err := json.Unmarshal(ruleKeys, &channel.RuleKeys); err != nil {
+				return nil, err
+			}
 		}
 		channels = append(channels, channel)
 	}
@@ -130,6 +145,12 @@ func buildNotificationDeliveryQuery(query storage.NotificationDeliveryQuery) (st
 	limit, offset := storage.NormalizeNotificationPagination(query.Limit, query.Offset)
 	where := ""
 	args := []any{}
+	if query.ID != "" {
+		where, args = appendWhere(where, args, "id = ?", query.ID)
+	}
+	if query.SiteID != "" {
+		where, args = appendWhere(where, args, "EXISTS (SELECT 1 FROM alerts a JOIN instances i ON i.id=a.instance_id WHERE a.id=notification_deliveries.alert_id AND COALESCE(NULLIF(i.site_id,''),i.id)=?)", query.SiteID)
+	}
 	if query.AlertID != "" {
 		where, args = appendWhere(where, args, "alert_id = ?", query.AlertID)
 	}

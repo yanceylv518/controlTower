@@ -71,15 +71,17 @@ func (s *MemoryStore) QueryAlertEvents(id string, limit int) ([]storage.AlertEve
 func (s *MemoryStore) MarkDeliveryForResend(id string, n time.Time) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	v, ok := s.notificationDeliveries[id]
-	if !ok {
-		return false, nil
+	for key, v := range s.notificationDeliveries {
+		if v.ID != id {
+			continue
+		}
+		v.Status = "failed"
+		v.Attempts = 0
+		v.NextAttemptAt = n
+		s.notificationDeliveries[key] = v
+		return true, nil
 	}
-	v.Status = "failed"
-	v.Attempts = 0
-	v.NextAttemptAt = n
-	s.notificationDeliveries[id] = v
-	return true, nil
+	return false, nil
 }
 
 func NewMemoryStore() *MemoryStore {
@@ -809,6 +811,26 @@ func (s *MemoryStore) QueryNotificationDeliveries(query storage.NotificationDeli
 	defer s.mu.Unlock()
 	deliveries := make([]storage.NotificationDelivery, 0, len(s.notificationDeliveries))
 	for _, delivery := range s.notificationDeliveries {
+		if query.ID != "" && delivery.ID != query.ID {
+			continue
+		}
+		if query.SiteID != "" {
+			alert, ok := s.alerts[delivery.AlertID]
+			if !ok {
+				continue
+			}
+			instance, ok := s.instances[alert.InstanceID]
+			if !ok {
+				continue
+			}
+			site := instance.SiteID
+			if site == "" {
+				site = instance.ID
+			}
+			if site != query.SiteID {
+				continue
+			}
+		}
 		if query.AlertID != "" && delivery.AlertID != query.AlertID {
 			continue
 		}

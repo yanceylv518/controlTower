@@ -3,6 +3,8 @@ package storage
 const MaxNotificationQueryLimit = 200
 
 type NotificationDeliveryQuery struct {
+	ID        string
+	SiteID    string
 	AlertID   string
 	ChannelID string
 	Status    string

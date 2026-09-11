@@ -30,15 +30,19 @@ type NotificationStore interface {
 }
 
 type NotificationChannelRequest struct {
-	ID          string `json:"id"`
-	ChannelType string `json:"channel_type"`
-	Name        string `json:"name"`
-	WebhookURL  string `json:"webhook_url"`
-	Enabled     bool   `json:"enabled"`
-	Secret      string `json:"secret"`
+	SiteID      string   `json:"site_id"`
+	RuleKeys    []string `json:"rule_keys"`
+	ID          string   `json:"id"`
+	ChannelType string   `json:"channel_type"`
+	Name        string   `json:"name"`
+	WebhookURL  string   `json:"webhook_url"`
+	Enabled     bool     `json:"enabled"`
+	Secret      string   `json:"secret"`
 }
 
 type NotificationChannelItem struct {
+	SiteID           string    `json:"site_id"`
+	RuleKeys         []string  `json:"rule_keys"`
 	ID               string    `json:"id"`
 	ChannelType      string    `json:"channel_type"`
 	Name             string    `json:"name"`
@@ -81,22 +85,86 @@ func (h Handler) HandleNotificationChannels(w http.ResponseWriter, r *http.Reque
 	}
 	switch r.Method {
 	case http.MethodGet:
+		site := strings.TrimSpace(r.URL.Query().Get("site_id"))
+		if site == "" && r.URL.Query().Get("unassigned") != "true" {
+			writeDashboardError(w, http.StatusBadRequest, "site_id_required")
+			return
+		}
 		channels, err := h.notificationStore.QueryNotificationChannels(false)
 		if err != nil {
 			writeDashboardError(w, http.StatusInternalServerError, "query_failed")
 			return
 		}
-		writeDashboardJSON(w, http.StatusOK, NotificationChannelListResponse{Items: notificationChannelItems(channels)})
+		filtered := make([]storage.NotificationChannel, 0)
+		for _, channel := range channels {
+			if channel.SiteID == site {
+				filtered = append(filtered, channel)
+			}
+		}
+		writeDashboardJSON(w, http.StatusOK, NotificationChannelListResponse{Items: notificationChannelItems(filtered)})
 	case http.MethodPost:
 		var request NotificationChannelRequest
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			writeDashboardError(w, http.StatusBadRequest, "invalid_json")
 			return
 		}
+		request.ID = strings.TrimSpace(request.ID)
+		request.SiteID = strings.TrimSpace(request.SiteID)
+		if h.instanceStore == nil {
+			writeDashboardError(w, http.StatusInternalServerError, "instance_store_not_configured")
+			return
+		}
+		instances, err := h.instanceStore.ListInstances()
+		if err != nil {
+			writeDashboardError(w, http.StatusInternalServerError, "query_failed")
+			return
+		}
+		validSite := false
+		for _, instance := range instances {
+			if siteOf(instance) == request.SiteID && !instance.Deleted {
+				validSite = true
+			}
+		}
+		if !validSite || request.SiteID == "" {
+			writeDashboardError(w, http.StatusBadRequest, "invalid_site_id")
+			return
+		}
+		var existing *storage.NotificationChannel
+		if request.ID != "" {
+			channels, err := h.notificationStore.QueryNotificationChannels(false)
+			if err != nil {
+				writeDashboardError(w, http.StatusInternalServerError, "query_failed")
+				return
+			}
+			for _, channel := range channels {
+				if channel.ID == request.ID {
+					existing = &channel
+					break
+				}
+			}
+		}
+		if existing != nil {
+			if existing.SiteID != "" && existing.SiteID != request.SiteID {
+				writeDashboardError(w, http.StatusConflict, "notification_channel_site_mismatch")
+				return
+			}
+			if strings.TrimSpace(request.WebhookURL) == "" {
+				request.WebhookURL = existing.WebhookURL
+			}
+			if request.Secret == "" && request.ChannelType == existing.ChannelType {
+				request.Secret = existing.SecretValue
+			}
+			if request.RuleKeys == nil {
+				request.RuleKeys = existing.RuleKeys
+			}
+		}
 		channel, ok := notificationChannelFromRequest(request, time.Now().UTC())
 		if !ok {
 			writeDashboardError(w, http.StatusBadRequest, "invalid_notification_channel")
 			return
+		}
+		if existing != nil {
+			channel.CreatedAt = existing.CreatedAt
 		}
 		if err := h.notificationStore.UpsertNotificationChannel(channel); err != nil {
 			writeDashboardError(w, http.StatusInternalServerError, "query_failed")
@@ -117,7 +185,12 @@ func (h Handler) HandleNotificationDeliveries(w http.ResponseWriter, r *http.Req
 		writeDashboardError(w, http.StatusInternalServerError, "notification_store_not_configured")
 		return
 	}
-	deliveries, err := h.notificationStore.QueryNotificationDeliveries(parseNotificationDeliveryQuery(r))
+	query := parseNotificationDeliveryQuery(r)
+	if query.SiteID == "" {
+		writeDashboardError(w, http.StatusBadRequest, "site_id_required")
+		return
+	}
+	deliveries, err := h.notificationStore.QueryNotificationDeliveries(query)
 	if err != nil {
 		writeDashboardError(w, http.StatusInternalServerError, "query_failed")
 		return
@@ -125,6 +198,24 @@ func (h Handler) HandleNotificationDeliveries(w http.ResponseWriter, r *http.Req
 	writeDashboardJSON(w, http.StatusOK, NotificationDeliveryListResponse{Items: notificationDeliveryItems(deliveries)})
 }
 func (h Handler) HandleNotificationResend(w http.ResponseWriter, r *http.Request) {
+	if h.notificationStore == nil {
+		writeDashboardError(w, 500, "notification_store_not_configured")
+		return
+	}
+	site := strings.TrimSpace(r.URL.Query().Get("site_id"))
+	if site == "" {
+		writeDashboardError(w, 400, "site_id_required")
+		return
+	}
+	items, err := h.notificationStore.QueryNotificationDeliveries(storage.NotificationDeliveryQuery{ID: r.PathValue("id"), SiteID: site, Limit: 1})
+	if err != nil {
+		writeDashboardError(w, 500, "query_failed")
+		return
+	}
+	if len(items) == 0 {
+		writeDashboardError(w, 404, "delivery_not_found")
+		return
+	}
 	ok, e := h.notificationStore.MarkDeliveryForResend(r.PathValue("id"), time.Now().UTC())
 	if e != nil {
 		writeDashboardError(w, 500, "query_failed")
@@ -163,6 +254,19 @@ func (h Handler) dispatchAlertNotifications(alerts []storage.Alert) error {
 	if len(channels) == 0 {
 		return nil
 	}
+	if h.instanceStore == nil {
+		return fmt.Errorf("notification routing: instance store not configured")
+	}
+	instances, err := h.instanceStore.ListInstances()
+	if err != nil {
+		return err
+	}
+	instanceSites := make(map[string]string, len(instances))
+	for _, instance := range instances {
+		if !instance.Deleted {
+			instanceSites[instance.ID] = siteOf(instance)
+		}
+	}
 	client := http.Client{Timeout: 3 * time.Second}
 	for _, alert := range alerts {
 		if alert.Status != "firing" {
@@ -172,6 +276,9 @@ func (h Handler) dispatchAlertNotifications(alerts []storage.Alert) error {
 			continue
 		}
 		for _, channel := range channels {
+			if !notificationChannelMatches(channel, alert, instanceSites) {
+				continue
+			}
 			due, err := h.notificationStore.NotificationDeliveryDue(alert.ID, channel.ID, time.Now().UTC())
 			if err != nil {
 				return err
@@ -318,6 +425,10 @@ func checkRobotResponse(body io.Reader, channelType string) error {
 }
 
 func notificationChannelFromRequest(request NotificationChannelRequest, now time.Time) (storage.NotificationChannel, bool) {
+	rules, valid := normalizeNotificationRules(request.RuleKeys)
+	if !valid || strings.TrimSpace(request.SiteID) == "" {
+		return storage.NotificationChannel{}, false
+	}
 	name := strings.TrimSpace(request.Name)
 	webhookURL := strings.TrimSpace(request.WebhookURL)
 	if name == "" || webhookURL == "" || !(strings.HasPrefix(webhookURL, "http://") || strings.HasPrefix(webhookURL, "https://")) {
@@ -334,13 +445,14 @@ func notificationChannelFromRequest(request NotificationChannelRequest, now time
 	if id == "" {
 		id = notificationChannelID(name, webhookURL, now)
 	}
-	return storage.NotificationChannel{ID: id, ChannelType: channelType, Name: name, WebhookURL: webhookURL, SecretValue: request.Secret, Enabled: request.Enabled, CreatedAt: now, UpdatedAt: now}, true
+	return storage.NotificationChannel{ID: id, SiteID: strings.TrimSpace(request.SiteID), RuleKeys: rules, ChannelType: channelType, Name: name, WebhookURL: webhookURL, SecretValue: request.Secret, Enabled: request.Enabled, CreatedAt: now, UpdatedAt: now}, true
 }
 
 func notificationChannelItems(channels []storage.NotificationChannel) []NotificationChannelItem {
 	items := make([]NotificationChannelItem, 0, len(channels))
 	for _, channel := range channels {
-		items = append(items, NotificationChannelItem{ID: channel.ID, ChannelType: channel.ChannelType, Name: channel.Name, WebhookURLMasked: maskWebhookURL(channel.WebhookURL), Enabled: channel.Enabled, CreatedAt: channel.CreatedAt, UpdatedAt: channel.UpdatedAt, HasSecret: channel.SecretValue != ""})
+		rules := append([]string{}, channel.RuleKeys...)
+		items = append(items, NotificationChannelItem{ID: channel.ID, SiteID: channel.SiteID, RuleKeys: rules, ChannelType: channel.ChannelType, Name: channel.Name, WebhookURLMasked: maskWebhookURL(channel.WebhookURL), Enabled: channel.Enabled, CreatedAt: channel.CreatedAt, UpdatedAt: channel.UpdatedAt, HasSecret: channel.SecretValue != ""})
 	}
 	return items
 }
@@ -355,7 +467,7 @@ func notificationDeliveryItems(deliveries []storage.NotificationDelivery) []Noti
 
 func parseNotificationDeliveryQuery(r *http.Request) storage.NotificationDeliveryQuery {
 	query := r.URL.Query()
-	return storage.NotificationDeliveryQuery{AlertID: query.Get("alert_id"), ChannelID: query.Get("channel_id"), Status: query.Get("status"), Limit: parseInt(query.Get("limit")), Offset: parseInt(query.Get("offset"))}
+	return storage.NotificationDeliveryQuery{SiteID: strings.TrimSpace(query.Get("site_id")), AlertID: query.Get("alert_id"), ChannelID: query.Get("channel_id"), Status: query.Get("status"), Limit: parseInt(query.Get("limit")), Offset: parseInt(query.Get("offset"))}
 }
 
 func notificationChannelID(name string, webhookURL string, now time.Time) string {

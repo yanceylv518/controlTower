@@ -142,7 +142,7 @@ func TestSendWeComNotificationFailsOnErrcode(t *testing.T) {
 
 func TestNotificationChannelFromRequestChannelTypes(t *testing.T) {
 	now := time.Now().UTC()
-	base := NotificationChannelRequest{Name: "ops", WebhookURL: "https://example.com/hook", Enabled: true}
+	base := NotificationChannelRequest{SiteID: "site-a", Name: "ops", WebhookURL: "https://example.com/hook", Enabled: true}
 
 	channel, ok := notificationChannelFromRequest(base, now)
 	if !ok || channel.ChannelType != "webhook" {

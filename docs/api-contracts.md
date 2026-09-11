@@ -191,10 +191,16 @@ Instance tokens are stored only as `SHA-256(pepper + token)` hashes. A token may
 
 | 方法与路径 | 参数 | 成功响应示例 |
 | --- | --- | --- |
-| `GET /api/dashboard/notification-channels` | 无 | `{"items":[{"id":"c1","channel_type":"dingtalk","has_secret":true}]}` |
-| `POST /api/dashboard/notification-channels` | JSON `id,channel_type,name,webhook_url,enabled,secret` | `{"items":[{"id":"c1","has_secret":true}]}` |
-| `GET /api/dashboard/notification-deliveries` | Query `alert_id,channel_id,status,limit,offset` | `{"items":[{"id":"d1","status":"failed","attempts":1}]}` |
-| `POST /api/dashboard/notification-deliveries/{id}/resend` | 无 | `{"ok":true}` |
+| `GET /api/dashboard/notification-channels` | 必填 Query `site_id`；旧渠道待分配列表使用 `unassigned=true` | `{"items":[{"id":"c1","site_id":"site-a","rule_keys":["user_low_balance"],"channel_type":"dingtalk","has_secret":true}]}` |
+| `POST /api/dashboard/notification-channels` | JSON `id,site_id,rule_keys,channel_type,name,webhook_url,enabled,secret` | `{"items":[{"id":"c1","site_id":"site-a","rule_keys":["user_low_balance"],"has_secret":true}]}` |
+| `GET /api/dashboard/notification-deliveries` | 必填 Query `site_id`；可选 `alert_id,channel_id,status,limit,offset` | `{"items":[{"id":"d1","status":"failed","attempts":1}]}` |
+| `POST /api/dashboard/notification-deliveries/{id}/resend` | 必填 Query `site_id`，其他站点记录返回 404 | `{"ok":true}` |
+
+通知渠道必须绑定单个有效站点，已绑定渠道不能跨站点更新（409）。站点和 `rule_keys` 同时匹配才投递；空 `rule_keys` 表示该站点全部告警类型，未知类型返回 400。多渠道匹配则分别投递，未匹配不回退到其他站点。全局通知开关及“仅推送余额告警”仍优先执行。
+
+编辑时 Webhook 地址留空保留原值；同类型渠道 Secret 留空保留原密钥。省略 `rule_keys` 保留原选择，显式 `[]` 改为全部类型。响应始终只返回脱敏地址和是否有密钥。
+
+升级需应用 `075_notification_routing.sql` 并同步更新前后端。历史渠道 `site_id` 为空，暂停投递，在通知设置“旧渠道待分配”中确认归属并保存后恢复。旧投递记录按原告警所属实例的站点查询，避免随渠道分配而串站点。Agent 独立企微直推不使用此路由配置。
 
 ### 渠道命令与审计
 

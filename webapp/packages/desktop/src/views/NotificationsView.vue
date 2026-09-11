@@ -2,7 +2,7 @@
 import { reactive, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
 import { Plus } from "@element-plus/icons-vue";
-import type { NotificationChannelInput } from "@ct/shared";
+import type { NotificationChannelInput, NotificationChannelItem } from "@ct/shared";
 import { dashboard } from "../api";
 import AppShell from "../components/AppShell.vue";
 import AsyncPanel from "../components/AsyncPanel.vue";
@@ -11,6 +11,22 @@ import StatusTag from "../components/StatusTag.vue";
 import { useAsyncData } from "../composables/useAsyncData";
 import { useAutoRefresh } from "../composables/useAutoRefresh";
 import { formatTime } from "../utils/format";
+import { useFiltersStore } from "../stores/filters";
+
+const filters = useFiltersStore();
+const ruleLabels: Record<string, string> = {
+  user_low_balance: "用户余额不足",
+  instance_offline: "实例离线",
+  high_cpu: "CPU 使用率过高",
+  high_memory: "内存使用率过高",
+  high_disk: "磁盘使用率过高",
+  health_down: "健康检查失败",
+  docker_stopped: "容器未运行",
+  agent_backlog: "Agent 日志积压",
+  high_error_rate: "错误率升高",
+  high_p95_latency: "P95 耗时过高",
+  recent_errors: "近期请求错误激增",
+};
 
 const typeLabels: Record<string, string> = {
   webhook: "通用 Webhook",
@@ -18,7 +34,11 @@ const typeLabels: Record<string, string> = {
   wecom: "企业微信机器人",
 };
 const dialogOpen = ref(false);
+const editing = ref(false);
+const allTypes = ref(false);
 const form = reactive<NotificationChannelInput>({
+  site_id: "",
+  rule_keys: [],
   id: "",
   name: "",
   channel_type: "webhook",
@@ -29,24 +49,65 @@ const form = reactive<NotificationChannelInput>({
 const saving = ref(false);
 const deliveryPage = ref(1);
 const deliveryPageSize = ref(20);
-const channels = useAsyncData(
-  async () => (await dashboard.notificationChannels()).items,
-);
-const deliveries = useAsyncData(
-  async () =>
-    (
-      await dashboard.notificationDeliveries({
-        limit: deliveryPageSize.value,
-        offset: (deliveryPage.value - 1) * deliveryPageSize.value,
-      })
-    ).items,
-);
+async function loadChannels(): Promise<{ items: NotificationChannelItem[]; unassigned: NotificationChannelItem[] }> {
+  await filters.loadInstances();
+  const site = filters.site_id;
+  if (!site) return { items: [], unassigned: [] };
+  const [assigned, legacy] = await Promise.all([
+    dashboard.notificationChannels({ site_id: site }),
+    dashboard.notificationChannels({ unassigned: true }),
+  ]);
+  if (site !== filters.site_id) return loadChannels();
+  return { items: assigned.items, unassigned: legacy.items };
+}
+const channels = useAsyncData(loadChannels);
+async function loadDeliveries(): Promise<Awaited<ReturnType<typeof dashboard.notificationDeliveries>>["items"]> {
+  await filters.loadInstances();
+  const site = filters.site_id;
+  const page = deliveryPage.value;
+  const size = deliveryPageSize.value;
+  if (!site) return [];
+  const result = await dashboard.notificationDeliveries({
+    site_id: site, limit: size, offset: (page - 1) * size,
+  });
+  if (site !== filters.site_id || page !== deliveryPage.value || size !== deliveryPageSize.value) return loadDeliveries();
+  return result.items;
+}
+const deliveries = useAsyncData(loadDeliveries);
 watch([deliveryPage, deliveryPageSize], () => void deliveries.reload());
+watch(() => filters.site_id, () => {
+  dialogOpen.value = false;
+  channels.data.value = undefined;
+  deliveries.data.value = undefined;
+  deliveryPage.value = 1;
+  void channels.reload();
+  void deliveries.reload();
+});
+function openChannel(channel?: NotificationChannelItem) {
+  editing.value = !!channel;
+  allTypes.value = !!channel && !channel.rule_keys?.length;
+  Object.assign(form, {
+    id: channel?.id || "", site_id: filters.site_id,
+    name: channel?.name || "", channel_type: channel?.channel_type || "webhook",
+    webhook_url: "", secret: "", enabled: channel?.enabled ?? true,
+    rule_keys: [...(channel?.rule_keys || [])],
+  });
+  dialogOpen.value = true;
+}
 async function save() {
+  if (!form.site_id || !form.name.trim() || (!editing.value && !form.webhook_url.trim())) {
+    ElMessage.error("请选择站点并填写名称和 Webhook 地址");
+    return;
+  }
+  if (!allTypes.value && !form.rule_keys.length) {
+    ElMessage.error("请选择至少一种告警类型，或勾选全部类型");
+    return;
+  }
   saving.value = true;
   try {
     await dashboard.saveNotificationChannel({
       ...form,
+      rule_keys: allTypes.value ? [] : [...form.rule_keys],
       secret: form.channel_type === "dingtalk" ? form.secret : undefined,
     });
     form.secret = "";
@@ -61,7 +122,7 @@ async function save() {
 }
 async function resend(id: string) {
   try {
-    await dashboard.resendDelivery(id);
+    await dashboard.resendDelivery(id, filters.site_id);
     ElMessage.success("已安排重发");
     await deliveries.reload();
   } catch (e) {
@@ -74,20 +135,37 @@ useAutoRefresh(deliveries.reload);
 <template>
   <AppShell title="通知设置">
     <template #tools>
-      <el-button type="primary" :icon="Plus" @click="dialogOpen = true"
+      <el-button type="primary" :icon="Plus" :disabled="!filters.site_id" @click="openChannel()"
         >添加渠道</el-button
       >
     </template>
+    <el-alert
+      title="通知渠道按站点独立配置，只有站点和告警类型都匹配才会投递。多个渠道匹配时，各发送一份。"
+      type="info" :closable="false" show-icon
+    />
+    <section v-if="channels.data.value?.unassigned.length" class="panel sub-panel">
+      <h2>旧渠道待分配</h2>
+      <el-alert title="这些旧渠道尚未绑定站点，已暂停投递。确认归属后，分配到对应站点并选择告警类型。" type="warning" :closable="false" />
+      <el-table :data="channels.data.value.unassigned">
+        <el-table-column prop="name" label="名称" />
+        <el-table-column prop="webhook_url_masked" label="Webhook 地址" />
+        <el-table-column label="操作" width="240">
+          <template #default="s">
+            <el-button :disabled="!filters.site_id" @click="openChannel(s.row)">分配到 {{ filters.site_id }}</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </section>
     <section class="panel sub-panel">
-      <h2>通知渠道</h2>
+      <h2>{{ filters.site_id }} · 通知渠道</h2>
       <AsyncPanel
         :loading="channels.loading.value"
         :error="channels.error.value"
-        :empty="!channels.data.value?.length"
-        empty-text="尚无通知渠道，请添加企业微信、钉钉机器人或 Webhook"
+        :empty="!channels.data.value?.items.length"
+        empty-text="当前站点尚无通知渠道，请添加渠道或分配旧渠道"
         @retry="channels.reload"
       >
-        <el-table :data="channels.data.value">
+        <el-table :data="channels.data.value?.items">
           <el-table-column prop="name" label="名称" min-width="140" />
           <el-table-column label="类型" width="150">
             <template #default="s">
@@ -112,6 +190,14 @@ useAutoRefresh(deliveries.reload);
               <StatusTag :value="s.row.enabled ? 'enabled' : 'disabled'" />
             </template>
           </el-table-column>
+          <el-table-column label="接收告警类型" min-width="240">
+            <template #default="s">
+              {{ s.row.rule_keys?.length ? s.row.rule_keys.map((key: string) => ruleLabels[key] || key).join("、") : "全部类型" }}
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="90">
+            <template #default="s"><el-button @click="openChannel(s.row)">编辑</el-button></template>
+          </el-table-column>
         </el-table>
       </AsyncPanel>
     </section>
@@ -126,6 +212,9 @@ useAutoRefresh(deliveries.reload);
         <el-table :data="deliveries.data.value">
           <el-table-column label="时间" width="160">
             <template #default="s">{{ formatTime(s.row.attempted_at) }}</template>
+          </el-table-column>
+          <el-table-column label="通知渠道" min-width="140">
+            <template #default="s">{{ channels.data.value?.items.find((item) => item.id === s.row.channel_id)?.name || s.row.channel_id }}</template>
           </el-table-column>
           <el-table-column label="状态" width="100">
             <template #default="s"><StatusTag :value="s.row.status" /></template>
@@ -167,10 +256,10 @@ useAutoRefresh(deliveries.reload);
         />
       </AsyncPanel>
     </section>
-    <el-dialog v-model="dialogOpen" title="添加 / 更新通知渠道" width="520px">
+    <el-dialog v-model="dialogOpen" :title="editing ? '编辑 / 分配通知渠道' : '添加通知渠道'" width="600px">
       <el-form :model="form" label-width="90px">
-        <el-form-item label="ID">
-          <el-input v-model="form.id" placeholder="唯一标识，如 wecom-ops" />
+        <el-form-item label="所属站点">
+          <el-input :model-value="form.site_id" disabled />
         </el-form-item>
         <el-form-item label="名称">
           <el-input v-model="form.name" placeholder="如 运维企微群" />
@@ -188,7 +277,7 @@ useAutoRefresh(deliveries.reload);
         <el-form-item label="URL">
           <el-input
             v-model="form.webhook_url"
-            placeholder="机器人 Webhook 地址"
+            :placeholder="editing ? '留空保留原 Webhook 地址' : '机器人 Webhook 地址'"
           />
         </el-form-item>
         <el-form-item v-if="form.channel_type === 'dingtalk'" label="Secret">
@@ -196,9 +285,18 @@ useAutoRefresh(deliveries.reload);
             v-model="form.secret"
             type="password"
             show-password
-            placeholder="加签密钥，留空为关键词模式"
+            :placeholder="editing ? '留空保留原加签密钥' : '加签密钥，留空为关键词模式'"
             autocomplete="new-password"
           />
+        </el-form-item>
+        <el-form-item label="告警类型">
+          <div>
+            <el-checkbox v-model="allTypes">全部类型</el-checkbox>
+            <el-select v-model="form.rule_keys" multiple :disabled="allTypes" placeholder="选择该渠道接收的告警类型" style="width: 100%">
+              <el-option v-for="(label, key) in ruleLabels" :key="key" :label="label" :value="key" />
+            </el-select>
+            <p>系统设置中若开启“仅推送余额告警”，其他类型仍不会发送。</p>
+          </div>
         </el-form-item>
         <el-form-item label="启用">
           <el-switch v-model="form.enabled" />

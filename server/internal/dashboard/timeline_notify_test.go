@@ -103,7 +103,7 @@ func TestExhaustedNotDueAndResend(t *testing.T) {
 	if due, _ := s.NotificationDeliveryDue("a", "c", n); due {
 		t.Fatal("exhausted due")
 	}
-	ok, e := s.MarkDeliveryForResend("a:c", n)
+	ok, e := s.MarkDeliveryForResend(d.ID, n)
 	if e != nil || !ok {
 		t.Fatalf("resend %v %v", ok, e)
 	}

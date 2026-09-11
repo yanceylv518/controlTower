@@ -233,6 +233,10 @@ type Alert struct {
 }
 
 type NotificationChannel struct {
+	// Channels without a site are unassigned and never receive notifications.
+	SiteID string
+	// Empty RuleKeys matches every alert type within this site.
+	RuleKeys    []string
 	ID          string
 	ChannelType string
 	Name        string
