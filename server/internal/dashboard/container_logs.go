@@ -6,8 +6,11 @@ import (
 	"controltower/server/internal/auth"
 	"controltower/server/internal/storage"
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -53,7 +56,12 @@ func (h ContainerLogHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if id := r.PathValue("id"); id != "" {
 			v, e := h.Store.GetContainerLog(r.Context(), id, historyActor)
 			if e != nil {
-				http.Error(w, "not found or expired", 404)
+				if errors.Is(e, sql.ErrNoRows) {
+					http.Error(w, "not found or expired", 404)
+				} else {
+					log.Printf("container log task read failed task_id=%q actor_id=%d: %v", id, u.ID, e)
+					http.Error(w, "task read failed; retry later", 500)
+				}
 				return
 			}
 			reply(v, nil)
@@ -120,6 +128,21 @@ func (h ContainerLogHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	b := make([]byte, 16)
+	if cache, ok := h.Store.(interface {
+		FindReusableContainerLog(context.Context, string, string, int64, cl.Query) (cl.Task, error)
+	}); ok {
+		cached, err := cache.FindReusableContainerLog(r.Context(), input.InstanceID, input.AgentID, u.ID, input.Query)
+		if err == nil {
+			w.Header().Set("X-CT-Log-Reused", "true")
+			reply(cached, nil)
+			return
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			log.Printf("container log cache read failed actor_id=%d: %v", u.ID, err)
+			http.Error(w, "task read failed; retry later", 500)
+			return
+		}
+	}
 	if _, e := rand.Read(b); e != nil {
 		http.Error(w, "unavailable", 500)
 		return

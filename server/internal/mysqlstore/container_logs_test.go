@@ -127,6 +127,18 @@ func TestContainerLogsLifecycle(t *testing.T) {
 		t.Fatal("result not stored", value, e)
 	}
 	p.Result = &cl.Result{Status: "failed"}
+	repeated := task.Query
+	repeated.BatchID = "new-batch"
+	if cached, err := s.FindReusableContainerLog(ctx, task.InstanceID, task.AgentID, task.ActorID, repeated); err != nil || cached.ID != task.ID {
+		t.Fatalf("complete query not reused: %+v %v", cached, err)
+	}
+	if _, err := s.FindReusableContainerLog(ctx, task.InstanceID, task.AgentID, task.ActorID+1, repeated); err == nil {
+		t.Fatal("another actor reused private logs")
+	}
+	repeated.Keyword = "different-condition"
+	if _, err := s.FindReusableContainerLog(ctx, task.InstanceID, task.AgentID, task.ActorID, repeated); err == nil {
+		t.Fatal("different query reused")
+	}
 	if _, e = s.PollContainerLogs(ctx, id, p); e != nil {
 		t.Fatal(e)
 	}
@@ -221,7 +233,10 @@ func TestContainerLogsLeaseExpiryKeepsPartialLines(t *testing.T) {
 	if _, e = db.Exec(`UPDATE container_log_tasks SET claimed_at=UTC_TIMESTAMP()-INTERVAL 120 SECOND WHERE id=?`, task.ID); e != nil {
 		t.Fatal(e)
 	}
-	got, e := s.GetContainerLog(ctx, task.ID, 7) // read path runs expiry
+	if e = s.expireContainerLogs(ctx); e != nil {
+		t.Fatal(e)
+	}
+	got, e := s.GetContainerLog(ctx, task.ID, 7)
 	if e != nil {
 		t.Fatal(e)
 	}

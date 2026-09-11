@@ -53,6 +53,7 @@ func lineTime(line string, loc *time.Location) (time.Time, bool) {
 }
 
 func newMatcher(q cl.Query) func(string) bool {
+	keyword := strings.ToLower(q.Keyword)
 	var request, code *regexp.Regexp
 	if q.RequestID != "" {
 		request = regexp.MustCompile(`(^|[^a-zA-Z0-9_.:-])` + regexp.QuoteMeta(q.RequestID) + `($|[^a-zA-Z0-9_.:-])`)
@@ -61,6 +62,6 @@ func newMatcher(q cl.Query) func(string) bool {
 		code = regexp.MustCompile(`(?i)["']?\b(?:error_code|status_code|status code|status|code)["']?\s*[:=]\s*["']?` + regexp.QuoteMeta(q.ErrorCode) + `(?:["']|$|[^a-zA-Z0-9_.:-])`)
 	}
 	return func(record string) bool {
-		return (q.Keyword == "" || strings.Contains(record, q.Keyword)) && (request == nil || request.MatchString(record)) && (code == nil || code.MatchString(record) || ginCode(record, q.ErrorCode))
+		return (keyword == "" || strings.Contains(strings.ToLower(record), keyword)) && (request == nil || request.MatchString(record)) && (code == nil || code.MatchString(record) || ginCode(record, q.ErrorCode))
 	}
 }

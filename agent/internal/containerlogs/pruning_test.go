@@ -23,7 +23,7 @@ func TestStreamNewQueryIncludesAppend(t *testing.T) {
 	engine := NewStreamEngine()
 	first := engine.Query(context.Background(), dir, q, time.UTC)
 	second := engine.Query(context.Background(), dir, q, time.UTC)
-	if !first.Complete || first.IndexedBytes != 0 || !second.Complete || second.ScannedBytes != first.ScannedBytes || len(second.Lines) != 0 {
+	if !first.Complete || first.IndexedBytes != 0 || !second.Complete || second.ScannedBytes != 0 || len(second.Lines) != 0 {
 		t.Fatalf("stream reads: first=%+v second=%+v", first, second)
 	}
 	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0600)

@@ -6,7 +6,7 @@ import (
 	"controltower/server/internal/auth"
 	"controltower/server/internal/ingest"
 	"controltower/server/internal/storage"
-	"errors"
+	"database/sql"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -42,7 +42,7 @@ func (s *testLogStore) GetContainerLog(_ context.Context, taskID string, id int6
 	if s.previous != nil && s.previous.ID == taskID && (id == 0 || s.previous.ActorID == id) {
 		return *s.previous, nil
 	}
-	return cl.Task{}, errors.New("not found")
+	return cl.Task{}, sql.ErrNoRows
 }
 func (s *testLogStore) PollContainerLogs(context.Context, string, cl.Poll) (*cl.Task, error) {
 	return nil, nil

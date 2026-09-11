@@ -9,6 +9,8 @@ import { useAuthStore } from '../stores/auth'
 import { dateToWall, isValidZone, parseWallTime, rezoneRange, zoneLabel } from '../utils/zoned'
 import { splitLogLine } from '../utils/logLine'
 import { groupLogHistory } from '../utils/logHistory'
+import { mergeLogTaskRefresh } from '../utils/logTaskRefresh'
+import { copyText } from '../utils/copyText'
 
 interface Query { kind?: string; host?: string; path?: string; level?: string; min_duration_ms?: number; batch_id?: string; keyword?: string; source_id: string; container: string; from: string; to: string; request_id?: string; error_code?: string }
 interface Result { total_scanned_bytes?: number; next_cursor?: string; complete?: boolean; phase?: string; indexed_bytes?: number; note?: string; files_scanned?: number; scanned_bytes?: number; status: string; lines: string[]; truncated?: boolean; error?: string }
@@ -115,10 +117,13 @@ async function refresh() {
     supportsHistoryPagination.value = !!a.supports_history_pagination
     if (busy.value) {
       const generation = selection
-      const updates = await Promise.allSettled(current.value.filter(pending).map(t => client.request<Task>(`/api/dashboard/container-log-tasks/${t.id}`)))
+      const requested = current.value.filter(pending)
+      const updates = await Promise.allSettled(requested.map(t => client.request<Task>(`/api/dashboard/container-log-tasks/${t.id}`)))
       if (!disposed && generation === selection) {
-        for (const update of updates) if (update.status === 'fulfilled') current.value = current.value.map(t => t.id === update.value.id ? update.value : t)
-        if (updates.some(r => r.status === 'rejected')) throw new Error('result refresh failed')
+        const merged = mergeLogTaskRefresh(current.value, requested, updates)
+        current.value = merged.tasks
+        error.value = merged.warning
+        return
       }
     }
     error.value = ''
@@ -191,7 +196,7 @@ async function submit() {
     }
     if (generation === selection) {
       if (failed) submissionError.value = `${failed} 个日志来源提交失败，本次结果不完整。请稍后重新查询。`
-      if (current.value.length) ElMessage.success(`已向当前站点的 ${current.value.length} 个日志来源提交查询`)
+      if (current.value.length) ElMessage.success(`已获取 ${current.value.length} 个来源的查询任务，完整历史结果直接复用`)
       await refresh()
     }
   } finally { submitting.value = false }
@@ -210,7 +215,15 @@ async function show(group: { tasks: Task[] }) {
   catch { ElMessage.error('结果不存在或已超过 24 小时保留期') }
   finally { if (generation === selection) loading.value = false }
 }
-async function copy() { try { await navigator.clipboard.writeText(output.value); ElMessage.success('已复制') } catch { ElMessage.warning('当前浏览器不支持直接复制，可选中日志手动复制') } }
+const manualCopyOpen = ref(false), manualCopyText = ref('')
+const manualCopyField = ref<HTMLTextAreaElement>()
+function selectManualCopy() { manualCopyField.value?.focus(); manualCopyField.value?.select() }
+async function copy() {
+  const text = output.value
+  if (!text) return
+  if (await copyText(text)) ElMessage.success('已复制')
+  else { manualCopyText.value = text; manualCopyOpen.value = true }
+}
 onMounted(async () => { try { await filters.loadInstances(); await refresh() } catch { error.value = '无法加载实例' }; if (!disposed) timer = setInterval(() => { if (document.visibilityState === 'visible') void refresh() }, 3000) })
 onBeforeUnmount(() => { disposed = true; selection++; if (timer) clearInterval(timer) })
 </script>
@@ -224,7 +237,7 @@ onBeforeUnmount(() => { disposed = true; selection++; if (timer) clearInterval(t
           <el-select v-model="logKind" style="width: 170px" aria-label="日志类型" :disabled="busy || submitting"><el-option v-for="(label, value) in logKinds" :key="value" :label="label" :value="value" /></el-select>
           <el-date-picker v-model="range" class="toolbar-time" type="datetimerange" value-format="YYYY-MM-DD HH:mm:ss" start-placeholder="开始时间" end-placeholder="结束时间" :clearable="false" aria-label="查询时间区间" />
 
-          <el-input v-model="keyword" class="toolbar-keyword" maxlength="128" placeholder="输入关键词搜索日志" aria-label="关键词" clearable />
+          <el-input v-model="keyword" class="toolbar-keyword" maxlength="128" placeholder="关键词（忽略大小写）" aria-label="关键词" clearable />
           <el-button :type="expanded || activeFilters ? 'primary' : 'default'" plain :aria-expanded="expanded" @click="expanded = !expanded">更多筛选{{ activeFilters ? `（${activeFilters}）` : '' }}</el-button>
           <el-button type="primary" native-type="submit" :loading="submitting" :disabled="!sources.length || busy">查询</el-button>
           <el-button @click="historyOpen = true">历史记录</el-button>
@@ -284,6 +297,11 @@ onBeforeUnmount(() => { disposed = true; selection++; if (timer) clearInterval(t
         <el-alert v-if="historyError" :title="historyError" type="warning" :closable="false" />
         <el-table v-loading="historyLoading" :data="history" @row-click="show" class="history-table"><el-table-column label="提交时间" width="180"><template #default="s">{{ format(s.row.created_at) }}</template></el-table-column><el-table-column label="查询范围" min-width="240"><template #default="s">{{ format(s.row.tasks[0].query.from) }} 至 {{ format(s.row.tasks[0].query.to) }}</template></el-table-column><el-table-column label="发起人" min-width="150"><template #default="s">{{ s.row.tasks[0].actor_name ? `${s.row.tasks[0].actor_name}（${s.row.tasks[0].actor}）` : s.row.tasks[0].actor }}</template></el-table-column><el-table-column label="来源" width="80"><template #default="s">{{ s.row.tasks.length }} 个</template></el-table-column><el-table-column label="状态" width="130"><template #default="s">{{ s.row.status }}</template></el-table-column><el-table-column label="操作" width="100"><template #default="s"><el-button link type="primary" @click.stop="show(s.row)">查看结果</el-button></template></el-table-column></el-table><el-pagination class="history-pagination" :current-page="historyPage" v-model:page-size="historyPageSize" :total="historyTotal" :page-sizes="[20, 50, 100]" layout="total, sizes, prev, pager, next" :disabled="historyLoading" @current-change="loadHistory" @size-change="loadHistory(1)" /></el-drawer>
     </div>
+    <el-dialog v-model="manualCopyOpen" title="手动复制日志" width="min(760px, calc(100vw - 32px))" append-to-body @opened="selectManualCopy" @closed="manualCopyText = ''">
+      <p>浏览器未允许自动复制，日志已选中，请按 Ctrl+C（Mac 使用 ⌘C）。</p>
+      <textarea ref="manualCopyField" :value="manualCopyText" readonly aria-label="待复制日志" style="width:100%;height:300px;font-family:monospace;white-space:pre;" />
+      <template #footer><el-button @click="selectManualCopy">全选日志</el-button><el-button @click="manualCopyOpen = false">关闭</el-button></template>
+    </el-dialog>
   </AppShell>
 </template>
 

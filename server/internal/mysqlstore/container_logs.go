@@ -16,7 +16,7 @@ func (s Store) expireContainerLogs(ctx context.Context) error {
 	}
 	// A running task has usually uploaded partial batches already; losing the
 	// lease must not throw those lines away. Only the status and notes change.
-	if _, err := s.db.ExecContext(ctx, `UPDATE container_log_tasks SET status='timed_out',result_json=COALESCE(JSON_SET(result_json,'$.status','timed_out','$.complete',false,'$.truncated',true,'$.error','Agent 未在时限内返回进度','$.note','已返回内容仅为部分结果，请重新查询'),'{"status":"timed_out","lines":[],"error":"Agent 未在时限内返回进度"}') WHERE status='running' AND claimed_at < UTC_TIMESTAMP() - INTERVAL 90 SECOND`); err != nil {
+	if _, err := s.db.ExecContext(ctx, `UPDATE container_log_tasks SET status='timed_out',result_json=COALESCE(JSON_SET(result_json,'$.status','timed_out','$.complete',JSON_EXTRACT('false','$'),'$.truncated',JSON_EXTRACT('true','$'),'$.error','Agent 未在时限内返回进度','$.note','已返回内容仅为部分结果，请重新查询'),'{"status":"timed_out","lines":[],"error":"Agent 未在时限内返回进度"}') WHERE status='running' AND claimed_at < UTC_TIMESTAMP() - INTERVAL 90 SECOND`); err != nil {
 		return err
 	}
 	if _, err := s.db.ExecContext(ctx, `UPDATE operation_audits a JOIN container_log_tasks t ON a.id=t.id SET a.status='timed_out' WHERE a.operation_type='logs.query' AND t.status='timed_out' AND a.status<>'timed_out'`); err != nil {
@@ -144,10 +144,9 @@ func (s Store) ListContainerLogs(ctx context.Context, actor int64) ([]cl.Task, e
 	return out, rows.Err()
 }
 func (s Store) GetContainerLog(ctx context.Context, id string, actor int64) (cl.Task, error) {
-	if err := s.expireContainerLogs(ctx); err != nil {
-		return cl.Task{}, err
-	}
-	return scanContainerLog(s.db.QueryRowContext(ctx, `SELECT `+containerLogColumns+` FROM container_log_tasks WHERE id=? AND (?=0 OR actor_id=?)`, id, actor, actor))
+	// Detail polling must not contend with Agent updates through housekeeping writes.
+	// Keep retention enforced even before the next scheduled/Agent cleanup.
+	return scanContainerLog(s.db.QueryRowContext(ctx, `SELECT `+containerLogColumns+` FROM container_log_tasks WHERE id=? AND (?=0 OR actor_id=?) AND created_at >= UTC_TIMESTAMP() - INTERVAL 1 DAY`, id, actor, actor))
 }
 func (s Store) PollContainerLogs(ctx context.Context, instance string, p cl.Poll) (*cl.Task, error) {
 	if err := s.expireContainerLogs(ctx); err != nil {

@@ -130,8 +130,8 @@ func TestStreamRereadsNewQueriesAndPreservesContinuationIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cachedBytes != info.Size() {
-		t.Fatal("new query must read each byte once", cachedBytes)
+	if cachedBytes >= info.Size() {
+		t.Fatal("indexed query must avoid unrelated blocks", cachedBytes)
 	}
 	f, err = os.OpenFile(filename, os.O_APPEND|os.O_WRONLY, 0600)
 	if err != nil {
@@ -144,7 +144,7 @@ func TestStreamRereadsNewQueriesAndPreservesContinuationIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(lines) != 2 || appendBytes != info.Size() {
+	if len(lines) != 2 || appendBytes >= info.Size() {
 		t.Fatal("new query did not include append", appendBytes, lines)
 	}
 }

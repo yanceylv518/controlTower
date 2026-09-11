@@ -26,6 +26,10 @@ type fileSnapshot struct {
 	signature string
 }
 type searchSession struct {
+	ranges            []timeBlock
+	rangePos          int
+	indexKey          string
+	build             *indexBuild
 	source            cl.Source
 	query             cl.Query
 	dir               string
@@ -46,6 +50,7 @@ type searchSession struct {
 
 // Stream cursors live only in this local process. Restart/expiry fails old cursors.
 type StreamEngine struct {
+	indexes   []fileTimeIndex
 	sessions  []*searchSession
 	pageBytes int64
 }
@@ -77,6 +82,10 @@ func (s *searchSession) close() {
 	}
 }
 func (s *searchSession) nextFile() {
+	s.ranges = nil
+	s.rangePos = 0
+	s.indexKey = ""
+	s.build = nil
 	s.close()
 	s.filePos++
 	s.readPos = 0
@@ -313,6 +322,7 @@ func (e *StreamEngine) page(ctx context.Context, s *searchSession, loc *time.Loc
 		}
 	}
 	emit := func(record logRecord) {
+		s.build.observe(record)
 		if record.oversized || record.stamp.IsZero() {
 			s.skipped = true
 			return
@@ -398,10 +408,23 @@ func (e *StreamEngine) page(ctx context.Context, s *searchSession, loc *time.Loc
 			continue
 		}
 		result.Phase = "querying"
+		if s.indexKey == "" {
+			e.prepareTimeIndex(s, file, loc)
+		}
+		if s.rangePos >= len(s.ranges) {
+			file.Close()
+			e.finishTimeIndex(s)
+			s.nextFile()
+			continue
+		}
+		span := s.ranges[s.rangePos]
 		if s.parser == nil {
 			s.parser = parserForSource(s.source, loc)
+			s.readPos = span.start
+			s.parser.offset = span.start
+			s.parser.lineStart = span.start
 		}
-		count := min(int64(len(buf)), snap.info.Size()-s.readPos, e.pageBytes-result.ScannedBytes)
+		count := min(int64(len(buf)), span.end-s.readPos, e.pageBytes-result.ScannedBytes)
 		n, readErr := file.ReadAt(buf[:count], s.readPos)
 		file.Close()
 		if readErr != nil && !(readErr == io.EOF && int64(n) == count) {
@@ -411,8 +434,13 @@ func (e *StreamEngine) page(ctx context.Context, s *searchSession, loc *time.Loc
 		}
 		s.readPos += int64(n)
 		result.ScannedBytes += int64(n)
-		s.parser.feed(buf[:n], s.readPos == snap.info.Size(), emit)
-		if s.readPos == snap.info.Size() {
+		s.parser.feed(buf[:n], s.readPos == span.end, emit)
+		if s.readPos == span.end {
+			s.rangePos++
+			s.parser = nil
+		}
+		if s.rangePos == len(s.ranges) {
+			e.finishTimeIndex(s)
 			s.nextFile()
 		}
 

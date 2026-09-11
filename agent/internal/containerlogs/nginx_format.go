@@ -154,7 +154,7 @@ var nginxErrorHost = regexp.MustCompile(`(?:^|, )server: ([^,\s]+)`)
 func nginxMatcher(source cl.Source, q cl.Query) func(string) bool {
 	f := compileNginxFormat(source.LogFormat)
 	return func(line string) bool {
-		if q.Keyword != "" && !strings.Contains(line, q.Keyword) {
+		if q.Keyword != "" && !strings.Contains(strings.ToLower(line), strings.ToLower(q.Keyword)) {
 			return false
 		}
 		if source.Kind == "nginx_error" {
