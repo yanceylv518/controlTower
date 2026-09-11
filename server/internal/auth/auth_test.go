@@ -219,6 +219,8 @@ func TestViewerGateWhitelistMatrix(t *testing.T) {
 		{"GET", "/api/dashboard/instances", 200},
 		{"GET", "/api/dashboard/billing/summary?instance_id=spoof&month=2026-08", 403},
 		{"GET", "/api/dashboard/billing/detail?instance_id=spoof&user_id=7&month=2026-08", 403},
+		{"GET", "/api/dashboard/passthrough/currency", 200},
+		{"POST", "/api/dashboard/passthrough/currency", 403},
 		{"GET", "/api/dashboard/passthrough/logs/stat", 200},
 		{"POST", "/api/dashboard/passthrough/logs/stat", 403},
 		{"GET", "/api/dashboard/passthrough/logs/count", 200},

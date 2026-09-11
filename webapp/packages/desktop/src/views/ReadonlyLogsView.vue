@@ -70,11 +70,12 @@ async function copyText(value: string | number | undefined | null) {
 const typeMeta = (type: number) => ({ 1: ['充值', 'warning'], 2: ['消费', 'success'], 3: ['管理', 'info'], 4: ['系统', 'info'], 5: ['错误', 'danger'], 6: ['退款', 'warning'], 7: ['登录', 'info'] }[type] || [`类型 ${type}`, 'info']) as [string, 'success' | 'warning' | 'info' | 'danger']
 const outputRate = (row: ReadonlyLog) => row.use_time > 0 && row.completion_tokens > 0 ? Math.round(row.completion_tokens / row.use_time) : 0
 const money = (quota: number) => {
-  const amount = quota / (prefs.quotaPerUnit || 500000)
+  if (!Number.isFinite(prefs.quotaPerUnit) || prefs.quotaPerUnit <= 0) return '—'
+  const amount = quota / prefs.quotaPerUnit
   return `${prefs.currencySymbol}${amount >= 1 ? amount.toFixed(2) : amount.toFixed(6)}`
 }
 const logSummary = computed(() => statState.data.value?.summary)
-const billingPrice = (value: number) => `${prefs.currencySymbol}${Number(value.toFixed(6))}`
+const billingPrice = (value: number) => Number.isFinite(prefs.priceMultiplier) ? `${prefs.currencySymbol}${Number((value * prefs.priceMultiplier).toFixed(6))}` : '—'
 const initial = (name: string) => name?.trim().slice(0, 1) || '用'
 const two = (n: number) => String(n).padStart(2, '0')
 const timeText = (iso: string) => { const d = new Date(iso); return `${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}` }

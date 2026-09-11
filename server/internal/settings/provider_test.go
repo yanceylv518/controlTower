@@ -10,6 +10,26 @@ import (
 
 type memoryStore struct{ values map[string]string }
 
+func TestRetiredNotificationAndCurrencySettingsAreIgnored(t *testing.T) {
+	old := map[string]string{NotificationsEnabled: "false", BalanceAlertEnabled: "false", NotifyBalanceOnly: "true", QuotaPerUnit: "invalid", CurrencySymbol: "wrong"}
+	for key, value := range old {
+		t.Setenv(key, value)
+	}
+	p := NewProvider(&memoryStore{values: old}, 0)
+	items, err := p.Items()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key := range old {
+		if _, ok := items[key]; ok {
+			t.Fatalf("retired setting still exposed: %s", key)
+		}
+	}
+	if _, err := p.Current(); err != nil {
+		t.Fatalf("retired values must not affect settings: %v", err)
+	}
+}
+
 func (s *memoryStore) ListSystemSettings() ([]storage.SystemSetting, error) {
 	out := []storage.SystemSetting{}
 	for k, v := range s.values {

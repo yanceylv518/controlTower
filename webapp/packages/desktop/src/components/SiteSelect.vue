@@ -3,11 +3,14 @@ import { computed, onMounted, watch } from "vue";
 import { siteOf } from "@ct/shared";
 import { useAuthStore } from "../stores/auth";
 import { useFiltersStore } from "../stores/filters";
+import { usePrefsStore } from "../stores/prefs";
 
 const props = withDefaults(defineProps<{ readonlyOnly?: boolean }>(), { readonlyOnly: false });
 
 const auth = useAuthStore();
 const filters = useFiltersStore();
+const prefs = usePrefsStore();
+watch(() => filters.site_id, (site) => void prefs.loadCurrency(site), { immediate: true, flush: "sync" });
 const viewerSite = computed(() =>
   auth.user?.role === "viewer" ? auth.user.scope_site || "" : "",
 );

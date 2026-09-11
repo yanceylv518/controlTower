@@ -163,6 +163,7 @@ func NewMux(options Options) *http.ServeMux {
 	mux.Handle("DELETE /api/dashboard/instances/{id}", protect(http.HandlerFunc(instances.Delete)))
 	mux.Handle("POST /api/dashboard/instances/{id}/rotate-token", protect(http.HandlerFunc(instances.Rotate)))
 	mux.Handle("GET /api/dashboard/passthrough/users", protect(http.HandlerFunc(passthrough.Users)))
+	mux.Handle("GET /api/dashboard/passthrough/currency", protect(http.HandlerFunc(passthrough.Currency)))
 	mux.Handle("GET /api/dashboard/passthrough/logs", protect(http.HandlerFunc(passthrough.Logs)))
 	mux.Handle("GET /api/dashboard/passthrough/logs/stat", protect(http.HandlerFunc(passthrough.LogStat)))
 	mux.Handle("GET /api/dashboard/passthrough/logs/count", protect(http.HandlerFunc(passthrough.LogCount)))

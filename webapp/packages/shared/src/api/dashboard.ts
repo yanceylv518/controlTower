@@ -694,6 +694,7 @@ export interface BillingVerificationResponse {
 }
 
 export const dashboardApi = (client: ApiClient) => ({
+  siteCurrency: (site: string) => client.request<{ quota_per_unit: number; price_multiplier: number; symbol: string; type: string }>(`/api/dashboard/passthrough/currency${query({ site })}`),
   instances: () =>
     client.request<ListResponse<InstanceItem>>("/api/dashboard/instances"),
   overview: (instance_id?: string, site?: string) =>

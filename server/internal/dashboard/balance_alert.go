@@ -36,7 +36,7 @@ type balanceAlertCache struct {
 }
 
 func (h Handler) balanceAlerts(values settings.Values, now time.Time) ([]AlertItem, error) {
-	if !values.BalanceAlertEnabled || h.balanceSource == nil || h.balanceUsage == nil || h.instanceStore == nil || h.balanceSettings == nil {
+	if h.balanceSource == nil || h.balanceUsage == nil || h.instanceStore == nil || h.balanceSettings == nil {
 		return nil, nil
 	}
 	var previous []AlertItem
@@ -141,6 +141,17 @@ func (h Handler) balanceAlerts(values settings.Values, now time.Time) ([]AlertIt
 			continue
 		}
 		evaluatedSites[site] = true
+		currency := siteCurrency{QuotaPerUnit: 1, Symbol: "quota "}
+		if source, ok := h.balanceSource.(siteCurrencySource); ok {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			value, currencyErr := readSiteCurrency(ctx, source, site)
+			cancel()
+			if currencyErr == nil {
+				currency = value
+			} else {
+				log.Printf("balance alert currency unavailable for site %s", site)
+			}
+		}
 		for _, user := range users {
 			if setting, ok := enabledUsers[user.ID]; !ok || !setting.Enabled {
 				continue
@@ -179,12 +190,12 @@ func (h Handler) balanceAlerts(values settings.Values, now time.Time) ([]AlertIt
 			if name == "" {
 				name = strconv.FormatInt(user.ID, 10)
 			}
-			balance := float64(user.Quota) / float64(values.QuotaPerUnit)
-			daily := dailyQuota / float64(values.QuotaPerUnit)
+			balance := float64(user.Quota) / currency.QuotaPerUnit
+			daily := dailyQuota / currency.QuotaPerUnit
 			key := info.alertInstance + ":user:" + strconv.FormatInt(user.ID, 10)
-			summary := fmt.Sprintf("用户：%s（ID %d）\n当前余额：%s%.2f\n近 %d 小时日均消费：%s%.2f\n预计可用：%.1f 天\n请求样本：%d 次", name, user.ID, values.CurrencySymbol, balance, values.BalanceLookbackHours, values.CurrencySymbol, daily, runwayDays, v.requests)
+			summary := fmt.Sprintf("用户：%s（ID %d）\n当前余额：%s%.2f\n近 %d 小时日均消费：%s%.2f\n预计可用：%.1f 天\n请求样本：%d 次", name, user.ID, currency.Symbol, balance, values.BalanceLookbackHours, currency.Symbol, daily, runwayDays, v.requests)
 			if user.Quota <= 0 {
-				summary = fmt.Sprintf("用户：%s（ID %d）\n当前余额：%s%.2f\n状态：余额已耗尽", name, user.ID, values.CurrencySymbol, balance)
+				summary = fmt.Sprintf("用户：%s（ID %d）\n当前余额：%s%.2f\n状态：余额已耗尽", name, user.ID, currency.Symbol, balance)
 			}
 			alerts = append(alerts, AlertItem{
 				ID: alertID(info.alertInstance, "user_low_balance", strconv.FormatInt(user.ID, 10)), InstanceID: info.alertInstance,

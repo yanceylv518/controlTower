@@ -34,8 +34,8 @@ const sections: ReadonlyArray<{ title: string; note: string; fields: readonly Fi
     ],
   },
   {
-    title: "告警阈值",
-    note: "warn 触发 warning 级、crit 触发 critical 级；warn 必须小于 crit",
+    title: "系统告警",
+    note: "实例离线及 CPU、内存、磁盘阈值；警告阈值必须小于严重阈值",
     fields: [
       ["CT_OFFLINE_ALERT_SECONDS", "实例离线（秒）", 1, 86400],
       ["CT_CPU_WARN_PERCENT", "CPU 警告（%）", 1, 100],
@@ -44,6 +44,12 @@ const sections: ReadonlyArray<{ title: string; note: string; fields: readonly Fi
       ["CT_MEMORY_CRIT_PERCENT", "内存严重（%）", 1, 100],
       ["CT_DISK_WARN_PERCENT", "磁盘警告（%）", 1, 100],
       ["CT_DISK_CRIT_PERCENT", "磁盘严重（%）", 1, 100],
+    ],
+  },
+  {
+    title: "请求告警",
+    note: "错误率和响应耗时阈值；警告阈值必须小于严重阈值",
+    fields: [
       ["CT_ERROR_RATE_WARN_PERCENT", "错误率警告（%）", 1, 100],
       ["CT_ERROR_RATE_CRIT_PERCENT", "错误率严重（%）", 1, 100],
       ["CT_P95_WARN_SECONDS", "P95 警告（秒）", 0.5, 600],
@@ -51,7 +57,7 @@ const sections: ReadonlyArray<{ title: string; note: string; fields: readonly Fi
     ],
   },
   {
-    title: "用户余额预警",
+    title: "余额告警",
     note: "按最近一段时间的用户消费速度预测余额可用天数；严重天数必须小于警告天数",
     fields: [
       ["CT_BALANCE_LOOKBACK_HOURS", "消费统计窗口（小时）", 24, 168],
@@ -67,20 +73,18 @@ const sourceLabels: Record<string, string> = {
   env: "环境变量",
   default: "默认",
 };
+const editableKeys = new Set(sections.flatMap(section => section.fields.map(field => field[0])));
+const sectionOrder = ["余额告警", "系统告警", "请求告警", "TTFT 图表阈值", "数据保留"];
+const displaySections = [...sections].sort((a, b) => sectionOrder.indexOf(a.title) - sectionOrder.indexOf(b.title));
 async function load() {
   loading.value = true;
   try {
     const response = await dashboard.settings();
     items.value = response.items;
-    Object.entries(response.items).forEach(
+    Object.entries(response.items).filter(([key]) => editableKeys.has(key)).forEach(
       ([key, item]) =>
         (values[key] =
-          key === "CT_NOTIFICATIONS_ENABLED" ||
-          key === "CT_BALANCE_ALERT_ENABLED" ||
-          key === "CT_NOTIFY_BALANCE_ONLY" ||
-          key === "CT_CURRENCY_SYMBOL"
-            ? item.value
-            : Number(item.value)),
+          Number(item.value)),
     );
   } finally {
     loading.value = false;
@@ -115,10 +119,10 @@ onMounted(load);
         >保存系统设置</el-button
       >
     </template>
-    <div v-loading="loading" class="settings-layout">
+    <div v-loading="loading" class="settings-layout" style="display: block">
       <div class="settings-column settings-column-main">
         <section
-        v-for="section in sections"
+        v-for="section in displaySections"
         :key="section.title"
         class="panel sub-panel"
       >
@@ -146,101 +150,9 @@ onMounted(load);
               默认 {{ items[field[0]]?.default }}
             </span>
           </div>
-          <div v-if="section.title === '用户余额预警'" class="field-item">
-            <label>用户余额速度预警</label>
-            <el-switch
-              v-model="values.CT_BALANCE_ALERT_ENABLED"
-              active-value="true"
-              inactive-value="false"
-            />
-            <span class="field-meta">关闭后不再读取用户余额或生成余额告警</span>
-          </div>
+
         </div>
         </section>
-      </div>
-      <div class="settings-column settings-column-side">
-        <section class="panel sub-panel">
-        <h2>通知</h2>
-        <p class="sub-note">关闭后 Server 侧告警不再向任何通知渠道投递</p>
-        <div class="field-grid">
-          <div class="field-item">
-            <label>告警通知总开关</label>
-            <el-switch
-              v-model="values.CT_NOTIFICATIONS_ENABLED"
-              active-value="true"
-              inactive-value="false"
-            />
-            <span class="field-meta">
-              <span
-                :class="[
-                  'source-pill',
-                  items.CT_NOTIFICATIONS_ENABLED?.source === 'db' ? 'db' : '',
-                ]"
-                >{{
-                  sourceLabels[items.CT_NOTIFICATIONS_ENABLED?.source] || "—"
-                }}</span
-              >
-            </span>
-          </div>
-          <div class="field-item">
-            <label>仅推送余额告警</label>
-            <el-switch
-              v-model="values.CT_NOTIFY_BALANCE_ONLY"
-              active-value="true"
-              inactive-value="false"
-            />
-            <span class="field-meta">开启后其他告警仍展示，但不会发送到通知渠道</span>
-          </div>
-        </div>
-      </section>
-      <section class="panel sub-panel">
-        <h2>显示</h2>
-        <p class="sub-note">
-          Quota 将按「金额 = quota ÷ 换算率」显示为货币；符号跟随 new-api 站点定价（不做汇率换算）
-        </p>
-        <div class="field-grid">
-          <div class="field-item">
-            <label>Quota 换算率（每 1 货币单位）</label>
-            <el-input-number
-              v-model="values.CT_QUOTA_PER_UNIT as number"
-              :min="1"
-              :max="1000000000"
-              :step="1000"
-              controls-position="right"
-              size="small"
-            />
-            <span class="field-meta">
-              <span
-                :class="[
-                  'source-pill',
-                  items.CT_QUOTA_PER_UNIT?.source === 'db' ? 'db' : '',
-                ]"
-                >{{ sourceLabels[items.CT_QUOTA_PER_UNIT?.source] || "—" }}</span
-              >
-              默认 {{ items.CT_QUOTA_PER_UNIT?.default }}
-            </span>
-          </div>
-          <div class="field-item">
-            <label>货币符号</label>
-            <el-input
-              v-model="values.CT_CURRENCY_SYMBOL as string"
-              size="small"
-              maxlength="4"
-              style="width: 90px"
-            />
-            <span class="field-meta">
-              <span
-                :class="[
-                  'source-pill',
-                  items.CT_CURRENCY_SYMBOL?.source === 'db' ? 'db' : '',
-                ]"
-                >{{ sourceLabels[items.CT_CURRENCY_SYMBOL?.source] || "—" }}</span
-              >
-              默认 {{ items.CT_CURRENCY_SYMBOL?.default }}
-            </span>
-          </div>
-        </div>
-      </section>
       </div>
     </div>
   </AppShell>

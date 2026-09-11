@@ -16,7 +16,7 @@ export function formatTokens(value: number | null | undefined) {
   return new Intl.NumberFormat('zh-CN').format(value)
 }
 export function formatQuota(value: number | null | undefined, perUnit: number, symbol: string) {
-  if (value == null) return '—'
-  const amount = value / (perUnit || 500000)
+  if (value == null || !Number.isFinite(perUnit) || perUnit <= 0) return '—'
+  const amount = value / perUnit
   return `${symbol}${amount >= 100 ? amount.toFixed(0) : amount.toFixed(2)}`
 }

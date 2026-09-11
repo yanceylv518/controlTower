@@ -86,7 +86,7 @@ func NewProvider(store storage.SystemSettingStore, ttl time.Duration) *Provider 
 func DefaultValue(key string) string { return defaults[key] }
 
 func Keys() []string {
-	return []string{RetentionDetail, RetentionMetric5m, RetentionRuntime, RetentionHealthHours, RetentionAlerts, OfflineSeconds, CPUWarn, CPUCrit, MemoryWarn, MemoryCrit, DiskWarn, DiskCrit, ErrorRateWarn, ErrorRateCrit, P95Warn, P95Crit, NotificationsEnabled, QuotaPerUnit, CurrencySymbol, TTFTP50Threshold, TTFTP90Threshold, TTFTP95Threshold, BalanceAlertEnabled, BalanceLookbackHours, BalanceWarnDays, BalanceCritDays, BalanceMinRequests, NotifyBalanceOnly}
+	return []string{RetentionDetail, RetentionMetric5m, RetentionRuntime, RetentionHealthHours, RetentionAlerts, OfflineSeconds, CPUWarn, CPUCrit, MemoryWarn, MemoryCrit, DiskWarn, DiskCrit, ErrorRateWarn, ErrorRateCrit, P95Warn, P95Crit, TTFTP50Threshold, TTFTP90Threshold, TTFTP95Threshold, BalanceLookbackHours, BalanceWarnDays, BalanceCritDays, BalanceMinRequests}
 }
 func (p *Provider) Invalidate() { p.mu.Lock(); p.loaded = time.Time{}; p.mu.Unlock() }
 func (p *Provider) Items() (map[string]Item, error) {
@@ -161,10 +161,6 @@ func Parse(items map[string]Item) (Values, error) {
 	if v.BalanceMinRequests, err = i(BalanceMinRequests); err != nil {
 		return v, err
 	}
-	if v.QuotaPerUnit, err = strconv.ParseInt(items[QuotaPerUnit].Value, 10, 64); err != nil {
-		return v, err
-	}
-	v.CurrencySymbol = items[CurrencySymbol].Value
 	ptrs := []struct {
 		k string
 		p *float64
@@ -173,18 +169,6 @@ func Parse(items map[string]Item) (Values, error) {
 		if *x.p, err = f(x.k); err != nil {
 			return v, fmt.Errorf("%s: %w", x.k, err)
 		}
-	}
-	v.NotificationsEnabled, err = strconv.ParseBool(items[NotificationsEnabled].Value)
-	if err != nil {
-		return v, err
-	}
-	v.BalanceAlertEnabled, err = strconv.ParseBool(items[BalanceAlertEnabled].Value)
-	if err != nil {
-		return v, err
-	}
-	v.NotifyBalanceOnly, err = strconv.ParseBool(items[NotifyBalanceOnly].Value)
-	if err != nil {
-		return v, err
 	}
 	if v.BalanceWarnDays, err = f(BalanceWarnDays); err != nil {
 		return v, err

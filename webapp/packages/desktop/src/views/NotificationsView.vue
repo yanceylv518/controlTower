@@ -12,22 +12,9 @@ import { useAsyncData } from "../composables/useAsyncData";
 import { useAutoRefresh } from "../composables/useAutoRefresh";
 import { formatTime } from "../utils/format";
 import { useFiltersStore } from "../stores/filters";
+import { alertCategories, categoriesForRules, rulesForCategories, categorySummary } from "../utils/alertCategories";
 
 const filters = useFiltersStore();
-const ruleLabels: Record<string, string> = {
-  user_low_balance: "用户余额不足",
-  instance_offline: "实例离线",
-  high_cpu: "CPU 使用率过高",
-  high_memory: "内存使用率过高",
-  high_disk: "磁盘使用率过高",
-  health_down: "健康检查失败",
-  docker_stopped: "容器未运行",
-  agent_backlog: "Agent 日志积压",
-  high_error_rate: "错误率升高",
-  high_p95_latency: "P95 耗时过高",
-  recent_errors: "近期请求错误激增",
-};
-
 const typeLabels: Record<string, string> = {
   webhook: "通用 Webhook",
   dingtalk: "钉钉机器人",
@@ -36,6 +23,7 @@ const typeLabels: Record<string, string> = {
 const dialogOpen = ref(false);
 const editing = ref(false);
 const allTypes = ref(false);
+const selectedCategories = ref<string[]>([]);
 const form = reactive<NotificationChannelInput>({
   site_id: "",
   rule_keys: [],
@@ -86,6 +74,7 @@ watch(() => filters.site_id, () => {
 function openChannel(channel?: NotificationChannelItem) {
   editing.value = !!channel;
   allTypes.value = !!channel && !channel.rule_keys?.length;
+  selectedCategories.value = categoriesForRules(channel?.rule_keys || []);
   Object.assign(form, {
     id: channel?.id || "", site_id: filters.site_id,
     name: channel?.name || "", channel_type: channel?.channel_type || "webhook",
@@ -99,7 +88,7 @@ async function save() {
     ElMessage.error("请选择站点并填写名称和 Webhook 地址");
     return;
   }
-  if (!allTypes.value && !form.rule_keys.length) {
+  if (!allTypes.value && !selectedCategories.value.length) {
     ElMessage.error("请选择至少一种告警类型，或勾选全部类型");
     return;
   }
@@ -107,7 +96,7 @@ async function save() {
   try {
     await dashboard.saveNotificationChannel({
       ...form,
-      rule_keys: allTypes.value ? [] : [...form.rule_keys],
+      rule_keys: allTypes.value ? [] : rulesForCategories(selectedCategories.value),
       secret: form.channel_type === "dingtalk" ? form.secret : undefined,
     });
     form.secret = "";
@@ -192,7 +181,7 @@ useAutoRefresh(deliveries.reload);
           </el-table-column>
           <el-table-column label="接收告警类型" min-width="240">
             <template #default="s">
-              {{ s.row.rule_keys?.length ? s.row.rule_keys.map((key: string) => ruleLabels[key] || key).join("、") : "全部类型" }}
+              {{ categorySummary(s.row.rule_keys || []) }}
             </template>
           </el-table-column>
           <el-table-column label="操作" width="90">
@@ -292,10 +281,10 @@ useAutoRefresh(deliveries.reload);
         <el-form-item label="告警类型">
           <div>
             <el-checkbox v-model="allTypes">全部类型</el-checkbox>
-            <el-select v-model="form.rule_keys" multiple :disabled="allTypes" placeholder="选择该渠道接收的告警类型" style="width: 100%">
-              <el-option v-for="(label, key) in ruleLabels" :key="key" :label="label" :value="key" />
+            <el-select v-model="selectedCategories" multiple :disabled="allTypes" placeholder="选择该渠道接收的告警类别" style="width: 100%">
+              <el-option v-for="category in alertCategories" :key="category.key" :label="category.label" :value="category.key" />
             </el-select>
-            <p>系统设置中若开启“仅推送余额告警”，其他类型仍不会发送。</p>
+            <p>保存后接收所选类别下的全部告警，具体阈值在系统设置中调整。</p>
           </div>
         </el-form-item>
         <el-form-item label="启用">

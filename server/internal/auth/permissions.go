@@ -165,6 +165,9 @@ func allowAdminRequest(u storage.User, r *http.Request) bool {
 	if path == "alerts" || strings.HasPrefix(path, "alerts/") {
 		return any("alerts.manage") || (read && any("overview.read", "tuning.manage"))
 	}
+	if path == "passthrough/currency" {
+		return read
+	}
 	if path == "passthrough/users" {
 		return read && any("data.users", "accounts.manage", "billing.users", "billing.tasks", "alerts.manage")
 	}

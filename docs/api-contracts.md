@@ -196,7 +196,11 @@ Instance tokens are stored only as `SHA-256(pepper + token)` hashes. A token may
 | `GET /api/dashboard/notification-deliveries` | 必填 Query `site_id`；可选 `alert_id,channel_id,status,limit,offset` | `{"items":[{"id":"d1","status":"failed","attempts":1}]}` |
 | `POST /api/dashboard/notification-deliveries/{id}/resend` | 必填 Query `site_id`，其他站点记录返回 404 | `{"ok":true}` |
 
-通知渠道必须绑定单个有效站点，已绑定渠道不能跨站点更新（409）。站点和 `rule_keys` 同时匹配才投递；空 `rule_keys` 表示该站点全部告警类型，未知类型返回 400。多渠道匹配则分别投递，未匹配不回退到其他站点。全局通知开关及“仅推送余额告警”仍优先执行。
+通知渠道必须绑定单个有效站点，已绑定渠道不能跨站点更新（409）。站点和 `rule_keys` 同时匹配才投递；空 `rule_keys` 表示该站点全部告警类型，未知类型返回 400。多渠道匹配则分别投递，未匹配不回退到其他站点。前端按余额、系统、请求三类选择，保存时展开成具体规则。旧的部分规则选择保持原样直到编辑保存，并明确标为“部分规则”。
+
+三个全局开关 CT_NOTIFICATIONS_ENABLED、CT_NOTIFY_BALANCE_ONLY、CT_BALANCE_ALERT_ENABLED 已退役，数据库和环境中的旧值不再影响告警。余额仍仅为显式启用的用户计算，通知由各站点渠道启用状态和类型决定。
+
+金额显示不再使用 CT_QUOTA_PER_UNIT、CT_CURRENCY_SYMBOL。GET `/api/dashboard/passthrough/currency?site=...` 读取 NewAPI 站点配置，返回有效 `quota_per_unit`（已含站点显示汇率）、`price_multiplier`（美元单价转站点显示单位）、`symbol`、`type`。viewer 固定到授权站点。失败返回 503，前端金额显示“—”；余额通知回退明确标识的原始 quota。历史账单继续使用其定价快照。需同步升级前后端，无新增迁移。
 
 编辑时 Webhook 地址留空保留原值；同类型渠道 Secret 留空保留原密钥。省略 `rule_keys` 保留原选择，显式 `[]` 改为全部类型。响应始终只返回脱敏地址和是否有密钥。
 

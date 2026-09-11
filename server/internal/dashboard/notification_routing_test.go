@@ -18,7 +18,7 @@ import (
 
 func TestNotificationsRouteBySiteAndRule(t *testing.T) {
 	for _, balanceOnly := range []bool{false, true} {
-		t.Run(map[bool]string{false: "all rules", true: "balance only"}[balanceOnly], func(t *testing.T) {
+		t.Run(map[bool]string{false: "all rules", true: "retired switches ignored"}[balanceOnly], func(t *testing.T) {
 			store := ingest.NewMemoryStore()
 			for _, instance := range []storage.Instance{{ID: "a1", SiteID: "a"}, {ID: "a2", SiteID: "a"}, {ID: "b1", SiteID: "b"}, {ID: "legacy-site"}} {
 				if err := store.CreateInstance(instance); err != nil {
@@ -66,7 +66,7 @@ func TestNotificationsRouteBySiteAndRule(t *testing.T) {
 			}
 			h := NewHandler(store).WithNotificationStore(store).WithInstanceStore(store)
 			if balanceOnly {
-				h = h.WithSettingsProvider(settings.NewProvider(&dashboardSettingsStore{values: map[string]string{settings.NotificationsEnabled: "true", settings.NotifyBalanceOnly: "true"}}, 0))
+				h = h.WithSettingsProvider(settings.NewProvider(&dashboardSettingsStore{values: map[string]string{settings.NotificationsEnabled: "false", settings.NotifyBalanceOnly: "true"}}, 0))
 			}
 			for i := 0; i < 2; i++ {
 				if err := h.dispatchAlertNotifications(alerts); err != nil {
@@ -74,9 +74,7 @@ func TestNotificationsRouteBySiteAndRule(t *testing.T) {
 				}
 			}
 			want := []string{"/a-business:a-balance", "/b-all:b-balance", "/legacy-instance:legacy"}
-			if !balanceOnly {
-				want = append(want, "/a-ops:a-cpu", "/b-all:b-cpu")
-			}
+			want = append(want, "/a-ops:a-cpu", "/b-all:b-cpu")
 			sort.Strings(want)
 			sort.Strings(got)
 			if !reflect.DeepEqual(got, want) {

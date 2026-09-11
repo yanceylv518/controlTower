@@ -1,20 +1,33 @@
 import { defineStore } from "pinia";
 import { dashboard } from "../api";
 
-// Display preferences sourced from system settings; safe defaults apply
-// before the settings request resolves or when it fails.
+// Currency is read from the selected NewAPI site, never global settings.
 export const usePrefsStore = defineStore("prefs", {
-  state: () => ({ quotaPerUnit: 500000, currencySymbol: "¥", ttftP50Threshold: 3, ttftP90Threshold: 30, ttftP95Threshold: 60, loaded: false }),
+  state: () => ({ quotaPerUnit: Number.NaN, priceMultiplier: Number.NaN, currencySymbol: "", currencySite: "", currencyError: "", ttftP50Threshold: 3, ttftP90Threshold: 30, ttftP95Threshold: 60, loaded: false }),
   actions: {
+    async loadCurrency(site: string) {
+      this.currencySite = site;
+      this.quotaPerUnit = Number.NaN;
+      this.priceMultiplier = Number.NaN;
+      this.currencySymbol = "";
+      this.currencyError = "";
+      if (!site) return;
+      try {
+        const result = await dashboard.siteCurrency(site);
+        if (this.currencySite !== site) return;
+        if (!Number.isFinite(result.quota_per_unit) || result.quota_per_unit <= 0) throw new Error("invalid currency");
+        this.quotaPerUnit = result.quota_per_unit;
+        this.priceMultiplier = result.price_multiplier;
+        this.currencySymbol = result.symbol;
+      } catch {
+        if (this.currencySite === site) this.currencyError = "未能读取当前站点的金额显示配置";
+      }
+    },
     async load(force = false) {
       if (this.loaded && !force) return;
       this.loaded = true;
       try {
         const response = await dashboard.settings();
-        const per = Number(response.items.CT_QUOTA_PER_UNIT?.value);
-        if (Number.isFinite(per) && per > 0) this.quotaPerUnit = per;
-        const symbol = response.items.CT_CURRENCY_SYMBOL?.value?.trim();
-        if (symbol) this.currencySymbol = symbol;
         const p50 = Number(response.items.CT_TTFT_P50_THRESHOLD_SECONDS?.value);
         const p90 = Number(response.items.CT_TTFT_P90_THRESHOLD_SECONDS?.value);
         const p95 = Number(response.items.CT_TTFT_P95_THRESHOLD_SECONDS?.value);

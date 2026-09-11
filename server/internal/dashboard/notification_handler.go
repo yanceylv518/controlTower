@@ -232,16 +232,6 @@ func (h Handler) dispatchAlertNotifications(alerts []storage.Alert) error {
 	if h.notificationStore == nil {
 		return nil
 	}
-	balanceOnly := false
-	if h.settings != nil {
-		if current, err := h.settings.Current(); err != nil {
-			return err
-		} else if !current.NotificationsEnabled {
-			return nil
-		} else {
-			balanceOnly = current.NotifyBalanceOnly
-		}
-	}
 	// Release "sent" deliveries of resolved alerts so a later firing episode
 	// of the same alert notifies again instead of being deduplicated forever.
 	if err := h.notificationStore.ExpireDeliveriesForResolvedAlerts(time.Now().UTC()); err != nil {
@@ -270,9 +260,6 @@ func (h Handler) dispatchAlertNotifications(alerts []storage.Alert) error {
 	client := http.Client{Timeout: 3 * time.Second}
 	for _, alert := range alerts {
 		if alert.Status != "firing" {
-			continue
-		}
-		if balanceOnly && alert.RuleKey != "user_low_balance" {
 			continue
 		}
 		for _, channel := range channels {
