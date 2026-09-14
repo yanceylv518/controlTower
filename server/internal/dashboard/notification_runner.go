@@ -11,8 +11,9 @@ import (
 )
 
 type AlertNotificationRunner struct {
-	handler  Handler
-	interval time.Duration
+	circuitAlerts CircuitAlertSource
+	handler       Handler
+	interval      time.Duration
 }
 
 func (r AlertNotificationRunner) WithSettingsProvider(v *settings.Provider) AlertNotificationRunner {
@@ -51,6 +52,11 @@ func (r AlertNotificationRunner) RunOnce() error {
 		return err
 	}
 	now := time.Now().UTC()
+	if r.circuitAlerts != nil {
+		if err := r.circuitAlerts.SyncCircuitAlerts(now); err != nil {
+			return err
+		}
+	}
 	if err := r.handler.alertStore.ExpireSilencedAlerts(now); err != nil {
 		return err
 	}
@@ -64,7 +70,17 @@ func (r AlertNotificationRunner) RunOnce() error {
 	if err != nil {
 		return err
 	}
-	return r.handler.dispatchAlertNotifications(alerts)
+	if err := r.handler.dispatchAlertNotifications(alerts); err != nil {
+		return err
+	}
+	if r.circuitAlerts != nil {
+		events, err := r.circuitAlerts.CircuitNotificationAlerts(now)
+		if err != nil {
+			return err
+		}
+		return r.handler.dispatchAlertNotifications(events)
+	}
+	return nil
 }
 
 func (r AlertNotificationRunner) Run(ctx context.Context) error {

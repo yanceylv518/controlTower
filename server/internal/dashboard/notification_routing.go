@@ -7,17 +7,19 @@ import (
 )
 
 var notificationRuleKeys = map[string]bool{
-	"user_low_balance": true,
-	"instance_offline": true,
-	"agent_backlog":    true,
-	"health_down":      true,
-	"docker_stopped":   true,
-	"high_error_rate":  true,
-	"high_p95_latency": true,
-	"high_cpu":         true,
-	"high_memory":      true,
-	"high_disk":        true,
-	"recent_errors":    true,
+	"channel_circuit_opened":    true,
+	"channel_circuit_recovered": true,
+	"user_low_balance":          true,
+	"instance_offline":          true,
+	"agent_backlog":             true,
+	"health_down":               true,
+	"docker_stopped":            true,
+	"high_error_rate":           true,
+	"high_p95_latency":          true,
+	"high_cpu":                  true,
+	"high_memory":               true,
+	"high_disk":                 true,
+	"recent_errors":             true,
 }
 
 func normalizeNotificationRules(keys []string) ([]string, bool) {

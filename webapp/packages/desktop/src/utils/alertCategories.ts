@@ -1,4 +1,5 @@
 export const alertCategories = [
+  { key: "circuit", label: "渠道熔断", rules: ["channel_circuit_opened", "channel_circuit_recovered"] },
   { key: "balance", label: "余额告警", rules: ["user_low_balance"] },
   { key: "system", label: "系统告警", rules: ["instance_offline", "high_cpu", "high_memory", "high_disk", "health_down", "docker_stopped", "agent_backlog"] },
   { key: "request", label: "请求告警", rules: ["high_error_rate", "high_p95_latency", "recent_errors"] },

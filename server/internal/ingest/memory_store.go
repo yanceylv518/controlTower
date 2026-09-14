@@ -679,7 +679,7 @@ func (s *MemoryStore) ResolveMissingAlerts(currentIDs []string, now time.Time) e
 		current[id] = struct{}{}
 	}
 	for id, alert := range s.alerts {
-		if alert.Status == "resolved" {
+		if alert.Status == "resolved" || alert.RuleKey == "channel_circuit_opened" || alert.RuleKey == "channel_circuit_recovered" {
 			continue
 		}
 		if _, ok := current[id]; ok {
@@ -782,7 +782,7 @@ func (s *MemoryStore) ExpireDeliveriesForResolvedAlerts(now time.Time) error {
 			continue
 		}
 		alert, ok := s.alerts[delivery.AlertID]
-		if !ok || alert.Status != "resolved" {
+		if !ok || alert.Status != "resolved" || alert.RuleKey == "channel_circuit_opened" || alert.RuleKey == "channel_circuit_recovered" {
 			continue
 		}
 		delivery.Status = "expired"

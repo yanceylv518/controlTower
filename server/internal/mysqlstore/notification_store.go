@@ -102,7 +102,8 @@ func (s Store) ExpireDeliveriesForResolvedAlerts(now time.Time) error {
 UPDATE notification_deliveries d
 JOIN alerts a ON a.id = d.alert_id
 SET d.status = 'expired', d.attempts = 0, d.next_attempt_at = ?
-WHERE d.status IN ('sent','exhausted') AND a.status = 'resolved'`, now)
+WHERE d.status IN ('sent','exhausted') AND a.status = 'resolved'
+AND a.rule_key NOT IN ('channel_circuit_opened','channel_circuit_recovered')`, now)
 	return err
 }
 

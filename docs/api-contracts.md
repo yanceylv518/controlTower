@@ -293,3 +293,9 @@ Instance tokens are stored only as `SHA-256(pepper + token)` hashes. A token may
 - `GET|PUT /api/dashboard/billing/user-settings` controls `use_tiered_pricing` per site/user; writes are admin-only and default to enabled when no row exists.
 - `GET /api/dashboard/billing/anomalies` lists or exports (`format=csv`) rejected source orders by keyset cursor.
 - A source order is excluded when input or output tokens are NULL/zero, or input tokens exceed the configured model maximum context. Unknown/zero model maximum context skips only the context-limit validation.
+
+### 渠道熔断通知（2026-09-14）
+
+通知类别新增“渠道熔断”，包含 `channel_circuit_opened` 和 `channel_circuit_recovered`。复用调权事件，仅 auto 模式且关联 channel.update 命令 succeeded 后生成；观察模式、失败和待执行命令不通知。按事件 ID 持久去重，恢复使用独立消息及重试记录，并关闭同站点同渠道此前的熔断告警。恢复信息在告警中心以 resolved/info 展示；短时间熔断后恢复仍可分别投递两条带事件时间的消息。
+
+076 迁移记录启用时间，仅消费该时间之后的事件，不补发历史熔断。普通指标扫描不能关闭熔断事件；已发送熔断消息不会因恢复而重新释放。旧渠道显式所选类别不扩大；空 rule_keys 的全部类别渠道会包含新增熔断类别。按站点投递，复用已有重试、确认和静默；不新增周期提醒。事件映射保留以防历史告警清理后重发。需要升级 Server/前端及迁移，Agent 无新增要求。

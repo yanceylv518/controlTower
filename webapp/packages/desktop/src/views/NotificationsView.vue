@@ -284,7 +284,7 @@ useAutoRefresh(deliveries.reload);
             <el-select v-model="selectedCategories" multiple :disabled="allTypes" placeholder="选择该渠道接收的告警类别" style="width: 100%">
               <el-option v-for="category in alertCategories" :key="category.key" :label="category.label" :value="category.key" />
             </el-select>
-            <p>保存后接收所选类别下的全部告警，具体阈值在系统设置中调整。</p>
+            <p>渠道熔断包含实际熔断和恢复通知，不推送观察模式事件。熔断阈值在调权中心调整，系统告警阈值在系统设置中调整。</p>
           </div>
         </el-form-item>
         <el-form-item label="启用">

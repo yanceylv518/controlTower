@@ -430,6 +430,7 @@ func startNotificationRunner(workers *workerGroup, store mysqlstore.Store, provi
 		WithInstanceStore(store).
 		WithBalanceAlerts(readonly, store).
 		WithBalanceSettings(store)
+	runner = runner.WithCircuitAlerts(store)
 	workers.Go(func(ctx context.Context) {
 		if err := runner.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("notification runner stopped: %v", err)
