@@ -90,26 +90,6 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 		log.Printf("tuning continuous evaluation site=%s stage=metrics failed duration=%s error=%v", id, metricsDuration, err)
 		return 0, 0
 	}
-	// An empty site-wide result can be a temporary ingestion or query gap.
-	// Treat it as unavailable evidence, not a fresh zero-sample evaluation:
-	// overwriting every state would make the UI oscillate and could prompt
-	// writes based on stale circuit/error state.
-	if len(metrics) == 0 {
-		// Existing empty-traffic flows still need their initial evaluation and
-		// circuit/probe transitions. Only suppress a sudden disappearance of
-		// evidence that was present in the preceding evaluation.
-		prior, priorErr := cs.ListContinuousStates(id)
-		if priorErr != nil {
-			log.Printf("tuning continuous evaluation site=%s stage=states failed during empty metrics duration=%s error=%v", id, metricsDuration, priorErr)
-			return 0, 0
-		}
-		for _, state := range prior {
-			if state.LastObservedRequests > 0 {
-				log.Printf("tuning continuous evaluation site=%s stage=metrics empty duration=%s; preserving previous states", id, metricsDuration)
-				return 0, 0
-			}
-		}
-	}
 	currentMetrics := metrics
 	currentRatesAreWindowTotals := true
 	currentRatesUnavailable := false
@@ -163,6 +143,7 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 	}
 	writes := 0
 	evaluated := 0
+	preserved := 0
 	for model, rows := range groups {
 		mode := pr.Policy.DispatchModes[model]
 		if mode == "" {
@@ -171,6 +152,15 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 		baseline, healthy := buildContinuousBaseline(rows, metricByID, p.MinSamples)
 		for _, base := range rows {
 			previous, exists := stateByID[base.ChannelID]
+			// Preserve normal evaluations during a site-wide evidence gap. Do
+			// not skip circuit/probe/soft-start processing: zero-weight channels
+			// naturally stop producing traffic and must recover without it.
+			// Explicit exclusion settings still take effect without samples.
+			if len(metrics) == 0 && exists && previous.ModelName == model && previous.LastObservedRequests > 0 &&
+				(previous.Phase == "normal" || previous.Phase == "") && base.BaseWeight > 0 && len(base.Models) <= 1 {
+				preserved++
+				continue
+			}
 			state := previous
 			state.InstanceID, state.ChannelID, state.ModelName = id, base.ChannelID, model
 			if !exists || state.KError <= 0 {
@@ -517,7 +507,7 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 			evaluated++
 		}
 	}
-	log.Printf("tuning continuous evaluation site=%s stage=channel_loop duration=%s total_duration=%s", id, time.Since(channelLoopStarted), time.Since(evaluationStarted))
+	log.Printf("tuning continuous evaluation site=%s stage=channel_loop duration=%s total_duration=%s preserved_empty_metrics=%d", id, time.Since(channelLoopStarted), time.Since(evaluationStarted), preserved)
 	return writes, evaluated
 }
 

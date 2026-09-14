@@ -238,6 +238,7 @@ let refreshTimer: ReturnType<typeof setInterval> | undefined;
 let ratesTimer: ReturnType<typeof setInterval> | undefined;
 const refreshError = ref("");
 let runtimeRefreshGeneration = 0;
+let runtimeSettledGeneration = 0;
 const channelsRefreshing = ref(false);
 async function refreshChannelsNow() {
   if (!siteID.value || channelsRefreshing.value || saving.value) return;
@@ -301,17 +302,25 @@ async function refreshRuntime() {
   if (!siteID.value || loading.value) return;
   const site = siteID.value;
   const generation = ++runtimeRefreshGeneration;
+  const loadAtStart = loadGeneration;
+  // A newer pending poll must not invalidate completed data: otherwise
+  // responses slower than the 30-second polling interval never reach the UI.
+  const canApply = () => generation > runtimeSettledGeneration && loadAtStart === loadGeneration && site === siteID.value && !loading.value && !saving.value;
   refreshNow.value = Date.now();
   try {
     const [s, r, b] = await Promise.all([dashboard.tuningContinuousStates(site), dashboard.tuningRecommendations(site, 300), dashboard.tuningBaseValues(site)]);
-    if (generation !== runtimeRefreshGeneration || site !== siteID.value || loading.value || saving.value) return;
+    if (!canApply()) return;
+    runtimeSettledGeneration = generation;
     acceptStates(site, s.items ?? []); events.value = r.items ?? [];
     mergeOnlineRows(b.items ?? []);
     for (const model of models.value) policy.dispatch_modes[model] ||= "off";
     if (!models.value.includes(activeModel.value)) activeModel.value = models.value[0] || "";
     if (!dirty.value) captureSavedState();
   } catch (error) {
-    if (generation === runtimeRefreshGeneration && site === siteID.value) refreshError.value = error instanceof Error ? error.message : "刷新失败";
+    if (canApply()) {
+      runtimeSettledGeneration = generation;
+      refreshError.value = error instanceof Error ? error.message : "刷新失败";
+    }
   }
 }
 async function sync(kind: "weight" | "priority") {
