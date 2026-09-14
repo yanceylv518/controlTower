@@ -254,6 +254,7 @@ export interface ChannelCommandInput {
   status?: number;
   weight?: number;
   priority?: number;
+  group?: string;
 }
 export interface ChannelCommandItem {
   id: string;
@@ -261,7 +262,7 @@ export interface ChannelCommandItem {
   instance_name: string;
   channel_id: number;
   status: string;
-  payload: Record<string, number>;
+  payload: Record<string, number | string>;
   created_by: string;
   error_summary?: string;
   created_at: string;
@@ -385,6 +386,14 @@ export interface ChannelBaseValue {
   base_weight: number; base_priority: number; current_weight: number; current_priority: number;
   max_rpm: number; max_tpm: number;
   snapshot_at?: string; models?: string[]; updated_at?: string; updated_by?: string;
+}
+export interface TuningChannel {
+  channel_id: number; channel_name: string; status: string; weight: number;
+  priority: number; models: string[]; group_name: string;
+}
+export interface TuningChannelGroupResponse {
+  command_id: string; instance_id: string; channel_id: number;
+  group: string; status: string; created_at: string;
 }
 export interface TuningPolicyResponse {
   instance_id: string; site_id: string; policy: TuningPolicy; mode: "observe" | "confirm" | "auto";
@@ -905,6 +914,10 @@ export const dashboardApi = (client: ApiClient) => ({
     client.request<TuningReport>(`/api/dashboard/tuning/report${query({ site_id, days })}`),
   tuningBaseValues: (site_id: string, model?: string) =>
     client.request<ListResponse<ChannelBaseValue>>(`/api/dashboard/tuning/base-values${query({ site_id, model })}`),
+  tuningChannels: (site_id: string) =>
+    client.request<ListResponse<TuningChannel>>(`/api/dashboard/tuning/channels${query({ site_id })}`),
+  saveTuningChannelGroup: (site_id: string, channel_id: number, group: string) =>
+    client.request<TuningChannelGroupResponse>(`/api/dashboard/tuning/channels/${channel_id}/group${query({ site_id })}`, { method: "PUT", body: JSON.stringify({ confirm: true, group }) }),
   refreshTuningChannels: (site_id: string) =>
     client.request<{ synced: boolean }>(`/api/dashboard/tuning/channels/refresh${query({ site_id })}`, { method: "POST" }),
   tuningChannelChanges: (site_id: string, after: string, signal: AbortSignal) =>

@@ -131,6 +131,13 @@ func NewMux(options Options) *http.ServeMux {
 	mux.Handle("GET /api/dashboard/nginx-timing/slow-samples", protect(http.HandlerFunc(dashboardHandler.HandleNginxSlowSamples)))
 	if tuningStore != nil {
 		mux.Handle("/api/dashboard/tuning/policy", protect(http.HandlerFunc(dashboardHandler.HandleTuningPolicy)))
+		if directory, supported := any(tuningStore).(dashboard.TuningChannelDirectory); supported {
+			mux.Handle("GET /api/dashboard/tuning/channels", protect(http.HandlerFunc(dashboardHandler.HandleTuningChannels)))
+			if updater, writable := any(tuningStore).(dashboard.ChannelGroupUpdater); writable {
+				groupHandler := dashboard.ChannelGroupHandler{Updater: updater, Directory: directory}
+				mux.Handle("PUT /api/dashboard/tuning/channels/{channelID}/group", protect(http.HandlerFunc(groupHandler.Update)))
+			}
+		}
 		mux.Handle("POST /api/dashboard/tuning/channels/refresh", protect(http.HandlerFunc(dashboardHandler.HandleRefreshTuningChannels)))
 		mux.Handle("GET /api/dashboard/tuning/channels/changes", protect(http.HandlerFunc(dashboardHandler.HandleTuningChannelChanges)))
 		mux.Handle("/api/dashboard/tuning/base-values", protect(http.HandlerFunc(dashboardHandler.HandleTuningBaseValues)))
@@ -147,7 +154,11 @@ func NewMux(options Options) *http.ServeMux {
 	if configStore, ok := any(options.Store).(dashboard.ControlConfigStore); ok {
 		instances.ControlConfig = configStore
 	}
-	commands := (dashboard.CommandHandler{Store: options.Store, Instances: options.Store}).WithNameSource(options.Store)
+	commands := dashboard.CommandHandler{Store: options.Store, Instances: options.Store}
+	if directory, supported := any(options.Store).(dashboard.TuningChannelDirectory); supported {
+		commands.Directory = directory
+	}
+	commands = commands.WithNameSource(options.Store)
 	mux.Handle("POST /api/dashboard/channels/{channelID}/commands", protect(http.HandlerFunc(commands.Create)))
 	mux.Handle("GET /api/dashboard/channel-commands", protect(http.HandlerFunc(commands.List)))
 	mux.Handle("GET /api/dashboard/operation-audits", protect(http.HandlerFunc(commands.Audits)))

@@ -1,16 +1,25 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { ApiError, type ChannelBaseValue, type TuningContinuousState, type TuningPolicy, type TuningRecommendation } from "@ct/shared";
+import { ApiError, type ChannelBaseValue, type TuningChannel, type TuningContinuousState, type TuningPolicy, type TuningRecommendation } from "@ct/shared";
 import { dashboard } from "../api";
 import AppShell from "../components/AppShell.vue";
 import { useFiltersStore } from "../stores/filters";
 import { formatTime } from "../utils/format";
+import { hiddenChannelGroupCount, MAX_VISIBLE_CHANNEL_GROUPS, normalizeChannelGroups, splitChannelGroups, visibleChannelGroups } from "../utils/channelGroup";
 
 const filters = useFiltersStore();
 const loading = ref(false), saving = ref(false), dirty = ref(false), activeTab = ref("overview"), helpOpen = ref(false);
 const mode = ref<"observe" | "confirm" | "auto">("observe");
 const bases = ref<ChannelBaseValue[]>([]), states = ref<TuningContinuousState[]>([]), events = ref<TuningRecommendation[]>([]);
+const channels = ref<TuningChannel[]>([]);
+let channelDirectoryGeneration = 0;
+const groupDialogOpen = ref(false), groupSaving = ref(false), groupConfirmed = ref(false);
+const editingChannel = ref<TuningChannel | null>(null), groupDraft = ref<string[]>([]), groupPreset = ref("");
+const pendingGroups = ref(new Map<number, string>());
+const groupErrors = ref(new Map<number, string>());
+const groupPollTimers = new Map<number, ReturnType<typeof setTimeout>>();
+const groupPollTokens = new Map<number, number>();
 const statesSite = ref("");
 const savedBases = ref<ChannelBaseValue[]>([]), savedPolicy = ref<TuningPolicy | null>(null), savedMode = ref<"observe" | "confirm" | "auto">("observe");
 const modelQuery = ref(""), activeModel = ref("");
@@ -33,6 +42,30 @@ const models = computed(() => {
 const visibleModels = computed(() => models.value.filter(model => model.toLowerCase().includes(modelQuery.value.trim().toLowerCase())));
 const activeRows = computed(() => bases.value.filter(x => x.model_name === activeModel.value).sort((a, b) => b.current_priority - a.current_priority || b.current_weight - a.current_weight || a.channel_id - b.channel_id));
 const channelRowKey = (row: ChannelBaseValue) => `${row.channel_id}:${row.model_name}`;
+// 总览表可能先于全渠道目录完成加载；缺少目录行时用基础值补齐编辑器上下文。
+const channelDirectoryByID = computed(() => new Map(channels.value.map(row => [row.channel_id, row])));
+const groupEditorRowFor = (row: ChannelBaseValue): TuningChannel => channelDirectoryByID.value.get(row.channel_id) ?? ({
+  channel_id: row.channel_id,
+  channel_name: row.channel_name,
+  status: "unknown",
+  weight: row.current_weight,
+  priority: row.current_priority,
+  models: row.models?.length ? row.models : [row.model_name],
+  group_name: row.group_name || "",
+});
+const groupOptions = computed(() => [...new Set(channels.value.flatMap(row => splitChannelGroups(row.group_name)))].sort((a, b) => a.localeCompare(b)));
+const groupCombinations = computed(() => {
+  const values = new Set<string>();
+  for (const row of channels.value) {
+    const groups = splitChannelGroups(row.group_name);
+    if (groups.length) values.add(groups.join(","));
+  }
+  return [...values].sort((a, b) => a.localeCompare(b));
+});
+const groupCellTitle = (value: string | null | undefined) => {
+  const groups = splitChannelGroups(value);
+  return groups.length > MAX_VISIBLE_CHANNEL_GROUPS ? `点击编辑分组（完整分组：${groups.join("、")}）` : "点击编辑分组";
+};
 const stateMap = computed(() => new Map((statesSite.value === siteID.value ? states.value : []).map(x => [`${x.channel_id}:${x.model_name}`, x])));
 const stateFor = (row: ChannelBaseValue) => stateMap.value.get(`${row.channel_id}:${row.model_name}`);
 const acceptStates = (site: string, items: TuningContinuousState[]) => {
@@ -189,6 +222,7 @@ async function load(syncOnline = false) {
     mode.value = p.mode; Object.assign(policy, p.policy); policy.continuous = Object.assign(defaults(), p.policy.continuous || {}); policy.continuous.max_increase_percent ??= 10; policy.dispatch_modes ||= {};
     bases.value = b.items ?? []; events.value = r.items ?? []; for (const model of models.value) policy.dispatch_modes[model] ||= "off";
     if (!models.value.includes(activeModel.value)) activeModel.value = models.value[0] || "";
+    void loadChannelDirectory(site);
     try {
       const result = await dashboard.tuningContinuousStates(site);
       if (!isCurrentLoad()) return;
@@ -232,6 +266,158 @@ async function syncChannels(site: string, explicit: boolean): Promise<boolean> {
     channelSyncError.value = error instanceof ApiError && typeof error.details.error === "string" ? error.details.error : (error instanceof Error ? error.message : "渠道同步失败");
     if (explicit) ElMessage.error(channelSyncError.value);
     return false;
+  }
+}
+// 分组编辑使用全渠道目录，不能复用只服务调权引擎的基础值列表。
+async function loadChannelDirectory(site: string) {
+  const generation = ++channelDirectoryGeneration;
+  if (!site) {
+    channels.value = [];
+    return;
+  }
+  try {
+    const result = await dashboard.tuningChannels(site);
+    if (site !== siteID.value || generation !== channelDirectoryGeneration) return;
+    channels.value = result.items ?? [];
+    const pending = new Map(pendingGroups.value);
+    const errors = new Map(groupErrors.value);
+    for (const row of channels.value) {
+      if (pending.get(row.channel_id) === row.group_name) {
+        pending.delete(row.channel_id);
+        errors.delete(row.channel_id);
+        stopGroupPoll(row.channel_id);
+      }
+    }
+    pendingGroups.value = pending;
+    groupErrors.value = errors;
+  } catch {
+    if (site !== siteID.value || generation !== channelDirectoryGeneration) return;
+    channels.value = [];
+  }
+}
+// 轮询 Agent 命令的终态，避免失败命令长期伪装成“等待执行”；每个渠道
+// 最多轮询 45 次，站点切换或页面销毁时由 cancelGroupPolls 统一取消。
+function stopGroupPoll(channelID: number) {
+  const timer = groupPollTimers.get(channelID);
+  if (timer) clearTimeout(timer);
+  groupPollTimers.delete(channelID);
+  groupPollTokens.set(channelID, (groupPollTokens.get(channelID) || 0) + 1);
+}
+function cancelGroupPolls() {
+  for (const timer of groupPollTimers.values()) clearTimeout(timer);
+  groupPollTimers.clear();
+  groupPollTokens.clear();
+}
+function setGroupError(channelID: number, message: string) {
+  const errors = new Map(groupErrors.value);
+  errors.set(channelID, message);
+  groupErrors.value = errors;
+}
+async function pollGroupCommand(site: string, channelID: number, instanceID: string, commandID: string, expectedGroup: string, token: number, attempt = 0): Promise<void> {
+  if (site !== siteID.value || groupPollTokens.get(channelID) !== token) return;
+  try {
+    const result = await dashboard.channelCommands({ instance_id: instanceID, limit: 100 });
+    if (site !== siteID.value || groupPollTokens.get(channelID) !== token) return;
+    const command = result.items.find(item => item.id === commandID);
+    if (command?.status === "succeeded") {
+      applyGroupLocally(channelID, expectedGroup);
+      stopGroupPoll(channelID);
+      const pending = new Map(pendingGroups.value);
+      pending.delete(channelID);
+      pendingGroups.value = pending;
+      ElMessage.success("渠道分组已由 Agent 执行");
+      return;
+    }
+    if (command && ["failed", "expired"].includes(command.status)) {
+      stopGroupPoll(channelID);
+      const pending = new Map(pendingGroups.value);
+      pending.delete(channelID);
+      pendingGroups.value = pending;
+      setGroupError(channelID, command.error_summary || (command.status === "expired" ? "Agent 命令已过期" : "Agent 执行失败"));
+      ElMessage.error(`渠道分组更新失败：${command.error_summary || command.status}`);
+      return;
+    }
+  } catch {
+    // 短暂查询失败不改变命令状态，下一轮继续确认终态。
+  }
+  if (attempt >= 45) {
+    stopGroupPoll(channelID);
+    setGroupError(channelID, "命令状态查询超时，请查看命令记录");
+    ElMessage.warning("渠道分组仍未确认，请查看命令记录");
+    return;
+  }
+  groupPollTimers.set(channelID, setTimeout(() => void pollGroupCommand(site, channelID, instanceID, commandID, expectedGroup, token, attempt + 1), 2000));
+}
+function applyGroupLocally(channelID: number, group: string) {
+  channels.value = channels.value.map(row => row.channel_id === channelID ? { ...row, group_name: group } : row);
+  bases.value = bases.value.map(row => row.channel_id === channelID ? { ...row, group_name: group } : row);
+  savedBases.value = savedBases.value.map(row => row.channel_id === channelID ? { ...row, group_name: group } : row);
+}
+function openGroupEditor(row: TuningChannel) {
+  stopGroupPoll(row.channel_id);
+  const errors = new Map(groupErrors.value);
+  errors.delete(row.channel_id);
+  groupErrors.value = errors;
+  editingChannel.value = row;
+  groupDraft.value = splitChannelGroups(row.group_name);
+  groupPreset.value = "";
+  groupConfirmed.value = false;
+  groupDialogOpen.value = true;
+}
+function useGroupCombination(value: string) {
+  if (value) groupDraft.value = splitChannelGroups(value);
+  groupPreset.value = "";
+}
+async function saveGroup() {
+  const row = editingChannel.value;
+  if (!row || !groupConfirmed.value || groupSaving.value) return;
+  let group: string;
+  try {
+    group = normalizeChannelGroups(groupDraft.value);
+  } catch (error) {
+    ElMessage.warning(error instanceof Error ? error.message : "分组格式无效");
+    return;
+  }
+  // 提交前按当前站点目录拦截未知名称，服务端仍会执行同一规则作为最终边界。
+  const unknownGroups = splitChannelGroups(group).filter(value => !groupOptions.value.includes(value));
+  if (unknownGroups.length) {
+    ElMessage.warning(`分组不存在，请选择 New API 已有分组：${unknownGroups.join("、")}`);
+    return;
+  }
+  groupSaving.value = true;
+  try {
+    const result = await dashboard.saveTuningChannelGroup(siteID.value, row.channel_id, group);
+    if (result.status === "succeeded") {
+      stopGroupPoll(row.channel_id);
+      applyGroupLocally(row.channel_id, result.group);
+      const pending = new Map(pendingGroups.value);
+      pending.delete(row.channel_id);
+      pendingGroups.value = pending;
+      ElMessage.success("渠道分组已更新");
+    } else if (result.status === "pending") {
+      stopGroupPoll(row.channel_id);
+      pendingGroups.value = new Map(pendingGroups.value).set(row.channel_id, result.group);
+      const errors = new Map(groupErrors.value);
+      errors.delete(row.channel_id);
+      groupErrors.value = errors;
+      const token = (groupPollTokens.get(row.channel_id) || 0) + 1;
+      groupPollTokens.set(row.channel_id, token);
+      void pollGroupCommand(siteID.value, row.channel_id, result.instance_id, result.command_id, result.group, token);
+      ElMessage.info("分组变更已下发，等待 Agent 执行");
+    } else {
+      stopGroupPoll(row.channel_id);
+      setGroupError(row.channel_id, `分组变更状态：${result.status || "未知"}`);
+      ElMessage.warning(`分组变更状态：${result.status || "未知"}`);
+    }
+    groupDialogOpen.value = false;
+  } catch (error) {
+    if (error instanceof ApiError && error.code === "group_not_found") {
+      ElMessage.error("分组已不存在，请刷新渠道信息后重试");
+    } else {
+      ElMessage.error(error instanceof Error ? error.message : "分组更新失败");
+    }
+  } finally {
+    groupSaving.value = false;
   }
 }
 let refreshTimer: ReturnType<typeof setInterval> | undefined;
@@ -290,6 +476,7 @@ async function watchChannelChanges() {
         if (abort.signal.aborted || site !== siteID.value) return;
         if (loading.value || saving.value) { await wait(200); continue; }
         mergeOnlineRows(rows.items ?? []);
+        void loadChannelDirectory(site);
         revision = result.revision;
       }
     } catch {
@@ -313,6 +500,7 @@ async function refreshRuntime() {
     runtimeSettledGeneration = generation;
     acceptStates(site, s.items ?? []); events.value = r.items ?? [];
     mergeOnlineRows(b.items ?? []);
+    void loadChannelDirectory(site);
     for (const model of models.value) policy.dispatch_modes[model] ||= "off";
     if (!models.value.includes(activeModel.value)) activeModel.value = models.value[0] || "";
     if (!dirty.value) captureSavedState();
@@ -391,18 +579,18 @@ async function save() {
     ElMessage.error(error instanceof Error ? error.message : "保存失败");
   } finally { saving.value = false; }
 }
-watch(() => filters.site_id, () => { void load(true); void watchChannelChanges(); });
+watch(() => filters.site_id, () => { cancelGroupPolls(); channels.value = []; pendingGroups.value = new Map(); groupErrors.value = new Map(); channelDirectoryGeneration++; void load(true); void watchChannelChanges(); });
 watch(siteID, () => { ratesReady.value = false; currentRates.value.clear(); void refreshCurrentRates(); });
 watch([eventModelFilter, eventRuleFilter, eventChannelQuery, activeModel], () => { eventPage.value = 1; });
 onMounted(() => { void load(true); void watchChannelChanges(); void refreshCurrentRates(); refreshTimer = setInterval(() => void refreshRuntime(), 30000); ratesTimer = setInterval(() => { if (!document.hidden) void refreshCurrentRates(); }, 5000); });
-onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); if (refreshTimer) clearInterval(refreshTimer); if (ratesTimer) clearInterval(ratesTimer); });
+onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPolls(); if (refreshTimer) clearInterval(refreshTimer); if (ratesTimer) clearInterval(ratesTimer); });
 </script>
 
 <template><AppShell title="调权中心"><div v-loading="loading" class="page" :class="{'events-page':activeTab==='events'}">
   <el-alert v-if="channelSyncError" :title="channelSyncError" type="warning" :closable="false" show-icon />
   <el-tabs v-model="activeTab" class="tabs">
     <el-tab-pane label="运行概览" name="overview">
-      <el-card shadow="never" class="workspace-card"><template #header><div class="head"><div class="title-line"><b>模型与渠道</b><small>每个模型单独选择关闭、只观察或自动执行</small><div class="inline-metrics"><span>自动 <b>{{ counts.auto }}</b></span><span>观察 <b>{{ counts.observe }}</b></span><span>关闭 <b>{{ counts.off }}</b></span></div></div><div class="tools"><el-button @click="helpOpen=true">使用说明</el-button><el-button :loading="channelsRefreshing" :disabled="saving" @click="refreshChannelsNow">刷新渠道信息</el-button><el-button :loading="saving" @click="sync('weight')">初始化/刷新基础值</el-button><el-button v-if="dirty" :disabled="saving" @click="cancelChanges()">取消更改</el-button><el-button v-if="dirty" type="primary" :loading="saving" @click="save">保存更改</el-button></div></div></template>
+      <el-card shadow="never" class="workspace-card"><template #header><div class="head"><div class="title-line"><b>模型与渠道</b><small>每个模型单独选择关闭、只观察或自动执行；点击分组可编辑</small><div class="inline-metrics"><span>自动 <b>{{ counts.auto }}</b></span><span>观察 <b>{{ counts.observe }}</b></span><span>关闭 <b>{{ counts.off }}</b></span></div></div><div class="tools"><el-button @click="helpOpen=true">使用说明</el-button><el-button :loading="channelsRefreshing" :disabled="saving" @click="refreshChannelsNow">刷新渠道信息</el-button><el-button :loading="saving" @click="sync('weight')">初始化/刷新基础值</el-button><el-button v-if="dirty" :disabled="saving" @click="cancelChanges()">取消更改</el-button><el-button v-if="dirty" type="primary" :loading="saving" @click="save">保存更改</el-button></div></div></template>
         <el-empty v-if="!models.length" description="还没有渠道基础值"><el-button type="primary" @click="sync('weight')">立即从 new-api 读取</el-button></el-empty>
         <div v-else class="model-workspace">
           <aside class="model-nav"><el-input v-model="modelQuery" clearable placeholder="搜索模型"/><div class="model-list"><button v-for="model in visibleModels" :key="model" :class="{active:activeModel===model}" @click="selectModel(model)"><span><b>{{ model }}</b><small>{{ bases.filter(x=>x.model_name===model).length }} 个渠道</small></span><span class="model-status"><el-tag :type="modeType(model)" effect="plain" size="small">{{ modeText(model) }}</el-tag></span></button><el-empty v-if="!visibleModels.length" :image-size="48" description="没有匹配模型"/></div></aside>
@@ -414,11 +602,20 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); if (refreshTime
             </div>
             <el-alert v-if="ratesError" :title="ratesError" type="warning" :closable="false"/>
             <el-collapse class="capacity-collapse"><el-collapse-item title="渠道 RPM / TPM 上限" name="capacity"><div class="capacity-grid"><div v-for="row in activeRows" :key="`capacity:${row.channel_id}:${row.model_name}`" class="capacity-row"><b>{{ row.channel_name }}<small>ID {{ row.channel_id }}</small></b><span :class="{negative:currentlyLimited(row)}">RPM {{ rateText(currentRateFor(row)?.rpm) }}</span><span :class="{negative:currentlyLimited(row)}">TPM {{ rateText(currentRateFor(row)?.tpm) }}</span><label>最大 RPM <el-input-number v-model="row.max_rpm" :min="0" :step="100" size="small" controls-position="right" @change="dirty=true"/></label><label>最大 TPM <el-input-number v-model="row.max_tpm" :min="0" :step="1000" size="small" controls-position="right" @change="dirty=true"/></label><el-tag v-if="currentlyLimited(row)" type="warning" size="small">已限升</el-tag><small v-else>0 表示不限制</small></div></div></el-collapse-item></el-collapse>
-            <el-table :data="activeRows" :row-key="channelRowKey" size="small" height="calc(100vh - 230px)"><el-table-column prop="channel_id" label="ID" width="76"/><el-table-column prop="channel_name" label="渠道" min-width="170"/><el-table-column prop="group_name" label="分组" min-width="110"><template #default="{row}">{{ row.group_name || "—" }}</template></el-table-column><el-table-column label="评估状态" min-width="180"><template #default="{row}"><div class="evaluation"><span>{{ evaluationText(row) }}</span><small>窗口样本 {{ sampleText(row) }}</small></div></template></el-table-column><el-table-column label="评估系数" min-width="220"><template #default="{row}"><el-popover trigger="hover" placement="top-start" :width="520" popper-class="factor-explain-popover"><template #reference><span class="factors explainable"><span :class="comparisonClass(stateFor(row)?.k_speed)">速度 {{ factor(stateFor(row)?.k_speed) }}</span> · <span :class="comparisonClass(stateFor(row)?.k_cache)">缓存 {{ factor(stateFor(row)?.k_cache) }}</span> · <span :class="comparisonClass(stateFor(row)?.k_otps)">输出 {{ factor(stateFor(row)?.k_otps) }}</span> · <span :class="comparisonClass(stateFor(row)?.k_error)">错误 {{ factor(stateFor(row)?.k_error) }}</span></span></template><pre class="factor-explanation">{{ factorExplanation(row) }}</pre></el-popover></template></el-table-column><el-table-column label="基础权重" width="122"><template #default="{row}"><el-input-number v-model="row.base_weight" :min="0" size="small" controls-position="right" @change="dirty=true"/></template></el-table-column><el-table-column width="105"><template #header><span class="column-help">计算权重<el-popover trigger="click" width="460"><template #reference><button class="help" aria-label="查看计算权重说明">i</button></template><div class="calc-details"><div class="calc-title"><b>计算权重说明</b><code>round(基础权重 × 综合倍率)</code></div><p class="formula">综合倍率 = clamp(速度 × 缓存 × 输出 × 错误，{{ policy.continuous.combined_min_factor.toFixed(3) }}，{{ policy.continuous.combined_max_factor.toFixed(3) }})</p><dl><div><dt>速度</dt><dd>比较该渠道与同模型渠道的 TTFT P50/P90/P95，按规则设置中的 w50/w90/w95 加权；越快系数越高。<small>来源：Agent 采集 new-api 日志的首字耗时，汇总到 metric_1m。</small></dd></div><div><dt>缓存</dt><dd>渠道大输入缓存 Token 比率相对同模型平均数换算；证据不足时不参与计算。<small>与监控一致：仅统计输入大于 512 Token 的成功请求，缓存读取 Token 总数 ÷提示 Token 总数。</small></dd></div><div><dt>输出</dt><dd>渠道 OTPS 相对同模型平均数换算；证据不足时不参与计算。<small>来源：成功流式请求的输出 token ÷生成耗时。</small></dd></div><div><dt>错误</dt><dd>分钟渠道错误率经 EWMA 平滑后换算；用户自身错误不处罚渠道。<small>来源：new-api 请求状态，由配置的用户错误码规则分类。</small></dd></div></dl><p class="calc-note">至少需要 2 个达到最少请求数且有完整 TTFT 数据的同模型渠道；模型关闭或数据不足时倍率保持 1.000。</p></div></el-popover></span></template><template #default="{row}"><span :class="weightClass(row)">{{ stateFor(row)?.proposed_weight ?? "—" }}</span></template></el-table-column><el-table-column prop="current_weight" label="当前权重" width="100"/><el-table-column label="基础优先级" width="122"><template #default="{row}"><el-input-number v-model="row.base_priority" :min="0" size="small" controls-position="right" @change="dirty=true"/></template></el-table-column><el-table-column prop="current_priority" label="线上优先级" width="110"/></el-table>
-          </section>
-        </div>
-      </el-card>
-    </el-tab-pane>
+            <el-table :data="activeRows" :row-key="channelRowKey" size="small" height="calc(100vh - 230px)"><el-table-column prop="channel_id" label="ID" width="76"/><el-table-column prop="channel_name" label="渠道" min-width="170"/><el-table-column prop="group_name" label="分组" min-width="150"><template #default="{row}"><button type="button" class="group-cell-trigger" :aria-label="'编辑 ' + row.channel_name + ' 的分组'" :title="groupCellTitle(row.group_name)" @click="openGroupEditor(groupEditorRowFor(row))"><span class="group-tags"><el-tag v-for="group in visibleChannelGroups(row.group_name)" :key="group" size="small">{{ group }}</el-tag><el-tag v-if="hiddenChannelGroupCount(row.group_name)" type="info" size="small">+{{ hiddenChannelGroupCount(row.group_name) }}</el-tag><span v-if="!splitChannelGroups(row.group_name).length" class="dim">—</span><el-tag v-if="pendingGroups.has(row.channel_id) && !groupErrors.has(row.channel_id)" type="warning" size="small">等待执行</el-tag><el-tag v-if="groupErrors.has(row.channel_id)" type="danger" size="small">执行失败</el-tag></span></button></template></el-table-column><el-table-column label="评估状态" min-width="180"><template #default="{row}"><div class="evaluation"><span>{{ evaluationText(row) }}</span><small>窗口样本 {{ sampleText(row) }}</small></div></template></el-table-column><el-table-column label="评估系数" min-width="220"><template #default="{row}"><el-popover trigger="hover" placement="top-start" :width="520" popper-class="factor-explain-popover"><template #reference><span class="factors explainable"><span :class="comparisonClass(stateFor(row)?.k_speed)">速度 {{ factor(stateFor(row)?.k_speed) }}</span> · <span :class="comparisonClass(stateFor(row)?.k_cache)">缓存 {{ factor(stateFor(row)?.k_cache) }}</span> · <span :class="comparisonClass(stateFor(row)?.k_otps)">输出 {{ factor(stateFor(row)?.k_otps) }}</span> · <span :class="comparisonClass(stateFor(row)?.k_error)">错误 {{ factor(stateFor(row)?.k_error) }}</span></span></template><pre class="factor-explanation">{{ factorExplanation(row) }}</pre></el-popover></template></el-table-column><el-table-column label="基础权重" width="122"><template #default="{row}"><el-input-number v-model="row.base_weight" :min="0" size="small" controls-position="right" @change="dirty=true"/></template></el-table-column><el-table-column width="105"><template #header><span class="column-help">计算权重<el-popover trigger="click" width="460"><template #reference><button class="help" aria-label="查看计算权重说明">i</button></template><div class="calc-details"><div class="calc-title"><b>计算权重说明</b><code>round(基础权重 × 综合倍率)</code></div><p class="formula">综合倍率 = clamp(速度 × 缓存 × 输出 × 错误，{{ policy.continuous.combined_min_factor.toFixed(3) }}，{{ policy.continuous.combined_max_factor.toFixed(3) }})</p><dl><div><dt>速度</dt><dd>比较该渠道与同模型渠道的 TTFT P50/P90/P95，按规则设置中的 w50/w90/w95 加权；越快系数越高。<small>来源：Agent 采集 new-api 日志的首字耗时，汇总到 metric_1m。</small></dd></div><div><dt>缓存</dt><dd>渠道大输入缓存 Token 比率相对同模型平均数换算；证据不足时不参与计算。<small>与监控一致：仅统计输入大于 512 Token 的成功请求，缓存读取 Token 总数 ÷提示 Token 总数。</small></dd></div><div><dt>输出</dt><dd>渠道 OTPS 相对同模型平均数换算；证据不足时不参与计算。<small>来源：成功流式请求的输出 token ÷生成耗时。</small></dd></div><div><dt>错误</dt><dd>分钟渠道错误率经 EWMA 平滑后换算；用户自身错误不处罚渠道。<small>来源：new-api 请求状态，由配置的用户错误码规则分类。</small></dd></div></dl><p class="calc-note">至少需要 2 个达到最少请求数且有完整 TTFT 数据的同模型渠道；模型关闭或数据不足时倍率保持 1.000。</p></div></el-popover></span></template><template #default="{row}"><span :class="weightClass(row)">{{ stateFor(row)?.proposed_weight ?? "—" }}</span></template></el-table-column><el-table-column prop="current_weight" label="当前权重" width="100"/><el-table-column label="基础优先级" width="122"><template #default="{row}"><el-input-number v-model="row.base_priority" :min="0" size="small" controls-position="right" @change="dirty=true"/></template></el-table-column><el-table-column prop="current_priority" label="线上优先级" width="110"/></el-table>
+           </section>
+         </div>
+       </el-card>
+       <el-dialog v-model="groupDialogOpen" title="调整渠道分组" width="min(640px, calc(100vw - 32px))" append-to-body>
+         <template v-if="editingChannel">
+           <div class="group-editor-context"><b>{{ editingChannel.channel_name }}</b><span>ID {{ editingChannel.channel_id }}</span><span>当前：{{ editingChannel.group_name || "—" }}</span></div>
+           <el-form label-position="top"><el-form-item label="分组组合"><el-select v-model="groupDraft" multiple filterable collapse-tags collapse-tags-tooltip placeholder="选择已有分组" style="width:100%"><el-option v-for="option in groupOptions" :key="option" :label="option" :value="option" /></el-select></el-form-item><el-form-item label="当前站点已有组合"><el-select v-model="groupPreset" clearable placeholder="选择组合快速填充" style="width:100%" @change="useGroupCombination"><el-option v-for="option in groupCombinations" :key="option" :label="option" :value="option" /></el-select></el-form-item></el-form>
+           <el-alert title="保存后会影响该渠道后续请求的分组匹配；多个分组将按 New API 的逗号组合格式写入。" type="warning" :closable="false" show-icon />
+           <el-checkbox v-model="groupConfirmed">我确认修改线上渠道分组</el-checkbox>
+         </template>
+         <template #footer><el-button @click="groupDialogOpen = false">取消</el-button><el-button type="primary" :loading="groupSaving" :disabled="!groupConfirmed" @click="saveGroup">保存分组</el-button></template>
+       </el-dialog>
+     </el-tab-pane>
     <el-tab-pane label="变更记录" name="events">
       <div class="summary compact"><div><span>近 7 天自动调权</span><b>{{ eventCount(7,'weight_write') }}</b></div><div><span>近 7 天熔断</span><b>{{ eventCount(7,'circuit_opened') }}</b></div><div><span>近 7 天恢复</span><b>{{ eventCount(7,'circuit_recovered') }}</b></div><div><span>近 7 天人工接管</span><b>{{ eventCount(7,'manual_takeover') }}</b></div></div>
       <el-card shadow="never" class="event-history-card">
@@ -497,6 +694,8 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); if (refreshTime
 .factor-formulas{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:12px 0 20px}.factor-formulas article{display:flex;min-width:0;flex-direction:column;gap:6px;padding:12px 14px;border:1px solid #dfe7f3;border-radius:8px;background:#f8faff}.factor-formulas article.combined{grid-column:1/-1;border-color:#bfd0fb;background:#f2f6ff}.factor-formulas b{color:#253858}.factor-formulas code{overflow-wrap:anywhere;color:#245eea;font:12px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace}.factor-formulas small{color:#728097}@media(max-width:900px){.factor-formulas{grid-template-columns:1fr}.factor-formulas article.combined{grid-column:auto}}
 .evidence-collapse{margin:0 0 8px}.evidence-collapse :deep(.el-collapse-item__header){height:34px;padding:0 10px;color:#596579;font-size:12px}.evidence-grid{display:grid;gap:6px;padding:4px 10px 10px}.evidence-row{display:grid;grid-template-columns:minmax(150px,1.2fr) 2fr 1fr 1fr 1fr;gap:10px;color:#596579;font-size:12px}.evidence-row b{color:#17233b}.evidence-row span{white-space:nowrap}
 .capacity-collapse{margin:0 0 8px}.capacity-collapse :deep(.el-collapse-item__header){height:34px;padding:0 10px;color:#596579;font-size:12px}.capacity-grid{display:grid;gap:6px;padding:4px 10px 10px}.capacity-row{display:grid;grid-template-columns:minmax(130px,1.2fr) minmax(64px,.6fr) minmax(84px,.7fr) minmax(162px,1.1fr) minmax(162px,1.1fr) minmax(72px,.5fr);align-items:center;gap:8px;color:#596579;font-size:12px}.capacity-row b{display:flex;flex-direction:column;color:#17233b}.capacity-row b small{color:#8491a5;font-weight:400}.capacity-row label{display:flex;align-items:center;gap:8px;white-space:nowrap}.capacity-row :deep(.el-input-number){width:100px}
+/* 点击式入口保持表格密度，同时提供键盘焦点和悬停反馈。 */
+.group-tags{display:flex;align-items:center;gap:5px;flex-wrap:wrap}.group-tags .dim{color:#8491a5}.group-cell-trigger{display:block;width:100%;min-height:28px;padding:3px 4px;border:1px solid transparent;border-radius:5px;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}.group-cell-trigger:hover{border-color:#c7d7f7;background:#f4f7ff}.group-cell-trigger:focus-visible{outline:2px solid #3168e8;outline-offset:1px}.group-cell-trigger .group-tags{min-height:22px}.group-editor-context{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px;padding:10px 12px;border-radius:6px;background:#f7f9fc;color:#596579;font-size:12px}.group-editor-context b{color:#17233b;font-size:14px}.group-editor-context span{overflow-wrap:anywhere}.group-editor-context+ :deep(.el-form){margin-bottom:12px}
 .event-toolbar{position:absolute;z-index:2;top:20px;right:20px;left:20px;display:flex;flex-wrap:wrap;align-items:center;gap:12px 16px}.event-filters{display:flex;flex-wrap:wrap;gap:10px}.channel-id{display:block;color:#8491a5;font-weight:400}.event-footer{position:absolute;z-index:3;right:20px;bottom:8px;left:20px;display:flex;height:44px;align-items:center;justify-content:flex-end;background:#fff}
 .page.events-page{height:calc(100vh - 88px);overflow:hidden}.events-page .tabs{height:100%}.events-page .tabs :deep(.el-tabs__content){height:calc(100% - 42px);overflow:hidden}.events-page .tabs :deep(.el-tab-pane){display:flex;height:100%;min-height:0;flex-direction:column;overflow:hidden}.events-page .event-history-card{min-height:0;flex:1}.events-page .event-history-card :deep(.el-card__body){position:relative;height:100%;min-height:0;padding:0}.event-table-wrap{position:absolute;top:64px;right:20px;bottom:60px;left:20px;min-height:0;overflow:hidden}.event-table-wrap :deep(.el-table){min-height:0}.event-history-card :deep(.el-empty){position:absolute;inset:64px 20px 20px}
 </style>

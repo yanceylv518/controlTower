@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"controltower/internal/channelcontrol"
 	"controltower/internal/latencyhist"
 	"controltower/server/internal/storage"
 	"controltower/server/internal/tuning"
@@ -132,6 +133,62 @@ func (s Store) SyncChannelBaseValues(instanceID string, models []string) ([]tuni
 		out = append(out, tuning.ChannelBaseValue{InstanceID: instanceID, ChannelID: c.ID, ChannelName: c.Name, GroupName: c.GroupName, ModelName: m, BaseWeight: c.Weight, BasePriority: c.Priority, CurrentWeight: c.Weight, CurrentPriority: c.Priority})
 	}
 	return out, nil
+}
+
+// UpdateChannelGroup 创建站点级分组变更命令。直连站点由 directcontrol 包
+// 覆盖为同步写入；未配置直连的站点沿用 Agent 心跳队列。
+func (s Store) UpdateChannelGroup(ctx context.Context, siteID string, channelID int64, group, actor string, now time.Time) (storage.ChannelCommand, error) {
+	normalized, err := channelcontrol.NormalizeGroup(group)
+	if err != nil {
+		return storage.ChannelCommand{}, err
+	}
+	channels, err := s.LatestChannels(siteID)
+	if err != nil {
+		return storage.ChannelCommand{}, err
+	}
+	targetFound := false
+	knownValues := make([]string, 0, len(channels))
+	for _, channel := range channels {
+		if channel.ID == channelID {
+			targetFound = true
+		}
+		knownValues = append(knownValues, channel.GroupName)
+	}
+	if !targetFound {
+		return storage.ChannelCommand{}, tuning.ErrChannelNotFound
+	}
+	// 入队前锁定分组白名单，避免没有经过 Dashboard 的调用写入未知用户组。
+	if err := channelcontrol.ValidateKnownGroups(normalized, knownValues); err != nil {
+		return storage.ChannelCommand{}, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return storage.ChannelCommand{}, err
+	}
+	defer tx.Rollback()
+	// 在排队时锁定当前站点视图中的旧分组，回报完成后审计仍能准确呈现
+	// 操作前后的值，即使 Agent 随后刷新了渠道快照。
+	var beforeGroup sql.NullString
+	err = tx.QueryRow(`SELECT COALESCE(c.group_name,'') FROM channel_current c JOIN instances i ON i.id=c.instance_id WHERE i.enabled=1 AND CASE WHEN i.site_id='' THEN i.id ELSE i.site_id END=? AND c.channel_id=? ORDER BY c.captured_at DESC,i.id ASC LIMIT 1 FOR UPDATE`, siteID, channelID).Scan(&beforeGroup)
+	if err == sql.ErrNoRows {
+		return storage.ChannelCommand{}, tuning.ErrChannelNotFound
+	}
+	if err != nil {
+		return storage.ChannelCommand{}, err
+	}
+	controlInstanceID, err := controlInstanceForSite(tx, siteID)
+	if err != nil {
+		return storage.ChannelCommand{}, err
+	}
+	payload, _ := json.Marshal(map[string]string{"group": normalized, "before_group": beforeGroup.String})
+	command := storage.ChannelCommand{ID: randomCommandID(), InstanceID: controlInstanceID, ChannelID: channelID, CommandType: "channel.update", PayloadJSON: string(payload), Status: "pending", CreatedBy: actor, CreatedAt: now, UpdatedAt: now}
+	if _, err = tx.Exec(`INSERT INTO channel_commands(id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, command.ID, command.InstanceID, command.ChannelID, command.CommandType, command.PayloadJSON, command.Status, command.CreatedBy, "", command.CreatedAt, command.UpdatedAt); err != nil {
+		return storage.ChannelCommand{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return storage.ChannelCommand{}, err
+	}
+	return command, nil
 }
 func (s Store) ListEnabledSites() ([]string, error) {
 	rows, e := s.db.QueryContext(context.Background(), `SELECT DISTINCT CASE WHEN site_id='' THEN id ELSE site_id END FROM instances WHERE enabled=1`)
@@ -392,6 +449,34 @@ func (s Store) RecordDirectWeightChange(v tuning.Recommendation, actor string, n
 		return "", err
 	}
 	return commandID, tx.Commit()
+}
+
+// RecordDirectChannelGroupChange 记录已经同步写入 New API 的分组变更，
+// 使直连结果与 Agent 命令在命令列表和审计中保持同一可追溯形态。
+func (s Store) RecordDirectChannelGroupChange(siteID string, channelID int64, actor, before, after string, now time.Time) (storage.ChannelCommand, error) {
+	tx, err := s.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		return storage.ChannelCommand{}, err
+	}
+	defer tx.Rollback()
+	controlInstanceID, err := controlInstanceForSite(tx, siteID)
+	if err != nil {
+		return storage.ChannelCommand{}, err
+	}
+	payload, _ := json.Marshal(map[string]string{"group": after})
+	command := storage.ChannelCommand{ID: randomCommandID(), InstanceID: controlInstanceID, ChannelID: channelID, CommandType: "channel.update", PayloadJSON: string(payload), Status: "succeeded", CreatedBy: actor, CreatedAt: now, UpdatedAt: now}
+	if _, err = tx.Exec(`INSERT INTO channel_commands(id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, command.ID, command.InstanceID, command.ChannelID, command.CommandType, command.PayloadJSON, command.Status, command.CreatedBy, "", command.CreatedAt, command.UpdatedAt); err != nil {
+		return storage.ChannelCommand{}, err
+	}
+	beforeSummary, _ := json.Marshal(map[string]string{"group": before})
+	afterSummary, _ := json.Marshal(map[string]any{"group": after, "direct": true})
+	if _, err = tx.Exec(`INSERT INTO operation_audits(id,instance_id,operation_type,target_type,target_id,actor_id,before_summary,after_summary,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, command.ID, siteID, "channel.update", "channel", fmt.Sprint(channelID), actor, string(beforeSummary), string(afterSummary), "success", now); err != nil {
+		return storage.ChannelCommand{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return storage.ChannelCommand{}, err
+	}
+	return command, nil
 }
 
 // CreateContinuousProbeExecuting mirrors CreateContinuousProbe for the direct

@@ -106,6 +106,80 @@ func TestStatusUpdateUsesDedicatedEndpoint(t *testing.T) {
 	}
 }
 
+func TestGroupUpdatePreservesFieldsAndNormalizesCombination(t *testing.T) {
+	var putBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet:
+			_, _ = w.Write([]byte(`{"success":true,"data":{"id":12,"name":"primary","key":"secret","status":1,"weight":10,"priority":2,"group":"default"}}`))
+		case r.Method == http.MethodPut:
+			if err := json.NewDecoder(r.Body).Decode(&putBody); err != nil {
+				t.Fatalf("decode PUT body: %v", err)
+			}
+			_, _ = w.Write([]byte(`{"success":true,"data":{"group":"default,vip"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	group := " default, vip, default "
+	result, err := New(server.URL, "admin-token", 7, server.Client()).Update(context.Background(), UpdateRequest{ChannelID: 12, Group: &group})
+	if err != nil {
+		t.Fatalf("group update: %v", err)
+	}
+	if putBody["group"] != "default,vip" || putBody["weight"] != float64(10) || putBody["priority"] != float64(2) {
+		t.Fatalf("unexpected PUT body: %#v", putBody)
+	}
+	if _, ok := putBody["key"]; ok {
+		t.Fatalf("PUT body leaked key: %#v", putBody)
+	}
+	if _, ok := putBody["status"]; ok {
+		t.Fatalf("PUT body must omit status: %#v", putBody)
+	}
+	if result.PreviousGroup != "default" || result.Group != "default,vip" {
+		t.Fatalf("unexpected groups: %#v", result)
+	}
+}
+
+func TestGroupUpdateRejectsEmptyItem(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{"id":12,"status":1,"weight":10,"priority":2,"group":"default"}}`))
+	}))
+	defer server.Close()
+
+	group := "default,,vip"
+	if _, err := New(server.URL, "admin-token", 7, server.Client()).Update(context.Background(), UpdateRequest{ChannelID: 12, Group: &group}); err == nil {
+		t.Fatal("empty group item must be rejected")
+	}
+}
+
+func TestGroupUpdateCanClearGroup(t *testing.T) {
+	var putBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			_, _ = w.Write([]byte(`{"success":true,"data":{"id":12,"status":1,"weight":10,"priority":2,"group":"default"}}`))
+			return
+		}
+		if r.Method == http.MethodPut {
+			_ = json.NewDecoder(r.Body).Decode(&putBody)
+			_, _ = w.Write([]byte(`{"success":true,"data":{}}`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	group := ""
+	result, err := New(server.URL, "admin-token", 7, server.Client()).Update(context.Background(), UpdateRequest{ChannelID: 12, Group: &group})
+	if err != nil {
+		t.Fatalf("clear group: %v", err)
+	}
+	if value, ok := putBody["group"]; !ok || value != "" || result.PreviousGroup != "default" || result.Group != "" {
+		t.Fatalf("group clear was not preserved: body=%#v result=%#v", putBody, result)
+	}
+}
+
 func mustJSON(value any) []byte {
 	data, _ := json.Marshal(value)
 	return data

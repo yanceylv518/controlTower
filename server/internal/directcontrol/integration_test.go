@@ -3,6 +3,7 @@ package directcontrol
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"controltower/internal/channelcontrol"
 	"controltower/server/internal/mysqlstore"
 	"controltower/server/internal/secrets"
 	"controltower/server/internal/storage"
@@ -39,7 +41,7 @@ func (f *fakeNewAPI) handler() http.Handler {
 		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/channel/test/"):
 			_, _ = w.Write([]byte(`{"success":true,"message":"","time":0.5}`))
 		case r.Method == http.MethodGet && r.URL.Path == "/api/channel/9":
-			_, _ = w.Write([]byte(`{"success":true,"data":{"id":9,"name":"smoke","key":"sk-secret","status":1,"weight":10,"priority":2}}`))
+			_, _ = w.Write([]byte(`{"success":true,"data":{"id":9,"name":"smoke","key":"sk-secret","status":1,"weight":10,"priority":2,"group":"default"}}`))
 		case r.Method == http.MethodPut && r.URL.Path == "/api/channel/":
 			var body map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&body)
@@ -102,12 +104,19 @@ func TestDirectControlIntegration(t *testing.T) {
 
 	inner := mysqlstore.New(db)
 	now := time.Now().UTC()
-	site, plainSite := "smoke-direct", "smoke-queue"
+	// 使用唯一后缀，避免本地长驻服务或并行测试遗留同名站点配置污染断言。
 	runID := fmt.Sprintf("%d", time.Now().UnixNano())
+	site, plainSite := "smoke-direct-"+runID, "smoke-queue-"+runID
 	for _, id := range []string{site, plainSite} {
 		if err := inner.CreateInstance(storage.Instance{ID: id, SiteID: id, Name: id, Enabled: true, CreatedAt: now, UpdatedAt: now}); err != nil && !strings.Contains(err.Error(), "Duplicate") {
 			t.Fatalf("create instance %s: %v", id, err)
 		}
+	}
+	if err := inner.StoreInstanceChannels(site, []channelcontrol.Channel{{ID: 9, Name: "smoke", Models: "m", Weight: 10, Priority: 2, Status: 1, Group: "default"}}, now); err != nil {
+		t.Fatalf("seed direct channel: %v", err)
+	}
+	if err := inner.StoreInstanceChannels(plainSite, []channelcontrol.Channel{{ID: 5, Name: "queued", Models: "m", Weight: 1, Priority: 1, Status: 1, Group: "default"}}, now); err != nil {
+		t.Fatalf("seed queued channel: %v", err)
 	}
 	encrypted, err := secrets.Encrypt("smoke-key", "smoke-token")
 	if err != nil {
@@ -153,6 +162,32 @@ func TestDirectControlIntegration(t *testing.T) {
 		t.Fatalf("audit row missing: %d %v", auditCount, err)
 	}
 
+	// 2b. 直连分组写入支持规范化多分组组合，立即更新站点快照并记录新旧值。
+	groupCommand, err := store.UpdateChannelGroup(ctx, site, 9, " default, vip, default ", "admin", now)
+	if err != nil || groupCommand.Status != "succeeded" {
+		t.Fatalf("direct group change: %#v %v", groupCommand, err)
+	}
+	if put := fake.lastPut(t); put["group"] != "default,vip" {
+		t.Fatalf("group combination not written to new-api: %#v", put)
+	}
+	var currentGroup, beforeSummary, afterSummary string
+	if err := db.QueryRow("SELECT group_name FROM channel_current WHERE instance_id=? AND channel_id=9", site).Scan(&currentGroup); err != nil || currentGroup != "default,vip" {
+		t.Fatalf("direct group not visible in snapshot: %q %v", currentGroup, err)
+	}
+	if err := db.QueryRow("SELECT before_summary,after_summary FROM operation_audits WHERE id=?", groupCommand.ID).Scan(&beforeSummary, &afterSummary); err != nil || !strings.Contains(beforeSummary, `"default"`) || !strings.Contains(afterSummary, `"default,vip"`) {
+		t.Fatalf("group audit missing old/new values: before=%s after=%s err=%v", beforeSummary, afterSummary, err)
+	}
+	// 未出现在站点渠道快照中的分组必须在触达 New API 前被拒绝。
+	if _, err := store.UpdateChannelGroup(ctx, site, 9, "custom-only", "admin", now); !errors.Is(err, channelcontrol.ErrGroupNotFound) {
+		t.Fatalf("unknown direct group error=%v, want ErrGroupNotFound", err)
+	}
+	fake.mu.Lock()
+	putCount := len(fake.putBodies)
+	fake.mu.Unlock()
+	if putCount != 3 {
+		t.Fatalf("unknown direct group reached New API: put_count=%d", putCount)
+	}
+
 	// 3. Probe round runs server-side and reports like an agent round.
 	probeRec := tuning.Recommendation{ID: "smoke-rec-2-" + runID, InstanceID: site, ChannelID: 9, ChannelName: "smoke", CreatedAt: now, Rule: "probe_started", Evidence: map[string]any{}, ModeAtCreation: "auto"}
 	probeID, err := store.CreateContinuousProbe(probeRec, "m", 3, 1, now)
@@ -170,7 +205,8 @@ func TestDirectControlIntegration(t *testing.T) {
 		if err := db.QueryRow("SELECT status FROM channel_commands WHERE id=?", probeID).Scan(&probeStatus); err != nil {
 			t.Fatalf("probe command: %v", err)
 		}
-		_ = db.QueryRow("SELECT probe_attempts, probe_successes, probe_command_id FROM tuning_continuous_states WHERE channel_id=9 AND model_name='m'").Scan(&attempts, &successes, &pending)
+		// 断言必须限定本次唯一站点，避免本地长驻数据中的相同渠道 ID 混入结果。
+		_ = db.QueryRow("SELECT probe_attempts, probe_successes, probe_command_id FROM tuning_continuous_states WHERE instance_id=? AND channel_id=9 AND model_name='m'", site).Scan(&attempts, &successes, &pending)
 		if probeStatus == "succeeded" && attempts == 3 && successes == 3 && pending == nil {
 			break
 		}
@@ -188,7 +224,7 @@ func TestDirectControlIntegration(t *testing.T) {
 	}
 	var attempts int
 	var pending *string
-	if err := db.QueryRow("SELECT probe_attempts, probe_command_id FROM tuning_continuous_states WHERE channel_id=9 AND model_name='m'").Scan(&attempts, &pending); err != nil {
+	if err := db.QueryRow("SELECT probe_attempts, probe_command_id FROM tuning_continuous_states WHERE instance_id=? AND channel_id=9 AND model_name='m'", site).Scan(&attempts, &pending); err != nil {
 		t.Fatalf("guard check: %v", err)
 	}
 	if attempts != 3 || pending != nil {
@@ -198,7 +234,7 @@ func TestDirectControlIntegration(t *testing.T) {
 	if err := inner.PutContinuousState(tuning.ContinuousState{InstanceID: site, ChannelID: 9, ModelName: "m", KError: 1, Phase: "normal", UpdatedAt: now}); err != nil {
 		t.Fatalf("reset persist: %v", err)
 	}
-	if err := db.QueryRow("SELECT probe_attempts, probe_command_id FROM tuning_continuous_states WHERE channel_id=9 AND model_name='m'").Scan(&attempts, &pending); err != nil {
+	if err := db.QueryRow("SELECT probe_attempts, probe_command_id FROM tuning_continuous_states WHERE instance_id=? AND channel_id=9 AND model_name='m'", site).Scan(&attempts, &pending); err != nil {
 		t.Fatalf("reset check: %v", err)
 	}
 	if attempts != 0 || pending != nil {
@@ -213,5 +249,16 @@ func TestDirectControlIntegration(t *testing.T) {
 	}
 	if err := db.QueryRow("SELECT status FROM channel_commands WHERE id=?", queueID).Scan(&status); err != nil || status != "pending" {
 		t.Fatalf("fallback must queue a pending command: %q %v", status, err)
+	}
+	queueGroup, err := store.UpdateChannelGroup(ctx, plainSite, 5, "default, vip, default", "admin", now)
+	if err != nil || queueGroup.Status != "pending" {
+		t.Fatalf("group queue fallback: %#v %v", queueGroup, err)
+	}
+	var payload string
+	if err := db.QueryRow("SELECT payload_json FROM channel_commands WHERE id=?", queueGroup.ID).Scan(&payload); err != nil || !strings.Contains(payload, `"group":"default,vip"`) || !strings.Contains(payload, `"before_group":"default"`) {
+		t.Fatalf("queued group payload missing normalized old/new values: %s %v", payload, err)
+	}
+	if _, err := store.UpdateChannelGroup(ctx, plainSite, 5, "custom-only", "admin", now); !errors.Is(err, channelcontrol.ErrGroupNotFound) {
+		t.Fatalf("unknown queued group error=%v, want ErrGroupNotFound", err)
 	}
 }

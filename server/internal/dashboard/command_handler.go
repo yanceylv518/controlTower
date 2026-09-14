@@ -4,10 +4,12 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
 
+	"controltower/internal/channelcontrol"
 	ctauth "controltower/server/internal/auth"
 	"controltower/server/internal/storage"
 )
@@ -20,6 +22,8 @@ type CommandStore interface {
 type CommandHandler struct {
 	Store     CommandStore
 	Instances InstanceStore
+	// Directory 提供站点渠道快照，用于拦截通用命令接口中的未知分组。
+	Directory TuningChannelDirectory
 	names     *nameResolver
 }
 
@@ -57,11 +61,12 @@ func (h CommandHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var q struct {
-		InstanceID string `json:"instance_id"`
-		Confirm    bool   `json:"confirm"`
-		Status     *int   `json:"status"`
-		Weight     *uint  `json:"weight"`
-		Priority   *int64 `json:"priority"`
+		InstanceID string  `json:"instance_id"`
+		Confirm    bool    `json:"confirm"`
+		Status     *int    `json:"status"`
+		Weight     *uint   `json:"weight"`
+		Priority   *int64  `json:"priority"`
+		Group      *string `json:"group"`
 	}
 	if json.NewDecoder(r.Body).Decode(&q) != nil {
 		writeDashboardError(w, 400, "invalid_command")
@@ -71,16 +76,47 @@ func (h CommandHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeDashboardError(w, 400, "confirm_required")
 		return
 	}
-	if q.Status == nil && q.Weight == nil && q.Priority == nil {
+	if q.Status == nil && q.Weight == nil && q.Priority == nil && q.Group == nil {
 		writeDashboardError(w, 400, "invalid_command")
 		return
 	}
-	if _, ok, err := h.Instances.InstanceByID(q.InstanceID); err != nil {
+	var group string
+	if q.Group != nil {
+		var err error
+		group, err = channelcontrol.NormalizeGroup(*q.Group)
+		if err != nil {
+			writeDashboardError(w, 400, "invalid_group")
+			return
+		}
+	}
+	instance, ok, err := h.Instances.InstanceByID(q.InstanceID)
+	if err != nil {
 		writeDashboardError(w, 500, "query_failed")
 		return
-	} else if !ok {
+	}
+	if !ok {
 		writeDashboardError(w, 404, "instance_not_found")
 		return
+	}
+	if q.Group != nil {
+		if h.Directory == nil {
+			writeDashboardError(w, http.StatusNotImplemented, "channel_group_update_not_supported")
+			return
+		}
+		// 通用渠道命令也必须复用站点分组白名单，避免绕过调权中心编辑器。
+		channels, directoryErr := h.Directory.LatestChannels(siteOf(instance))
+		if directoryErr != nil {
+			writeDashboardError(w, 500, "query_failed")
+			return
+		}
+		if groupErr := validateChannelGroupAgainstDirectory(group, channels); groupErr != nil {
+			if errors.Is(groupErr, channelcontrol.ErrGroupNotFound) {
+				writeDashboardError(w, http.StatusBadRequest, "group_not_found")
+			} else {
+				writeDashboardError(w, http.StatusBadRequest, "invalid_group")
+			}
+			return
+		}
 	}
 	changes := map[string]any{}
 	if q.Status != nil {
@@ -91,6 +127,9 @@ func (h CommandHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	if q.Priority != nil {
 		changes["priority"] = *q.Priority
+	}
+	if q.Group != nil {
+		changes["group"] = group
 	}
 	payload, _ := json.Marshal(changes)
 	var b [16]byte

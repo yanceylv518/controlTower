@@ -27,6 +27,18 @@ WHERE CASE WHEN i.site_id='' THEN i.id ELSE i.site_id END=? AND c.channel_id=?`,
 	return err
 }
 
+// ApplyChannelGroupWrite 将已被 New API 确认的分组同步到站点内所有实例，
+// 让调权中心的站点视图不会继续显示旧分组。
+func (s Store) ApplyChannelGroupWrite(siteID string, channelID int64, group string, at time.Time) error {
+	_, err := s.db.ExecContext(context.Background(), `UPDATE channel_current c JOIN instances i ON i.id=c.instance_id
+SET c.group_name=?,c.captured_at=GREATEST(c.captured_at,?)
+WHERE CASE WHEN i.site_id='' THEN i.id ELSE i.site_id END=? AND c.channel_id=?`, group, at, siteID, channelID)
+	if err == nil {
+		channelupdates.Notify(siteID)
+	}
+	return err
+}
+
 func (s Store) StoreFreshChannels(siteID string, channels []channelcontrol.Channel, at time.Time) error {
 	instanceID, err := controlInstanceForSite(s.db, siteID)
 	if err != nil {
@@ -46,21 +58,22 @@ func (s Store) StoreInstanceChannels(instanceID string, channels []channelcontro
 
 func applyCompletedChannelWrite(tx *sql.Tx, command storage.ChannelCommand, at time.Time) error {
 	var payload struct {
-		Weight   *uint  `json:"weight"`
-		Priority *int64 `json:"priority"`
-		Status   *int   `json:"status"`
+		Weight   *uint   `json:"weight"`
+		Priority *int64  `json:"priority"`
+		Status   *int    `json:"status"`
+		Group    *string `json:"group"`
 	}
 	if err := json.Unmarshal([]byte(command.PayloadJSON), &payload); err != nil {
 		return err
 	}
-	if payload.Weight == nil && payload.Priority == nil && payload.Status == nil {
+	if payload.Weight == nil && payload.Priority == nil && payload.Status == nil && payload.Group == nil {
 		return nil
 	}
 	_, err := tx.Exec(`UPDATE channel_current c JOIN instances i ON i.id=c.instance_id
 JOIN instances source ON source.id=?
-SET c.weight=COALESCE(?,c.weight),c.priority=COALESCE(?,c.priority),c.status=COALESCE(?,c.status),c.captured_at=GREATEST(c.captured_at,?)
+SET c.weight=COALESCE(?,c.weight),c.priority=COALESCE(?,c.priority),c.status=COALESCE(?,c.status),c.group_name=COALESCE(?,c.group_name),c.captured_at=GREATEST(c.captured_at,?)
 WHERE CASE WHEN i.site_id='' THEN i.id ELSE i.site_id END=CASE WHEN source.site_id='' THEN source.id ELSE source.site_id END
-AND c.channel_id=?`, command.InstanceID, payload.Weight, payload.Priority, channelStatusLabelPtr(payload.Status), at, command.ChannelID)
+AND c.channel_id=?`, command.InstanceID, payload.Weight, payload.Priority, channelStatusLabelPtr(payload.Status), payload.Group, at, command.ChannelID)
 	return err
 }
 

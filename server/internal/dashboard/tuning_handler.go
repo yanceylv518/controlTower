@@ -18,6 +18,9 @@ type ChannelBaseValueStore interface {
 	SaveChannelBaseValues(string, string, []tuning.ChannelBaseValue, time.Time) error
 	SyncChannelBaseValues(string, []string) ([]tuning.ChannelBaseValue, error)
 }
+type TuningChannelDirectory interface {
+	LatestChannels(string) ([]tuning.Channel, error)
+}
 type ContinuousStateStore interface {
 	ListContinuousStates(string) ([]tuning.ContinuousState, error)
 }
@@ -77,6 +80,45 @@ func (h Handler) HandleTuningContinuousStates(w http.ResponseWriter, r *http.Req
 		return
 	}
 	writeDashboardJSON(w, 200, map[string]any{"items": items})
+}
+
+type TuningChannelItem struct {
+	ChannelID   int64    `json:"channel_id"`
+	ChannelName string   `json:"channel_name"`
+	Status      string   `json:"status"`
+	Weight      int64    `json:"weight"`
+	Priority    int64    `json:"priority"`
+	Models      []string `json:"models"`
+	GroupName   string   `json:"group_name"`
+}
+
+// HandleTuningChannels 返回站点内每个渠道的最新状态。它与基础值接口分开，
+// 因为分组编辑必须覆盖禁用渠道和多模型渠道，而调权引擎会有意排除这些渠道。
+func (h Handler) HandleTuningChannels(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeDashboardError(w, http.StatusMethodNotAllowed, "method_not_allowed")
+		return
+	}
+	id := tuningSiteID(r)
+	if id == "" {
+		writeDashboardError(w, http.StatusBadRequest, "site_id_required")
+		return
+	}
+	store, ok := h.tuningStore.(TuningChannelDirectory)
+	if !ok {
+		writeDashboardError(w, http.StatusNotImplemented, "channel_directory_not_supported")
+		return
+	}
+	channels, err := store.LatestChannels(id)
+	if err != nil {
+		writeDashboardError(w, http.StatusInternalServerError, "query_failed")
+		return
+	}
+	items := make([]TuningChannelItem, 0, len(channels))
+	for _, channel := range channels {
+		items = append(items, TuningChannelItem{ChannelID: channel.ID, ChannelName: channel.Name, Status: channel.Status, Weight: channel.Weight, Priority: channel.Priority, Models: channel.Models, GroupName: channel.GroupName})
+	}
+	writeDashboardJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 type PolicyResponse struct {

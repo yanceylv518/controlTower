@@ -12,13 +12,14 @@ import (
 	ctauth "controltower/server/internal/auth"
 	"controltower/server/internal/ingest"
 	"controltower/server/internal/storage"
+	"controltower/server/internal/tuning"
 )
 
 func TestChannelCommandHandlerValidationActorAndDTO(t *testing.T) {
 	s := ingest.NewMemoryStore()
 	now := time.Now().UTC()
 	_ = s.CreateInstance(storage.Instance{ID: "inst", Enabled: true, CreatedAt: now, UpdatedAt: now})
-	h := CommandHandler{Store: s, Instances: s}
+	h := CommandHandler{Store: s, Instances: s, Directory: channelGroupDirectoryStub{channels: []tuning.Channel{{ID: 7, Name: "primary", GroupName: "default,vip"}}}}
 	call := func(body string, actor string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest("POST", "/api/dashboard/channels/7/commands", bytes.NewBufferString(body))
 		r.SetPathValue("channelID", "7")
@@ -50,6 +51,13 @@ func TestChannelCommandHandlerValidationActorAndDTO(t *testing.T) {
 	_ = json.Unmarshal(w.Body.Bytes(), &dto)
 	if dto["created_by"] != "token" || dto["instance_id"] != "inst" || dto["channel_id"] == nil {
 		t.Fatalf("dto=%v", dto)
+	}
+	w = call(`{"instance_id":"inst","confirm":true,"group":" default, vip, default "}`, "token")
+	if w.Code != http.StatusCreated || !bytes.Contains(w.Body.Bytes(), []byte(`"group":"default,vip"`)) {
+		t.Fatalf("group command=%d %s", w.Code, w.Body.String())
+	}
+	if w = call(`{"instance_id":"inst","confirm":true,"group":"custom"}`, "token"); w.Code != http.StatusBadRequest || !bytes.Contains(w.Body.Bytes(), []byte(`"error":"group_not_found"`)) {
+		t.Fatalf("unknown group command=%d %s", w.Code, w.Body.String())
 	}
 }
 

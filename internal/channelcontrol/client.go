@@ -18,13 +18,16 @@ type UpdateRequest struct {
 	Status    *int
 	Weight    *uint
 	Priority  *int64
+	Group     *string
 }
 
 type Result struct {
-	ChannelID int64
-	Status    *int
-	Weight    *uint
-	Priority  *int64
+	ChannelID     int64
+	Status        *int
+	Weight        *uint
+	Priority      *int64
+	PreviousGroup string
+	Group         string
 }
 
 type ProbeResult struct {
@@ -121,6 +124,7 @@ func (c *Client) Update(ctx context.Context, update UpdateRequest) (Result, erro
 		return Result{}, err
 	}
 	originalStatus := channelNumber(channel["status"])
+	originalGroup := channelString(channel["group"])
 	delete(channel, "key")
 	// Current new-api versions reject status on the general channel update
 	// endpoint. Status has its own endpoint, while GET /api/channel/:id always
@@ -132,6 +136,13 @@ func (c *Client) Update(ctx context.Context, update UpdateRequest) (Result, erro
 	}
 	if update.Priority != nil {
 		channel["priority"] = *update.Priority
+	}
+	if update.Group != nil {
+		group, normalizeErr := NormalizeGroup(*update.Group)
+		if normalizeErr != nil {
+			return Result{}, normalizeErr
+		}
+		channel["group"] = group
 	}
 	channel["id"] = update.ChannelID
 
@@ -145,6 +156,16 @@ func (c *Client) Update(ctx context.Context, update UpdateRequest) (Result, erro
 	}
 	if !response.Success {
 		return Result{}, fmt.Errorf("new-api channel update failed: %s", response.Message)
+	}
+	actualGroup := channelString(channel["group"])
+	if response.Data != nil {
+		if returnedGroup, ok := response.Data["group"].(string); ok {
+			normalizedReturned, normalizeErr := NormalizeGroup(returnedGroup)
+			if normalizeErr != nil {
+				return Result{}, fmt.Errorf("new-api returned invalid group: %w", normalizeErr)
+			}
+			actualGroup = normalizedReturned
+		}
 	}
 	if update.Status != nil {
 		statusBody, marshalErr := json.Marshal(map[string]int{"status": *update.Status})
@@ -164,7 +185,7 @@ func (c *Client) Update(ctx context.Context, update UpdateRequest) (Result, erro
 		}
 		originalStatus = int64(*update.Status)
 	}
-	return Result{ChannelID: update.ChannelID, Status: intPointer(originalStatus), Weight: uintPointer(channelNumber(channel["weight"])), Priority: int64Pointer(channelNumber(channel["priority"]))}, nil
+	return Result{ChannelID: update.ChannelID, Status: intPointer(originalStatus), Weight: uintPointer(channelNumber(channel["weight"])), Priority: int64Pointer(channelNumber(channel["priority"])), PreviousGroup: originalGroup, Group: actualGroup}, nil
 }
 
 func (c *Client) ensureToken(ctx context.Context) error {
@@ -299,6 +320,11 @@ func channelNumber(value any) int64 {
 	default:
 		return 0
 	}
+}
+
+func channelString(value any) string {
+	text, _ := value.(string)
+	return text
 }
 
 func intPointer(value int64) *int     { result := int(value); return &result }

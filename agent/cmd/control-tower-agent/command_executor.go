@@ -80,6 +80,7 @@ func executeCommands(ctx context.Context, controller channelController, commands
 			Status:    command.Status,
 			Weight:    command.Weight,
 			Priority:  command.Priority,
+			Group:     command.Group,
 		})
 		if err != nil {
 			result.Status = "failed"

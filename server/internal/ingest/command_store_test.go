@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -42,11 +43,11 @@ func TestCommandStoreLifecycleAndFilters(t *testing.T) {
 func TestHeartbeatClaimsCommandsAndReportAuditsOnce(t *testing.T) {
 	s := NewMemoryStore()
 	now := time.Now().UTC()
-	_ = s.CreateChannelCommand(storage.ChannelCommand{ID: "cmd", InstanceID: "inst", ChannelID: 9, CommandType: "channel.update", PayloadJSON: `{"status":2}`, Status: "pending", CreatedBy: "admin", CreatedAt: now, UpdatedAt: now})
+	_ = s.CreateChannelCommand(storage.ChannelCommand{ID: "cmd", InstanceID: "inst", ChannelID: 9, CommandType: "channel.update", PayloadJSON: `{"status":2,"group":"default,vip","before_group":"default"}`, Status: "pending", CreatedBy: "admin", CreatedAt: now, UpdatedAt: now})
 	_ = s.CreateChannelCommand(storage.ChannelCommand{ID: "expired", InstanceID: "inst", ChannelID: 8, CommandType: "channel.update", PayloadJSON: `{"status":2}`, Status: "pending", CreatedAt: now.Add(-time.Hour), UpdatedAt: now})
 	svc := NewServiceWithCommandExpiry(s, 10*time.Minute)
 	_, commands, e := svc.SaveHeartbeatWithCommands(agentgateway.AgentHeartbeatRequest{InstanceID: "inst", AgentID: "agent", ReportedAt: now})
-	if e != nil || len(commands) != 1 || commands[0].ID != "cmd" || commands[0].Status == nil || *commands[0].Status != 2 {
+	if e != nil || len(commands) != 1 || commands[0].ID != "cmd" || commands[0].Status == nil || *commands[0].Status != 2 || commands[0].Group == nil || *commands[0].Group != "default,vip" {
 		t.Fatalf("commands=%v err=%v", commands, e)
 	}
 	report := agentgateway.AgentReportRequest{InstanceID: "inst", AgentID: "agent", ReportedAt: now, CommandResults: []agentgateway.ChannelCommandResult{{ID: "cmd", ChannelID: 9, Status: "succeeded", AppliedAt: now}}}
@@ -59,6 +60,9 @@ func TestHeartbeatClaimsCommandsAndReportAuditsOnce(t *testing.T) {
 	audits, _ := s.QueryOperationAudits(storage.OperationAuditQuery{InstanceID: "inst"})
 	if len(audits) != 1 || audits[0].ActorID != "admin" {
 		t.Fatalf("audits=%v", audits)
+	}
+	if audits[0].BeforeSummary != `{"group":"default"}` || !strings.Contains(audits[0].AfterSummary, `"group":"default,vip"`) || !strings.Contains(audits[0].AfterSummary, `"status":"succeeded"`) {
+		t.Fatalf("group audit must retain before/after/result: %#v", audits[0])
 	}
 }
 

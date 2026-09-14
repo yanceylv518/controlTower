@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"controltower/internal/channelcontrol"
 	"controltower/agent/internal/reporter"
+	"controltower/internal/channelcontrol"
 )
 
 type probeController struct {
@@ -26,6 +26,19 @@ func TestExecuteVerifyCommandUsesNoChangeUpdate(t *testing.T) {
 		t.Fatalf("unexpected verify result: results=%#v updates=%#v", results, c.updates)
 	}
 }
+
+func TestExecuteGroupCommandForwardsNormalizedGroup(t *testing.T) {
+	c := &probeController{}
+	group := "default,vip"
+	results := executeCommands(context.Background(), c, []reporter.ChannelCommand{{ID: "g", Type: "channel.update", ChannelID: 9, Group: &group}})
+	if len(results) != 1 || results[0].Status != "succeeded" || len(c.updates) != 1 {
+		t.Fatalf("unexpected group result: results=%#v updates=%#v", results, c.updates)
+	}
+	if c.updates[0].Group == nil || *c.updates[0].Group != group || c.updates[0].Weight != nil || c.updates[0].Priority != nil || c.updates[0].Status != nil {
+		t.Fatalf("group update fields were not forwarded exactly: %#v", c.updates[0])
+	}
+}
+
 func (p *probeController) Probe(context.Context, int64, string) (channelcontrol.ProbeResult, error) {
 	r := p.results[p.calls]
 	p.calls++

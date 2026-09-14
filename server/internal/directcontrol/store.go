@@ -130,6 +130,82 @@ func (s Store) CreateContinuousWeightChange(v tuning.Recommendation, actor strin
 	return commandID, err
 }
 
+// UpdateChannelGroup 通过站点配置的直连控制器写入分组；未配置直连时回落到
+// Agent 命令队列，保证两种执行方式共享同一条校验和审计链路。
+func (s Store) UpdateChannelGroup(ctx context.Context, siteID string, channelID int64, group, actor string, now time.Time) (storage.ChannelCommand, error) {
+	normalized, err := channelcontrol.NormalizeGroup(group)
+	if err != nil {
+		return storage.ChannelCommand{}, err
+	}
+	controller, direct, err := s.controllerForSite(siteID)
+	if err != nil {
+		return storage.ChannelCommand{}, err
+	}
+	if !direct {
+		return s.Store.UpdateChannelGroup(ctx, siteID, channelID, normalized, actor, now)
+	}
+	channels, err := s.Store.LatestChannels(siteID)
+	if err != nil {
+		return storage.ChannelCommand{}, fmt.Errorf("query channel groups: %w", err)
+	}
+	targetFound := false
+	knownValues := make([]string, 0, len(channels))
+	for _, channel := range channels {
+		if channel.ID == channelID {
+			targetFound = true
+		}
+		knownValues = append(knownValues, channel.GroupName)
+	}
+	if !targetFound {
+		return storage.ChannelCommand{}, tuning.ErrChannelNotFound
+	}
+	// 直连写入无法依赖队列层校验，因此在触达 New API 前再次检查白名单。
+	if err := channelcontrol.ValidateKnownGroups(normalized, knownValues); err != nil {
+		return storage.ChannelCommand{}, err
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, writeTimeout)
+	defer cancel()
+	result, err := controller.Update(ctx, channelcontrol.UpdateRequest{ChannelID: channelID, Group: &normalized})
+	if err != nil {
+		return storage.ChannelCommand{}, fmt.Errorf("direct group write: %w", err)
+	}
+	actual := result.Group
+	if actual == "" {
+		actual = normalized
+	}
+	writtenAt := time.Now().UTC()
+	command, err := recordExecutedChannelGroup(func() (storage.ChannelCommand, error) {
+		if err := s.Store.ApplyChannelGroupWrite(siteID, channelID, actual, writtenAt); err != nil {
+			return storage.ChannelCommand{}, fmt.Errorf("new-api group write succeeded but channel state sync failed: %w", err)
+		}
+		return s.Store.RecordDirectChannelGroupChange(siteID, channelID, actor, result.PreviousGroup, actual, now)
+	})
+	if err != nil {
+		log.Printf("direct control: group write site=%s channel=%d group=%q reached new-api but was not recorded: %v", siteID, channelID, actual, err)
+		return command, err
+	}
+	log.Printf("direct control: group write site=%s channel=%d group=%q succeeded", siteID, channelID, actual)
+	return command, err
+}
+
+// recordExecutedChannelGroup 在 New API 已成功写入后重试落盘；与连续调权的
+// 权重路径不同，手工操作两次仍无法记录时必须返回失败，避免页面把空命令
+// 显示成成功的用户操作。
+func recordExecutedChannelGroup(record func() (storage.ChannelCommand, error)) (storage.ChannelCommand, error) {
+	command, err := record()
+	if err == nil {
+		return command, nil
+	}
+	command, err = record()
+	if err != nil {
+		return command, err
+	}
+	return command, nil
+}
+
 // recordExecutedWrite persists the paper trail of a write that ALREADY
 // reached new-api. If persisting fails twice the write is still reported as
 // a success: returning an error here would fork CT's belief from reality —

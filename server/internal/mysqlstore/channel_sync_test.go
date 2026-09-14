@@ -91,6 +91,26 @@ func TestChannelSyncPreservesAnchorsAndRejectsOldSnapshots(t *testing.T) {
 			assertValues(25, 9)
 		}
 	}
+	// Agent 分组命令成功后更新线上快照；失败时保留此前观测到的分组。
+	for _, status := range []string{"failed", "succeeded"} {
+		command := storage.ChannelCommand{ID: site + "-group-" + status, InstanceID: ids[0], ChannelID: 7, CommandType: "channel.update", PayloadJSON: `{"group":"vip,fast"}`, Status: "delivered", CreatedBy: "test", CreatedAt: now, UpdatedAt: now}
+		if err = s.CreateChannelCommand(command); err != nil {
+			t.Fatal(err)
+		}
+		if _, changed, err := s.CompleteChannelCommand(command.ID, status, "", now.Add(2*time.Second)); err != nil || !changed {
+			t.Fatalf("group complete: %v %v", changed, err)
+		}
+		rows, err := s.ListChannelBaseValues(site, "")
+		if err != nil || len(rows) != 1 {
+			t.Fatalf("group rows: %#v %v", rows, err)
+		}
+		if status == "failed" && rows[0].GroupName != "" {
+			t.Fatalf("failed group command changed displayed value: %#v", rows[0])
+		}
+		if status == "succeeded" && rows[0].GroupName != "vip,fast" {
+			t.Fatalf("successful group command was not displayed: %#v", rows[0])
+		}
+	}
 	// Fresh external changes replace the confirmed result, preserving anchors.
 	if err = s.StoreInstanceChannels(ids[0], []channelcontrol.Channel{{ID: 7, Name: "renamed", Models: "m", Weight: 30, Priority: 4, Status: 1}}, now.Add(3*time.Second)); err != nil {
 		t.Fatal(err)

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"controltower/internal/channelcontrol"
+	"controltower/server/internal/storage"
 	"controltower/server/internal/tuning"
 )
 
@@ -159,5 +160,30 @@ func TestRecordExecutedWriteNeverForksFromReality(t *testing.T) {
 	id, err := recordExecutedWrite(func() (string, error) { calls++; return "", fmt.Errorf("boom") })
 	if err != nil || id != "" || calls != 2 {
 		t.Fatalf("a write that reached new-api must be reported as written even without a paper trail: id=%q err=%v calls=%d", id, err, calls)
+	}
+}
+
+func TestRecordExecutedChannelGroupRetriesPersistence(t *testing.T) {
+	calls := 0
+	command, err := recordExecutedChannelGroup(func() (storage.ChannelCommand, error) {
+		calls++
+		if calls == 1 {
+			return storage.ChannelCommand{}, fmt.Errorf("lock wait timeout")
+		}
+		return storage.ChannelCommand{ID: "group-cmd", Status: "succeeded"}, nil
+	})
+	if err != nil || command.ID != "group-cmd" || calls != 2 {
+		t.Fatalf("group persistence retry failed: command=%#v err=%v calls=%d", command, err, calls)
+	}
+}
+
+func TestRecordExecutedChannelGroupReportsUnrecordedWrite(t *testing.T) {
+	calls := 0
+	command, err := recordExecutedChannelGroup(func() (storage.ChannelCommand, error) {
+		calls++
+		return storage.ChannelCommand{}, fmt.Errorf("database unavailable")
+	})
+	if err == nil || command.ID != "" || calls != 2 {
+		t.Fatalf("manual group write must expose audit persistence failure: command=%#v err=%v calls=%d", command, err, calls)
 	}
 }
