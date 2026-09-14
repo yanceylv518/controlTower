@@ -265,6 +265,24 @@ type continuousFake struct {
 	policy          *PolicyRecord
 }
 
+func TestContinuousEmptySiteMetricsPreservesPreviousEvaluation(t *testing.T) {
+	now := time.Now().UTC()
+	previous := ContinuousState{InstanceID: "i", ChannelID: 1, ModelName: "m", Phase: "normal", KError: 1, LastObservedRequests: 42, ProposedWeight: 80, UpdatedAt: now.Add(-time.Minute)}
+	f := &continuousFake{
+		bases: []ChannelBaseValue{{ChannelID: 1, ModelName: "m", Models: []string{"m"}, BaseWeight: 100, CurrentWeight: 80}},
+		states: map[int64]ContinuousState{1: previous},
+	}
+	writes, evaluated := NewEngine(f).evaluateContinuous("i", autoPolicy(), now, f)
+	if writes != 0 || evaluated != 0 || f.writeAttempts != 0 || f.states[1] != previous {
+		t.Fatalf("empty metrics must preserve trusted state without writes: writes=%d evaluated=%d state=%#v", writes, evaluated, f.states[1])
+	}
+	f.metrics = []ChannelMetric{{ChannelID: 1, RequestCount: 30, TTFTP50: 1, TTFTP90: 1, TTFTP95: 1}}
+	NewEngine(f).evaluateContinuous("i", autoPolicy(), now.Add(time.Minute), f)
+	if f.states[1].LastObservedRequests != 30 {
+		t.Fatalf("evaluation must resume with fresh metrics: %#v", f.states[1])
+	}
+}
+
 func (f *continuousFake) GetPolicy(string) (PolicyRecord, bool, error) {
 	if f.policy != nil {
 		return *f.policy, true, nil

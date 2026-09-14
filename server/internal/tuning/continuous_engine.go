@@ -90,6 +90,26 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 		log.Printf("tuning continuous evaluation site=%s stage=metrics failed duration=%s error=%v", id, metricsDuration, err)
 		return 0, 0
 	}
+	// An empty site-wide result can be a temporary ingestion or query gap.
+	// Treat it as unavailable evidence, not a fresh zero-sample evaluation:
+	// overwriting every state would make the UI oscillate and could prompt
+	// writes based on stale circuit/error state.
+	if len(metrics) == 0 {
+		// Existing empty-traffic flows still need their initial evaluation and
+		// circuit/probe transitions. Only suppress a sudden disappearance of
+		// evidence that was present in the preceding evaluation.
+		prior, priorErr := cs.ListContinuousStates(id)
+		if priorErr != nil {
+			log.Printf("tuning continuous evaluation site=%s stage=states failed during empty metrics duration=%s error=%v", id, metricsDuration, priorErr)
+			return 0, 0
+		}
+		for _, state := range prior {
+			if state.LastObservedRequests > 0 {
+				log.Printf("tuning continuous evaluation site=%s stage=metrics empty duration=%s; preserving previous states", id, metricsDuration)
+				return 0, 0
+			}
+		}
+	}
 	currentMetrics := metrics
 	currentRatesAreWindowTotals := true
 	currentRatesUnavailable := false

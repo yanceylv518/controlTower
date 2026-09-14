@@ -11,6 +11,7 @@ const filters = useFiltersStore();
 const loading = ref(false), saving = ref(false), dirty = ref(false), activeTab = ref("overview"), helpOpen = ref(false);
 const mode = ref<"observe" | "confirm" | "auto">("observe");
 const bases = ref<ChannelBaseValue[]>([]), states = ref<TuningContinuousState[]>([]), events = ref<TuningRecommendation[]>([]);
+const statesSite = ref("");
 const savedBases = ref<ChannelBaseValue[]>([]), savedPolicy = ref<TuningPolicy | null>(null), savedMode = ref<"observe" | "confirm" | "auto">("observe");
 const modelQuery = ref(""), activeModel = ref("");
 const eventModelFilter = ref(""), eventRuleFilter = ref(""), eventChannelQuery = ref("");
@@ -32,8 +33,17 @@ const models = computed(() => {
 const visibleModels = computed(() => models.value.filter(model => model.toLowerCase().includes(modelQuery.value.trim().toLowerCase())));
 const activeRows = computed(() => bases.value.filter(x => x.model_name === activeModel.value).sort((a, b) => b.current_priority - a.current_priority || b.current_weight - a.current_weight || a.channel_id - b.channel_id));
 const channelRowKey = (row: ChannelBaseValue) => `${row.channel_id}:${row.model_name}`;
-const stateMap = computed(() => new Map(states.value.map(x => [`${x.channel_id}:${x.model_name}`, x])));
+const stateMap = computed(() => new Map((statesSite.value === siteID.value ? states.value : []).map(x => [`${x.channel_id}:${x.model_name}`, x])));
 const stateFor = (row: ChannelBaseValue) => stateMap.value.get(`${row.channel_id}:${row.model_name}`);
+const acceptStates = (site: string, items: TuningContinuousState[]) => {
+  if (!items.length && statesSite.value === site && states.value.length) {
+    refreshError.value = "评估状态暂时为空，正在显示上次成功结果";
+    return;
+  }
+  states.value = items;
+  statesSite.value = site;
+  refreshError.value = "";
+};
 const validEvent = (item: TuningRecommendation) => item.rule !== "circuit_recovered" || item.proposed_weight > 0;
 const recentEvents = computed(() => events.value.filter(x => validEvent(x) && ["weight_observed", "weight_write", "manual_takeover", "auto_paused", "circuit_opened", "probe_started", "probe_failed", "circuit_recovered"].includes(x.rule)));
 const eventModel = (item: TuningRecommendation) => String(item.evidence?.model ?? bases.value.find(row => row.channel_id === item.channel_id)?.model_name ?? "");
@@ -92,7 +102,7 @@ const phaseText = (s?: TuningContinuousState) => !s ? "等待首次评估" : eff
 const phaseType = (s?: TuningContinuousState) => s?.phase === "circuit" ? "danger" : s?.phase === "probing" || s?.phase === "soft_start" || effectivePause(s) ? "warning" : "success";
 const eventName = (rule: string) => ({ weight_observed: "观察到权重变化", weight_write: "自动调整权重", manual_takeover: "检测到人工修改", auto_paused: "安全保护暂停", circuit_opened: "渠道熔断", probe_started: "开始恢复检测", probe_failed: "恢复检测未通过", circuit_recovered: "渠道恢复" } as Record<string, string>)[rule] || rule;
 const eventCount = (days: number, rule: string) => events.value.filter(x => validEvent(x) && x.rule === rule && new Date(x.created_at).getTime() >= Date.now() - days * 86400000).length;
-const sampleText = (row: ChannelBaseValue) => `${stateFor(row)?.last_observed_requests ?? 0}/${policy.continuous.min_samples}`;
+const sampleText = (row: ChannelBaseValue) => { const state = stateFor(row); return state ? `${state.last_observed_requests}/${policy.continuous.min_samples}` : "—"; };
 const rateText = (value?: number) => value == null ? "—" : Math.round(value).toLocaleString("zh-CN");
 const currentRates = ref(new Map<number, { rpm: number; tpm: number }>());
 const ratesReady = ref(false), ratesError = ref("");
@@ -127,6 +137,7 @@ const evaluationText = (row: ChannelBaseValue) => {
   if ((row.models?.length ?? 1) > 1 || state?.paused_reason === "mixed_channel") return "多模型渠道，安全暂停";
   if (modelMode(row.model_name) === "off") return "模型已关闭";
   if (row.base_weight <= 0) return "基础权重为 0，未参与调权";
+  if (!state) return "等待评估数据";
   if (state?.paused_reason || (state?.phase && state.phase !== "normal")) return phaseText(state);
   if (requests < policy.continuous.min_samples) return `样本不足 ${requests}/${policy.continuous.min_samples}`;
   if (!state?.metric_ready) return "缺少完整 TTFT 数据";
@@ -166,6 +177,7 @@ async function load(syncOnline = false) {
   if (loading.value && loadingSite === site) return;
   loadingSite = site;
   const generation = ++loadGeneration;
+  runtimeRefreshGeneration++;
   loading.value = true;
   const isCurrentLoad = () => generation === loadGeneration && site === siteID.value;
   // Only cached page reads own the loading overlay. Live synchronization
@@ -177,7 +189,14 @@ async function load(syncOnline = false) {
     mode.value = p.mode; Object.assign(policy, p.policy); policy.continuous = Object.assign(defaults(), p.policy.continuous || {}); policy.continuous.max_increase_percent ??= 10; policy.dispatch_modes ||= {};
     bases.value = b.items ?? []; events.value = r.items ?? []; for (const model of models.value) policy.dispatch_modes[model] ||= "off";
     if (!models.value.includes(activeModel.value)) activeModel.value = models.value[0] || "";
-    try { const result = await dashboard.tuningContinuousStates(site); if (!isCurrentLoad()) return; states.value = result.items ?? []; } catch { if (!isCurrentLoad()) return; states.value = []; }
+    try {
+      const result = await dashboard.tuningContinuousStates(site);
+      if (!isCurrentLoad()) return;
+      acceptStates(site, result.items ?? []);
+    } catch (error) {
+      if (!isCurrentLoad()) return;
+      refreshError.value = error instanceof Error ? error.message : "评估状态暂不可用";
+    }
     dirty.value = false; captureSavedState();
   } finally { if (generation === loadGeneration) loading.value = false; }
   try {
@@ -218,6 +237,7 @@ async function syncChannels(site: string, explicit: boolean): Promise<boolean> {
 let refreshTimer: ReturnType<typeof setInterval> | undefined;
 let ratesTimer: ReturnType<typeof setInterval> | undefined;
 const refreshError = ref("");
+let runtimeRefreshGeneration = 0;
 const channelsRefreshing = ref(false);
 async function refreshChannelsNow() {
   if (!siteID.value || channelsRefreshing.value || saving.value) return;
@@ -280,18 +300,18 @@ async function watchChannelChanges() {
 async function refreshRuntime() {
   if (!siteID.value || loading.value) return;
   const site = siteID.value;
+  const generation = ++runtimeRefreshGeneration;
   refreshNow.value = Date.now();
   try {
     const [s, r, b] = await Promise.all([dashboard.tuningContinuousStates(site), dashboard.tuningRecommendations(site, 300), dashboard.tuningBaseValues(site)]);
-    if (site !== siteID.value || loading.value || saving.value) return;
-    states.value = s.items ?? []; events.value = r.items ?? [];
+    if (generation !== runtimeRefreshGeneration || site !== siteID.value || loading.value || saving.value) return;
+    acceptStates(site, s.items ?? []); events.value = r.items ?? [];
     mergeOnlineRows(b.items ?? []);
     for (const model of models.value) policy.dispatch_modes[model] ||= "off";
     if (!models.value.includes(activeModel.value)) activeModel.value = models.value[0] || "";
     if (!dirty.value) captureSavedState();
-    refreshError.value = "";
   } catch (error) {
-    refreshError.value = error instanceof Error ? error.message : "刷新失败";
+    if (generation === runtimeRefreshGeneration && site === siteID.value) refreshError.value = error instanceof Error ? error.message : "刷新失败";
   }
 }
 async function sync(kind: "weight" | "priority") {
