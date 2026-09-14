@@ -151,19 +151,16 @@ const crossRows = computed(() =>
     .filter((item) => item.dimension_key.startsWith(crossPrefix.value))
     .map((item) => ({
       ...item,
+      crossUserID: props.kind === "models" ? item.dimension_key.slice(crossPrefix.value.length) : "",
       crossName:
         props.kind === "models"
-          ? userName(item.dimension_key.slice(crossPrefix.value.length))
+          ? (item.display_name && item.display_name !== item.dimension_key
+            ? item.display_name
+            : `用户 ${item.dimension_key.slice(crossPrefix.value.length)}`)
           : item.dimension_key.slice(crossPrefix.value.length),
     }))
     .sort((a, b) => b.request_count - a.request_count),
 );
-function userName(userID: string) {
-  const match = state.data.value?.find((x) =>
-    x.dimension_key.endsWith(`:user:${userID}`),
-  );
-  return match?.display_name || `用户 ${userID}`;
-}
 
 async function loadHistory(silent = false) {
   const request = Date.now();
@@ -440,7 +437,7 @@ const firingCount = computed(
                               ? 'warn'
                               : 'ok',
                         ]"
-                      /><b>{{ row.crossName }}</b></span
+                      /><b>{{ row.crossName }}</b><small v-if="row.crossUserID" class="cross-user-id">#{{ row.crossUserID }}</small></span
                     >
                   </template>
                 </el-table-column>
@@ -587,3 +584,7 @@ const firingCount = computed(
     </AsyncPanel>
   </AppShell>
 </template>
+
+<style scoped>
+.cross-user-id { margin-left: 6px; color: var(--ct-ink-3); font-size: 11px; font-weight: 400; }
+</style>

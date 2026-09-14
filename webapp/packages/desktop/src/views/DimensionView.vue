@@ -327,16 +327,18 @@ function rowClass({ row }: { row: DimRow }) {
       :empty="!state.data.value?.length"
       @retry="state.reload"
     >
-      <el-tabs v-model="activeTab" class="dimension-view-tabs">
-        <el-tab-pane label="指标图表" name="charts" />
-        <el-tab-pane label="排名与明细" name="ranking" />
-      </el-tabs>
+      <div class="dimension-toolbar" :aria-label="`${title}工具栏`">
+        <div class="dimension-view-switch" role="group" aria-label="监控视图">
+          <button type="button" :class="{ active: activeTab === 'charts' }" :aria-pressed="activeTab === 'charts'" @click="activeTab = 'charts'">指标图表</button>
+          <button type="button" :class="{ active: activeTab === 'ranking' }" :aria-pressed="activeTab === 'ranking'" @click="activeTab = 'ranking'">排名与明细</button>
+        </div>
+        <template v-if="activeTab === 'charts'">
+          <span class="dimension-toolbar-divider" aria-hidden="true" />
+          <el-segmented v-model="activeMetric" class="dimension-metric-switch" :options="[{ label: 'TTFT', value: 'ttft' }, { label: 'TPM', value: 'tpm' }, { label: 'OTPS', value: 'otps' }]" size="small" aria-label="监控指标" />
+        </template>
+        <span class="dimension-toolbar-count">{{ visibleRows.length }} 个{{ kind === 'channels' ? '渠道' : '模型' }}</span>
+      </div>
       <section v-show="activeTab === 'charts'" class="dimension-metric-view">
-        <el-tabs v-model="activeMetric" class="dimension-metric-tabs">
-          <el-tab-pane label="TTFT" name="ttft" />
-          <el-tab-pane label="TPM" name="tpm" />
-          <el-tab-pane label="OTPS" name="otps" />
-        </el-tabs>
         <div class="dimension-chart-grid">
           <article v-for="group in selectedTrendGroups" :key="group.key" class="dimension-chart-card">
             <header><div><h2>{{ group.name }}</h2><p>{{ kind === 'channels' ? '渠道' : '模型' }} ID {{ group.id }} · 按 Token 排名</p></div><el-button v-if="group.row" link type="primary" @click="openDetail(group.row)">详情</el-button></header>
@@ -494,10 +496,21 @@ function rowClass({ row }: { row: DimRow }) {
 </template>
 
 <style scoped>
-.dimension-view-tabs :deep(.el-tabs__header),
-.dimension-metric-tabs :deep(.el-tabs__header) { margin: 0 0 10px; }
-.dimension-view-tabs :deep(.el-tabs__content),
-.dimension-metric-tabs :deep(.el-tabs__content) { display: none; }
+.dimension-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 18px; min-height: 52px; padding: 8px 12px; margin-bottom: 14px; border: 1px solid var(--ct-line); border-radius: 8px; background: var(--ct-surface); }
+.dimension-view-switch { display: flex; align-items: center; gap: 16px; }
+.dimension-view-switch button { border: 0; border-radius: 3px; background: none; padding: 5px 0; font: inherit; font-size: 13px; color: var(--ct-ink-3); cursor: pointer; white-space: nowrap; }
+.dimension-view-switch button:hover { color: var(--ct-primary); }
+.dimension-view-switch button.active { color: var(--ct-primary); font-weight: 500; }
+.dimension-view-switch button:focus-visible { outline: 2px solid var(--ct-primary); outline-offset: 3px; }
+.dimension-toolbar-divider { width: 1px; height: 20px; background: var(--ct-line); }
+.dimension-metric-switch { --el-segmented-bg-color: var(--ct-surface-2); --el-segmented-item-selected-bg-color: var(--ct-surface); --el-segmented-item-selected-color: var(--ct-primary); font-size: 12px; }
+.dimension-metric-switch :deep(.el-segmented__item) { padding: 0 12px; }
+.dimension-toolbar-count { margin-left: auto; color: var(--ct-ink-3); font-size: 12px; white-space: nowrap; }
+@media (max-width: 1000px) { .dimension-toolbar { gap: 10px; } }
+@media (max-width: 480px) {
+  .dimension-toolbar-divider { display: none; }
+  .dimension-metric-switch :deep(.el-segmented__item) { padding: 0 9px; }
+}
 .dimension-chart-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; padding-bottom: 12px; }
 .dimension-chart-card { min-width: 0; padding: 13px 15px; border: 1px solid var(--ct-line); border-radius: var(--ct-r-card); background: var(--ct-surface); box-shadow: var(--ct-shadow); }
 .dimension-chart-card > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 8px; }

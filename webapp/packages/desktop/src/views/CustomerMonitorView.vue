@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, ref, shallowRef, watch } from "vue";
 import { Refresh, Search } from "@element-plus/icons-vue";
 import { siteOf, type MetricItem } from "@ct/shared";
 import { dashboard } from "../api";
@@ -7,8 +7,9 @@ import AppShell from "../components/AppShell.vue";
 import AsyncPanel from "../components/AsyncPanel.vue";
 import CustomerTokenChart from "../components/CustomerTokenChart.vue";
 import CustomerCompareChart from "../components/CustomerCompareChart.vue";
+import CustomerTrafficCard from "../components/CustomerTrafficCard.vue";
 import MiniSparkline from "../components/MiniSparkline.vue";
-import { useAsyncData } from "../composables/useAsyncData";
+import { latestCustomerMinute, verifiedCustomerBuckets } from "../utils/customerTraffic";
 import { useAutoRefresh } from "../composables/useAutoRefresh";
 import { useFiltersStore } from "../stores/filters";
 import { usePrefsStore } from "../stores/prefs";
@@ -21,7 +22,7 @@ void prefs.load();
 const router = useRouter();
 const hours = ref(1);
 const activeTab = ref<"charts" | "ranking">("charts");
-const activeMetric = ref<"ttft" | "tpm" | "otps">("ttft");
+const activeMetric = ref<"ttft" | "tpm" | "otps">("tpm");
 const ttftThresholds = computed(() => [
   { name: "P50", value: prefs.ttftP50Threshold, color: "#2f6fed" },
   { name: "P90", value: prefs.ttftP90Threshold, color: "#16a6b6" },
@@ -32,46 +33,69 @@ const selectedKeys = ref<string[]>([]);
 const page = ref(1);
 const pageSize = ref(50);
 const history = ref<MetricItem[]>([]);
-let initialized = false;
+const recentHistory = shallowRef<MetricItem[]>([]);
+const coverageByInstance = shallowRef(new Map<string, number[]>());
+const asOf = ref(Date.now());
+const refreshKey = ref(0);
+const trafficSort = ref("current");
+const data = shallowRef<MetricItem[]>();
+const loading = ref(false);
+const error = ref("");
+let generation = 0;
+let pending: Promise<void> | undefined;
+const state = { data, loading, error, reload };
 
-const state = useAsyncData(async () => {
-  await filters.loadInstances();
-  const instanceIDs = filters.instances
-    .filter((item) => item.enabled && siteOf(item) === filters.site_id)
-    .map((item) => item.instance_id);
-  const window = hours.value === 24 ? "5m" : "1m";
-  const responses = await Promise.all(instanceIDs.flatMap(instanceID => [
-    dashboard.metricHistory({
-      instance_id: instanceID,
-      window,
-      dimension_type: "instance_user",
-      dimension_key_prefix: `${instanceID}:user:`,
-      hours: hours.value,
-      aggregate: true,
-    }),
-    dashboard.metricHistory({
-      instance_id: instanceID,
-      window,
-      dimension_type: "instance_user",
-      dimension_key_prefix: `${instanceID}:user:`,
-      hours: hours.value,
-    }),
-  ]));
-  const summaries: MetricItem[] = [];
-  const points: MetricItem[] = [];
-  responses.forEach((response, index) => {
-    if (index % 2 === 0) summaries.push(...response.items);
-    else points.push(...response.items);
-  });
-  history.value = points;
-  initialized = true;
-  return summaries.sort((a, b) => totalTokens(b) - totalTokens(a));
-});
+function reload(silent = false): Promise<void> {
+  if (pending) return pending;
+  const token = generation;
+  const site = filters.site_id, range = hours.value;
+  if (!silent || !data.value) loading.value = true;
+  error.value = "";
+  const work = async () => {
+    try {
+      await filters.loadInstances();
+      if (token !== generation) return;
+      const instanceIDs = filters.instances.filter(item => item.enabled && siteOf(item) === site).map(item => item.instance_id);
+      const window = range === 24 ? "5m" : "1m";
+      const responses = await Promise.all(instanceIDs.map(async instanceID => {
+        const params = { instance_id: instanceID, window, dimension_type: "instance_user", dimension_key_prefix: `${instanceID}:user:`, hours: range };
+        const [summary, points, recent, instancePoints] = await Promise.all([
+          dashboard.metricHistory({ ...params, aggregate: true }),
+          dashboard.metricHistory(params),
+          range === 24 ? dashboard.metricHistory({ ...params, window: "1m", hours: 1 }) : Promise.resolve(null),
+          // A denied/unavailable instance history only disables zero inference.
+          dashboard.metricHistory({ instance_id: instanceID, window, dimension_type: "instance", dimension_key: instanceID, hours: range }).catch(() => ({ items: [] as MetricItem[] })),
+        ]);
+        return { instanceID, coverage: verifiedCustomerBuckets(instanceID, instancePoints.items, points.items), summary: summary.items, points: points.items, recent: recent?.items || points.items };
+      }));
+      if (token !== generation) return;
+      history.value = responses.flatMap(response => response.points);
+      recentHistory.value = responses.flatMap(response => response.recent);
+      coverageByInstance.value = new Map(responses.map(response => [response.instanceID, response.coverage]));
+      data.value = responses.flatMap(response => response.summary).sort((a, b) => totalTokens(b) - totalTokens(a));
+      asOf.value = Date.now();
+      refreshKey.value++;
+    } catch {
+      if (token === generation) error.value = "客户指标加载失败，请重试；已有数据保留至下次成功刷新";
+    } finally {
+      if (token === generation) { loading.value = false; pending = undefined; }
+    }
+  };
+  pending = work();
+  return pending;
+}
 
 watch([hours, () => filters.site_id], () => {
+  ++generation;
+  pending = undefined;
+  data.value = undefined;
+  history.value = [];
+  recentHistory.value = [];
+  coverageByInstance.value = new Map();
+  selectedKeys.value = [];
   page.value = 1;
-  if (initialized) void state.reload();
-});
+  void state.reload();
+}, { flush: "sync" });
 useAutoRefresh(state.reload);
 
 function totalTokens(item: MetricItem) {
@@ -143,6 +167,17 @@ const filteredRows = computed(() => {
   return allRows.value.filter(item => !keyword || `${customerName(item)} ${item.dimension_key}`.toLowerCase().includes(keyword));
 });
 const pagedRows = computed(() => filteredRows.value.slice((page.value - 1) * pageSize.value, page.value * pageSize.value));
+const minuteByKey = computed(() => {
+  const groups = new Map<string, MetricItem[]>();
+  recentHistory.value.forEach(item => { const items = groups.get(item.dimension_key) || []; items.push(item); groups.set(item.dimension_key, items); });
+  return new Map([...groups].map(([key, points]) => [key, latestCustomerMinute(points, asOf.value, hours.value === 24 ? [] : coverageByInstance.value.get(points[0].instance_id))]));
+});
+const sortedTrafficRows = computed(() => [...filteredRows.value].sort((a, b) => {
+  const delta = trafficSort.value === "current"
+    ? (minuteByKey.value.get(b.dimension_key)?.tpm ?? -1) - (minuteByKey.value.get(a.dimension_key)?.tpm ?? -1)
+    : totalTokens(b) - totalTokens(a);
+  return delta || a.dimension_key.localeCompare(b.dimension_key);
+}));
 const topTen = computed(() => filteredRows.value.slice(0, 10).map(item => ({ name: customerName(item), prompt: item.prompt_tokens, completion: item.completion_tokens })));
 
 watch(allRows, rows => {
@@ -197,11 +232,25 @@ function openDetail(row: MetricItem) {
       <el-button :icon="Refresh" circle size="small" :loading="state.loading.value" title="刷新" @click="state.reload" />
     </template>
 
-    <AsyncPanel :loading="state.loading.value" :error="state.error.value" :empty="!allRows.length" @retry="state.reload">
-      <el-tabs v-model="activeTab" class="customer-view-tabs">
-        <el-tab-pane label="客户图表" name="charts" />
-        <el-tab-pane label="排名与明细" name="ranking" />
-      </el-tabs>
+    <el-alert v-if="state.error.value && allRows.length" :title="state.error.value" type="warning" :closable="false" show-icon />
+    <AsyncPanel :loading="state.loading.value" :error="allRows.length ? '' : state.error.value" :empty="!allRows.length" @retry="state.reload">
+      <div class="customer-toolbar" aria-label="客户监控工具栏">
+        <div class="customer-view-switch" role="group" aria-label="客户视图">
+          <button type="button" :class="{ active: activeTab === 'charts' }" :aria-pressed="activeTab === 'charts'" @click="activeTab = 'charts'">客户图表</button>
+          <button type="button" :class="{ active: activeTab === 'ranking' }" :aria-pressed="activeTab === 'ranking'" @click="activeTab = 'ranking'">排名与明细</button>
+        </div>
+        <template v-if="activeTab === 'charts'">
+          <span class="customer-toolbar-divider" aria-hidden="true" />
+          <el-segmented v-model="activeMetric" class="customer-metric-switch" :options="[{ label: 'TPM', value: 'tpm' }, { label: 'TTFT', value: 'ttft' }, { label: 'OTPS', value: 'otps' }]" size="small" aria-label="监控指标" />
+        </template>
+        <div class="customer-toolbar-right">
+          <span class="customer-toolbar-count">{{ filteredRows.length }} 位客户</span>
+          <el-select v-if="activeTab === 'charts' && activeMetric === 'tpm'" v-model="trafficSort" size="small" aria-label="客户流量排序">
+            <el-option label="最近结束1分钟 TPM ↓" value="current" />
+            <el-option label="所选时段总 Token ↓" value="total" />
+          </el-select>
+        </div>
+      </div>
 
       <section v-show="activeTab === 'ranking'" class="customer-kpis">
         <article class="customer-kpi"><span>总 Token</span><strong>{{ formatTokens(grandTotal) }}</strong><small>当前 {{ hours }} 小时</small></article>
@@ -221,16 +270,16 @@ function openDetail(row: MetricItem) {
       </section>
 
       <section v-show="activeTab === 'charts'" class="customer-metric-view">
-        <el-tabs v-model="activeMetric" class="customer-metric-tabs">
-          <el-tab-pane label="TTFT" name="ttft" />
-          <el-tab-pane label="TPM" name="tpm" />
-          <el-tab-pane label="OTPS" name="otps" />
-        </el-tabs>
-        <div class="customer-trend-groups">
+        <template v-if="activeMetric === 'tpm' && activeTab === 'charts'">
+          <div class="customer-traffic-grid">
+            <CustomerTrafficCard v-for="row in sortedTrafficRows" :key="`${filters.site_id}:${row.dimension_key}`" :customer="row" :totals="historyByKey.get(row.dimension_key) || []" :minute="minuteByKey.get(row.dimension_key) || null" :verified-buckets="coverageByInstance.get(row.instance_id) || []" :hours="hours" :as-of="asOf" :refresh-key="refreshKey" @detail="openDetail(row)" />
+          </div>
+          <footer class="traffic-footer"><span>图层顺序固定 · 图例按时段流量排序</span></footer>
+        </template>
+        <div v-else-if="activeMetric !== 'tpm'" class="customer-trend-groups">
           <article v-for="group in selectedTrendGroups" :key="group.key" class="customer-trend-group">
             <header><div><h2>{{ group.name }}</h2><p>客户 ID {{ group.id }} · 按 Token 排名</p></div><el-button link type="primary" @click="openDetail(allRows.find(item => item.dimension_key === group.key)!)">详情</el-button></header>
             <section v-if="activeMetric === 'ttft'" class="customer-metric-card"><h3>TTFT</h3><p>P50 / P90 / P95 首字响应分位数</p><CustomerCompareChart :series="group.ttft" unit="s" :thresholds="ttftThresholds" /></section>
-            <section v-else-if="activeMetric === 'tpm'" class="customer-metric-card"><h3>TPM</h3><p>每分钟 Token</p><CustomerCompareChart :series="group.tpm" compact /></section>
             <section v-else class="customer-metric-card"><h3>OTPS</h3><p>流式请求生成阶段每秒输出 Token</p><CustomerCompareChart :series="group.otps" unit=" token/s" /></section>
           </article>
         </div>
@@ -280,6 +329,30 @@ function openDetail(row: MetricItem) {
 
 <style scoped>
 .customer-search { width: 220px; }
+.customer-traffic-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; align-items: start; }
+.customer-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 18px; min-height: 52px; padding: 8px 12px; margin-bottom: 14px; border: 1px solid var(--ct-line); border-radius: 8px; background: var(--ct-surface); }
+.customer-view-switch { display: flex; align-items: center; gap: 16px; }
+.customer-view-switch button { border: 0; border-radius: 3px; background: none; padding: 5px 0; font: inherit; font-size: 13px; color: var(--ct-ink-3); cursor: pointer; white-space: nowrap; }
+.customer-view-switch button:hover { color: var(--ct-primary); }
+.customer-view-switch button.active { color: var(--ct-primary); font-weight: 500; }
+.customer-view-switch button:focus-visible { outline: 2px solid var(--ct-primary); outline-offset: 3px; }
+.customer-toolbar-divider { width: 1px; height: 20px; background: var(--ct-line); }
+.customer-metric-switch { --el-segmented-bg-color: var(--ct-surface-2); --el-segmented-item-selected-bg-color: var(--ct-surface); --el-segmented-item-selected-color: var(--ct-primary); font-size: 12px; }
+.customer-metric-switch :deep(.el-segmented__item) { padding: 0 12px; }
+.customer-toolbar-right { display: flex; align-items: center; gap: 14px; margin-left: auto; min-width: 0; }
+.customer-toolbar-count { color: var(--ct-ink-3); font-size: 12px; white-space: nowrap; }
+.customer-toolbar-right :deep(.el-select) { width: 190px; max-width: 100%; }
+@media (max-width: 1000px) {
+  .customer-toolbar { gap: 10px; }
+  .customer-toolbar-right { width: 100%; justify-content: space-between; }
+}
+@media (max-width: 480px) {
+  .customer-toolbar-divider { display: none; }
+  .customer-metric-switch :deep(.el-segmented__item) { padding: 0 9px; }
+}
+.traffic-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-top: 14px; color: var(--ct-ink-3); font-size: 11px; }
+@media (max-width: 1200px) { .customer-traffic-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 780px) { .customer-traffic-grid { grid-template-columns: minmax(0, 1fr); } }
 .customer-kpis { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
 .customer-kpi { position: relative; overflow: hidden; min-height: 94px; padding: 13px 15px; border: 1px solid var(--ct-line); border-radius: var(--ct-r-card); background: var(--ct-surface); box-shadow: var(--ct-shadow); display: flex; flex-direction: column; }
 .customer-kpi::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 3px; background: #2f6fed; opacity: .8; }
@@ -290,10 +363,6 @@ function openDetail(row: MetricItem) {
 .customer-panel { min-width: 0; padding: 13px 15px; border: 1px solid var(--ct-line); border-radius: var(--ct-r-card); background: var(--ct-surface); box-shadow: var(--ct-shadow); }
 .customer-panel > header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 4px; }.customer-panel h2 { margin: 0; font-size: 14px; }.customer-panel header p { margin: 2px 0 0; color: var(--ct-ink-3); font-size: 11px; }
 :deep(.customer-chart-canvas) { width: 100%; height: 270px; }
-.customer-view-tabs :deep(.el-tabs__header) { margin: 0 0 12px; }
-.customer-view-tabs :deep(.el-tabs__content) { display: none; }
-.customer-metric-tabs :deep(.el-tabs__header) { margin: 0 0 10px; }
-.customer-metric-tabs :deep(.el-tabs__content) { display: none; }
 .customer-trend-groups { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 12px; }
 .customer-trend-group { padding: 13px 15px; border: 1px solid var(--ct-line); border-radius: var(--ct-r-card); background: var(--ct-surface); box-shadow: var(--ct-shadow); }
 .customer-trend-group > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 10px; }

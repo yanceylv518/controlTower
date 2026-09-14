@@ -508,6 +508,11 @@ func buildReport(ctx context.Context, cfg config.Config, reportedAt time.Time, s
 		rateMetrics = rateMetrics[1:]
 	}
 	report.AggregatedMetrics = append(report.AggregatedMetrics, rateMetrics...)
+	var skippedTraffic int
+	report.AggregatedMetrics, skippedTraffic = metricaggregator.LimitCustomerTraffic(report.AggregatedMetrics, 10000)
+	if skippedTraffic > 0 {
+		log.Printf("customer channel TPM breakdown skipped for this batch: %d rows exceed report budget; existing metrics retained", skippedTraffic)
+	}
 	if report.MetricBatchID == "" {
 		report.MetricBatchID = fmt.Sprintf("rates:%s:%d:%d", cfg.AgentID, reportedAt.UnixNano(), sequence)
 	}

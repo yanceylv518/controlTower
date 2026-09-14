@@ -59,7 +59,11 @@ type accumulator struct {
 
 func Aggregate1m(events []storage.LogEvent) []Metric {
 	accumulators := make(map[string]*accumulator)
+	traffic := make(map[customerChannelBucket]int64)
 	for _, event := range events {
+		if event.UserID > 0 && event.ChannelID > 0 {
+			traffic[customerChannelBucket{instance: event.InstanceID, bucket: event.CreatedAt.Truncate(time.Minute), user: event.UserID, channel: event.ChannelID}] += event.TotalTokens
+		}
 		for _, dimension := range dimensionsFor(event) {
 			key := event.InstanceID + "|" + event.CreatedAt.Truncate(time.Minute).Format(time.RFC3339) + "|" + dimension.dimensionType + "|" + dimension.dimensionKey
 			acc := accumulators[key]
@@ -78,9 +82,17 @@ func Aggregate1m(events []storage.LogEvent) []Metric {
 		}
 	}
 
-	results := make([]Metric, 0, len(accumulators))
+	results := make([]Metric, 0, len(accumulators)+len(traffic))
 	for _, acc := range accumulators {
 		results = append(results, acc.finalize())
+	}
+	for key, tokens := range traffic {
+		results = append(results, Metric{
+			InstanceID: key.instance, BucketTime: key.bucket,
+			DimensionType: "instance_user_channel",
+			DimensionKey:  key.instance + ":user:" + strconv.FormatInt(key.user, 10) + ":channel:" + strconv.FormatInt(key.channel, 10),
+			TPM:           tokens,
+		})
 	}
 	sort.Slice(results, func(i, j int) bool {
 		if results[i].BucketTime.Equal(results[j].BucketTime) {

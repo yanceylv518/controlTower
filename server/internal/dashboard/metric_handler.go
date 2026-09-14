@@ -372,6 +372,9 @@ func (h Handler) instanceName(instanceID string) string {
 }
 
 func (h Handler) displayDimensionKey(dimensionType string, dimensionKey string) string {
+	if dimensionType == "instance_user_channel" {
+		return h.displayDimensionName(dimensionType, dimensionKey)
+	}
 	parts := strings.Split(dimensionKey, ":")
 	if len(parts) < 3 {
 		return dimensionKey
@@ -410,6 +413,32 @@ func displayDimensionKey(dimensionType string, dimensionKey string) string {
 // displayDimensionName is presentation-only. DisplayKey remains backward
 // compatible because alert links and older clients still consume it.
 func (h Handler) displayDimensionName(dimensionType string, dimensionKey string) string {
+	if dimensionType == "instance_model_user" {
+		instanceID, tail, ok := strings.Cut(dimensionKey, ":model:")
+		marker := strings.LastIndex(tail, ":user:")
+		if ok && marker > 0 {
+			idText := tail[marker+len(":user:"):]
+			if id, err := strconv.ParseInt(idText, 10, 64); err == nil && id > 0 {
+				if h.names != nil {
+					return h.names.UserName(instanceID, id)
+				}
+				return "用户 " + idText
+			}
+		}
+		return dimensionKey
+	}
+	if dimensionType == "instance_user_channel" {
+		instanceID, tail, ok := strings.Cut(dimensionKey, ":user:")
+		_, channelID, hasChannel := strings.Cut(tail, ":channel:")
+		id, err := strconv.ParseInt(channelID, 10, 64)
+		if ok && hasChannel && err == nil && id > 0 {
+			if h.names != nil {
+				return h.names.ChannelName(instanceID, id)
+			}
+			return "渠道 " + channelID
+		}
+		return dimensionKey
+	}
 	parts := strings.Split(dimensionKey, ":")
 	if len(parts) < 3 {
 		return dimensionKey

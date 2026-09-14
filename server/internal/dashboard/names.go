@@ -25,11 +25,12 @@ type nameEntry struct {
 }
 
 type nameResolver struct {
-	source NameSource
-	ttl    time.Duration
-	now    func() time.Time
-	mu     sync.Mutex
-	cache  map[string]nameEntry
+	customers *customerNameDirectory
+	source    NameSource
+	ttl       time.Duration
+	now       func() time.Time
+	mu        sync.Mutex
+	cache     map[string]nameEntry
 }
 
 func newNameResolver(source NameSource, ttl time.Duration) *nameResolver {
@@ -85,6 +86,9 @@ func (r *nameResolver) ChannelName(instanceID string, channelID int64) string {
 }
 
 func (r *nameResolver) UserName(instanceID string, userID int64) string {
+	if name := r.customerName(instanceID, userID); name != "" {
+		return name
+	}
 	fallback := fmt.Sprintf("用户 %d", userID)
 	if bulk, ok := r.source.(bulkNameSource); ok {
 		r.preloadUsers(instanceID, bulk)

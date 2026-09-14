@@ -40,8 +40,12 @@ func Aggregate(instanceID string, events []logcollector.Event, cacheHitMinPrompt
 		userCodes = configuredUserCodes[0]
 	}
 	accumulators := make(map[string]*accumulator)
+	traffic := make(map[customerChannelBucket]int64)
 	for _, event := range events {
 		bucket := event.CreatedAt.Truncate(time.Minute)
+		if event.UserID > 0 && event.ChannelID > 0 {
+			traffic[customerChannelBucket{bucket: bucket, user: event.UserID, channel: event.ChannelID}] += event.TotalTokens
+		}
 		for _, dimension := range dimensionsFor(instanceID, event) {
 			key := bucket.Format(time.RFC3339) + "|" + dimension.dimensionType + "|" + dimension.dimensionKey
 			acc := accumulators[key]
@@ -53,9 +57,17 @@ func Aggregate(instanceID string, events []logcollector.Event, cacheHitMinPrompt
 		}
 	}
 
-	metrics := make([]reporter.AggregatedMetricPayload, 0, len(accumulators))
+	metrics := make([]reporter.AggregatedMetricPayload, 0, len(accumulators)+len(traffic))
 	for _, acc := range accumulators {
 		metrics = append(metrics, acc.finalize())
+	}
+	for key, tokens := range traffic {
+		metrics = append(metrics, reporter.AggregatedMetricPayload{
+			BucketTime: key.bucket, WindowSeconds: 60,
+			DimensionType: "instance_user_channel",
+			DimensionKey:  instanceID + ":user:" + strconv.FormatInt(key.user, 10) + ":channel:" + strconv.FormatInt(key.channel, 10),
+			TPM:           tokens,
+		})
 	}
 	sort.Slice(metrics, func(i, j int) bool {
 		if metrics[i].BucketTime.Equal(metrics[j].BucketTime) {

@@ -217,7 +217,7 @@ func allowAdminRequest(u storage.User, r *http.Request) bool {
 		switch r.URL.Query().Get("dimension_type") {
 		case "instance":
 			return any("overview.read")
-		case "instance_user", "instance_user_model":
+		case "instance_user", "instance_user_model", "instance_user_channel":
 			return any("monitor.customers")
 		case "instance_channel", "instance_channel_model":
 			return any("monitor.channels")

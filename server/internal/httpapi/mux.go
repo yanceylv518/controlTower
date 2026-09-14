@@ -61,7 +61,14 @@ func NewMux(options Options) *http.ServeMux {
 	mux.HandleFunc("/api/agent/heartbeat", agentHandler.HandleHeartbeat)
 	mux.HandleFunc("/api/agent/report", agentHandler.HandleReport)
 
-	dashboardHandler := dashboard.NewHandler(options.Store).WithNameSource(options.Store).WithLogStore(options.Store).WithLogSampleStore(options.Store).WithRuntimeStore(options.Store).WithMetricSource(options.Store).WithAlertStore(options.Store).WithNotificationStore(options.Store).WithChannelSnapshotStore(options.Store).WithNginxTimingStore(options.Store).WithNotificationMaxAttempts(options.NotificationMaxAttempts).WithSettingsProvider(options.SettingsProvider).WithInstanceStore(options.Store).WithAlertGenerationDisabled()
+	passthrough := &dashboard.PassthroughHandler{SecretKey: options.SecretKey, Audit: options.Store}
+	if configStore, ok := any(options.Store).(dashboard.ReadonlyConfigStore); ok {
+		passthrough.Config = configStore
+	}
+	if rollupStore, ok := any(options.Store).(dashboard.ReadonlyLogRollupStore); ok {
+		passthrough.Rollups = rollupStore
+	}
+	dashboardHandler := dashboard.NewHandler(options.Store).WithNameSource(options.Store).WithCustomerNameSource(passthrough).WithLogStore(options.Store).WithLogSampleStore(options.Store).WithRuntimeStore(options.Store).WithMetricSource(options.Store).WithAlertStore(options.Store).WithNotificationStore(options.Store).WithChannelSnapshotStore(options.Store).WithNginxTimingStore(options.Store).WithNotificationMaxAttempts(options.NotificationMaxAttempts).WithSettingsProvider(options.SettingsProvider).WithInstanceStore(options.Store).WithAlertGenerationDisabled()
 	tuningStore := options.TuningStore
 	if tuningStore == nil {
 		tuningStore, _ = any(options.Store).(tuning.Store)
@@ -139,13 +146,6 @@ func NewMux(options Options) *http.ServeMux {
 	}
 	if configStore, ok := any(options.Store).(dashboard.ControlConfigStore); ok {
 		instances.ControlConfig = configStore
-	}
-	passthrough := &dashboard.PassthroughHandler{SecretKey: options.SecretKey, Audit: options.Store}
-	if configStore, ok := any(options.Store).(dashboard.ReadonlyConfigStore); ok {
-		passthrough.Config = configStore
-	}
-	if rollupStore, ok := any(options.Store).(dashboard.ReadonlyLogRollupStore); ok {
-		passthrough.Rollups = rollupStore
 	}
 	commands := (dashboard.CommandHandler{Store: options.Store, Instances: options.Store}).WithNameSource(options.Store)
 	mux.Handle("POST /api/dashboard/channels/{channelID}/commands", protect(http.HandlerFunc(commands.Create)))
