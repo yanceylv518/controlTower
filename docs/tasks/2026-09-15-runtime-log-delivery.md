@@ -1,5 +1,11 @@
 # 运行监控与日志既有改动提交交付
 
+## rc112 打包发布（2026-09-15，已发布）
+
+- 用户授权打包，沿用 GitHub 发布流程；目标 v2.0.0-rc112，提交 1d476657e2171a30c674eeca91d60b425d79f8f6；对应 CI 34925280399 completed/success。
+- 范围：本次电话设置纠偏，产出 Server/Agent 安装包、SHA256SUMS 和 GHCR 镜像。无需新迁移或再次升级 rc111 Agent；不部署生产。发布任务 34925447820 completed/success，安装包构建、Docker 镜像构建推送、GitHub release 创建均成功。已核验三个非空安装包及 SHA256SUMS 均 uploaded；未下载到本地复核校验。
+- 发布页：https://github.com/yanceylv518/controlTower/releases/tag/v2.0.0-rc112；镜像 ghcr.io/yanceylv518/controltower-server:v2.0.0-rc112（工作流同时更新 latest）。未部署生产，下一步按用户安排升级 Server/前端并验收真实客户目录和拨号。
+
 ## 电话设置纠偏提交（2026-09-15，已推送）
 
 - 用户授权提交并推送本任务相关修改，工作目录 .tmp/runtime-log-delivery，分支 codex/runtime-log-delivery；范围含客户自动目录/号码多选、设置页统一样式、万单位、默认 20% 和比例判断开关及回归文档。主工作区其他改动保留。
