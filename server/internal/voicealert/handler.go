@@ -73,6 +73,7 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c.Targets = nil
+	c = c.WithDirectionRules()
 	calls, err := h.Store.Calls(ctx, site)
 	if err != nil {
 		fail(500, "电话记录读取失败")
@@ -104,5 +105,5 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	list = filtered
-	_ = json.NewEncoder(w).Encode(map[string]any{"site_id": site, "site_scoped": true, "config": c, "credentials_ready": h.Caller.Ready(), "worker_enabled": h.Runner != nil, "calls": calls, "targets": statuses, "customers": list.Customers, "unavailable_sites": list.UnavailableSites, "directory_error": directoryError})
+	_ = json.NewEncoder(w).Encode(map[string]any{"site_id": site, "site_scoped": true, "direction_rules": true, "config": c, "credentials_ready": h.Caller.Ready(), "worker_enabled": h.Runner != nil, "calls": calls, "targets": statuses, "customers": list.Customers, "unavailable_sites": list.UnavailableSites, "directory_error": directoryError})
 }

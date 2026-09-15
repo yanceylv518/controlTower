@@ -64,6 +64,26 @@ func TestVoiceSiteConfigIntegration(t *testing.T) {
 	if !ca.Enabled || ca.Percent != 20 || !ca.UsePercent || cb.Enabled || cb.Percent != 31 || cb.UsePercent {
 		t.Fatal(ca, cb)
 	}
+	ca = ca.WithDirectionRules()
+	ca.Rise.Enabled = false
+	ca.Rise.Percent = 70
+	ca.Fall.Percent = 25
+	ca.Fall.Delta = 15000000
+	ca.Fall.UsePercent = false
+	if err := store.SaveConfig(ctx, a, ca, "test"); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.Config(ctx, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Rise.Enabled || loaded.Rise.Percent != 70 || loaded.Fall.Percent != 25 || loaded.Fall.Delta != 15000000 || loaded.Fall.UsePercent {
+		t.Fatal("direction rules not persisted", loaded)
+	}
+	other, err := store.Config(ctx, b)
+	if err != nil || other.Rule("上涨").Percent != 31 {
+		t.Fatal("other site overwritten", other, err)
+	}
 	c.Recipients[0].Targets = []string{a + "/1"}
 	if err := store.SaveConfig(ctx, b, c, "test"); err == nil {
 		t.Fatal("cross-site save accepted")

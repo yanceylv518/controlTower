@@ -18,24 +18,57 @@ type Recipient struct {
 	Phone   string   `json:"phone"`
 	Targets []string `json:"targets"`
 }
+type DirectionRule struct {
+	Enabled    bool    `json:"enabled"`
+	UsePercent bool    `json:"use_percent"`
+	Percent    float64 `json:"percent"`
+	Delta      int64   `json:"delta"`
+}
 type Config struct {
-	Enabled          bool        `json:"enabled"`
-	TtsCode          string      `json:"tts_code"`
-	CalledShowNumber string      `json:"called_show_number"`
-	Percent          float64     `json:"percent"`
-	UsePercent       bool        `json:"use_percent"`
-	Delta            int64       `json:"delta"`
-	Targets          []Target    `json:"targets,omitempty"` // Legacy input only; discovery uses the system directory.
-	Recipients       []Recipient `json:"recipients"`
+	Rise             *DirectionRule `json:"rise,omitempty"`
+	Fall             *DirectionRule `json:"fall,omitempty"`
+	Enabled          bool           `json:"enabled"`
+	TtsCode          string         `json:"tts_code"`
+	CalledShowNumber string         `json:"called_show_number"`
+	Percent          float64        `json:"percent"`
+	UsePercent       bool           `json:"use_percent"`
+	Delta            int64          `json:"delta"`
+	Targets          []Target       `json:"targets,omitempty"` // Legacy input only; discovery uses the system directory.
+	Recipients       []Recipient    `json:"recipients"`
 }
 
 func DefaultConfig() Config {
 	return Config{UsePercent: true, Percent: 20, Delta: 10000000, Targets: []Target{}, Recipients: []Recipient{}}
 }
 
+// Missing direction rules inherit legacy thresholds; explicit disabled rules remain disabled.
+func (c Config) Rule(direction string) DirectionRule {
+	rule := c.Fall
+	if direction == "上涨" {
+		rule = c.Rise
+	}
+	if rule != nil {
+		return *rule
+	}
+	return DirectionRule{Enabled: true, UsePercent: c.UsePercent, Percent: c.Percent, Delta: c.Delta}
+}
+func (c Config) WithDirectionRules() Config {
+	rise, fall := c.Rule("上涨"), c.Rule("下降")
+	c.Rise = &rise
+	c.Fall = &fall
+	return c
+}
+
 var phonePattern = regexp.MustCompile(`^(1[3-9][0-9]{9}|0[0-9]{9,11})$`)
 
 func (c Config) Validate() error {
+	for _, direction := range []string{"上涨", "下降"} {
+		rule := c.Rule(direction)
+		if math.IsNaN(rule.Percent) || math.IsInf(rule.Percent, 0) || rule.Percent <= 0 || rule.Percent > 10000 || rule.Delta <= 0 || rule.Delta > 1000000000000 {
+			return fmt.Errorf("%s比例应在0–10000%%之间，差值应在1–1000000000000之间", direction)
+		}
+	}
+
 	if math.IsNaN(c.Percent) || math.IsInf(c.Percent, 0) || c.Percent <= 0 || c.Percent > 10000 || c.Delta <= 0 || c.Delta > 1000000000000 {
 		return fmt.Errorf("波动比例应在 0–10000%% 之间，差值阈值应在 1–1000000000000 之间")
 	}
@@ -123,5 +156,6 @@ func Evaluate(values []int64, c Config) (bool, int64, int64, string) {
 	}
 	// Measure against the value before the excursion, including declines.
 	// A rise from zero has no finite ratio and uses the absolute threshold.
-	return delta > c.Delta && (!c.UsePercent || baseline == 0 || float64(delta)/float64(baseline)*100 > c.Percent), low, high, direction
+	rule := c.Rule(direction)
+	return rule.Enabled && delta > rule.Delta && (!rule.UsePercent || baseline == 0 || float64(delta)/float64(baseline)*100 > rule.Percent), low, high, direction
 }

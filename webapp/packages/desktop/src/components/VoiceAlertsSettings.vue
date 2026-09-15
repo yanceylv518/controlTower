@@ -6,17 +6,24 @@ import { useFiltersStore } from '../stores/filters'
 import StatusTag from './StatusTag.vue'
 type Target = { site: string; user_id: number; label: string }
 type Recipient = { phone: string; targets: string[]; scope?: 'all' | 'selected' }
-type Config = { enabled: boolean; tts_code: string; called_show_number: string; use_percent: boolean; percent: number; delta: number; recipients: Recipient[] }
+type DirectionRule = { enabled: boolean; use_percent: boolean; percent: number; delta: number }
+type Config = { rise: DirectionRule; fall: DirectionRule; enabled: boolean; tts_code: string; called_show_number: string; use_percent: boolean; percent: number; delta: number; recipients: Recipient[] }
 type Call = { id: string; site: string; user_id: number; phone: string; min_tpm: number; max_tpm: number; direction: string; status: string; code: string; call_id: string; created_at: string }
 type Status = { site: string; user_id: number; state: string; min_tpm: number; max_tpm: number; direction: string; window_end: string }
-type Response = { site_id: string; site_scoped: boolean; config: Config; credentials_ready: boolean; worker_enabled: boolean; calls: Call[]; targets: Status[]; customers: Target[]; unavailable_sites: string[]; directory_error: string }
+type Response = { site_id: string; site_scoped: boolean; direction_rules: boolean; config: Config; credentials_ready: boolean; worker_enabled: boolean; calls: Call[]; targets: Status[]; customers: Target[]; unavailable_sites: string[]; directory_error: string }
+const defaultRule = (): DirectionRule => ({ enabled: true, use_percent: true, percent: 20, delta: 10000000 })
+const directions = [{ key: 'rise' as const, label: '上涨预警' }, { key: 'fall' as const, label: '下降预警' }]
+const normalizeRules = (c: Config) => {
+ const legacy = { enabled: true, use_percent: c.use_percent ?? true, percent: c.percent ?? 20, delta: c.delta ?? 10000000 }
+ return { rise: { ...(c.rise || legacy) }, fall: { ...(c.fall || legacy) } }
+}
 const filters = useFiltersStore()
 let requestVersion = 0
-const config = ref<Config>({ enabled: false, tts_code: '', called_show_number: '', use_percent: true, percent: 20, delta: 10000000, recipients: [] })
-const deltaWan = computed({
- get: () => config.value.delta / 10000,
- set: (value: number | undefined) => { config.value.delta = typeof value === 'number' ? Math.round(value * 10000) : 0 },
-})
+const config = ref<Config>({ rise: defaultRule(), fall: defaultRule(), enabled: false, tts_code: '', called_show_number: '', use_percent: true, percent: 20, delta: 10000000, recipients: [] })
+const deltaWan = {
+ rise: computed({get: () => config.value.rise.delta / 10000, set: (v: number | undefined) => { config.value.rise.delta = typeof v === 'number' ? Math.round(v * 10000) : 0 }}),
+ fall: computed({get: () => config.value.fall.delta / 10000, set: (v: number | undefined) => { config.value.fall.delta = typeof v === 'number' ? Math.round(v * 10000) : 0 }}),
+}
 const customers = ref<Target[]>([]), directoryWarning = ref('')
 const serverCompatible = ref(false)
 const ready = ref(false), worker = ref(false), loading = ref(false), loaded = ref(false)
@@ -30,7 +37,7 @@ async function request(save = false, refreshOnly = false) {
   ElMessage.error('请先更新远程 Server，再保存电话预警配置')
   return
  }
- if (save && (!Number.isInteger(config.value.delta) || config.value.delta < 1 || config.value.delta > 1000000000000)) {
+ if (save && [config.value.rise, config.value.fall].some(rule => !Number.isInteger(rule.delta) || rule.delta < 1 || rule.delta > 1000000000000)) {
   ElMessage.error('请填写有效的 TPM 差值（0.0001–100000000 万 Token）')
   return
  }
@@ -41,14 +48,14 @@ async function request(save = false, refreshOnly = false) {
  const version = ++requestVersion
  loading.value = true
  try {
-  const { enabled, tts_code, called_show_number, use_percent, percent, delta, recipients } = config.value
-  const body = { enabled, tts_code, called_show_number, use_percent, percent, delta, recipients: recipients.map(r => ({ phone: r.phone, targets: r.scope === 'all' ? [] : r.targets })) }
+  const { enabled, tts_code, called_show_number, rise, fall, use_percent, percent, delta, recipients } = config.value
+  const body = { enabled, tts_code, called_show_number, rise, fall, use_percent, percent, delta, recipients: recipients.map(r => ({ phone: r.phone, targets: r.scope === 'all' ? [] : r.targets })) }
   const result = await client.request<Response>(`/api/dashboard/voice-alerts?site_id=${encodeURIComponent(site)}`, save ? { method: 'PUT', body: JSON.stringify(body) } : {})
   if (version !== requestVersion || site !== filters.site_id) return
-  if (!refreshOnly || !loaded.value) config.value = { ...result.config, use_percent: result.config.use_percent ?? true, recipients: (result.config.recipients || []).map(r => ({ ...r, targets: r.targets || [], scope: r.targets?.length ? 'selected' : 'all' })) }
+  if (!refreshOnly || !loaded.value) config.value = { ...result.config, ...normalizeRules(result.config), use_percent: result.config.use_percent ?? true, recipients: (result.config.recipients || []).map(r => ({ ...r, targets: r.targets || [], scope: r.targets?.length ? 'selected' : 'all' })) }
   customers.value = result.customers || []
-  serverCompatible.value = Array.isArray(result.customers) && result.site_scoped === true && result.site_id === site
-  directoryWarning.value = !serverCompatible.value ? '远程 Server 尚未支持站点级电话预警。请先更新 Server；当前可预览页面，暂不能保存电话预警配置。' : result.directory_error || (result.unavailable_sites?.length ? `以下站点客户列表暂时无法读取：${result.unavailable_sites.join('、')}。已有选择保留，这些站点暂不检测。` : '')
+  serverCompatible.value = Array.isArray(result.customers) && result.site_scoped === true && result.direction_rules === true && result.site_id === site
+  directoryWarning.value = !serverCompatible.value ? '远程 Server 尚未支持上涨/下降独立配置。请先更新 Server；当前可预览页面，暂不能保存电话预警配置。' : result.directory_error || (result.unavailable_sites?.length ? `以下站点客户列表暂时无法读取：${result.unavailable_sites.join('、')}。已有选择保留，这些站点暂不检测。` : '')
   ready.value = result.credentials_ready; worker.value = result.worker_enabled; calls.value = result.calls; statuses.value = result.targets; loaded.value = true
   if (save) ElMessage.success('电话预警配置已保存')
  } catch (e) { if (version !== requestVersion || site !== filters.site_id) return; ElMessage.error(e instanceof Error ? e.message : '电话预警配置加载失败') }
@@ -58,7 +65,7 @@ watch(() => filters.site_id, () => {
  ++requestVersion
  loaded.value = false; loading.value = false; serverCompatible.value = false
  customers.value = []; calls.value = []; statuses.value = []; directoryWarning.value = ''
- config.value = { enabled: false, tts_code: '', called_show_number: '', use_percent: true, percent: 20, delta: 10000000, recipients: [] }
+ config.value = { rise: defaultRule(), fall: defaultRule(), enabled: false, tts_code: '', called_show_number: '', use_percent: true, percent: 20, delta: 10000000, recipients: [] }
  void request()
 }, { immediate: true, flush: 'sync' })
 const targetKey = (target: Target) => `${target.site}/${target.user_id}`
@@ -86,10 +93,14 @@ const customerOptions = computed(() => {
    <div class="voice-fields">
     <el-form-item class="full-field" label="语音通知模板"><el-input v-model="config.tts_code" placeholder="填写已审核的 TTS 模板 ID" /><span class="field-hint">模板变量：customer、direction</span></el-form-item>
     <el-form-item class="full-field" label="专属显号 / 服务实例"><el-input v-model="config.called_show_number" placeholder="公共模式留空" /></el-form-item>
-    <div class="threshold-caption"><span>触发条件</span><span>近 5 分钟 · {{ config.use_percent ? '同时满足' : '仅判断差值' }}</span></div>
-    <div class="full-field"><el-checkbox v-model="config.use_percent">同时判断波动比例</el-checkbox></div>
-    <el-form-item label="波动比例大于（%）"><el-input-number v-model="config.percent" :disabled="!config.use_percent" :min="0.1" :max="10000" controls-position="right" /></el-form-item>
-    <el-form-item label="TPM 差值大于（万）"><el-input-number v-model="deltaWan" :min="0.0001" :max="100000000" :step="100" controls-position="right" aria-label="TPM 差值大于（万 Token）" /></el-form-item>
+    <section v-for="direction in directions" :key="direction.key" class="full-field direction-rule">
+     <div class="threshold-caption"><span>{{ direction.label }}</span><el-switch v-model="config[direction.key].enabled" :aria-label="`启用${direction.label}`" size="small" /></div>
+     <div class="voice-fields">
+      <div class="full-field"><el-checkbox v-model="config[direction.key].use_percent" :disabled="!config[direction.key].enabled">同时判断{{ direction.key === 'rise' ? '上涨' : '下降' }}比例</el-checkbox></div>
+      <el-form-item :label="`${direction.key === 'rise' ? '上涨' : '下降'}比例大于（%）`"><el-input-number v-model="config[direction.key].percent" :disabled="!config[direction.key].enabled || !config[direction.key].use_percent" :min="0.1" :max="10000" controls-position="right" /></el-form-item>
+      <el-form-item label="TPM 差值大于（万）"><el-input-number v-model="deltaWan[direction.key].value" :disabled="!config[direction.key].enabled" :min="0.0001" :max="100000000" :step="100" controls-position="right" :aria-label="`${direction.label} TPM 差值（万 Token）`" /></el-form-item>
+     </div>
+    </section>
    </div>
    <details class="rule-details"><summary>计算口径与冷却规则</summary><p>差值 = 最高 TPM − 最低 TPM；按最高、最低值最后出现的先后判断方向：上涨比例 = 差值 ÷ 最低 TPM × 100%，下降比例 = 差值 ÷ 最高 TPM × 100%。关闭比例判断时，只需差值达标；开启时两项同时达标，从 0 上涨时只判断差值，降至 0 按下降 100% 判断；等于阈值不触发。采集不完整时等待数据，同一客户对同一号码至少冷却 10 分钟。</p></details>
    </section>
