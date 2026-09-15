@@ -116,10 +116,7 @@ func (h BillingStatementResultHandler) ServeHTTP(w http.ResponseWriter, r *http.
 			writeDashboardError(w, http.StatusInternalServerError, "billing_statement_files_failed")
 			return
 		}
-		dailyFiles := []map[string]any{}
-		for _, file := range files {
-			dailyFiles = append(dailyFiles, map[string]any{"day": file.BillDay.In(billing.BusinessLocation).Format("2006-01-02"), "filename": statementDailyFilename(job, file.BillDay)})
-		}
+		dailyFiles := statementDailyDownloads(job, files)
 		writeDashboardJSON(w, http.StatusOK, map[string]any{"daily_files": dailyFiles, "job": job, "total_orders": billable + job.AbnormalRows, "normal_orders": verified, "billable_orders": billable, "anomaly_total": job.AbnormalRows, "reconciliation_total": job.MismatchRows, "review_required": job.MismatchRows > 0, "count_balanced": verified+job.AbnormalRows+job.MismatchRows == billable+job.AbnormalRows, "model_summary": preview.Models, "daily_summary": preview.Daily, "token_summary": preview.Tokens, "anomalies": preview.Anomalies, "reconciliation": preview.Reconciliation})
 		return
 	}
@@ -172,7 +169,7 @@ func (h BillingStatementResultHandler) ServeHTTP(w http.ResponseWriter, r *http.
 		if openErr != nil {
 			continue
 		}
-		entry, createErr := z.Create("日明细/" + statementDailyFilename(job, file.BillDay))
+		entry, createErr := z.Create("日明细/" + statementDailyMemberFilename(job, file))
 		if createErr == nil {
 			_, _ = io.Copy(entry, in)
 		}
@@ -191,6 +188,16 @@ func (h BillingStatementResultHandler) writeDailyFile(w http.ResponseWriter, r *
 	files, err := h.Store.ListBillingStatementUserFiles(r.Context(), job.ID)
 	if err != nil {
 		writeDashboardError(w, http.StatusInternalServerError, "billing_statement_files_failed")
+		return
+	}
+	selected := []billing.UserDailyFile{}
+	for _, item := range files {
+		if item.BillDay.In(billing.BusinessLocation).Format("2006-01-02") == day.Format("2006-01-02") {
+			selected = append(selected, item)
+		}
+	}
+	if len(selected) > 1 {
+		h.writeDailyArchive(w, r, job, day, selected)
 		return
 	}
 	for _, item := range files {
