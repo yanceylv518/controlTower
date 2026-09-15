@@ -10,6 +10,7 @@ import (
 	"controltower/agent/internal/reporter"
 	"controltower/internal/cachemetrics"
 	"controltower/internal/latencyhist"
+	"controltower/internal/speedstats"
 )
 
 type accumulator struct {
@@ -82,6 +83,9 @@ func Aggregate(instanceID string, events []logcollector.Event, cacheHitMinPrompt
 }
 
 func (a *accumulator) add(event logcollector.Event, cacheHitMinPromptTokens int64, userCodes map[int]bool) {
+	if a.metric.DimensionType == "instance_channel" && a.metric.SpeedTTFT == nil {
+		a.metric.SpeedTTFT = speedstats.New()
+	}
 	a.metric.RequestCount++
 	zeroOutput := event.LogType == "consume" && event.CompletionTokens == 0
 	if event.LogType == "consume" && !zeroOutput {
@@ -125,6 +129,16 @@ func (a *accumulator) add(event logcollector.Event, cacheHitMinPromptTokens int6
 		}
 	}
 	if event.IsStream && event.FirstResponseMs != nil {
+		if stats := a.metric.SpeedTTFT; stats != nil {
+			switch {
+			case event.AttemptCount > 1:
+				stats.RetryCount++
+			case event.AttemptCount == 1 && event.LogType == "consume" && event.CompletionTokens > 0:
+				stats.Buckets[latencyhist.IndexV2(float64(*event.FirstResponseMs)/1000)]++
+			default:
+				stats.UnknownCount++
+			}
+		}
 		a.ttftCount++
 		a.ttftSumMS += *event.FirstResponseMs
 		if len(a.ttftValues) < maxRawValuesPerBucket {

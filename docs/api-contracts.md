@@ -310,3 +310,22 @@ Agent 需要与 Server 一起升级到支持 `group` 字段的版本；旧 Agent
 通知类别新增“渠道熔断”，包含 `channel_circuit_opened` 和 `channel_circuit_recovered`。复用调权事件，仅 auto 模式且关联 channel.update 命令 succeeded 后生成；观察模式、失败和待执行命令不通知。按事件 ID 持久去重，恢复使用独立消息及重试记录，并关闭同站点同渠道此前的熔断告警。恢复信息在告警中心以 resolved/info 展示；短时间熔断后恢复仍可分别投递两条带事件时间的消息。
 
 076 迁移记录启用时间，仅消费该时间之后的事件，不补发历史熔断。普通指标扫描不能关闭熔断事件；已发送熔断消息不会因恢复而重新释放。旧渠道显式所选类别不扩大；空 rule_keys 的全部类别渠道会包含新增熔断类别。按站点投递，复用已有重试、确认和静默；不新增周期提醒。事件映射保留以防历史告警清理后重发。需要升级 Server/前端及迁移，Agent 无新增要求。
+
+
+## 调权专用未重试 TTFT（2026-09-15）
+
+Agent 在原有 `/api/agent/report` 的 `aggregated_metrics` 渠道条目中可附带 `speed_ttft`，不增加上报请求或采集次数。仅 `instance_channel` 维度携带；客户、模型等其他维度及公共 TTFT 字段不变。
+
+```json
+{"speed_ttft":{"buckets":[0,0,10,0,0,0,0,0,0,0,0,0,0,0,0],"retry_count":3,"unknown_count":2}}
+```
+
+- `buckets`：15 个非累计桶，边界与 `ttft_buckets` V2 相同；只计入有有效 `frt`、输出 Token 大于 0 的成功流式日志，且 `other.admin_info.use_channel` 完整、长度为 1、末渠道与日志渠道相同。
+- `retry_count`：有效流式 TTFT 中能确认尝试次数大于 1 的数量，包括同渠道重试。
+- `unknown_count`：其余有效流式 TTFT 数量，包括无法确认尝试信息或不符合成功输出条件的记录。
+- 三者之和必须等于公共 `ttft_count`，长度、非负性或总数校验失败时仅忽略该可选统计，不中断公共监控上报。
+- 缺失对象表示旧 Agent 或无有效新统计；全零对象表示新 Agent 已统计但该条目无有效流式 TTFT。合并仅累加存在的新证据，旧记录不被认定为未重试；公开 TTFT 总数减去新证据总数得到旧口径/缺失覆盖数量。
+- 079 迁移新增 1m/5m 可空统计列及调权状态计数/口径版本，不用历史公共 TTFT 回填新字段。原批次 ID 去重事务覆盖新增数据。
+- 调权速度分位数、同模型速度基线均使用专用桶；最低样本数使用有效未重试 TTFT 数，不以总请求数代替。缓存、OTPS、错误及其原有资格条件不变。
+- 速度样本或速度基线不足时保留相同模型之前的新口径速度系数；首次及旧口径评分使用中性 1。旧版本评分不会被当成新口径可信值继承。
+- 状态 API 新增 `speed_sample_count`、`speed_retry_count`、`speed_unknown_count`、`speed_legacy_count`、`speed_stats_version`；变更记录 evidence 同步记录。升级顺序为 Server/079 迁移与前端，然后 Agent；无生产迁移/部署包含在本次代码交付中。

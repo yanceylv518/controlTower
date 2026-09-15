@@ -26,6 +26,8 @@ type continuousBaseline struct {
 	ttft50, ttft90, ttft95 float64
 	cache, otps            float64
 	cacheReady, otpsReady  bool
+	speedReady             bool
+	probeTTFT95            float64 // Public baseline retained for existing recovery probes.
 }
 
 const (
@@ -170,6 +172,11 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 				state.Phase = "normal"
 			}
 			state.KSpeed, state.KCache, state.KOTPS = 1, 1, 1
+			// Never retain an old unfiltered speed score during migration.
+			if base.BaseWeight > 0 && len(base.Models) <= 1 && previous.ModelName == model && previous.SpeedStatsVersion == 1 && previous.KSpeed > 0 {
+				state.KSpeed = clamp(previous.KSpeed, p.SpeedMinFactor, p.SpeedMaxFactor)
+			}
+			state.SpeedStatsVersion = 1
 			// manual_override is obsolete in authoritative auto tuning. Clear any
 			// legacy state before the early-return branches below (mixed channel,
 			// zero baseline, circuit and probing), so an old pause can never remain
@@ -200,9 +207,10 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 			if currentRatesUnavailable && (base.MaxRPM > 0 || base.MaxTPM > 0) {
 				state.CapacityLimited = true
 			}
-			state.MetricReady = m.RequestCount >= p.MinSamples && m.TTFTP50 > 0 && m.TTFTP90 > 0 && m.TTFTP95 > 0
-			state.BaselineReady = healthy
-			state.MetricTTFTP50, state.MetricTTFTP90, state.MetricTTFTP95 = m.TTFTP50, m.TTFTP90, m.TTFTP95
+			state.MetricReady = speedEvidenceReady(m, p.MinSamples)
+			state.SpeedSamples, state.SpeedRetries, state.SpeedUnknown, state.SpeedLegacy = m.SpeedSamples, m.SpeedRetries, m.SpeedUnknown, m.SpeedLegacy
+			state.BaselineReady = baseline.speedReady
+			state.MetricTTFTP50, state.MetricTTFTP90, state.MetricTTFTP95 = m.SpeedTTFTP50, m.SpeedTTFTP90, m.SpeedTTFTP95
 			state.BaselineTTFTP50, state.BaselineTTFTP90, state.BaselineTTFTP95 = baseline.ttft50, baseline.ttft90, baseline.ttft95
 			state.MetricCache, state.BaselineCache = m.CacheHitRate, baseline.cache
 			state.CacheReady = baseline.cacheReady && m.CachePromptTokens >= cacheEvidenceTokens
@@ -259,10 +267,10 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 			if state.Phase == "probing" && state.ProbeCommandID == nil && state.ProbeAttempts > 0 {
 				successRatio := float64(state.ProbeSuccesses) / float64(state.ProbeAttempts)
 				probeSpeed := 1.0
-				if state.ProbeSuccesses > 0 && healthy && baseline.ttft95 > 0 {
+				if state.ProbeSuccesses > 0 && healthy && baseline.probeTTFT95 > 0 {
 					avg := state.ProbeDurationSum / float64(state.ProbeSuccesses)
 					if avg > 0 {
-						probeSpeed = clamp(math.Sqrt(baseline.ttft95/avg), .1, 1)
+						probeSpeed = clamp(math.Sqrt(baseline.probeTTFT95/avg), .1, 1)
 					}
 				}
 				probeMultiplier := successRatio * probeSpeed
@@ -325,7 +333,7 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 					state.SmoothedErrorRate = passiveErrorRate
 					state.KError = reliabilityFactorWithPolicy(passiveErrorRate, p)
 					if healthy && m.RequestCount >= p.MinSamples {
-						state.KSpeed, state.KCache, state.KOTPS = performanceFactors(m, baseline, p, state.CacheReady, state.OTPSReady)
+						applyPerformanceFactors(&state, m, baseline, p)
 					}
 					passiveMultiplier := combinedFactor(state, p)
 					state.Phase = "normal"
@@ -390,7 +398,7 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 				state.NextProbeAt = nil
 			}
 			if healthy && mode != "off" && m.RequestCount >= p.MinSamples {
-				state.KSpeed, state.KCache, state.KOTPS = performanceFactors(m, baseline, p, state.CacheReady, state.OTPSReady)
+				applyPerformanceFactors(&state, m, baseline, p)
 			}
 			state.Multiplier = combinedFactor(state, p)
 			if mode == "off" || !healthy {
@@ -573,12 +581,18 @@ func (e *Engine) foldErrorDecayWithBuckets(id string, channelID int64, state *Co
 func buildContinuousBaseline(rows []ChannelBaseValue, metrics map[int64]ChannelMetric, minSamples int64) (continuousBaseline, bool) {
 	var b continuousBaseline
 	var ttft50, ttft90, ttft95, caches, otps []float64
+	monitorEligible := 0
+	var probeTTFT95Sum float64
 	for _, row := range rows {
 		m := metrics[row.ChannelID]
 		if m.RequestCount < minSamples || m.TTFTP50 <= 0 || m.TTFTP90 <= 0 || m.TTFTP95 <= 0 {
 			continue
 		}
-		ttft50, ttft90, ttft95 = append(ttft50, m.TTFTP50), append(ttft90, m.TTFTP90), append(ttft95, m.TTFTP95)
+		monitorEligible++
+		probeTTFT95Sum += m.TTFTP95
+		if speedEvidenceReady(m, minSamples) {
+			ttft50, ttft90, ttft95 = append(ttft50, m.SpeedTTFTP50), append(ttft90, m.SpeedTTFTP90), append(ttft95, m.SpeedTTFTP95)
+		}
 		if m.CachePromptTokens >= cacheEvidenceTokens {
 			caches = append(caches, m.CacheHitRate)
 		}
@@ -586,10 +600,14 @@ func buildContinuousBaseline(rows []ChannelBaseValue, metrics map[int64]ChannelM
 			otps = append(otps, m.OTPS)
 		}
 	}
-	if len(ttft50) < 2 {
+	if monitorEligible < 2 {
 		return b, false
 	}
-	b.ttft50, b.ttft90, b.ttft95 = average(ttft50), average(ttft90), average(ttft95)
+	b.probeTTFT95 = probeTTFT95Sum / float64(monitorEligible)
+	if len(ttft50) >= 2 {
+		b.ttft50, b.ttft90, b.ttft95 = average(ttft50), average(ttft90), average(ttft95)
+		b.speedReady = true
+	}
 	if len(caches) >= 2 {
 		b.cache, b.cacheReady = average(caches), true
 	}
@@ -600,10 +618,10 @@ func buildContinuousBaseline(rows []ChannelBaseValue, metrics map[int64]ChannelM
 }
 
 func speedFactor(m ChannelMetric, b continuousBaseline, p ContinuousDispatchParams) float64 {
-	if m.TTFTP50 <= 0 || m.TTFTP90 <= 0 || m.TTFTP95 <= 0 {
+	if !speedEvidenceReady(m, p.MinSamples) || !b.speedReady {
 		return 1
 	}
-	r := p.SpeedP50Weight*(m.TTFTP50/b.ttft50) + p.SpeedP90Weight*(m.TTFTP90/b.ttft90) + p.SpeedP95Weight*(m.TTFTP95/b.ttft95)
+	r := p.SpeedP50Weight*(m.SpeedTTFTP50/b.ttft50) + p.SpeedP90Weight*(m.SpeedTTFTP90/b.ttft90) + p.SpeedP95Weight*(m.SpeedTTFTP95/b.ttft95)
 	if r <= 0 {
 		return 1
 	}
@@ -758,6 +776,7 @@ func continuousEvent(id string, base ChannelBaseValue, state ContinuousState, ru
 		Evidence: map[string]any{
 			"model": base.ModelName, "phase": state.Phase, "multiplier": state.Multiplier,
 			"k_speed": state.KSpeed, "k_cache": state.KCache, "k_otps": state.KOTPS, "k_error": state.KError,
+			"speed_sample_count": state.SpeedSamples, "speed_retry_count": state.SpeedRetries, "speed_unknown_count": state.SpeedUnknown, "speed_legacy_count": state.SpeedLegacy, "speed_stats_version": state.SpeedStatsVersion,
 			"metric_ttft_p50": state.MetricTTFTP50, "metric_ttft_p90": state.MetricTTFTP90, "metric_ttft_p95": state.MetricTTFTP95,
 			"baseline_ttft_p50": state.BaselineTTFTP50, "baseline_ttft_p90": state.BaselineTTFTP90, "baseline_ttft_p95": state.BaselineTTFTP95,
 			"metric_cache": state.MetricCache, "baseline_cache": state.BaselineCache, "cache_ready": state.CacheReady,
@@ -765,4 +784,15 @@ func continuousEvent(id string, base ChannelBaseValue, state ContinuousState, ru
 			"smoothed_error_rate": state.SmoothedErrorRate, "probe_attempts": state.ProbeAttempts, "probe_successes": state.ProbeSuccesses,
 		},
 		CurrentWeight: base.CurrentWeight, ProposedWeight: state.ProposedWeight, CurrentPriority: &base.CurrentPriority, ProposedPriority: &base.BasePriority, ModeAtCreation: mode, Status: "recorded"}
+}
+
+func speedEvidenceReady(m ChannelMetric, minSamples int64) bool {
+	return m.SpeedSamples >= minSamples && m.SpeedTTFTP50 > 0 && m.SpeedTTFTP90 > 0 && m.SpeedTTFTP95 > 0
+}
+func applyPerformanceFactors(state *ContinuousState, m ChannelMetric, b continuousBaseline, p ContinuousDispatchParams) {
+	speed, cache, otps := performanceFactors(m, b, p, state.CacheReady, state.OTPSReady)
+	if state.MetricReady && b.speedReady {
+		state.KSpeed = speed
+	}
+	state.KCache, state.KOTPS = cache, otps
 }

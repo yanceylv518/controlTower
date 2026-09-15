@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"controltower/internal/latencyhist"
+	"controltower/internal/speedstats"
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
@@ -442,6 +443,7 @@ func toAggregatorMetrics(instanceID string, payloads []agentgateway.AggregatedMe
 			OTPSDurationSecs:  payload.OTPSDurationSecs,
 			LatencyBuckets:    payload.LatencyBuckets,
 			LatencyBucketsV2:  bucketsV2FromSlice(payload.LatencyBucketsV2),
+			SpeedTTFT:         validSpeedTTFT(payload),
 			TTFTBuckets:       bucketsV2FromSlice(payload.TTFTBuckets),
 		})
 	}
@@ -459,4 +461,16 @@ func bucketsV2FromSlice(values []int64) *latencyhist.BucketsV2 {
 func channelSnapshotID(instanceID string, channelID int64, capturedAt time.Time) string {
 	sum := sha1.Sum([]byte(fmt.Sprintf("%s:%d:%d", instanceID, channelID, capturedAt.UnixNano())))
 	return hex.EncodeToString(sum[:])
+}
+
+// Invalid optional evidence must not interrupt the existing monitoring pipeline.
+func validSpeedTTFT(p agentgateway.AggregatedMetricPayload) *speedstats.Stats {
+	total := int64(0)
+	if p.TTFTCount != nil {
+		total = *p.TTFTCount
+	}
+	if p.DimensionType != "instance_channel" || !p.SpeedTTFT.Valid(total) {
+		return nil
+	}
+	return speedstats.Clone(p.SpeedTTFT)
 }

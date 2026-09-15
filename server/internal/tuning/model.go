@@ -239,17 +239,24 @@ type PolicyRecord struct {
 	UpdatedAt       time.Time
 }
 type ChannelMetric struct {
-	ChannelID                                int64
-	RequestCount, ErrorCount, UserErrorCount int64
-	TPM                                      int64
-	P95                                      float64
-	TTFTP50, TTFTP90, TTFTP95                float64
-	CacheHitRate                             float64
-	OTPS                                     float64
-	CachePromptTokens, OTPSSampleTokens      int64
+	SpeedTTFTP50, SpeedTTFTP90, SpeedTTFTP95              float64
+	SpeedSamples, SpeedRetries, SpeedUnknown, SpeedLegacy int64
+	ChannelID                                             int64
+	RequestCount, ErrorCount, UserErrorCount              int64
+	TPM                                                   int64
+	P95                                                   float64
+	TTFTP50, TTFTP90, TTFTP95                             float64
+	CacheHitRate                                          float64
+	OTPS                                                  float64
+	CachePromptTokens, OTPSSampleTokens                   int64
 }
 
 type ContinuousState struct {
+	SpeedSamples         int64      `json:"speed_sample_count"`
+	SpeedRetries         int64      `json:"speed_retry_count"`
+	SpeedUnknown         int64      `json:"speed_unknown_count"`
+	SpeedLegacy          int64      `json:"speed_legacy_count"`
+	SpeedStatsVersion    int        `json:"speed_stats_version"`
 	InstanceID           string     `json:"instance_id"`
 	ChannelID            int64      `json:"channel_id"`
 	ModelName            string     `json:"model_name"`

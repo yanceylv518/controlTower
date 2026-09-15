@@ -941,6 +941,7 @@ func metricArgs(metric aggregator.Metric) []any {
 	}
 	args = appendV2Args(args, metric.LatencyBucketsV2)
 	args = appendV2Args(args, metric.TTFTBuckets)
+	args = append(args, speedTTFTArgs(metric.SpeedTTFT)...)
 	return append(args, time.Now().UTC())
 }
 

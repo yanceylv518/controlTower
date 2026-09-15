@@ -10,7 +10,7 @@ const sfc = readFileSync(new URL('../src/views/ContinuousTuningView.vue', import
 const script = sfc.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1].replace(/^import .*;\r?\n/gm, '')
 const compiled = ts.transpileModule(script, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText
 const row = { channel_id: 1, model_name: 'm', base_weight: 100, current_weight: 80, current_priority: 1, models: ['m'] }
-const state = (requests, weight = 80) => ({ channel_id: 1, model_name: 'm', last_observed_requests: requests, proposed_weight: weight, phase: 'normal', metric_ready: true, baseline_ready: true, updated_at: '2026-09-14T00:00:00Z' })
+const state = (requests, weight = 80) => ({ channel_id: 1, model_name: 'm', last_observed_requests: requests, proposed_weight: weight, speed_stats_version: 1, phase: 'normal', metric_ready: true, baseline_ready: true, updated_at: '2026-09-14T00:00:00Z' })
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no }); return { promise, resolve, reject } }
 
 function page() {
@@ -130,4 +130,28 @@ test('late errors from the previous site cannot affect the current site', async 
   old.reject(new Error('site a timeout')); await first
   assert.equal(p.stateFor(row).last_observed_requests, 90)
   assert.equal(p.refreshError.value, '')
+})
+
+
+test('speed readiness uses direct samples even with abundant total requests', async () => {
+  const p = page()
+  p.dashboard.tuningContinuousStates = async () => ({ items: [{ ...state(500), metric_ready: false, baseline_ready: false, speed_sample_count: 3, speed_retry_count: 497 }] })
+  await p.load()
+  assert.match(p.evaluationText(row), /速度样本不足 3\//)
+  assert.equal(p.sampleText(row), `500/${p.policy.continuous.min_samples}`)
+})
+
+test('legacy speed evidence never appears ready solely from request volume', async () => {
+  const p = page()
+  p.dashboard.tuningContinuousStates = async () => ({ items: [{ ...state(500), metric_ready: false, baseline_ready: false, speed_legacy_count: 500 }] })
+  await p.load()
+  assert.match(p.evaluationText(row), /速度样本不足 0\//)
+})
+
+
+test('pre-upgrade cached readiness is not presented as filtered speed evidence', async () => {
+  const p = page()
+  p.dashboard.tuningContinuousStates = async () => ({ items: [{ ...state(500), speed_stats_version: 0 }] })
+  await p.load()
+  assert.equal(p.evaluationText(row), '等待新口径速度评估')
 })

@@ -39,7 +39,7 @@ func latencyBucketColumnSQL() string {
 }
 
 func v2BucketColumnSQL() string {
-	return strings.Join(latency2BucketColumns, ", ") + ", " + strings.Join(ttft2BucketColumns, ", ")
+	return strings.Join(latency2BucketColumns, ", ") + ", " + strings.Join(ttft2BucketColumns, ", ") + ", " + strings.Join(speedTTFTColumns(), ", ")
 }
 
 func v2BucketReplaceAssignmentsSQL() string {
@@ -47,6 +47,7 @@ func v2BucketReplaceAssignmentsSQL() string {
 	for _, column := range append(append([]string{}, latency2BucketColumns...), ttft2BucketColumns...) {
 		assignments = append(assignments, column+" = VALUES("+column+")")
 	}
+	assignments = append(assignments, speedTTFTAssignments(false)...)
 	return strings.Join(assignments, ",\n  ")
 }
 
@@ -58,11 +59,12 @@ func v2BucketMergeAssignmentsSQL() string {
 	for _, column := range append(append([]string{}, latency2BucketColumns...), ttft2BucketColumns...) {
 		assignments = append(assignments, column+" = "+column+" + VALUES("+column+")")
 	}
+	assignments = append(assignments, speedTTFTAssignments(true)...)
 	return strings.Join(assignments, ",\n  ")
 }
 
 func metricValuePlaceholders() string {
-	count := 34 + latencyhist.BucketCount + 2*latencyhist.BucketCountV2
+	count := 34 + latencyhist.BucketCount + 2*latencyhist.BucketCountV2 + len(speedTTFTColumns())
 	values := make([]string, 0, count)
 	for i := 0; i < count; i++ {
 		values = append(values, "?")

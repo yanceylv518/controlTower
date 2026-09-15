@@ -10,13 +10,13 @@ import (
 func TestContinuousBaselineRequiresTwoComparableChannels(t *testing.T) {
 	rows := []ChannelBaseValue{{ChannelID: 1}, {ChannelID: 2}}
 	metrics := map[int64]ChannelMetric{
-		1: {ChannelID: 1, RequestCount: 20, TTFTP50: 1, TTFTP90: 2, TTFTP95: 3},
-		2: {ChannelID: 2, RequestCount: 19, TTFTP50: 2, TTFTP90: 3, TTFTP95: 4},
+		1: {ChannelID: 1, RequestCount: 20, TTFTP50: 1, TTFTP90: 2, TTFTP95: 3, SpeedSamples: 20, SpeedTTFTP50: 1, SpeedTTFTP90: 2, SpeedTTFTP95: 3},
+		2: {ChannelID: 2, RequestCount: 19, TTFTP50: 2, TTFTP90: 3, TTFTP95: 4, SpeedSamples: 20, SpeedTTFTP50: 2, SpeedTTFTP90: 3, SpeedTTFTP95: 4},
 	}
 	if _, ok := buildContinuousBaseline(rows, metrics, 20); ok {
 		t.Fatal("one comparable channel must not produce a relative baseline")
 	}
-	metrics[2] = ChannelMetric{ChannelID: 2, RequestCount: 20, TTFTP50: 2, TTFTP90: 4, TTFTP95: 6}
+	metrics[2] = ChannelMetric{ChannelID: 2, RequestCount: 20, TTFTP50: 2, TTFTP90: 4, TTFTP95: 6, SpeedSamples: 20, SpeedTTFTP50: 2, SpeedTTFTP90: 4, SpeedTTFTP95: 6}
 	b, ok := buildContinuousBaseline(rows, metrics, 20)
 	if !ok || b.ttft50 != 1.5 || b.ttft90 != 3 || b.ttft95 != 4.5 {
 		t.Fatalf("unexpected baseline: %#v ok=%v", b, ok)
@@ -26,9 +26,9 @@ func TestContinuousBaselineRequiresTwoComparableChannels(t *testing.T) {
 func TestContinuousBaselineUsesArithmeticAverage(t *testing.T) {
 	rows := []ChannelBaseValue{{ChannelID: 1}, {ChannelID: 2}, {ChannelID: 3}}
 	metrics := map[int64]ChannelMetric{
-		1: {ChannelID: 1, RequestCount: 20, TTFTP50: 1, TTFTP90: 2, TTFTP95: 3, CacheHitRate: .1, CachePromptTokens: cacheEvidenceTokens, OTPS: 10, OTPSSampleTokens: otpsEvidenceTokens},
-		2: {ChannelID: 2, RequestCount: 20, TTFTP50: 2, TTFTP90: 4, TTFTP95: 6, CacheHitRate: .2, CachePromptTokens: cacheEvidenceTokens, OTPS: 20, OTPSSampleTokens: otpsEvidenceTokens},
-		3: {ChannelID: 3, RequestCount: 20, TTFTP50: 9, TTFTP90: 12, TTFTP95: 15, CacheHitRate: .9, CachePromptTokens: cacheEvidenceTokens, OTPS: 90, OTPSSampleTokens: otpsEvidenceTokens},
+		1: {ChannelID: 1, RequestCount: 20, TTFTP50: 1, TTFTP90: 2, TTFTP95: 3, SpeedSamples: 20, SpeedTTFTP50: 1, SpeedTTFTP90: 2, SpeedTTFTP95: 3, CacheHitRate: .1, CachePromptTokens: cacheEvidenceTokens, OTPS: 10, OTPSSampleTokens: otpsEvidenceTokens},
+		2: {ChannelID: 2, RequestCount: 20, TTFTP50: 2, TTFTP90: 4, TTFTP95: 6, SpeedSamples: 20, SpeedTTFTP50: 2, SpeedTTFTP90: 4, SpeedTTFTP95: 6, CacheHitRate: .2, CachePromptTokens: cacheEvidenceTokens, OTPS: 20, OTPSSampleTokens: otpsEvidenceTokens},
+		3: {ChannelID: 3, RequestCount: 20, TTFTP50: 9, TTFTP90: 12, TTFTP95: 15, SpeedSamples: 20, SpeedTTFTP50: 9, SpeedTTFTP90: 12, SpeedTTFTP95: 15, CacheHitRate: .9, CachePromptTokens: cacheEvidenceTokens, OTPS: 90, OTPSSampleTokens: otpsEvidenceTokens},
 	}
 	b, ok := buildContinuousBaseline(rows, metrics, 20)
 	if !ok || !b.cacheReady || !b.otpsReady {
@@ -45,8 +45,8 @@ func TestContinuousBaselineUsesArithmeticAverage(t *testing.T) {
 }
 
 func TestContinuousFactorsRewardFasterChannelAndRespectCap(t *testing.T) {
-	b := continuousBaseline{ttft50: 2, ttft90: 4, ttft95: 6, cache: .5, otps: 50, cacheReady: true, otpsReady: true}
-	fast := ChannelMetric{TTFTP50: 1, TTFTP90: 2, TTFTP95: 3, CacheHitRate: .8, CachePromptTokens: cacheEvidenceTokens, OTPS: 80, OTPSSampleTokens: otpsEvidenceTokens}
+	b := continuousBaseline{speedReady: true, ttft50: 2, ttft90: 4, ttft95: 6, cache: .5, otps: 50, cacheReady: true, otpsReady: true}
+	fast := ChannelMetric{TTFTP50: 1, TTFTP90: 2, TTFTP95: 3, SpeedSamples: 20, SpeedTTFTP50: 1, SpeedTTFTP90: 2, SpeedTTFTP95: 3, CacheHitRate: .8, CachePromptTokens: cacheEvidenceTokens, OTPS: 80, OTPSSampleTokens: otpsEvidenceTokens}
 	if got := speedFactor(fast, b, DefaultPolicy().Continuous); got <= 1 {
 		t.Fatalf("faster channel should have factor above one, got %v", got)
 	}
@@ -62,8 +62,8 @@ func TestContinuousFactorsRewardFasterChannelAndRespectCap(t *testing.T) {
 }
 
 func TestSpeedFactorUsesConfiguredPercentileWeights(t *testing.T) {
-	b := continuousBaseline{ttft50: 1, ttft90: 1, ttft95: 1}
-	m := ChannelMetric{TTFTP50: 1, TTFTP90: 2, TTFTP95: 4}
+	b := continuousBaseline{speedReady: true, ttft50: 1, ttft90: 1, ttft95: 1}
+	m := ChannelMetric{TTFTP50: 1, TTFTP90: 2, TTFTP95: 4, SpeedSamples: 20, SpeedTTFTP50: 1, SpeedTTFTP90: 2, SpeedTTFTP95: 4}
 	p := DefaultPolicy().Continuous
 	p.Sensitivity, p.SpeedExponent = 1, 1
 	p.SpeedMinFactor, p.SpeedMaxFactor = .01, 10
@@ -81,8 +81,8 @@ func TestContinuousFactorsUseConfiguredCurves(t *testing.T) {
 	p := DefaultPolicy().Continuous
 	p.CacheExponent, p.CacheMinFactor, p.CacheMaxFactor = 1, .6, 1.4
 	p.OTPSExponent, p.OTPSMinFactor, p.OTPSMaxFactor = 1, .7, 1.6
-	b := continuousBaseline{ttft50: 1, ttft90: 1, ttft95: 1, cache: .5, otps: 10}
-	m := ChannelMetric{TTFTP50: 1, TTFTP90: 1, TTFTP95: 1, CacheHitRate: .25, OTPS: 20}
+	b := continuousBaseline{speedReady: true, ttft50: 1, ttft90: 1, ttft95: 1, cache: .5, otps: 10}
+	m := ChannelMetric{TTFTP50: 1, TTFTP90: 1, TTFTP95: 1, SpeedSamples: 20, SpeedTTFTP50: 1, SpeedTTFTP90: 1, SpeedTTFTP95: 1, CacheHitRate: .25, OTPS: 20}
 	_, cache, otps := performanceFactors(m, b, p, true, true)
 	if cache != .6 || otps != 1.6 {
 		t.Fatalf("configured factor bounds were ignored: cache=%v otps=%v", cache, otps)
@@ -106,8 +106,8 @@ func TestObservePublishesWindowProgressAndOnlyChangedProposals(t *testing.T) {
 			{ChannelID: 2, ChannelName: "slow", ModelName: "m", Models: []string{"m"}, BaseWeight: 100, CurrentWeight: 100},
 		},
 		metrics: []ChannelMetric{
-			{ChannelID: 1, RequestCount: 30, ErrorCount: 3, UserErrorCount: 1, TTFTP50: 1, TTFTP90: 1, TTFTP95: 1, CacheHitRate: .5, OTPS: 10},
-			{ChannelID: 2, RequestCount: 25, TTFTP50: 2, TTFTP90: 2, TTFTP95: 2, CacheHitRate: .5, OTPS: 10},
+			{ChannelID: 1, RequestCount: 30, ErrorCount: 3, UserErrorCount: 1, TTFTP50: 1, TTFTP90: 1, TTFTP95: 1, SpeedSamples: 20, SpeedTTFTP50: 1, SpeedTTFTP90: 1, SpeedTTFTP95: 1, CacheHitRate: .5, OTPS: 10},
+			{ChannelID: 2, RequestCount: 25, TTFTP50: 2, TTFTP90: 2, TTFTP95: 2, SpeedSamples: 20, SpeedTTFTP50: 2, SpeedTTFTP90: 2, SpeedTTFTP95: 2, CacheHitRate: .5, OTPS: 10},
 		},
 	}
 	p := DefaultPolicy()
@@ -155,8 +155,8 @@ func TestCapacityLimitBlocksOnlyWeightIncrease(t *testing.T) {
 			{ChannelID: 2, ChannelName: "slow", ModelName: "m", Models: []string{"m"}, BaseWeight: 100, CurrentWeight: 100},
 		},
 		metrics: []ChannelMetric{
-			{ChannelID: 1, RequestCount: 30, TPM: 3000, TTFTP50: 1, TTFTP90: 1, TTFTP95: 1},
-			{ChannelID: 2, RequestCount: 30, TPM: 300, TTFTP50: 3, TTFTP90: 3, TTFTP95: 3},
+			{ChannelID: 1, RequestCount: 30, TPM: 3000, TTFTP50: 1, TTFTP90: 1, TTFTP95: 1, SpeedSamples: 20, SpeedTTFTP50: 1, SpeedTTFTP90: 1, SpeedTTFTP95: 1},
+			{ChannelID: 2, RequestCount: 30, TPM: 300, TTFTP50: 3, TTFTP90: 3, TTFTP95: 3, SpeedSamples: 20, SpeedTTFTP50: 3, SpeedTTFTP90: 3, SpeedTTFTP95: 3},
 		},
 	}
 	f := &currentRatesFake{continuousFake: base, current: []ChannelMetric{
@@ -235,8 +235,8 @@ func TestObserveDeadbandAnchorsOnLastRecordedEvent(t *testing.T) {
 		st.KError = kerr
 		f.states[1] = st
 		f.metrics = []ChannelMetric{
-			{ChannelID: 1, RequestCount: 30, TTFTP50: 1, TTFTP90: 1, TTFTP95: 1},
-			{ChannelID: 2, RequestCount: 30, TTFTP50: 1, TTFTP90: 1, TTFTP95: 1},
+			{ChannelID: 1, RequestCount: 30, TTFTP50: 1, TTFTP90: 1, TTFTP95: 1, SpeedSamples: 20, SpeedTTFTP50: 1, SpeedTTFTP90: 1, SpeedTTFTP95: 1},
+			{ChannelID: 2, RequestCount: 30, TTFTP50: 1, TTFTP90: 1, TTFTP95: 1, SpeedSamples: 20, SpeedTTFTP50: 1, SpeedTTFTP90: 1, SpeedTTFTP95: 1},
 		}
 		e.evaluateContinuous("i", PolicyRecord{InstanceID: "i", Policy: p, Mode: "observe"}, now.Add(time.Duration(i)*time.Minute), f)
 	}
@@ -276,7 +276,7 @@ func TestContinuousEmptySiteMetricsPreservesPreviousEvaluation(t *testing.T) {
 	if writes != 0 || evaluated != 0 || f.writeAttempts != 0 || f.states[1] != previous {
 		t.Fatalf("empty metrics must preserve trusted state without writes: writes=%d evaluated=%d state=%#v", writes, evaluated, f.states[1])
 	}
-	f.metrics = []ChannelMetric{{ChannelID: 1, RequestCount: 30, TTFTP50: 1, TTFTP90: 1, TTFTP95: 1}}
+	f.metrics = []ChannelMetric{{ChannelID: 1, RequestCount: 30, TTFTP50: 1, TTFTP90: 1, TTFTP95: 1, SpeedSamples: 20, SpeedTTFTP50: 1, SpeedTTFTP90: 1, SpeedTTFTP95: 1}}
 	NewEngine(f).evaluateContinuous("i", autoPolicy(), now.Add(time.Minute), f)
 	if f.states[1].LastObservedRequests != 30 {
 		t.Fatalf("evaluation must resume with fresh metrics: %#v", f.states[1])
@@ -524,7 +524,7 @@ func TestContinuousCircuitProbeAndSoftStart(t *testing.T) {
 		{ChannelID: 1, ChannelName: "c", ModelName: "m", Models: []string{"m"}, BaseWeight: 100, BasePriority: 7, CurrentWeight: 100, CurrentPriority: 7, SnapshotAt: now},
 		{ChannelID: 2, ChannelName: "peer", ModelName: "m", Models: []string{"m"}, BaseWeight: 100, BasePriority: 7, CurrentWeight: 100, CurrentPriority: 7, SnapshotAt: now},
 	}, states: map[int64]ContinuousState{1: {InstanceID: "i", ChannelID: 1, ModelName: "m", KError: .2, SmoothedErrorRate: .35, Phase: "normal", LastWrittenWeight: &lastWritten, LastWriteAt: &lastWriteAt}}}
-	f.metrics = []ChannelMetric{{ChannelID: 1, RequestCount: 20, TTFTP50: 1, TTFTP90: 1, TTFTP95: 1}, {ChannelID: 2, RequestCount: 20, TTFTP50: 1, TTFTP90: 1, TTFTP95: 1}}
+	f.metrics = []ChannelMetric{{ChannelID: 1, RequestCount: 20, TTFTP50: 1, TTFTP90: 1, TTFTP95: 1, SpeedSamples: 20, SpeedTTFTP50: 1, SpeedTTFTP90: 1, SpeedTTFTP95: 1}, {ChannelID: 2, RequestCount: 20, TTFTP50: 1, TTFTP90: 1, TTFTP95: 1, SpeedSamples: 20, SpeedTTFTP50: 1, SpeedTTFTP90: 1, SpeedTTFTP95: 1}}
 	e := NewEngine(f)
 	e.evaluateContinuous("i", p, now, f)
 	s := f.states[1]
@@ -565,7 +565,7 @@ func TestObservedCircuitRecoversFromPassiveProductionTraffic(t *testing.T) {
 			// Below the normal 20-request performance threshold: these requests
 			// are still sufficient as a 10-request passive recovery round.
 			{ChannelID: 1, RequestCount: 10},
-			{ChannelID: 2, RequestCount: 30, TTFTP50: 1, TTFTP90: 1, TTFTP95: 1, CacheHitRate: .5, OTPS: 10},
+			{ChannelID: 2, RequestCount: 30, TTFTP50: 1, TTFTP90: 1, TTFTP95: 1, SpeedSamples: 20, SpeedTTFTP50: 1, SpeedTTFTP90: 1, SpeedTTFTP95: 1, CacheHitRate: .5, OTPS: 10},
 		},
 		states: map[int64]ContinuousState{
 			// A faithful v2 circuit state carries the smoothed rate that
@@ -630,7 +630,7 @@ func TestZeroBaseWeightDoesNotCircuitOrRecover(t *testing.T) {
 	p.DispatchModes = map[string]string{"m": "observe"}
 	f := &continuousFake{
 		bases:   []ChannelBaseValue{{ChannelID: 1, ModelName: "m", Models: []string{"m"}, BaseWeight: 0, CurrentWeight: 20}},
-		metrics: []ChannelMetric{{ChannelID: 1, RequestCount: 100, ErrorCount: 100, TTFTP50: 1, TTFTP90: 1, TTFTP95: 1}},
+		metrics: []ChannelMetric{{ChannelID: 1, RequestCount: 100, ErrorCount: 100, TTFTP50: 1, TTFTP90: 1, TTFTP95: 1, SpeedSamples: 20, SpeedTTFTP50: 1, SpeedTTFTP90: 1, SpeedTTFTP95: 1}},
 		states: map[int64]ContinuousState{1: {
 			InstanceID: "i", ChannelID: 1, ModelName: "m", KError: .2,
 			SmoothedErrorRate: .3, Phase: "circuit", NextProbeAt: &due,
@@ -869,7 +869,7 @@ func TestPausedAutoCircuitWaitsForRealZeroingWrite(t *testing.T) {
 	failedAt := now.Add(-time.Minute)
 	f := &continuousFake{
 		bases:   []ChannelBaseValue{{ChannelID: 1, ModelName: "m", Models: []string{"m"}, BaseWeight: 10, CurrentWeight: 10, SnapshotAt: now.Add(-time.Hour)}},
-		metrics: []ChannelMetric{{ChannelID: 1, RequestCount: 100, ErrorCount: 60, TTFTP50: 1, TTFTP90: 1, TTFTP95: 1}},
+		metrics: []ChannelMetric{{ChannelID: 1, RequestCount: 100, ErrorCount: 60, TTFTP50: 1, TTFTP90: 1, TTFTP95: 1, SpeedSamples: 20, SpeedTTFTP50: 1, SpeedTTFTP90: 1, SpeedTTFTP95: 1}},
 		states: map[int64]ContinuousState{1: {InstanceID: "i", ChannelID: 1, ModelName: "m", KError: .2, SmoothedErrorRate: .5, Phase: "normal",
 			PausedReason: "write_failed", WriteFailureStreak: 3, LastWriteError: "boom", LastWriteFailureAt: &failedAt}},
 		writeErr: errors.New("boom"),

@@ -52,6 +52,7 @@ type Event struct {
 	CacheTokens       *int64
 	CacheFieldPresent bool
 	CachePromptTokens *int64
+	AttemptCount      int
 	FirstResponseMs   *int64
 }
 
@@ -64,6 +65,10 @@ func ConvertRow(row Row) (Event, bool, error) {
 	cacheTokens, cachePresent, _ := parseCacheTokens(row.Other)
 	cachePromptTokens, _ := parseCachePromptTokens(row.Other, row.PromptTokens, cacheTokens)
 	firstResponseMs, _ := parseFirstResponseMs(row.Other)
+	attempts := 0
+	if row.IsStream && firstResponseMs != nil {
+		attempts = attemptCount(row.Other, row.ChannelID)
+	}
 
 	return Event{
 		SourceLogID:       row.ID,
@@ -89,6 +94,7 @@ func ConvertRow(row Row) (Event, bool, error) {
 		CacheFieldPresent: cachePresent,
 		CachePromptTokens: cachePromptTokens,
 		FirstResponseMs:   firstResponseMs,
+		AttemptCount:      attempts,
 	}, true, nil
 }
 
