@@ -11,6 +11,7 @@ import { usePrefsStore } from "../stores/prefs";
 const prefs = usePrefsStore();
 const loading = ref(false);
 const saving = ref(false);
+const activeTab = ref('voice');
 const items = ref<Record<string, SystemSettingItem>>({});
 const values = reactive<Record<string, string | number>>({});
 type Field = readonly [string, string, number, number];
@@ -78,6 +79,7 @@ const sourceLabels: Record<string, string> = {
 const editableKeys = new Set(sections.flatMap(section => section.fields.map(field => field[0])));
 const sectionOrder = ["余额告警", "系统告警", "请求告警", "TTFT 图表阈值", "数据保留"];
 const displaySections = [...sections].sort((a, b) => sectionOrder.indexOf(a.title) - sectionOrder.indexOf(b.title));
+const displayColumns = [displaySections.filter((_, i) => i % 2 === 0), displaySections.filter((_, i) => i % 2 === 1)];
 async function load() {
   loading.value = true;
   try {
@@ -117,15 +119,20 @@ onMounted(load);
 <template>
   <AppShell title="设置">
     <template #tools>
-      <el-button type="primary" :loading="saving" @click="save"
+      <el-radio-group v-model="activeTab" size="small" aria-label="设置分类">
+        <el-radio-button value="voice">电话预警</el-radio-button>
+        <el-radio-button value="system">系统与监控</el-radio-button>
+      </el-radio-group>
+      <el-button v-if="activeTab === 'system'" type="primary" :loading="saving" :disabled="loading" @click="save"
         >保存系统设置</el-button
       >
     </template>
-    <div v-loading="loading" class="settings-layout" style="display: block">
-      <VoiceAlertsSettings />
-      <div class="settings-column settings-column-main">
+    <div class="settings-page">
+      <VoiceAlertsSettings v-show="activeTab === 'voice'" />
+      <div v-show="activeTab === 'system'" v-loading="loading" class="system-settings-grid">
+       <div v-for="(column, index) in displayColumns" :key="index" class="settings-column">
         <section
-        v-for="section in displaySections"
+        v-for="section in column"
         :key="section.title"
         class="panel sub-panel"
       >
@@ -156,7 +163,21 @@ onMounted(load);
 
         </div>
         </section>
+       </div>
       </div>
     </div>
   </AppShell>
 </template>
+
+<style scoped>
+.settings-page { display: grid; gap: 12px; }
+.system-settings-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; align-items: start; }
+.system-settings-grid .settings-column { display: grid; gap: 12px; min-width: 0; }
+.system-settings-grid .sub-panel { margin: 0; }
+.system-settings-grid .field-grid { display: grid; grid-template-columns: minmax(0,1fr); gap: 0; }
+.system-settings-grid .field-item { display: grid; grid-template-columns: minmax(120px,1fr) 112px 100px; gap: 8px; align-items: center; min-width: 0; padding: 8px 0; border-top: 1px solid var(--ct-line); }
+.system-settings-grid .field-item :deep(.el-input-number) { width: 100%; }
+.system-settings-grid .field-meta { justify-content: flex-end; }
+@media(max-width:1000px) { .system-settings-grid { grid-template-columns: 1fr; } }
+@media(max-width:600px) { .system-settings-grid .field-grid { grid-template-columns: 1fr; } .system-settings-grid .sub-panel { padding: 18px; } }
+</style>

@@ -96,6 +96,7 @@ func run() error {
 	controlStore := directcontrol.Wrap(store, cfg.SecretKey)
 	workers := newWorkerGroup(workerCtx)
 	voiceStore := voicealert.Store{DB: db}
+	voiceStore.Directory = &voicealert.Directory{Sites: voiceStore, Source: &dashboard.PassthroughHandler{SecretKey: cfg.SecretKey, Config: store}}
 	voiceCaller := voicealert.AliyunFromEnv()
 	var voiceRunner *voicealert.Runner
 	var afterReport func()

@@ -16,7 +16,8 @@ type fakeRepository struct {
 	result      Result
 }
 
-func (s *fakeRepository) Config(context.Context) (Config, error) { return s.config, nil }
+func (s *fakeRepository) Config(context.Context) (Config, error)    { return s.config, nil }
+func (s *fakeRepository) Targets(context.Context) ([]Target, error) { return s.config.Targets, nil }
 func (s *fakeRepository) Snapshot(context.Context, Target, time.Time) ([]int64, time.Time, error) {
 	v := make([]int64, 11)
 	v[10] = 20000000
@@ -39,8 +40,8 @@ func (s *fakeRepository) Finish(_ context.Context, _ string, r Result, _ time.Ti
 }
 
 type fakeCaller struct {
-	ready bool
-	calls int
+	ready  bool
+	calls  int
 	phones []string
 }
 

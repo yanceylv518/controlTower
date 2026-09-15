@@ -9,7 +9,10 @@ import (
 	"time"
 )
 
-type Store struct{ DB *sql.DB }
+type Store struct {
+	DB        *sql.DB
+	Directory *Directory
+}
 
 func (s Store) Config(ctx context.Context) (Config, error) {
 	c := DefaultConfig()
@@ -31,15 +34,25 @@ func (s Store) SaveConfig(ctx context.Context, c Config, actor string) error {
 		return err
 	}
 	// Reject nonexistent/disabled sites without touching a NewAPI database.
-	for _, t := range c.Targets {
-		var n int
-		if err := s.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM instances WHERE enabled=1 AND CASE WHEN site_id='' THEN id ELSE site_id END=?`, t.Site).Scan(&n); err != nil {
-			return err
-		}
-		if n == 0 {
-			return fmt.Errorf("站点 %s 不存在或未启用", t.Site)
+	seenSites := map[string]bool{}
+	for _, recipient := range c.Recipients {
+		for _, key := range recipient.Targets {
+			site, _, _ := parseTargetKey(key)
+			if seenSites[site] {
+				continue
+			}
+			seenSites[site] = true
+			var n int
+			if err := s.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM instances WHERE enabled=1 AND CASE WHEN site_id='' THEN id ELSE site_id END=?`, site).Scan(&n); err != nil {
+				return err
+			}
+			if n == 0 {
+				return fmt.Errorf("站点 %s 不存在或未启用", site)
+			}
 		}
 	}
+	// Legacy manually registered targets are no longer an allowlist.
+	c.Targets = nil
 	raw, err := json.Marshal(c)
 	if err != nil {
 		return err

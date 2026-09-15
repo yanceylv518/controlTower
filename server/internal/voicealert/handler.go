@@ -11,9 +11,16 @@ import (
 
 // Handler must be mounted behind RequireSessionOrToken (admin-only route).
 type Handler struct {
-	Store  Store
+	Store  SettingsStore
 	Caller Caller
 	Runner *Runner
+}
+
+type SettingsStore interface {
+	Config(context.Context) (Config, error)
+	SaveConfig(context.Context, Config, string) error
+	Calls(context.Context) ([]CallRecord, error)
+	Customers(context.Context) (CustomerList, error)
 }
 
 func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -56,6 +63,7 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fail(500, "配置读取失败")
 		return
 	}
+	c.Targets = nil
 	calls, err := h.Store.Calls(ctx)
 	if err != nil {
 		fail(500, "电话记录读取失败")
@@ -65,5 +73,11 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if h.Runner != nil {
 		statuses = h.Runner.Status()
 	}
-	_ = json.NewEncoder(w).Encode(map[string]any{"config": c, "credentials_ready": h.Caller.Ready(), "worker_enabled": h.Runner != nil, "calls": calls, "targets": statuses})
+	list, directoryErr := h.Store.Customers(ctx)
+	directoryError := ""
+	if directoryErr != nil {
+		directoryError = "客户列表暂时无法读取，请稍后刷新；已保存的接听范围保持不变"
+		list = CustomerList{Customers: []Target{}, UnavailableSites: []string{}}
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{"config": c, "credentials_ready": h.Caller.Ready(), "worker_enabled": h.Runner != nil, "calls": calls, "targets": statuses, "customers": list.Customers, "unavailable_sites": list.UnavailableSites, "directory_error": directoryError})
 }

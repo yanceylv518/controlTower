@@ -1,12 +1,14 @@
 package voicealert
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 )
 
 func TestThresholds(t *testing.T) {
 	c := DefaultConfig()
+	c.Percent = 50
 	for _, tc := range []struct {
 		low, high int64
 		want      bool
@@ -71,5 +73,57 @@ func TestRollingBoundaryAndCoverage(t *testing.T) {
 	broken = append(broken, stamps[6:]...)
 	if continuous(broken, end.Add(-6*time.Minute), end) {
 		t.Fatal("collection gap accepted")
+	}
+}
+
+func TestOptionalPercent(t *testing.T) {
+	c := DefaultConfig()
+	if c.Percent != 20 || !c.UsePercent {
+		t.Fatal(c)
+	}
+	for _, tc := range []struct {
+		low, high int64
+		on, off   bool
+	}{
+		{80000000, 95000000, false, true}, {65000000, 80000000, true, true},
+		{100000, 200000, false, false}, {80000000, 90000000, false, false},
+		{100000000, 120000000, false, true}, {0, 10000001, true, true},
+	} {
+		values := make([]int64, 11)
+		for i := range values {
+			values[i] = tc.low
+		}
+		values[10] = tc.high
+		for _, enabled := range []bool{true, false} {
+			c.UsePercent = enabled
+			want := tc.off
+			if enabled {
+				want = tc.on
+			}
+			if hit, _, _ := Trigger(values, c); hit != want {
+				t.Fatalf("%+v enabled=%v got=%v", tc, enabled, hit)
+			}
+		}
+	}
+}
+func TestPercentConfigCompatibility(t *testing.T) {
+	c := DefaultConfig()
+	if err := json.Unmarshal([]byte(`{"percent":50}`), &c); err != nil {
+		t.Fatal(err)
+	}
+	if !c.UsePercent || c.Percent != 50 {
+		t.Fatal(c)
+	}
+	c.UsePercent = false
+	data, err := json.Marshal(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored := DefaultConfig()
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatal(err)
+	}
+	if restored.UsePercent || restored.Percent != 50 {
+		t.Fatal(restored)
 	}
 }

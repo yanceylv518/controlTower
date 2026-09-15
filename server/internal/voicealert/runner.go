@@ -10,6 +10,7 @@ import (
 
 type Repository interface {
 	Config(context.Context) (Config, error)
+	Targets(context.Context) ([]Target, error)
 	Snapshot(context.Context, Target, time.Time) ([]int64, time.Time, error)
 	Claim(context.Context, Target, time.Time, int64, int64, string, time.Time) (string, error)
 	Finish(context.Context, string, Result, time.Time) error
@@ -75,19 +76,38 @@ func (r *Runner) Once(ctx context.Context) error {
 	if !c.Enabled {
 		return nil
 	}
+	if len(c.Recipients) == 0 {
+		return nil
+	}
+	directoryCtx, cancelDirectory := context.WithTimeout(ctx, 15*time.Second)
+	targets, err := r.Store.Targets(directoryCtx)
+	cancelDirectory()
+	if err != nil {
+		return err
+	}
 	if r.NotificationsAllowed != nil {
 		allowed, e := r.NotificationsAllowed()
 		if e != nil {
 			return e
 		}
 		if !allowed {
-			for _, t := range c.Targets {
+			for _, t := range targets {
 				statuses = append(statuses, TargetStatus{Site: t.Site, UserID: t.UserID, State: "notifications_disabled"})
 			}
 			return nil
 		}
 	}
-	for _, t := range c.Targets {
+	for _, t := range targets {
+		subscribed := false
+		for _, recipient := range c.Recipients {
+			if recipient.Matches(t) {
+				subscribed = true
+				break
+			}
+		}
+		if !subscribed {
+			continue
+		}
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
