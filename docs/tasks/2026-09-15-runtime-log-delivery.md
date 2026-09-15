@@ -1,5 +1,11 @@
 # 运行监控与日志既有改动提交交付
 
+## rc113 发布（2026-09-15，已发布）
+
+- 用户授权打包，目标 v2.0.0-rc113，提交 99092d1ad391f92769cc3e3e29003371ca977f45，与最新 origin/main 一致；CI 34931542072 已成功。包含站点配置隔离、078 迁移与方向比例修正。
+- 沿用标签触发 release 工作流，发布三份安装包、校验文件和 Server 镜像；不部署生产。上线须确认目标站点启用保存，Agent无需更新。发布任务34931723218 completed/success；安装包构建、镜像构建推送、Release创建均成功。API核验三个非空安装包与SHA256SUMS均 uploaded；未下载复核校验，未部署。
+- 发布页：https://github.com/yanceylv518/controlTower/releases/tag/v2.0.0-rc113；镜像 ghcr.io/yanceylv518/controltower-server:v2.0.0-rc113，工作流同时更新latest。下一步按用户安排升级Server/前端并确认站点启用。
+
 ## 站点隔离与比例修正交付（2026-09-15，已推送）
 
 - 用户授权提交并推送两项修改，隔离分支 codex/runtime-log-delivery 基线与 origin/main 同为 3ef9db3b2；仅本任务代码、078 迁移、测试及文档，保留原工作区其他改动。
