@@ -2,6 +2,10 @@
 
 ## 当前上下文
 
+- **每日明细修复交付（2026-09-15）**：代码 34604fa06 已快进推送 origin/main；用户确认目的地后审批阻塞解除。暂存差异检查通过，本轮代码未变，沿用前轮四包 Go 回归及 dashboard vet；未打包/部署。仅需更新 Server，旧账单无需重生成，核对差异继续计费。见[任务记录](docs/tasks/2026-09-15-billing-daily-download.md)。
+
+- **上游每日明细下载修复（2026-09-15）**：隔离目录 `.tmp/billing-daily-download` 修复同日多用户文件重名及按天仅下载首份的问题；每日一个入口，多文件按天 ZIP，包内按用户 ID 区分，单文件仍 XLSX，完整 ZIP 亦去除重名。原实现回归复现、四个相关 Go 包及 dashboard vet 通过；实库/浏览器/真实 Excel 数值未验收。未提交发布部署，仅需 Server 更新，旧账单无需重生成。见[任务记录](docs/tasks/2026-09-15-billing-daily-download.md)。
+
 - **rc115 调权窗口修复发布（2026-09-15）**：26a2e4b3 经合并提交 6685ce2d8 推送 main，v2.0.0-rc115 指向该提交。合并后全量 Go/vet 通过，CI34941944921 和 release34942184936 成功；三份安装包、SHA256SUMS 与 Server 镜像已发布。无新迁移，本次只需升级 Server，rc114 Agent 可沿用；未下载复核、未部署。见[任务记录](docs/tasks/2026-09-15-tuning-direct-ttft.md)。
 
 - **调权分钟窗口修复（2026-09-15）**：隔离目录 .tmp/tuning-direct-ttft 已将性能评估窗口对齐到最近结束的完整分钟，保留配置时长和实时限流/快速熔断路径，无新增查询、无 Agent/NewAPI/迁移改动。先复现后回归，覆盖 1/5/15 分钟及跨日/时区；四个相关 Go 包与 tuning vet 通过，实库/生产未验收。未提交/部署，本次仅需更新 Server；渠道 255 长期无有效 TTFT 仍待独立核查。见[任务记录](docs/tasks/2026-09-15-tuning-direct-ttft.md)。
