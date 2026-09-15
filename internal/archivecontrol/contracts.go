@@ -117,6 +117,7 @@ type Response struct {
 	LeaseSeconds   int    `json:"lease_seconds"`
 }
 type Store interface {
+	LatestLogArchiveMonth(context.Context, string) (string, error)
 	ListLogArchiveDays(context.Context, string, string) ([]Day, error)
 	ListLogArchives(context.Context, string) ([]Item, error)
 	UpdateLogArchive(context.Context, string, Config, string) error

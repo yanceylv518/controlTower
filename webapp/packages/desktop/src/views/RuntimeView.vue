@@ -5,6 +5,7 @@ import { dashboard } from "../api";
 import { useFiltersStore } from "../stores/filters";
 import { useAsyncData } from "../composables/useAsyncData";
 import { useAutoRefresh } from "../composables/useAutoRefresh";
+import { loadRuntimeHistory } from "../utils/runtimeHistory";
 import AppShell from "../components/AppShell.vue";
 import AsyncPanel from "../components/AsyncPanel.vue";
 import HoursSelect from "../components/HoursSelect.vue";
@@ -19,9 +20,10 @@ import {
 
 const filters = useFiltersStore();
 const hours = ref(1);
-const startTime = () =>
-  new Date(Date.now() - hours.value * 3600000).toISOString();
 const state = useAsyncData(async () => {
+  const end = Date.now();
+  const startTime = new Date(end - hours.value * 3600000).toISOString();
+  const endTime = new Date(end).toISOString();
   await filters.loadInstances();
   const common = { limit: 200 };
   const siteInstanceIDs = new Set(
@@ -31,17 +33,13 @@ const state = useAsyncData(async () => {
   );
   const [agents, metrics, health, docker] = await Promise.all([
     dashboard.agents(common),
-    dashboard.serverMetrics({
-      ...common,
-      start_time: startTime(),
-      end_time: new Date().toISOString(),
-    }),
+    loadRuntimeHistory(dashboard.serverMetrics, [...siteInstanceIDs], startTime, endTime),
     dashboard.healthChecks(common),
     dashboard.dockerStatuses(common),
   ]);
   return {
     agents: agents.items.filter((item) => siteInstanceIDs.has(item.instance_id)),
-    metrics: metrics.items.filter((item) => siteInstanceIDs.has(item.instance_id)),
+    metrics,
     health: health.items.filter((item) => siteInstanceIDs.has(item.instance_id)),
     docker: docker.items.filter((item) => siteInstanceIDs.has(item.instance_id)),
   };

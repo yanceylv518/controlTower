@@ -45,7 +45,7 @@ func (q Query) Validate(now time.Time) error {
 	if len(q.Host) > 253 || len(q.Path) > 256 || strings.ContainsAny(q.Host+q.Path, "\x00\r\n") || q.MinDurationMS < 0 || q.MinDurationMS > 3600000 {
 		return errors.New("invalid nginx filter")
 	}
-	if q.Level != "" && !strings.Contains("|debug|info|notice|warn|error|crit|alert|emerg|", "|"+q.Level+"|") {
+	if q.Level != "" && !strings.Contains("|debug|info|notice|warn|error|crit|alert|emerg|error_and_above|", "|"+q.Level+"|") {
 		return errors.New("invalid log level")
 	}
 	if q.BatchID != "" && !ValidName(q.BatchID) {

@@ -11,7 +11,7 @@ func TestM1B4ConfigDefaultsAndBounds(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if cfg.CommandExpiryMinutes != 10 || cfg.RetentionDetailDays != 30 || cfg.RetentionMetric5mDays != 90 || cfg.RetentionRuntimeDays != 7 {
+	if cfg.CommandExpiryMinutes != 10 || cfg.RetentionDetailDays != 30 || cfg.RetentionMetric5mDays != 90 || cfg.RetentionRuntimeDays != 1 {
 		t.Fatalf("defaults=%+v", cfg)
 	}
 	base["CT_COMMAND_EXPIRY_MINUTES"] = "0"

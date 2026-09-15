@@ -51,6 +51,22 @@ func (s Store) ListLogArchives(ctx context.Context, site string) ([]ac.Item, err
 	return []ac.Item{v}, rows.Err()
 }
 
+func (s Store) LatestLogArchiveMonth(ctx context.Context, site string) (string, error) {
+	var date string
+	err := s.db.QueryRowContext(ctx, `SELECT log_date FROM site_log_archive_days WHERE site_id=? AND log_date BETWEEN '0001-01-01' AND '9999-12-31' ORDER BY log_date DESC LIMIT 1`, site).Scan(&date)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	d, err := time.Parse("2006-01-02", date)
+	if err != nil {
+		return "", err
+	}
+	return d.Format("2006-01"), nil
+}
+
 func (s Store) ListLogArchiveDays(ctx context.Context, site, month string) ([]ac.Day, error) {
 	start, err := time.Parse("2006-01", month)
 	if err != nil {

@@ -179,7 +179,7 @@ async function submit() {
   if (logKind.value !== 'app') {
     query.kind = logKind.value
     if (requestPath.value.trim()) query.path = requestPath.value.trim()
-    if (logLevel.value) query.level = logLevel.value
+    if (logKind.value === 'nginx_error') query.level = logLevel.value || 'error_and_above'
     if (minDuration.value) query.min_duration_ms = minDuration.value
   }
   if ([query.request_id, query.error_code].some(v => v && !/^[a-zA-Z0-9_.:-]{1,128}$/.test(v))) { ElMessage.warning('请求 ID 和错误码仅支持字母、数字及 _ . : -，最多 128 位'); return }
@@ -248,7 +248,7 @@ onBeforeUnmount(() => { disposed = true; selection++; if (timer) clearInterval(t
           <label v-if="supportsFilter('status')">{{ logKind === 'app' ? '错误码' : 'HTTP 状态码' }}<el-input v-model="errorCode" maxlength="128" :placeholder="logKind === 'app' ? '例如 429、insufficient_quota' : '例如 404、502'" clearable /></label>
           <label v-if="supportsFilter('path')">请求路径<el-input v-model="requestPath" maxlength="256" placeholder="例如 /v1/chat/completions" clearable /></label>
           <label v-if="supportsFilter('duration')">耗时 ≥<el-input-number v-model="minDuration" :min="0" :max="3600000" :precision="0" :controls="false" placeholder="毫秒" /> ms</label>
-          <label v-if="supportsFilter('level')">错误级别<el-select v-model="logLevel" clearable style="width: 150px"><el-option v-for="level in ['debug','info','notice','warn','error','crit','alert','emerg']" :key="level" :value="level" :label="level" /></el-select></label>
+          <label v-if="supportsFilter('level')">错误级别<el-select v-model="logLevel" clearable placeholder="error 及以上" style="width: 150px"><el-option v-for="level in ['error','crit','alert','emerg']" :key="level" :value="level" :label="level" /></el-select></label>
           <el-button link @click="clearExtraFilters">清空附加条件</el-button>
           <span class="query-note">所有条件同时满足，收起后仍生效</span>
         </div>

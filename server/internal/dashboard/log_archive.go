@@ -31,6 +31,13 @@ func (h LogArchiveHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		month := r.URL.Query().Get("month")
+		if month == "" && len(items) > 0 {
+			month, err = h.Store.LatestLogArchiveMonth(r.Context(), site)
+			if err != nil {
+				writeDashboardError(w, 500, "archive_month_unavailable")
+				return
+			}
+		}
 		if month == "" {
 			month = time.Now().In(time.FixedZone("UTC+08:00", 28800)).Format("2006-01")
 		}
@@ -45,7 +52,7 @@ func (h LogArchiveHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"items": items})
+		_ = json.NewEncoder(w).Encode(map[string]any{"items": items, "month": month})
 		return
 	}
 	var c ac.Config

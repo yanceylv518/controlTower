@@ -53,7 +53,7 @@ func Load(values map[string]string) (Config, error) {
 		CommandExpiryMinutes:         intOrDefault(values, "CT_COMMAND_EXPIRY_MINUTES", 10),
 		RetentionDetailDays:          intOrDefault(values, "CT_RETENTION_DETAIL_DAYS", 30),
 		RetentionMetric5mDays:        intOrDefault(values, "CT_RETENTION_METRIC5M_DAYS", 90),
-		RetentionRuntimeDays:         intOrDefault(values, "CT_RETENTION_RUNTIME_DAYS", 7),
+		RetentionRuntimeDays:         intOrDefault(values, "CT_RETENTION_RUNTIME_DAYS", 1),
 		RetentionHealthHours:         intOrDefault(values, "CT_RETENTION_HEALTH_HOURS", 6),
 		BillingPagePauseMilliseconds: intOrDefault(values, "CT_BILLING_PAGE_PAUSE_MILLISECONDS", 500),
 	}

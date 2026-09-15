@@ -798,6 +798,7 @@ export const dashboardApi = (client: ApiClient) => ({
       start_time?: string;
       end_time?: string;
       limit?: number;
+      offset?: number;
     } = {},
   ) =>
     client.request<ListResponse<ServerMetricItem>>(

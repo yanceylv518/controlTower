@@ -159,7 +159,16 @@ func nginxMatcher(source cl.Source, q cl.Query) func(string) bool {
 		}
 		if source.Kind == "nginx_error" {
 			m := nginxErrorLevel.FindStringSubmatch(line)
-			if len(m) < 2 || q.Level != "" && m[1] != q.Level {
+			if len(m) < 2 {
+				return false
+			}
+			if q.Level == "" || q.Level == "error_and_above" {
+				switch m[1] {
+				case "error", "crit", "alert", "emerg":
+				default:
+					return false
+				}
+			} else if m[1] != q.Level {
 				return false
 			}
 			if source.Shared && q.Host != "" {

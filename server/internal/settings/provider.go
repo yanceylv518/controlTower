@@ -43,7 +43,7 @@ const (
 )
 
 var defaults = map[string]string{
-	RetentionDetail: "30", RetentionMetric5m: "90", RetentionRuntime: "7", RetentionHealthHours: "6", RetentionAlerts: "30", OfflineSeconds: "120",
+	RetentionDetail: "30", RetentionMetric5m: "90", RetentionRuntime: "1", RetentionHealthHours: "6", RetentionAlerts: "30", OfflineSeconds: "120",
 	CPUWarn: "80", CPUCrit: "90", MemoryWarn: "80", MemoryCrit: "90", DiskWarn: "85", DiskCrit: "95",
 	ErrorRateWarn: "20", ErrorRateCrit: "50", P95Warn: "5", P95Crit: "10", NotificationsEnabled: "true",
 	QuotaPerUnit: "500000", CurrencySymbol: "¥",
