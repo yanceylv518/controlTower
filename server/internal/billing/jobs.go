@@ -522,6 +522,7 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 				verification = FallbackLogCharge(log, quotaPerUnit)
 			}
 			displayPrompt, displayCompletion, media := statementDisplayUsage(log)
+			attachHistoricalPrices(job, log, quotaPerUnit, &verification.Charge)
 			if job.UsageVersion == 0 {
 				displayPrompt, displayCompletion = nullableInt64(log.PromptTokens), nullableInt64(log.CompletionTokens)
 			}

@@ -25,7 +25,7 @@ func TestStatementSourceSelectionDefaultAndDedup(t *testing.T) {
 		if strings.HasSuffix(extra, "true") {
 			want = billing.PricingSourceRecalculate
 		}
-		if w.Code != 202 || store.job.PricingSource != want || store.job.UsageVersion != 1 {
+		if w.Code != 202 || store.job.PricingSource != want || store.job.UsageVersion != billing.HistoricalPriceUsageVersion {
 			t.Fatalf("body=%s code=%d job=%+v", body, w.Code, store.job)
 		}
 		if key := keys[want]; key != "" && key != store.job.RequestKey {

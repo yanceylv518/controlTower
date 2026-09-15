@@ -1,6 +1,18 @@
 # Control Tower 项目进度
 
-## 当前上下文
+<!-- AI_CURRENT_START -->
+## 当前总览
+
+- 更新时间：2026-09-16，Asia/Shanghai。
+- 目标与结果：明细和日统计展示历史单价及同日多套规则，已实现并通过自动化验证；原始金额不变。普通计费还原快照单价，表达式展示原文、档位和条件；规则预聚合避免扫描海量明细。
+- 工作位置：`codex/billing-historical-price-display`，基线 a58f278f / rc117，隔离检出；未提交、未发布、未部署。主检出原有修改保留。
+- 验证：Go 全量 vet/test、pnpm typecheck/build 和 87 项前端回归通过；真实 MySQL（未配置 DSN）、浏览器、Excel 与生产验收未执行。
+- 兼容与下一步：新任务 usage_version=2，旧账单需新建任务生成完整价格信息，无新增迁移；按用户安排人工验收和交付。音频单价暂不单独还原，表达式不保证可拆为固定单价。此前精度及旧音频任务审查事项保留。
+- 交接：[历史价格展示](docs/ai-tasks/2026-09-16-billing-historical-prices.md)。AI Workspace 暂不可用，本地文档已保留，尚未归档。
+
+<!-- AI_CURRENT_END -->
+
+## 历史上下文
 
 - **账单计费来源交付（2026-09-16）**：功能提交 `498bb1621` 已快进推送 origin/main，包含默认 NewAPI 原始扣费、可选重算、多媒体用量拆分及 080 迁移。fetch、暂存与 diff 检查通过；本轮代码未变、未重复测试，沿用前轮 Go/MySQL/87 项前端及构建验证。未打包部署，需升级 Server/前端及迁移，Agent 不变。见[任务记录](docs/tasks/2026-09-15-billing-source-mode.md)。
 

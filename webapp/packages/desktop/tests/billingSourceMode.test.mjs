@@ -33,7 +33,7 @@ test('recalculate is explicitly sent, and opening another new task resets it', a
   await p.openCreate();assert.equal(p.createForm.value.recalculate,false)
 })
 test('dedup distinguishes pricing modes and legacy usage format', async () => {
-  for(const [source,version,blocked] of [['newapi',1,true],['recalculate',1,false],['newapi',0,false]]) {
+  for(const [source,version,blocked] of [['newapi',2,true],['recalculate',2,false],['newapi',1,false],['newapi',0,false]]) {
     const p=page();fill(p)
     p.data.value.items=[{instance_id:'site',status:'complete',job_type:'user_statement',user_id:7,range_from:'2026-09-01T00:00:00+08:00',range_to:'2026-09-02T00:00:00+08:00',pricing_source:source,usage_version:version}]
     await p.createJob(); assert.equal(p.calls.length,blocked?0:1)

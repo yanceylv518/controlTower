@@ -65,7 +65,7 @@ func (h BillingStatementsHandler) ServeHTTP(w http.ResponseWriter, r *http.Reque
 	if req.Recalculate {
 		job.PricingSource = billing.PricingSourceRecalculate
 	}
-	job.UsageVersion = 1
+	job.UsageVersion = billing.HistoricalPriceUsageVersion
 	subjectName := ""
 	switch req.StatementType {
 	case "user":
@@ -101,7 +101,7 @@ func (h BillingStatementsHandler) ServeHTTP(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	raw := fmt.Sprintf("v2|%s|%s|%d|%s|%s|exclude-zero:%t", job.InstanceID, job.JobType, map[bool]int64{true: job.UserID, false: job.UpstreamID}[job.JobType == "user_statement"], from.Format(time.RFC3339), to.Format(time.RFC3339), job.ExcludeZeroOutput)
-	raw += "|pricing:" + job.PricingSource + "|usage:1"
+	raw += fmt.Sprintf("|pricing:%s|usage:%d", job.PricingSource, job.UsageVersion)
 	sum := sha256.Sum256([]byte(raw))
 	job.RequestKey = "statement:" + hex.EncodeToString(sum[:16])
 	err = h.Store.CreateBillingStatementJob(r.Context(), job, steps, subjectName)

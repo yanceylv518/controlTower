@@ -105,7 +105,7 @@ async function createJob() {
     && job.range_to?.slice(0, 10) === wantedTo.slice(0, 10)
     && !!job.exclude_zero_output === form.exclude_zero_output
     && (job.pricing_source !== "newapi") === form.recalculate
-    && (job.usage_version || 0) === 1);
+    && (job.usage_version || 0) === 2);
   if (duplicate) { ElMessage.warning("相同对象和账期的账单任务已存在，不能重复创建"); return; }
   creating.value = true;
   try {

@@ -66,14 +66,27 @@ func detailCSVHeaders(job Job, headers []string) []string {
 			headers[i] = "普通输出 Token"
 		}
 	}
-	return append(headers, "图像输入 Token", "图像输出 Token", "音频输入 Token", "音频输出 Token")
+	headers = append(headers, "图像输入 Token", "图像输出 Token", "音频输入 Token", "音频输出 Token")
+	if job.UsageVersion >= HistoricalPriceUsageVersion {
+		headers = append(headers, "图像输入单价", "计价规则")
+	}
+	return headers
 }
-func detailCSVCells(job Job, media *MultimediaUsage, cells []string) []string {
+func detailCSVCells(job Job, media *MultimediaUsage, cells []string, charges ...LogCharge) []string {
 	if job.UsageVersion == 0 {
 		return cells
 	}
 	if media == nil {
-		return append(cells, "", "", "", "")
+		cells = append(cells, "", "", "", "")
+	} else {
+		cells = append(cells, strconv.FormatInt(media.ImageInputTokens, 10), strconv.FormatInt(media.ImageOutputTokens, 10), strconv.FormatInt(media.AudioInputTokens, 10), strconv.FormatInt(media.AudioOutputTokens, 10))
 	}
-	return append(cells, strconv.FormatInt(media.ImageInputTokens, 10), strconv.FormatInt(media.ImageOutputTokens, 10), strconv.FormatInt(media.AudioInputTokens, 10), strconv.FormatInt(media.AudioOutputTokens, 10))
+	if job.UsageVersion >= HistoricalPriceUsageVersion {
+		if len(charges) > 0 {
+			cells = append(cells, charges[0].ImagePrice, charges[0].PricingRule)
+		} else {
+			cells = append(cells, "未记录", "异常订单未保存计价规则")
+		}
+	}
+	return cells
 }

@@ -372,12 +372,12 @@ func statementDailySummary(job billing.Job, rows []billing.StatementAggregateRow
 	for _, grouped := range groupStatementRows(job, rows, discounts, true) {
 		v, discount := grouped.Row, grouped.Discount
 		price := prices.price(job, v)
-		if job.UsesNewAPICharge() {
+		if job.UsesNewAPICharge() && job.UsageVersion < billing.HistoricalPriceUsageVersion {
 			price = billing.Price{Input: "未拆分", Output: "未拆分", Cache: "未拆分", CacheWrite: "未拆分"}
 		} else if prices == nil {
 			price = billing.Price{Input: "待加载", Output: "待加载", Cache: "待加载", CacheWrite: "待加载"}
 		}
-		out = append(out, map[string]any{"day": v.Day.Format("2006-01-02"), "channel_id": v.ChannelID, "channel_name": v.ChannelName, "model_name": statementModelLabel(job, v.ChannelName, v.ModelName), "request_count": v.RequestCount, "image_input_tokens": v.ImageInputTokens, "image_output_tokens": v.ImageOutputTokens, "audio_input_tokens": v.AudioInputTokens, "audio_output_tokens": v.AudioOutputTokens, "prompt_tokens": v.PromptTokens, "completion_tokens": v.CompletionTokens, "cache_read_tokens": v.CacheTokens, "cache_write_tokens": v.CacheWriteTokens, "input_price": price.Input, "output_price": price.Output, "cache_read_price": price.Cache, "cache_write_price": price.CacheWrite, "amount": v.Amount, "discount": discount, "final_amount": multiplyDecimal(v.Amount, discount), "detail_file": statementDailyFilename(job, v.Day)})
+		out = append(out, map[string]any{"day": v.Day.Format("2006-01-02"), "channel_id": v.ChannelID, "channel_name": v.ChannelName, "model_name": statementModelLabel(job, v.ChannelName, v.ModelName), "request_count": v.RequestCount, "image_input_tokens": v.ImageInputTokens, "image_output_tokens": v.ImageOutputTokens, "audio_input_tokens": v.AudioInputTokens, "audio_output_tokens": v.AudioOutputTokens, "prompt_tokens": v.PromptTokens, "completion_tokens": v.CompletionTokens, "cache_read_tokens": v.CacheTokens, "cache_write_tokens": v.CacheWriteTokens, "price_rules": prices.rules(job, v), "input_price": price.Input, "output_price": price.Output, "cache_read_price": price.Cache, "cache_write_price": price.CacheWrite, "amount": v.Amount, "discount": discount, "final_amount": multiplyDecimal(v.Amount, discount), "detail_file": statementDailyFilename(job, v.Day)})
 	}
 	return out
 }
@@ -511,6 +511,13 @@ func statementWorkbook(job billing.Job, rows []billing.StatementAggregateRow, st
 			return nil, err
 		}
 	}
+	var prices statementPrices
+	if job.UsageVersion >= billing.HistoricalPriceUsageVersion {
+		prices, err = loadStatementPrices(context.Background(), job, store, roots...)
+		if err != nil {
+			return nil, err
+		}
+	}
 	modelRows := groupStatementRows(job, rows, discounts, false)
 	widths := []float64{28, 14, 18, 18, 18, 18, 16, 12, 16}
 	if job.UsageVersion > 0 {
@@ -559,6 +566,10 @@ func statementWorkbook(job billing.Job, rows []billing.StatementAggregateRow, st
 		dailyWidths = append([]float64{24}, dailyWidths...)
 		dailyHeaders = append([]xlsxwriter.Cell{t("渠道")}, dailyHeaders...)
 	}
+	if job.UsageVersion >= billing.HistoricalPriceUsageVersion {
+		dailyWidths = append(dailyWidths, 20, 20, 20, 20, 100)
+		dailyHeaders = append(dailyHeaders, t("输入单价"), t("输出单价"), t("缓存读取单价"), t("缓存写入单价"), t("计价规则"))
+	}
 	daily, err := newStatementSheet(book, job, "每日账单", dailyWidths)
 	if err != nil {
 		return nil, err
@@ -576,6 +587,10 @@ func statementWorkbook(job billing.Job, rows []billing.StatementAggregateRow, st
 		}
 		if job.JobType == "upstream_statement" {
 			cells = append([]xlsxwriter.Cell{t(v.ChannelName)}, cells...)
+		}
+		if job.UsageVersion >= billing.HistoricalPriceUsageVersion {
+			price := prices.price(job, v)
+			cells = append(cells, t(price.Input), t(price.Output), t(price.Cache), t(price.CacheWrite), xlsxwriter.Cell{Value: prices.rules(job, v), Style: xlsxwriter.WrappedTextStyle})
 		}
 		_ = daily.Row(cells)
 	}

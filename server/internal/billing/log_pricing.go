@@ -13,6 +13,7 @@ import (
 // log. Ratios are deliberately absent: they are only inputs used to derive the
 // effective per-million-token prices captured below.
 type LogCharge struct {
+	PricingRule                                                                          string
 	Mode                                                                                 string
 	MatchedTier                                                                          string
 	InputPrice, OutputPrice, CacheReadPrice, ImagePrice                                  string

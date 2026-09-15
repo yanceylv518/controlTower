@@ -27,7 +27,7 @@ type statementPriceKey struct {
 	Day, Model string
 	Channel    int64
 }
-type statementPriceTuple [4]string
+type statementPriceTuple [5]string // four prices plus the complete paired rule
 type statementPrices map[statementPriceKey]map[statementPriceTuple]bool
 
 // Only a numeric zero paired with an explicitly zero token count is a
@@ -112,7 +112,7 @@ func rememberStatementPrices(key string, prices statementPrices) {
 }
 
 func loadStatementPrices(ctx context.Context, job billing.Job, store BillingStatementResultStore, roots ...string) (statementPrices, error) {
-	if job.UsesNewAPICharge() {
+	if job.UsesNewAPICharge() && job.UsageVersion < billing.HistoricalPriceUsageVersion {
 		return statementPrices{}, nil
 	}
 	if err := ctx.Err(); err != nil {
@@ -140,7 +140,7 @@ func loadStatementPrices(ctx context.Context, job billing.Job, store BillingStat
 		return files[i].RelativePath < files[j].RelativePath
 	})
 	var signature strings.Builder
-	fmt.Fprintf(&signature, "v1|%s|%s|%s\n", root, job.ID, job.JobType)
+	fmt.Fprintf(&signature, "v2|%s|%s|%s\n", root, job.ID, job.JobType)
 	for _, file := range files {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -263,7 +263,7 @@ func (prices statementPrices) price(job billing.Job, row billing.StatementAggreg
 	}
 	var columns [4][]string
 	for tuple := range prices[key] {
-		for i, value := range tuple {
+		for i, value := range tuple[:4] {
 			if value != "" && !slices.Contains(columns[i], value) {
 				columns[i] = append(columns[i], value)
 			}
@@ -324,7 +324,14 @@ func readStatementFilePrices(ctx context.Context, path string) (statementPrices,
 	defer z.Close()
 	out := statementPrices{}
 	day := ""
+	summaryPath, err := historicalPriceSheetPath(z.File)
+	if err != nil {
+		return nil, "", err
+	}
 	for _, file := range z.File {
+		if summaryPath != "" && file.Name != summaryPath {
+			continue
+		}
 		if !strings.HasPrefix(file.Name, "xl/worksheets/sheet") || !strings.HasSuffix(file.Name, ".xml") {
 			continue
 		}
@@ -446,6 +453,7 @@ func readStatementPriceSheet(ctx context.Context, in io.Reader, out statementPri
 			}
 			tuple[i] = value
 		}
+		tuple[4] = values[headers["计价规则"]]
 		if out[key] == nil {
 			out[key] = map[statementPriceTuple]bool{}
 		}

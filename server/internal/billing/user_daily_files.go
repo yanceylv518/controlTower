@@ -150,7 +150,7 @@ func (g UserDailyFileGenerator) generateChannelFiles(ctx context.Context, root s
 		writer := csv.NewWriter(tmp)
 		_ = writer.Write(detailCSVHeaders(job, []string{"请求时间", "请求 ID", "用户", "令牌", "模型", "计费模式", "命中价格层级", "输入 Token", "输出 Token", "缓存读取 Token", "缓存写入 Token", "5m 缓存写入 Token", "1h 缓存写入 Token", "输入单价", "输出单价", "缓存读取单价", "缓存写入单价", "5m 缓存写入单价", "1h 缓存写入单价", "按次单价", "金额", "订单状态", "异常原因"}))
 		for _, row := range rows {
-			_ = writer.Write(detailCSVCells(job, &row.MultimediaUsage, []string{time.Unix(row.CreatedUnix, 0).In(BusinessLocation).Format("2006-01-02 15:04:05"), row.RequestID, row.Username, row.TokenName, row.ModelName, billingModeLabel(row.Charge.Mode), row.Charge.MatchedTier, strconv.FormatInt(row.PromptTokens, 10), strconv.FormatInt(row.CompletionTokens, 10), strconv.FormatInt(row.CacheReadTokens, 10), strconv.FormatInt(row.CacheWriteTokens, 10), strconv.FormatInt(row.CacheWrite5mTokens, 10), strconv.FormatInt(row.CacheWrite1hTokens, 10), row.Charge.InputPrice, row.Charge.OutputPrice, row.Charge.CacheReadPrice, row.Charge.CacheWritePrice, row.Charge.CacheWrite5mPrice, row.Charge.CacheWrite1hPrice, row.Charge.PerRequestPrice, row.Charge.Total, "正常", ""}))
+			_ = writer.Write(detailCSVCells(job, &row.MultimediaUsage, []string{time.Unix(row.CreatedUnix, 0).In(BusinessLocation).Format("2006-01-02 15:04:05"), row.RequestID, row.Username, row.TokenName, row.ModelName, billingModeLabel(row.Charge.Mode), row.Charge.MatchedTier, strconv.FormatInt(row.PromptTokens, 10), strconv.FormatInt(row.CompletionTokens, 10), strconv.FormatInt(row.CacheReadTokens, 10), strconv.FormatInt(row.CacheWriteTokens, 10), strconv.FormatInt(row.CacheWrite5mTokens, 10), strconv.FormatInt(row.CacheWrite1hTokens, 10), row.Charge.InputPrice, row.Charge.OutputPrice, row.Charge.CacheReadPrice, row.Charge.CacheWritePrice, row.Charge.CacheWrite5mPrice, row.Charge.CacheWrite1hPrice, row.Charge.PerRequestPrice, row.Charge.Total, "正常", ""}, row.Charge))
 		}
 		for _, row := range anomalies {
 			_ = writer.Write(detailCSVCells(job, nil, []string{row.CreatedAt.In(BusinessLocation).Format("2006-01-02 15:04:05"), row.RequestID, row.Username, row.TokenName, row.ModelName, "异常订单", "未完成计价", strconv.FormatInt(row.PromptTokens.Int64, 10), strconv.FormatInt(row.CompletionTokens.Int64, 10), strconv.FormatInt(row.CacheTokens, 10), strconv.FormatInt(row.CacheWriteTokens, 10), strconv.FormatInt(row.CacheWrite5mTokens, 10), strconv.FormatInt(row.CacheWrite1hTokens, 10), row.InputPrice, row.OutputPrice, row.CachePrice, row.CacheWritePrice, "", "", "", row.ActualAmount, "异常订单", row.Reasons}))
@@ -241,6 +241,11 @@ func writeUserDailyWorkbook(out io.Writer, job Job, group UserDailyFile, columns
 	appendColumn("5m 写入单价", columns.write5m)
 	appendColumn("1h 写入单价", columns.write1h)
 	appendColumn("按次单价", columns.perRequest)
+	appendColumn("图像输入单价", job.UsageVersion >= HistoricalPriceUsageVersion)
+	appendColumn("计价规则", job.UsageVersion >= HistoricalPriceUsageVersion)
+	if job.UsageVersion >= HistoricalPriceUsageVersion {
+		widths[len(widths)-1] = 100
+	}
 	headers = append(headers, "总费用")
 	widths = append(widths, 16)
 
@@ -251,6 +256,12 @@ func writeUserDailyWorkbook(out io.Writer, job Job, group UserDailyFile, columns
 		priceNote = "计费来源：NewAPI 日志实际扣费；单价未拆分，总费用直接采用原始扣费结果"
 	} else {
 		priceNote += "；计费来源：重新计费"
+	}
+	if job.UsageVersion >= HistoricalPriceUsageVersion {
+		priceNote = "单价单位：金额/百万 Token；单价与规则来自请求日志历史快照，不使用当前配置。表达式不强行拆分。"
+		if job.UsesNewAPICharge() {
+			priceNote += "金额采用 NewAPI 原始扣费。"
+		}
 	}
 	if columns.perRequest {
 		priceNote += "；按次单价单位：金额/次"
@@ -287,7 +298,11 @@ func writeUserDailyWorkbook(out io.Writer, job Job, group UserDailyFile, columns
 	if err := newSheet(); err != nil {
 		return err
 	}
+	priceRows := map[historicalPriceRow]bool{}
 	err = iterate(func(row RequestDetail) error {
+		if job.UsageVersion >= HistoricalPriceUsageVersion {
+			priceRows[priceSnapshot(row)] = true
+		}
 		if dataRows >= 1_000_000 {
 			if err := newSheet(); err != nil {
 				return err
@@ -319,7 +334,9 @@ func writeUserDailyWorkbook(out io.Writer, job Job, group UserDailyFile, columns
 			cells = append(cells, numberCell(row.CacheWrite1hTokens, 3))
 		}
 		priceCell := decimalCell
-		if job.UsesNewAPICharge() {
+		if job.UsageVersion >= HistoricalPriceUsageVersion {
+			priceCell = historicalPriceCell
+		} else if job.UsesNewAPICharge() {
 			priceCell = func(string) xlsxwriter.Cell { return xlsxwriter.Cell{Value: "未拆分", Style: 5} }
 		}
 		cells = append(cells, priceCell(row.Charge.InputPrice), priceCell(row.Charge.OutputPrice), priceCell(row.Charge.CacheReadPrice))
@@ -335,6 +352,9 @@ func writeUserDailyWorkbook(out io.Writer, job Job, group UserDailyFile, columns
 		if columns.perRequest {
 			cells = append(cells, priceCell(row.Charge.PerRequestPrice))
 		}
+		if job.UsageVersion >= HistoricalPriceUsageVersion {
+			cells = append(cells, historicalPriceCell(row.Charge.ImagePrice), xlsxwriter.Cell{Value: row.Charge.PricingRule, Style: xlsxwriter.WrappedTextStyle})
+		}
 		cells = append(cells, decimalCell(row.Charge.Total))
 		if err := sheet.Row(cells); err != nil {
 			return err
@@ -344,6 +364,11 @@ func writeUserDailyWorkbook(out io.Writer, job Job, group UserDailyFile, columns
 	})
 	if err != nil {
 		return err
+	}
+	if job.UsageVersion >= HistoricalPriceUsageVersion {
+		if err := writeHistoricalPriceSheet(wb, day, priceRows); err != nil {
+			return err
+		}
 	}
 	return wb.Write(out)
 }
@@ -362,7 +387,7 @@ func workbookOptionalColumns(rows []RequestDetail) optionalWorkbookColumns {
 		columns.genericWrite = columns.genericWrite || genericWriteTokens > 0 || decimalNonZero(row.Charge.CacheWritePrice)
 		columns.write5m = columns.write5m || row.CacheWrite5mTokens > 0 || decimalNonZero(row.Charge.CacheWrite5mPrice)
 		columns.write1h = columns.write1h || row.CacheWrite1hTokens > 0 || decimalNonZero(row.Charge.CacheWrite1hPrice)
-		columns.perRequest = columns.perRequest || row.Charge.Mode == "per_request" || decimalNonZero(row.Charge.PerRequestPrice)
+		columns.perRequest = columns.perRequest || hasPerRequestPrice(row.Charge)
 	}
 	return columns
 }
