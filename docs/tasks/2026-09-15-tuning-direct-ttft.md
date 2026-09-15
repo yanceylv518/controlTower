@@ -1,7 +1,7 @@
 # 调权速度排除重试样本
 
 - 目标：监控 TTFT 保留现有全部样本；调权速度与基线只使用可确认未重试的有效流式 TTFT。
-- 状态：代码及验证完成，未提交/发布/部署；更新时间：2026-09-15。
+- 状态：代码 0edb9e4e2 已提交并快进推送 origin/main；更新时间：2026-09-15。未发布/部署；下方未提交描述为当时状态。
 - 任务 ID：01a09ee4-7eb0-7b73-a512-fc4e9e1893ae。
 - 工作目录：E:/projects/controlTower/.tmp/tuning-direct-ttft；分支：codex/tuning-direct-ttft；基于 origin/main eeea96788。
 - 范围：Agent 日志解析/渠道聚合与上报协议、Server 验证/存储迁移/调权查询与样本保护、调权页样本说明、测试及接口文档。
@@ -29,3 +29,10 @@
 - 验证：两项主要缺陷在修复前测试复现，见 .tmp/verification/review-repro.log；修复后全项目 Go 测试通过（47 包结果）、8 个相关包 vet 通过，11 项前端测试及类型检查/生产构建通过；最终排除渠道保护调整后 tuning 包全量回归通过，git diff --check 通过。
 - 迁移/协作：已 fetch 确认 origin/main 仍为 eeea96788，隔离基线无落后，无 079 编号冲突。本轮未改 SQL/迁移，前轮本地 MySQL 专项验证仍适用于该未变部分；本轮未重复启动实库测试，未把此前结果计作本轮执行。
 - 限制：仍未在真实站点验证渠道尝试字段覆盖率、生产迁移耗时或浏览器人工交互。部署顺序仍为 Server/前端和 079 迁移先行，再升级 Agent；NewAPI 与监控 TTFT 口径不变。
+
+
+## 提交交付（2026-09-15）
+
+- 用户授权提交并推送；从隔离目录提交 32 个本任务文件，代码提交 `0edb9e4e2`（fix(tuning): exclude retry TTFT from speed scoring），已从 eeea96788 快进推送 origin/main。
+- 提交前 fetch 确认无主线变化，已审核暂存范围、git diff --cached --check；代码未变，本次提交操作未重复运行前轮已通过的测试。此前的代码验证与限制见上文。
+- 主工作区其他代码及预览保留，未强制同步本地 main；本次未打包发布或部署，升级需 Server/前端与 079 迁移，再升级 Agent。
