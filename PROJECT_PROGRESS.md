@@ -2,6 +2,8 @@
 
 ## 当前上下文
 
+- **账单计费来源交付（2026-09-16）**：功能提交 `498bb1621` 已快进推送 origin/main，包含默认 NewAPI 原始扣费、可选重算、多媒体用量拆分及 080 迁移。fetch、暂存与 diff 检查通过；本轮代码未变、未重复测试，沿用前轮 Go/MySQL/87 项前端及构建验证。未打包部署，需升级 Server/前端及迁移，Agent 不变。见[任务记录](docs/tasks/2026-09-15-billing-source-mode.md)。
+
 - **账单原始计费与多媒体拆分（2026-09-15）**：隔离目录 `.tmp/billing-source-mode` 已实现新任务默认采用 NewAPI 日志扣费、可选重算，并拆分普通与图像/音频输入输出；含 080 迁移、任务模式持久化/查重、页面和文件展示及旧 Server 兼容保护。全量 Go、相关 vet、本地 MySQL 专项、87 项前端回归及类型检查/构建通过；真实浏览器/Excel/生产未验收。未提交发布部署，需 Server/前端及迁移，Agent 不变；旧账单保留，新建任务使用新口径。见[任务记录](docs/tasks/2026-09-15-billing-source-mode.md)。
 
 - **rc116 每日明细修复发布（2026-09-15）**：v2.0.0-rc116 指向 ac575498d，CI34949285641 与 release34949558520 成功；三份安装包、SHA256SUMS 和 Server rc116/latest 镜像已发布。仅需升级 Server，无新迁移/Agent 改动，旧账单无需重生成；未下载复核、未部署。见[任务记录](docs/tasks/2026-09-15-billing-daily-download.md)。
