@@ -86,7 +86,12 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 		return 0, 0
 	}
 	stageStarted = time.Now()
-	metrics, err := e.store.QueryMetrics(id, now.Add(-time.Duration(p.WindowMinutes)*time.Minute), now)
+	// Metrics are stored at minute starts. A second-precision lower bound
+	// drops the oldest minute and includes an unfinished current minute;
+	// with a one-minute window that can repeatedly reset sample readiness.
+	// Keep the live rate query and state-machine clocks on the actual now.
+	metricsEnd := now.Truncate(time.Minute)
+	metrics, err := e.store.QueryMetrics(id, metricsEnd.Add(-time.Duration(p.WindowMinutes)*time.Minute), metricsEnd)
 	metricsDuration := time.Since(stageStarted)
 	if err != nil {
 		log.Printf("tuning continuous evaluation site=%s stage=metrics failed duration=%s error=%v", id, metricsDuration, err)

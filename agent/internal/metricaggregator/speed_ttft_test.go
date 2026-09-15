@@ -2,11 +2,73 @@ package metricaggregator
 
 import (
 	"controltower/agent/internal/logcollector"
+	"controltower/agent/internal/reporter"
+	"controltower/internal/speedstats"
 	"encoding/json"
 	"reflect"
 	"testing"
 	"time"
 )
+
+// Exercise raw source metadata and the actual report JSON together. Small
+// collection batches must not impose a per-batch minimum or lose evidence.
+func TestSpeedCountsFromRawRowsAcrossReportBatches(t *testing.T) {
+	for _, tc := range []struct {
+		name                         string
+		other                        string
+		stream                       bool
+		output                       int64
+		direct, retry, unknown, ttft int64
+	}{
+		{"direct", `{"frt":1000,"admin_info":{"use_channel":["255"]}}`, true, 100, 530, 0, 0, 530},
+		{"cross_channel_retry", `{"frt":1000,"admin_info":{"use_channel":["141","255"]}}`, true, 100, 0, 530, 0, 530},
+		{"same_channel_retry", `{"frt":1000,"admin_info":{"use_channel":["255","255"]}}`, true, 100, 0, 530, 0, 530},
+		{"missing_route", `{"frt":1000}`, true, 100, 0, 0, 530, 530},
+		{"route_mismatch", `{"frt":1000,"admin_info":{"use_channel":["141"]}}`, true, 100, 0, 0, 530, 530},
+		{"no_output", `{"frt":1000,"admin_info":{"use_channel":["255"]}}`, true, 0, 0, 0, 530, 530},
+		{"not_streaming", `{"frt":1000,"admin_info":{"use_channel":["255"]}}`, false, 100, 0, 0, 0, 0},
+		{"missing_ttft", `{"admin_info":{"use_channel":["255"]}}`, true, 100, 0, 0, 0, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var merged *speedstats.Stats
+			var requests, ttft int64
+			for i := 0; i < 530; i++ {
+				e, ok, err := logcollector.ConvertRow(logcollector.Row{ID: int64(i + 1), Type: 2, ChannelID: 255, CreatedAt: time.Unix(1800000000+int64(i%60), 0), IsStream: tc.stream, CompletionTokens: tc.output, Other: tc.other})
+				if err != nil || !ok {
+					t.Fatalf("convert: %v %v", ok, err)
+				}
+				report := reporter.AgentReportRequest{AggregatedMetrics: Aggregate("i", []logcollector.Event{e}, 512)}
+				wire, err := json.Marshal(report)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var decoded reporter.AgentReportRequest
+				if err := json.Unmarshal(wire, &decoded); err != nil {
+					t.Fatal(err)
+				}
+				found := false
+				for _, m := range decoded.AggregatedMetrics {
+					if m.DimensionType != "instance_channel" {
+						continue
+					}
+					found = true
+					if m.TTFTCount == nil || !m.SpeedTTFT.Valid(*m.TTFTCount) {
+						t.Fatalf("invalid report evidence: %+v", m)
+					}
+					requests += m.RequestCount
+					ttft += *m.TTFTCount
+					merged = speedstats.Merge(merged, m.SpeedTTFT)
+				}
+				if !found {
+					t.Fatal("channel missing from report")
+				}
+			}
+			if requests != 530 || ttft != tc.ttft || merged.Samples() != tc.direct || merged.RetryCount != tc.retry || merged.UnknownCount != tc.unknown {
+				t.Fatalf("requests=%d ttft=%d stats=%+v", requests, ttft, merged)
+			}
+		})
+	}
+}
 
 func TestSpeedFilterLeavesMonitoringUnchanged(t *testing.T) {
 	ms := int64(11000)
