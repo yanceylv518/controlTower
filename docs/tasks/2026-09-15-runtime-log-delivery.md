@@ -1,5 +1,11 @@
 # 运行监控与日志既有改动提交交付
 
+## rc114 发布（2026-09-15，已发布）
+
+- 用户授权打包，目标v2.0.0-rc114，主线提交be795a468ee6a7b97288c936c289b81e7dcfd7be，CI34937520302成功。包含方向独立电话规则和已合入的调权TTFT过滤更新。
+- release34937682316已completed/success；安装包、镜像构建推送及Release创建成功。API核验Server amd64、Agent amd64/arm64三个非空安装包和SHA256SUMS均uploaded，发布页非draft。未下载复核校验，未部署生产。
+- 发布页：https://github.com/yanceylv518/controlTower/releases/tag/v2.0.0-rc114；镜像ghcr.io/yanceylv518/controltower-server:v2.0.0-rc114，工作流同时更新latest。电话功能本身不改Agent；完整启用本版调权需先升级Server/前端及079迁移，再升级Agent。保留其他工作区改动，下一步按用户安排部署及真实环境验收。
+
 ## 方向规则提交交付（2026-09-15，已推送）
 
 - 用户授权提交推送上涨/下降独立配置，范围为方向规则、表单、相关回归和文档；隔离分支codex/runtime-log-delivery，保留其他改动。
