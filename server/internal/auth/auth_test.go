@@ -227,6 +227,8 @@ func TestViewerGateWhitelistMatrix(t *testing.T) {
 		{"GET", "/api/dashboard/metrics?dimension_type=instance_channel", 403},
 		{"GET", "/api/dashboard/tuning/policy", 403},
 		{"GET", "/api/dashboard/settings", 403},
+		{"GET", "/api/dashboard/voice-alerts", 403},
+		{"PUT", "/api/dashboard/voice-alerts", 403},
 		{"GET", "/api/dashboard/channel-snapshots", 403},
 		{"POST", "/api/dashboard/metrics?dimension_type=instance_user", 403},
 	}

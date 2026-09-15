@@ -32,6 +32,8 @@ type Options struct {
 	FastCircuitSink         tuning.FastCircuitSink
 	SettingsProvider        *settings.Provider
 	BillingPagePause        time.Duration
+	VoiceHandler            http.Handler
+	AfterAgentReport        func()
 }
 
 type Store interface {
@@ -55,7 +57,7 @@ func NewMux(options Options) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", handleHealthz)
 
-	ingestService := ingest.NewServiceWithCommandExpiry(options.Store, options.CommandExpiry).WithFastCircuitSink(options.FastCircuitSink)
+	ingestService := ingest.NewServiceWithCommandExpiry(options.Store, options.CommandExpiry).WithFastCircuitSink(options.FastCircuitSink).WithAfterReport(options.AfterAgentReport)
 	agentHandler := agentgateway.NewHandlerWithTokens(options.AgentToken, ingestService, options.Store, options.AgentTokenPepper)
 	mux.HandleFunc("/api/agent/heartbeat", agentHandler.HandleHeartbeat)
 	mux.HandleFunc("/api/agent/report", agentHandler.HandleReport)
@@ -76,6 +78,9 @@ func NewMux(options Options) *http.ServeMux {
 		return dashboard.RequireBearerToken(options.DashboardToken, h)
 	}
 	a := ctauth.Handlers{M: options.AuthManager, Limiter: ctauth.NewIPLimiter(), Audit: options.Store}
+	if options.VoiceHandler != nil {
+		mux.Handle("/api/dashboard/voice-alerts", protect(options.VoiceHandler))
+	}
 	mux.HandleFunc("/api/auth/login", a.Login)
 	mux.HandleFunc("/api/auth/logout", a.Logout)
 	mux.HandleFunc("/api/auth/me", a.Me)

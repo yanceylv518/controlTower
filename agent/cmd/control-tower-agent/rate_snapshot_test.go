@@ -68,6 +68,15 @@ func TestRateCoverageUsesPreCollectionSnapshot(t *testing.T) {
 				t.Fatalf("unexpected snapshot: %+v", stats)
 			}
 			report := buildReport(context.Background(), config.Config{AgentID: "test", LogCollectEnabled: !tc.disabled}, now, 1, last, stats, events, nil, nil, nil, nil)
+			userMarker := false
+			for _, m := range report.AggregatedMetrics {
+				if m.DimensionType == "user_rate_second" && m.DimensionKey == "0" {
+					userMarker = true
+				}
+			}
+			if userMarker != tc.wantMarker {
+				t.Fatalf("customer coverage=%v want %v", userMarker, tc.wantMarker)
+			}
 			marker, counters := false, 0
 			for _, metric := range report.AggregatedMetrics {
 				if metric.DimensionType != "channel_rate_second" {

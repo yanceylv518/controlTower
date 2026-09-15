@@ -24,6 +24,7 @@ import (
 	"controltower/server/internal/settings"
 	"controltower/server/internal/storage"
 	"controltower/server/internal/tuning"
+	"controltower/server/internal/voicealert"
 )
 
 func main() {
@@ -94,6 +95,16 @@ func run() error {
 	}
 	controlStore := directcontrol.Wrap(store, cfg.SecretKey)
 	workers := newWorkerGroup(workerCtx)
+	voiceStore := voicealert.Store{DB: db}
+	voiceCaller := voicealert.AliyunFromEnv()
+	var voiceRunner *voicealert.Runner
+	var afterReport func()
+	if !cfg.APIOnly {
+		voiceRunner = voicealert.NewRunner(voiceStore, voiceCaller)
+		voiceRunner.NotificationsAllowed = func() (bool, error) { v, e := settingsProvider.Current(); return v.NotificationsEnabled, e }
+		afterReport = voiceRunner.Notify
+		workers.Go(voiceRunner.Run)
+	}
 	var fastCircuitSink tuning.FastCircuitSink
 	if cfg.APIOnly {
 		log.Printf("API-only mode enabled; operational runners are disabled (billing job worker remains enabled)")
@@ -125,7 +136,7 @@ func run() error {
 
 	server := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           httpapi.NewMux(httpapi.Options{AgentToken: cfg.AgentToken, DashboardToken: cfg.DashboardToken, Store: store, TuningStore: controlStore, FastCircuitSink: fastCircuitSink, AuthManager: authManager, AgentTokenPepper: cfg.AgentTokenPepper, SecretKey: cfg.SecretKey, NotificationMaxAttempts: cfg.NotificationMaxAttempts, CommandExpiry: time.Duration(cfg.CommandExpiryMinutes) * time.Minute, SettingsProvider: settingsProvider, BillingPagePause: time.Duration(cfg.BillingPagePauseMilliseconds) * time.Millisecond}),
+		Handler:           httpapi.NewMux(httpapi.Options{VoiceHandler: voicealert.Handler{Store: voiceStore, Caller: voiceCaller, Runner: voiceRunner}, AfterAgentReport: afterReport, AgentToken: cfg.AgentToken, DashboardToken: cfg.DashboardToken, Store: store, TuningStore: controlStore, FastCircuitSink: fastCircuitSink, AuthManager: authManager, AgentTokenPepper: cfg.AgentTokenPepper, SecretKey: cfg.SecretKey, NotificationMaxAttempts: cfg.NotificationMaxAttempts, CommandExpiry: time.Duration(cfg.CommandExpiryMinutes) * time.Minute, SettingsProvider: settingsProvider, BillingPagePause: time.Duration(cfg.BillingPagePauseMilliseconds) * time.Millisecond}),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	log.Printf("control tower server listening on %s", cfg.ListenAddr)

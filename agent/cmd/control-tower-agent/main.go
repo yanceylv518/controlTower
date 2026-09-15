@@ -499,6 +499,11 @@ func buildReport(ctx context.Context, cfg config.Config, reportedAt time.Time, s
 		rateMetrics = rateMetrics[1:]
 	}
 	report.AggregatedMetrics = append(report.AggregatedMetrics, rateMetrics...)
+	userRates := metricaggregator.UserRates(events, reportedAt)
+	if !cfg.LogCollectEnabled || !backlog.SnapshotKnown || backlog.BacklogEstimate > 0 {
+		userRates = userRates[1:]
+	}
+	report.AggregatedMetrics = append(report.AggregatedMetrics, userRates...)
 	if report.MetricBatchID == "" {
 		report.MetricBatchID = fmt.Sprintf("rates:%s:%d:%d", cfg.AgentID, reportedAt.UnixNano(), sequence)
 	}
