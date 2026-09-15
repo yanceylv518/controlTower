@@ -69,11 +69,15 @@ func (prices statementPrices) rules(job billing.Job, row billing.StatementAggreg
 		ordered = append(ordered, rule)
 	}
 	sort.Strings(ordered)
+	ordered, ambiguous := groupRuleCompleteness(ordered)
 	if len(ordered) == 1 {
 		return ordered[0]
 	}
 	for i := range ordered {
 		ordered[i] = fmt.Sprintf("规则 %d：\n%s", i+1, ordered[i])
+	}
+	if ambiguous {
+		return "当日存在不同已记录价格，以下含信息不完整的记录（记录条数不代表价格套数）\n" + strings.Join(ordered, "\n\n")
 	}
 	return fmt.Sprintf("当日 %d 套计价规则（逐套列出，不代表统一单价）\n", len(ordered)) + strings.Join(ordered, "\n\n")
 }
