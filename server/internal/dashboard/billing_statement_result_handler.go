@@ -279,6 +279,7 @@ func groupStatementRows(job billing.Job, rows []billing.StatementAggregateRow, d
 			item.Row.ChannelID, item.Row.ChannelName = row.ChannelID, row.ChannelName
 		}
 		item.Row.RequestCount += row.RequestCount
+		item.Row.MultimediaUsage.Add(row.MultimediaUsage)
 		item.Row.PromptTokens += row.PromptTokens
 		item.Row.CompletionTokens += row.CompletionTokens
 		item.Row.CacheTokens += row.CacheTokens
@@ -321,7 +322,7 @@ func statementPreviewOptions(ctx context.Context, job billing.Job, rows []billin
 	out := statementPreviewData{Models: []map[string]any{}, Daily: []map[string]any{}, Tokens: []map[string]any{}, Anomalies: []map[string]any{}, Reconciliation: []map[string]any{}}
 	for _, grouped := range groupStatementRows(job, rows, discounts, false) {
 		v, discount := grouped.Row, grouped.Discount
-		out.Models = append(out.Models, map[string]any{"channel_id": v.ChannelID, "channel_name": v.ChannelName, "model_name": statementModelLabel(job, v.ChannelName, v.ModelName), "request_count": v.RequestCount, "prompt_tokens": v.PromptTokens, "completion_tokens": v.CompletionTokens, "cache_read_tokens": v.CacheTokens, "cache_write_tokens": v.CacheWriteTokens, "amount": v.Amount, "discount": discount, "final_amount": multiplyDecimal(v.Amount, discount)})
+		out.Models = append(out.Models, map[string]any{"channel_id": v.ChannelID, "channel_name": v.ChannelName, "model_name": statementModelLabel(job, v.ChannelName, v.ModelName), "request_count": v.RequestCount, "image_input_tokens": v.ImageInputTokens, "image_output_tokens": v.ImageOutputTokens, "audio_input_tokens": v.AudioInputTokens, "audio_output_tokens": v.AudioOutputTokens, "prompt_tokens": v.PromptTokens, "completion_tokens": v.CompletionTokens, "cache_read_tokens": v.CacheTokens, "cache_write_tokens": v.CacheWriteTokens, "amount": v.Amount, "discount": discount, "final_amount": multiplyDecimal(v.Amount, discount)})
 	}
 	out.Daily = statementDailySummary(job, rows, discounts, prices)
 	if job.JobType == "user_statement" {
@@ -330,7 +331,7 @@ func statementPreviewOptions(ctx context.Context, job billing.Job, rows []billin
 			return statementPreviewData{}, tokenErr
 		}
 		for _, v := range tokens {
-			out.Tokens = append(out.Tokens, map[string]any{"token_id": v.TokenID, "token_name": v.TokenName, "day": v.Day.Format("2006-01-02"), "model_name": v.ModelName, "request_count": v.RequestCount, "prompt_tokens": v.PromptTokens, "completion_tokens": v.CompletionTokens, "cache_read_tokens": v.CacheTokens, "cache_write_tokens": v.CacheWriteTokens, "amount": v.Amount, "discount": "1.000000", "final_amount": v.Amount})
+			out.Tokens = append(out.Tokens, map[string]any{"token_id": v.TokenID, "token_name": v.TokenName, "day": v.Day.Format("2006-01-02"), "model_name": v.ModelName, "request_count": v.RequestCount, "image_input_tokens": v.ImageInputTokens, "image_output_tokens": v.ImageOutputTokens, "audio_input_tokens": v.AudioInputTokens, "audio_output_tokens": v.AudioOutputTokens, "prompt_tokens": v.PromptTokens, "completion_tokens": v.CompletionTokens, "cache_read_tokens": v.CacheTokens, "cache_write_tokens": v.CacheWriteTokens, "amount": v.Amount, "discount": "1.000000", "final_amount": v.Amount})
 		}
 	}
 	userID := int64(0)
@@ -371,10 +372,12 @@ func statementDailySummary(job billing.Job, rows []billing.StatementAggregateRow
 	for _, grouped := range groupStatementRows(job, rows, discounts, true) {
 		v, discount := grouped.Row, grouped.Discount
 		price := prices.price(job, v)
-		if prices == nil {
+		if job.UsesNewAPICharge() {
+			price = billing.Price{Input: "未拆分", Output: "未拆分", Cache: "未拆分", CacheWrite: "未拆分"}
+		} else if prices == nil {
 			price = billing.Price{Input: "待加载", Output: "待加载", Cache: "待加载", CacheWrite: "待加载"}
 		}
-		out = append(out, map[string]any{"day": v.Day.Format("2006-01-02"), "channel_id": v.ChannelID, "channel_name": v.ChannelName, "model_name": statementModelLabel(job, v.ChannelName, v.ModelName), "request_count": v.RequestCount, "prompt_tokens": v.PromptTokens, "completion_tokens": v.CompletionTokens, "cache_read_tokens": v.CacheTokens, "cache_write_tokens": v.CacheWriteTokens, "input_price": price.Input, "output_price": price.Output, "cache_read_price": price.Cache, "cache_write_price": price.CacheWrite, "amount": v.Amount, "discount": discount, "final_amount": multiplyDecimal(v.Amount, discount), "detail_file": statementDailyFilename(job, v.Day)})
+		out = append(out, map[string]any{"day": v.Day.Format("2006-01-02"), "channel_id": v.ChannelID, "channel_name": v.ChannelName, "model_name": statementModelLabel(job, v.ChannelName, v.ModelName), "request_count": v.RequestCount, "image_input_tokens": v.ImageInputTokens, "image_output_tokens": v.ImageOutputTokens, "audio_input_tokens": v.AudioInputTokens, "audio_output_tokens": v.AudioOutputTokens, "prompt_tokens": v.PromptTokens, "completion_tokens": v.CompletionTokens, "cache_read_tokens": v.CacheTokens, "cache_write_tokens": v.CacheWriteTokens, "input_price": price.Input, "output_price": price.Output, "cache_read_price": price.Cache, "cache_write_price": price.CacheWrite, "amount": v.Amount, "discount": discount, "final_amount": multiplyDecimal(v.Amount, discount), "detail_file": statementDailyFilename(job, v.Day)})
 	}
 	return out
 }
@@ -446,6 +449,13 @@ func newStatementSheet(book *xlsxwriter.Workbook, job billing.Job, name string, 
 		subject = job.ID
 	}
 	title := subject + " · " + job.From.In(billing.BusinessLocation).Format("20060102") + "至" + job.To.In(billing.BusinessLocation).AddDate(0, 0, -1).Format("20060102") + " · 对账单"
+	if job.UsageVersion > 0 {
+		if job.UsesNewAPICharge() {
+			title += " · NewAPI 原始计费"
+		} else {
+			title += " · 重新计费"
+		}
+	}
 	if err := sheet.Title(title, len(widths)); err != nil {
 		return nil, err
 	}
@@ -503,7 +513,13 @@ func statementWorkbook(job billing.Job, rows []billing.StatementAggregateRow, st
 	}
 	modelRows := groupStatementRows(job, rows, discounts, false)
 	widths := []float64{28, 14, 18, 18, 18, 18, 16, 12, 16}
-	headers := []xlsxwriter.Cell{t("模型"), t("订单数"), t("输入 Token"), t("输出 Token"), t("缓存读取 Token"), t("缓存写入 Token"), t("总费用"), t("折扣"), t("最终费用")}
+	if job.UsageVersion > 0 {
+		widths = append(widths, 18, 18, 18, 18)
+	}
+	headers := []xlsxwriter.Cell{t("模型"), t("订单数"), t(statementInputLabel(job)), t(statementOutputLabel(job)), t("缓存读取 Token"), t("缓存写入 Token"), t("总费用"), t("折扣"), t("最终费用")}
+	if job.UsageVersion > 0 {
+		headers = append(headers, multimediaHeaders()...)
+	}
 	if job.JobType == "upstream_statement" {
 		widths = append([]float64{24}, widths...)
 		headers = append([]xlsxwriter.Cell{t("渠道")}, headers...)
@@ -517,6 +533,9 @@ func statementWorkbook(job billing.Job, rows []billing.StatementAggregateRow, st
 	for index, grouped := range modelRows {
 		v, discount := grouped.Row, grouped.Discount
 		cells := []xlsxwriter.Cell{t(v.ModelName), n64(v.RequestCount), n64(v.PromptTokens), n64(v.CompletionTokens), n64(v.CacheTokens), n64(v.CacheWriteTokens), d(v.Amount), d(discount), d(multiplyDecimal(v.Amount, discount))}
+		if job.UsageVersion > 0 {
+			cells = append(cells, multimediaCells(v.MultimediaUsage)...)
+		}
 		if job.JobType == "upstream_statement" {
 			cells = append([]xlsxwriter.Cell{t(v.ChannelName)}, cells...)
 		}
@@ -531,7 +550,11 @@ func statementWorkbook(job billing.Job, rows []billing.StatementAggregateRow, st
 		return nil, err
 	}
 	dailyWidths := []float64{14, 28, 14, 18, 18, 18, 18, 16, 12, 16, 34}
-	dailyHeaders := []xlsxwriter.Cell{t("日期"), t("模型"), t("订单数"), t("输入 Token"), t("输出 Token"), t("缓存读取 Token"), t("缓存写入 Token"), t("总费用"), t("折扣"), t("最终费用"), t("明细文件")}
+	dailyHeaders := []xlsxwriter.Cell{t("日期"), t("模型"), t("订单数"), t(statementInputLabel(job)), t(statementOutputLabel(job)), t("缓存读取 Token"), t("缓存写入 Token"), t("总费用"), t("折扣"), t("最终费用"), t("明细文件")}
+	if job.UsageVersion > 0 {
+		dailyWidths = append(dailyWidths, 18, 18, 18, 18)
+		dailyHeaders = append(dailyHeaders, multimediaHeaders()...)
+	}
 	if job.JobType == "upstream_statement" {
 		dailyWidths = append([]float64{24}, dailyWidths...)
 		dailyHeaders = append([]xlsxwriter.Cell{t("渠道")}, dailyHeaders...)
@@ -548,6 +571,9 @@ func statementWorkbook(job billing.Job, rows []billing.StatementAggregateRow, st
 		discountCell := d(discount)
 		discountCell.Formula = summaryRefs[key]
 		cells := []xlsxwriter.Cell{t(v.Day.Format("2006-01-02")), t(v.ModelName), n64(v.RequestCount), n64(v.PromptTokens), n64(v.CompletionTokens), n64(v.CacheTokens), n64(v.CacheWriteTokens), d(v.Amount), discountCell, d(final), t(statementDailyFilename(job, v.Day))}
+		if job.UsageVersion > 0 {
+			cells = append(cells, multimediaCells(v.MultimediaUsage)...)
+		}
 		if job.JobType == "upstream_statement" {
 			cells = append([]xlsxwriter.Cell{t(v.ChannelName)}, cells...)
 		}
@@ -561,18 +587,24 @@ func statementWorkbook(job billing.Job, rows []billing.StatementAggregateRow, st
 		if tokenErr != nil {
 			return nil, tokenErr
 		}
-		summary, summaryErr := newStatementSheet(book, job, "令牌用量汇总", []float64{14, 26, 14, 18, 18, 18, 18, 16})
+		summary, summaryErr := newStatementSheet(book, job, "令牌用量汇总", statementMediaWidths(job, []float64{14, 26, 14, 18, 18, 18, 18, 16}))
 		if summaryErr != nil {
 			return nil, summaryErr
 		}
-		_ = summary.Row([]xlsxwriter.Cell{t("令牌 ID"), t("令牌"), t("订单数"), t("输入 Token"), t("输出 Token"), t("缓存读取 Token"), t("缓存写入 Token"), t("最终费用")})
+		_ = summary.Row(statementMediaHeaders(job, []xlsxwriter.Cell{t("令牌 ID"), t("令牌"), t("订单数"), t(statementInputLabel(job)), t(statementOutputLabel(job)), t("缓存读取 Token"), t("缓存写入 Token"), t("最终费用")}))
 		groupedTokens := map[int64][]xlsxwriter.Cell{}
 		for _, v := range tokens {
 			cells, exists := groupedTokens[v.TokenID]
 			if !exists {
 				cells = []xlsxwriter.Cell{n64(v.TokenID), t(v.TokenName), n64(0), n64(0), n64(0), n64(0), n64(0), d("0")}
+				if job.UsageVersion > 0 {
+					cells = append(cells, multimediaCells(billing.MultimediaUsage{})...)
+				}
 			}
 			values := []xlsxwriter.Cell{n64(v.RequestCount), n64(v.PromptTokens), n64(v.CompletionTokens), n64(v.CacheTokens), n64(v.CacheWriteTokens), d(v.Amount)}
+			if job.UsageVersion > 0 {
+				values = append(values, multimediaCells(v.MultimediaUsage)...)
+			}
 			for i, c := range values {
 				cells[i+2].Value = addDecimal(cells[i+2].Value, c.Value)
 			}
@@ -591,14 +623,14 @@ func statementWorkbook(job billing.Job, rows []billing.StatementAggregateRow, st
 		if err := summary.Total(); err != nil {
 			return nil, err
 		}
-		ts, sheetErr := newStatementSheet(book, job, "令牌每日用量", []float64{14, 26, 14, 28, 14, 18, 18, 18, 18, 16})
+		ts, sheetErr := newStatementSheet(book, job, "令牌每日用量", statementMediaWidths(job, []float64{14, 26, 14, 28, 14, 18, 18, 18, 18, 16}))
 		if sheetErr != nil {
 			return nil, sheetErr
 		}
-		_ = ts.Row([]xlsxwriter.Cell{t("令牌 ID"), t("令牌"), t("日期"), t("模型"), t("订单数"), t("输入 Token"), t("输出 Token"), t("缓存读取 Token"), t("缓存写入 Token"), t("最终费用")})
+		_ = ts.Row(statementMediaHeaders(job, []xlsxwriter.Cell{t("令牌 ID"), t("令牌"), t("日期"), t("模型"), t("订单数"), t(statementInputLabel(job)), t(statementOutputLabel(job)), t("缓存读取 Token"), t("缓存写入 Token"), t("最终费用")}))
 		for _, v := range tokens {
 			final := v.Amount
-			_ = ts.Row([]xlsxwriter.Cell{n64(v.TokenID), t(v.TokenName), t(v.Day.Format("2006-01-02")), t(v.ModelName), n64(v.RequestCount), n64(v.PromptTokens), n64(v.CompletionTokens), n64(v.CacheTokens), n64(v.CacheWriteTokens), d(final)})
+			_ = ts.Row(statementMediaCells(job, v.MultimediaUsage, []xlsxwriter.Cell{n64(v.TokenID), t(v.TokenName), t(v.Day.Format("2006-01-02")), t(v.ModelName), n64(v.RequestCount), n64(v.PromptTokens), n64(v.CompletionTokens), n64(v.CacheTokens), n64(v.CacheWriteTokens), d(final)}))
 		}
 		if err := ts.Total(); err != nil {
 			return nil, err

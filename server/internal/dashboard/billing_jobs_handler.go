@@ -147,7 +147,7 @@ func (h BillingJobsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					visible = append(visible, job)
 				}
 			}
-			writeDashboardJSON(w, 200, map[string]any{"items": visible})
+			writeDashboardJSON(w, 200, map[string]any{"items": visible, "pricing_source_selection": true})
 			return
 		}
 		job, err := h.Store.BillingJob(r.Context(), id)

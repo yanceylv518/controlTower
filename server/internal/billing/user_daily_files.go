@@ -148,12 +148,12 @@ func (g UserDailyFileGenerator) generateChannelFiles(ctx context.Context, root s
 		}
 		_, _ = tmp.Write([]byte{0xef, 0xbb, 0xbf})
 		writer := csv.NewWriter(tmp)
-		_ = writer.Write([]string{"请求时间", "请求 ID", "用户", "令牌", "模型", "计费模式", "命中价格层级", "输入 Token", "输出 Token", "缓存读取 Token", "缓存写入 Token", "5m 缓存写入 Token", "1h 缓存写入 Token", "输入单价", "输出单价", "缓存读取单价", "缓存写入单价", "5m 缓存写入单价", "1h 缓存写入单价", "按次单价", "金额", "订单状态", "异常原因"})
+		_ = writer.Write(detailCSVHeaders(job, []string{"请求时间", "请求 ID", "用户", "令牌", "模型", "计费模式", "命中价格层级", "输入 Token", "输出 Token", "缓存读取 Token", "缓存写入 Token", "5m 缓存写入 Token", "1h 缓存写入 Token", "输入单价", "输出单价", "缓存读取单价", "缓存写入单价", "5m 缓存写入单价", "1h 缓存写入单价", "按次单价", "金额", "订单状态", "异常原因"}))
 		for _, row := range rows {
-			_ = writer.Write([]string{time.Unix(row.CreatedUnix, 0).In(BusinessLocation).Format("2006-01-02 15:04:05"), row.RequestID, row.Username, row.TokenName, row.ModelName, billingModeLabel(row.Charge.Mode), row.Charge.MatchedTier, strconv.FormatInt(row.PromptTokens, 10), strconv.FormatInt(row.CompletionTokens, 10), strconv.FormatInt(row.CacheReadTokens, 10), strconv.FormatInt(row.CacheWriteTokens, 10), strconv.FormatInt(row.CacheWrite5mTokens, 10), strconv.FormatInt(row.CacheWrite1hTokens, 10), row.Charge.InputPrice, row.Charge.OutputPrice, row.Charge.CacheReadPrice, row.Charge.CacheWritePrice, row.Charge.CacheWrite5mPrice, row.Charge.CacheWrite1hPrice, row.Charge.PerRequestPrice, row.Charge.Total, "正常", ""})
+			_ = writer.Write(detailCSVCells(job, &row.MultimediaUsage, []string{time.Unix(row.CreatedUnix, 0).In(BusinessLocation).Format("2006-01-02 15:04:05"), row.RequestID, row.Username, row.TokenName, row.ModelName, billingModeLabel(row.Charge.Mode), row.Charge.MatchedTier, strconv.FormatInt(row.PromptTokens, 10), strconv.FormatInt(row.CompletionTokens, 10), strconv.FormatInt(row.CacheReadTokens, 10), strconv.FormatInt(row.CacheWriteTokens, 10), strconv.FormatInt(row.CacheWrite5mTokens, 10), strconv.FormatInt(row.CacheWrite1hTokens, 10), row.Charge.InputPrice, row.Charge.OutputPrice, row.Charge.CacheReadPrice, row.Charge.CacheWritePrice, row.Charge.CacheWrite5mPrice, row.Charge.CacheWrite1hPrice, row.Charge.PerRequestPrice, row.Charge.Total, "正常", ""}))
 		}
 		for _, row := range anomalies {
-			_ = writer.Write([]string{row.CreatedAt.In(BusinessLocation).Format("2006-01-02 15:04:05"), row.RequestID, row.Username, row.TokenName, row.ModelName, "异常订单", "未完成计价", strconv.FormatInt(row.PromptTokens.Int64, 10), strconv.FormatInt(row.CompletionTokens.Int64, 10), strconv.FormatInt(row.CacheTokens, 10), strconv.FormatInt(row.CacheWriteTokens, 10), strconv.FormatInt(row.CacheWrite5mTokens, 10), strconv.FormatInt(row.CacheWrite1hTokens, 10), row.InputPrice, row.OutputPrice, row.CachePrice, row.CacheWritePrice, "", "", "", row.ActualAmount, "异常订单", row.Reasons})
+			_ = writer.Write(detailCSVCells(job, nil, []string{row.CreatedAt.In(BusinessLocation).Format("2006-01-02 15:04:05"), row.RequestID, row.Username, row.TokenName, row.ModelName, "异常订单", "未完成计价", strconv.FormatInt(row.PromptTokens.Int64, 10), strconv.FormatInt(row.CompletionTokens.Int64, 10), strconv.FormatInt(row.CacheTokens, 10), strconv.FormatInt(row.CacheWriteTokens, 10), strconv.FormatInt(row.CacheWrite5mTokens, 10), strconv.FormatInt(row.CacheWrite1hTokens, 10), row.InputPrice, row.OutputPrice, row.CachePrice, row.CacheWritePrice, "", "", "", row.ActualAmount, "异常订单", row.Reasons}))
 		}
 		writer.Flush()
 		if writer.Error() != nil {
@@ -226,6 +226,12 @@ func writeUserDailyWorkbook(out io.Writer, job Job, group UserDailyFile, columns
 			widths = append(widths, 16)
 		}
 	}
+	if job.UsageVersion > 0 {
+		headers[8], headers[9] = "普通输入 Token", "普通输出 Token"
+		for _, label := range []string{"图像输入 Token", "图像输出 Token", "音频输入 Token", "音频输出 Token"} {
+			appendColumn(label, true)
+		}
+	}
 	appendColumn("普通缓存写入 Token", columns.genericWrite)
 	appendColumn("5m 写入 Token", columns.write5m)
 	appendColumn("1h 写入 Token", columns.write1h)
@@ -241,6 +247,11 @@ func writeUserDailyWorkbook(out io.Writer, job Job, group UserDailyFile, columns
 	wb := xlsxwriter.New()
 	day := group.BillDay.In(BusinessLocation).Format("2006-01-02")
 	priceNote := "单价单位：金额/百万 Token"
+	if job.UsesNewAPICharge() {
+		priceNote = "计费来源：NewAPI 日志实际扣费；单价未拆分，总费用直接采用原始扣费结果"
+	} else {
+		priceNote += "；计费来源：重新计费"
+	}
 	if columns.perRequest {
 		priceNote += "；按次单价单位：金额/次"
 	}
@@ -295,6 +306,9 @@ func writeUserDailyWorkbook(out io.Writer, job Job, group UserDailyFile, columns
 			{Value: channelLabel(row), Style: 5}, {Value: row.ModelName, Style: 5}, {Value: billingModeLabel(row.Charge.Mode), Style: 5}, {Value: row.Charge.MatchedTier, Style: 5},
 			numberCell(row.PromptTokens, 3), numberCell(row.CompletionTokens, 3), numberCell(row.CacheReadTokens, 3),
 		}
+		if job.UsageVersion > 0 {
+			cells = append(cells, numberCell(row.ImageInputTokens, 3), numberCell(row.ImageOutputTokens, 3), numberCell(row.AudioInputTokens, 3), numberCell(row.AudioOutputTokens, 3))
+		}
 		if columns.genericWrite {
 			cells = append(cells, numberCell(writeTokens, 3))
 		}
@@ -304,18 +318,22 @@ func writeUserDailyWorkbook(out io.Writer, job Job, group UserDailyFile, columns
 		if columns.write1h {
 			cells = append(cells, numberCell(row.CacheWrite1hTokens, 3))
 		}
-		cells = append(cells, decimalCell(row.Charge.InputPrice), decimalCell(row.Charge.OutputPrice), decimalCell(row.Charge.CacheReadPrice))
+		priceCell := decimalCell
+		if job.UsesNewAPICharge() {
+			priceCell = func(string) xlsxwriter.Cell { return xlsxwriter.Cell{Value: "未拆分", Style: 5} }
+		}
+		cells = append(cells, priceCell(row.Charge.InputPrice), priceCell(row.Charge.OutputPrice), priceCell(row.Charge.CacheReadPrice))
 		if columns.genericWrite {
-			cells = append(cells, decimalCell(row.Charge.CacheWritePrice))
+			cells = append(cells, priceCell(row.Charge.CacheWritePrice))
 		}
 		if columns.write5m {
-			cells = append(cells, decimalCell(row.Charge.CacheWrite5mPrice))
+			cells = append(cells, priceCell(row.Charge.CacheWrite5mPrice))
 		}
 		if columns.write1h {
-			cells = append(cells, decimalCell(row.Charge.CacheWrite1hPrice))
+			cells = append(cells, priceCell(row.Charge.CacheWrite1hPrice))
 		}
 		if columns.perRequest {
-			cells = append(cells, decimalCell(row.Charge.PerRequestPrice))
+			cells = append(cells, priceCell(row.Charge.PerRequestPrice))
 		}
 		cells = append(cells, decimalCell(row.Charge.Total))
 		if err := sheet.Row(cells); err != nil {
@@ -373,6 +391,12 @@ func channelLabel(row RequestDetail) string {
 }
 
 func billingModeLabel(mode string) string {
+	if mode == "newapi" {
+		return "NewAPI 原始计费"
+	}
+	if mode == "logged_quota_fallback" {
+		return "原始扣费兜底"
+	}
 	if mode == "tiered_expr" {
 		return "表达式计费"
 	}

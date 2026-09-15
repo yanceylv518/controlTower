@@ -377,6 +377,7 @@ const billingOtherProjection = `CASE WHEN JSON_VALID(l.other) THEN JSON_OBJECT(`
 	`'image_input',JSON_EXTRACT(l.other,'$.image_input'),` +
 	`'image_output',JSON_EXTRACT(l.other,'$.image_output'),` +
 	`'image_output_tokens',JSON_EXTRACT(l.other,'$.image_output_tokens'),` +
+	`'audio_input_token_count',JSON_EXTRACT(l.other,'$.audio_input_token_count'),` +
 	`'audio_input',JSON_EXTRACT(l.other,'$.audio_input'),` +
 	`'audio_output',JSON_EXTRACT(l.other,'$.audio_output')) ELSE '{}' END`
 
@@ -688,7 +689,7 @@ func parseBillingCacheUsage(other string) billingCacheUsage {
 	return billingCacheUsage{
 		Read: read, Write: write, Write5m: write5m, Write1h: write1h, Semantic: semantic,
 		ImageInput: imageInput, ImageOutput: imageOutput,
-		AudioInput: number("audio_input"), AudioOutput: number("audio_output"),
+		AudioInput: number("audio_input", "audio_input_token_count"), AudioOutput: number("audio_output"),
 		ModelPrice: decimal("model_price"), ModelRatio: decimal("model_ratio"), CompletionRatio: decimal("completion_ratio"),
 		CacheRatio: decimal("cache_ratio"), CacheCreationRatio: decimal("cache_creation_ratio"),
 		CacheCreationRatio5m: decimal("cache_creation_ratio_5m"), CacheCreationRatio1h: decimal("cache_creation_ratio_1h"),

@@ -112,6 +112,9 @@ func rememberStatementPrices(key string, prices statementPrices) {
 }
 
 func loadStatementPrices(ctx context.Context, job billing.Job, store BillingStatementResultStore, roots ...string) (statementPrices, error) {
+	if job.UsesNewAPICharge() {
+		return statementPrices{}, nil
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -420,6 +423,12 @@ func readStatementPriceSheet(ctx context.Context, in io.Reader, out statementPri
 			if n, ok := new(big.Rat).SetString(value); ok {
 				value = n.FloatString(6)
 				tokenHeader := []string{"输入 Token", "输出 Token", "缓存读取 Token", "普通缓存写入 Token"}[i]
+				if _, ok := headers["普通输入 Token"]; ok && i == 0 {
+					tokenHeader = "普通输入 Token"
+				}
+				if _, ok := headers["普通输出 Token"]; ok && i == 1 {
+					tokenHeader = "普通输出 Token"
+				}
 				tokenIndex := headers[tokenHeader]
 				if i == 3 && tokenIndex == 0 {
 					tokenIndex = headers["缓存写入 Token"]

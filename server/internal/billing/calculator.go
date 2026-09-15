@@ -81,6 +81,7 @@ type DailyRow struct {
 }
 
 type TokenDailyRow struct {
+	MultimediaUsage
 	InstanceID, Username, TokenName, ModelName, GroupName string
 	UserID, TokenID, TierFrom                             int64
 	Day                                                   time.Time

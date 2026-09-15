@@ -13,6 +13,7 @@ import (
 const defaultQuotaPerUnit = "500000"
 
 type AggregateRow struct {
+	MultimediaUsage
 	InstanceID                                                       string
 	UserID                                                           int64
 	Username, ModelName, GroupName                                   string

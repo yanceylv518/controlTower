@@ -117,7 +117,7 @@ func (s Store) ListBillingStatementDiscounts(ctx context.Context, jobID string) 
 }
 
 func (s Store) QueryBillingStatementAggregates(ctx context.Context, jobID string) ([]billing.StatementAggregateRow, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT instance_id,user_id,MAX(username),channel_id,MAX(channel_name),model_name,bill_day,SUM(request_count),SUM(prompt_tokens),SUM(completion_tokens),SUM(cache_read_tokens),SUM(cache_write_tokens),SUM(cache_write_5m_tokens),SUM(cache_write_1h_tokens),SUM(calculated_quota),CAST(SUM(total_amount) AS CHAR) FROM billing_compact_daily_totals WHERE job_id=? GROUP BY instance_id,user_id,channel_id,model_name,bill_day ORDER BY bill_day,channel_id,model_name`, jobID)
+	rows, err := s.db.QueryContext(ctx, `SELECT instance_id,user_id,MAX(username),channel_id,MAX(channel_name),model_name,bill_day,SUM(request_count),SUM(prompt_tokens),SUM(completion_tokens),SUM(image_input_tokens),SUM(image_output_tokens),SUM(audio_input_tokens),SUM(audio_output_tokens),SUM(cache_read_tokens),SUM(cache_write_tokens),SUM(cache_write_5m_tokens),SUM(cache_write_1h_tokens),SUM(calculated_quota),CAST(SUM(total_amount) AS CHAR) FROM billing_compact_daily_totals WHERE job_id=? GROUP BY instance_id,user_id,channel_id,model_name,bill_day ORDER BY bill_day,channel_id,model_name`, jobID)
 	if err != nil {
 		return nil, err
 	}
@@ -125,7 +125,7 @@ func (s Store) QueryBillingStatementAggregates(ctx context.Context, jobID string
 	items := []billing.StatementAggregateRow{}
 	for rows.Next() {
 		var v billing.StatementAggregateRow
-		if err = rows.Scan(&v.InstanceID, &v.UserID, &v.Username, &v.ChannelID, &v.ChannelName, &v.ModelName, &v.Day, &v.RequestCount, &v.PromptTokens, &v.CompletionTokens, &v.CacheTokens, &v.CacheWriteTokens, &v.CacheWrite5mTokens, &v.CacheWrite1hTokens, &v.Quota, &v.Amount); err != nil {
+		if err = rows.Scan(&v.InstanceID, &v.UserID, &v.Username, &v.ChannelID, &v.ChannelName, &v.ModelName, &v.Day, &v.RequestCount, &v.PromptTokens, &v.CompletionTokens, &v.ImageInputTokens, &v.ImageOutputTokens, &v.AudioInputTokens, &v.AudioOutputTokens, &v.CacheTokens, &v.CacheWriteTokens, &v.CacheWrite5mTokens, &v.CacheWrite1hTokens, &v.Quota, &v.Amount); err != nil {
 			return nil, err
 		}
 		items = append(items, v)

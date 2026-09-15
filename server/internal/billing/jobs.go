@@ -102,6 +102,8 @@ type Job struct {
 	RequestedBy       string    `json:"requested_by"`
 	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt         time.Time `json:"updated_at"`
+	PricingSource     string    `json:"pricing_source"`
+	UsageVersion      int       `json:"usage_version"`
 }
 
 type JobStep struct {
@@ -205,6 +207,7 @@ type ReconciliationOrder struct {
 }
 
 type RequestDetail struct {
+	MultimediaUsage
 	InstanceID, JobID, RequestID, UpstreamRequestID, Username, TokenName, ChannelName, ModelName string
 	SourceLogID, CreatedUnix, UserID, TokenID, ChannelID                                         int64
 	BillDay                                                                                      time.Time
@@ -502,7 +505,10 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 			billDay := dateOnly(time.Unix(log.CreatedUnix, 0))
 			billDayKey := billDay.Format("2006-01-02")
 			reasons := StatementAnomalyReasons(log, maxByModel[log.ModelName], job.ExcludeZeroOutput)
-			verification, pricingReason := VerifyLogChargeReason(log, quotaPerUnit)
+			verification, pricingReason, chargeErr := StatementLogCharge(job, log, quotaPerUnit)
+			if chargeErr != nil {
+				return chargeErr
+			}
 			if len(reasons) > 0 {
 				item := AnomalyOrder{InstanceID: job.InstanceID, SourceLogID: log.ID, JobID: job.ID, CreatedAt: time.Unix(log.CreatedUnix, 0), RequestID: log.RequestID, UpstreamRequestID: log.UpstreamRequestID, UserID: log.UserID, Username: log.Username, TokenID: log.TokenID, TokenName: log.TokenName, ChannelID: log.ChannelID, ChannelName: log.ChannelName, ModelName: log.ModelName, GroupName: log.GroupName, PromptTokens: SourcePromptTokens(log), CompletionTokens: log.CompletionTokens, CacheTokens: log.CacheTokens, CacheWriteTokens: log.CacheWriteTokens, CacheWrite5mTokens: log.CacheWrite5mTokens, CacheWrite1hTokens: log.CacheWrite1hTokens, Quota: log.Quota, MaxContextTokens: maxByModel[log.ModelName], Reasons: strings.Join(reasons, ","), DetectedAt: time.Now().UTC()}
 				fillAnomalyCharge(&item, verification.Charge)
@@ -515,10 +521,15 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 			if pricingReason == PricingReasonIncomplete {
 				verification = FallbackLogCharge(log, quotaPerUnit)
 			}
+			displayPrompt, displayCompletion, media := statementDisplayUsage(log)
+			if job.UsageVersion == 0 {
+				displayPrompt, displayCompletion = nullableInt64(log.PromptTokens), nullableInt64(log.CompletionTokens)
+			}
 			requestDetails = append(requestDetails, RequestDetail{
-				InstanceID: job.InstanceID, JobID: job.ID, SourceLogID: log.ID, CreatedUnix: log.CreatedUnix, BillDay: billDay, RequestID: log.RequestID, UpstreamRequestID: log.UpstreamRequestID,
+				MultimediaUsage: media,
+				InstanceID:      job.InstanceID, JobID: job.ID, SourceLogID: log.ID, CreatedUnix: log.CreatedUnix, BillDay: billDay, RequestID: log.RequestID, UpstreamRequestID: log.UpstreamRequestID,
 				UserID: log.UserID, Username: log.Username, TokenID: log.TokenID, TokenName: log.TokenName, ChannelID: log.ChannelID, ChannelName: log.ChannelName, ModelName: log.ModelName,
-				PromptTokens: nullableInt64(log.PromptTokens), CompletionTokens: nullableInt64(log.CompletionTokens), CacheReadTokens: log.CacheTokens, CacheWriteTokens: log.CacheWriteTokens,
+				PromptTokens: displayPrompt, CompletionTokens: displayCompletion, CacheReadTokens: log.CacheTokens, CacheWriteTokens: log.CacheWriteTokens,
 				CacheWrite5mTokens: log.CacheWrite5mTokens, CacheWrite1hTokens: log.CacheWrite1hTokens, Charge: verification.Charge, CalculatedQuota: verification.CalculatedQuota, LoggedQuota: log.Quota,
 			})
 			tier := int64(0)

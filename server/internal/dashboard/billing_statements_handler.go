@@ -39,6 +39,7 @@ func (h BillingStatementsHandler) ServeHTTP(w http.ResponseWriter, r *http.Reque
 		To                string `json:"to"`
 		UserID            int64  `json:"user_id"`
 		UpstreamID        int64  `json:"upstream_id"`
+		Recalculate       bool   `json:"recalculate"`
 		ExcludeZeroOutput bool   `json:"exclude_zero_output"`
 	}
 	if json.NewDecoder(r.Body).Decode(&req) != nil || !billingSiteAllowed(r, strings.TrimSpace(req.InstanceID), 0) {
@@ -60,6 +61,11 @@ func (h BillingStatementsHandler) ServeHTTP(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	job.ExcludeZeroOutput = req.ExcludeZeroOutput
+	job.PricingSource = billing.PricingSourceNewAPI
+	if req.Recalculate {
+		job.PricingSource = billing.PricingSourceRecalculate
+	}
+	job.UsageVersion = 1
 	subjectName := ""
 	switch req.StatementType {
 	case "user":
@@ -95,6 +101,7 @@ func (h BillingStatementsHandler) ServeHTTP(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	raw := fmt.Sprintf("v2|%s|%s|%d|%s|%s|exclude-zero:%t", job.InstanceID, job.JobType, map[bool]int64{true: job.UserID, false: job.UpstreamID}[job.JobType == "user_statement"], from.Format(time.RFC3339), to.Format(time.RFC3339), job.ExcludeZeroOutput)
+	raw += "|pricing:" + job.PricingSource + "|usage:1"
 	sum := sha256.Sum256([]byte(raw))
 	job.RequestKey = "statement:" + hex.EncodeToString(sum[:16])
 	err = h.Store.CreateBillingStatementJob(r.Context(), job, steps, subjectName)

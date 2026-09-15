@@ -570,6 +570,8 @@ export interface BillingJob {
   user_id?: number;
   user_name?: string;
   exclude_zero_output?: boolean;
+  pricing_source?: "newapi" | "recalculate";
+  usage_version?: number;
   upstream_id?: number;
   upstream_name?: string;
   range_from?: string;
@@ -950,7 +952,7 @@ export const dashboardApi = (client: ApiClient) => ({
     client.request<BillingDetailResponse>(`/api/dashboard/billing/detail${query(params)}`),
   generateBilling: (input: { instance_id: string; from: string; to: string; force?: boolean; scope?: "all" | "channel" | "user" | "upstream"; user_id?: number; upstream_id?: number }) =>
     client.request<{ accepted: boolean; reused: boolean; job: BillingJob }>("/api/dashboard/billing/backfill", { method: "POST", body: JSON.stringify(input) }),
-  createBillingStatement: (input:{instance_id:string;statement_type:"user"|"upstream";user_id?:number;upstream_id?:number;from:string;to:string;exclude_zero_output?:boolean}) =>
+  createBillingStatement: (input:{instance_id:string;statement_type:"user"|"upstream";user_id?:number;upstream_id?:number;from:string;to:string;exclude_zero_output?:boolean;recalculate?:boolean}) =>
     client.request<{accepted:boolean;job:BillingJob}>("/api/dashboard/billing/statements",{method:"POST",body:JSON.stringify(input)}),
   billingStatementResult: (id:string, deferPrices = false, signal?: AbortSignal) => client.request<{job:BillingJob;daily_files:{day:string;filename:string}[];total_orders:number;normal_orders:number;billable_orders:number;anomaly_total:number;reconciliation_total:number;review_required:boolean;count_balanced:boolean;model_summary:Record<string,unknown>[];daily_summary:Record<string,unknown>[];token_summary:Record<string,unknown>[];anomalies:Record<string,unknown>[];reconciliation:Record<string,unknown>[]}>(`/api/dashboard/billing/statements/result${query({id, defer_prices: deferPrices ? "1" : undefined})}`, { signal }),
   billingStatementPrices: (id:string, signal?: AbortSignal) => client.request<{daily_summary:Record<string,unknown>[]}>(`/api/dashboard/billing/statements/result${query({id, section: "prices"})}`, { signal }),
@@ -960,7 +962,7 @@ export const dashboardApi = (client: ApiClient) => ({
   cancelBillingJob: (id: string) => client.request<BillingJob>(`/api/dashboard/billing/jobs${query({ id })}`, { method: "DELETE" }),
   deleteFailedBillingJob: (id: string) => client.request<{ deleted: boolean; id: string }>(`/api/dashboard/billing/jobs${query({ id })}`, { method: "DELETE" }),
   billingJobs: (params: { instance_id?: string; status?: BillingJob["status"]; limit?: number } = {}) =>
-    client.request<{ items: BillingJob[] }>(`/api/dashboard/billing/jobs${query(params)}`),
+    client.request<{ items: BillingJob[]; pricing_source_selection?: boolean }>(`/api/dashboard/billing/jobs${query(params)}`),
   billingOverview: (params: { instance_id?: string; month?: string } = {}) =>
     client.request<{ items: BillingDailyOverview[]; from: string; to: string }>(`/api/dashboard/billing/overview${query(params)}`),
   billingUserDays: (params: { instance_id: string; from?: string; through?: string; user_id?: number; search?: string }) =>
