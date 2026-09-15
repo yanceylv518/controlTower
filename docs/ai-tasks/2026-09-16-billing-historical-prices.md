@@ -2,7 +2,7 @@
 
 - 标识：2026-09-16-billing-historical-prices
 - 更新时间：2026-09-16，Asia/Shanghai。
-- 状态：实现及自动化验证完成，待人工验收；未提交、未发布、未部署。
+- 状态：已提交推送 main，v2.0.0-rc118 已发布；未部署，待人工验收。
 - 目标与验收条件：明细展示历史单价，日订单统计同步显示；同日不统一价格时逐套展示规则，原始扣费金额不变。
 - 负责会话、分支和范围：当前 Codex 会话；codex/billing-historical-price-display，基线 a58f278f / rc117；隔离目录 D:/CodexProjects/codex/control-tower/.tmp/latest-billing-review。主目录电话预警分支及原有业务修改保留。
 - 实际结果与关键决策：普通计费独立从日志历史倍率/价格快照还原单价，不改变金额和核对结果；缺失显示未记录，免费价格为零。表达式不假定可拆为固定单价，保留 expr_b64 解码全文、matched_tier、group_ratio、request_rules、工具附加费用；表达式缺失/无效明确显示，原始模式不执行表达式。
@@ -11,6 +11,14 @@
 - 兼容：新任务 usage_version=2，版本进入查重键，允许相同旧账期新建完整价格格式任务。旧任务/文件不回填，不修改旧计费方式。无新增迁移，依赖已有 080；无需升级 Agent/NewAPI。
 - 验证：go vet ./...、go test ./... 全量通过；pnpm typecheck、pnpm build 通过（仅既有大包提示）；node --test packages/desktop/tests/*.test.mjs，87 项通过。新增端到端覆盖原金额不变、20/100/2 历史价格、零价/缺价、未知表达式不执行、gob→JSON→XLSX、日规则合并、渠道隔离、CSV 列对齐及零元按次价格。故意写坏逐请求 XML 后仍可加载规则及下载每日汇总，证明新格式不扫描明细。
 - 未验证与限制：CT_MYSQL_TEST_DSN 未配置，实库集成未执行；没有浏览器/Excel 人工验收或生产账单验收。音频分项单价暂不独立还原，规则明确说明；表达式不能保证拆分，展示历史原文供核对。此前精度/旧音频任务审查事项未在本轮修复。
-- 下一步：人工验收后按用户安排提交、打包和部署；旧账单需新建任务生成历史价格信息。
+- 下一步：按用户安排部署并人工验收；旧账单需新建任务生成历史价格信息。
 - 自动归档：本机 auto_capture=true，但查询及归档均无法连接 AI Workspace；保留本地记录，尚未上传。
 - 相关资料：docs/design-billing-source-mode.md；server/internal/billing/historical_prices.go；server/internal/billing/historical_price_sheet.go；server/internal/dashboard/billing_historical_rules.go；对应 *_test.go。
+
+## 提交与 rc118 发布
+
+- 用户明确授权提交推送并重新打包；fetch 后 origin/main 仍为 a58f278f，无需合并。21 个本任务文件提交为 ba9a2f5e2822e2208d2c0eae9949064be73318dd，推送 main 成功；标签 v2.0.0-rc118 指向该提交。本轮无业务代码修改。
+- 远端 CI 35031183849、release 35031229720 均 completed/success，Go 和 Web 质量门、安装包构建、镜像构建推送、GitHub Release 创建全部成功。
+- 发布页：https://github.com/yanceylv518/controlTower/releases/tag/v2.0.0-rc118；镜像 ghcr.io/yanceylv518/controltower-server:v2.0.0-rc118，同时更新 latest。
+- Server Linux amd64、Agent Linux amd64/arm64 三份安装包和 SHA256SUMS 已上传并下载到主目录 release/v2.0.0-rc118，三份 SHA-256 全部一致；Server 包内二进制、前端入口和 080 迁移已核对。
+- 从 rc117 升级无新迁移，升级 Server/前端即可；未部署生产、未生成真实账单。此前精度和旧音频任务问题未修复。
