@@ -220,7 +220,7 @@ CAST(SUBSTRING_INDEX(dimension_key,':',-1) AS SIGNED),
 SUM(request_count),SUM(error_count),SUM(user_error_count),SUM(tpm),
 COALESCE(MAX(p95_use_time),0),
 SUM(cache_tokens_total),SUM(cache_prompt_tokens),
-SUM(otps_output_tokens),SUM(otps_duration_seconds),` + strings.Join(histogramSums, ",") + `
+SUM(otps_output_tokens),SUM(otps_duration_seconds),` + strings.Join(histogramSums, ",") + `,` + tuningSpeedSumsSQL() + `,SUM(COALESCE(ttft_count,0))
 FROM metric_1m
 WHERE instance_id IN (SELECT id FROM instances WHERE enabled=1 AND CASE WHEN site_id='' THEN id ELSE site_id END=?) AND dimension_type='instance_channel' AND bucket_time>=? AND bucket_time<?
 GROUP BY CAST(SUBSTRING_INDEX(dimension_key,':',-1) AS SIGNED)`
@@ -238,10 +238,16 @@ func (s Store) QueryMetrics(id string, start, end time.Time) ([]tuning.ChannelMe
 		var cacheTokens int64
 		var otpsDuration float64
 		var buckets latencyhist.BucketsV2
+		var speedBuckets latencyhist.BucketsV2
+		var totalTTFT int64
 		dest := []any{&m.ChannelID, &m.RequestCount, &m.ErrorCount, &m.UserErrorCount, &m.TPM, &m.P95, &cacheTokens, &m.CachePromptTokens, &m.OTPSSampleTokens, &otpsDuration}
 		for i := range buckets {
 			dest = append(dest, &buckets[i])
 		}
+		for i := range speedBuckets {
+			dest = append(dest, &speedBuckets[i])
+		}
+		dest = append(dest, &m.SpeedRetries, &m.SpeedUnknown, &totalTTFT)
 		if e = rows.Scan(dest...); e != nil {
 			return nil, e
 		}
@@ -260,6 +266,19 @@ func (s Store) QueryMetrics(id string, start, end time.Time) ([]tuning.ChannelMe
 		if value := latencyhist.QuantileV2(buckets, .95); value != nil {
 			m.TTFTP95 = *value
 		}
+		for _, n := range speedBuckets {
+			m.SpeedSamples += n
+		}
+		m.SpeedLegacy = max(totalTTFT-m.SpeedSamples-m.SpeedRetries-m.SpeedUnknown, 0)
+		if v := latencyhist.QuantileV2(speedBuckets, .50); v != nil {
+			m.SpeedTTFTP50 = *v
+		}
+		if v := latencyhist.QuantileV2(speedBuckets, .90); v != nil {
+			m.SpeedTTFTP90 = *v
+		}
+		if v := latencyhist.QuantileV2(speedBuckets, .95); v != nil {
+			m.SpeedTTFTP95 = *v
+		}
 		out = append(out, m)
 	}
 	return out, rows.Err()
@@ -272,7 +291,7 @@ func (s Store) QueryCurrentChannelRates(id string, now time.Time) ([]tuning.Chan
 }
 
 func (s Store) ListContinuousStates(id string) ([]tuning.ContinuousState, error) {
-	rows, err := s.db.QueryContext(context.Background(), `SELECT instance_id,channel_id,model_name,k_error,k_speed,k_cache,k_otps,multiplier,proposed_weight,last_written_weight,last_write_at,last_observed_requests,last_observed_errors,metric_rpm,metric_tpm,capacity_limited,metric_ready,baseline_ready,metric_ttft_p50,metric_ttft_p90,metric_ttft_p95,baseline_ttft_p50,baseline_ttft_p90,baseline_ttft_p95,metric_cache,baseline_cache,cache_ready,metric_otps,baseline_otps,otps_ready,smoothed_error_rate,last_bucket_at,paused_reason,phase,circuit_opened_at,next_probe_at,probe_command_id,probe_attempts,probe_successes,probe_duration_sum,original_priority,soft_start_pending,write_failure_streak,last_write_failure_at,last_write_error,last_observed_weight,updated_at FROM tuning_continuous_states WHERE instance_id=?`, id)
+	rows, err := s.db.QueryContext(context.Background(), `SELECT instance_id,channel_id,model_name,k_error,k_speed,k_cache,k_otps,multiplier,proposed_weight,last_written_weight,last_write_at,last_observed_requests,last_observed_errors,metric_rpm,metric_tpm,capacity_limited,metric_ready,baseline_ready,metric_ttft_p50,metric_ttft_p90,metric_ttft_p95,baseline_ttft_p50,baseline_ttft_p90,baseline_ttft_p95,metric_cache,baseline_cache,cache_ready,metric_otps,baseline_otps,otps_ready,smoothed_error_rate,last_bucket_at,paused_reason,phase,circuit_opened_at,next_probe_at,probe_command_id,probe_attempts,probe_successes,probe_duration_sum,original_priority,soft_start_pending,write_failure_streak,last_write_failure_at,last_write_error,last_observed_weight,updated_at,speed_sample_count,speed_retry_count,speed_unknown_count,speed_legacy_count,speed_stats_version FROM tuning_continuous_states WHERE instance_id=?`, id)
 	if err != nil {
 		return nil, err
 	}
@@ -284,7 +303,7 @@ func (s Store) ListContinuousStates(id string) ([]tuning.ContinuousState, error)
 		var writeAt, bucketAt, openedAt, nextProbeAt, writeFailAt sql.NullTime
 		var probeID sql.NullString
 		var originalPriority sql.NullInt64
-		if err = rows.Scan(&v.InstanceID, &v.ChannelID, &v.ModelName, &v.KError, &v.KSpeed, &v.KCache, &v.KOTPS, &v.Multiplier, &v.ProposedWeight, &written, &writeAt, &v.LastObservedRequests, &v.LastObservedErrors, &v.MetricRPM, &v.MetricTPM, &v.CapacityLimited, &v.MetricReady, &v.BaselineReady, &v.MetricTTFTP50, &v.MetricTTFTP90, &v.MetricTTFTP95, &v.BaselineTTFTP50, &v.BaselineTTFTP90, &v.BaselineTTFTP95, &v.MetricCache, &v.BaselineCache, &v.CacheReady, &v.MetricOTPS, &v.BaselineOTPS, &v.OTPSReady, &v.SmoothedErrorRate, &bucketAt, &v.PausedReason, &v.Phase, &openedAt, &nextProbeAt, &probeID, &v.ProbeAttempts, &v.ProbeSuccesses, &v.ProbeDurationSum, &originalPriority, &v.SoftStartPending, &v.WriteFailureStreak, &writeFailAt, &v.LastWriteError, &observed, &v.UpdatedAt); err != nil {
+		if err = rows.Scan(&v.InstanceID, &v.ChannelID, &v.ModelName, &v.KError, &v.KSpeed, &v.KCache, &v.KOTPS, &v.Multiplier, &v.ProposedWeight, &written, &writeAt, &v.LastObservedRequests, &v.LastObservedErrors, &v.MetricRPM, &v.MetricTPM, &v.CapacityLimited, &v.MetricReady, &v.BaselineReady, &v.MetricTTFTP50, &v.MetricTTFTP90, &v.MetricTTFTP95, &v.BaselineTTFTP50, &v.BaselineTTFTP90, &v.BaselineTTFTP95, &v.MetricCache, &v.BaselineCache, &v.CacheReady, &v.MetricOTPS, &v.BaselineOTPS, &v.OTPSReady, &v.SmoothedErrorRate, &bucketAt, &v.PausedReason, &v.Phase, &openedAt, &nextProbeAt, &probeID, &v.ProbeAttempts, &v.ProbeSuccesses, &v.ProbeDurationSum, &originalPriority, &v.SoftStartPending, &v.WriteFailureStreak, &writeFailAt, &v.LastWriteError, &observed, &v.UpdatedAt, &v.SpeedSamples, &v.SpeedRetries, &v.SpeedUnknown, &v.SpeedLegacy, &v.SpeedStatsVersion); err != nil {
 			return nil, err
 		}
 		if written.Valid {
@@ -329,7 +348,7 @@ func (s Store) ListContinuousStates(id string) ([]tuning.ContinuousState, error)
 // stamped into last_probe_command_id — a column this upsert never assigns.
 func (s Store) PutContinuousState(v tuning.ContinuousState) error {
 	started := time.Now()
-	_, err := s.db.ExecContext(context.Background(), `INSERT INTO tuning_continuous_states(instance_id,channel_id,model_name,k_error,k_speed,k_cache,k_otps,multiplier,proposed_weight,last_written_weight,last_write_at,last_observed_requests,last_observed_errors,metric_ready,baseline_ready,metric_ttft_p50,metric_ttft_p90,metric_ttft_p95,baseline_ttft_p50,baseline_ttft_p90,baseline_ttft_p95,metric_cache,baseline_cache,cache_ready,metric_otps,baseline_otps,otps_ready,smoothed_error_rate,last_bucket_at,paused_reason,phase,circuit_opened_at,next_probe_at,probe_command_id,probe_attempts,probe_successes,probe_duration_sum,original_priority,soft_start_pending,write_failure_streak,last_write_failure_at,last_write_error,last_observed_weight,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE model_name=VALUES(model_name),k_error=VALUES(k_error),k_speed=VALUES(k_speed),k_cache=VALUES(k_cache),k_otps=VALUES(k_otps),multiplier=VALUES(multiplier),proposed_weight=VALUES(proposed_weight),last_written_weight=VALUES(last_written_weight),last_write_at=VALUES(last_write_at),last_observed_requests=VALUES(last_observed_requests),last_observed_errors=VALUES(last_observed_errors),metric_ready=VALUES(metric_ready),baseline_ready=VALUES(baseline_ready),metric_ttft_p50=VALUES(metric_ttft_p50),metric_ttft_p90=VALUES(metric_ttft_p90),metric_ttft_p95=VALUES(metric_ttft_p95),baseline_ttft_p50=VALUES(baseline_ttft_p50),baseline_ttft_p90=VALUES(baseline_ttft_p90),baseline_ttft_p95=VALUES(baseline_ttft_p95),metric_cache=VALUES(metric_cache),baseline_cache=VALUES(baseline_cache),cache_ready=VALUES(cache_ready),metric_otps=VALUES(metric_otps),baseline_otps=VALUES(baseline_otps),otps_ready=VALUES(otps_ready),smoothed_error_rate=VALUES(smoothed_error_rate),last_bucket_at=VALUES(last_bucket_at),paused_reason=VALUES(paused_reason),phase=VALUES(phase),circuit_opened_at=VALUES(circuit_opened_at),next_probe_at=VALUES(next_probe_at),probe_command_id=IF(@keep_probe:=(VALUES(probe_command_id) IS NOT NULL AND VALUES(probe_command_id)=last_probe_command_id),probe_command_id,VALUES(probe_command_id)),probe_attempts=IF(@keep_probe,probe_attempts,VALUES(probe_attempts)),probe_successes=IF(@keep_probe,probe_successes,VALUES(probe_successes)),probe_duration_sum=IF(@keep_probe,probe_duration_sum,VALUES(probe_duration_sum)),original_priority=VALUES(original_priority),soft_start_pending=VALUES(soft_start_pending),write_failure_streak=VALUES(write_failure_streak),last_write_failure_at=VALUES(last_write_failure_at),last_write_error=VALUES(last_write_error),last_observed_weight=VALUES(last_observed_weight),updated_at=VALUES(updated_at)`, v.InstanceID, v.ChannelID, v.ModelName, v.KError, v.KSpeed, v.KCache, v.KOTPS, v.Multiplier, v.ProposedWeight, v.LastWrittenWeight, v.LastWriteAt, v.LastObservedRequests, v.LastObservedErrors, v.MetricReady, v.BaselineReady, v.MetricTTFTP50, v.MetricTTFTP90, v.MetricTTFTP95, v.BaselineTTFTP50, v.BaselineTTFTP90, v.BaselineTTFTP95, v.MetricCache, v.BaselineCache, v.CacheReady, v.MetricOTPS, v.BaselineOTPS, v.OTPSReady, v.SmoothedErrorRate, v.LastBucketAt, v.PausedReason, v.Phase, v.CircuitOpenedAt, v.NextProbeAt, v.ProbeCommandID, v.ProbeAttempts, v.ProbeSuccesses, v.ProbeDurationSum, v.OriginalPriority, v.SoftStartPending, v.WriteFailureStreak, v.LastWriteFailureAt, v.LastWriteError, v.LastObservedWeight, v.UpdatedAt)
+	_, err := s.db.ExecContext(context.Background(), `INSERT INTO tuning_continuous_states(instance_id,channel_id,model_name,k_error,k_speed,k_cache,k_otps,multiplier,proposed_weight,last_written_weight,last_write_at,last_observed_requests,last_observed_errors,metric_ready,baseline_ready,metric_ttft_p50,metric_ttft_p90,metric_ttft_p95,baseline_ttft_p50,baseline_ttft_p90,baseline_ttft_p95,metric_cache,baseline_cache,cache_ready,metric_otps,baseline_otps,otps_ready,smoothed_error_rate,last_bucket_at,paused_reason,phase,circuit_opened_at,next_probe_at,probe_command_id,probe_attempts,probe_successes,probe_duration_sum,original_priority,soft_start_pending,write_failure_streak,last_write_failure_at,last_write_error,last_observed_weight,updated_at,speed_sample_count,speed_retry_count,speed_unknown_count,speed_legacy_count,speed_stats_version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE model_name=VALUES(model_name),k_error=VALUES(k_error),k_speed=VALUES(k_speed),k_cache=VALUES(k_cache),k_otps=VALUES(k_otps),multiplier=VALUES(multiplier),proposed_weight=VALUES(proposed_weight),last_written_weight=VALUES(last_written_weight),last_write_at=VALUES(last_write_at),last_observed_requests=VALUES(last_observed_requests),last_observed_errors=VALUES(last_observed_errors),metric_ready=VALUES(metric_ready),baseline_ready=VALUES(baseline_ready),metric_ttft_p50=VALUES(metric_ttft_p50),metric_ttft_p90=VALUES(metric_ttft_p90),metric_ttft_p95=VALUES(metric_ttft_p95),baseline_ttft_p50=VALUES(baseline_ttft_p50),baseline_ttft_p90=VALUES(baseline_ttft_p90),baseline_ttft_p95=VALUES(baseline_ttft_p95),metric_cache=VALUES(metric_cache),baseline_cache=VALUES(baseline_cache),cache_ready=VALUES(cache_ready),metric_otps=VALUES(metric_otps),baseline_otps=VALUES(baseline_otps),otps_ready=VALUES(otps_ready),smoothed_error_rate=VALUES(smoothed_error_rate),last_bucket_at=VALUES(last_bucket_at),paused_reason=VALUES(paused_reason),phase=VALUES(phase),circuit_opened_at=VALUES(circuit_opened_at),next_probe_at=VALUES(next_probe_at),probe_command_id=IF(@keep_probe:=(VALUES(probe_command_id) IS NOT NULL AND VALUES(probe_command_id)=last_probe_command_id),probe_command_id,VALUES(probe_command_id)),probe_attempts=IF(@keep_probe,probe_attempts,VALUES(probe_attempts)),probe_successes=IF(@keep_probe,probe_successes,VALUES(probe_successes)),probe_duration_sum=IF(@keep_probe,probe_duration_sum,VALUES(probe_duration_sum)),original_priority=VALUES(original_priority),soft_start_pending=VALUES(soft_start_pending),write_failure_streak=VALUES(write_failure_streak),last_write_failure_at=VALUES(last_write_failure_at),last_write_error=VALUES(last_write_error),last_observed_weight=VALUES(last_observed_weight),updated_at=VALUES(updated_at),speed_sample_count=VALUES(speed_sample_count),speed_retry_count=VALUES(speed_retry_count),speed_unknown_count=VALUES(speed_unknown_count),speed_legacy_count=VALUES(speed_legacy_count),speed_stats_version=VALUES(speed_stats_version)`, v.InstanceID, v.ChannelID, v.ModelName, v.KError, v.KSpeed, v.KCache, v.KOTPS, v.Multiplier, v.ProposedWeight, v.LastWrittenWeight, v.LastWriteAt, v.LastObservedRequests, v.LastObservedErrors, v.MetricReady, v.BaselineReady, v.MetricTTFTP50, v.MetricTTFTP90, v.MetricTTFTP95, v.BaselineTTFTP50, v.BaselineTTFTP90, v.BaselineTTFTP95, v.MetricCache, v.BaselineCache, v.CacheReady, v.MetricOTPS, v.BaselineOTPS, v.OTPSReady, v.SmoothedErrorRate, v.LastBucketAt, v.PausedReason, v.Phase, v.CircuitOpenedAt, v.NextProbeAt, v.ProbeCommandID, v.ProbeAttempts, v.ProbeSuccesses, v.ProbeDurationSum, v.OriginalPriority, v.SoftStartPending, v.WriteFailureStreak, v.LastWriteFailureAt, v.LastWriteError, v.LastObservedWeight, v.UpdatedAt, v.SpeedSamples, v.SpeedRetries, v.SpeedUnknown, v.SpeedLegacy, v.SpeedStatsVersion)
 	if err == nil {
 		_, err = s.db.ExecContext(context.Background(), `UPDATE tuning_continuous_states SET metric_rpm=?,metric_tpm=?,capacity_limited=? WHERE instance_id=? AND channel_id=?`, v.MetricRPM, v.MetricTPM, v.CapacityLimited, v.InstanceID, v.ChannelID)
 	}
@@ -814,4 +833,12 @@ func (s Store) RecommendationReport(q tuning.RecommendationQuery) (tuning.Report
 		r.Total += count
 	}
 	return r, rows.Err()
+}
+
+func tuningSpeedSumsSQL() string {
+	var sums []string
+	for _, c := range speedTTFTColumns() {
+		sums = append(sums, "SUM(COALESCE("+c+",0))")
+	}
+	return strings.Join(sums, ",")
 }

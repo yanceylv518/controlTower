@@ -430,6 +430,11 @@ export interface TuningContinuousState {
   metric_rpm: number;
   metric_tpm: number;
   capacity_limited: boolean;
+  speed_sample_count?: number;
+  speed_retry_count?: number;
+  speed_unknown_count?: number;
+  speed_legacy_count?: number;
+  speed_stats_version?: number;
   metric_ready: boolean;
   baseline_ready: boolean;
   metric_ttft_p50: number;

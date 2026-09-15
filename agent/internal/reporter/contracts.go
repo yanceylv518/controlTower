@@ -1,6 +1,7 @@
 package reporter
 
 import (
+	"controltower/internal/speedstats"
 	"time"
 
 	"controltower/internal/latencyhist"
@@ -137,6 +138,7 @@ type AggregatedMetricPayload struct {
 	LatencyBuckets    latencyhist.Buckets `json:"latency_buckets"`
 	LatencyBucketsV2  []int64             `json:"latency_buckets_v2,omitempty"`
 	TTFTBuckets       []int64             `json:"ttft_buckets,omitempty"`
+	SpeedTTFT         *speedstats.Stats   `json:"speed_ttft,omitempty"`
 }
 
 type LogSamplePayload struct {
