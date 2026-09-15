@@ -16,7 +16,13 @@ type fakeRepository struct {
 	result      Result
 }
 
-func (s *fakeRepository) Config(context.Context) (Config, error)    { return s.config, nil }
+func (s *fakeRepository) Configs(context.Context) (map[string]Config, error) {
+	out := map[string]Config{}
+	for _, t := range s.config.Targets {
+		out[t.Site] = s.config
+	}
+	return out, nil
+}
 func (s *fakeRepository) Targets(context.Context) ([]Target, error) { return s.config.Targets, nil }
 func (s *fakeRepository) Snapshot(context.Context, Target, time.Time) ([]int64, time.Time, error) {
 	v := make([]int64, 11)

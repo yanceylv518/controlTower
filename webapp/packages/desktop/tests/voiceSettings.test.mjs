@@ -9,10 +9,11 @@ const script = sfc.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1].repl
 const compiled = ts.transpileModule(script, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText
 function settings() {
  const calls = [], errors = []
- const response = { config: { enabled: true, tts_code: 'TTS_test', called_show_number: '', percent: 50, delta: 10000000, recipients: [{ phone: '13800000000', targets: [] }] }, customers: [{ site: 'a', user_id: 7, label: 'alice' }, { site: 'b', user_id: 7, label: 'bob' }], unavailable_sites: [], calls: [], targets: [] }
+ const filters = {site_id:'a'}
+ const response = { site_id:'a', site_scoped:true, config: { enabled: true, tts_code: 'TTS_test', called_show_number: '', percent: 50, delta: 10000000, recipients: [{ phone: '13800000000', targets: [] }] }, customers: [{ site: 'a', user_id: 7, label: 'alice' }, { site: 'b', user_id: 7, label: 'bob' }], unavailable_sites: [], calls: [], targets: [] }
  const client = { request: async (url, options) => { calls.push({url, ...options}); return structuredClone(response) } }
- const create = new Function('computed', 'ref', 'onMounted', 'ElMessage', 'client', `${compiled}\nreturn {request, config, customers, customerOptions, directoryWarning, deltaWan};`)
- return { ...create(computed, ref, () => {}, {error: e => errors.push(e), success: () => {}}, client), calls, errors, response }
+ const create = new Function('computed', 'ref', 'watch', 'useFiltersStore', 'ElMessage', 'client', `${compiled}\nreturn {request, config, customers, customerOptions, directoryWarning, deltaWan};`)
+ return { ...create(computed, ref, () => {}, () => filters, {error: e => errors.push(e), success: () => {}}, client), calls, errors, response, filters }
 }
 
 test('all recipients save dynamic all scope without a manual customer list', async () => {
@@ -60,7 +61,7 @@ test('legacy specific subscriptions load from directory without broadening scope
 test('old server without directory is explained and cannot receive incompatible saves', async () => {
  const s = settings(); delete s.response.customers
  await s.request()
- assert.match(s.directoryWarning.value, /远程 Server 尚未支持客户自动获取/)
+ assert.match(s.directoryWarning.value, /远程 Server 尚未支持站点级电话预警/)
  await s.request(true)
  assert.equal(s.calls.length, 1)
  assert.match(s.errors[0], /更新远程 Server/)
@@ -103,4 +104,24 @@ test('percent defaults to 20 with optional condition and preserves saved false',
  s.response.config.use_percent = false
  await s.request()
  assert.equal(s.config.value.use_percent, false)
+})
+
+test('site requests carry scope and old responses cannot overwrite a new site', async () => {
+ const s = settings()
+ const pending = s.request()
+ s.filters.site_id = 'b'
+ await pending
+ assert.equal(s.config.value.enabled, false)
+ s.response.site_id = 'b'
+ await s.request()
+ assert.match(s.calls.at(-1).url, /site_id=b$/)
+ s.config.value.percent = 21
+ await s.request(true)
+ assert.match(s.calls.at(-1).url, /site_id=b$/)
+ assert.equal(JSON.parse(s.calls.at(-1).body).percent, 21)
+})
+test('server without site-scoping cannot receive saves', async () => {
+ const s=settings(); delete s.response.site_scoped
+ await s.request(); await s.request(true)
+ assert.equal(s.calls.length,1)
 })

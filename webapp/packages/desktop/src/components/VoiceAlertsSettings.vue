@@ -1,14 +1,17 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, watch, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { client } from '../api'
+import { useFiltersStore } from '../stores/filters'
 import StatusTag from './StatusTag.vue'
 type Target = { site: string; user_id: number; label: string }
 type Recipient = { phone: string; targets: string[]; scope?: 'all' | 'selected' }
 type Config = { enabled: boolean; tts_code: string; called_show_number: string; use_percent: boolean; percent: number; delta: number; recipients: Recipient[] }
 type Call = { id: string; site: string; user_id: number; phone: string; min_tpm: number; max_tpm: number; direction: string; status: string; code: string; call_id: string; created_at: string }
 type Status = { site: string; user_id: number; state: string; min_tpm: number; max_tpm: number; direction: string; window_end: string }
-type Response = { config: Config; credentials_ready: boolean; worker_enabled: boolean; calls: Call[]; targets: Status[]; customers: Target[]; unavailable_sites: string[]; directory_error: string }
+type Response = { site_id: string; site_scoped: boolean; config: Config; credentials_ready: boolean; worker_enabled: boolean; calls: Call[]; targets: Status[]; customers: Target[]; unavailable_sites: string[]; directory_error: string }
+const filters = useFiltersStore()
+let requestVersion = 0
 const config = ref<Config>({ enabled: false, tts_code: '', called_show_number: '', use_percent: true, percent: 20, delta: 10000000, recipients: [] })
 const deltaWan = computed({
  get: () => config.value.delta / 10000,
@@ -21,7 +24,8 @@ const calls = ref<Call[]>([]), statuses = ref<Status[]>([])
 const recordsTab = ref('status')
 const labels: Record<string, string> = { notifications_disabled: '告警通知总开关已关闭', normal: '未达阈值', coverage_pending: '等待完整采集覆盖（约6分钟预热）', query_failed: '数据查询失败', credentials_missing: '待配置凭据', cooldown_or_phone_limit: '客户冷却或号码频控', accepted: '已受理（不代表已接听）', rejected: '接口拒绝', unknown: '结果待确认，不自动重试' }
 async function request(save = false, refreshOnly = false) {
- if (loading.value) return
+ const site = filters.site_id
+ if (!site || (save && (loading.value || !loaded.value))) return
  if (save && !serverCompatible.value) {
   ElMessage.error('请先更新远程 Server，再保存电话预警配置')
   return
@@ -34,21 +38,29 @@ async function request(save = false, refreshOnly = false) {
   ElMessage.error('请选择至少一个客户，或切换为全部客户')
   return
  }
+ const version = ++requestVersion
  loading.value = true
  try {
   const { enabled, tts_code, called_show_number, use_percent, percent, delta, recipients } = config.value
   const body = { enabled, tts_code, called_show_number, use_percent, percent, delta, recipients: recipients.map(r => ({ phone: r.phone, targets: r.scope === 'all' ? [] : r.targets })) }
-  const result = await client.request<Response>('/api/dashboard/voice-alerts', save ? { method: 'PUT', body: JSON.stringify(body) } : {})
+  const result = await client.request<Response>(`/api/dashboard/voice-alerts?site_id=${encodeURIComponent(site)}`, save ? { method: 'PUT', body: JSON.stringify(body) } : {})
+  if (version !== requestVersion || site !== filters.site_id) return
   if (!refreshOnly || !loaded.value) config.value = { ...result.config, use_percent: result.config.use_percent ?? true, recipients: (result.config.recipients || []).map(r => ({ ...r, targets: r.targets || [], scope: r.targets?.length ? 'selected' : 'all' })) }
   customers.value = result.customers || []
-  serverCompatible.value = Array.isArray(result.customers)
-  directoryWarning.value = !serverCompatible.value ? '远程 Server 尚未支持客户自动获取。请先更新 Server；当前可预览页面，暂不能保存电话预警配置。' : result.directory_error || (result.unavailable_sites?.length ? `以下站点客户列表暂时无法读取：${result.unavailable_sites.join('、')}。已有选择保留，这些站点暂不检测。` : '')
+  serverCompatible.value = Array.isArray(result.customers) && result.site_scoped === true && result.site_id === site
+  directoryWarning.value = !serverCompatible.value ? '远程 Server 尚未支持站点级电话预警。请先更新 Server；当前可预览页面，暂不能保存电话预警配置。' : result.directory_error || (result.unavailable_sites?.length ? `以下站点客户列表暂时无法读取：${result.unavailable_sites.join('、')}。已有选择保留，这些站点暂不检测。` : '')
   ready.value = result.credentials_ready; worker.value = result.worker_enabled; calls.value = result.calls; statuses.value = result.targets; loaded.value = true
   if (save) ElMessage.success('电话预警配置已保存')
- } catch (e) { ElMessage.error(e instanceof Error ? e.message : '电话预警配置加载失败') }
- finally { loading.value = false }
+ } catch (e) { if (version !== requestVersion || site !== filters.site_id) return; ElMessage.error(e instanceof Error ? e.message : '电话预警配置加载失败') }
+ finally { if (version === requestVersion) loading.value = false }
 }
-onMounted(() => request())
+watch(() => filters.site_id, () => {
+ ++requestVersion
+ loaded.value = false; loading.value = false; serverCompatible.value = false
+ customers.value = []; calls.value = []; statuses.value = []; directoryWarning.value = ''
+ config.value = { enabled: false, tts_code: '', called_show_number: '', use_percent: true, percent: 20, delta: 10000000, recipients: [] }
+ void request()
+}, { immediate: true, flush: 'sync' })
 const targetKey = (target: Target) => `${target.site}/${target.user_id}`
 const customerOptions = computed(() => {
  const options = customers.value.map(t => ({ key: targetKey(t), label: `${t.label}（${t.site} · #${t.user_id}）`, unavailable: false }))
@@ -63,10 +75,11 @@ const customerOptions = computed(() => {
 <template>
  <section v-loading="loading" class="voice-settings">
   <header class="voice-heading">
-   <div><h2>客户 TPM 电话预警 <StatusTag :value="config.enabled ? 'enabled' : 'disabled'" /></h2><p class="sub-note">监测客户流量波动，通知值班人员</p></div>
+   <div><h2>客户 TPM 电话预警 <StatusTag :value="config.enabled ? 'enabled' : 'disabled'" /></h2><p class="sub-note">当前站点：{{ filters.site_id || '请选择站点' }} · 配置仅对本站点生效</p></div>
    <div class="heading-actions"><el-tag size="small" :type="ready && worker ? 'success' : 'info'">{{ !worker ? '检测后台未运行' : ready ? '服务端凭据已配置' : '待配置 AccessKey' }}</el-tag><el-button type="primary" :disabled="!loaded || loading || !serverCompatible" :loading="loading" @click="request(true)">保存电话预警</el-button></div>
   </header>
   <el-alert v-if="loaded && (!ready || !worker)" type="info" :closable="false" :title="!worker ? '电话检测后台未运行' : '尚未配置服务端 AccessKey，可先保存规则，当前不会拨号'" />
+  <el-alert v-if="loaded && !config.enabled" type="info" :closable="false" title="当前站点未启用电话预警。旧全局配置仅预填规则和号码，请确认后启用并保存。" />
   <el-form label-position="top" :disabled="!loaded || loading">
    <section class="panel sub-panel voice-card rule-card">
    <div class="support-panel-head card-heading"><h2>预警规则</h2><div class="enable-control"><span>启用</span><el-switch v-model="config.enabled" aria-label="启用电话预警" size="small" /></div></div>
@@ -78,11 +91,11 @@ const customerOptions = computed(() => {
     <el-form-item label="波动比例大于（%）"><el-input-number v-model="config.percent" :disabled="!config.use_percent" :min="0.1" :max="10000" controls-position="right" /></el-form-item>
     <el-form-item label="TPM 差值大于（万）"><el-input-number v-model="deltaWan" :min="0.0001" :max="100000000" :step="100" controls-position="right" aria-label="TPM 差值大于（万 Token）" /></el-form-item>
    </div>
-   <details class="rule-details"><summary>计算口径与冷却规则</summary><p>差值 = 最高 TPM − 最低 TPM；波动比例 = 差值 ÷ 最低 TPM。关闭比例判断时，只需差值达标；开启时两项同时达标，最低值为 0 时只判断差值。采集不完整时等待数据，同一客户对同一号码至少冷却 10 分钟。</p></details>
+   <details class="rule-details"><summary>计算口径与冷却规则</summary><p>差值 = 最高 TPM − 最低 TPM；按最高、最低值最后出现的先后判断方向：上涨比例 = 差值 ÷ 最低 TPM × 100%，下降比例 = 差值 ÷ 最高 TPM × 100%。关闭比例判断时，只需差值达标；开启时两项同时达标，从 0 上涨时只判断差值，降至 0 按下降 100% 判断；等于阈值不触发。采集不完整时等待数据，同一客户对同一号码至少冷却 10 分钟。</p></details>
    </section>
    <section class="panel sub-panel voice-card recipients-card">
    <div class="support-panel-head card-heading"><div><h2>值班接听号码 <el-tag size="small" type="info">{{ config.recipients.length }}</el-tag></h2>
-   <p class="sub-note">默认全部客户，也可为每个号码单独多选。</p>
+   <p class="sub-note">默认本站点全部客户，也可为每个号码单独多选。</p>
    </div><el-button @click="config.recipients.push({ phone: '', targets: [], scope: 'all' })">＋ 添加接听号码</el-button></div>
    <el-alert v-if="directoryWarning" type="warning" :closable="false" :title="directoryWarning" />
    <div class="recipient-list">
@@ -92,7 +105,7 @@ const customerOptions = computed(() => {
     <el-form-item label="接听号码"><el-input v-model="recipient.phone" placeholder="国内手机或固话" /></el-form-item>
     <el-form-item label="接收客户范围">
      <el-radio-group v-model="recipient.scope">
-      <el-radio value="all">全部客户</el-radio>
+      <el-radio value="all">本站点全部客户</el-radio>
       <el-radio value="selected">指定客户</el-radio>
      </el-radio-group>
      <el-select v-if="recipient.scope === 'selected'" v-model="recipient.targets" multiple filterable clearable collapse-tags collapse-tags-tooltip placeholder="搜索并选择客户（可多选）" :no-data-text="serverCompatible ? '暂无可选客户，请检查站点客户列表' : '请先更新远程 Server 以获取客户列表'">
@@ -102,7 +115,7 @@ const customerOptions = computed(() => {
     <el-button text type="danger" @click="config.recipients.splice(index, 1)">移除</el-button>
    </div>
    </div>
-   <footer class="recipient-footer"><p class="sub-note">单号码频控：1 次/分钟 · 5 次/小时 · 20 次/天</p><details class="rule-details"><summary>客户范围与拨号说明</summary><p>全部范围包含后续新增客户，电话自动播报 NewAPI 用户名。多个客户共用号码额度，失败和结果未知也计入；持续异常在冷却结束后可再次通知。</p></details></footer>
+   <footer class="recipient-footer"><p class="sub-note">单号码频控：1 次/分钟 · 5 次/小时 · 20 次/天</p><details class="rule-details"><summary>客户范围与拨号说明</summary><p>全部范围仅包含本站点及其后续新增客户，电话自动播报 NewAPI 用户名。同一号码跨站点共用呼叫额度，失败和结果未知也计入；持续异常在冷却结束后可再次通知。</p></details></footer>
    </section>
   </el-form>
   <section class="panel sub-panel voice-card records-card">

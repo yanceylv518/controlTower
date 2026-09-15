@@ -9,7 +9,7 @@ import (
 )
 
 type Repository interface {
-	Config(context.Context) (Config, error)
+	Configs(context.Context) (map[string]Config, error)
 	Targets(context.Context) ([]Target, error)
 	Snapshot(context.Context, Target, time.Time) ([]int64, time.Time, error)
 	Claim(context.Context, Target, time.Time, int64, int64, string, time.Time) (string, error)
@@ -67,16 +67,20 @@ func (r *Runner) Run(ctx context.Context) {
 	}
 }
 func (r *Runner) Once(ctx context.Context) error {
-	c, err := r.Store.Config(ctx)
+	configs, err := r.Store.Configs(ctx)
 	if err != nil {
 		return err
 	}
 	statuses := []TargetStatus{}
 	defer func() { r.mu.Lock(); r.status = statuses; r.mu.Unlock() }()
-	if !c.Enabled {
-		return nil
+	active := false
+	for _, c := range configs {
+		if c.Enabled && len(c.Recipients) > 0 {
+			active = true
+			break
+		}
 	}
-	if len(c.Recipients) == 0 {
+	if !active {
 		return nil
 	}
 	directoryCtx, cancelDirectory := context.WithTimeout(ctx, 15*time.Second)
@@ -92,12 +96,19 @@ func (r *Runner) Once(ctx context.Context) error {
 		}
 		if !allowed {
 			for _, t := range targets {
+				if c, ok := configs[t.Site]; !ok || !c.Enabled {
+					continue
+				}
 				statuses = append(statuses, TargetStatus{Site: t.Site, UserID: t.UserID, State: "notifications_disabled"})
 			}
 			return nil
 		}
 	}
 	for _, t := range targets {
+		c, ok := configs[t.Site]
+		if !ok || !c.Enabled {
+			continue
+		}
 		subscribed := false
 		for _, recipient := range c.Recipients {
 			if recipient.Matches(t) {

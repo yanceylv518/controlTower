@@ -17,9 +17,9 @@ type Handler struct {
 }
 
 type SettingsStore interface {
-	Config(context.Context) (Config, error)
-	SaveConfig(context.Context, Config, string) error
-	Calls(context.Context) ([]CallRecord, error)
+	Config(context.Context, string) (Config, error)
+	SaveConfig(context.Context, string, Config, string) error
+	Calls(context.Context, string) ([]CallRecord, error)
 	Customers(context.Context) (CustomerList, error)
 }
 
@@ -28,6 +28,11 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	fail := func(status int, message string) {
 		w.WriteHeader(status)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
+	}
+	site := r.URL.Query().Get("site_id")
+	if !validSite(site) {
+		fail(400, "请选择有效站点")
+		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
@@ -43,11 +48,15 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			fail(400, "配置格式错误")
 			return
 		}
+		if err := c.ValidateSite(site); err != nil {
+			fail(400, err.Error())
+			return
+		}
 		if err := c.Validate(); err != nil {
 			fail(400, err.Error())
 			return
 		}
-		if err := h.Store.SaveConfig(ctx, c, ctauth.Actor(r)); err != nil {
+		if err := h.Store.SaveConfig(ctx, site, c, ctauth.Actor(r)); err != nil {
 			fail(400, "保存失败，请检查站点是否存在、已启用以及数据库状态")
 			return
 		}
@@ -58,20 +67,24 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fail(405, "method_not_allowed")
 		return
 	}
-	c, err := h.Store.Config(ctx)
+	c, err := h.Store.Config(ctx, site)
 	if err != nil {
 		fail(500, "配置读取失败")
 		return
 	}
 	c.Targets = nil
-	calls, err := h.Store.Calls(ctx)
+	calls, err := h.Store.Calls(ctx, site)
 	if err != nil {
 		fail(500, "电话记录读取失败")
 		return
 	}
 	statuses := []TargetStatus{}
 	if h.Runner != nil {
-		statuses = h.Runner.Status()
+		for _, status := range h.Runner.Status() {
+			if status.Site == site {
+				statuses = append(statuses, status)
+			}
+		}
 	}
 	list, directoryErr := h.Store.Customers(ctx)
 	directoryError := ""
@@ -79,5 +92,17 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		directoryError = "客户列表暂时无法读取，请稍后刷新；已保存的接听范围保持不变"
 		list = CustomerList{Customers: []Target{}, UnavailableSites: []string{}}
 	}
-	_ = json.NewEncoder(w).Encode(map[string]any{"config": c, "credentials_ready": h.Caller.Ready(), "worker_enabled": h.Runner != nil, "calls": calls, "targets": statuses, "customers": list.Customers, "unavailable_sites": list.UnavailableSites, "directory_error": directoryError})
+	filtered := CustomerList{Customers: []Target{}, UnavailableSites: []string{}}
+	for _, customer := range list.Customers {
+		if customer.Site == site {
+			filtered.Customers = append(filtered.Customers, customer)
+		}
+	}
+	for _, unavailable := range list.UnavailableSites {
+		if unavailable == site {
+			filtered.UnavailableSites = append(filtered.UnavailableSites, unavailable)
+		}
+	}
+	list = filtered
+	_ = json.NewEncoder(w).Encode(map[string]any{"site_id": site, "site_scoped": true, "config": c, "credentials_ready": h.Caller.Ready(), "worker_enabled": h.Runner != nil, "calls": calls, "targets": statuses, "customers": list.Customers, "unavailable_sites": list.UnavailableSites, "directory_error": directoryError})
 }

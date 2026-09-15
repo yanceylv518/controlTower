@@ -14,12 +14,12 @@ type Store struct {
 	Directory *Directory
 }
 
-func (s Store) Config(ctx context.Context) (Config, error) {
+func (s Store) Config(ctx context.Context, site string) (Config, error) {
 	c := DefaultConfig()
 	var raw string
-	err := s.DB.QueryRowContext(ctx, "SELECT config_json FROM voice_alert_config WHERE id=1").Scan(&raw)
+	err := s.DB.QueryRowContext(ctx, "SELECT config_json FROM voice_alert_site_config WHERE site_id=?", site).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
-		return c, nil
+		return s.legacyConfig(ctx, site)
 	}
 	if err != nil {
 		return c, err
@@ -29,27 +29,19 @@ func (s Store) Config(ctx context.Context) (Config, error) {
 	}
 	return c, c.Validate()
 }
-func (s Store) SaveConfig(ctx context.Context, c Config, actor string) error {
+func (s Store) SaveConfig(ctx context.Context, site string, c Config, actor string) error {
 	if err := c.Validate(); err != nil {
 		return err
 	}
-	// Reject nonexistent/disabled sites without touching a NewAPI database.
-	seenSites := map[string]bool{}
-	for _, recipient := range c.Recipients {
-		for _, key := range recipient.Targets {
-			site, _, _ := parseTargetKey(key)
-			if seenSites[site] {
-				continue
-			}
-			seenSites[site] = true
-			var n int
-			if err := s.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM instances WHERE enabled=1 AND CASE WHEN site_id='' THEN id ELSE site_id END=?`, site).Scan(&n); err != nil {
-				return err
-			}
-			if n == 0 {
-				return fmt.Errorf("站点 %s 不存在或未启用", site)
-			}
-		}
+	if err := c.ValidateSite(site); err != nil {
+		return err
+	}
+	var count int
+	if err := s.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM instances WHERE enabled=1 AND CASE WHEN site_id='' THEN id ELSE site_id END=?`, site).Scan(&count); err != nil {
+		return err
+	}
+	if count == 0 {
+		return fmt.Errorf("站点不存在或未启用")
 	}
 	// Legacy manually registered targets are no longer an allowlist.
 	c.Targets = nil
@@ -67,12 +59,12 @@ func (s Store) SaveConfig(ctx context.Context, c Config, actor string) error {
 		return err
 	}
 	var before string
-	err = tx.QueryRowContext(ctx, "SELECT config_json FROM voice_alert_config WHERE id=1").Scan(&before)
+	err = tx.QueryRowContext(ctx, "SELECT config_json FROM voice_alert_site_config WHERE site_id=?", site).Scan(&before)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
 	now := time.Now().UTC()
-	if _, err = tx.ExecContext(ctx, `INSERT INTO voice_alert_config(id,config_json,updated_by,updated_at) VALUES(1,?,?,?) ON DUPLICATE KEY UPDATE config_json=VALUES(config_json),updated_by=VALUES(updated_by),updated_at=VALUES(updated_at)`, string(raw), actor, now); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO voice_alert_site_config(site_id,config_json,updated_by,updated_at) VALUES(?,?,?,?) ON DUPLICATE KEY UPDATE config_json=VALUES(config_json),updated_by=VALUES(updated_by),updated_at=VALUES(updated_at)`, site, string(raw), actor, now); err != nil {
 		return err
 	}
 	// Keep recipient numbers out of the general operation audit.
@@ -91,7 +83,7 @@ func (s Store) SaveConfig(ctx context.Context, c Config, actor string) error {
 	if err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO operation_audits(id,instance_id,operation_type,target_type,target_id,actor_id,before_summary,after_summary,status,created_at) VALUES(?,'','voice_alert.configure','voice_alert','global',?,?,?,'succeeded',?)`, id, actor, redact(before), redact(string(raw)), now); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO operation_audits(id,instance_id,operation_type,target_type,target_id,actor_id,before_summary,after_summary,status,created_at) VALUES(?,'','voice_alert.configure','voice_alert',?,?,?,?,'succeeded',?)`, id, site, actor, redact(before), redact(string(raw)), now); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -281,8 +273,8 @@ type CallRecord struct {
 	SuppressUntil time.Time `json:"suppress_until"`
 }
 
-func (s Store) Calls(ctx context.Context) ([]CallRecord, error) {
-	rows, err := s.DB.QueryContext(ctx, `SELECT id,site_id,user_id,phone,window_end,min_tpm,max_tpm,direction,status,call_id,request_id,result_code,created_at,suppress_until FROM voice_alert_calls ORDER BY created_at DESC LIMIT 100`)
+func (s Store) Calls(ctx context.Context, site string) ([]CallRecord, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT id,site_id,user_id,phone,window_end,min_tpm,max_tpm,direction,status,call_id,request_id,result_code,created_at,suppress_until FROM voice_alert_calls WHERE site_id=? ORDER BY created_at DESC LIMIT 100`, site)
 	if err != nil {
 		return nil, err
 	}

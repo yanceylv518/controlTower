@@ -74,7 +74,7 @@ func (s *discoveredRepository) Snapshot(ctx context.Context, t Target, now time.
 func TestRunnerUsesDirectoryAndDynamicAllRecipients(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Enabled = true
-	cfg.Targets = []Target{{Site: "legacy", UserID: 99, Label: "manual"}}
+	cfg.Targets = []Target{{Site: "a", UserID: 99, Label: "manual"}}
 	cfg.Recipients = []Recipient{{Phone: "13800000000"}}
 	s := &discoveredRepository{fakeRepository: fakeRepository{config: cfg}, discovered: []Target{{Site: "a", UserID: 7, Label: "automatic-name"}}}
 	c := &fakeCaller{ready: true}
@@ -82,14 +82,14 @@ func TestRunnerUsesDirectoryAndDynamicAllRecipients(t *testing.T) {
 	if err := r.Once(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	s.discovered = append(s.discovered, Target{Site: "b", UserID: 7, Label: "new-account"})
+	s.discovered = append(s.discovered, Target{Site: "a", UserID: 8, Label: "new-account"}, Target{Site: "b", UserID: 7, Label: "other-site"})
 	s.queried = nil
 	if err := r.Once(context.Background()); err != nil || len(s.queried) != 2 || s.queried[1].Label != "new-account" {
 		t.Fatal("all did not discover new account", s.queried, err)
 	}
-	s.config.Recipients[0].Targets = []string{"b/7"}
+	s.config.Recipients[0].Targets = []string{"a/8"}
 	s.queried = nil
-	if err := r.Once(context.Background()); err != nil || len(s.queried) != 1 || s.queried[0].Site != "b" {
+	if err := r.Once(context.Background()); err != nil || len(s.queried) != 1 || s.queried[0].Site != "a" || s.queried[0].UserID != 8 {
 		t.Fatal("scope crossed site", s.queried, err)
 	}
 	s.directoryErr = errors.New("directory failed")

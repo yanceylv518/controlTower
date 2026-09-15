@@ -127,3 +127,50 @@ func TestPercentConfigCompatibility(t *testing.T) {
 		t.Fatal(restored)
 	}
 }
+
+func TestDirectionalPercentBaseline(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		start, end       int64
+		percent          float64
+		usePercent, want bool
+		direction        string
+	}{
+		{"drop 36.7 percent", 30000000, 19000000, 50, true, false, "下降"},
+		{"rise 57.9 percent", 19000000, 30000000, 50, true, true, "上涨"},
+		{"drop exactly 50", 30000000, 15000000, 50, true, false, "下降"},
+		{"drop over 50", 30000000, 14000000, 50, true, true, "下降"},
+		{"rise exactly 50", 30000000, 45000000, 50, true, false, "上涨"},
+		{"rise over 50", 30000000, 45000001, 50, true, true, "上涨"},
+		{"fall to zero is exactly 100", 30000000, 0, 100, true, false, "下降"},
+		{"fall to zero exceeds 50", 30000000, 0, 50, true, true, "下降"},
+		{"rise from zero", 0, 11000000, 100, true, true, "上涨"},
+		{"absolute gate from zero", 0, 10000000, 50, true, false, "上涨"},
+		{"percent disabled", 30000000, 19000000, 50, false, true, "下降"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := DefaultConfig()
+			c.Percent = tc.percent
+			c.UsePercent = tc.usePercent
+			values := make([]int64, 11)
+			for i := range values {
+				values[i] = tc.start
+			}
+			values[10] = tc.end
+			hit, _, _, direction := Evaluate(values, c)
+			if hit != tc.want || direction != tc.direction {
+				t.Fatalf("hit=%v direction=%s", hit, direction)
+			}
+		})
+	}
+	c := DefaultConfig()
+	c.Percent = 50
+	values := []int64{30000000, 19000000, 30000000, 30000000, 30000000, 30000000, 30000000, 30000000, 30000000, 30000000, 19000000}
+	if hit, _, _, dir := Evaluate(values, c); hit || dir != "下降" {
+		t.Fatal("latest extrema must use decline baseline")
+	}
+	values[10] = 30000000
+	if hit, _, _, dir := Evaluate(values, c); !hit || dir != "上涨" {
+		t.Fatal("latest extrema must use rise baseline")
+	}
+}

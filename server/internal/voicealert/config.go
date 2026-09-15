@@ -116,8 +116,12 @@ func Evaluate(values []int64, c Config) (bool, int64, int64, string) {
 	}
 	delta := high - low
 	direction := "下降"
+	baseline := high
 	if highAt > lowAt {
 		direction = "上涨"
+		baseline = low
 	}
-	return delta > c.Delta && (!c.UsePercent || low == 0 || float64(delta)/float64(low)*100 > c.Percent), low, high, direction
+	// Measure against the value before the excursion, including declines.
+	// A rise from zero has no finite ratio and uses the absolute threshold.
+	return delta > c.Delta && (!c.UsePercent || baseline == 0 || float64(delta)/float64(baseline)*100 > c.Percent), low, high, direction
 }
