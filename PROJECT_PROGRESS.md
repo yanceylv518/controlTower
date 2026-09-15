@@ -2,6 +2,8 @@
 
 ## 当前上下文
 
+- **rc116 每日明细修复发布（2026-09-15）**：v2.0.0-rc116 指向 ac575498d，CI34949285641 与 release34949558520 成功；三份安装包、SHA256SUMS 和 Server rc116/latest 镜像已发布。仅需升级 Server，无新迁移/Agent 改动，旧账单无需重生成；未下载复核、未部署。见[任务记录](docs/tasks/2026-09-15-billing-daily-download.md)。
+
 - **每日明细修复交付（2026-09-15）**：代码 34604fa06 已快进推送 origin/main；用户确认目的地后审批阻塞解除。暂存差异检查通过，本轮代码未变，沿用前轮四包 Go 回归及 dashboard vet；未打包/部署。仅需更新 Server，旧账单无需重生成，核对差异继续计费。见[任务记录](docs/tasks/2026-09-15-billing-daily-download.md)。
 
 - **上游每日明细下载修复（2026-09-15）**：隔离目录 `.tmp/billing-daily-download` 修复同日多用户文件重名及按天仅下载首份的问题；每日一个入口，多文件按天 ZIP，包内按用户 ID 区分，单文件仍 XLSX，完整 ZIP 亦去除重名。原实现回归复现、四个相关 Go 包及 dashboard vet 通过；实库/浏览器/真实 Excel 数值未验收。未提交发布部署，仅需 Server 更新，旧账单无需重生成。见[任务记录](docs/tasks/2026-09-15-billing-daily-download.md)。

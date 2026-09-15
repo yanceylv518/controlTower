@@ -1,7 +1,7 @@
 # 上游账单每日明细下载修复
 
 - 目标：每日入口唯一，下载包含当天全部已登记明细，完整 ZIP 无重名覆盖。
-- 状态：代码 34604fa06 已快进推送 origin/main，未发布/部署；更新时间：2026-09-15。
+- 状态：代码已推送，v2.0.0-rc116 已发布，未部署；更新时间：2026-09-15。
 - 任务 ID：01a0a421-0d9e-7230-96e7-d6b7ab628aaf
 - 工作目录：E:/projects/controlTower/.tmp/billing-daily-download
 - 分支：codex/billing-daily-download，基于 origin/main 92f359f1e。
@@ -16,3 +16,12 @@
 - 推送阻塞：自动审批拒绝 git push origin HEAD:main，理由是缺少对具体目标仓库/默认分支的明确授权，且远端尚未被其认定为可信证据验证。目标为 https://github.com/yanceylv518/controlTower.git 的 main；未执行成功、未改用其他途径绕过。
 - 推送结果：用户明确确认目的地后，git push origin HEAD:main 成功，远端由 92f359f1e 快进至 34604fa06；上面的审批阻塞已解除。交付文档随单独文档提交推送，未打包/部署。
 - 下一步：按用户安排发布及真实站点验收；旧账单无需重新生成，核对差异继续计费。主工作区已有改动保留，本记录同步至隔离目录供交付。
+
+## rc116 打包（2026-09-15，已发布）
+
+- 用户授权打包，沿用标签触发 release 工作流；目标 v2.0.0-rc116，提交 ac575498d8be01e24b9ae6bb4b319a3ebf8aa764，与远端 main 一致，rc116 远端标签不存在。
+- CI 34949285641 completed/success，包含 Go 测试/构建和前端类型检查/构建。
+- 范围扩展为本修复的安装包及 GHCR 镜像发布，更新 latest；不部署生产。无新迁移或 Agent 改动，已有账单无需重生成。
+- 发布结果：release 34949558520 completed/success，安装包构建、镜像构建推送及 Release 创建步骤全部成功。API 确认非草稿 Release，Server amd64、Agent amd64/arm64 三份非空安装包与 SHA256SUMS 均 uploaded。未下载复核包内容/校验值，未部署。
+- 发布页：https://github.com/yanceylv518/controlTower/releases/tag/v2.0.0-rc116；Server 镜像 ghcr.io/yanceylv518/controltower-server:v2.0.0-rc116，同时更新 latest。
+- 下一步：按用户安排升级 Server 并验收旧账单按天下载；Agent 无需更新，账单无需重新生成。
