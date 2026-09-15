@@ -45,6 +45,7 @@ func (s Store) SaveConfig(ctx context.Context, site string, c Config, actor stri
 	}
 	// Legacy manually registered targets are no longer an allowlist.
 	c.Targets = nil
+	c = c.WithDirectionRules()
 	raw, err := json.Marshal(c)
 	if err != nil {
 		return err

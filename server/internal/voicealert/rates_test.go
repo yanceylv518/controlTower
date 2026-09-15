@@ -174,3 +174,58 @@ func TestDirectionalPercentBaseline(t *testing.T) {
 		t.Fatal("latest extrema must use rise baseline")
 	}
 }
+
+func TestIndependentDirectionRules(t *testing.T) {
+	c := DefaultConfig()
+	c.Percent = 50
+	c = c.WithDirectionRules()
+	if c.Rise == c.Fall || c.Rise.Percent != 50 || c.Fall.Percent != 50 {
+		t.Fatal("legacy thresholds not independently inherited")
+	}
+	up := []int64{19000000, 19000000, 19000000, 19000000, 19000000, 19000000, 19000000, 19000000, 19000000, 19000000, 30000000}
+	down := []int64{30000000, 30000000, 30000000, 30000000, 30000000, 30000000, 30000000, 30000000, 30000000, 30000000, 19000000}
+	c.Rise.Percent = 60
+	c.Fall.Percent = 30
+	if hit, _, _ := Trigger(up, c); hit {
+		t.Fatal("rise ignored its threshold")
+	}
+	if hit, _, _ := Trigger(down, c); !hit {
+		t.Fatal("fall ignored its threshold")
+	}
+	c.Fall.Enabled = false
+	if hit, _, _ := Trigger(down, c); hit {
+		t.Fatal("disabled fall triggered")
+	}
+	c.Rise.UsePercent = false
+	if hit, _, _ := Trigger(up, c); !hit {
+		t.Fatal("rise percent switch ignored")
+	}
+	c.Rise.Delta = 11000000
+	if hit, _, _ := Trigger(up, c); hit {
+		t.Fatal("absolute equality triggered")
+	}
+	c.Rise.Delta = 0
+	if c.Validate() == nil {
+		t.Fatal("invalid direction accepted")
+	}
+}
+func TestDirectionJSONPreservesExplicitDisabled(t *testing.T) {
+	c := DefaultConfig()
+	if err := json.Unmarshal([]byte(`{"percent":65,"delta":12000000,"use_percent":false}`), &c); err != nil {
+		t.Fatal(err)
+	}
+	c = c.WithDirectionRules()
+	c.Fall.Enabled = false
+	c.Rise.Percent = 70
+	raw, err := json.Marshal(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := DefaultConfig()
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Fall.Enabled || got.Fall.Percent != 65 || got.Fall.Delta != 12000000 || got.Fall.UsePercent || got.Rise.Percent != 70 {
+		t.Fatal(string(raw))
+	}
+}
