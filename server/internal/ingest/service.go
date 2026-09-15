@@ -43,7 +43,11 @@ type Service struct {
 	store         Store
 	commandExpiry time.Duration
 	fastCircuit   tuning.FastCircuitSink
+	afterReport   func()
 }
+
+// The callback only wakes a bounded background worker; never call providers here.
+func (s Service) WithAfterReport(callback func()) Service { s.afterReport = callback; return s }
 
 func (s Service) WithFastCircuitSink(sink tuning.FastCircuitSink) Service {
 	s.fastCircuit = sink
@@ -338,7 +342,12 @@ func (s Service) SaveReport(req agentgateway.AgentReportRequest) error {
 	}
 
 	if reportedLastLogID > 0 {
-		return s.store.UpdateLogOffset(req.InstanceID, reportedLastLogID)
+		if err := s.store.UpdateLogOffset(req.InstanceID, reportedLastLogID); err != nil {
+			return err
+		}
+	}
+	if s.afterReport != nil {
+		s.afterReport()
 	}
 	return nil
 }

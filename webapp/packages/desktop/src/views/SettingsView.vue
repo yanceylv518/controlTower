@@ -4,6 +4,8 @@ import { ApiError, type SystemSettingItem } from "@ct/shared";
 import { ElMessage } from "element-plus";
 import { dashboard } from "../api";
 import AppShell from "../components/AppShell.vue";
+import VoiceAlertsSettings from "../components/VoiceAlertsSettings.vue";
+
 import { usePrefsStore } from "../stores/prefs";
 
 const prefs = usePrefsStore();
@@ -120,6 +122,7 @@ onMounted(load);
       >
     </template>
     <div v-loading="loading" class="settings-layout" style="display: block">
+      <VoiceAlertsSettings />
       <div class="settings-column settings-column-main">
         <section
         v-for="section in displaySections"

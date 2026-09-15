@@ -33,6 +33,8 @@ type Options struct {
 	FastCircuitSink         tuning.FastCircuitSink
 	SettingsProvider        *settings.Provider
 	BillingPagePause        time.Duration
+	VoiceHandler            http.Handler
+	AfterAgentReport        func()
 }
 
 type Store interface {
@@ -56,7 +58,7 @@ func NewMux(options Options) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", handleHealthz)
 
-	ingestService := ingest.NewServiceWithCommandExpiry(options.Store, options.CommandExpiry).WithFastCircuitSink(options.FastCircuitSink)
+	ingestService := ingest.NewServiceWithCommandExpiry(options.Store, options.CommandExpiry).WithFastCircuitSink(options.FastCircuitSink).WithAfterReport(options.AfterAgentReport)
 	agentHandler := agentgateway.NewHandlerWithTokens(options.AgentToken, ingestService, options.Store, options.AgentTokenPepper)
 	mux.HandleFunc("/api/agent/heartbeat", agentHandler.HandleHeartbeat)
 	mux.HandleFunc("/api/agent/report", agentHandler.HandleReport)
@@ -92,6 +94,9 @@ func NewMux(options Options) *http.ServeMux {
 		mux.Handle("PUT /api/dashboard/log-archives/{id}", protect(h))
 		controlSections["archive"] = agentHandler.LogArchive(archiveStore)
 		mux.HandleFunc("POST /api/agent/log-archive/poll", controlSections["archive"])
+	}
+	if options.VoiceHandler != nil {
+		mux.Handle("/api/dashboard/voice-alerts", protect(options.VoiceHandler))
 	}
 	mux.HandleFunc("/api/auth/login", a.Login)
 	mux.HandleFunc("/api/auth/logout", a.Logout)

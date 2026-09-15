@@ -508,10 +508,27 @@ func buildReport(ctx context.Context, cfg config.Config, reportedAt time.Time, s
 		rateMetrics = rateMetrics[1:]
 	}
 	report.AggregatedMetrics = append(report.AggregatedMetrics, rateMetrics...)
+	userRates := metricaggregator.UserRates(events, reportedAt)
+	if !cfg.LogCollectEnabled || !backlog.SnapshotKnown || backlog.BacklogEstimate > 0 {
+		userRates = userRates[1:]
+	}
+	report.AggregatedMetrics = append(report.AggregatedMetrics, userRates...)
 	var skippedTraffic int
 	report.AggregatedMetrics, skippedTraffic = metricaggregator.LimitCustomerTraffic(report.AggregatedMetrics, 10000)
 	if skippedTraffic > 0 {
 		log.Printf("customer channel TPM breakdown skipped for this batch: %d rows exceed report budget; existing metrics retained", skippedTraffic)
+	}
+	if len(report.AggregatedMetrics) > 10000 {
+		metrics := report.AggregatedMetrics[:0]
+		for _, metric := range report.AggregatedMetrics {
+			if metric.DimensionType != "user_rate_second" {
+				metrics = append(metrics, metric)
+			}
+		}
+		// A durable invalid-coverage marker prevents a skipped batch from
+		// appearing as zero traffic between otherwise valid watermarks.
+		report.AggregatedMetrics = append(metrics, reporter.AggregatedMetricPayload{BucketTime: reportedAt.UTC().Truncate(time.Second), WindowSeconds: 1, DimensionType: "user_rate_second", DimensionKey: "0", RequestCount: 1})
+		log.Printf("customer voice rates skipped for this batch: report budget exceeded; coverage invalidated")
 	}
 	if report.MetricBatchID == "" {
 		report.MetricBatchID = fmt.Sprintf("rates:%s:%d:%d", cfg.AgentID, reportedAt.UnixNano(), sequence)

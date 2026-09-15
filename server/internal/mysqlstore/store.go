@@ -555,6 +555,9 @@ func (s Store) ApplyMetricBatch(instanceID string, batchID string, metrics []agg
 	rateValues := []string{}
 	rateArgs := []any{}
 	for _, metric := range metrics {
+		if metric.DimensionType == "user_rate_second" {
+			continue
+		}
 		if metric.DimensionType != "channel_rate_second" {
 			regular = append(regular, metric)
 			continue
@@ -581,6 +584,9 @@ func (s Store) ApplyMetricBatch(instanceID string, batchID string, metrics []agg
 		if _, err := tx.ExecContext(ctx, "DELETE FROM channel_rate_seconds WHERE bucket_time<? LIMIT ?", time.Now().UTC().Add(-10*time.Minute), max(1000, len(metrics)-len(regular))); err != nil {
 			return err
 		}
+	}
+	if err := applyUserRates(ctx, tx, instanceID, metrics); err != nil {
+		return err
 	}
 	metrics = regular
 	const batchSize = 100

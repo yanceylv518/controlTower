@@ -11,15 +11,20 @@ import (
 
 func TestReportCustomerTrafficCannotDisplaceRateMetrics(t *testing.T) {
 	now := time.Date(2026, 9, 14, 10, 0, 0, 0, time.UTC)
-	for _, count := range []int{2000, 3000} {
+	for _, count := range []int{1000, 2000, 3000} {
 		events := make([]logcollector.Event, count)
 		for i := range events {
 			events[i] = logcollector.Event{CreatedAt: now, SourceLogID: int64(i + 1), UserID: int64(i + 1), ChannelID: 3, ModelName: "a", LogType: "consume", TotalTokens: 30, PromptTokens: 20, CompletionTokens: 10}
 		}
 		report := buildReport(context.Background(), config.Config{InstanceID: "site", AgentID: "test", LogCollectEnabled: true}, now, 1, int64(count), logcollector.BacklogStats{SnapshotKnown: true}, events, nil, nil, nil, nil)
-		traffic, users, rates := 0, 0, 0
+		traffic, users, rates, voice, invalid := 0, 0, 0, 0, false
 		for _, m := range report.AggregatedMetrics {
 			switch m.DimensionType {
+			case "user_rate_second":
+				voice++
+				if m.DimensionKey == "0" && m.RequestCount != 0 {
+					invalid = true
+				}
 			case "instance_user_channel":
 				traffic++
 				if m.TPM != 30 {
@@ -40,8 +45,11 @@ func TestReportCustomerTrafficCannotDisplaceRateMetrics(t *testing.T) {
 		if len(report.AggregatedMetrics) > 10000 || users != count || rates != 2 {
 			t.Fatalf("existing report affected: rows=%d users=%d rates=%d", len(report.AggregatedMetrics), users, rates)
 		}
-		if (count == 2000 && traffic != count) || (count == 3000 && traffic != 0) {
+		if (count == 1000 && traffic != count) || (count >= 2000 && traffic != 0) {
 			t.Fatalf("incorrect budget behavior: count=%d traffic=%d", count, traffic)
+		}
+		if (count < 3000 && (voice != count+1 || invalid)) || (count == 3000 && (voice != 1 || !invalid)) {
+			t.Fatalf("incorrect voice coverage: count=%d rows=%d invalid=%v", count, voice, invalid)
 		}
 	}
 }

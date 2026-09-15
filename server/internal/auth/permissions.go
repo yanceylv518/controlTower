@@ -153,7 +153,7 @@ func allowAdminRequest(u storage.User, r *http.Request) bool {
 	if path == "operation-audits" {
 		return read && any("audits.read")
 	}
-	if path == "settings" {
+	if path == "settings" || path == "voice-alerts" {
 		return any("settings.manage")
 	}
 	if strings.HasPrefix(path, "notification-") {

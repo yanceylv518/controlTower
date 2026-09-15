@@ -15,6 +15,10 @@ func TestRestrictedAdminEndpointMatrix(t *testing.T) {
 		permission, method, path string
 		want                     bool
 	}{
+		{"settings.manage", "GET", "voice-alerts", true},
+		{"settings.manage", "PUT", "voice-alerts", true},
+		{"notifications.manage", "PUT", "voice-alerts", false},
+		{"monitor.customers", "GET", "voice-alerts", false},
 		{"archive.manage", "GET", "log-archives", true},
 		{"archive.manage", "PUT", "log-archives/inst", true},
 		{"instances.manage", "PUT", "log-archives/inst", false},
