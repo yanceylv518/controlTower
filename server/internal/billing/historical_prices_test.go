@@ -25,7 +25,7 @@ func TestHistoricalPricesDoNotChangeLoggedAmount(t *testing.T) {
 	if got.Charge.InputPrice != "20.000000" || got.Charge.OutputPrice != "100.000000" || got.Charge.CacheReadPrice != "2.000000" || got.Charge.ImagePrice != "20.000000" {
 		t.Fatalf("prices %+v", got.Charge)
 	}
-	if got.Charge.CacheWritePrice != "未记录" {
+	if got.Charge.CacheWritePrice != "不适用（无用量）" {
 		t.Fatal("missing price became zero")
 	}
 	log.CacheRatio = "0"
@@ -102,5 +102,26 @@ func TestHistoricalSourcePricesSurviveSpoolAndDailyFiles(t *testing.T) {
 	}
 	if strings.Contains(content, "未拆分") {
 		t.Fatal("new prices hidden")
+	}
+}
+
+func TestHistoricalMissingOptionalPriceRequiresUsage(t *testing.T) {
+	job := Job{UsageVersion: HistoricalPriceUsageVersion}
+	for _, used := range []int64{0, 12} {
+		log := PagedLogRecord{ModelRatio: "10", GroupRatio: "1", ImageInputTokens: used, CacheTokens: used, CacheWriteTokens: 3 * used, CacheWrite5mTokens: used, CacheWrite1hTokens: used}
+		charge := LogCharge{Total: "123.456"}
+		attachHistoricalPrices(job, log, "500000", &charge)
+		want := "不适用（无用量）"
+		if used > 0 {
+			want = "有用量但未记录"
+		}
+		for _, price := range []string{charge.ImagePrice, charge.CacheReadPrice, charge.CacheWritePrice, charge.CacheWrite5mPrice, charge.CacheWrite1hPrice} {
+			if price != want {
+				t.Fatalf("used=%d price=%s want=%s", used, price, want)
+			}
+		}
+		if charge.Total != "123.456" {
+			t.Fatal("amount changed")
+		}
 	}
 }

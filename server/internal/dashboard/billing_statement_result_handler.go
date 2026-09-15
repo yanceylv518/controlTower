@@ -521,11 +521,11 @@ func statementWorkbook(job billing.Job, rows []billing.StatementAggregateRow, st
 	modelRows := groupStatementRows(job, rows, discounts, false)
 	widths := []float64{28, 14, 18, 18, 18, 18, 16, 12, 16}
 	if job.UsageVersion > 0 {
-		widths = append(widths, 18, 18, 18, 18)
+		widths = insertStatementColumns(widths, 4, []float64{18, 18, 18, 18})
 	}
 	headers := []xlsxwriter.Cell{t("模型"), t("订单数"), t(statementInputLabel(job)), t(statementOutputLabel(job)), t("缓存读取 Token"), t("缓存写入 Token"), t("总费用"), t("折扣"), t("最终费用")}
 	if job.UsageVersion > 0 {
-		headers = append(headers, multimediaHeaders()...)
+		headers = insertStatementColumns(headers, 4, multimediaHeaders())
 	}
 	if job.JobType == "upstream_statement" {
 		widths = append([]float64{24}, widths...)
@@ -541,16 +541,20 @@ func statementWorkbook(job billing.Job, rows []billing.StatementAggregateRow, st
 		v, discount := grouped.Row, grouped.Discount
 		cells := []xlsxwriter.Cell{t(v.ModelName), n64(v.RequestCount), n64(v.PromptTokens), n64(v.CompletionTokens), n64(v.CacheTokens), n64(v.CacheWriteTokens), d(v.Amount), d(discount), d(multiplyDecimal(v.Amount, discount))}
 		if job.UsageVersion > 0 {
-			cells = append(cells, multimediaCells(v.MultimediaUsage)...)
+			cells = insertStatementColumns(cells, 4, multimediaCells(v.MultimediaUsage))
 		}
 		if job.JobType == "upstream_statement" {
 			cells = append([]xlsxwriter.Cell{t(v.ChannelName)}, cells...)
 		}
 		_ = s.Row(cells)
-		column := "H"
-		if job.JobType == "upstream_statement" {
-			column = "I"
+		columnIndex := 8
+		if job.UsageVersion > 0 {
+			columnIndex += 4
 		}
+		if job.JobType == "upstream_statement" {
+			columnIndex++
+		}
+		column := string(rune('A' + columnIndex - 1))
 		summaryRefs[grouped.Key] = fmt.Sprintf("'账单总览'!%s%d", column, index+5)
 	}
 	if err := s.Total(); err != nil {
@@ -559,17 +563,19 @@ func statementWorkbook(job billing.Job, rows []billing.StatementAggregateRow, st
 	dailyWidths := []float64{14, 28, 14, 18, 18, 18, 18, 16, 12, 16, 34}
 	dailyHeaders := []xlsxwriter.Cell{t("日期"), t("模型"), t("订单数"), t(statementInputLabel(job)), t(statementOutputLabel(job)), t("缓存读取 Token"), t("缓存写入 Token"), t("总费用"), t("折扣"), t("最终费用"), t("明细文件")}
 	if job.UsageVersion > 0 {
-		dailyWidths = append(dailyWidths, 18, 18, 18, 18)
-		dailyHeaders = append(dailyHeaders, multimediaHeaders()...)
+		dailyWidths = insertStatementColumns(dailyWidths, 5, []float64{18, 18, 18, 18})
+		dailyHeaders = insertStatementColumns(dailyHeaders, 5, multimediaHeaders())
 	}
 	if job.JobType == "upstream_statement" {
 		dailyWidths = append([]float64{24}, dailyWidths...)
 		dailyHeaders = append([]xlsxwriter.Cell{t("渠道")}, dailyHeaders...)
 	}
 	if job.UsageVersion >= billing.HistoricalPriceUsageVersion {
-		dailyWidths = append(dailyWidths, 20, 20, 20, 20, 100)
-		dailyHeaders = append(dailyHeaders, t("输入单价"), t("输出单价"), t("缓存读取单价"), t("缓存写入单价"), t("计价规则"))
+		dailyWidths = insertStatementColumns(dailyWidths, len(dailyWidths)-4, []float64{20, 20, 20, 20, 100})
+		dailyHeaders = insertStatementColumns(dailyHeaders, len(dailyHeaders)-4, []xlsxwriter.Cell{t("输入单价"), t("输出单价"), t("缓存读取单价"), t("缓存写入单价"), t("计价规则")})
 	}
+	dailyWidths = moveStatementLastColumn(dailyWidths, 2)
+	dailyHeaders = moveStatementLastColumn(dailyHeaders, 2)
 	daily, err := newStatementSheet(book, job, "每日账单", dailyWidths)
 	if err != nil {
 		return nil, err
@@ -583,16 +589,16 @@ func statementWorkbook(job billing.Job, rows []billing.StatementAggregateRow, st
 		discountCell.Formula = summaryRefs[key]
 		cells := []xlsxwriter.Cell{t(v.Day.Format("2006-01-02")), t(v.ModelName), n64(v.RequestCount), n64(v.PromptTokens), n64(v.CompletionTokens), n64(v.CacheTokens), n64(v.CacheWriteTokens), d(v.Amount), discountCell, d(final), t(statementDailyFilename(job, v.Day))}
 		if job.UsageVersion > 0 {
-			cells = append(cells, multimediaCells(v.MultimediaUsage)...)
+			cells = insertStatementColumns(cells, 5, multimediaCells(v.MultimediaUsage))
 		}
 		if job.JobType == "upstream_statement" {
 			cells = append([]xlsxwriter.Cell{t(v.ChannelName)}, cells...)
 		}
 		if job.UsageVersion >= billing.HistoricalPriceUsageVersion {
 			price := prices.price(job, v)
-			cells = append(cells, t(price.Input), t(price.Output), t(price.Cache), t(price.CacheWrite), xlsxwriter.Cell{Value: prices.rules(job, v), Style: xlsxwriter.WrappedTextStyle})
+			cells = insertStatementColumns(cells, len(cells)-4, []xlsxwriter.Cell{t(price.Input), t(price.Output), t(price.Cache), t(price.CacheWrite), {Value: prices.rules(job, v), Style: xlsxwriter.WrappedTextStyle}})
 		}
-		_ = daily.Row(cells)
+		_ = daily.Row(moveStatementLastColumn(cells, 2))
 	}
 	if err := daily.Total(); err != nil {
 		return nil, err
@@ -613,12 +619,12 @@ func statementWorkbook(job billing.Job, rows []billing.StatementAggregateRow, st
 			if !exists {
 				cells = []xlsxwriter.Cell{n64(v.TokenID), t(v.TokenName), n64(0), n64(0), n64(0), n64(0), n64(0), d("0")}
 				if job.UsageVersion > 0 {
-					cells = append(cells, multimediaCells(billing.MultimediaUsage{})...)
+					cells = insertStatementColumns(cells, 5, multimediaCells(billing.MultimediaUsage{}))
 				}
 			}
 			values := []xlsxwriter.Cell{n64(v.RequestCount), n64(v.PromptTokens), n64(v.CompletionTokens), n64(v.CacheTokens), n64(v.CacheWriteTokens), d(v.Amount)}
 			if job.UsageVersion > 0 {
-				values = append(values, multimediaCells(v.MultimediaUsage)...)
+				values = insertStatementColumns(values, 3, multimediaCells(v.MultimediaUsage))
 			}
 			for i, c := range values {
 				cells[i+2].Value = addDecimal(cells[i+2].Value, c.Value)

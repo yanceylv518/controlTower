@@ -33,7 +33,7 @@ func parseOrdinaryRule(rule string) (ordinaryRuleSnapshot, bool) {
 			return ordinaryRuleSnapshot{}, false
 		}
 		value := strings.TrimPrefix(part, label+" ")
-		if value != "未记录" {
+		if value != "未记录" && value != "不适用（无用量）" && value != "有用量但未记录" {
 			price, ok := new(big.Rat).SetString(value)
 			if !ok || price.Sign() < 0 {
 				return ordinaryRuleSnapshot{}, false
@@ -62,12 +62,16 @@ func groupRuleCompleteness(rules []string) ([]string, bool) {
 	ambiguous := false
 	for context, rows := range groups {
 		var observed [7]map[string]bool
-		var missing [7]bool
+		var missing, usedMissing, unused [7]bool
 		conflict, partial := false, false
 		for i := range observed {
 			observed[i] = map[string]bool{}
 			for _, row := range rows {
-				if row.values[i] == "未记录" {
+				if row.values[i] == "不适用（无用量）" {
+					unused[i] = true
+				} else if row.values[i] == "有用量但未记录" {
+					missing[i], usedMissing[i] = true, true
+				} else if row.values[i] == "未记录" {
 					missing[i] = true
 				} else {
 					observed[i][row.values[i]] = true
@@ -83,15 +87,23 @@ func groupRuleCompleteness(rules []string) ([]string, bool) {
 			}
 			continue
 		}
-		fields, missingLabels := []string{}, []string{}
+		fields, missingLabels, unknownLabels := []string{}, []string{}, []string{}
 		for i, label := range ordinaryPriceLabels {
 			value := "未记录"
+			if unused[i] && !missing[i] {
+				value = "不适用（无用量）"
+			}
+			if usedMissing[i] {
+				value = "有用量但未记录"
+			}
 			for price := range observed[i] {
 				value = price
 			}
 			fields = append(fields, label+" "+value)
-			if missing[i] && len(observed[i]) > 0 {
+			if usedMissing[i] {
 				missingLabels = append(missingLabels, label)
+			} else if missing[i] && len(observed[i]) > 0 {
+				unknownLabels = append(unknownLabels, label)
 			}
 		}
 		text := ordinaryRulePrefix + strings.Join(fields, "；")
@@ -99,7 +111,10 @@ func groupRuleCompleteness(rules []string) ([]string, bool) {
 			text += "\n" + context
 		}
 		if len(missingLabels) > 0 {
-			text += "\n已记录的单价一致；部分订单未记录：" + strings.Join(missingLabels, "、") + "。缺失信息不作为另一套价格，也不代表这些订单已确认使用上述单价。"
+			text += "\n部分订单有对应计费用量但未记录单价：" + strings.Join(missingLabels, "、") + "。"
+		}
+		if len(unknownLabels) > 0 {
+			text += "\n历史记录未区分无用量与单价缺失：" + strings.Join(unknownLabels, "、") + "；不据此判断价格变化或计费异常。"
 		}
 		out = append(out, text)
 	}

@@ -85,9 +85,10 @@ func TestSourceStatementMediaPreviewAndWorkbook(t *testing.T) {
 		var sheet struct {
 			Rows []struct {
 				Cells []struct {
-					Ref    string `xml:"r,attr"`
-					Value  string `xml:"v"`
-					Inline string `xml:"is>t"`
+					Ref     string `xml:"r,attr"`
+					Value   string `xml:"v"`
+					Inline  string `xml:"is>t"`
+					Formula string `xml:"f"`
 				} `xml:"c"`
 			} `xml:"sheetData>row"`
 		}
@@ -97,6 +98,14 @@ func TestSourceStatementMediaPreviewAndWorkbook(t *testing.T) {
 		column := ""
 		seen := false
 		for _, row := range sheet.Rows {
+			for i, cell := range row.Cells {
+				if cell.Inline == "最终费用" && i != len(row.Cells)-1 {
+					t.Fatalf("%s final amount must be last", file.Name)
+				}
+				if cell.Formula != "" && file.Name == "xl/worksheets/sheet2.xml" && cell.Formula != "'账单总览'!L5" {
+					t.Fatalf("discount formula points to wrong column: %s", cell.Formula)
+				}
+			}
 			for _, cell := range row.Cells {
 				if cell.Inline == "图像输入 Token" {
 					column = strings.TrimRight(cell.Ref, "0123456789")

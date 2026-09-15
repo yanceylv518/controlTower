@@ -59,6 +59,26 @@ func attachHistoricalPrices(job Job, log PagedLogRecord, quotaPerUnit string, ch
 				charge.CacheWrite5mPrice, charge.CacheWrite1hPrice = price(five), price(log.CacheCreationRatio1h)
 				charge.ImagePrice = price(log.ImageRatio)
 			}
+			// Missing optional rates are only relevant when this request used the item.
+			optionalPrice := func(price *string, used int64) {
+				if *price != "未记录" {
+					return
+				}
+				if used == 0 {
+					*price = "不适用（无用量）"
+				} else if used > 0 {
+					*price = "有用量但未记录"
+				}
+			}
+			optionalPrice(&charge.CacheReadPrice, log.CacheTokens)
+			remainingWrite := log.CacheWriteTokens - log.CacheWrite5mTokens - log.CacheWrite1hTokens
+			if remainingWrite < 0 {
+				remainingWrite = log.CacheWriteTokens
+			}
+			optionalPrice(&charge.CacheWritePrice, remainingWrite)
+			optionalPrice(&charge.CacheWrite5mPrice, log.CacheWrite5mTokens)
+			optionalPrice(&charge.CacheWrite1hPrice, log.CacheWrite1hTokens)
+			optionalPrice(&charge.ImagePrice, log.ImageInputTokens)
 			parts = append(parts, fmt.Sprintf("历史单价（金额/百万 Token，含分组倍率）：输入 %s；输出 %s；缓存读取 %s；缓存写入 %s；5m 写入 %s；1h 写入 %s；图像输入 %s", charge.InputPrice, charge.OutputPrice, charge.CacheReadPrice, charge.CacheWritePrice, charge.CacheWrite5mPrice, charge.CacheWrite1hPrice, charge.ImagePrice))
 		}
 	}

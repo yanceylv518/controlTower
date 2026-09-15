@@ -279,7 +279,7 @@ func (prices statementPrices) price(job billing.Job, row billing.StatementAggreg
 		}
 		filtered := make([]string, 0, len(column))
 		for _, value := range column {
-			if hasPrice && (value == unusedStatementPrice || value == "未使用") {
+			if hasPrice && (value == unusedStatementPrice || value == "未使用" || value == "不适用（无用量）") {
 				continue
 			}
 			if value == unusedStatementPrice {

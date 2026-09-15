@@ -113,6 +113,14 @@ func TestHistoricalRulesDailyPreviewAndExport(t *testing.T) {
 					t.Fatalf("missing %s", want)
 				}
 			}
+			previous := -1
+			for _, label := range []string{"普通输入 Token", "图像输入 Token", "缓存读取 Token", "输入单价", "计价规则", "总费用", "折扣", "最终费用"} {
+				index := strings.Index(string(raw), ">"+label+"<")
+				if index <= previous {
+					t.Fatalf("column %s out of order", label)
+				}
+				previous = index
+			}
 		}
 	}
 	agg.ModelName = "expr"
