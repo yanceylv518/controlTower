@@ -760,10 +760,10 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
            </section>
          </div>
        </el-card>
-       <el-dialog v-model="groupManagerOpen" title="分组组合管理" width="min(740px, calc(100vw - 32px))" append-to-body destroy-on-close :close-on-click-modal="false"><ChannelGroupEditor v-if="groupManagerOpen" :key="siteID" :site="siteID" current="" :options="groupOptions" :saving="false" manage-only @cancel="groupManagerOpen = false" /></el-dialog>
+       <el-dialog v-model="groupManagerOpen" class="tuning-group-dialog" title="分组组合管理" width="min(740px, calc(100vw - 32px))" append-to-body destroy-on-close :close-on-click-modal="false"><ChannelGroupEditor v-if="groupManagerOpen" :key="siteID" :site="siteID" current="" :options="groupOptions" :saving="false" manage-only @cancel="groupManagerOpen = false" /></el-dialog>
        <el-dialog v-model="groupDialogOpen" title="调整渠道分组" width="min(740px, calc(100vw - 32px))" class="tuning-group-dialog" append-to-body destroy-on-close :close-on-click-modal="false">
          <template v-if="editingChannel">
-           <div class="group-editor-context"><b>{{ editingChannel.channel_name }}</b><span>ID {{ editingChannel.channel_id }}</span><span>当前：{{ editingChannel.group_name || "—" }}</span></div>
+           <div class="group-editor-context"><div class="group-channel-heading"><b>{{ editingChannel.channel_name }}</b><span class="group-channel-id">#{{ editingChannel.channel_id }}</span></div><div class="group-current-line"><span>当前分组</span><span>{{ splitChannelGroups(editingChannel.group_name).join(' · ') || '未设置' }}</span></div></div>
            <ChannelGroupEditor v-if="groupDialogOpen" :key="`${siteID}:${editingChannel.channel_id}`" :site="siteID" :current="editingChannel.group_name || ''" :options="groupOptions" :saving="groupSaving" @save="saveGroupSelection" @cancel="groupDialogOpen = false" />
          </template>
        </el-dialog>
@@ -920,9 +920,9 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
 .tuning-save-bar{position:sticky;bottom:14px;z-index:12;display:flex;align-items:center;justify-content:space-between;gap:16px;margin-top:16px;padding:14px 20px;border:1px solid #e4e9f1;border-radius:7px;background:#fff;box-shadow:0 5px 22px #20365814;font-size:13px}
 .tuning-save-bar i{display:inline-block;width:7px;height:7px;border-radius:50%;background:#d9a139;margin-right:8px}
 .save-context{color:#8792a5;font-size:11px;margin-left:14px}
-.group-editor-context{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px;padding:10px 12px;border-radius:6px;background:var(--ct-surface-2);color:var(--ct-ink-2);font-size:12px}
-.group-editor-context b{color:var(--ct-ink);font-size:14px}
-.group-editor-context span{font-size:12px;color:var(--ct-ink-2)}
+.group-editor-context{margin-bottom:16px;padding:16px 20px;border:1px solid var(--ct-line);border-radius:8px;background:var(--ct-surface-2)}
+.group-channel-heading{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.group-channel-heading b{color:var(--ct-ink);font-size:14px;font-weight:600;overflow-wrap:anywhere}.group-channel-id{color:var(--ct-ink-2);font-size:11px;border:1px solid var(--ct-line);background:var(--ct-surface);border-radius:4px;padding:1px 6px;font-variant-numeric:tabular-nums}
+.group-current-line{display:grid;grid-template-columns:56px 1fr;gap:12px;font-size:12px;line-height:1.8;color:var(--ct-ink-2);margin-top:10px;overflow-wrap:anywhere}.group-current-line>span:first-child{color:var(--ct-ink-3)}
 .group-preview{padding:14px 16px;background:#f5f8fc;border-radius:6px;margin:6px 0 16px;font-size:12px;overflow-wrap:anywhere}
 .group-preview>b{display:block;margin-bottom:12px}
 .group-preview>div{display:grid;grid-template-columns:65px 1fr;gap:10px;margin:7px 0}

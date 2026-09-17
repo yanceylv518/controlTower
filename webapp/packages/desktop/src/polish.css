@@ -1,0 +1,134 @@
+/* Shared finish layer. Keep page geometry, semantic status colors and data density intact. */
+:root {
+  --ct-bg: #f1f3f7;
+  --ct-surface-2: #f8fafc;
+  --ct-line: #e5e9f0;
+  --ct-line-strong: #cfd7e4;
+  --ct-ink: #202b3d;
+  --ct-ink-2: #637086;
+  --ct-ink-3: #8190a5;
+  --ct-accent: #315edb;
+  --ct-accent-weak: #edf2ff;
+  --ct-shadow: 0 1px 2px rgb(25 42 70 / 3%), 0 4px 16px rgb(25 42 70 / 3%);
+  --ct-shadow-overlay: 0 8px 24px rgb(25 42 70 / 8%), 0 24px 64px rgb(25 42 70 / 12%);
+  --el-border-radius-base: 6px;
+  --el-border-radius-small: 4px;
+  --el-border-radius-round: 20px;
+  --el-box-shadow-light: 0 6px 24px rgb(25 42 70 / 9%);
+  --el-mask-color: rgb(24 34 51 / 34%);
+}
+body { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+
+/* A quieter shell separates navigation from the white work surfaces. */
+.shell .sidebar { border-right: 1px solid rgb(255 255 255 / 5%); }
+.shell .sidebar .logo-row { padding: 2px 4px 14px; margin-bottom: 8px; border-bottom: 1px solid rgb(255 255 255 / 7%); }
+.shell .sidebar .logo span { box-shadow: inset 0 1px 0 rgb(255 255 255 / 14%); }
+.shell .nav-group { letter-spacing: .04em; opacity: .85; }
+.shell .sidebar a { min-height: 34px; margin: 2px 0; transition: background-color .15s, color .15s; }
+.shell .sidebar a.router-link-active { background: rgb(129 164 240 / 14%); }
+.shell .sidebar a.router-link-active .el-icon { opacity: 1; color: #a9c2ff; }
+.shell .topbar { box-shadow: 0 1px 4px rgb(25 42 70 / 2%); }
+.shell .topbar h1 { font-size: 15px; font-weight: 600; letter-spacing: .01em; }
+.shell .topbar .user { color: var(--ct-ink-2); }
+.shell .content { padding-top: 16px; }
+
+/* Shared cards and toolbars, without hover motion on static data. */
+.shell .el-card,
+.shell .panel,
+.shell .spec-card,
+.shell .dim-table,
+.shell .machine-card,
+.shell .runtime-instance {
+  border-color: var(--ct-line);
+  border-radius: var(--ct-r-card);
+  background: var(--ct-surface);
+  box-shadow: var(--ct-shadow);
+}
+.shell .el-card__header { padding: 16px 20px; border-bottom-color: var(--ct-line); }
+.shell .el-card__body { color: var(--ct-ink); }
+.shell .panel-title h2 { font-size: 14px; font-weight: 600; color: var(--ct-ink); }
+.shell .panel-title > span { color: var(--ct-ink-3); font-size: 12px; }
+.shell .filter-row { row-gap: 10px; }
+
+/* Overview: distinct label, figure and context levels. */
+.shell .kpi-grid { gap: 16px; }
+.shell .kpi-card { position: relative; padding: 20px; border-color: var(--ct-line); border-radius: 10px; box-shadow: var(--ct-shadow); }
+.shell .kpi-card strong { font-size: 26px; font-weight: 600; letter-spacing: -.035em; font-variant-numeric: tabular-nums; line-height: 1.3; }
+.shell .kpi-card > span { font-size: 12px; color: var(--ct-ink-2); margin-bottom: 8px; }
+.shell .kpi-card .kpi-icon { border-radius: 8px; }
+.shell .trends-panel .trend-chart { border: 0; border-top: 1px solid var(--ct-line); border-radius: 0; box-shadow: none; background: transparent; padding: 16px 0 0; }
+.shell .trends-panel .trend-chart:first-child { border-top: 0; padding-top: 0; }
+.shell .trends-panel .trend-chart h3 { color: var(--ct-ink-2); font-size: 12px; font-weight: 500; }
+.shell .alerts-panel .alert-item { padding: 16px 0; border-color: var(--ct-line); }
+.shell .alerts-panel .alert-item strong { font-size: 13px; font-weight: 500; color: var(--ct-ink); }
+.shell .alerts-panel .alert-item p { line-height: 1.7; color: var(--ct-ink-2); }
+.shell .alerts-panel .alert-item small { display: block; margin-top: 6px; color: var(--ct-ink-3); }
+
+/* Forms retain their existing sizes; consistent edges and focus supply the finish. */
+.el-input__wrapper,
+.el-select__wrapper,
+.el-textarea__inner { border-radius: 6px; transition: box-shadow .15s, background-color .15s; }
+.el-input__wrapper:not(.is-focus):hover,
+.el-select__wrapper:not(.is-focused):hover { box-shadow: 0 0 0 1px var(--ct-line-strong) inset; }
+.el-form-item__label { font-weight: 500; color: var(--ct-ink-2); }
+.el-button { font-weight: 500; transition: background-color .15s, border-color .15s, box-shadow .15s; }
+.el-button:not(.is-link):not(.is-text):not(.is-circle) { border-radius: 6px; }
+.el-button--primary:not(.is-plain):not(.is-link):not(.is-text):not(.is-disabled) { box-shadow: 0 1px 2px rgb(27 59 135 / 14%); }
+.el-button:focus-visible { outline: 2px solid var(--ct-accent); outline-offset: 3px; }
+.el-tabs__nav-wrap::after { height: 1px; background: var(--ct-line); }
+.el-tabs__active-bar { border-radius: 2px; }
+.el-tabs__item { font-size: 13px; }
+.el-tag { border-radius: 4px; font-weight: 400; }
+.el-empty__description p { color: var(--ct-ink-3); font-size: 13px; }
+
+/* Preserve alert/selected row colors: only style neutral table surfaces. */
+.shell .el-table {
+  --el-table-border-color: var(--ct-line);
+  --el-table-header-bg-color: var(--ct-surface-2);
+  --el-table-header-text-color: var(--ct-ink-2);
+  --el-table-row-hover-bg-color: #f3f6fc;
+  --el-table-text-color: var(--ct-ink);
+}
+.shell .el-table th.el-table__cell { font-size: 12px; font-weight: 500; }
+.shell .el-table .cell { overflow-wrap: anywhere; }
+.shell .el-table__empty-text { color: var(--ct-ink-3); font-size: 13px; }
+.el-pagination { --el-pagination-button-bg-color: var(--ct-surface); }
+.el-pagination.is-background .el-pager li { border-radius: 6px; }
+.ct-pager { background: var(--ct-surface-2); border-top-color: var(--ct-line); }
+.ct-pager-size .el-select__wrapper { border-radius: 6px; background: var(--ct-surface); box-shadow: 0 0 0 1px var(--ct-line) inset; }
+
+/* Global overlays also cover teleported dialogs outside the application shell. */
+.el-dialog { --el-dialog-padding-primary: 24px; border: 1px solid var(--ct-line); border-radius: 12px; box-shadow: var(--ct-shadow-overlay); }
+.el-dialog__header { padding-bottom: 18px; }
+.el-dialog__title { font-size: 16px; font-weight: 600; color: var(--ct-ink); }
+.el-dialog__body { color: var(--ct-ink-2); }
+.el-dialog__footer { padding-top: 20px; }
+.el-dialog__headerbtn:hover { background: var(--ct-surface-2); border-radius: 6px; }
+.el-message-box { border: 1px solid var(--ct-line); border-radius: 12px; padding: 20px; box-shadow: var(--ct-shadow-overlay); }
+.el-message-box__title { font-size: 16px; font-weight: 600; }
+.el-message-box__content { padding-top: 16px; padding-bottom: 20px; }
+.el-drawer { box-shadow: var(--ct-shadow-overlay); }
+.el-drawer__header { border-bottom: 1px solid var(--ct-line); margin-bottom: 0; padding-bottom: 20px; color: var(--ct-ink); }
+.el-popper.is-light { border-color: var(--ct-line); border-radius: 8px; box-shadow: var(--el-box-shadow-light); }
+.el-select-dropdown__item,
+.el-dropdown-menu__item { font-size: 13px; }
+.el-select-dropdown__item.is-selected { font-weight: 500; }
+
+/* Authentication shares the same restrained palette and form language. */
+.login-page { background: var(--ct-bg); }
+.login-card { border-color: var(--ct-line); border-radius: 14px; box-shadow: var(--ct-shadow-overlay); }
+.login-card h1 { font-size: 24px; font-weight: 600; letter-spacing: -.025em; color: var(--ct-ink); }
+.login-card p { color: var(--ct-ink-2); line-height: 1.7; }
+.login-card .brand-mark { background: var(--ct-accent); border-radius: 10px; }
+
+@media (max-width: 760px) {
+  .shell .content { padding-top: 12px; }
+  .shell .kpi-grid { gap: 10px; }
+  .shell .kpi-card { padding: 14px; }
+  .shell .kpi-card strong { font-size: 22px; }
+  .shell .el-card__header { padding: 14px 16px; }
+  .el-dialog { --el-dialog-padding-primary: 18px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .shell .sidebar a, .el-button, .el-input__wrapper, .el-select__wrapper, .el-textarea__inner { transition: none; }
+}

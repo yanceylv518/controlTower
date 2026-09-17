@@ -105,14 +105,14 @@ function saveChannel() {
         <el-alert v-if="loadError" :title="loadError" type="error" :closable="false"><el-button link type="primary" :loading="loading" @click="load">重新加载组合</el-button></el-alert>
         <div v-loading="loading" class="presets-area">
           <el-checkbox-group v-if="presets.length" v-model="selected" class="preset-grid" :disabled="storing || saving" @change="usePresets">
-            <el-checkbox v-for="p in presets" :key="p.id" :value="p.id" border class="preset-option"><div><b>{{ p.name }}</b><small>{{ p.groups.join('、') }}</small></div></el-checkbox>
+            <el-checkbox v-for="p in presets" :key="p.id" :value="p.id" border class="preset-option"><div><div class="preset-title"><b>{{ p.name }}</b><span class="group-count">{{ p.groups.length }} 组</span></div><small>{{ p.groups.join(' · ') }}</small></div></el-checkbox>
           </el-checkbox-group>
           <div v-else-if="!loading && !loadError" class="empty-combinations">还没有保存组合 <el-button link type="primary" @click="tab = 'manage'; openEditor()">新建组合</el-button></div>
         </div>
         <div class="section-title"><span>目标分组 <small>已选 {{ groups.length }} 个</small></span><el-button link type="primary" :disabled="!groups.length || !writable" @click="openEditor(undefined, true)">存为新组合</el-button></div>
         <el-select v-model="groups" multiple filterable allow-create default-first-option :disabled="saving" placeholder="多选分组，或输入新名称后按 Enter" class="full-width" @change="modified = true"><el-option v-for="g in allOptions" :key="g" :value="g" :label="g" /></el-select>
         <p class="helper">{{ modified ? '已自行调整，原组合保持不变' : selected.length ? '已载入所选组合，可继续增删分组' : '可直接选择多个分组，或从组合库快速填充' }}</p>
-        <div class="change-preview"><b>变更预览</b><div><span>新增</span><strong class="added">{{ added.join(' / ') || '无' }}</strong></div><div><span>移除</span><strong class="removed">{{ removed.join(' / ') || '无' }}</strong></div><div><span>保存后</span><strong>{{ groups.join(' / ') || '尚未选择' }}</strong></div></div>
+        <div class="change-preview"><div class="preview-heading"><b>变更预览</b><small>{{ changed ? '核对后保存到渠道' : '与当前分组一致' }}</small></div><div class="preview-line"><span>新增</span><div class="preview-tags"><span v-for="g in added" :key="g" class="diff-tag added">＋ {{ g }}</span><span v-if="!added.length" class="no-change">无</span></div></div><div class="preview-line"><span>移除</span><div class="preview-tags"><span v-for="g in removed" :key="g" class="diff-tag removed">− {{ g }}</span><span v-if="!removed.length" class="no-change">无</span></div></div><div class="preview-line preview-result"><span>保存后</span><strong>{{ groups.join(' / ') || '尚未选择' }}</strong></div></div>
         <el-checkbox v-model="confirmed" :disabled="saving || !changed || !groups.length" class="confirm-change">确认将渠道分组替换为上述目标分组</el-checkbox>
       </el-tab-pane>
       <el-tab-pane label="分组组合管理" name="manage">
@@ -128,5 +128,53 @@ function saveChannel() {
 </template>
 
 <style scoped>
-.channel-group-editor{color:var(--ct-ink);font-size:13px}.section-title{display:flex;justify-content:space-between;align-items:center;gap:12px;margin:8px 0 12px;font-weight:500}.section-title small,.helper{color:var(--ct-ink-2);font-size:12px;font-weight:400}.helper{margin:8px 0 16px}.full-width{width:100%}.presets-area{min-height:40px;margin-bottom:20px}.preset-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.preset-option.el-checkbox{width:100%;height:auto;min-height:72px;margin:0;padding:12px;background:var(--ct-surface);border-color:var(--ct-line);border-radius:var(--ct-r-ctl);align-items:flex-start}.preset-option.is-checked{background:var(--ct-accent-weak);border-color:var(--ct-accent)}.preset-option :deep(.el-checkbox__input){margin-top:3px}.preset-option :deep(.el-checkbox__label){white-space:normal;overflow-wrap:anywhere;padding-left:8px}.preset-option b{font-size:13px;font-weight:500}.preset-option small{display:block;margin-top:4px;color:var(--ct-ink-2);font-size:12px}.empty-combinations{color:var(--ct-ink-2);padding:12px;background:var(--ct-surface-2);border-radius:var(--ct-r-ctl)}.change-preview{background:var(--ct-surface-2);border-radius:var(--ct-r-ctl);padding:16px;margin:16px 0}.change-preview>b{display:block;margin-bottom:12px;font-weight:500}.change-preview>div{display:grid;grid-template-columns:56px 1fr;gap:12px;margin:8px 0;overflow-wrap:anywhere}.change-preview span{color:var(--ct-ink-2)}.change-preview strong{font-weight:400}.added{color:var(--ct-ok)}.removed{color:var(--ct-ink-3);text-decoration:line-through}.confirm-change{height:auto;white-space:normal}.confirm-change :deep(.el-checkbox__label){white-space:normal}.saved-row{padding:16px 0;border-bottom:1px solid var(--ct-line);display:flex;align-items:center;justify-content:space-between;gap:16px}.saved-content{min-width:0}.saved-content>b{font-weight:500;overflow-wrap:anywhere}.group-tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}.group-tags :deep(.el-tag){max-width:100%;height:auto;white-space:normal;overflow-wrap:anywhere}.row-actions{display:flex;flex-shrink:0;gap:12px}.row-actions .el-button+.el-button{margin-left:0}.preset-form{padding:16px;background:var(--ct-surface-2);border-radius:var(--ct-r-ctl);margin-top:20px}.preset-form>b{display:block;margin-bottom:16px;font-weight:500}.dialog-actions{display:flex;justify-content:flex-end;flex-wrap:wrap;gap:8px;border-top:1px solid var(--ct-line);padding-top:16px;margin-top:20px}.dialog-actions .el-button+.el-button{margin-left:0}.editor-actions{display:flex;justify-content:flex-end}@media(max-width:600px){.preset-grid{grid-template-columns:1fr}.saved-row{align-items:flex-start;flex-direction:column}.row-actions{align-self:flex-end}}
+.channel-group-editor{color:var(--ct-ink);font-size:13px}
+.channel-group-editor :deep(.el-tabs__header){margin:0 0 24px}
+.channel-group-editor :deep(.el-tabs__nav-wrap::after){height:1px;background:var(--ct-line)}
+.channel-group-editor :deep(.el-tabs__item){height:44px;font-size:13px;font-weight:500}
+.channel-group-editor :deep(.el-tabs__active-bar){height:2px;border-radius:2px}
+.section-title{display:flex;justify-content:space-between;align-items:center;gap:12px;margin:0 0 12px;font-size:13px;font-weight:600}
+.section-title small{margin-left:8px;font-size:12px;font-weight:400;color:var(--ct-ink-3)}
+.helper{font-size:12px;line-height:1.7;color:var(--ct-ink-2);margin:10px 0 24px}
+.full-width{width:100%}
+.full-width :deep(.el-select__wrapper){min-height:44px;padding:8px 12px;border-radius:8px;box-shadow:0 0 0 1px var(--ct-line) inset}
+.full-width :deep(.el-select__wrapper.is-focused){box-shadow:0 0 0 1px var(--ct-accent) inset}
+.full-width :deep(.el-tag){border:0;background:var(--ct-accent-weak);color:var(--ct-accent);border-radius:4px;min-height:24px}
+.presets-area{min-height:40px;margin-bottom:28px;max-height:240px;overflow:auto;padding:1px}
+.preset-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.preset-option.el-checkbox{width:100%;height:auto;min-height:84px;margin:0;padding:16px;background:var(--ct-surface);border-color:var(--ct-line);border-radius:8px;align-items:flex-start;transition:border-color .15s,background-color .15s}
+.preset-option.el-checkbox:hover{border-color:var(--ct-line-strong);background:var(--ct-surface-2)}
+.preset-option.el-checkbox.is-checked{background:var(--ct-accent-weak);border-color:var(--ct-accent)}
+.preset-option :deep(.el-checkbox__input){margin-top:3px}
+.preset-option :deep(.el-checkbox__label){white-space:normal;overflow-wrap:anywhere;padding-left:10px;min-width:0;flex:1}
+.preset-title{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
+.preset-title b{font-size:13px;font-weight:600;color:var(--ct-ink);line-height:1.5}
+.group-count{font-size:11px;color:var(--ct-ink-3);white-space:nowrap;font-weight:400}
+.preset-option small{display:block;margin-top:7px;color:var(--ct-ink-2);font-size:12px;line-height:1.65}
+.empty-combinations{display:flex;justify-content:center;align-items:center;gap:12px;min-height:88px;color:var(--ct-ink-3);padding:20px;border:1px dashed var(--ct-line-strong);border-radius:8px;background:var(--ct-surface-2)}
+.change-preview{border:1px solid var(--ct-line);border-radius:8px;padding:16px 20px;margin:0 0 16px;background:var(--ct-surface-2)}
+.preview-heading{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px}
+.preview-heading b{font-weight:600;font-size:12px}.preview-heading small{font-size:11px;color:var(--ct-ink-3)}
+.preview-line{display:grid;grid-template-columns:48px 1fr;gap:12px;align-items:start;margin-top:10px;overflow-wrap:anywhere}
+.preview-line>span{color:var(--ct-ink-2);font-size:12px;line-height:24px}
+.preview-tags{display:flex;flex-wrap:wrap;gap:6px}.diff-tag{display:inline-flex;padding:2px 8px;border-radius:4px;font-size:12px;line-height:20px}
+.added{color:var(--ct-ok);background:var(--ct-ok-weak)}.removed{color:var(--ct-ink-2);background:var(--ct-line);text-decoration:line-through}
+.no-change{color:var(--ct-ink-3);font-size:12px;line-height:24px}.preview-result{border-top:1px solid var(--ct-line);padding-top:12px;margin-top:14px}.preview-result strong{font-weight:400;font-size:12px;line-height:24px}
+.confirm-change{height:auto;white-space:normal;padding:4px 0}.confirm-change :deep(.el-checkbox__label){white-space:normal;font-size:12px;line-height:1.7;color:var(--ct-ink-2)}
+.saved-list{border-top:1px solid var(--ct-line)}.saved-row{padding:20px 0;border-bottom:1px solid var(--ct-line);display:flex;align-items:center;justify-content:space-between;gap:20px}.saved-content{min-width:0}.saved-content>b{font-size:14px;font-weight:500;overflow-wrap:anywhere}
+.group-tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}.group-tags :deep(.el-tag){max-width:100%;height:auto;min-height:22px;white-space:normal;overflow-wrap:anywhere;background:var(--ct-surface-2);border:1px solid var(--ct-line);color:var(--ct-ink-2);border-radius:4px}
+.row-actions{display:flex;flex-shrink:0;gap:16px}.row-actions .el-button+.el-button{margin-left:0}
+.preset-form{padding:20px;background:var(--ct-surface-2);border:1px solid var(--ct-line);border-radius:8px;margin-top:24px}.preset-form>b{display:block;margin-bottom:20px;font-size:14px;font-weight:500}.preset-form :deep(.el-form-item){margin-bottom:20px}.preset-form :deep(.el-form-item__label){font-size:12px;color:var(--ct-ink-2);margin-bottom:8px}.preset-form :deep(.el-input__wrapper){min-height:38px;border-radius:6px}
+.dialog-actions{position:sticky;bottom:-24px;z-index:2;background:var(--ct-surface);display:flex;justify-content:flex-end;flex-wrap:wrap;gap:10px;border-top:1px solid var(--ct-line);padding:18px 0 4px;margin-top:24px}.dialog-actions .el-button+.el-button{margin-left:0}.dialog-actions .el-button{min-height:34px;padding:8px 16px;border-radius:6px}.dialog-actions .el-button--primary{min-width:120px}.editor-actions{display:flex;justify-content:flex-end}
+@media(max-width:600px){.preset-grid{grid-template-columns:1fr}.saved-row{align-items:flex-start;flex-direction:column}.row-actions{align-self:flex-end}.section-title small{display:block;margin:4px 0 0}.change-preview{padding:14px}.preview-heading{align-items:flex-start}.preview-heading small{max-width:50%;text-align:right}}
+@media(prefers-reduced-motion:reduce){.preset-option.el-checkbox{transition:none}}
+</style>
+<style>
+.el-dialog.tuning-group-dialog{padding:0;border:1px solid var(--ct-line);border-radius:12px;max-height:88vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 16px 64px rgb(16 24 40 / 16%)}
+.tuning-group-dialog .el-dialog__header{padding:22px 28px 18px;margin:0;border-bottom:1px solid var(--ct-line);flex-shrink:0}
+.tuning-group-dialog .el-dialog__title{font-size:16px;font-weight:600;line-height:24px;color:var(--ct-ink)}
+.tuning-group-dialog .el-dialog__headerbtn{top:12px;right:12px;width:40px;height:40px}
+.tuning-group-dialog .el-dialog__body{padding:24px 28px;overflow:auto;min-height:0}
+.tuning-group-dialog .el-dialog__footer{display:none}
+@media(max-width:600px){.tuning-group-dialog .el-dialog__header{padding:18px 20px}.tuning-group-dialog .el-dialog__body{padding:20px}}
 </style>
