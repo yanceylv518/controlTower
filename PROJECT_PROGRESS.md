@@ -3,6 +3,9 @@
 <!-- AI_CURRENT_START -->
 ## 当前总览
 
+- **本地整合已提交、推送待确认（2026-09-17）**：业务提交b6461feb8，58文件；Go test/vet、142项前端测试和构建通过。自动审批拒绝推送，要求用户明确确认GitHub yanceylv518/controlTower的main目的地；代码未推送、未发布部署。见[整合记录](docs/tasks/2026-09-17-local-changes-integration.md)。
+
+
 - **全部本地业务代码整合（2026-09-17）**：以229c9036a为基线，去重已交付改动，整合调权/平均输出、只读渠道来源、用户账单分组、账单任务选项。Go test/vet、142项前端回归和类型检查/构建通过；未配置实库/未运行浏览器验收，待提交推送，未发布部署。见[整合记录](docs/tasks/2026-09-17-local-changes-integration.md)。
 
 
