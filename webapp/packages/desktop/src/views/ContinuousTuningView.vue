@@ -920,7 +920,7 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
 .tuning-save-bar{position:sticky;bottom:14px;z-index:12;display:flex;align-items:center;justify-content:space-between;gap:16px;margin-top:16px;padding:14px 20px;border:1px solid #e4e9f1;border-radius:7px;background:#fff;box-shadow:0 5px 22px #20365814;font-size:13px}
 .tuning-save-bar i{display:inline-block;width:7px;height:7px;border-radius:50%;background:#d9a139;margin-right:8px}
 .save-context{color:#8792a5;font-size:11px;margin-left:14px}
-.group-editor-context{margin-bottom:16px;padding:16px 20px;border:1px solid var(--ct-line);border-radius:8px;background:var(--ct-surface-2)}
+.group-editor-context{margin-bottom:10px;padding:12px 14px;border:1px solid var(--ct-line);border-radius:8px;background:var(--ct-surface-2)}
 .group-channel-heading{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.group-channel-heading b{color:var(--ct-ink);font-size:14px;font-weight:600;overflow-wrap:anywhere}.group-channel-id{color:var(--ct-ink-2);font-size:11px;border:1px solid var(--ct-line);background:var(--ct-surface);border-radius:4px;padding:1px 6px;font-variant-numeric:tabular-nums}
 .group-current-line{display:grid;grid-template-columns:56px 1fr;gap:12px;font-size:12px;line-height:1.8;color:var(--ct-ink-2);margin-top:10px;overflow-wrap:anywhere}.group-current-line>span:first-child{color:var(--ct-ink-3)}
 .group-preview{padding:14px 16px;background:#f5f8fc;border-radius:6px;margin:6px 0 16px;font-size:12px;overflow-wrap:anywhere}
