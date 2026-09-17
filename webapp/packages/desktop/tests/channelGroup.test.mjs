@@ -27,7 +27,8 @@ test('group normalization enforces the storage length boundary', () => {
   assert.throws(() => normalizeChannelGroups(['x'.repeat(129)]), /128/)
 })
 
-test('group editor does not allow creating unknown groups', () => {
-  assert.doesNotMatch(viewSource, /allow-create/)
-  assert.match(viewSource, /placeholder="选择已有分组"/)
+test('group editor uses a dedicated site-scoped combination manager', () => {
+  assert.match(viewSource, /<ChannelGroupEditor/)
+  assert.match(viewSource, /:site="siteID"/)
+  assert.doesNotMatch(viewSource, /当前站点已有组合/)
 })

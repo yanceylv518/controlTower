@@ -56,7 +56,7 @@ func TestChannelCommandHandlerValidationActorAndDTO(t *testing.T) {
 	if w.Code != http.StatusCreated || !bytes.Contains(w.Body.Bytes(), []byte(`"group":"default,vip"`)) {
 		t.Fatalf("group command=%d %s", w.Code, w.Body.String())
 	}
-	if w = call(`{"instance_id":"inst","confirm":true,"group":"custom"}`, "token"); w.Code != http.StatusBadRequest || !bytes.Contains(w.Body.Bytes(), []byte(`"error":"group_not_found"`)) {
+	if w = call(`{"instance_id":"inst","confirm":true,"group":"custom"}`, "token"); w.Code != http.StatusCreated || !bytes.Contains(w.Body.Bytes(), []byte(`"group":"custom"`)) {
 		t.Fatalf("unknown group command=%d %s", w.Code, w.Body.String())
 	}
 }

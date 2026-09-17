@@ -3,6 +3,8 @@
 <!-- AI_CURRENT_START -->
 ## 当前总览
 
+- **调权分组组合（2026-09-18，待环境验收）**：按确认设计实现多选组合合并去重、目标分组手动增删、命名组合新建/编辑/删除及独立管理入口；使用主界面 Element Plus 与 `--ct-*` 主题。用户明确允许新分组名称，直连/队列/通用入口保留格式、渠道归属和确认校验，不再限制历史名称。组合按站点持久化并做 revision 冲突保护；新增 082 迁移。Go vet/test、153 项前端测试、typecheck/build 通过；MySQL 实库测试未配置而跳过，浏览器工具不可用，未部署、按用户要求暂不打包。完整使用需升级 Server/Web 并执行迁移；见 [交接](docs/ai-tasks/2026-09-18-channel-group-combinations.md) 和 [设计](docs/channel-group-combinations.md)。
+
 - **只读日志动态计费摘要补全（2026-09-18，待真实页面验收）**：对照 NewAPI rc35，解析日志表达式快照并按 matched_tier 展示命中档位、输入/输出单价、有缓存用量时的缓存单价及多媒体价格，沿用站点货币换算；缺失匹配不猜测价格。33 项相关回归、Web typecheck/build 通过，本地 Vite 已热更新；浏览器工具不可用，未验证截图订单原始字段及实际页面、未部署。交接见 [修复记录](docs/ai-tasks/2026-09-18-readonly-billing-summary.md)。
 
 - **全部本地业务整合已推送（2026-09-17）**：业务提交b6461feb8及交付记录89f238a3d已快进推送origin/main，目的地审批已解除。包含调权/平均输出、只读渠道、用户账单分组、账单任务选项；Go test/vet、142项前端测试、类型检查/构建通过。未发布部署，源目录保留。见[整合记录](docs/tasks/2026-09-17-local-changes-integration.md)。

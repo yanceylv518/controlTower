@@ -147,19 +147,13 @@ func (s Store) UpdateChannelGroup(ctx context.Context, siteID string, channelID 
 		return storage.ChannelCommand{}, err
 	}
 	targetFound := false
-	knownValues := make([]string, 0, len(channels))
 	for _, channel := range channels {
 		if channel.ID == channelID {
 			targetFound = true
 		}
-		knownValues = append(knownValues, channel.GroupName)
 	}
 	if !targetFound {
 		return storage.ChannelCommand{}, tuning.ErrChannelNotFound
-	}
-	// 入队前锁定分组白名单，避免没有经过 Dashboard 的调用写入未知用户组。
-	if err := channelcontrol.ValidateKnownGroups(normalized, knownValues); err != nil {
-		return storage.ChannelCommand{}, err
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

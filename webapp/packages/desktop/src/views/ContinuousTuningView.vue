@@ -7,6 +7,7 @@ import { dashboard } from "../api";
 import AppShell from "../components/AppShell.vue";
 import TuningInfo from "../components/TuningInfo.vue";
 import TuningCapacityMetric from "../components/TuningCapacityMetric.vue";
+import ChannelGroupEditor from "../components/ChannelGroupEditor.vue";
 import { useFiltersStore } from "../stores/filters";
 import { formatTime } from "../utils/format";
 import { hiddenChannelGroupCount, MAX_VISIBLE_CHANNEL_GROUPS, normalizeChannelGroups, splitChannelGroups, visibleChannelGroups } from "../utils/channelGroup";
@@ -17,8 +18,9 @@ const mode = ref<"observe" | "confirm" | "auto">("observe");
 const bases = ref<ChannelBaseValue[]>([]), states = ref<TuningContinuousState[]>([]), events = ref<TuningRecommendation[]>([]);
 const channels = ref<TuningChannel[]>([]);
 let channelDirectoryGeneration = 0;
+const groupManagerOpen = ref(false);
 const groupDialogOpen = ref(false), groupSaving = ref(false), groupConfirmed = ref(false);
-const editingChannel = ref<TuningChannel | null>(null), groupDraft = ref<string[]>([]), groupPreset = ref("");
+const editingChannel = ref<TuningChannel | null>(null), groupDraft = ref<string[]>([]);
 const pendingGroups = ref(new Map<number, string>());
 const groupErrors = ref(new Map<number, string>());
 const groupPollTimers = new Map<number, ReturnType<typeof setTimeout>>();
@@ -78,14 +80,6 @@ const groupEditorRowFor = (row: ChannelBaseValue): TuningChannel => channelDirec
   group_name: row.group_name || "",
 });
 const groupOptions = computed(() => [...new Set(channels.value.flatMap(row => splitChannelGroups(row.group_name)))].sort((a, b) => a.localeCompare(b)));
-const groupCombinations = computed(() => {
-  const values = new Set<string>();
-  for (const row of channels.value) {
-    const groups = splitChannelGroups(row.group_name);
-    if (groups.length) values.add(groups.join(","));
-  }
-  return [...values].sort((a, b) => a.localeCompare(b));
-});
 const groupCellTitle = (value: string | null | undefined) => {
   const groups = splitChannelGroups(value);
   return groups.length > MAX_VISIBLE_CHANNEL_GROUPS ? `点击编辑分组（完整分组：${groups.join("、")}）` : "点击编辑分组";
@@ -501,13 +495,13 @@ function openGroupEditor(row: TuningChannel) {
   groupErrors.value = errors;
   editingChannel.value = row;
   groupDraft.value = splitChannelGroups(row.group_name);
-  groupPreset.value = "";
   groupConfirmed.value = false;
   groupDialogOpen.value = true;
 }
-function useGroupCombination(value: string) {
-  if (value) groupDraft.value = splitChannelGroups(value);
-  groupPreset.value = "";
+function saveGroupSelection(groups: string[]) {
+  groupDraft.value = groups;
+  groupConfirmed.value = true;
+  void saveGroup();
 }
 async function saveGroup() {
   const row = editingChannel.value;
@@ -519,15 +513,11 @@ async function saveGroup() {
     ElMessage.warning(error instanceof Error ? error.message : "分组格式无效");
     return;
   }
-  // 提交前按当前站点目录拦截未知名称，服务端仍会执行同一规则作为最终边界。
-  const unknownGroups = splitChannelGroups(group).filter(value => !groupOptions.value.includes(value));
-  if (unknownGroups.length) {
-    ElMessage.warning(`分组不存在，请选择 New API 已有分组：${unknownGroups.join("、")}`);
-    return;
-  }
   groupSaving.value = true;
+  const groupSite = siteID.value;
   try {
-    const result = await dashboard.saveTuningChannelGroup(siteID.value, row.channel_id, group);
+    const result = await dashboard.saveTuningChannelGroup(groupSite, row.channel_id, group);
+    if (groupSite !== siteID.value) return;
     if (result.status === "succeeded") {
       stopGroupPoll(row.channel_id);
       applyGroupLocally(row.channel_id, result.group);
@@ -553,7 +543,7 @@ async function saveGroup() {
     groupDialogOpen.value = false;
   } catch (error) {
     if (error instanceof ApiError && error.code === "group_not_found") {
-      ElMessage.error("分组已不存在，请刷新渠道信息后重试");
+      ElMessage.error("当前 Server 尚不支持新增分组名称，请升级后重试");
     } else {
       ElMessage.error(error instanceof Error ? error.message : "分组更新失败");
     }
@@ -720,7 +710,7 @@ async function save() {
     ElMessage.error(error instanceof Error ? error.message : "保存失败");
   } finally { saving.value = false; }
 }
-watch(() => filters.site_id, () => { cancelGroupPolls(); channels.value = []; pendingGroups.value = new Map(); groupErrors.value = new Map(); channelDirectoryGeneration++; void load(true); void watchChannelChanges(); });
+watch(() => filters.site_id, () => { groupDialogOpen.value = false; groupManagerOpen.value = false; cancelGroupPolls(); channels.value = []; pendingGroups.value = new Map(); groupErrors.value = new Map(); channelDirectoryGeneration++; void load(true); void watchChannelChanges(); });
 watch(siteID, () => { ratesReady.value = false; currentRates.value.clear(); void refreshCurrentRates(); });
 watch([eventModelFilter, eventRuleFilter, eventChannelQuery, eventDateRange, activeModel], () => { eventPage.value = 1; });
 onMounted(() => { void load(true); void watchChannelChanges(); void refreshCurrentRates(); refreshTimer = setInterval(() => void refreshRuntime(), 30000); ratesTimer = setInterval(() => { if (!document.hidden) void refreshCurrentRates(); }, 5000); });
@@ -731,7 +721,7 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
   <el-alert v-if="channelSyncError" :title="channelSyncError" type="warning" :closable="false" />
   <el-tabs v-model="activeTab" class="tabs">
     <el-tab-pane label="运行概览" name="overview">
-      <el-card shadow="never" class="workspace-card"><template #header><div class="head"><div class="title-line"><b>模型与渠道</b><div class="inline-metrics"><span>自动 <b>{{ counts.auto }}</b></span><span>观察 <b>{{ counts.observe }}</b></span><span>关闭 <b>{{ counts.off }}</b></span></div></div><div class="tools"><el-button @click="helpOpen=true">使用说明</el-button><el-button :loading="channelsRefreshing" :disabled="saving" @click="refreshChannelsNow">刷新渠道信息</el-button><el-button :loading="saving" @click="sync('weight')">初始化/刷新基础值</el-button></div></div></template>
+      <el-card shadow="never" class="workspace-card"><template #header><div class="head"><div class="title-line"><b>模型与渠道</b><div class="inline-metrics"><span>自动 <b>{{ counts.auto }}</b></span><span>观察 <b>{{ counts.observe }}</b></span><span>关闭 <b>{{ counts.off }}</b></span></div></div><div class="tools"><el-button :disabled="!siteID" @click="groupManagerOpen = true">分组组合</el-button><el-button @click="helpOpen=true">使用说明</el-button><el-button :loading="channelsRefreshing" :disabled="saving" @click="refreshChannelsNow">刷新渠道信息</el-button><el-button :loading="saving" @click="sync('weight')">初始化/刷新基础值</el-button></div></div></template>
         <el-empty v-if="!models.length" description="还没有渠道基础值"><el-button type="primary" @click="sync('weight')">立即从 new-api 读取</el-button></el-empty>
         <div v-else class="model-workspace" :class="{'nav-collapsed':modelNavCollapsed}">
           <aside class="model-nav">
@@ -770,15 +760,12 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
            </section>
          </div>
        </el-card>
-       <el-dialog v-model="groupDialogOpen" title="调整渠道分组" width="min(640px, calc(100vw - 32px))" class="tuning-group-dialog" append-to-body>
+       <el-dialog v-model="groupManagerOpen" title="分组组合管理" width="min(740px, calc(100vw - 32px))" append-to-body destroy-on-close :close-on-click-modal="false"><ChannelGroupEditor v-if="groupManagerOpen" :key="siteID" :site="siteID" current="" :options="groupOptions" :saving="false" manage-only @cancel="groupManagerOpen = false" /></el-dialog>
+       <el-dialog v-model="groupDialogOpen" title="调整渠道分组" width="min(740px, calc(100vw - 32px))" class="tuning-group-dialog" append-to-body destroy-on-close :close-on-click-modal="false">
          <template v-if="editingChannel">
            <div class="group-editor-context"><b>{{ editingChannel.channel_name }}</b><span>ID {{ editingChannel.channel_id }}</span><span>当前：{{ editingChannel.group_name || "—" }}</span></div>
-           <el-form label-position="top"><el-form-item label="分组组合"><el-select v-model="groupDraft" multiple filterable collapse-tags collapse-tags-tooltip placeholder="选择已有分组" style="width:100%"><el-option v-for="option in groupOptions" :key="option" :label="option" :value="option" /></el-select></el-form-item><el-form-item label="当前站点已有组合"><el-select v-model="groupPreset" clearable placeholder="选择组合快速填充" style="width:100%" @change="useGroupCombination"><el-option v-for="option in groupCombinations" :key="option" :label="option" :value="option" /></el-select></el-form-item></el-form>
-           <div class="group-preview"><b>变更预览</b><div><span>当前</span>{{ editingChannel.group_name || '未设置分组' }}</div><div><span>保存后</span>{{ groupDraft.join(' / ') || '未选择分组' }}</div></div>
-          <el-alert title="保存后会影响该渠道后续请求的分组匹配；多个分组将按 New API 的逗号组合格式写入。" type="warning" :closable="false" />
-           <el-checkbox v-model="groupConfirmed">我确认修改线上渠道分组</el-checkbox>
+           <ChannelGroupEditor v-if="groupDialogOpen" :key="`${siteID}:${editingChannel.channel_id}`" :site="siteID" :current="editingChannel.group_name || ''" :options="groupOptions" :saving="groupSaving" @save="saveGroupSelection" @cancel="groupDialogOpen = false" />
          </template>
-         <template #footer><el-button @click="groupDialogOpen = false">取消</el-button><el-button type="primary" :loading="groupSaving" :disabled="!groupConfirmed" @click="saveGroup">保存分组</el-button></template>
        </el-dialog>
      </el-tab-pane>
     <el-tab-pane label="变更记录" name="events">
@@ -933,14 +920,14 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
 .tuning-save-bar{position:sticky;bottom:14px;z-index:12;display:flex;align-items:center;justify-content:space-between;gap:16px;margin-top:16px;padding:14px 20px;border:1px solid #e4e9f1;border-radius:7px;background:#fff;box-shadow:0 5px 22px #20365814;font-size:13px}
 .tuning-save-bar i{display:inline-block;width:7px;height:7px;border-radius:50%;background:#d9a139;margin-right:8px}
 .save-context{color:#8792a5;font-size:11px;margin-left:14px}
-.group-editor-context{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px;padding:10px 12px;border-radius:6px;background:#f7f9fc;color:#596579;font-size:12px}
-.group-editor-context b{color:#17233b;font-size:14px}
-.group-editor-context span{font-size:12px;color:#8491a5}
+.group-editor-context{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px;padding:10px 12px;border-radius:6px;background:var(--ct-surface-2);color:var(--ct-ink-2);font-size:12px}
+.group-editor-context b{color:var(--ct-ink);font-size:14px}
+.group-editor-context span{font-size:12px;color:var(--ct-ink-2)}
 .group-preview{padding:14px 16px;background:#f5f8fc;border-radius:6px;margin:6px 0 16px;font-size:12px;overflow-wrap:anywhere}
 .group-preview>b{display:block;margin-bottom:12px}
 .group-preview>div{display:grid;grid-template-columns:65px 1fr;gap:10px;margin:7px 0}
 .group-preview span{color:#8491a5}
-.tuning-group-dialog :deep(.el-checkbox){margin-top:12px}
+
 .tuning-help :deep(.el-drawer__header){margin-bottom:12px;color:#223652}
 .tuning-help :deep(.el-drawer__body){padding-top:0}
 

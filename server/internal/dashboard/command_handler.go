@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"strconv"
 	"time"
@@ -103,18 +102,21 @@ func (h CommandHandler) Create(w http.ResponseWriter, r *http.Request) {
 			writeDashboardError(w, http.StatusNotImplemented, "channel_group_update_not_supported")
 			return
 		}
-		// 通用渠道命令也必须复用站点分组白名单，避免绕过调权中心编辑器。
+		// 自定义分组不依赖历史名称，仍须确认目标渠道属于该站点。
 		channels, directoryErr := h.Directory.LatestChannels(siteOf(instance))
 		if directoryErr != nil {
 			writeDashboardError(w, 500, "query_failed")
 			return
 		}
-		if groupErr := validateChannelGroupAgainstDirectory(group, channels); groupErr != nil {
-			if errors.Is(groupErr, channelcontrol.ErrGroupNotFound) {
-				writeDashboardError(w, http.StatusBadRequest, "group_not_found")
-			} else {
-				writeDashboardError(w, http.StatusBadRequest, "invalid_group")
+		found := false
+		for _, channel := range channels {
+			if channel.ID == channelID {
+				found = true
+				break
 			}
+		}
+		if !found {
+			writeDashboardError(w, http.StatusNotFound, "channel_not_found")
 			return
 		}
 	}

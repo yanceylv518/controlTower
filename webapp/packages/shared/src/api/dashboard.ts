@@ -1,5 +1,8 @@
 import type { ApiClient } from "../client";
 
+export interface ChannelGroupPreset { id: string; name: string; groups: string[] }
+export interface ChannelGroupPresets { items: ChannelGroupPreset[]; revision: number }
+
 // API types intentionally retain snake_case so every field maps one-to-one to the frozen contract.
 export interface MetricSummary {
   request_count: number;
@@ -893,6 +896,8 @@ export const dashboardApi = (client: ApiClient) => ({
     client.request<ListResponse<OperationAuditItem>>(
       `/api/dashboard/operation-audits${query(params)}`,
     ),
+  tuningGroupPresets: (site_id: string) => client.request<ChannelGroupPresets>(`/api/dashboard/tuning/group-presets${query({ site_id })}`),
+  saveTuningGroupPresets: (site_id: string, value: ChannelGroupPresets) => client.request<ChannelGroupPresets>(`/api/dashboard/tuning/group-presets${query({ site_id })}`, { method: "PUT", body: JSON.stringify(value) }),
   settings: () => client.request<SystemSettingsResponse>("/api/dashboard/settings"),
   saveSettings: (values: Record<string, string>) => client.request<SystemSettingsResponse>("/api/dashboard/settings", { method: "PUT", body: JSON.stringify({ values }) }),
   balanceAlertUsers: (instance_id: string) => client.request<ListResponse<BalanceAlertUserSetting>>(`/api/dashboard/balance-alert-users${query({ instance_id })}`),

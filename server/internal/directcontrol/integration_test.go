@@ -3,7 +3,6 @@ package directcontrol
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -177,15 +176,15 @@ func TestDirectControlIntegration(t *testing.T) {
 	if err := db.QueryRow("SELECT before_summary,after_summary FROM operation_audits WHERE id=?", groupCommand.ID).Scan(&beforeSummary, &afterSummary); err != nil || !strings.Contains(beforeSummary, `"default"`) || !strings.Contains(afterSummary, `"default,vip"`) {
 		t.Fatalf("group audit missing old/new values: before=%s after=%s err=%v", beforeSummary, afterSummary, err)
 	}
-	// 未出现在站点渠道快照中的分组必须在触达 New API 前被拒绝。
-	if _, err := store.UpdateChannelGroup(ctx, site, 9, "custom-only", "admin", now); !errors.Is(err, channelcontrol.ErrGroupNotFound) {
-		t.Fatalf("unknown direct group error=%v, want ErrGroupNotFound", err)
+	// 已确认的自定义分组可以直连写入，不再依赖旧渠道快照白名单。
+	if _, err := store.UpdateChannelGroup(ctx, site, 9, "custom-only", "admin", now); err != nil {
+		t.Fatalf("custom direct group failed: %v", err)
 	}
 	fake.mu.Lock()
 	putCount := len(fake.putBodies)
 	fake.mu.Unlock()
-	if putCount != 3 {
-		t.Fatalf("unknown direct group reached New API: put_count=%d", putCount)
+	if putCount != 4 {
+		t.Fatalf("custom direct group did not reach New API: put_count=%d", putCount)
 	}
 
 	// 3. Probe round runs server-side and reports like an agent round.
@@ -258,7 +257,7 @@ func TestDirectControlIntegration(t *testing.T) {
 	if err := db.QueryRow("SELECT payload_json FROM channel_commands WHERE id=?", queueGroup.ID).Scan(&payload); err != nil || !strings.Contains(payload, `"group":"default,vip"`) || !strings.Contains(payload, `"before_group":"default"`) {
 		t.Fatalf("queued group payload missing normalized old/new values: %s %v", payload, err)
 	}
-	if _, err := store.UpdateChannelGroup(ctx, plainSite, 5, "custom-only", "admin", now); !errors.Is(err, channelcontrol.ErrGroupNotFound) {
-		t.Fatalf("unknown queued group error=%v, want ErrGroupNotFound", err)
+	if _, err := store.UpdateChannelGroup(ctx, plainSite, 5, "custom-only", "admin", now); err != nil {
+		t.Fatalf("custom queued group failed: %v", err)
 	}
 }

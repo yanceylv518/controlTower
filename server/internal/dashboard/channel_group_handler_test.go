@@ -78,11 +78,11 @@ func TestChannelGroupHandlerValidatesBoundariesAndConfirmation(t *testing.T) {
 		t.Fatalf("unexpected updater request: %#v", updater)
 	}
 	callCount := updater.calls
-	if w := call(http.MethodPut, "/api/dashboard/tuning/channels/7/group?site_id=site-a", `{"confirm":true,"group":"custom"}`); w.Code != http.StatusBadRequest || !bytes.Contains(w.Body.Bytes(), []byte(`"error":"group_not_found"`)) {
+	if w := call(http.MethodPut, "/api/dashboard/tuning/channels/7/group?site_id=site-a", `{"confirm":true,"group":"custom"}`); w.Code != http.StatusAccepted {
 		t.Fatalf("unknown group=%d body=%s", w.Code, w.Body.String())
 	}
-	if updater.calls != callCount {
-		t.Fatalf("unknown group reached updater: %#v", updater)
+	if updater.calls != callCount+1 || updater.group != "custom" {
+		t.Fatalf("custom group did not reach updater: %#v", updater)
 	}
 }
 

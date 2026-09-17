@@ -33,16 +33,6 @@ type ChannelGroupHandler struct {
 	Directory TuningChannelDirectory
 }
 
-// validateChannelGroupAgainstDirectory 以站点最新渠道快照中的分组作为允许集合，
-// 防止页面或直接调用者把 New API 未使用过的用户组名称写入渠道。
-func validateChannelGroupAgainstDirectory(group string, channels []tuning.Channel) error {
-	knownValues := make([]string, 0, len(channels))
-	for _, channel := range channels {
-		knownValues = append(knownValues, channel.GroupName)
-	}
-	return channelcontrol.ValidateKnownGroups(group, knownValues)
-}
-
 // Update 在委托直连或 Agent 更新器前校验站点与渠道边界。确认字段用于防止
 // 绕过页面确认框的客户端误发线上写操作。
 func (h ChannelGroupHandler) Update(w http.ResponseWriter, r *http.Request) {
@@ -99,14 +89,6 @@ func (h ChannelGroupHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	if !found {
 		writeDashboardError(w, http.StatusNotFound, "channel_not_found")
-		return
-	}
-	if err := validateChannelGroupAgainstDirectory(group, channels); err != nil {
-		if errors.Is(err, channelcontrol.ErrGroupNotFound) {
-			writeDashboardError(w, http.StatusBadRequest, "group_not_found")
-		} else {
-			writeDashboardError(w, http.StatusBadRequest, "invalid_group")
-		}
 		return
 	}
 	command, err := h.Updater.UpdateChannelGroup(r.Context(), siteID, channelID, group, ctauth.Actor(r), time.Now().UTC())

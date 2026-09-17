@@ -149,19 +149,13 @@ func (s Store) UpdateChannelGroup(ctx context.Context, siteID string, channelID 
 		return storage.ChannelCommand{}, fmt.Errorf("query channel groups: %w", err)
 	}
 	targetFound := false
-	knownValues := make([]string, 0, len(channels))
 	for _, channel := range channels {
 		if channel.ID == channelID {
 			targetFound = true
 		}
-		knownValues = append(knownValues, channel.GroupName)
 	}
 	if !targetFound {
 		return storage.ChannelCommand{}, tuning.ErrChannelNotFound
-	}
-	// 直连写入无法依赖队列层校验，因此在触达 New API 前再次检查白名单。
-	if err := channelcontrol.ValidateKnownGroups(normalized, knownValues); err != nil {
-		return storage.ChannelCommand{}, err
 	}
 	if ctx == nil {
 		ctx = context.Background()
