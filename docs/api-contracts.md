@@ -202,6 +202,8 @@ Instance tokens are stored only as `SHA-256(pepper + token)` hashes. A token may
 
 金额显示不再使用 CT_QUOTA_PER_UNIT、CT_CURRENCY_SYMBOL。GET `/api/dashboard/passthrough/currency?site=...` 读取 NewAPI 站点配置，返回有效 `quota_per_unit`（已含站点显示汇率）、`price_multiplier`（美元单价转站点显示单位）、`symbol`、`type`。viewer 固定到授权站点。失败返回 503，前端金额显示“—”；余额通知回退明确标识的原始 quota。历史账单继续使用其定价快照。需同步升级前后端，无新增迁移。
 
+只读使用日志 `GET /api/dashboard/passthrough/logs` 兼容 rc35 的 `type`、`channel`、`p`、`page_size` 参数以及 CT 旧的 `log_type`、`channel_id`、`offset`、`limit` 参数；另支持 `username`、`token_name`、`model_name`、`group`、`request_id`、`upstream_request_id`，时间可用 RFC3339 `start_time/end_time` 或 rc35 秒级 `start_timestamp/end_timestamp`。响应保留 `content_summary` 脱敏摘要，同时提供兼容字段 `content`、`channel`、`channel_id`、`channel_name`、`token_id`、`other`、`has_more`、`page/page_size`；`fallback` 表示同一请求是否实际尝试过多个渠道，`fallback_channels`（仅管理员）保留可确认的有序渠道链，通常只有最终尝试记录带完整的 `191 → 141` 链路。服务端同时兼容 `other.fallback`/`other.is_fallback`/`other.fallback_flag` 和 `other.admin_info.use_channel`，并按当前页请求 ID 批量关联其它尝试记录，因此首个错误尝试也不会丢失 fallback 标志。管理员渠道名称在 `channels` 权限不可用时退化为 ID。`GET /api/dashboard/passthrough/logs/count` 与 `/stat` 复用同一筛选口径，统计完整小时优先使用只读日志聚合，带请求 ID 或模糊模型/用户名筛选时回源原表。viewer 站点/用户范围由服务端强制注入，同一用户同一 Request ID 只保留最后结果，`other` 按角色剥离特权元数据。
+
 编辑时 Webhook 地址留空保留原值；同类型渠道 Secret 留空保留原密钥。省略 `rule_keys` 保留原选择，显式 `[]` 改为全部类型。响应始终只返回脱敏地址和是否有密钥。
 
 升级需应用 `075_notification_routing.sql` 并同步更新前后端。历史渠道 `site_id` 为空，暂停投递，在通知设置“旧渠道待分配”中确认归属并保存后恢复。旧投递记录按原告警所属实例的站点查询，避免随渠道分配而串站点。Agent 独立企微直推不使用此路由配置。

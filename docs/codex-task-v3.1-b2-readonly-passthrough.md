@@ -7,8 +7,8 @@
 ## 设计
 
 - **023 迁移**：instances 表 `ADD COLUMN logs_readonly_dsn VARCHAR(512) NOT NULL DEFAULT ''`（站点级；实例管理页可填，仅 admin 可见可改，页面注明"只读账号，仅授 logs/users SELECT"）。未配置站点相关页面显示"未开通明细查询"。
-- **直连管理**（server 新包）：按站点惰性建连接池（MaxOpenConns 2、查询超时 5s、只读会话）；DSN 变更热生效（每次取时比对）。
-- **日志明细接口** `GET /api/dashboard/passthrough/logs`：参数 站点/用户（viewer 强制 scope 注入，admin 可查站点内任意用户）/**时间区间（必填，缺省最近 24 小时，单次区间上限 31 天——杜绝无区间全表扫）**/分页（上限 100/页）；SQL 强制 `user_id IN (...) AND created_at BETWEEN` 走 newapi 原生用户索引（部署时 EXPLAIN 验证记入交付说明）；返回字段对齐 newapi 日志页（时间/模型/渠道名/tokens/quota/耗时/内容摘要脱敏——复用 agent 侧 redact 正则的 server 版）。
+- **直连管理**（server 新包）：按站点惰性建连接池（MaxOpenConns 3、MaxIdleConns 2、查询超时 5s、只读会话）；日志页列表、统计和总数可并发读取，DSN 变更热生效（每次取时比对）。
+- **日志明细接口** `GET /api/dashboard/passthrough/logs`：参数站点/用户（viewer 强制 scope 注入，admin 可查站点内任意用户）、类型（兼容 `type` 与 `log_type`）、模型/令牌/分组/渠道（兼容 `channel` 与 `channel_id`）、Request ID、上游 Request ID、时间区间（缺省最近一小时至未来一小时，单次区间上限 31 天）和分页（兼容 `p/page_size` 与 `offset/limit`，上限 100/页）；SQL 使用半开时间范围与 `created_at,id` 降序，避免跨边界重复。viewer 同一用户同一 Request ID 只展示最后结果，空 Request ID 逐条保留；返回字段对齐 rc35 日志页（时间/模型/渠道 ID 与可选名称/令牌 ID/tokens/quota/耗时/Request ID/上游 Request ID/内容摘要脱敏），`other` 按角色剥离 admin/root 元数据。
 - **用户只读接口** `GET /api/dashboard/passthrough/users`：scope 内用户的 id/用户名/显示名/余额/状态/已用额度；同过滤规则。
 - **Web**：使用日志页（viewer 主页面之一，admin 也可用）+ 用户管理页（只读列表）；两页均带站点未开通降级态。
 - 审计：viewer 的直连查询记 operation_audits（查询参数摘要）；**同批补上 B1 遗留的 viewer 登录审计**（B1 验收记档转入的硬项）。

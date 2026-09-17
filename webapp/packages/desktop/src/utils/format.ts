@@ -1,4 +1,6 @@
-export const formatNumber = (value: number | null | undefined) => value == null ? '—' : new Intl.NumberFormat('zh-CN').format(value)
+// 日志表会在一次渲染中格式化数百个数字，复用格式化器可避免重复初始化 ICU 数据。
+const numberFormatter = new Intl.NumberFormat('zh-CN')
+export const formatNumber = (value: number | null | undefined) => value == null ? '—' : numberFormatter.format(value)
 export const formatPercent = (value: number | null | undefined, digits = 1) => value == null ? '—' : `${(value * 100).toFixed(digits)}%`
 export const formatSeconds = (value: number | null | undefined) => value == null ? '—' : `${value.toFixed(2)}s`
 export function formatBytes(value: number | null | undefined) {
@@ -13,7 +15,7 @@ export function formatTime(value: string | null | undefined) {
 export function formatTokens(value: number | null | undefined) {
   if (value == null) return '—'
   if (Math.abs(value) >= 1_000_000) return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1)}M`
-  return new Intl.NumberFormat('zh-CN').format(value)
+  return numberFormatter.format(value)
 }
 export function formatQuota(value: number | null | undefined, perUnit: number, symbol: string) {
   if (value == null || !Number.isFinite(perUnit) || perUnit <= 0) return '—'

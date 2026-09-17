@@ -11,12 +11,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	_ "github.com/go-sql-driver/mysql"
 )
@@ -740,12 +742,15 @@ const (
 	readonlyQueryTimeout    = 5 * time.Second
 	readonlyLogQueryTimeout = 120 * time.Second
 	readonlyLogCountTimeout = 120 * time.Second
-	readonlyLogsListQuery   = `SELECT id,user_id,created_at,type,COALESCE(username,''),COALESCE(model_name,''),channel_id,COALESCE(token_name,''),prompt_tokens,completion_tokens,quota,use_time,COALESCE(request_id,''),COALESCE(upstream_request_id,''),COALESCE(content,''),COALESCE(` + "`group`" + `,''),COALESCE(ip,''),COALESCE(is_stream,0),COALESCE(other,'') FROM logs WHERE created_at>=? AND created_at<?`
-	readonlyLogsListOrder   = ` ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?`
+	// 日志页会并发请求列表、统计和总数，连接池至少要覆盖这三个只读请求。
+	readonlyDBMaxOpenConns = 3
+	readonlyLogsListQuery  = `SELECT l.id,l.user_id,l.created_at,l.type,COALESCE(l.username,''),COALESCE(l.model_name,''),COALESCE(l.channel_id,0),COALESCE(l.token_id,0),COALESCE(l.token_name,''),COALESCE(l.prompt_tokens,0),COALESCE(l.completion_tokens,0),COALESCE(l.quota,0),COALESCE(l.use_time,0),COALESCE(l.request_id,''),COALESCE(l.upstream_request_id,''),COALESCE(l.content,''),COALESCE(l.` + "`group`" + `,''),COALESCE(l.ip,''),COALESCE(l.is_stream,0),COALESCE(l.other,'') FROM logs l WHERE l.created_at>=? AND l.created_at<?`
+	readonlyLogsListOrder  = ` ORDER BY l.created_at DESC,l.id DESC LIMIT ? OFFSET ?`
+	readonlyLogRateQuery   = `SELECT COUNT(*),COALESCE(SUM(l.prompt_tokens),0)+COALESCE(SUM(l.completion_tokens),0) FROM logs l WHERE l.created_at>=? AND l.created_at<?`
 )
 
 func configureReadonlyDB(db *sql.DB) {
-	db.SetMaxOpenConns(2)
+	db.SetMaxOpenConns(readonlyDBMaxOpenConns)
 	db.SetMaxIdleConns(2)
 	db.SetConnMaxLifetime(5 * time.Minute)
 }
@@ -804,6 +809,9 @@ type PassthroughLog struct {
 	Username          string    `json:"username"`
 	ModelName         string    `json:"model_name"`
 	ChannelID         int64     `json:"channel_id"`
+	Channel           int64     `json:"channel"`
+	ChannelName       string    `json:"channel_name"`
+	TokenID           int64     `json:"token_id"`
 	TokenName         string    `json:"token_name"`
 	PromptTokens      int64     `json:"prompt_tokens"`
 	CompletionTokens  int64     `json:"completion_tokens"`
@@ -811,11 +819,187 @@ type PassthroughLog struct {
 	UseTime           int64     `json:"use_time"`
 	RequestID         string    `json:"request_id"`
 	UpstreamRequestID string    `json:"upstream_request_id"`
+	Content           string    `json:"content"`
 	ContentSummary    string    `json:"content_summary"`
 	Group             string    `json:"group"`
 	IP                string    `json:"ip"`
 	IsStream          bool      `json:"is_stream"`
-	Other             string    `json:"other"`
+	// Fallback 表示同一请求是否实际尝试过多个渠道；它不依赖 admin_info 投影。
+	Fallback         bool     `json:"fallback"`
+	FallbackChannels []string `json:"fallback_channels,omitempty"`
+	Other            string   `json:"other"`
+}
+
+// readonlyRequestKey 用请求 ID 和用户 ID 组成批量标记的稳定键，避免不同用户复用
+// 非规范请求 ID 时被误判为同一条 fallback 链路。
+func readonlyRequestKey(requestID string, userID int64) string {
+	return requestID + "\x00" + strconv.FormatInt(userID, 10)
+}
+
+func appendReadonlyFallbackChannel(channels []string, value string) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return channels
+	}
+	for _, current := range channels {
+		if current == value {
+			return channels
+		}
+	}
+	return append(channels, value)
+}
+
+// readonlyStringList 兼容 use_channel 的数字数组、字符串数组和旧版链路文本。
+// 仅保留非空的渠道标识，避免把损坏的 JSON 变成一个假 fallback。
+func readonlyStringList(raw json.RawMessage) []string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	var values []json.RawMessage
+	if err := json.Unmarshal(raw, &values); err == nil {
+		channels := make([]string, 0, len(values))
+		for _, item := range values {
+			var text string
+			if json.Unmarshal(item, &text) == nil {
+				channels = appendReadonlyFallbackChannel(channels, text)
+				continue
+			}
+			var number json.Number
+			if json.Unmarshal(item, &number) == nil {
+				channels = appendReadonlyFallbackChannel(channels, number.String())
+			}
+		}
+		return channels
+	}
+	var text string
+	if json.Unmarshal(raw, &text) != nil {
+		return nil
+	}
+	// 历史日志可能保存为 "1->2"、"1 → 2" 或逗号分隔文本。
+	text = strings.NewReplacer("->", " ", "→", " ", ",", " ").Replace(text)
+	parts := strings.Fields(text)
+	channels := make([]string, 0, len(parts))
+	for _, part := range parts {
+		channels = appendReadonlyFallbackChannel(channels, part)
+	}
+	return channels
+}
+
+func readonlyBool(raw json.RawMessage) bool {
+	var value bool
+	if json.Unmarshal(raw, &value) == nil {
+		return value
+	}
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		switch strings.ToLower(strings.TrimSpace(text)) {
+		case "1", "true", "yes", "y":
+			return true
+		}
+	}
+	return false
+}
+
+// readonlyLogFallbackInfo 从显式标志或 use_channel 链路提取可公开的 fallback 事实。
+// admin_info 仍按原角色规则投影；这里只返回是否发生过 fallback 以及管理员可用的渠道链。
+func readonlyLogFallbackInfo(value string) (bool, []string) {
+	var values map[string]json.RawMessage
+	if value == "" || json.Unmarshal([]byte(value), &values) != nil || values == nil {
+		return false, nil
+	}
+	channels := readonlyStringList(values["fallback_channels"])
+	if len(channels) == 0 {
+		channels = readonlyStringList(values["use_channel"])
+	}
+	if adminRaw, ok := values["admin_info"]; ok {
+		var adminInfo map[string]json.RawMessage
+		if json.Unmarshal(adminRaw, &adminInfo) == nil && adminInfo != nil {
+			if len(channels) == 0 {
+				channels = readonlyStringList(adminInfo["fallback_channels"])
+			}
+			if len(channels) == 0 {
+				channels = readonlyStringList(adminInfo["use_channel"])
+			}
+			for _, key := range []string{"fallback", "is_fallback", "fallback_flag"} {
+				if readonlyBool(adminInfo[key]) {
+					return true, channels
+				}
+			}
+		}
+	}
+	for _, key := range []string{"fallback", "is_fallback", "fallback_flag"} {
+		if readonlyBool(values[key]) {
+			return true, channels
+		}
+	}
+	return len(channels) > 1, channels
+}
+
+// markReadonlyFallbackRequests 批量检查当前页请求 ID 是否存在其它尝试记录。
+// 这样即使错误日志本身只保存了第一次渠道，也能和最终成功记录共享 fallback 标志；
+// 查询只涉及当前页最多 100 个 ID，并复用 request_id 索引，不改变主列表排序。
+func markReadonlyFallbackRequests(ctx context.Context, tx *sql.Tx, items []PassthroughLog) {
+	requestIDs := make([]string, 0, len(items))
+	seen := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		if item.Fallback || item.RequestID == "" {
+			continue
+		}
+		// SQL 按 request_id、user_id 分组，因此参数只需对请求 ID 去重；同名请求由不同用户的结果在回写时再区分。
+		if _, ok := seen[item.RequestID]; ok {
+			continue
+		}
+		seen[item.RequestID] = struct{}{}
+		requestIDs = append(requestIDs, item.RequestID)
+	}
+	if len(requestIDs) == 0 {
+		return
+	}
+	args := make([]any, len(requestIDs))
+	for i, requestID := range requestIDs {
+		args[i] = requestID
+	}
+	query := `SELECT request_id,user_id,COUNT(*) FROM logs WHERE request_id IN (` + placeholders(len(requestIDs)) + `) GROUP BY request_id,user_id`
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		// 标记属于展示增强；远端旧库不支持时保留基础日志，不让列表查询失败。
+		return
+	}
+	defer rows.Close()
+	fallbackKeys := make(map[string]struct{})
+	for rows.Next() {
+		var requestID string
+		var userID, count int64
+		if err := rows.Scan(&requestID, &userID, &count); err != nil {
+			return
+		}
+		if count > 1 {
+			fallbackKeys[readonlyRequestKey(requestID, userID)] = struct{}{}
+		}
+	}
+	if rows.Err() != nil {
+		return
+	}
+	for i := range items {
+		if _, ok := fallbackKeys[readonlyRequestKey(items[i].RequestID, items[i].UserID)]; ok {
+			items[i].Fallback = true
+		}
+	}
+}
+
+type readonlyLogFilters struct {
+	where             string
+	args              []any
+	username          string
+	modelName         string
+	tokenName         string
+	group             string
+	requestID         string
+	upstreamRequestID string
+	logType           *int
+	channelID         *int64
+	hasLike           bool
+	hasRequestFilter  bool
 }
 type PassthroughLogSummary struct {
 	Quota int64 `json:"quota"`
@@ -882,38 +1066,283 @@ func passthroughScope(r *http.Request) (string, []int64, error) {
 	return site, ids, nil
 }
 
+func readonlyViewer(r *http.Request) bool {
+	u, ok := ctauth.CurrentUser(r)
+	return ok && u.Role == "viewer"
+}
+
 func placeholders(n int) string { return strings.TrimRight(strings.Repeat("?,", n), ",") }
-func queryWindow(r *http.Request) (time.Time, time.Time, error) {
-	now := time.Now().UTC()
-	end := now
-	start := now.Add(-24 * time.Hour)
-	var err error
-	if value := r.URL.Query().Get("start_time"); value != "" {
-		start, err = time.Parse(time.RFC3339, value)
-		if err != nil {
-			return start, end, err
+
+// firstQueryValue 同时兼容 rc35 参数名和 Control Tower 旧参数名，空值会继续读取下一个别名。
+func firstQueryValue(values url.Values, names ...string) string {
+	for _, name := range names {
+		if value := strings.TrimSpace(values.Get(name)); value != "" {
+			return value
 		}
 	}
-	if value := r.URL.Query().Get("end_time"); value != "" {
-		end, err = time.Parse(time.RFC3339, value)
+	return ""
+}
+
+// readonlyLikePattern 保持 rc35 的显式通配符语义，同时限制模式复杂度，避免远端日志库被恶意模式拖垮。
+func readonlyLikePattern(value, param string) (string, error) {
+	if !strings.Contains(value, "%") {
+		return value, nil
+	}
+	if strings.Contains(value, "%%") || strings.Count(value, "%") > 2 {
+		return "", fmt.Errorf("invalid_%s_filter", param)
+	}
+	if utf8.RuneCountInString(strings.ReplaceAll(value, "%", "")) < 2 {
+		return "", fmt.Errorf("invalid_%s_filter", param)
+	}
+	value = strings.ReplaceAll(value, "!", "!!")
+	return strings.ReplaceAll(value, "_", "!_"), nil
+}
+
+// parseReadonlyLogFilters 构造三类读取接口共用的 WHERE 条件，确保列表、COUNT 和统计不会出现筛选分叉。
+func parseReadonlyLogFilters(values url.Values, userIDs []int64, viewer bool) (readonlyLogFilters, error) {
+	filters := readonlyLogFilters{}
+	if len(userIDs) > 0 {
+		filters.where += " AND l.user_id IN (" + placeholders(len(userIDs)) + ")"
+		for _, id := range userIDs {
+			filters.args = append(filters.args, id)
+		}
+	}
+
+	addText := func(param, column string, fuzzy bool) error {
+		value := strings.TrimSpace(values.Get(param))
+		if value == "" {
+			return nil
+		}
+		if fuzzy && strings.Contains(value, "%") {
+			pattern, err := readonlyLikePattern(value, param)
+			if err != nil {
+				return err
+			}
+			filters.where += " AND l." + column + " LIKE ? ESCAPE '!'"
+			filters.args = append(filters.args, pattern)
+			filters.hasLike = true
+			return nil
+		}
+		filters.where += " AND l." + column + " = ?"
+		filters.args = append(filters.args, value)
+		return nil
+	}
+
+	filters.username = strings.TrimSpace(values.Get("username"))
+	filters.modelName = strings.TrimSpace(values.Get("model_name"))
+	filters.tokenName = strings.TrimSpace(values.Get("token_name"))
+	filters.group = strings.TrimSpace(values.Get("group"))
+	filters.requestID = strings.TrimSpace(values.Get("request_id"))
+	filters.upstreamRequestID = strings.TrimSpace(values.Get("upstream_request_id"))
+	if err := addText("username", "username", true); err != nil {
+		return filters, err
+	}
+	if err := addText("model_name", "model_name", true); err != nil {
+		return filters, err
+	}
+	if err := addText("token_name", "token_name", false); err != nil {
+		return filters, err
+	}
+	if err := addText("group", "`group`", false); err != nil {
+		return filters, err
+	}
+	if err := addText("request_id", "request_id", false); err != nil {
+		return filters, err
+	}
+	if err := addText("upstream_request_id", "upstream_request_id", false); err != nil {
+		return filters, err
+	}
+
+	channelValue := firstQueryValue(values, "channel_id", "channel")
+	if channelValue != "" {
+		channelID, err := strconv.ParseInt(channelValue, 10, 64)
+		if err != nil || channelID < 0 {
+			return filters, fmt.Errorf("invalid_channel_id")
+		}
+		if channelID > 0 {
+			filters.where += " AND l.channel_id = ?"
+			filters.args = append(filters.args, channelID)
+			filters.channelID = &channelID
+		}
+	}
+
+	logTypeValue := firstQueryValue(values, "log_type", "type")
+	if logTypeValue != "" {
+		logType, err := strconv.Atoi(logTypeValue)
+		if err != nil || logType < 0 {
+			return filters, fmt.Errorf("invalid_log_type")
+		}
+		if logType > 0 {
+			filters.where += " AND l.type = ?"
+			filters.args = append(filters.args, logType)
+			filters.logType = &logType
+		}
+	}
+
+	filters.hasRequestFilter = filters.requestID != "" || filters.upstreamRequestID != ""
+	if viewer {
+		// 与 rc35 自助日志一致：只隐藏同一用户同一请求的中间结果，空请求 ID 逐条保留。
+		filters.where += ` AND (l.request_id IS NULL OR l.request_id = '' OR NOT EXISTS (
+			SELECT 1 FROM logs AS newer_logs
+			WHERE newer_logs.request_id = l.request_id
+			  AND newer_logs.user_id = l.user_id
+			  AND newer_logs.id > l.id
+		))`
+	}
+	return filters, nil
+}
+
+// projectReadonlyLogOther 按访问角色投影 other，避免只读整库账号把 root/admin 元数据带到页面。
+func projectReadonlyLogOther(value string, viewer bool) string {
+	if value == "" {
+		return ""
+	}
+	var values map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(value), &values); err != nil {
+		return "{}"
+	}
+	if values == nil {
+		return "{}"
+	}
+	changed := false
+	if viewer {
+		for _, key := range []string{"admin_info", "root_info", "audit_info", "channel_id", "channel_name", "channel_type", "reject_reason"} {
+			if _, ok := values[key]; ok {
+				delete(values, key)
+				changed = true
+			}
+		}
+	} else {
+		if _, ok := values["root_info"]; ok {
+			delete(values, "root_info")
+			changed = true
+		}
+		// 旧版日志把拒绝原因写在顶层，管理员视图统一收进 admin_info。
+		if reject, ok := values["reject_reason"]; ok {
+			admin := map[string]json.RawMessage{}
+			if raw, exists := values["admin_info"]; exists {
+				_ = json.Unmarshal(raw, &admin)
+			}
+			if admin == nil {
+				admin = map[string]json.RawMessage{}
+			}
+			if _, exists := admin["reject_reason"]; !exists {
+				admin["reject_reason"] = reject
+			}
+			if raw, err := json.Marshal(admin); err == nil {
+				values["admin_info"] = raw
+				delete(values, "reject_reason")
+				changed = true
+			}
+		}
+	}
+	if !changed {
+		return value
+	}
+	encoded, err := json.Marshal(values)
+	if err != nil {
+		return "{}"
+	}
+	return string(encoded)
+}
+
+// hydrateReadonlyChannelNames 只为管理员批量补全渠道名称；channels 不可读时保留日志结果并显示 ID。
+func hydrateReadonlyChannelNames(ctx context.Context, tx *sql.Tx, items []PassthroughLog) {
+	ids := make([]int64, 0, len(items))
+	seen := make(map[int64]struct{}, len(items))
+	for _, item := range items {
+		if item.ChannelID <= 0 {
+			continue
+		}
+		if _, ok := seen[item.ChannelID]; ok {
+			continue
+		}
+		seen[item.ChannelID] = struct{}{}
+		ids = append(ids, item.ChannelID)
+	}
+	if len(ids) == 0 {
+		return
+	}
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT id,COALESCE(name,'') FROM channels WHERE id IN (`+placeholders(len(ids))+`)`, args...)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	names := make(map[int64]string, len(ids))
+	for rows.Next() {
+		var id int64
+		var name string
+		if rows.Scan(&id, &name) == nil {
+			names[id] = name
+		}
+	}
+	for i := range items {
+		items[i].ChannelName = names[items[i].ChannelID]
+	}
+}
+func queryWindow(r *http.Request) (time.Time, time.Time, error) {
+	now := time.Now().UTC()
+	// rc35 默认查看最近一小时并预留未来一小时，避免跨日后默认窗口突然跳到当天零点。
+	end := now.Add(time.Hour)
+	start := now.Add(-time.Hour)
+	values := r.URL.Query()
+	if value := firstQueryValue(values, "start_time", "start_timestamp"); value != "" {
+		parsed, err := parseReadonlyTime(value)
 		if err != nil {
 			return start, end, err
 		}
+		start = parsed
+	}
+	if value := firstQueryValue(values, "end_time", "end_timestamp"); value != "" {
+		parsed, err := parseReadonlyTime(value)
+		if err != nil {
+			return start, end, err
+		}
+		end = parsed
 	}
 	if !start.Before(end) || end.Sub(start) > 31*24*time.Hour {
 		return start, end, fmt.Errorf("invalid_time_range")
 	}
 	return start, end, nil
 }
+
+func parseReadonlyTime(value string) (time.Time, error) {
+	if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+		return parsed, nil
+	}
+	seconds, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return time.Unix(seconds, 0).UTC(), nil
+}
+
 func queryPage(r *http.Request, max int) (int, int) {
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	values := r.URL.Query()
+	limitValue := firstQueryValue(values, "limit", "page_size")
+	limit, _ := strconv.Atoi(limitValue)
 	if limit <= 0 {
 		limit = 50
 	}
 	if limit > max {
 		limit = max
 	}
-	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	offsetValue := strings.TrimSpace(values.Get("offset"))
+	offset, _ := strconv.Atoi(offsetValue)
+	if offsetValue == "" {
+		page, err := strconv.Atoi(strings.TrimSpace(values.Get("p")))
+		if err == nil && page > 1 {
+			if page-1 > int(^uint(0)>>1)/limit {
+				offset = int(^uint(0) >> 1)
+			} else {
+				offset = (page - 1) * limit
+			}
+		}
+	}
 	if offset < 0 {
 		offset = 0
 	}
@@ -1036,44 +1465,17 @@ func (h *PassthroughHandler) Logs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !configured {
-		writeDashboardJSON(w, 200, map[string]any{"items": []PassthroughLog{}, "configured": false, "total": 0, "summary": PassthroughLogSummary{}})
+		writeDashboardJSON(w, 200, map[string]any{"items": []PassthroughLog{}, "configured": false, "total": 0, "page": 1, "page_size": 0, "summary": PassthroughLogSummary{}})
 		return
 	}
 	limit, offset := queryPage(r, 100)
-	args := make([]any, 0, len(ids)+10)
-	args = append(args, start.Unix(), end.Unix())
-	userFilter := ""
-	if len(ids) > 0 {
-		userFilter = " AND user_id IN (" + placeholders(len(ids)) + ")"
-		for _, id := range ids {
-			args = append(args, id)
-		}
+	viewer := readonlyViewer(r)
+	filters, err := parseReadonlyLogFilters(r.URL.Query(), ids, viewer)
+	if err != nil {
+		writeDashboardError(w, 400, err.Error())
+		return
 	}
-	filters := ""
-	for _, spec := range []struct{ param, column string }{{"token_name", "token_name"}, {"username", "username"}, {"group", "`group`"}, {"model_name", "model_name"}, {"request_id", "request_id"}} {
-		if value := strings.TrimSpace(r.URL.Query().Get(spec.param)); value != "" {
-			filters += " AND " + spec.column + " = ?"
-			args = append(args, value)
-		}
-	}
-	if value := strings.TrimSpace(r.URL.Query().Get("channel_id")); value != "" {
-		channelID, parseErr := strconv.ParseInt(value, 10, 64)
-		if parseErr != nil {
-			writeDashboardError(w, 400, "invalid_channel_id")
-			return
-		}
-		filters += " AND channel_id = ?"
-		args = append(args, channelID)
-	}
-	if value := strings.TrimSpace(r.URL.Query().Get("log_type")); value != "" {
-		logType, parseErr := strconv.Atoi(value)
-		if parseErr != nil {
-			writeDashboardError(w, 400, "invalid_log_type")
-			return
-		}
-		filters += " AND type = ?"
-		args = append(args, logType)
-	}
+	args := append([]any{start.Unix(), end.Unix()}, filters.args...)
 	pageArgs := append(append([]any{}, args...), limit+1, offset)
 	ctx, cancel := context.WithTimeout(r.Context(), readonlyLogQueryTimeout)
 	defer cancel()
@@ -1083,7 +1485,7 @@ func (h *PassthroughHandler) Logs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	rows, err := tx.QueryContext(ctx, readonlyLogsListQuery+userFilter+filters+readonlyLogsListOrder, pageArgs...)
+	rows, err := tx.QueryContext(ctx, readonlyLogsListQuery+filters.where+readonlyLogsListOrder, pageArgs...)
 	if err != nil {
 		writeDashboardError(w, 502, "readonly_query_failed")
 		return
@@ -1094,24 +1496,47 @@ func (h *PassthroughHandler) Logs(w http.ResponseWriter, r *http.Request) {
 		var v PassthroughLog
 		var created int64
 		var content string
-		if rows.Scan(&v.ID, &v.UserID, &created, &v.Type, &v.Username, &v.ModelName, &v.ChannelID, &v.TokenName, &v.PromptTokens, &v.CompletionTokens, &v.Quota, &v.UseTime, &v.RequestID, &v.UpstreamRequestID, &content, &v.Group, &v.IP, &v.IsStream, &v.Other) != nil {
+		if rows.Scan(&v.ID, &v.UserID, &created, &v.Type, &v.Username, &v.ModelName, &v.ChannelID, &v.TokenID, &v.TokenName, &v.PromptTokens, &v.CompletionTokens, &v.Quota, &v.UseTime, &v.RequestID, &v.UpstreamRequestID, &content, &v.Group, &v.IP, &v.IsStream, &v.Other) != nil {
 			writeDashboardError(w, 502, "readonly_query_failed")
 			return
 		}
 		v.CreatedAt = time.Unix(created, 0).UTC()
 		v.ContentSummary = redactSummary(content)
+		v.Content = v.ContentSummary
+		v.Channel = v.ChannelID
+		v.Fallback, v.FallbackChannels = readonlyLogFallbackInfo(v.Other)
+		v.Other = projectReadonlyLogOther(v.Other, viewer)
+		if viewer {
+			v.ChannelName = ""
+		}
 		items = append(items, v)
 	}
 	if err := rows.Err(); err != nil {
 		writeDashboardError(w, 502, "readonly_query_failed")
 		return
 	}
+	// MySQL 同一事务不能在结果集未关闭时再发起批量关联查询；显式关闭后才标记
+	// fallback，避免驱动返回 commands out of sync 后被降级逻辑静默忽略。
+	if err := rows.Close(); err != nil {
+		writeDashboardError(w, 502, "readonly_query_failed")
+		return
+	}
+	markReadonlyFallbackRequests(ctx, tx, items)
+	if viewer {
+		for i := range items {
+			// viewer 只收到事实标志，不暴露其它尝试渠道的运营链路。
+			items[i].FallbackChannels = nil
+		}
+	}
 	hasMore := len(items) > limit
 	if hasMore {
 		items = items[:limit]
 	}
+	if !viewer {
+		hydrateReadonlyChannelNames(ctx, tx, items)
+	}
 	h.audit(r, site, "passthrough.logs", map[string]any{"user_ids": ids, "start_time": start, "end_time": end, "limit": limit, "offset": offset})
-	writeDashboardJSON(w, 200, map[string]any{"items": items, "configured": true, "total": offset + len(items), "has_more": hasMore})
+	writeDashboardJSON(w, 200, map[string]any{"items": items, "configured": true, "total": offset + len(items), "page": offset/limit + 1, "page_size": limit, "has_more": hasMore})
 }
 
 func (h *PassthroughHandler) LogStat(w http.ResponseWriter, r *http.Request) {
@@ -1134,46 +1559,36 @@ func (h *PassthroughHandler) LogStat(w http.ResponseWriter, r *http.Request) {
 		writeDashboardJSON(w, 200, map[string]any{"configured": false, "summary": PassthroughLogSummary{}})
 		return
 	}
-	where := ""
-	args := make([]any, 0, len(ids)+6)
-	if len(ids) > 0 {
-		where += " AND user_id IN (" + placeholders(len(ids)) + ")"
-		for _, id := range ids {
-			args = append(args, id)
-		}
+	filters, err := parseReadonlyLogFilters(r.URL.Query(), ids, false)
+	if err != nil {
+		writeDashboardError(w, 400, err.Error())
+		return
 	}
-	for _, spec := range []struct{ param, column string }{{"token_name", "token_name"}, {"username", "username"}, {"group", "`group`"}, {"model_name", "model_name"}} {
-		if value := strings.TrimSpace(r.URL.Query().Get(spec.param)); value != "" {
-			where += " AND " + spec.column + " = ?"
-			args = append(args, value)
-		}
-	}
-	var channelID *int64
-	if value := strings.TrimSpace(r.URL.Query().Get("channel_id")); value != "" {
-		parsedChannelID, parseErr := strconv.ParseInt(value, 10, 64)
-		if parseErr != nil {
-			writeDashboardError(w, 400, "invalid_channel_id")
-			return
-		}
-		where += " AND channel_id = ?"
-		args = append(args, parsedChannelID)
-		channelID = &parsedChannelID
-	}
+	where, args := filters.where, filters.args
 	ctx, cancel := context.WithTimeout(r.Context(), readonlyLogQueryTimeout)
 	defer cancel()
 	var summary PassthroughLogSummary
+	quotaWhere := where
+	if filters.logType == nil {
+		// rc35 的统计默认只计算消费日志；显式类型筛选时则统计该类型。
+		quotaWhere += " AND l.type=2"
+	}
 	quotaFrom, quotaTo, useRollup := completeHourWindow(start, end)
-	if useRollup && h.readonlyRollupReady(ctx, site, quotaFrom) {
-		consumeType := 2
-		queryValues := map[string]string{"username": strings.TrimSpace(r.URL.Query().Get("username")), "model_name": strings.TrimSpace(r.URL.Query().Get("model_name")), "token_name": strings.TrimSpace(r.URL.Query().Get("token_name")), "group": strings.TrimSpace(r.URL.Query().Get("group"))}
-		local, localErr := h.Rollups.QueryReadonlyLogRollup(ctx, readonlyRollupFilter(site, ids, quotaFrom, quotaTo, queryValues, &consumeType, channelID))
+	if useRollup && !filters.hasRequestFilter && !filters.hasLike && h.readonlyRollupReady(ctx, site, quotaFrom) {
+		logType := filters.logType
+		if logType == nil {
+			consumeType := 2
+			logType = &consumeType
+		}
+		queryValues := map[string]string{"username": filters.username, "model_name": filters.modelName, "token_name": filters.tokenName, "group": filters.group}
+		local, localErr := h.Rollups.QueryReadonlyLogRollup(ctx, readonlyRollupFilter(site, ids, quotaFrom, quotaTo, queryValues, logType, filters.channelID))
 		if localErr != nil {
 			writeDashboardError(w, 502, "readonly_query_failed")
 			return
 		}
 		summary.Quota = local.QuotaSum
 		if start.Before(quotaFrom) {
-			value, rawErr := queryRawQuota(ctx, db, start, minTime(end, quotaFrom), where, args)
+			value, rawErr := queryRawQuota(ctx, db, start, minTime(end, quotaFrom), quotaWhere, args)
 			if rawErr != nil {
 				writeDashboardError(w, 502, "readonly_query_failed")
 				return
@@ -1181,21 +1596,29 @@ func (h *PassthroughHandler) LogStat(w http.ResponseWriter, r *http.Request) {
 			summary.Quota += value
 		}
 		if quotaTo.Before(end) {
-			value, rawErr := queryRawQuota(ctx, db, maxTime(start, quotaTo), end, where, args)
+			value, rawErr := queryRawQuota(ctx, db, maxTime(start, quotaTo), end, quotaWhere, args)
 			if rawErr != nil {
 				writeDashboardError(w, 502, "readonly_query_failed")
 				return
 			}
 			summary.Quota += value
 		}
-	} else if value, rawErr := queryRawQuota(ctx, db, start, end, where, args); rawErr != nil {
+	} else if value, rawErr := queryRawQuota(ctx, db, start, end, quotaWhere, args); rawErr != nil {
 		writeDashboardError(w, 502, "readonly_query_failed")
 		return
 	} else {
 		summary.Quota = value
 	}
-	rateArgs := append([]any{time.Now().Add(-60 * time.Second).Unix()}, args...)
-	if err := db.QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(SUM(prompt_tokens),0)+COALESCE(SUM(completion_tokens),0) FROM logs WHERE created_at>=? AND type=2`+where, rateArgs...).Scan(&summary.RPM, &summary.TPM); err != nil {
+	// 速率窗口使用 [now-60s, now)，既保持最近一分钟语义，也避免未来时间戳扩大扫描范围。
+	rateEnd := time.Now().UTC()
+	rateArgs := []any{rateEnd.Add(-60 * time.Second).Unix(), rateEnd.Unix()}
+	rateQuery := readonlyLogRateQuery
+	// 显式类型已经由公共 filters.where 注入，只有默认查询需要补充消费类型。
+	if filters.logType == nil {
+		rateQuery += " AND l.type=2"
+	}
+	rateArgs = append(rateArgs, args...)
+	if err := db.QueryRowContext(ctx, rateQuery+where, rateArgs...).Scan(&summary.RPM, &summary.TPM); err != nil {
 		writeDashboardError(w, 502, "readonly_query_failed")
 		return
 	}
@@ -1223,72 +1646,54 @@ func (h *PassthroughHandler) LogCount(w http.ResponseWriter, r *http.Request) {
 		writeDashboardJSON(w, 200, map[string]any{"configured": false, "total": 0})
 		return
 	}
-	where := ""
-	args := []any{start.Unix(), end.Unix()}
-	if len(ids) > 0 {
-		where += " AND user_id IN (" + placeholders(len(ids)) + ")"
-		for _, id := range ids {
-			args = append(args, id)
-		}
+	viewer := readonlyViewer(r)
+	filters, err := parseReadonlyLogFilters(r.URL.Query(), ids, viewer)
+	if err != nil {
+		writeDashboardError(w, 400, err.Error())
+		return
 	}
-	for _, spec := range []struct{ param, column string }{{"token_name", "token_name"}, {"username", "username"}, {"group", "`group`"}, {"model_name", "model_name"}, {"request_id", "request_id"}} {
-		if value := strings.TrimSpace(r.URL.Query().Get(spec.param)); value != "" {
-			where += " AND " + spec.column + " = ?"
-			args = append(args, value)
-		}
-	}
-	var channelID *int64
-	if value := strings.TrimSpace(r.URL.Query().Get("channel_id")); value != "" {
-		parsedChannelID, parseErr := strconv.ParseInt(value, 10, 64)
-		if parseErr != nil {
-			writeDashboardError(w, 400, "invalid_channel_id")
-			return
-		}
-		where += " AND channel_id = ?"
-		args = append(args, parsedChannelID)
-		channelID = &parsedChannelID
-	}
-	var logType *int
-	if value := strings.TrimSpace(r.URL.Query().Get("log_type")); value != "" {
-		parsedLogType, parseErr := strconv.Atoi(value)
-		if parseErr != nil {
-			writeDashboardError(w, 400, "invalid_log_type")
-			return
-		}
-		where += " AND type = ?"
-		args = append(args, parsedLogType)
-		logType = &parsedLogType
-	}
+	where := filters.where
+	args := append([]any{start.Unix(), end.Unix()}, filters.args...)
 	ctx, cancel := context.WithTimeout(r.Context(), readonlyLogCountTimeout)
 	defer cancel()
 	var total int64
 	rollupFrom, rollupTo, useRollup := completeHourWindow(start, end)
-	requestID := strings.TrimSpace(r.URL.Query().Get("request_id"))
-	if useRollup && requestID == "" && h.readonlyRollupReady(ctx, site, rollupFrom) {
-		queryValues := map[string]string{"username": strings.TrimSpace(r.URL.Query().Get("username")), "model_name": strings.TrimSpace(r.URL.Query().Get("model_name")), "token_name": strings.TrimSpace(r.URL.Query().Get("token_name")), "group": strings.TrimSpace(r.URL.Query().Get("group"))}
-		local, localErr := h.Rollups.QueryReadonlyLogRollup(ctx, readonlyRollupFilter(site, ids, rollupFrom, rollupTo, queryValues, logType, channelID))
+	if useRollup && !viewer && !filters.hasRequestFilter && !filters.hasLike && h.readonlyRollupReady(ctx, site, rollupFrom) {
+		queryValues := map[string]string{"username": filters.username, "model_name": filters.modelName, "token_name": filters.tokenName, "group": filters.group}
+		local, localErr := h.Rollups.QueryReadonlyLogRollup(ctx, readonlyRollupFilter(site, ids, rollupFrom, rollupTo, queryValues, filters.logType, filters.channelID))
 		if localErr != nil {
 			writeDashboardError(w, 502, "readonly_query_failed")
 			return
 		}
-		total = local.RequestCount
-		if start.Before(rollupFrom) {
-			value, rawErr := queryRawCount(ctx, db, start, minTime(end, rollupFrom), where, args[2:])
+		if local.RequestCount == 0 {
+			// 聚合为空时回源整段计数，兼容源库重灌或聚合暂未覆盖当前时间桶的场景。
+			// 直接查完整区间可避免把头尾零头与聚合结果重复相加。
+			value, rawErr := queryRawCount(ctx, db, start, end, where, args[2:])
 			if rawErr != nil {
 				writeDashboardError(w, 502, "readonly_query_failed")
 				return
 			}
-			total += value
-		}
-		if rollupTo.Before(end) {
-			value, rawErr := queryRawCount(ctx, db, maxTime(start, rollupTo), end, where, args[2:])
-			if rawErr != nil {
-				writeDashboardError(w, 502, "readonly_query_failed")
-				return
+			total = value
+		} else {
+			total = local.RequestCount
+			if start.Before(rollupFrom) {
+				value, rawErr := queryRawCount(ctx, db, start, minTime(end, rollupFrom), where, args[2:])
+				if rawErr != nil {
+					writeDashboardError(w, 502, "readonly_query_failed")
+					return
+				}
+				total += value
 			}
-			total += value
+			if rollupTo.Before(end) {
+				value, rawErr := queryRawCount(ctx, db, maxTime(start, rollupTo), end, where, args[2:])
+				if rawErr != nil {
+					writeDashboardError(w, 502, "readonly_query_failed")
+					return
+				}
+				total += value
+			}
 		}
-	} else if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM logs WHERE created_at>=? AND created_at<?`+where, args...).Scan(&total); err != nil {
+	} else if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM logs l WHERE l.created_at>=? AND l.created_at<?`+where, args...).Scan(&total); err != nil {
 		writeDashboardError(w, 502, "readonly_query_failed")
 		return
 	}
@@ -1310,7 +1715,7 @@ func queryRawQuota(ctx context.Context, db *sql.DB, start, end time.Time, where 
 	}
 	args := append([]any{start.Unix(), end.Unix()}, filterArgs...)
 	var value int64
-	err := db.QueryRowContext(ctx, `SELECT COALESCE(SUM(quota),0) FROM logs WHERE created_at>=? AND created_at<? AND type=2`+where, args...).Scan(&value)
+	err := db.QueryRowContext(ctx, `SELECT COALESCE(SUM(l.quota),0) FROM logs l WHERE l.created_at>=? AND l.created_at<?`+where, args...).Scan(&value)
 	return value, err
 }
 
@@ -1320,7 +1725,7 @@ func queryRawCount(ctx context.Context, db *sql.DB, start, end time.Time, where 
 	}
 	args := append([]any{start.Unix(), end.Unix()}, filterArgs...)
 	var value int64
-	err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM logs WHERE created_at>=? AND created_at<?`+where, args...).Scan(&value)
+	err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM logs l WHERE l.created_at>=? AND l.created_at<?`+where, args...).Scan(&value)
 	return value, err
 }
 
