@@ -15,8 +15,8 @@ function page() {
   const dashboard = { billingUpstreams: async () => ({ items: [] }), createBillingStatement: async value => { calls.push(value) } }
   const passthrough = { users: async () => ({ items: [] }) }
   const state = { data, reload: async () => {}, refresh: async () => {} }
-  const create = new Function('computed','ref','onUnmounted','watch','useRoute','useRouter','ElMessage','ElMessageBox','dashboard','passthrough','useAsyncData','useFiltersStore','billingReadErrorMessage','billingTaskErrorMessage','formatNumber', `${compiled}\nreturn { createForm, openCreate, createJob };`)
-  const view = create(computed,ref,()=>{},()=>{},()=>({query:{}}),()=>({}),{error: m=>errors.push(m),warning:m=>errors.push(m),success:()=>{}},{},dashboard,passthrough,()=>state,()=>({site_id:'site'}),String,String,String)
+  const create = new Function('computed','ref','onUnmounted','watch','useRoute','useRouter','ElMessage','ElMessageBox','dashboard','passthrough','useAsyncData','useFiltersStore','billingReadErrorMessage','billingTaskErrorMessage','formatNumber','siteOf', `${compiled}\nreturn { createForm, openCreate, createJob };`)
+  const view = create(computed,ref,()=>{},()=>{},()=>({query:{}}),()=>({}),{error: m=>errors.push(m),warning:m=>errors.push(m),success:()=>{}},{},dashboard,passthrough,()=>state,()=>({site_id:'site',instances:[]}),String,String,String,item=>item.site_id||item.instance_id)
   return { ...view, calls, errors, data }
 }
 function fill(p) {

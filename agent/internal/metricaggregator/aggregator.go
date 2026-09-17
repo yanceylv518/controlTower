@@ -10,6 +10,7 @@ import (
 	"controltower/agent/internal/reporter"
 	"controltower/internal/cachemetrics"
 	"controltower/internal/latencyhist"
+	"controltower/internal/outputstats"
 	"controltower/internal/speedstats"
 )
 
@@ -85,6 +86,12 @@ func Aggregate(instanceID string, events []logcollector.Event, cacheHitMinPrompt
 func (a *accumulator) add(event logcollector.Event, cacheHitMinPromptTokens int64, userCodes map[int]bool) {
 	if a.metric.DimensionType == "instance_channel" && a.metric.SpeedTTFT == nil {
 		a.metric.SpeedTTFT = speedstats.New()
+	}
+	if a.metric.OutputSpeed == nil {
+		a.metric.OutputSpeed = &outputstats.Stats{}
+	}
+	if event.LogType == "consume" {
+		a.metric.OutputSpeed.Add(event.CompletionTokens, event.UseTime, event.AttemptCount, a.metric.DimensionType == "instance_channel")
 	}
 	a.metric.RequestCount++
 	zeroOutput := event.LogType == "consume" && event.CompletionTokens == 0

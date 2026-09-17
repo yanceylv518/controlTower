@@ -3,6 +3,7 @@ import { computed, onUnmounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import type { BillingJob, BillingJobStep, BillingUpstream, ReadonlyUser } from "@ct/shared";
+import { siteOf } from "@ct/shared";
 import { dashboard, passthrough } from "../api";
 import AppShell from "../components/AppShell.vue";
 import AsyncPanel from "../components/AsyncPanel.vue";
@@ -13,6 +14,8 @@ import { formatNumber } from "../utils/format";
 
 type TaskTab = "active" | "failed" | "complete";
 const filters = useFiltersStore();
+const createSites = computed(() => [...new Set(filters.instances
+  .filter((item) => item.enabled && item.logs_readonly_configured).map(siteOf))]);
 const router = useRouter();
 const route = useRoute();
 const activeTab = ref<TaskTab>("active");
@@ -64,19 +67,42 @@ const shortError = (job: BillingJob) => {
   if (/timeout|deadline exceeded/i.test(error)) return "上游请求超时";
   return error.length > 60 ? `${error.slice(0, 60)}…` : error;
 };
+let optionRequest = 0;
+function resetOptions() {
+  optionRequest++;
+  userOptions.value = [];
+  upstreamOptions.value = [];
+  userLoading.value = false;
+  upstreamLoading.value = false;
+}
+watch(() => [createVisible.value, createForm.value.instance_id, createForm.value.bill_type], resetOptions, { flush: "sync" });
 async function loadUsers(keyword = "") {
-  if (!createForm.value.instance_id) { userOptions.value = []; return; }
+  const site = createForm.value.instance_id;
+  if (!createVisible.value || !site || createForm.value.bill_type !== "user") return;
+  const request = ++optionRequest;
   userLoading.value = true;
-  try { userOptions.value = (await passthrough.users({ site: createForm.value.instance_id, keyword: keyword.trim() || undefined, limit: 100, offset: 0 })).items; }
-  catch (error) { userOptions.value = []; ElMessage.warning(billingReadErrorMessage(error, "用户列表加载失败")); }
-  finally { userLoading.value = false; }
+  try {
+    const result = await passthrough.users({ site, keyword: keyword.trim() || undefined, limit: 100, offset: 0 });
+    if (request === optionRequest) userOptions.value = result.items;
+  } catch (error) {
+    if (request === optionRequest) { userOptions.value = []; ElMessage.warning(billingReadErrorMessage(error, "用户列表加载失败")); }
+  } finally { if (request === optionRequest) userLoading.value = false; }
 }
 async function loadUpstreams() {
-  if (!createForm.value.instance_id) { upstreamOptions.value = []; return; }
+  const site = createForm.value.instance_id;
+  if (!createVisible.value || !site || createForm.value.bill_type !== "upstream") return;
+  const request = ++optionRequest;
   upstreamLoading.value = true;
-  try { upstreamOptions.value = (await dashboard.billingUpstreams(createForm.value.instance_id)).items.filter((item) => item.enabled); }
-  catch (error) { upstreamOptions.value = []; ElMessage.warning(billingReadErrorMessage(error, "上游列表加载失败")); }
-  finally { upstreamLoading.value = false; }
+  try {
+    const result = await dashboard.billingUpstreams(site);
+    if (request === optionRequest) upstreamOptions.value = result.items.filter((item) => item.enabled);
+  } catch (error) {
+    if (request === optionRequest) { upstreamOptions.value = []; ElMessage.warning(billingReadErrorMessage(error, "上游列表加载失败")); }
+  } finally { if (request === optionRequest) upstreamLoading.value = false; }
+}
+async function loadCreateOptions(keyword = "") {
+  if (createForm.value.bill_type === "user") await loadUsers(keyword);
+  else await loadUpstreams();
 }
 async function openCreate(job?: BillingJob) {
   const yesterday = new Date(); yesterday.setHours(0, 0, 0, 0); yesterday.setDate(yesterday.getDate() - 1);
@@ -88,9 +114,10 @@ async function openCreate(job?: BillingJob) {
   const through = job?.range_to ? new Date(new Date(job.range_to).getTime() - 1) : queryThrough ? new Date(`${queryThrough}T00:00:00`) : yesterday;
   createForm.value = { instance_id: job?.instance_id || querySite || filters.site_id || "", bill_type: job ? (job.job_type === "upstream_statement" ? "upstream" : "user") : queryBillType, user_id: job?.user_id || undefined, upstream_id: job?.upstream_id || undefined, exclude_zero_output: !!job?.exclude_zero_output, recalculate: job ? job.pricing_source !== "newapi" : false, range: [from, through] };
   createVisible.value = true;
-  await Promise.all([loadUsers(job?.user_id ? String(job.user_id) : ""), loadUpstreams()]);
+  resetOptions();
+  await loadCreateOptions(job?.user_id ? String(job.user_id) : "");
 }
-async function changeCreateSite() { createForm.value.user_id = undefined; createForm.value.upstream_id = undefined; await Promise.all([loadUsers(), loadUpstreams()]); }
+async function changeCreateSite() { createForm.value.user_id = undefined; createForm.value.upstream_id = undefined; resetOptions(); await loadCreateOptions(); }
 async function createJob() {
   if (!state.data.value?.pricing_source_selection) { ElMessage.error("当前 Server 不支持计费来源选择，请升级 Server 后创建账单"); return; }
   const form = createForm.value;
@@ -152,7 +179,7 @@ async function poll() {
     await Promise.all(expandedJobIDs.value.map((jobID)=>loadJobSteps(jobID,true)));
   }
 }
-onUnmounted(() => { disposed = true; });
+onUnmounted(() => { disposed = true; resetOptions(); });
 watch(()=>filters.site_id,()=>void state.reload());
 void state.reload().then(async()=>{if(route.query.create==="1")await openCreate();await poll()});
 </script>
@@ -185,8 +212,8 @@ void state.reload().then(async()=>{if(route.query.create==="1")await openCreate(
     <el-dialog v-model="createVisible" title="创建账单任务" width="560px">
       <el-form label-width="100px">
         <el-alert v-if="!state.data.value?.pricing_source_selection" type="warning" :closable="false" title="当前 Server 尚未支持计费来源选择，请升级 Server 后创建账单。" />
-        <el-form-item label="站点"><el-select v-model="createForm.instance_id" filterable style="width:100%" @change="changeCreateSite"><el-option v-for="item in filters.instances.filter(item=>item.enabled&&item.logs_readonly_configured)" :key="item.instance_id" :label="item.name || item.instance_id" :value="item.instance_id" /></el-select></el-form-item>
-        <el-form-item label="账单类型"><el-radio-group v-model="createForm.bill_type"><el-radio-button value="user">用户账单</el-radio-button><el-radio-button value="upstream">上游账单</el-radio-button></el-radio-group></el-form-item>
+        <el-form-item label="站点"><el-select v-model="createForm.instance_id" filterable style="width:100%" @change="changeCreateSite"><el-option v-for="site in createSites" :key="site" :label="site" :value="site" /></el-select></el-form-item>
+        <el-form-item label="账单类型"><el-radio-group v-model="createForm.bill_type" @change="changeCreateSite"><el-radio-button value="user">用户账单</el-radio-button><el-radio-button value="upstream">上游账单</el-radio-button></el-radio-group></el-form-item>
         <el-form-item v-if="createForm.bill_type === 'user'" label="选择用户"><el-select v-model="createForm.user_id" filterable remote clearable :remote-method="loadUsers" :loading="userLoading" placeholder="每个任务只能选择一个用户" style="width:100%"><el-option v-for="user in userOptions" :key="user.id" :label="`${user.display_name || user.username || `用户 ${user.id}`}（ID: ${user.id}）`" :value="user.id" /></el-select></el-form-item>
         <el-form-item v-else label="选择上游"><el-select v-model="createForm.upstream_id" filterable clearable :loading="upstreamLoading" placeholder="每个任务只能选择一个上游" style="width:100%"><el-option v-for="item in upstreamOptions" :key="item.id" :label="`${item.name}（${item.channels.length} 个渠道）`" :value="item.id" /></el-select></el-form-item>
         <el-form-item label="账单日期"><el-date-picker v-model="createForm.range" type="daterange" start-placeholder="开始日期" end-placeholder="结束日期（包含）" :disabled-date="(date: Date) => date >= new Date(new Date().setHours(0,0,0,0))" style="width:100%" /></el-form-item>

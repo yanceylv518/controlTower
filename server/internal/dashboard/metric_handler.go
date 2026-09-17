@@ -75,6 +75,7 @@ type MetricItem struct {
 	TTFTP95MS         *float64  `json:"ttft_p95_ms"`
 	OTPS              *float64  `json:"otps"`
 	OTPSSampleTokens  int64     `json:"otps_sample_tokens"`
+	OTPSDurationSecs  float64   `json:"otps_duration_seconds"`
 }
 
 func (h Handler) WithMetricSource(source MetricSource) Handler {
@@ -328,8 +329,9 @@ func (h Handler) filterMetricItemsByInstances(metrics []aggregator.Metric, dimen
 			TTFTP50MS:         metric.TTFTP50MS,
 			TTFTP90MS:         metric.TTFTP90MS,
 			TTFTP95MS:         metric.TTFTP95MS,
-			OTPS:              otps(metric.OTPSOutputTokens, metric.OTPSDurationSecs),
-			OTPSSampleTokens:  metric.OTPSOutputTokens,
+			OTPS:              metric.OutputSpeed.Rate(),
+			OTPSSampleTokens:  metric.OutputSpeed.SampleTokens(),
+			OTPSDurationSecs:  metric.OutputSpeed.Duration(),
 		})
 	}
 	sort.Slice(items, func(i, j int) bool {
@@ -339,14 +341,6 @@ func (h Handler) filterMetricItemsByInstances(metrics []aggregator.Metric, dimen
 		return items[i].BucketTime.After(items[j].BucketTime)
 	})
 	return items
-}
-
-func otps(tokens int64, seconds float64) *float64 {
-	if tokens <= 0 || seconds <= 0 {
-		return nil
-	}
-	value := float64(tokens) / seconds
-	return &value
 }
 
 func nullableRatio(numerator, denominator *int64) *float64 {

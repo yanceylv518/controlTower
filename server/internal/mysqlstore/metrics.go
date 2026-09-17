@@ -175,6 +175,7 @@ func scanMetrics(rows *sql.Rows) ([]aggregator.Metric, error) {
 		var latencyV2 [latencyhist.BucketCountV2]sql.NullInt64
 		var ttftV2 [latencyhist.BucketCountV2]sql.NullInt64
 		var speedValues [latencyhist.BucketCountV2 + 2]sql.NullInt64
+		var outputValues outputSpeedScan
 		dest := []any{
 			&metric.InstanceID,
 			&metric.BucketTime,
@@ -222,6 +223,7 @@ func scanMetrics(rows *sql.Rows) ([]aggregator.Metric, error) {
 		for i := range speedValues {
 			dest = append(dest, &speedValues[i])
 		}
+		dest = append(dest, outputValues.args()...)
 		if err := rows.Scan(dest...); err != nil {
 			return nil, err
 		}
@@ -229,6 +231,7 @@ func scanMetrics(rows *sql.Rows) ([]aggregator.Metric, error) {
 		metric.LatencyBucketsV2 = nullableV2(latencyV2)
 		metric.TTFTBuckets = nullableV2(ttftV2)
 		metric.SpeedTTFT = speedTTFTFromSQL(speedValues)
+		metric.OutputSpeed = outputValues.stats()
 		metric.SuccessRate = floatPointer(successRate)
 		metric.ErrorRate = floatPointer(errorRate)
 		metric.AvgUseTime = floatPointer(avgUseTime)

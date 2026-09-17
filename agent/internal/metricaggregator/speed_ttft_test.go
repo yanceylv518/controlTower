@@ -97,7 +97,9 @@ func TestSpeedFilterLeavesMonitoringUnchanged(t *testing.T) {
 			t.Fatal("speed evidence duplicated on other dimensions")
 		}
 		got[i].SpeedTTFT = nil
+		got[i].OutputSpeed = nil
 		allDirect[i].SpeedTTFT = nil
+		allDirect[i].OutputSpeed = nil
 	}
 	if !reflect.DeepEqual(got, allDirect) {
 		t.Fatal("attempt metadata affected public aggregation")

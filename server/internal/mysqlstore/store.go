@@ -4,6 +4,7 @@ import (
 	"context"
 	"controltower/internal/latencyhist"
 	"database/sql"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -210,7 +211,23 @@ ON DUPLICATE KEY UPDATE
 }
 
 func (s Store) InsertChannelSnapshot(snapshot storage.ChannelSnapshot) error {
-	_, err := s.db.ExecContext(context.Background(), `
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var site string
+	if err = tx.QueryRow(`SELECT COALESCE(NULLIF(site_id,''),id) FROM instances WHERE id=?`, snapshot.InstanceID).Scan(&site); err != nil {
+		return err
+	}
+	configured, err := lockChannelSource(tx, site)
+	if err != nil {
+		return err
+	}
+	if configured != "" {
+		return nil
+	}
+	_, err = tx.Exec(`
 INSERT INTO channel_current (
   instance_id, channel_id, id, channel_name, status, weight, models_text, group_name, priority, captured_at
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -235,7 +252,10 @@ ON DUPLICATE KEY UPDATE
 		snapshot.CapturedAt,
 	)
 	if err == nil {
-		channelupdates.Notify(siteIDForInstance(s.db, snapshot.InstanceID))
+		err = tx.Commit()
+	}
+	if err == nil {
+		channelupdates.Notify(site)
 	}
 	return err
 }
@@ -248,6 +268,12 @@ func (s Store) SyncChannelSnapshots(instanceID string, snapshots []storage.Chann
 }
 
 func (s Store) SyncChannelSnapshotsAt(instanceID string, snapshots []storage.ChannelSnapshot, at time.Time) error {
+	return s.syncChannelSnapshotsAt(instanceID, snapshots, at, nil)
+}
+
+// source is nil for Agent reports, empty for HTTP, or the encrypted readonly
+// configuration used for this collection. Never apply a result from an old source.
+func (s Store) syncChannelSnapshotsAt(instanceID string, snapshots []storage.ChannelSnapshot, at time.Time, source *string) error {
 	tx, err := s.db.BeginTx(context.Background(), nil)
 	if err != nil {
 		return err
@@ -257,6 +283,22 @@ func (s Store) SyncChannelSnapshotsAt(instanceID string, snapshots []storage.Cha
 	var siteID string
 	if err = tx.QueryRow(`SELECT CASE WHEN site_id='' THEN id ELSE site_id END FROM instances WHERE id=?`, instanceID).Scan(&siteID); err != nil {
 		return err
+	}
+	configured, err := lockChannelSource(tx, siteID)
+	if err != nil {
+		return err
+	}
+	if source == nil && configured != "" {
+		return nil
+	}
+	if source != nil && *source != configured {
+		return fmt.Errorf("channel source changed during collection")
+	}
+	if source != nil {
+		snapshots, err = consolidateChannelSnapshots(tx, siteID, instanceID, snapshots, at)
+		if err != nil {
+			return err
+		}
 	}
 	channelIDs := make([]int64, 0, len(snapshots))
 	for _, snapshot := range snapshots {
@@ -305,12 +347,6 @@ VALUES (?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE id=VALUES(id),channel_name=
 		if _, err = tx.Exec(`DELETE FROM channel_current WHERE instance_id=? AND captured_at<=?`, instanceID, at); err != nil {
 			return err
 		}
-		if _, err = tx.Exec(`DELETE FROM tuning_continuous_states WHERE instance_id=? AND channel_id NOT IN (SELECT channel_id FROM channel_current WHERE instance_id=?)`, siteID, instanceID); err != nil {
-			return err
-		}
-		if _, err = tx.Exec(`DELETE FROM channel_base_values WHERE instance_id=? AND channel_id NOT IN (SELECT channel_id FROM channel_current WHERE instance_id=?)`, siteID, instanceID); err != nil {
-			return err
-		}
 	} else {
 		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(channelIDs)), ",")
 		args := make([]any, 0, len(channelIDs)+1)
@@ -322,14 +358,22 @@ VALUES (?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE id=VALUES(id),channel_name=
 		if _, err = tx.Exec(`DELETE FROM channel_current WHERE instance_id=? AND channel_id NOT IN (`+placeholders+`) AND captured_at<=?`, deleteArgs...); err != nil {
 			return err
 		}
-		tuningArgs := make([]any, len(args))
-		copy(tuningArgs, args)
-		tuningArgs[0] = siteID
-		tuningArgs = append(tuningArgs, instanceID)
-		if _, err = tx.Exec(`DELETE FROM tuning_continuous_states WHERE instance_id=? AND channel_id NOT IN (`+placeholders+`) AND channel_id NOT IN (SELECT channel_id FROM channel_current WHERE instance_id=?)`, tuningArgs...); err != nil {
+	}
+	if source != nil {
+		// Existing instance-scoped monitoring readers need the same inventory.
+		// These copies all come from the one Server collection, never the Agents.
+		if _, err = tx.Exec(`INSERT INTO channel_current(instance_id,channel_id,id,channel_name,status,weight,models_text,group_name,priority,captured_at)
+		SELECT i.id,c.channel_id,c.id,c.channel_name,c.status,c.weight,c.models_text,c.group_name,c.priority,c.captured_at
+		FROM channel_current c JOIN instances i ON COALESCE(NULLIF(i.site_id,''),i.id)=?
+		WHERE c.instance_id=? AND i.id<>? AND i.enabled=1 AND i.deleted=0`, siteID, instanceID, instanceID); err != nil {
 			return err
 		}
-		if _, err = tx.Exec(`DELETE FROM channel_base_values WHERE instance_id=? AND channel_id NOT IN (`+placeholders+`) AND channel_id NOT IN (SELECT channel_id FROM channel_current WHERE instance_id=?)`, tuningArgs...); err != nil {
+	}
+	// Anchors and runtime state belong to the site, not an individual collector.
+	for _, table := range []string{"tuning_continuous_states", "channel_base_values"} {
+		if _, err = tx.Exec(`DELETE FROM `+table+` WHERE instance_id=? AND channel_id NOT IN
+		(SELECT c.channel_id FROM channel_current c JOIN instances i ON i.id=c.instance_id
+		WHERE COALESCE(NULLIF(i.site_id,''),i.id)=? AND i.enabled=1 AND i.deleted=0)`, siteID, siteID); err != nil {
 			return err
 		}
 	}
@@ -942,6 +986,7 @@ func metricArgs(metric aggregator.Metric) []any {
 	args = appendV2Args(args, metric.LatencyBucketsV2)
 	args = appendV2Args(args, metric.TTFTBuckets)
 	args = append(args, speedTTFTArgs(metric.SpeedTTFT)...)
+	args = append(args, outputSpeedArgs(metric.OutputSpeed)...)
 	return append(args, time.Now().UTC())
 }
 

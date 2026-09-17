@@ -22,7 +22,7 @@ function page() {
     tuningContinuousStates: async () => ({ items: [state(42)] }),
   }
   const names = ['computed', 'reactive', 'ref', 'watch', 'onMounted', 'onBeforeUnmount', 'useFiltersStore', 'dashboard', 'formatTime', 'ApiError', 'ElMessage', 'ElMessageBox']
-  const create = new Function(...names, `${compiled}\nreturn { load, refreshRuntime, acceptStates, stateFor, sampleText, evaluationText, states, refreshError, bases, policy };`)
+  const create = new Function(...names, `${compiled}\nreturn { load, refreshRuntime, acceptStates, stateFor, sampleText, evaluationText, states, refreshError, bases, policy, channelQuery, channelStatusFilter, displayedRows, activeModel, dirty, selectModel, fieldChanged, savedBases, originalBase, calculatedWeight, displayedSpeedFactor, coefficientCell, overallEvaluationStatus, coefficientEmptyText, coefficientSpan, displayedPriority, editPriority, priorityLocked, cancelChanges, limitReason, currentRates, ratesReady, rowStatus, eventResult, eventResultClass, events, filteredEvents, eventDateRange };`)
   const view = create(computed, reactive, ref, () => {}, () => {}, () => {}, () => filters, dashboard, String, class extends Error {}, {}, {})
   return { ...view, filters, dashboard }
 }
@@ -137,7 +137,7 @@ test('speed readiness uses direct samples even with abundant total requests', as
   const p = page()
   p.dashboard.tuningContinuousStates = async () => ({ items: [{ ...state(500), metric_ready: false, baseline_ready: false, speed_sample_count: 3, speed_retry_count: 497 }] })
   await p.load()
-  assert.match(p.evaluationText(row), /速度样本不足 3\//)
+  assert.match(p.evaluationText(row), /TTFT 样本不足 3\//)
   assert.equal(p.sampleText(row), `500/${p.policy.continuous.min_samples}`)
 })
 
@@ -145,7 +145,7 @@ test('legacy speed evidence never appears ready solely from request volume', asy
   const p = page()
   p.dashboard.tuningContinuousStates = async () => ({ items: [{ ...state(500), metric_ready: false, baseline_ready: false, speed_legacy_count: 500 }] })
   await p.load()
-  assert.match(p.evaluationText(row), /速度样本不足 0\//)
+  assert.match(p.evaluationText(row), /TTFT 样本不足 0\//)
 })
 
 
@@ -155,3 +155,179 @@ test('pre-upgrade cached readiness is not presented as filtered speed evidence',
   await p.load()
   assert.equal(p.evaluationText(row), '等待新口径速度评估')
 })
+
+test('eligible output is visible without TTFT and old output readiness is not reused', async () => {
+  const p = page()
+  const outputState = { ...state(500), metric_ready: false, baseline_ready: false, otps_ready: true, otps_stats_version: 1 }
+  p.dashboard.tuningContinuousStates = async () => ({ items: [outputState] })
+  await p.load()
+  assert.equal(p.evaluationText(row), 'TTFT 样本不足，使用本轮输出系数')
+  outputState.otps_stats_version = 0
+  await p.refreshRuntime()
+  assert.match(p.evaluationText(row), /TTFT 样本不足/)
+  assert.doesNotMatch(p.evaluationText(row), /使用本轮输出系数/)
+})
+
+test('missing peer TTFT baseline also uses current output and sparse windows hold', async () => {
+  const p = page()
+  const s = { ...state(500), metric_ready: true, baseline_ready: false, otps_ready: true, otps_stats_version: 1 }
+  p.dashboard.tuningContinuousStates = async () => ({items:[s]})
+  await p.load()
+  assert.equal(p.evaluationText(row), 'TTFT 基线不足，使用本轮输出系数')
+  s.last_observed_requests = 1
+  await p.refreshRuntime()
+  assert.match(p.evaluationText(row), /样本不足.*本轮不调权/)
+  s.phase = 'circuit'
+  await p.refreshRuntime()
+  assert.match(p.evaluationText(row), /已熔断/)
+})
+
+
+test('switching models preserves pending edits and evaluation still uses its saved base', async () => {
+  const p = page(); await p.load();
+  p.savedBases.value = [{ ...row, base_weight: 100 }];
+  p.bases.value[0].base_weight = 120; p.dirty.value = true;
+  p.selectModel('other'); p.selectModel('m');
+  assert.equal(p.bases.value[0].base_weight, 120);
+  assert.equal(p.dirty.value, true);
+  assert.equal(p.fieldChanged(p.bases.value[0], 'base_weight'), true);
+  assert.equal(p.originalBase(p.bases.value[0]), 100);
+})
+
+test('capacity distinguishes unavailable rates from zero and reports the exceeded limit', async () => {
+  const p = page(); await p.load();
+  const b = { ...row, max_rpm: 100, max_tpm: 1000 };
+  assert.match(p.limitReason(b), /不可用/);
+  p.ratesReady.value = true;
+  p.currentRates.value.set(1, {rpm:0,tpm:0});
+  assert.equal(p.limitReason(b), '');
+  p.currentRates.value.set(1, {rpm:99,tpm:1000});
+  assert.match(p.limitReason(b), /^TPM/);
+  p.currentRates.value.set(1, {rpm:100,tpm:1000});
+  assert.match(p.limitReason(b), /^RPM \/ TPM/);
+  assert.equal(p.limitReason({...b,max_rpm:0,max_tpm:0}), '');
+})
+
+test('channel search and attention filter retain circuit precedence over output substitution', async () => {
+  const p = page(); await p.load(); p.activeModel.value='m';
+  p.bases.value = [{...row, channel_name:'north', max_rpm:0,max_tpm:0}];
+  p.acceptStates('a',[{...state(100), phase:'circuit',otps_ready:true,otps_stats_version:1,metric_ready:false}]);
+  assert.equal(p.rowStatus(p.bases.value[0]).label,'熔断');
+  p.channelStatusFilter.value='attention'; assert.equal(p.displayedRows.value.length,1);
+  p.channelQuery.value='south'; assert.equal(p.displayedRows.value.length,0);
+  p.channelQuery.value='1'; assert.equal(p.displayedRows.value.length,1);
+})
+
+test('recorded events are not presented as successful writes and dates include the last day', async () => {
+  const p = page(); await p.load();
+  assert.equal(p.eventResult({status:'recorded'}),'已记录');
+  assert.equal(p.eventResult({status:'succeeded'}),'执行成功');
+  assert.equal(p.eventResultClass({status:'failed'}),'danger');
+  p.events.value = ['2026-09-16T23:59:59','2026-09-17T00:00:00','2026-09-17T23:59:59','2026-09-18T00:00:00'].map((created_at,i)=>({id:String(i),created_at,rule:'weight_write',channel_name:'north',channel_id:1}));
+  p.eventDateRange.value=['2026-09-17','2026-09-17'];
+  assert.deepEqual(p.filteredEvents.value.map(e=>e.id),['1','2']);
+})
+
+test('formula target is independent of execution limits and unsaved base edits', async () => {
+  const p = page(); await p.load();
+  p.states.value = [{ ...state(42, 88), base_weight: 100, k_speed: 1.2, k_cache: 1, k_otps: 1.2, k_error: 1 }];
+  assert.equal(p.calculatedWeight(row), 144);
+  assert.equal(p.calculatedWeight({ ...row, base_weight: 300 }), 144);
+  p.states.value[0].k_speed = 2;
+  assert.equal(p.calculatedWeight(row), 150);
+  p.states.value[0].last_observed_requests = 1;
+  assert.equal(p.calculatedWeight(row), null);
+  p.states.value[0].last_observed_requests = 42;
+  p.states.value[0].phase = 'circuit';
+  assert.equal(p.calculatedWeight(row), 150);
+  p.policy.dispatch_modes.m = 'off';
+  assert.equal(p.calculatedWeight(row), 150);
+  Object.assign(p.states.value[0], {metric_ready:false,baseline_ready:false,paused_reason:'mixed_channel',speed_stats_version:0});
+  assert.equal(p.calculatedWeight(row), 150);
+  assert.equal(p.calculatedWeight({...row, base_weight:0}), null);
+});
+
+test('priority editor shows online value, shares channel draft and preserves circuit lock', async () => {
+  const p = page(); await p.load();
+  p.bases.value[0].base_priority = 11;
+  p.bases.value.push({ ...row, model_name: 'other', base_priority: 11 });
+  assert.equal(p.displayedPriority(p.bases.value[0]), 1);
+  p.editPriority(p.bases.value[0], 12);
+  assert.equal(p.displayedPriority(p.bases.value[0]), 12);
+  assert.equal(p.bases.value[1].base_priority, 12);
+  assert.equal(p.bases.value[0].current_priority, 1);
+  p.cancelChanges(false);
+  assert.equal(p.displayedPriority(p.bases.value[0]), 1);
+  p.states.value[0].phase = 'circuit';
+  p.editPriority(p.bases.value[0], 13);
+  assert.equal(p.displayedPriority(p.bases.value[0]), 1);
+});
+
+test('speed display suppresses stale factors and labels only valid output fallback', async () => {
+  const p = page(); await p.load();
+  p.states.value = [{ ...state(2), k_speed: 1.985, k_otps: 1.2 }];
+  assert.equal(p.displayedSpeedFactor(row), null);
+  p.states.value[0].last_observed_requests = 42;
+  p.states.value[0].metric_ready = false;
+  assert.equal(p.displayedSpeedFactor(row), null);
+  Object.assign(p.states.value[0], {otps_ready:true, otps_stats_version:1});
+  assert.equal(p.displayedSpeedFactor(row), null);
+  p.states.value[0].k_speed = 1.2;
+  assert.equal(p.displayedSpeedFactor(row), 1.2);
+  p.states.value[0].metric_ready = true;
+  p.states.value[0].k_speed = 0.9;
+  assert.equal(p.displayedSpeedFactor(row), 0.9);
+});
+
+test('coefficient cells keep values with explicit availability and provenance', async () => {
+  const p = page(); await p.load();
+  p.states.value = [{...state(1),k_speed:1.9,k_cache:0.9,k_otps:1,k_error:0.8,smoothed_error_rate:0.05}];
+  assert.equal(p.coefficientCell(row,'speed').value,null);
+  assert.equal(p.coefficientCell(row,'speed').status,'');
+  assert.equal(p.rowStatus(row).label,'窗口样本不足 1/20');
+  assert.equal(p.coefficientCell(row,'cache').status,'保留值');
+  assert.equal(p.coefficientCell(row,'error').status,'平滑错误率');
+  Object.assign(p.states.value[0],{last_observed_requests:42,metric_ready:false,otps_ready:true,otps_stats_version:1,k_speed:1.1,k_otps:1.1,k_cache:1,cache_ready:false});
+  assert.equal(p.coefficientCell(row,'speed').status,'输出替代');
+  assert.equal(p.coefficientCell(row,'cache').status,'中性回退');
+  assert.equal(p.coefficientCell(row,'otps').status,'有效');
+});
+
+test('window shortage precedes TTFT provenance while circuit retains precedence', async () => {
+ const p=page(); await p.load();
+ p.states.value=[{...state(3),speed_stats_version:0,metric_ready:false,baseline_ready:false}];
+ assert.equal(p.rowStatus(row).label,'窗口样本不足 3/20');
+ assert.equal(p.coefficientCell(row,'speed').status,'');
+ Object.assign(p.states.value[0],{last_observed_requests:25,speed_stats_version:1});
+ assert.equal(p.coefficientCell(row,'speed').status,'TTFT 样本不足');
+ p.states.value[0].metric_ready=true;
+ assert.equal(p.coefficientCell(row,'speed').status,'基线不足');
+ Object.assign(p.states.value[0],{phase:'circuit',last_observed_requests:0});
+ assert.equal(p.rowStatus(row).label,'熔断');
+});
+
+test('overall evaluation occupies a shared coefficient row without warning glyphs', async () => {
+ const p=page(); await p.load();
+ p.states.value=[{...state(3)}];
+ assert.equal(p.overallEvaluationStatus(row),'窗口样本不足 3/20');
+ Object.assign(p.states.value[0],{last_observed_requests:25,metric_ready:false});
+ assert.equal(p.overallEvaluationStatus(row),'');
+ p.states.value[0].phase='circuit';
+ assert.equal(p.overallEvaluationStatus(row),'熔断');
+ assert.equal(p.rowStatus(row).icon,'');
+ assert.deepEqual(p.coefficientSpan({column:{property:'coefficient_speed'}}),[1,4]);
+ assert.deepEqual(p.coefficientSpan({column:{property:'coefficient_cache'}}),[0,0]);
+ assert.deepEqual(p.coefficientSpan({column:{}}),[1,1]);
+});
+
+test('coefficient empty labels distinguish nonparticipation from circuit', async () => {
+ const p=page(); await p.load();
+ p.states.value=[state(2)];
+ assert.equal(p.coefficientEmptyText(row),'窗口样本不足');
+ assert.equal(p.coefficientEmptyText({...row,base_weight:0}),'未参与调权');
+ p.policy.dispatch_modes.m='off';
+ assert.equal(p.coefficientEmptyText(row),'未参与调权');
+ p.policy.dispatch_modes.m='auto';p.states.value[0].phase='circuit';
+ assert.equal(p.coefficientEmptyText(row),'');
+ assert.equal(p.overallEvaluationStatus(row),'熔断');
+});

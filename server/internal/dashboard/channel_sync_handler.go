@@ -36,7 +36,7 @@ func (h Handler) HandleRefreshTuningChannels(w http.ResponseWriter, r *http.Requ
 			return
 		}
 		log.Printf("channel refresh site=%s failed: %v", site, err)
-		writeDashboardJSON(w, 502, map[string]any{"error": "渠道同步失败，请先确认站点已配置 new-api 直连且连接正常"})
+		writeDashboardJSON(w, 502, map[string]any{"error": "渠道同步失败，请检查站点只读连接的 channels 表查询权限或 new-api 控制连接；已保留原有渠道数据"})
 		return
 	}
 	writeDashboardJSON(w, 200, map[string]any{"synced": true})

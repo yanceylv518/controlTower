@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
+import { InfoFilled } from "@element-plus/icons-vue";
 import type { BillingJob } from "@ct/shared";
 import AppShell from "./AppShell.vue";
 import AsyncPanel from "./AsyncPanel.vue";
@@ -36,6 +37,63 @@ const state = useAsyncData(async () => {
 const records = computed(() => (state.data.value?.items || []).filter((job) => props.billType === "user"
   ? job.job_type === "user_statement" && Number(job.user_id) > 0
   : job.job_type === "upstream_statement" && Number(job.upstream_id) > 0));
+const userSearch = ref("");
+const billDateRange = ref<[Date, Date] | null>(null);
+const dateShortcuts = [
+  { text: "本月", value: () => { const today = new Date(); return [new Date(today.getFullYear(), today.getMonth(), 1), new Date(today.getFullYear(), today.getMonth() + 1, 0)]; } },
+  { text: "上月", value: () => { const today = new Date(); return [new Date(today.getFullYear(), today.getMonth() - 1, 1), new Date(today.getFullYear(), today.getMonth(), 0)]; } },
+  { text: "近三个月", value: () => { const today = new Date(); return [new Date(today.getFullYear(), today.getMonth() - 2, 1), new Date(today.getFullYear(), today.getMonth() + 1, 0)]; } },
+];
+const selectedBillPeriod = computed(() => {
+  if (!billDateRange.value || billDateRange.value.length !== 2) return null;
+  const [start, end] = billDateRange.value;
+  return { from: new Date(start.getFullYear(), start.getMonth(), start.getDate()).getTime(),
+    to: new Date(end.getFullYear(), end.getMonth(), end.getDate() + 1).getTime() };
+});
+const userPage = ref(1);
+const expandedUsers = ref<string[]>([]);
+const usersPerPage = 20;
+const generatedTime = (job: BillingJob) => new Date(job.updated_at || job.created_at || 0).getTime();
+const userGroups = computed(() => {
+  const groups = new Map<string, { key: string; name: string; userId: number; site: string; bills: BillingJob[]; latest: BillingJob; reviewCount: number }>();
+  for (const job of [...records.value].sort((a, b) => generatedTime(b) - generatedTime(a))) {
+    const key = JSON.stringify([job.instance_id, job.user_id]);
+    let group = groups.get(key);
+    if (!group) {
+      group = { key, name: job.user_name || "用户", userId: Number(job.user_id), site: job.instance_id, bills: [], latest: job, reviewCount: 0 };
+      groups.set(key, group);
+    }
+    if (group.name === "用户" && job.user_name) group.name = job.user_name;
+    group.bills.push(job);
+    if (job.mismatch_rows) group.reviewCount++;
+  }
+  return [...groups.values()].map(group => ({ ...group, bills: group.bills.sort((a, b) =>
+    (b.range_from || "").localeCompare(a.range_from || "") || generatedTime(b) - generatedTime(a)) }));
+});
+const matchingUsers = computed(() => {
+  const keyword = userSearch.value.trim().toLocaleLowerCase();
+  return userGroups.value.filter(group => !keyword || String(group.userId).includes(keyword)
+    || group.name.toLocaleLowerCase().includes(keyword)
+    || group.bills.some(job => job.user_name?.toLocaleLowerCase().includes(keyword)))
+    .map(group => {
+      const period = selectedBillPeriod.value;
+      const bills = period ? group.bills.filter(job => job.range_from && job.range_to
+        && new Date(job.range_from).getTime() < period.to && new Date(job.range_to).getTime() > period.from) : group.bills;
+      return { ...group, bills, reviewCount: bills.filter(job => job.mismatch_rows).length,
+        latest: bills.reduce((latest, job) => generatedTime(job) > generatedTime(latest) ? job : latest, bills[0] || group.latest) };
+    }).filter(group => group.bills.length > 0);
+});
+const matchingBillCount = computed(() => matchingUsers.value.reduce((total, group) => total + group.bills.length, 0));
+const visibleGroups = computed(() => props.billType === "user"
+  ? matchingUsers.value.slice((userPage.value - 1) * usersPerPage, userPage.value * usersPerPage)
+  : [{ key: "upstream", name: "", userId: 0, site: "", bills: records.value, latest: records.value[0], reviewCount: 0 }]);
+function toggleUser(key: string) {
+  expandedUsers.value = expandedUsers.value.includes(key)
+    ? expandedUsers.value.filter(value => value !== key) : [...expandedUsers.value, key];
+}
+watch([userSearch, billDateRange], () => { userPage.value = 1; });
+watch(() => [filters.site_id, props.billType], () => { userSearch.value = ""; billDateRange.value = null; userPage.value = 1; expandedUsers.value = []; });
+watch(() => matchingUsers.value.length, count => { userPage.value = Math.min(userPage.value, Math.max(1, Math.ceil(count / usersPerPage))); });
 const formatTime = (value?: string) => value ? new Date(value).toLocaleString() : "—";
 const previewNumber = (value:unknown) => formatNumber(Number(value || 0));
 const previewMoney = (value:unknown) => Number(value || 0).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 6 });
@@ -141,12 +199,32 @@ watch(() => [filters.site_id, props.billType] as const, () => void state.reload(
 <template>
   <AppShell :title="title">
     <template #tools><el-button type="primary" @click="createBill">生成{{ title }}</el-button><el-button @click="state.reload">刷新</el-button></template>
-    <el-alert :title="`${title}只展示账单任务已经生成的可交付结果；主账单可单独下载，每日明细可在查看账单后按天下载。`" type="info" :closable="false" show-icon />
+    <el-alert v-if="props.billType !== 'user'" :title="`${title}只展示账单任务已经生成的可交付结果；主账单可单独下载，每日明细可在查看账单后按天下载。`" type="info" :closable="false" show-icon />
+    <el-alert v-if="(state.data.value?.items.length || 0) >= 200" class="history-notice" title="当前仅加载最近 200 条已完成任务，较早账单可能未包含在列表中。" type="warning" :closable="false" show-icon />
+    <div v-if="props.billType === 'user'" class="user-toolbar">
+      <el-input v-model="userSearch" placeholder="搜索用户名称或 ID" aria-label="搜索用户名称或 ID" clearable class="user-search" />
+      <div class="bill-date-filter"><span>账期</span><el-date-picker v-model="billDateRange" type="daterange" range-separator="至" start-placeholder="开始日期" end-placeholder="结束日期" :shortcuts="dateShortcuts" clearable /></div>
+      <span>{{ matchingUsers.length }} 位用户 · {{ matchingBillCount }} 份账单</span>
+      <el-tooltip content="账单按用户归组，点击用户展开各账期账单，最新账期排在前面；日期筛选显示与所选日期有重叠的账期，包含结束日期，仅筛选已加载账单。" placement="top">
+        <button type="button" class="group-help" aria-label="账单分组说明"><el-icon><InfoFilled /></el-icon></button>
+      </el-tooltip>
+      <el-button :disabled="!expandedUsers.length" @click="expandedUsers = []">全部收起</el-button>
+    </div>
     <AsyncPanel :loading="state.loading.value" :error="state.error.value" :empty="!records.length" :empty-text="`暂无${title}，请先创建账单任务`" @retry="state.reload">
-      <el-table :data="records" row-key="id" class="records-table">
+      <el-empty v-if="props.billType === 'user' && !matchingUsers.length" description="没有匹配的账单，请调整用户或账期筛选" />
+      <section v-for="group in visibleGroups" :key="group.key" :class="{ 'user-group': props.billType === 'user' }">
+        <button v-if="props.billType === 'user'" type="button" class="user-group-header" :aria-expanded="expandedUsers.includes(group.key)" @click="toggleUser(group.key)">
+          <span class="expand-arrow" :class="{ expanded: expandedUsers.includes(group.key) }" aria-hidden="true">›</span>
+          <span class="user-identity"><strong>{{ group.name }}</strong><small>ID: {{ group.userId }} · {{ group.site }}</small></span>
+          <span class="group-count">{{ group.bills.length }} 份账单</span>
+          <el-tag v-if="group.reviewCount" type="warning">{{ group.reviewCount }} 份待复核</el-tag>
+          <span class="group-latest">最近生成：{{ formatTime(group.latest?.updated_at || group.latest?.created_at) }}</span>
+          <span class="expand-label">{{ expandedUsers.includes(group.key) ? '收起' : '展开账单' }}</span>
+        </button>
+      <el-table v-if="props.billType !== 'user' || expandedUsers.includes(group.key)" :data="group.bills" row-key="id" class="records-table">
         <el-table-column label="账单编号" min-width="300"><template #default="s"><b>{{ s.row.bill_no || s.row.id }}</b><small>{{s.row.pricing_source === "newapi" ? "NewAPI 原始计费" : "重新计费"}}</small><small>内部任务：{{s.row.id}}</small></template></el-table-column>
-        <el-table-column :label="props.billType === 'user' ? '用户' : '上游'" min-width="150"><template #default="s">{{ subject(s.row) }}</template></el-table-column>
-        <el-table-column prop="instance_id" label="站点" min-width="130" />
+        <el-table-column v-if="props.billType !== 'user'" label="上游" min-width="150"><template #default="s">{{ subject(s.row) }}</template></el-table-column>
+        <el-table-column v-if="props.billType !== 'user'" prop="instance_id" label="站点" min-width="130" />
         <el-table-column label="账单周期" min-width="210"><template #default="s">{{ formatRange(s.row) }}</template></el-table-column>
         <el-table-column label="计费订单" width="110" align="right"><template #default="s">{{ formatNumber(s.row.billed_rows || 0) }}</template></el-table-column>
         <el-table-column label="内部异常" width="110" align="right"><template #default="s"><span :class="{ warning: s.row.abnormal_rows }">{{ formatNumber(s.row.abnormal_rows || 0) }}</span></template></el-table-column>
@@ -155,6 +233,8 @@ watch(() => [filters.site_id, props.billType] as const, () => void state.reload(
         <el-table-column label="状态" width="110"><template #default="s"><el-tag :type="s.row.mismatch_rows ? 'warning' : 'success'">{{s.row.mismatch_rows ? '待复核' : '可使用'}}</el-tag></template></el-table-column>
         <el-table-column label="操作" width="230" fixed="right"><template #default="s"><el-button link type="primary" @click="viewBill(s.row)">查看账单</el-button><el-button link type="primary" :loading="downloadingBillId===s.row.id" :disabled="!!downloadingBillId" @click="downloadBill(s.row)">下载主账单</el-button><el-button link type="danger" @click="deleteBill(s.row)">删除</el-button></template></el-table-column>
       </el-table>
+      </section>
+      <el-pagination v-if="props.billType === 'user' && matchingUsers.length > usersPerPage" v-model:current-page="userPage" :page-size="usersPerPage" :total="matchingUsers.length" layout="total, prev, pager, next" class="user-pagination" />
     </AsyncPanel>
     <el-dialog v-model="detailVisible" width="min(1180px, calc(100vw - 48px))" top="7vh" class="bill-preview-dialog" destroy-on-close>
       <template #header><div class="preview-title"><div class="preview-mark">账</div><div><h2>{{props.billType==='user'?'用户账单':'上游账单'}}</h2><p>{{detail?.job.bill_no || '账单内容预览'}}</p></div><el-tag v-if="detail" :type="detail.review_required?'warning':'success'" effect="light" round>{{detail.review_required?'待复核':'可使用'}}</el-tag></div></template>
@@ -182,6 +262,8 @@ watch(() => [filters.site_id, props.billType] as const, () => void state.reload(
 </template>
 
 <style scoped>
+.group-help{display:inline-flex;align-items:center;justify-content:center;padding:4px;border:0;background:transparent;color:var(--el-text-color-secondary);cursor:help;font-size:14px}.group-help:focus-visible{outline:2px solid var(--el-color-primary);border-radius:4px}.history-notice{margin-top:12px}.user-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:16px;margin:0 0 16px;color:var(--el-text-color-secondary);font-size:13px}.user-search{width:260px}.bill-date-filter{display:flex;align-items:center;gap:8px;max-width:100%}.bill-date-filter :deep(.el-date-editor){width:280px;max-width:100%;flex-grow:0}.user-toolbar>.el-button{margin-left:auto}.user-group{margin-top:12px;border:1px solid var(--el-border-color-light);border-radius:8px;overflow:hidden;background:var(--el-bg-color)}.user-group-header{display:flex;align-items:center;gap:16px;width:100%;padding:18px 20px;border:0;background:var(--el-bg-color);color:var(--el-text-color-primary);text-align:left;cursor:pointer;font:inherit}.user-group-header:hover{background:var(--el-fill-color-light)}.user-group-header:focus-visible{outline:2px solid var(--el-color-primary);outline-offset:-2px}.user-identity{min-width:180px;flex:1}.user-identity strong{font-size:15px}.expand-arrow{font-size:24px;transition:transform .15s}.expand-arrow.expanded{transform:rotate(90deg)}.group-count,.group-latest{font-size:13px;color:var(--el-text-color-secondary)}.expand-label{font-size:13px;color:var(--el-color-primary)}.user-group .records-table{margin-top:0;border-top:1px solid var(--el-border-color-light)}.user-pagination{justify-content:flex-end;margin-top:20px}@media(max-width:900px){.user-toolbar{flex-wrap:wrap}.user-search{width:100%}.user-group-header{flex-wrap:wrap;gap:10px}.user-identity{min-width:140px}.group-latest{display:none}}
+
 .records-table{margin-top:16px}b,small{display:block}small{margin-top:4px;color:var(--el-text-color-secondary);font-size:12px}.warning{color:var(--el-color-warning);font-weight:600}
 .preview-title{display:flex;align-items:center;gap:12px}.preview-title h2{margin:0;font-size:20px;color:#172033}.preview-title p{margin:4px 0 0;color:#8490a5;font-size:12px}.preview-title .el-tag{margin-left:auto;margin-right:12px}.preview-mark{display:grid;place-items:center;width:42px;height:42px;border-radius:12px;color:#fff;font-size:20px;font-weight:700;background:linear-gradient(135deg,#315ee8,#6c8cff);box-shadow:0 7px 18px rgba(49,94,232,.24)}
 .preview-body{min-height:300px}.preview-meta{display:grid;grid-template-columns:1fr 1fr 1.3fr;gap:1px;background:#e8edf5;border:1px solid #e8edf5;border-radius:10px;overflow:hidden}.preview-meta>div{padding:13px 16px;background:#f8fafd}.preview-meta span{display:block;color:#8994a7;font-size:12px;margin-bottom:5px}.preview-meta strong{color:#28344a;font-size:14px}.mono{font-family:Consolas,monospace;font-size:12px!important;font-weight:500}

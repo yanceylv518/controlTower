@@ -1,6 +1,7 @@
 package agentgateway
 
 import (
+	"controltower/internal/outputstats"
 	"controltower/internal/speedstats"
 	"time"
 
@@ -138,6 +139,7 @@ type AggregatedMetricPayload struct {
 	LatencyBucketsV2  []int64             `json:"latency_buckets_v2,omitempty"`
 	TTFTBuckets       []int64             `json:"ttft_buckets,omitempty"`
 	SpeedTTFT         *speedstats.Stats   `json:"speed_ttft,omitempty"`
+	OutputSpeed       *outputstats.Stats  `json:"output_speed,omitempty"`
 }
 
 type LogSamplePayload struct {

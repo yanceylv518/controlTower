@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"controltower/internal/latencyhist"
+	"controltower/internal/outputstats"
 	"controltower/internal/speedstats"
 	"crypto/sha1"
 	"encoding/hex"
@@ -294,40 +295,52 @@ func (s Service) SaveReport(req agentgateway.AgentReportRequest) error {
 		}
 	}
 
-	channelSnapshots := make([]storage.ChannelSnapshot, 0, len(req.ChannelSnapshots))
-	for _, payload := range req.ChannelSnapshots {
-		capturedAt := payload.CapturedAt
-		if capturedAt.IsZero() {
-			capturedAt = req.ReportedAt
+	// Source selection is server-side; old Agents keep sending their normal
+	// reports. Ignore only channel inventory when a readonly source is configured.
+	acceptChannels := true
+	if gate, ok := s.store.(interface{ AcceptAgentChannelSnapshots(string) (bool, error) }); ok && (req.ChannelSnapshotComplete || len(req.ChannelSnapshots) > 0) {
+		var err error
+		acceptChannels, err = gate.AcceptAgentChannelSnapshots(req.InstanceID)
+		if err != nil {
+			return err
 		}
-		channelSnapshots = append(channelSnapshots, storage.ChannelSnapshot{
-			ID: channelSnapshotID(req.InstanceID, payload.ChannelID, capturedAt), InstanceID: req.InstanceID,
-			ChannelID: payload.ChannelID, ChannelName: payload.ChannelName, Status: payload.Status, Weight: payload.Weight,
-			ModelsText: payload.ModelsText, GroupName: payload.GroupName, Priority: payload.Priority, CapturedAt: capturedAt,
-		})
 	}
-	if req.ChannelSnapshotComplete {
-		if batchStore, ok := s.store.(interface {
-			SyncChannelSnapshotsAt(string, []storage.ChannelSnapshot, time.Time) error
-		}); ok {
-			if err := batchStore.SyncChannelSnapshotsAt(req.InstanceID, channelSnapshots, req.ReportedAt); err != nil {
-				return err
+	if acceptChannels {
+		channelSnapshots := make([]storage.ChannelSnapshot, 0, len(req.ChannelSnapshots))
+		for _, payload := range req.ChannelSnapshots {
+			capturedAt := payload.CapturedAt
+			if capturedAt.IsZero() {
+				capturedAt = req.ReportedAt
 			}
-		} else if batchStore, ok := s.store.(channelSnapshotBatchStore); ok {
-			if err := batchStore.SyncChannelSnapshots(req.InstanceID, channelSnapshots); err != nil {
-				return err
+			channelSnapshots = append(channelSnapshots, storage.ChannelSnapshot{
+				ID: channelSnapshotID(req.InstanceID, payload.ChannelID, capturedAt), InstanceID: req.InstanceID,
+				ChannelID: payload.ChannelID, ChannelName: payload.ChannelName, Status: payload.Status, Weight: payload.Weight,
+				ModelsText: payload.ModelsText, GroupName: payload.GroupName, Priority: payload.Priority, CapturedAt: capturedAt,
+			})
+		}
+		if req.ChannelSnapshotComplete {
+			if batchStore, ok := s.store.(interface {
+				SyncChannelSnapshotsAt(string, []storage.ChannelSnapshot, time.Time) error
+			}); ok {
+				if err := batchStore.SyncChannelSnapshotsAt(req.InstanceID, channelSnapshots, req.ReportedAt); err != nil {
+					return err
+				}
+			} else if batchStore, ok := s.store.(channelSnapshotBatchStore); ok {
+				if err := batchStore.SyncChannelSnapshots(req.InstanceID, channelSnapshots); err != nil {
+					return err
+				}
+			} else {
+				for _, snapshot := range channelSnapshots {
+					if err := s.store.InsertChannelSnapshot(snapshot); err != nil {
+						return err
+					}
+				}
 			}
 		} else {
 			for _, snapshot := range channelSnapshots {
 				if err := s.store.InsertChannelSnapshot(snapshot); err != nil {
 					return err
 				}
-			}
-		}
-	} else {
-		for _, snapshot := range channelSnapshots {
-			if err := s.store.InsertChannelSnapshot(snapshot); err != nil {
-				return err
 			}
 		}
 	}
@@ -444,6 +457,7 @@ func toAggregatorMetrics(instanceID string, payloads []agentgateway.AggregatedMe
 			LatencyBuckets:    payload.LatencyBuckets,
 			LatencyBucketsV2:  bucketsV2FromSlice(payload.LatencyBucketsV2),
 			SpeedTTFT:         validSpeedTTFT(payload),
+			OutputSpeed:       validOutputSpeed(payload),
 			TTFTBuckets:       bucketsV2FromSlice(payload.TTFTBuckets),
 		})
 	}
@@ -473,4 +487,11 @@ func validSpeedTTFT(p agentgateway.AggregatedMetricPayload) *speedstats.Stats {
 		return nil
 	}
 	return speedstats.Clone(p.SpeedTTFT)
+}
+
+func validOutputSpeed(p agentgateway.AggregatedMetricPayload) *outputstats.Stats {
+	if !p.OutputSpeed.Valid(p.RequestCount, p.DimensionType == "instance_channel") {
+		return nil
+	}
+	return outputstats.Clone(p.OutputSpeed)
 }

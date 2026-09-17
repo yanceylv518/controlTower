@@ -26,9 +26,9 @@ func TestContinuousBaselineRequiresTwoComparableChannels(t *testing.T) {
 func TestContinuousBaselineUsesArithmeticAverage(t *testing.T) {
 	rows := []ChannelBaseValue{{ChannelID: 1}, {ChannelID: 2}, {ChannelID: 3}}
 	metrics := map[int64]ChannelMetric{
-		1: {ChannelID: 1, RequestCount: 20, TTFTP50: 1, TTFTP90: 2, TTFTP95: 3, SpeedSamples: 20, SpeedTTFTP50: 1, SpeedTTFTP90: 2, SpeedTTFTP95: 3, CacheHitRate: .1, CachePromptTokens: cacheEvidenceTokens, OTPS: 10, OTPSSampleTokens: otpsEvidenceTokens},
-		2: {ChannelID: 2, RequestCount: 20, TTFTP50: 2, TTFTP90: 4, TTFTP95: 6, SpeedSamples: 20, SpeedTTFTP50: 2, SpeedTTFTP90: 4, SpeedTTFTP95: 6, CacheHitRate: .2, CachePromptTokens: cacheEvidenceTokens, OTPS: 20, OTPSSampleTokens: otpsEvidenceTokens},
-		3: {ChannelID: 3, RequestCount: 20, TTFTP50: 9, TTFTP90: 12, TTFTP95: 15, SpeedSamples: 20, SpeedTTFTP50: 9, SpeedTTFTP90: 12, SpeedTTFTP95: 15, CacheHitRate: .9, CachePromptTokens: cacheEvidenceTokens, OTPS: 90, OTPSSampleTokens: otpsEvidenceTokens},
+		1: {ChannelID: 1, RequestCount: 20, TTFTP50: 1, TTFTP90: 2, TTFTP95: 3, SpeedSamples: 20, SpeedTTFTP50: 1, SpeedTTFTP90: 2, SpeedTTFTP95: 3, CacheHitRate: .1, CachePromptTokens: cacheEvidenceTokens, OTPS: 10, OTPSSampleTokens: otpsEvidenceTokens, OTPSSamples: 20, OTPSStatsVersion: 1},
+		2: {ChannelID: 2, RequestCount: 20, TTFTP50: 2, TTFTP90: 4, TTFTP95: 6, SpeedSamples: 20, SpeedTTFTP50: 2, SpeedTTFTP90: 4, SpeedTTFTP95: 6, CacheHitRate: .2, CachePromptTokens: cacheEvidenceTokens, OTPS: 20, OTPSSampleTokens: otpsEvidenceTokens, OTPSSamples: 20, OTPSStatsVersion: 1},
+		3: {ChannelID: 3, RequestCount: 20, TTFTP50: 9, TTFTP90: 12, TTFTP95: 15, SpeedSamples: 20, SpeedTTFTP50: 9, SpeedTTFTP90: 12, SpeedTTFTP95: 15, CacheHitRate: .9, CachePromptTokens: cacheEvidenceTokens, OTPS: 90, OTPSSampleTokens: otpsEvidenceTokens, OTPSSamples: 20, OTPSStatsVersion: 1},
 	}
 	b, ok := buildContinuousBaseline(rows, metrics, 20)
 	if !ok || !b.cacheReady || !b.otpsReady {
@@ -46,7 +46,7 @@ func TestContinuousBaselineUsesArithmeticAverage(t *testing.T) {
 
 func TestContinuousFactorsRewardFasterChannelAndRespectCap(t *testing.T) {
 	b := continuousBaseline{speedReady: true, ttft50: 2, ttft90: 4, ttft95: 6, cache: .5, otps: 50, cacheReady: true, otpsReady: true}
-	fast := ChannelMetric{TTFTP50: 1, TTFTP90: 2, TTFTP95: 3, SpeedSamples: 20, SpeedTTFTP50: 1, SpeedTTFTP90: 2, SpeedTTFTP95: 3, CacheHitRate: .8, CachePromptTokens: cacheEvidenceTokens, OTPS: 80, OTPSSampleTokens: otpsEvidenceTokens}
+	fast := ChannelMetric{TTFTP50: 1, TTFTP90: 2, TTFTP95: 3, SpeedSamples: 20, SpeedTTFTP50: 1, SpeedTTFTP90: 2, SpeedTTFTP95: 3, CacheHitRate: .8, CachePromptTokens: cacheEvidenceTokens, OTPS: 80, OTPSSampleTokens: otpsEvidenceTokens, OTPSSamples: 20, OTPSStatsVersion: 1}
 	if got := speedFactor(fast, b, DefaultPolicy().Continuous); got <= 1 {
 		t.Fatalf("faster channel should have factor above one, got %v", got)
 	}
@@ -365,6 +365,7 @@ func TestContinuousAutoDedupesAgainstOwnLastWrite(t *testing.T) {
 		ChannelID: 1, ModelName: "m", Models: []string{"m"}, BaseWeight: 100,
 		CurrentWeight: 90, SnapshotAt: now.Add(-time.Hour),
 	}}}
+	addNeutralPerformanceEvidence(f)
 	e := NewEngine(f)
 	e.evaluateContinuous("i", autoPolicy(), now, f)
 	// Snapshot stays stale at 90. The ramp advances from the last successful
@@ -385,6 +386,7 @@ func TestContinuousAutoWritesEveryIntegerTargetChange(t *testing.T) {
 		states: map[int64]ContinuousState{1: {InstanceID: "i", ChannelID: 1, ModelName: "m", KError: 1, LastWrittenWeight: &last, LastWriteAt: &writeAt}},
 	}
 	pr := autoPolicy()
+	addNeutralPerformanceEvidence(f)
 	NewEngine(f).evaluateContinuous("i", pr, now, f)
 	if len(f.writes) != 1 || f.writes[0].ProposedWeight != 100 {
 		t.Fatalf("one-unit target change must write immediately: %#v", f.writes)
@@ -409,6 +411,7 @@ func TestContinuousAutoDoesNotWaitForMinimumWriteInterval(t *testing.T) {
 				state.LastWrittenWeight = &last
 			}
 			f := &continuousFake{bases: []ChannelBaseValue{{ChannelID: 1, ModelName: "m", Models: []string{"m"}, BaseWeight: 100, CurrentWeight: 90, SnapshotAt: now.Add(-time.Hour)}}, states: map[int64]ContinuousState{1: state}}
+			addNeutralPerformanceEvidence(f)
 			NewEngine(f).evaluateContinuous("i", autoPolicy(), now, f)
 			if len(f.writes) != tc.wantWrites {
 				t.Fatalf("writes=%d want=%d state=%#v", len(f.writes), tc.wantWrites, f.states[1])
@@ -429,6 +432,7 @@ func TestAutoReassertsCalculatedWeightAfterConfirmedExternalChange(t *testing.T)
 		states: map[int64]ContinuousState{1: {InstanceID: "i", ChannelID: 1, ModelName: "m",
 			KError: 1, LastWrittenWeight: &written, LastWriteAt: &writeAt}},
 	}
+	addNeutralPerformanceEvidence(stale)
 	NewEngine(stale).evaluateContinuous("i", autoPolicy(), now, stale)
 	if stale.states[1].PausedReason != "" || len(stale.writes) != 0 {
 		t.Fatalf("stale snapshot must neither pause nor duplicate: state=%#v writes=%d", stale.states[1], len(stale.writes))
@@ -439,6 +443,7 @@ func TestAutoReassertsCalculatedWeightAfterConfirmedExternalChange(t *testing.T)
 		states: map[int64]ContinuousState{1: {InstanceID: "i", ChannelID: 1, ModelName: "m",
 			KError: 1, LastWrittenWeight: &written, LastWriteAt: &writeAt}},
 	}
+	addNeutralPerformanceEvidence(fresh)
 	NewEngine(fresh).evaluateContinuous("i", autoPolicy(), now, fresh)
 	if fresh.states[1].PausedReason != "" || len(fresh.writes) != 1 || fresh.writes[0].ProposedWeight != 99 {
 		t.Fatalf("fresh external change must be overwritten by auto: %#v writes=%#v", fresh.states[1], fresh.writes)
@@ -725,6 +730,7 @@ func TestWriteFailureStreakPausesThenSelfHeals(t *testing.T) {
 		bases:    []ChannelBaseValue{{ChannelID: 1, ModelName: "m", Models: []string{"m"}, BaseWeight: 10, CurrentWeight: 20, SnapshotAt: now.Add(-time.Hour)}},
 		writeErr: errors.New("new-api channel update failed: unauthorized"),
 	}
+	addNeutralPerformanceEvidence(f)
 	e := NewEngine(f)
 	pr := autoPolicy()
 
@@ -787,6 +793,7 @@ func TestWriteFailurePauseClearsWhenDueChangeEvaporates(t *testing.T) {
 				bases:  []ChannelBaseValue{{ChannelID: 1, ModelName: "m", Models: []string{"m"}, BaseWeight: 100, CurrentWeight: tc.current, SnapshotAt: now.Add(-time.Hour)}},
 				states: map[int64]ContinuousState{1: {InstanceID: "i", ChannelID: 1, ModelName: "m", KError: 1, LastWrittenWeight: &last, LastWriteAt: &lastWriteAt, PausedReason: "write_failed", WriteFailureStreak: 3, LastWriteFailureAt: &failedAt, LastWriteError: "boom"}},
 			}
+			addNeutralPerformanceEvidence(f)
 			NewEngine(f).evaluateContinuous("i", autoPolicy(), now, f)
 			state := f.states[1]
 			if f.writeAttempts != 0 || state.PausedReason != "" || state.WriteFailureStreak != 0 || state.LastWriteError != "" {
@@ -802,6 +809,7 @@ func TestWriteFailurePauseKeepsRetryFailuresQuiet(t *testing.T) {
 		bases:    []ChannelBaseValue{{ChannelID: 1, ModelName: "m", Models: []string{"m"}, BaseWeight: 10, CurrentWeight: 20, SnapshotAt: now.Add(-time.Hour)}},
 		writeErr: errors.New("boom"),
 	}
+	addNeutralPerformanceEvidence(f)
 	e := NewEngine(f)
 	for i := 0; i < 3; i++ {
 		e.evaluateContinuous("i", autoPolicy(), now.Add(time.Duration(i)*time.Minute), f)
@@ -907,5 +915,13 @@ func TestPausedAutoCircuitWaitsForRealZeroingWrite(t *testing.T) {
 	}
 	if len(f.writes) != 1 || f.writes[0].Rule != "circuit_opened" {
 		t.Fatalf("the committed write must be the circuit zeroing: %#v", f.writes)
+	}
+}
+
+// Write/retry tests exercise dispatch with a valid current-window proposal.
+func addNeutralPerformanceEvidence(f *continuousFake) {
+	f.bases = append(f.bases, ChannelBaseValue{ChannelID: 999, ModelName: "m", Models: []string{"m"}, BaseWeight: 100, CurrentWeight: 100})
+	for _, b := range f.bases {
+		f.metrics = append(f.metrics, ChannelMetric{ChannelID: b.ChannelID, RequestCount: 100, TTFTP50: 1, TTFTP90: 1, TTFTP95: 1, SpeedSamples: 100, SpeedTTFTP50: 1, SpeedTTFTP90: 1, SpeedTTFTP95: 1, OTPS: 100, OTPSSamples: 100, OTPSSampleTokens: 1000, OTPSStatsVersion: 1})
 	}
 }

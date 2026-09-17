@@ -2,6 +2,7 @@ package aggregator
 
 import (
 	"controltower/internal/cachemetrics"
+	"controltower/internal/outputstats"
 	"controltower/internal/speedstats"
 	"sort"
 	"strconv"
@@ -48,7 +49,8 @@ type Metric struct {
 	LatencyBuckets    latencyhist.Buckets
 	LatencyBucketsV2  *latencyhist.BucketsV2
 	TTFTBuckets       *latencyhist.BucketsV2
-	SpeedTTFT         *speedstats.Stats `json:"speed_ttft,omitempty"`
+	SpeedTTFT         *speedstats.Stats  `json:"speed_ttft,omitempty"`
+	OutputSpeed       *outputstats.Stats `json:"output_speed,omitempty"`
 }
 
 type accumulator struct {
@@ -228,6 +230,7 @@ func MergeMetric(current Metric, incoming Metric) Metric {
 	merged.BigInputCount = addNullableInt64(merged.BigInputCount, incoming.BigInputCount)
 	merged.BigInputCacheHits = addNullableInt64(merged.BigInputCacheHits, incoming.BigInputCacheHits)
 	merged.SpeedTTFT = speedstats.Merge(merged.SpeedTTFT, incoming.SpeedTTFT)
+	merged.OutputSpeed = outputstats.Merge(merged.OutputSpeed, incoming.OutputSpeed)
 	merged.TTFTCount = addNullableInt64(merged.TTFTCount, incoming.TTFTCount)
 	merged.TTFTSumMS = addNullableInt64(merged.TTFTSumMS, incoming.TTFTSumMS)
 	merged.OTPSOutputTokens += incoming.OTPSOutputTokens

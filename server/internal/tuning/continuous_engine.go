@@ -177,10 +177,8 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 				state.Phase = "normal"
 			}
 			state.KSpeed, state.KCache, state.KOTPS = 1, 1, 1
-			// Never retain an old unfiltered speed score during migration.
-			if base.BaseWeight > 0 && len(base.Models) <= 1 && previous.ModelName == model && previous.SpeedStatsVersion == 1 && previous.KSpeed > 0 {
-				state.KSpeed = clamp(previous.KSpeed, p.SpeedMinFactor, p.SpeedMaxFactor)
-			}
+			// Every performance factor belongs to this window. Missing TTFT
+			// uses this window's output factor, never a historical speed score.
 			state.SpeedStatsVersion = 1
 			// manual_override is obsolete in authoritative auto tuning. Clear any
 			// legacy state before the early-return branches below (mixed channel,
@@ -220,7 +218,9 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 			state.MetricCache, state.BaselineCache = m.CacheHitRate, baseline.cache
 			state.CacheReady = baseline.cacheReady && m.CachePromptTokens >= cacheEvidenceTokens
 			state.MetricOTPS, state.BaselineOTPS = m.OTPS, baseline.otps
-			state.OTPSReady = baseline.otpsReady && m.OTPSSampleTokens >= otpsEvidenceTokens
+			state.OTPSReady = baseline.otpsReady && outputEvidenceReady(m, p.MinSamples)
+			state.OTPSSamples, state.OTPSRetries, state.OTPSUnknown = m.OTPSSamples, m.OTPSRetries, m.OTPSUnknown
+			state.OTPSStatsVersion = m.OTPSStatsVersion
 
 			// Mixed-channel fuse (design §4): the weight knob is channel-wide,
 			// so a channel serving several models must never be auto-tuned on
@@ -337,7 +337,7 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 				if passiveErrorRate <= p.RecoveryErrorRate {
 					state.SmoothedErrorRate = passiveErrorRate
 					state.KError = reliabilityFactorWithPolicy(passiveErrorRate, p)
-					if healthy && m.RequestCount >= p.MinSamples {
+					if (healthy || baseline.otpsReady) && m.RequestCount >= p.MinSamples {
 						applyPerformanceFactors(&state, m, baseline, p)
 					}
 					passiveMultiplier := combinedFactor(state, p)
@@ -402,11 +402,11 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 				state.CircuitOpenedAt = nil
 				state.NextProbeAt = nil
 			}
-			if healthy && mode != "off" && m.RequestCount >= p.MinSamples {
+			if (healthy || baseline.otpsReady) && mode != "off" && m.RequestCount >= p.MinSamples {
 				applyPerformanceFactors(&state, m, baseline, p)
 			}
 			state.Multiplier = combinedFactor(state, p)
-			if mode == "off" || !healthy {
+			if mode == "off" || (!healthy && !baseline.otpsReady) {
 				state.Multiplier = 1
 			}
 			state.ProposedWeight = int64(math.Round(float64(base.BaseWeight) * state.Multiplier))
@@ -473,13 +473,24 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 				continue
 			}
 
+			// Circuit/probe/recovery decisions above take precedence. A sparse
+			// normal window must not reset or rewrite the already applied weight.
+			if m.RequestCount < p.MinSamples || (!state.MetricReady || !state.BaselineReady) && !state.OTPSReady {
+				state.ProposedWeight = effectiveCurrentWeight(base, state)
+				state.Multiplier = float64(state.ProposedWeight) / float64(base.BaseWeight)
+				state.UpdatedAt = now
+				_ = cs.PutContinuousState(state)
+				evaluated++
+				continue
+			}
+
 			// Preserve useful observation evidence without adding one event per
 			// channel every minute: only record a proposal outside the write
 			// deadband RELATIVE TO THE LAST RECORDED EVENT. Anchoring on the
 			// previous tick instead would rate-filter — a slow drift never
 			// exceeds the threshold per step and would stay unrecorded no
 			// matter how far it travels.
-			if mode == "observe" && healthy && m.RequestCount >= p.MinSamples &&
+			if mode == "observe" && (healthy || baseline.otpsReady) && m.RequestCount >= p.MinSamples &&
 				(state.LastObservedWeight == nil || weightChangeOutsideDeadband(state.ProposedWeight, *state.LastObservedWeight, base.BaseWeight, observeEventDeadbandPercent)) {
 				_ = e.store.InsertRecommendation(continuousEvent(id, base, state, "weight_observed", mode, now))
 				anchor := state.ProposedWeight
@@ -590,6 +601,10 @@ func buildContinuousBaseline(rows []ChannelBaseValue, metrics map[int64]ChannelM
 	var probeTTFT95Sum float64
 	for _, row := range rows {
 		m := metrics[row.ChannelID]
+		// Output speed also supports non-streaming requests without TTFT.
+		if outputEvidenceReady(m, minSamples) {
+			otps = append(otps, m.OTPS)
+		}
 		if m.RequestCount < minSamples || m.TTFTP50 <= 0 || m.TTFTP90 <= 0 || m.TTFTP95 <= 0 {
 			continue
 		}
@@ -601,9 +616,9 @@ func buildContinuousBaseline(rows []ChannelBaseValue, metrics map[int64]ChannelM
 		if m.CachePromptTokens >= cacheEvidenceTokens {
 			caches = append(caches, m.CacheHitRate)
 		}
-		if m.OTPSSampleTokens >= otpsEvidenceTokens && m.OTPS > 0 {
-			otps = append(otps, m.OTPS)
-		}
+	}
+	if len(otps) >= 2 {
+		b.otps, b.otpsReady = average(otps), true
 	}
 	if monitorEligible < 2 {
 		return b, false
@@ -616,10 +631,11 @@ func buildContinuousBaseline(rows []ChannelBaseValue, metrics map[int64]ChannelM
 	if len(caches) >= 2 {
 		b.cache, b.cacheReady = average(caches), true
 	}
-	if len(otps) >= 2 {
-		b.otps, b.otpsReady = average(otps), true
-	}
 	return b, true
+}
+
+func outputEvidenceReady(m ChannelMetric, minSamples int64) bool {
+	return m.OTPSStatsVersion == 1 && m.OTPSSamples >= minSamples && m.OTPSSampleTokens >= otpsEvidenceTokens && m.OTPS > 0
 }
 
 func speedFactor(m ChannelMetric, b continuousBaseline, p ContinuousDispatchParams) float64 {
@@ -640,6 +656,9 @@ func performanceFactors(m ChannelMetric, b continuousBaseline, p ContinuousDispa
 	}
 	if otpsReady && b.otps > 0 {
 		otps = clamp(math.Pow(m.OTPS/b.otps, p.OTPSExponent*p.Sensitivity), p.OTPSMinFactor, p.OTPSMaxFactor)
+	}
+	if !speedEvidenceReady(m, p.MinSamples) || !b.speedReady {
+		speed = otps
 	}
 	return speed, cache, otps
 }
@@ -786,6 +805,7 @@ func continuousEvent(id string, base ChannelBaseValue, state ContinuousState, ru
 			"baseline_ttft_p50": state.BaselineTTFTP50, "baseline_ttft_p90": state.BaselineTTFTP90, "baseline_ttft_p95": state.BaselineTTFTP95,
 			"metric_cache": state.MetricCache, "baseline_cache": state.BaselineCache, "cache_ready": state.CacheReady,
 			"metric_otps": state.MetricOTPS, "baseline_otps": state.BaselineOTPS, "otps_ready": state.OTPSReady,
+			"otps_sample_count": state.OTPSSamples, "otps_retry_count": state.OTPSRetries, "otps_unknown_count": state.OTPSUnknown, "otps_stats_version": state.OTPSStatsVersion,
 			"smoothed_error_rate": state.SmoothedErrorRate, "probe_attempts": state.ProbeAttempts, "probe_successes": state.ProbeSuccesses,
 		},
 		CurrentWeight: base.CurrentWeight, ProposedWeight: state.ProposedWeight, CurrentPriority: &base.CurrentPriority, ProposedPriority: &base.BasePriority, ModeAtCreation: mode, Status: "recorded"}
@@ -796,8 +816,6 @@ func speedEvidenceReady(m ChannelMetric, minSamples int64) bool {
 }
 func applyPerformanceFactors(state *ContinuousState, m ChannelMetric, b continuousBaseline, p ContinuousDispatchParams) {
 	speed, cache, otps := performanceFactors(m, b, p, state.CacheReady, state.OTPSReady)
-	if state.MetricReady && b.speedReady {
-		state.KSpeed = speed
-	}
+	state.KSpeed = speed
 	state.KCache, state.KOTPS = cache, otps
 }

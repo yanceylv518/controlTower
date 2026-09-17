@@ -1,9 +1,12 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
+import { ArrowLeft, ArrowRight } from "@element-plus/icons-vue";
 import { ApiError, type ChannelBaseValue, type TuningChannel, type TuningContinuousState, type TuningPolicy, type TuningRecommendation } from "@ct/shared";
 import { dashboard } from "../api";
 import AppShell from "../components/AppShell.vue";
+import TuningInfo from "../components/TuningInfo.vue";
+import TuningCapacityMetric from "../components/TuningCapacityMetric.vue";
 import { useFiltersStore } from "../stores/filters";
 import { formatTime } from "../utils/format";
 import { hiddenChannelGroupCount, MAX_VISIBLE_CHANNEL_GROUPS, normalizeChannelGroups, splitChannelGroups, visibleChannelGroups } from "../utils/channelGroup";
@@ -23,6 +26,27 @@ const groupPollTokens = new Map<number, number>();
 const statesSite = ref("");
 const savedBases = ref<ChannelBaseValue[]>([]), savedPolicy = ref<TuningPolicy | null>(null), savedMode = ref<"observe" | "confirm" | "auto">("observe");
 const modelQuery = ref(""), activeModel = ref("");
+const manualNavCollapsed = ref(false);
+const narrowNavExpanded = ref(false);
+const pageElement = ref<HTMLElement | null>(null);
+const compactLayout = ref(false);
+const modelNavCollapsed = computed({
+  get: () => compactLayout.value ? !narrowNavExpanded.value : manualNavCollapsed.value,
+  set: (collapsed: boolean) => {
+    if (compactLayout.value) narrowNavExpanded.value = !collapsed;
+    else manualNavCollapsed.value = collapsed;
+  },
+});
+watch(compactLayout, () => { narrowNavExpanded.value = false; });
+let layoutObserver: ResizeObserver | undefined;
+onMounted(() => {
+  if (!pageElement.value) return;
+  layoutObserver = new ResizeObserver(([entry]) => {
+    if (entry) compactLayout.value = entry.contentRect.width < 1200;
+  });
+  layoutObserver.observe(pageElement.value);
+});
+onBeforeUnmount(() => layoutObserver?.disconnect());
 const eventModelFilter = ref(""), eventRuleFilter = ref(""), eventChannelQuery = ref("");
 const eventPage = ref(1), eventPageSize = ref(20);
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
@@ -84,7 +108,8 @@ const filteredEvents = computed(() => {
   const selectedModel = eventModelFilter.value === "__current__" ? activeModel.value : eventModelFilter.value;
   const channelQuery = eventChannelQuery.value.trim().toLowerCase();
   return recentEvents.value.filter(item =>
-    (!selectedModel || eventModel(item) === selectedModel)
+    (!eventDateRange.value || (new Date(item.created_at).getTime() >= new Date(`${eventDateRange.value[0]}T00:00:00`).getTime() && new Date(item.created_at).getTime() <= new Date(`${eventDateRange.value[1]}T23:59:59.999`).getTime()))
+    && (!selectedModel || eventModel(item) === selectedModel)
     && (!eventRuleFilter.value || item.rule === eventRuleFilter.value)
     && (!channelQuery || item.channel_name.toLowerCase().includes(channelQuery) || String(item.channel_id).includes(channelQuery)),
   );
@@ -107,9 +132,9 @@ const factorExplanation = (row: ChannelBaseValue) => {
   if (state.speed_stats_version === 1 && state.metric_ready && state.baseline_ready && state.baseline_ttft_p50 > 0 && state.baseline_ttft_p90 > 0 && state.baseline_ttft_p95 > 0) {
     const ratio = policy.continuous.speed_p50_weight * state.metric_ttft_p50 / state.baseline_ttft_p50 + policy.continuous.speed_p90_weight * state.metric_ttft_p90 / state.baseline_ttft_p90 + policy.continuous.speed_p95_weight * state.metric_ttft_p95 / state.baseline_ttft_p95;
     const raw = Math.pow(1 / ratio, policy.continuous.speed_exponent * policy.continuous.sensitivity);
-    lines.push(`速度 ${factor(state.k_speed)}\nR = ${percent(policy.continuous.speed_p50_weight)}×(${state.metric_ttft_p50.toFixed(3)}/${state.baseline_ttft_p50.toFixed(3)}) + ${percent(policy.continuous.speed_p90_weight)}×(${state.metric_ttft_p90.toFixed(3)}/${state.baseline_ttft_p90.toFixed(3)}) + ${percent(policy.continuous.speed_p95_weight)}×(${state.metric_ttft_p95.toFixed(3)}/${state.baseline_ttft_p95.toFixed(3)}) = ${ratio.toFixed(4)}\nclamp((1/R)^(${policy.continuous.speed_exponent}×${policy.continuous.sensitivity}), ${policy.continuous.speed_min_factor}, ${policy.continuous.speed_max_factor}) = ${clampNumber(raw, policy.continuous.speed_min_factor, policy.continuous.speed_max_factor).toFixed(3)}`);
+    lines.push(`速度 ${displayedSpeedFactor(row) === null ? "—" : factor(displayedSpeedFactor(row)!)}\nR = ${percent(policy.continuous.speed_p50_weight)}×(${state.metric_ttft_p50.toFixed(3)}/${state.baseline_ttft_p50.toFixed(3)}) + ${percent(policy.continuous.speed_p90_weight)}×(${state.metric_ttft_p90.toFixed(3)}/${state.baseline_ttft_p90.toFixed(3)}) + ${percent(policy.continuous.speed_p95_weight)}×(${state.metric_ttft_p95.toFixed(3)}/${state.baseline_ttft_p95.toFixed(3)}) = ${ratio.toFixed(4)}\nclamp((1/R)^(${policy.continuous.speed_exponent}×${policy.continuous.sensitivity}), ${policy.continuous.speed_min_factor}, ${policy.continuous.speed_max_factor}) = ${clampNumber(raw, policy.continuous.speed_min_factor, policy.continuous.speed_max_factor).toFixed(3)}`);
   } else {
-    lines.push(`速度 ${factor(state.k_speed)}\n本轮不更新速度系数，保留已有新口径系数（首次为 1.000）：${!state.metric_ready ? "未重试有效样本不足或 TTFT 不完整" : "未重试样本合格渠道不足 2 个"}。`);
+    lines.push(`速度 ${displayedSpeedFactor(row) === null ? "—" : factor(displayedSpeedFactor(row)!)}\n${state.otps_ready && state.otps_stats_version === 1 && state.last_observed_requests >= policy.continuous.min_samples ? "TTFT 样本或基线不足，使用本轮平均输出速度系数；OTPS 在综合倍率中参与两次，不沿用历史 TTFT。" : "本轮数据不足，不重新调整权重，也不使用历史 TTFT 系数。"}`);
   }
   if (state.cache_ready && state.baseline_cache > 0) {
     const ratio = state.metric_cache / state.baseline_cache;
@@ -118,12 +143,15 @@ const factorExplanation = (row: ChannelBaseValue) => {
   } else {
     lines.push(`缓存 ${factor(state.k_cache)}\n回退为 1.000：窗口内大输入请求的提示 Token 不足 10000，或同模型缓存基线不足。`);
   }
-  if (state.otps_ready && state.baseline_otps > 0) {
+  lines.push(`输出样本：未重试 ${state.otps_sample_count ?? 0}；重试排除 ${state.otps_retry_count ?? 0}；无法确认 ${state.otps_unknown_count ?? 0}。流式和非流式均按输出 Token 总数 ÷ 请求总耗时计算，监控保留重试。`);
+  if (state.otps_stats_version !== 1) {
+    lines.push("输出：等待新口径输出样本，旧缓存系数不能解释为请求总耗时口径。");
+  } else if (state.otps_ready && state.baseline_otps > 0) {
     const ratio = state.metric_otps / state.baseline_otps;
     const raw = Math.pow(ratio, policy.continuous.otps_exponent * policy.continuous.sensitivity);
     lines.push(`输出 ${factor(state.k_otps)}\nOTPS ${state.metric_otps.toFixed(2)} ÷ 同模型平均数 ${state.baseline_otps.toFixed(2)} = ${ratio.toFixed(4)}\nclamp(比值^(${policy.continuous.otps_exponent}×${policy.continuous.sensitivity}), ${policy.continuous.otps_min_factor}, ${policy.continuous.otps_max_factor}) = ${clampNumber(raw, policy.continuous.otps_min_factor, policy.continuous.otps_max_factor).toFixed(3)}`);
   } else {
-    lines.push(`输出 ${factor(state.k_otps)}\n回退为 1.000：窗口输出 Token 不足 100，或同模型 OTPS 基线不足。`);
+    lines.push(`输出 ${factor(state.k_otps)}\n回退为 1.000：未重试有效请求不足 ${policy.continuous.min_samples} 条、输出 Token 不足 100，或同模型合格渠道不足 2 个。`);
   }
   lines.push(`错误 ${factor(state.k_error)}\n平滑渠道错误率 ${(state.smoothed_error_rate * 100).toFixed(2)}%；按 ≤${percent(policy.continuous.error_healthy_rate)}→1.000、${percent(policy.continuous.error_degraded_rate)}→${factor(policy.continuous.error_degraded_factor)}、${percent(policy.continuous.error_poor_rate)}→${factor(policy.continuous.error_poor_factor)}、≥${percent(policy.continuous.error_floor_rate)}→${factor(policy.continuous.error_min_factor)} 分段线性换算。用户自身错误不处罚渠道。`);
   return lines.join("\n\n");
@@ -177,11 +205,117 @@ const evaluationText = (row: ChannelBaseValue) => {
   if (row.base_weight <= 0) return "基础权重为 0，未参与调权";
   if (!state) return "等待评估数据";
   if (state?.paused_reason || (state?.phase && state.phase !== "normal")) return phaseText(state);
+  const minimum = (savedPolicy.value?.continuous ?? policy.continuous).min_samples;
+  if (requests < minimum) return `窗口样本不足 ${requests}/${minimum}，本轮不调权`;
   if (state.speed_stats_version !== 1) return "等待新口径速度评估";
-  if (requests < policy.continuous.min_samples) return `样本不足 ${requests}/${policy.continuous.min_samples}`;
-  if (!state?.metric_ready) return `速度样本不足 ${state.speed_sample_count ?? 0}/${policy.continuous.min_samples}`;
-  return state.baseline_ready ? "已参与本轮计算" : "速度基线不足 2 个渠道";
+  if (!state?.metric_ready) return state.otps_ready && state.otps_stats_version === 1 ? "TTFT 样本不足，使用本轮输出系数" : `TTFT 样本不足 ${state.speed_sample_count ?? 0}/${policy.continuous.min_samples}，输出不可用，本轮不调权`;
+  return state.baseline_ready ? "已参与本轮计算" : state.otps_ready && state.otps_stats_version === 1 ? "TTFT 基线不足，使用本轮输出系数" : "TTFT 与输出基线不足，本轮不调权";
 };
+const displayedSpeedFactor = (row: ChannelBaseValue): number | null => {
+  const state = stateFor(row), params = savedPolicy.value?.continuous ?? policy.continuous;
+  if (!state || modelMode(row.model_name) === 'off' || row.base_weight <= 0 || state.phase !== 'normal' || state.paused_reason || (row.models?.length ?? 1) > 1) return null;
+  if (state.speed_stats_version !== 1 || state.last_observed_requests < params.min_samples) return null;
+  const ttftReady = state.metric_ready && state.baseline_ready;
+  if (!ttftReady && !(state.otps_ready && state.otps_stats_version === 1)) return null;
+  // New-version fallback must match this round's output factor, never an older TTFT value.
+  if (!ttftReady && state.k_speed !== state.k_otps) return null;
+  return Number.isFinite(state.k_speed) ? state.k_speed : null;
+};
+const speedLabel = (row: ChannelBaseValue) => {
+  const state = stateFor(row);
+  return displayedSpeedFactor(row) !== null && state && (!state.metric_ready || !state.baseline_ready) ? "速度（输出替代）" : "速度";
+};
+const coefficientColumns = [{key:'speed',label:'速度'}, {key:'cache',label:'缓存'}, {key:'otps',label:'输出'}, {key:'error',label:'错误'}] as const;
+const coefficientCell = (row: ChannelBaseValue, key: 'speed' | 'cache' | 'otps' | 'error') => {
+  const state = stateFor(row);
+  if (!state) return {value:null, status:'等待评估', detail:'尚无评估数据'};
+  const value = key === 'speed' ? displayedSpeedFactor(row) : state[`k_${key}`];
+  const result = (status: string, detail = status) => ({value: Number.isFinite(value) ? value : null, status, detail});
+  const params = savedPolicy.value?.continuous ?? policy.continuous;
+  if (modelMode(row.model_name) === 'off' || row.base_weight <= 0 || state.phase !== 'normal' || state.paused_reason || (row.models?.length ?? 1)>1) return result('未参与', evaluationText(row));
+  if (key === 'error') return result('平滑错误率', `平滑错误率 ${percent(state.smoothed_error_rate)}；错误系数独立于速度样本判断`);
+  if (state.last_observed_requests < params.min_samples) return result(key === 'speed' ? '' : '保留值', `窗口样本 ${state.last_observed_requests}/${params.min_samples}，本轮不重新计算性能系数`);
+  if (key === 'speed') {
+    if (value !== null) return result(speedLabel(row).includes('替代') ? '输出替代' : 'TTFT 有效');
+    if (state.speed_stats_version !== 1) return result('等待新口径');
+    return result(!state.metric_ready ? 'TTFT 样本不足' : !state.baseline_ready ? '基线不足' : '系数不可用', evaluationText(row));
+  }
+  if (key === 'cache') return result(state.cache_ready && state.baseline_cache > 0 ? '有效' : value === 1 ? '中性回退' : '保留值', state.cache_ready && state.baseline_cache > 0 ? '缓存样本与基线有效' : '缓存样本或基线不足');
+  if (state.otps_stats_version !== 1) return result('口径待确认', '接口缺少新版输出统计标记，暂无法确认当前系数的统计口径');
+  return result(state.otps_ready ? '有效' : value === 1 ? '中性回退' : '保留值', state.otps_ready ? '输出样本与基线有效' : '输出样本或基线不足');
+};
+const channelQuery = ref(""), channelStatusFilter = ref("");
+const eventDateRange = ref<[string, string] | null>(null);
+const settingsSection = ref("basic"), helpSection = ref("calculation");
+const limitReason = (row: ChannelBaseValue) => {
+  const rate = currentRateFor(row);
+  if (!rate) return row.max_rpm > 0 || row.max_tpm > 0 ? "实时负载不可用，有容量上限的渠道暂停上调" : "";
+  const exceeded = [row.max_rpm > 0 && rate.rpm >= row.max_rpm ? "RPM" : "", row.max_tpm > 0 && rate.tpm >= row.max_tpm ? "TPM" : ""].filter(Boolean);
+  return exceeded.length ? `${exceeded.join(" / ")} 已达到上限，仅暂停上调，仍允许下调` : "";
+};
+const rowStatus = (row: ChannelBaseValue) => {
+  const state = stateFor(row), text = evaluationText(row);
+  if (text === "模型已关闭") return { kind: "muted", icon: "—", label: "已关闭" };
+  if (state?.phase === "circuit") return { kind: "danger", icon: "", label: "熔断" };
+  if (effectivePause(state) === "write_failed") return { kind: "danger", icon: "", label: "写入失败" };
+  if (text.includes("暂停")) return { kind: "warning", icon: "Ⅱ", label: "已暂停" };
+  if (state?.phase === "probing" || state?.phase === "soft_start") return { kind: "warning", icon: "↻", label: "恢复中" };
+  if (text.startsWith("窗口样本不足")) return { kind: "muted", icon: "i", label: text.split("，")[0] };
+  if (text.includes("不调权") || text.includes("未参与")) return { kind: "muted", icon: "i", label: text.includes("样本") ? "样本不足" : "未参与" };
+  if (text.includes("等待")) return { kind: "muted", icon: "i", label: "待评估" };
+  if (speedLabel(row).includes("替代")) return { kind: "accent", icon: "⇄", label: "" };
+  return { kind: "muted", icon: "", label: "—" };
+};
+const overallEvaluationStatus = (row: ChannelBaseValue) => {
+  const state = stateFor(row);
+  const overall = !state || modelMode(row.model_name) === 'off' || row.base_weight <= 0 || state.phase !== 'normal' || !!effectivePause(state) || (row.models?.length ?? 1) > 1 || evaluationText(row).startsWith('窗口样本不足');
+  return overall ? rowStatus(row).label : '';
+};
+const coefficientEmptyText = (row: ChannelBaseValue) => {
+  const status = overallEvaluationStatus(row);
+  if (status.startsWith('窗口样本不足')) return '窗口样本不足';
+  return ['未参与', '已关闭', '已暂停'].includes(status) ? '未参与调权' : '';
+};
+const coefficientSpan = ({column}: {column: {property?: string}}) => {
+  if (column.property === 'coefficient_speed') return [1,4];
+  if (column.property?.startsWith('coefficient_')) return [0,0];
+  return [1,1];
+};
+const displayedRows = computed(() => activeRows.value.filter(row => {
+  const query = channelQuery.value.trim().toLowerCase();
+  if (query && !`${row.channel_name} ${row.channel_id} ${row.group_name}`.toLowerCase().includes(query)) return false;
+  if (channelStatusFilter.value === "limited") return !!limitReason(row);
+  if (channelStatusFilter.value === "attention") return ["danger", "warning"].includes(rowStatus(row).kind) || !!limitReason(row);
+  if (channelStatusFilter.value === "changed") return !!stateFor(row) && stateFor(row)!.proposed_weight !== row.current_weight;
+  return true;
+}));
+const priorityDrafts = reactive(new Map<number, number>());
+const priorityLocked = (row: ChannelBaseValue) => states.value.some(state => state.channel_id === row.channel_id && (state.phase === 'circuit' || state.phase === 'probing'));
+const displayedPriority = (row: ChannelBaseValue) => priorityDrafts.get(row.channel_id) ?? row.current_priority;
+const editPriority = (row: ChannelBaseValue, value: number | undefined) => {
+  if (priorityLocked(row) || value == null || !Number.isSafeInteger(value) || value < 0) return;
+  priorityDrafts.set(row.channel_id, value);
+  for (const item of bases.value) if (item.channel_id === row.channel_id) item.base_priority = value;
+  dirty.value = true;
+};
+const fieldChanged = (row: ChannelBaseValue, key: "base_weight" | "base_priority" | "max_rpm" | "max_tpm") => {
+  const saved = savedBases.value.find(item => channelRowKey(item) === channelRowKey(row));
+  return !!saved && saved[key] !== row[key];
+};
+const originalBase = (row: ChannelBaseValue) => stateFor(row)?.base_weight ?? savedBases.value.find(item => channelRowKey(item) === channelRowKey(row))?.base_weight ?? row.base_weight;
+const calculatedWeight = (row: ChannelBaseValue): number | null => {
+  const state = stateFor(row), params = savedPolicy.value?.continuous ?? policy.continuous;
+  if ((state?.last_observed_requests ?? 0) < params.min_samples || row.base_weight <= 0) return null;
+  const base = originalBase(row);
+  if (base <= 0) return null;
+  // Display the latest coefficient snapshot as a reference; execution eligibility is separate.
+  const factors = [state?.k_speed, state?.k_cache, state?.k_otps, state?.k_error].map(value => value ?? 1);
+  return Math.max(1, Math.round(base * clampNumber(factors.reduce((a, b) => a * b, 1), params.combined_min_factor, params.combined_max_factor)));
+};
+
+const eventResult = (row: TuningRecommendation) => ({ succeeded: "执行成功", failed: "执行失败", pending: "等待执行", expired: "已过期", recorded: "已记录", approved: "已批准", rejected: "已拒绝" } as Record<string, string>)[row.status] || row.status || "—";
+const eventResultClass = (row: TuningRecommendation) => row.status === "failed" || row.status === "expired" ? "danger" : row.status === "pending" ? "warning" : "muted";
+const resetEventFilters = () => { eventModelFilter.value = ""; eventRuleFilter.value = ""; eventChannelQuery.value = ""; eventDateRange.value = null; eventPage.value = 1; };
 const lastEvaluationAt = computed(() => activeRows.value.map(row => stateFor(row)?.updated_at).filter((value): value is string => !!value).sort().at(-1));
 const refreshNow = ref(Date.now());
 const evaluationAgeMinutes = computed(() => lastEvaluationAt.value ? Math.max(0, (refreshNow.value - new Date(lastEvaluationAt.value).getTime()) / 60000) : 0);
@@ -191,12 +325,14 @@ const replacePolicy = (value: TuningPolicy) => {
   Object.assign(policy, clone(value));
 };
 const captureSavedState = () => {
+  priorityDrafts.clear();
   savedBases.value = clone(bases.value);
   savedPolicy.value = clone(policy);
   savedMode.value = mode.value;
 };
 const cancelChanges = (notify = true) => {
   if (!savedPolicy.value) return;
+  priorityDrafts.clear();
   bases.value = clone(savedBases.value);
   replacePolicy(savedPolicy.value);
   mode.value = savedMode.value;
@@ -205,7 +341,6 @@ const cancelChanges = (notify = true) => {
 };
 const selectModel = (model: string) => {
   if (model === activeModel.value) return;
-  if (dirty.value) cancelChanges(false);
   activeModel.value = model;
 };
 
@@ -587,36 +722,60 @@ async function save() {
 }
 watch(() => filters.site_id, () => { cancelGroupPolls(); channels.value = []; pendingGroups.value = new Map(); groupErrors.value = new Map(); channelDirectoryGeneration++; void load(true); void watchChannelChanges(); });
 watch(siteID, () => { ratesReady.value = false; currentRates.value.clear(); void refreshCurrentRates(); });
-watch([eventModelFilter, eventRuleFilter, eventChannelQuery, activeModel], () => { eventPage.value = 1; });
+watch([eventModelFilter, eventRuleFilter, eventChannelQuery, eventDateRange, activeModel], () => { eventPage.value = 1; });
 onMounted(() => { void load(true); void watchChannelChanges(); void refreshCurrentRates(); refreshTimer = setInterval(() => void refreshRuntime(), 30000); ratesTimer = setInterval(() => { if (!document.hidden) void refreshCurrentRates(); }, 5000); });
 onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPolls(); if (refreshTimer) clearInterval(refreshTimer); if (ratesTimer) clearInterval(ratesTimer); });
 </script>
 
-<template><AppShell title="调权中心"><div v-loading="loading" class="page" :class="{'events-page':activeTab==='events'}">
-  <el-alert v-if="channelSyncError" :title="channelSyncError" type="warning" :closable="false" show-icon />
+<template><AppShell title="调权中心" class="tuning-shell"><div ref="pageElement" v-loading="loading" class="page" :class="{'events-page':activeTab==='events', 'compact-layout':compactLayout}">
+  <el-alert v-if="channelSyncError" :title="channelSyncError" type="warning" :closable="false" />
   <el-tabs v-model="activeTab" class="tabs">
     <el-tab-pane label="运行概览" name="overview">
-      <el-card shadow="never" class="workspace-card"><template #header><div class="head"><div class="title-line"><b>模型与渠道</b><small>每个模型单独选择关闭、只观察或自动执行；点击分组可编辑</small><div class="inline-metrics"><span>自动 <b>{{ counts.auto }}</b></span><span>观察 <b>{{ counts.observe }}</b></span><span>关闭 <b>{{ counts.off }}</b></span></div></div><div class="tools"><el-button @click="helpOpen=true">使用说明</el-button><el-button :loading="channelsRefreshing" :disabled="saving" @click="refreshChannelsNow">刷新渠道信息</el-button><el-button :loading="saving" @click="sync('weight')">初始化/刷新基础值</el-button><el-button v-if="dirty" :disabled="saving" @click="cancelChanges()">取消更改</el-button><el-button v-if="dirty" type="primary" :loading="saving" @click="save">保存更改</el-button></div></div></template>
+      <el-card shadow="never" class="workspace-card"><template #header><div class="head"><div class="title-line"><b>模型与渠道</b><div class="inline-metrics"><span>自动 <b>{{ counts.auto }}</b></span><span>观察 <b>{{ counts.observe }}</b></span><span>关闭 <b>{{ counts.off }}</b></span></div></div><div class="tools"><el-button @click="helpOpen=true">使用说明</el-button><el-button :loading="channelsRefreshing" :disabled="saving" @click="refreshChannelsNow">刷新渠道信息</el-button><el-button :loading="saving" @click="sync('weight')">初始化/刷新基础值</el-button></div></div></template>
         <el-empty v-if="!models.length" description="还没有渠道基础值"><el-button type="primary" @click="sync('weight')">立即从 new-api 读取</el-button></el-empty>
-        <div v-else class="model-workspace">
-          <aside class="model-nav"><el-input v-model="modelQuery" clearable placeholder="搜索模型"/><div class="model-list"><button v-for="model in visibleModels" :key="model" :class="{active:activeModel===model}" @click="selectModel(model)"><span><b>{{ model }}</b><small>{{ bases.filter(x=>x.model_name===model).length }} 个渠道</small></span><span class="model-status"><el-tag :type="modeType(model)" effect="plain" size="small">{{ modeText(model) }}</el-tag></span></button><el-empty v-if="!visibleModels.length" :image-size="48" description="没有匹配模型"/></div></aside>
-          <section class="model-detail"><div class="model-head"><div><b>{{ activeModel }}</b><small>{{ activeRows.length }} 个渠道</small><small v-if="refreshError" class="stale">刷新失败：{{ refreshError }}</small><small v-else-if="evaluationStalled" class="stale">评估已停滞：最后成功于 {{ formatTime(lastEvaluationAt!) }}</small><small v-else-if="lastEvaluationAt">最近评估 {{ formatTime(lastEvaluationAt) }} · 每 30 秒自动刷新</small></div><el-radio-group v-if="activeModel" v-model="policy.dispatch_modes[activeModel]" size="small" @change="dirty=true"><el-radio-button value="off">关闭</el-radio-button><el-radio-button value="observe">只观察</el-radio-button><el-radio-button value="auto">自动执行</el-radio-button></el-radio-group></div>
-            <el-collapse class="evidence-collapse"><el-collapse-item title="查看本轮原始指标与同模型平均数" name="evidence"><div class="evidence-grid"><div v-for="row in activeRows" :key="`${row.channel_id}:${row.model_name}`" class="evidence-row"><b>{{ row.channel_name }}</b><span>TTFT {{ seconds(stateFor(row)?.metric_ttft_p50) }}/{{ seconds(stateFor(row)?.metric_ttft_p90) }}/{{ seconds(stateFor(row)?.metric_ttft_p95) }} → 平均数 {{ seconds(stateFor(row)?.baseline_ttft_p50) }}/{{ seconds(stateFor(row)?.baseline_ttft_p90) }}/{{ seconds(stateFor(row)?.baseline_ttft_p95) }}</span><span>缓存 {{ stateFor(row)?.cache_ready ? `${percent(stateFor(row)?.metric_cache)} → ${percent(stateFor(row)?.baseline_cache)}` : "证据不足，不参与" }}</span><span>输出 {{ stateFor(row)?.otps_ready ? `${stateFor(row)?.metric_otps.toFixed(1)} → ${stateFor(row)?.baseline_otps.toFixed(1)} OTPS` : "证据不足，不参与" }}</span><span>平滑渠道错误率 {{ percent(stateFor(row)?.smoothed_error_rate) }}</span></div></div></el-collapse-item></el-collapse>
-            <div class="rate-window-info">
-              <small>已覆盖的 60 秒负载 · 每 5 秒刷新 · Agent 保持 30 秒采集</small>
-              <small v-if="ratesReady">统计区间：{{ new Date(ratesWindowStart).toLocaleTimeString('zh-CN', { hour12: false }) }} 至 {{ new Date(ratesAsOf).toLocaleTimeString('zh-CN', { hour12: false }) }}（不含结束秒） · 数据延迟 {{ ratesDelay }} 秒</small>
-            </div>
+        <div v-else class="model-workspace" :class="{'nav-collapsed':modelNavCollapsed}">
+          <aside class="model-nav">
+            <div class="model-nav-tools"><el-input v-if="!modelNavCollapsed" v-model="modelQuery" clearable placeholder="搜索模型" aria-label="搜索模型"/><button type="button" class="model-nav-toggle" :aria-label="modelNavCollapsed ? '展开模型列表' : '收起模型列表'" :title="modelNavCollapsed ? '展开模型列表' : '收起模型列表'" :aria-expanded="!modelNavCollapsed" @click="modelNavCollapsed=!modelNavCollapsed"><el-icon aria-hidden="true"><ArrowRight v-if="modelNavCollapsed"/><ArrowLeft v-else/></el-icon></button></div>
+            <button v-if="modelNavCollapsed" class="model-nav-rail" type="button" :title="'当前模型：' + activeModel" aria-label="展开模型列表" @click="modelNavCollapsed=false">模型</button>
+            <div v-show="!modelNavCollapsed" class="model-list"><button v-for="model in visibleModels" :key="model" :class="{active:activeModel===model}" :title="model + ' · ' + modeText(model)" :aria-label="model + '，' + modeText(model)" @click="selectModel(model)"><span><b>{{ model }}</b><span class="model-secondary"><small>{{ bases.filter(x=>x.model_name===model).length }} 个渠道</small><span class="model-mode-text" :class="modelMode(model)">{{ modelMode(model) === 'auto' ? '自动' : modelMode(model) === 'observe' ? '观察' : '关闭' }}</span></span></span></button><el-empty v-if="!visibleModels.length" :image-size="48" description="没有匹配模型"/></div>
+          </aside>
+          <section class="model-detail"><div class="model-head"><div><b>{{ activeModel }}</b><small>{{ activeRows.length }} 个渠道</small><small v-if="refreshError" class="stale">刷新失败：{{ refreshError }}</small><small v-else-if="evaluationStalled" class="stale">评估已停滞：最后成功于 {{ formatTime(lastEvaluationAt!) }}</small><small v-else-if="lastEvaluationAt">最近评估 {{ formatTime(lastEvaluationAt) }} · 每 30 秒自动刷新</small><TuningInfo label="实时负载统计"><p>负载更新：{{ ratesAsOf ? formatTime(ratesAsOf) : '—' }}</p><p>已覆盖的 60 秒负载，每 5 秒刷新；Agent 保持 30 秒采集。</p><p>统计区间：{{ ratesWindowStart ? formatTime(ratesWindowStart) : '—' }} 至 {{ ratesAsOf ? formatTime(ratesAsOf) : '—' }}（不含结束秒）</p><p>数据延迟 {{ ratesDelay }} 秒。容量输入 0 表示不限制。</p></TuningInfo></div><el-radio-group v-if="activeModel" v-model="policy.dispatch_modes[activeModel]" size="small" @change="dirty=true"><el-radio-button value="off">关闭</el-radio-button><el-radio-button value="observe">只观察</el-radio-button><el-radio-button value="auto">自动执行</el-radio-button></el-radio-group></div>
             <el-alert v-if="ratesError" :title="ratesError" type="warning" :closable="false"/>
-            <el-collapse class="capacity-collapse"><el-collapse-item title="渠道 RPM / TPM 上限" name="capacity"><div class="capacity-grid"><div v-for="row in activeRows" :key="`capacity:${row.channel_id}:${row.model_name}`" class="capacity-row"><b>{{ row.channel_name }}<small>ID {{ row.channel_id }}</small></b><span :class="{negative:currentlyLimited(row)}">RPM {{ rateText(currentRateFor(row)?.rpm) }}</span><span :class="{negative:currentlyLimited(row)}">TPM {{ rateText(currentRateFor(row)?.tpm) }}</span><label>最大 RPM <el-input-number v-model="row.max_rpm" :min="0" :step="100" size="small" controls-position="right" @change="dirty=true"/></label><label>最大 TPM <el-input-number v-model="row.max_tpm" :min="0" :step="1000" size="small" controls-position="right" @change="dirty=true"/></label><el-tag v-if="currentlyLimited(row)" type="warning" size="small">已限升</el-tag><small v-else>0 表示不限制</small></div></div></el-collapse-item></el-collapse>
-            <el-table :data="activeRows" :row-key="channelRowKey" size="small" height="calc(100vh - 230px)"><el-table-column prop="channel_id" label="ID" width="76"/><el-table-column prop="channel_name" label="渠道" min-width="170"/><el-table-column prop="group_name" label="分组" min-width="150"><template #default="{row}"><button type="button" class="group-cell-trigger" :aria-label="'编辑 ' + row.channel_name + ' 的分组'" :title="groupCellTitle(row.group_name)" @click="openGroupEditor(groupEditorRowFor(row))"><span class="group-tags"><el-tag v-for="group in visibleChannelGroups(row.group_name)" :key="group" size="small">{{ group }}</el-tag><el-tag v-if="hiddenChannelGroupCount(row.group_name)" type="info" size="small">+{{ hiddenChannelGroupCount(row.group_name) }}</el-tag><span v-if="!splitChannelGroups(row.group_name).length" class="dim">—</span><el-tag v-if="pendingGroups.has(row.channel_id) && !groupErrors.has(row.channel_id)" type="warning" size="small">等待执行</el-tag><el-tag v-if="groupErrors.has(row.channel_id)" type="danger" size="small">执行失败</el-tag></span></button></template></el-table-column><el-table-column label="评估状态" min-width="180"><template #default="{row}"><div class="evaluation"><span>{{ evaluationText(row) }}</span><small>窗口样本 {{ sampleText(row) }}</small><small>速度有效 {{ stateFor(row)?.speed_sample_count ?? 0 }} · 重试排除 {{ stateFor(row)?.speed_retry_count ?? 0 }}</small></div></template></el-table-column><el-table-column label="评估系数" min-width="220"><template #default="{row}"><el-popover trigger="hover" placement="top-start" :width="520" popper-class="factor-explain-popover"><template #reference><span class="factors explainable"><span :class="comparisonClass(stateFor(row)?.k_speed)">速度 {{ factor(stateFor(row)?.k_speed) }}</span> · <span :class="comparisonClass(stateFor(row)?.k_cache)">缓存 {{ factor(stateFor(row)?.k_cache) }}</span> · <span :class="comparisonClass(stateFor(row)?.k_otps)">输出 {{ factor(stateFor(row)?.k_otps) }}</span> · <span :class="comparisonClass(stateFor(row)?.k_error)">错误 {{ factor(stateFor(row)?.k_error) }}</span></span></template><pre class="factor-explanation">{{ factorExplanation(row) }}</pre></el-popover></template></el-table-column><el-table-column label="基础权重" width="122"><template #default="{row}"><el-input-number v-model="row.base_weight" :min="0" size="small" controls-position="right" @change="dirty=true"/></template></el-table-column><el-table-column width="105"><template #header><span class="column-help">计算权重<el-popover trigger="click" width="460"><template #reference><button class="help" aria-label="查看计算权重说明">i</button></template><div class="calc-details"><div class="calc-title"><b>计算权重说明</b><code>round(基础权重 × 综合倍率)</code></div><p class="formula">综合倍率 = clamp(速度 × 缓存 × 输出 × 错误，{{ policy.continuous.combined_min_factor.toFixed(3) }}，{{ policy.continuous.combined_max_factor.toFixed(3) }})</p><dl><div><dt>速度</dt><dd>比较该渠道与同模型渠道的 TTFT P50/P90/P95，按规则设置中的 w50/w90/w95 加权；越快系数越高。<small>来源：Agent 采集 new-api 日志的首字耗时，汇总到 metric_1m。</small></dd></div><div><dt>缓存</dt><dd>渠道大输入缓存 Token 比率相对同模型平均数换算；证据不足时不参与计算。<small>与监控一致：仅统计输入大于 512 Token 的成功请求，缓存读取 Token 总数 ÷提示 Token 总数。</small></dd></div><div><dt>输出</dt><dd>渠道 OTPS 相对同模型平均数换算；证据不足时不参与计算。<small>来源：成功流式请求的输出 token ÷生成耗时。</small></dd></div><div><dt>错误</dt><dd>分钟渠道错误率经 EWMA 平滑后换算；用户自身错误不处罚渠道。<small>来源：new-api 请求状态，由配置的用户错误码规则分类。</small></dd></div></dl><p class="calc-note">速度至少需要 2 个未重试有效样本达标的同模型渠道；不足时保留已有新口径速度系数，首次为 1.000。其他指标按原有条件计算。</p></div></el-popover></span></template><template #default="{row}"><span :class="weightClass(row)">{{ stateFor(row)?.proposed_weight ?? "—" }}</span></template></el-table-column><el-table-column prop="current_weight" label="当前权重" width="100"/><el-table-column label="基础优先级" width="122"><template #default="{row}"><el-input-number v-model="row.base_priority" :min="0" size="small" controls-position="right" @change="dirty=true"/></template></el-table-column><el-table-column prop="current_priority" label="线上优先级" width="110"/></el-table>
+            <el-table class="channel-table" :span-method="coefficientSpan" :data="activeRows" :row-key="channelRowKey" size="small" height="100%" empty-text="没有匹配渠道">
+              <el-table-column label="渠道" :width="compactLayout ? 190 : 320" align="left" fixed><template #default="{row}">
+                <div class="channel-heading"><span class="channel-key">#{{ row.channel_id }} ·</span><b class="channel-name" :title="row.channel_name">{{ row.channel_name }}</b></div>
+                <div class="channel-meta"><TuningCapacityMetric metric="TPM" :channel="row.channel_name" v-model="row.max_tpm" :current="currentRateFor(row)?.tpm" :modified="fieldChanged(row,'max_tpm')" @change="dirty=true"/><TuningCapacityMetric metric="RPM" :channel="row.channel_name" v-model="row.max_rpm" :current="currentRateFor(row)?.rpm" :modified="fieldChanged(row,'max_rpm')" @change="dirty=true"/></div>
+                <small v-if="pendingGroups.has(row.channel_id) && !groupErrors.has(row.channel_id)" class="warning">分组等待执行</small><small v-if="groupErrors.has(row.channel_id)" class="danger" :title="groupErrors.get(row.channel_id)">分组执行失败</small>
+              </template></el-table-column>
+              <el-table-column label="分组" :min-width="compactLayout ? 150 : 260" align="center"><template #default="{row}"><button type="button" class="group-cell-trigger" :aria-label="'编辑 ' + row.channel_name + ' 的分组'" :title="groupCellTitle(row.group_name)" @click="openGroupEditor(groupEditorRowFor(row))"><span class="group-tags"><span v-for="group in splitChannelGroups(row.group_name)" :key="group">{{ group }}</span><span v-if="!splitChannelGroups(row.group_name).length">设置分组</span></span></button></template></el-table-column>
+              <el-table-column label="评估系数" align="center">
+                <el-table-column v-for="metric in coefficientColumns" :key="metric.key" :prop="'coefficient_' + metric.key" :label="metric.label" :width="compactLayout ? 60 : 80" align="center" class-name="coefficient-merged"><template #default="{row}">
+                  <div v-if="metric.key === 'speed'" class="coefficient-group">
+                    <div v-if="!coefficientEmptyText(row)" class="coefficient-values"><div v-for="item in coefficientColumns" :key="item.key" class="coefficient-cell" :title="coefficientCell(row, item.key).detail"><b v-if="item.key !== 'speed' || coefficientCell(row, item.key).value != null || !coefficientCell(row, item.key).status" :class="{'factor-up':(coefficientCell(row, item.key).value ?? 1)>1,'factor-down':(coefficientCell(row, item.key).value ?? 1)<1}">{{ coefficientCell(row, item.key).value == null ? '—' : factor(coefficientCell(row, item.key).value!) }}</b><small v-if="item.key === 'speed' && !overallEvaluationStatus(row) && coefficientCell(row, item.key).status && coefficientCell(row, item.key).status !== 'TTFT 有效'">{{ coefficientCell(row, item.key).status }}</small></div></div>
+                    <div v-if="overallEvaluationStatus(row)" class="coefficient-overall" :class="[rowStatus(row).kind, {'only-status':!!coefficientEmptyText(row)}]" :title="evaluationText(row)">{{ coefficientEmptyText(row) || overallEvaluationStatus(row) }}</div>
+                  </div>
+                </template></el-table-column>
+              </el-table-column>
+              <el-table-column label="权重" align="center">
+                <el-table-column label="基础" :min-width="compactLayout ? 80 : 100" align="center"><template #default="{row}"><el-input-number v-model="row.base_weight" :class="{modified:fieldChanged(row,'base_weight')}" :aria-label="row.channel_name + ' 基础权重'" :min="0" :controls="false" size="small" @change="dirty=true"/></template></el-table-column>
+                <el-table-column label="计算" :min-width="compactLayout ? 70 : 95" align="center"><template #default="{row}"><div class="weight-calculated"><TuningInfo :trigger-text="String(calculatedWeight(row) ?? '—')" :class="{accent: calculatedWeight(row) !== null && calculatedWeight(row) !== row.current_weight}" :key="channelRowKey(row)" :label="'本轮计算 · ' + row.channel_name" :width="500">
+                    <template v-if="stateFor(row)"><p class="calculation-formula">{{ originalBase(row) }} × {{ factor(stateFor(row)?.k_speed) }} × {{ factor(stateFor(row)?.k_otps) }} × {{ factor(stateFor(row)?.k_cache) }} × {{ factor(stateFor(row)?.k_error) }}</p><p class="formula-caption">基础 × {{ speedLabel(row) }} × 输出 × 缓存 × 错误</p><p>{{ evaluationText(row) }}</p><p v-if="displayedSpeedFactor(row) === null && calculatedWeight(row) !== null" class="formula-caption">参考值使用接口最近保留的系数；速度当前不可用于本轮评估，此处不代表本轮重新测得。</p><p v-if="speedLabel(row).includes('替代')">TTFT 不足，使用本轮 OTPS；输出系数参与两次。</p><div class="evidence-pairs"><span>窗口样本 <b>{{ sampleText(row) }}</b></span><span>TTFT 有效 <b>{{ stateFor(row)?.speed_sample_count ?? 0 }}</b></span><span>输出有效 <b>{{ stateFor(row)?.otps_sample_count ?? 0 }}</b></span><span>重试排除 <b>{{ stateFor(row)?.speed_retry_count ?? 0 }}</b></span></div><p>公式目标：<b>{{ calculatedWeight(row) ?? '—' }}</b><small>（按最近返回系数与已保存倍率边界推算；仅窗口不足或基础权重为0时不展示，不代表会执行）</small></p><p>安全限制后拟执行：<b>{{ stateFor(row)?.proposed_weight }}</b> · 当前：{{ row.current_weight }}</p><p v-if="fieldChanged(row, 'base_weight')" class="warning">基础值有未保存修改；本轮结果仍对应上次评估。</p><p v-if="limitReason(row)" class="limit-note">{{ limitReason(row) }}</p><details class="full-evidence"><summary>完整指标与计算依据</summary><pre class="factor-explanation">{{ factorExplanation(row) }}</pre></details></template><p v-else>等待首次评估，尚无计算数据。</p>
+                  </TuningInfo><el-tooltip v-if="limitReason(row)" :content="limitReason(row)" placement="top"><button class="status-icon warning limit-icon" :aria-label="limitReason(row)"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 3h12M10 17V7m-4 4 4-4 4 4"/></svg></button></el-tooltip></div></template></el-table-column>
+                <el-table-column label="线上" :min-width="compactLayout ? 60 : 80" align="center"><template #default="{row}"><span class="current-weight">{{ row.current_weight }}</span></template></el-table-column>
+              </el-table-column>
+              <el-table-column label="优先级" :min-width="compactLayout ? 80 : 100" align="center"><template #default="{row}"><span :title="priorityLocked(row) ? '熔断或探测中，当前逻辑暂停优先级写入' : '线上优先级；修改后点击保存更改同步'"><el-input-number :model-value="displayedPriority(row)" :class="{modified:priorityDrafts.has(row.channel_id)}" :aria-label="row.channel_name + ' 优先级'" :disabled="saving || priorityLocked(row)" :min="0" :precision="0" :controls="false" size="small" @update:model-value="editPriority(row, $event)"/></span></template></el-table-column>
+
+            </el-table>
+            <div class="channel-footer">{{ activeRows.length }} 个渠道<span>点击 TPM / RPM 编辑上限</span></div>
            </section>
          </div>
        </el-card>
-       <el-dialog v-model="groupDialogOpen" title="调整渠道分组" width="min(640px, calc(100vw - 32px))" append-to-body>
+       <el-dialog v-model="groupDialogOpen" title="调整渠道分组" width="min(640px, calc(100vw - 32px))" class="tuning-group-dialog" append-to-body>
          <template v-if="editingChannel">
            <div class="group-editor-context"><b>{{ editingChannel.channel_name }}</b><span>ID {{ editingChannel.channel_id }}</span><span>当前：{{ editingChannel.group_name || "—" }}</span></div>
            <el-form label-position="top"><el-form-item label="分组组合"><el-select v-model="groupDraft" multiple filterable collapse-tags collapse-tags-tooltip placeholder="选择已有分组" style="width:100%"><el-option v-for="option in groupOptions" :key="option" :label="option" :value="option" /></el-select></el-form-item><el-form-item label="当前站点已有组合"><el-select v-model="groupPreset" clearable placeholder="选择组合快速填充" style="width:100%" @change="useGroupCombination"><el-option v-for="option in groupCombinations" :key="option" :label="option" :value="option" /></el-select></el-form-item></el-form>
-           <el-alert title="保存后会影响该渠道后续请求的分组匹配；多个分组将按 New API 的逗号组合格式写入。" type="warning" :closable="false" show-icon />
+           <div class="group-preview"><b>变更预览</b><div><span>当前</span>{{ editingChannel.group_name || '未设置分组' }}</div><div><span>保存后</span>{{ groupDraft.join(' / ') || '未选择分组' }}</div></div>
+          <el-alert title="保存后会影响该渠道后续请求的分组匹配；多个分组将按 New API 的逗号组合格式写入。" type="warning" :closable="false" />
            <el-checkbox v-model="groupConfirmed">我确认修改线上渠道分组</el-checkbox>
          </template>
          <template #footer><el-button @click="groupDialogOpen = false">取消</el-button><el-button type="primary" :loading="groupSaving" :disabled="!groupConfirmed" @click="saveGroup">保存分组</el-button></template>
@@ -629,79 +788,249 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
             <el-select v-model="eventModelFilter" placeholder="模型" style="width:220px"><el-option label="全部模型" value=""/><el-option :label="`当前模型${activeModel ? `（${activeModel}）` : ''}`" value="__current__"/><el-option v-for="model in models" :key="model" :label="model" :value="model"/></el-select>
             <el-select v-model="eventRuleFilter" clearable placeholder="全部事件" style="width:170px"><el-option v-for="rule in eventRuleOptions" :key="rule" :label="eventName(rule)" :value="rule"/></el-select>
             <el-input v-model="eventChannelQuery" clearable placeholder="搜索渠道名称或 ID" style="width:240px"/>
-          </div></div>
-        <div v-if="filteredEvents.length" class="event-table-wrap"><el-table :data="pagedEvents" :fit="false" size="small" height="100%">
+            <el-date-picker v-model="eventDateRange" type="daterange" value-format="YYYY-MM-DD" range-separator="至" start-placeholder="开始日期" end-placeholder="结束日期" @change="eventPage=1"/><el-button @click="resetEventFilters">重置</el-button>
+          </div><small class="event-scope">筛选范围：最近加载的 {{ events.length }} 条记录（最多 300 条）</small></div>
+        <div v-if="filteredEvents.length" class="event-table-wrap"><el-table :data="pagedEvents" size="small" height="100%">
           <el-table-column label="时间" width="170"><template #default="{row}">{{ formatTime(row.created_at) }}</template></el-table-column>
-          <el-table-column label="模型" width="210" show-overflow-tooltip><template #default="{row}">{{ eventModel(row) || '—' }}</template></el-table-column>
-          <el-table-column prop="channel_name" label="渠道" width="360" show-overflow-tooltip><template #default="{row}"><b>{{ row.channel_name }}</b><small class="channel-id">ID {{ row.channel_id }}</small></template></el-table-column>
-          <el-table-column label="事件" width="145"><template #default="{row}"><el-tag :type="row.rule==='weight_write'?'success':row.rule==='circuit_opened'?'danger':'warning'">{{ eventName(row.rule) }}</el-tag></template></el-table-column>
-          <el-table-column label="权重变化" width="125"><template #default="{row}">{{ row.current_weight }} → {{ row.proposed_weight }}</template></el-table-column>
-          <el-table-column label="模式" width="90"><template #default="{row}">{{ row.mode_at_creation==='auto'?'自动':row.mode_at_creation==='observe'?'观察':'关闭' }}</template></el-table-column>
+          <el-table-column label="模型与渠道" min-width="260"><template #default="{row}"><b>{{ eventModel(row) || '—' }}</b><small class="event-channel" :title="row.channel_name">{{ row.channel_name }} · #{{ row.channel_id }}</small></template></el-table-column>
+          <el-table-column label="事件" width="145"><template #default="{row}"><span :class="{danger:row.rule==='circuit_opened'}">{{ eventName(row.rule) }}</span></template></el-table-column>
+          <el-table-column label="变更内容" min-width="160"><template #default="{row}">权重 <b>{{ row.current_weight }} → {{ row.proposed_weight }}</b><small v-if="row.current_priority != null && row.proposed_priority != null && row.current_priority !== row.proposed_priority" class="channel-id">优先级 {{ row.current_priority }} → {{ row.proposed_priority }}</small></template></el-table-column>
+          <el-table-column label="执行状态" width="115"><template #default="{row}"><span :class="eventResultClass(row)">{{ eventResult(row) }}</span></template></el-table-column>
+          <el-table-column label="详情" width="80"><template #default="{row}"><TuningInfo label="变更详情"><div class="event-detail"><p><b>{{ eventName(row.rule) }}</b> · {{ eventModel(row) }}</p><p>{{ row.channel_name }} · #{{ row.channel_id }}</p><p>权重 {{ row.current_weight }} → {{ row.proposed_weight }}</p><p>模式：{{ row.mode_at_creation==='auto'?'自动':row.mode_at_creation==='observe'?'观察':'关闭' }}</p><p>状态：{{ eventResult(row) }}</p><p>记录时间：{{ formatTime(row.created_at) }}</p><p v-if="row.outcome_at">结果时间：{{ formatTime(row.outcome_at) }}</p><details><summary>记录依据</summary><pre class="factor-explanation">{{ JSON.stringify(row.evidence, null, 2) }}</pre><pre v-if="row.outcome" class="factor-explanation">{{ JSON.stringify(row.outcome, null, 2) }}</pre></details></div></TuningInfo></template></el-table-column>
         </el-table></div>
-        <div v-if="filteredEvents.length" class="event-footer"><el-pagination v-model:current-page="eventPage" v-model:page-size="eventPageSize" layout="sizes, prev, pager, next" :page-sizes="[20,50,100]" :total="filteredEvents.length"/></div>
+        <div v-if="filteredEvents.length" class="event-footer"><el-pagination v-model:current-page="eventPage" v-model:page-size="eventPageSize" layout="total, sizes, prev, pager, next" :page-sizes="[20,50,100]" :total="filteredEvents.length"/></div>
         <el-empty v-else description="当前筛选条件下暂无记录"/>
       </el-card>
     </el-tab-pane>
-    <el-tab-pane label="规则设置" name="settings"><el-card shadow="never"><template #header><div class="head"><div><b>系统如何计算权重</b><small>通常保持默认值即可</small></div></div></template>
-      <div class="flow"><div><i>1</i><b>同模型比较</b><span>只比较相同模型的渠道</span></div><div><i>2</i><b>综合评分</b><span>速度、缓存、输出与错误</span></div><div><i>3</i><b>计算权重</b><span>基础权重 × 综合倍率</span></div><div><i>4</i><b>安全执行</b><span>自动执行才写入线上</span></div></div>
-      <el-form label-position="top"><div class="params">
-        <el-form-item label="调整灵敏度 S"><el-input-number v-model="policy.continuous.sensitivity" :min=".1" :max="5" :step=".1" @change="dirty=true"/><small>放大或缩小渠道相对差异；1 为标准</small></el-form-item>
-        <el-form-item label="速度影响指数 αs"><el-input-number v-model="policy.continuous.speed_exponent" :min=".01" :max="2" :step=".05" :precision="2" @change="dirty=true"/><small>速度差异进入幂运算的强度；默认 0.35</small></el-form-item>
-        <el-form-item label="P50 占比 w50"><el-input-number v-model="policy.continuous.speed_p50_weight" :min="0" :max="1" :step=".05" :precision="2" @change="dirty=true"/><small>默认 0.50；三个占比之和必须为 1</small></el-form-item>
-        <el-form-item label="P90 占比 w90"><el-input-number v-model="policy.continuous.speed_p90_weight" :min="0" :max="1" :step=".05" :precision="2" @change="dirty=true"/><small>默认 0.30；三个占比之和必须为 1</small></el-form-item>
-        <el-form-item label="P95 占比 w95"><el-input-number v-model="policy.continuous.speed_p95_weight" :min="0" :max="1" :step=".05" :precision="2" @change="dirty=true"/><small>默认 0.20；三个占比之和必须为 1</small></el-form-item>
-        <el-form-item label="速度系数下限 Ls"><el-input-number v-model="policy.continuous.speed_min_factor" :min=".01" :max="1" :step=".05" :precision="2" @change="dirty=true"/><small>慢渠道速度系数最低值；默认 0.75</small></el-form-item>
-        <el-form-item label="速度系数上限 Us"><el-input-number v-model="policy.continuous.speed_max_factor" :min="1" :max="3" :step=".05" :precision="2" @change="dirty=true"/><small>快渠道速度系数最高值；默认 1.25</small></el-form-item>
-        <el-form-item label="评估窗口（分钟）"><el-input-number v-model="policy.continuous.window_minutes" :min="1" @change="dirty=true"/><small>每次计算使用最近多少分钟的指标</small></el-form-item>
-        <el-form-item label="单次上调上限（%）"><el-input-number v-model="policy.continuous.max_increase_percent" :min="1" :max="100" :step="1" :precision="0" @change="dirty=true"/><small>自动模式每轮最多按当前有效权重上调该比例（至少允许 +1），默认 10%；下调不受限制</small></el-form-item>
-        <el-form-item label="每渠道最少请求数"><el-input-number v-model="policy.continuous.min_samples" :min="1" @change="dirty=true"/><small>低于此数量不参与本轮性能比较，错误历史仍参与可靠性计算</small></el-form-item>
-        <el-form-item label="启用批次快速熔断"><el-switch v-model="policy.continuous.fast_circuit_enabled" @change="dirty=true"/><small>直接检查每次 Agent 上报的渠道增量，不等待分钟桶稳定</small></el-form-item>
-        <el-form-item label="快速熔断最少请求数"><el-input-number v-model="policy.continuous.fast_circuit_min_samples" :min="1" :max="100000" @change="dirty=true"/><small>单次上报达到该请求数后才判断，默认 50</small></el-form-item>
-        <el-form-item label="快速熔断错误率"><el-input-number v-model="policy.continuous.fast_circuit_error_rate" :min=".01" :max="1" :step=".05" :precision="2" @change="dirty=true"/><small>非用户错误率达到阈值立即熔断，默认 50%</small></el-form-item>
-      </div></el-form>
-      <el-collapse><el-collapse-item title="评估系数曲线设置" name="factors"><p class="safety">指数控制差异放大强度，上下限限制单项及最终综合倍率；错误系数在四个错误率节点间线性变化。</p><div class="factor-formulas"><article><b>速度系数 Ks</b><code>R = w50×P50/P50平均数 + w90×P90/P90平均数 + w95×P95/P95平均数</code><code>Ks = clamp((1/R)^(αs×S), Ls, Us)</code></article><article><b>缓存系数 Kc</b><code>C = 大输入缓存 Token ÷ 大输入提示 Token</code><code>Kc = clamp((C/C平均数)^(αc×S), Lc, Uc)</code></article><article><b>输出系数 Ko</b><code>Ko = clamp((OTPS/OTPS平均数)^(αo×S), Lo, Uo)</code></article><article><b>错误系数 Ke</b><code>Ke = piecewise(E；E1→1，E2→K2，E3→K3，E4→Kmin)</code><small>相邻错误率节点之间采用线性插值。</small></article><article class="combined"><b>最终综合倍率 M</b><code>M = clamp(Ks × Kc × Ko × Ke, Lm, Um)</code><code>计算权重 = round(基础权重 × M)</code></article></div><div class="params"><el-form-item label="缓存影响指数 αc"><el-input-number v-model="policy.continuous.cache_exponent" :min=".01" :max="2" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="缓存系数下限 Lc"><el-input-number v-model="policy.continuous.cache_min_factor" :min=".01" :max="1" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="缓存系数上限 Uc"><el-input-number v-model="policy.continuous.cache_max_factor" :min="1" :max="3" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="输出影响指数 αo"><el-input-number v-model="policy.continuous.otps_exponent" :min=".01" :max="2" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="输出系数下限 Lo"><el-input-number v-model="policy.continuous.otps_min_factor" :min=".01" :max="1" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="输出系数上限 Uo"><el-input-number v-model="policy.continuous.otps_max_factor" :min="1" :max="3" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="健康错误率节点 E1"><el-input-number v-model="policy.continuous.error_healthy_rate" :min="0" :max="1" :step=".01" :precision="2" @change="dirty=true"/><small>此错误率以内系数为 1</small></el-form-item><el-form-item label="轻度错误率节点 E2"><el-input-number v-model="policy.continuous.error_degraded_rate" :min="0" :max="1" :step=".01" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="轻度错误系数 K2"><el-input-number v-model="policy.continuous.error_degraded_factor" :min=".01" :max=".99" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="严重错误率节点 E3"><el-input-number v-model="policy.continuous.error_poor_rate" :min="0" :max="1" :step=".01" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="严重错误系数 K3"><el-input-number v-model="policy.continuous.error_poor_factor" :min=".01" :max=".99" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="封底错误率节点 E4"><el-input-number v-model="policy.continuous.error_floor_rate" :min="0" :max="1" :step=".01" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="错误系数下限 Kmin"><el-input-number v-model="policy.continuous.error_min_factor" :min=".01" :max=".99" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="综合倍率下限 Lm"><el-input-number v-model="policy.continuous.combined_min_factor" :min=".01" :max="1" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="综合倍率上限 Um"><el-input-number v-model="policy.continuous.combined_max_factor" :min="1" :max="5" :step=".05" :precision="2" @change="dirty=true"/></el-form-item></div></el-collapse-item><el-collapse-item title="高级安全设置：熔断与自动恢复" name="safety"><p class="safety">性能差异只会降权；平滑渠道错误率达到阈值才熔断。自动模式静默后主动探测，观察模式使用真实流量被动恢复。</p><div class="params"><el-form-item label="熔断错误率"><el-input-number v-model="policy.continuous.circuit_error_rate" :min=".01" :max="1" :step=".01" @change="dirty=true"/><small>平滑渠道错误率达到此值才停止分流</small></el-form-item><el-form-item label="被动恢复错误率"><el-input-number v-model="policy.continuous.recovery_error_rate" :min="0" :max=".99" :step=".01" @change="dirty=true"/><small>观察模式降到此值后解除模拟熔断</small></el-form-item><el-form-item label="探针恢复阈值"><el-input-number v-model="policy.continuous.recovery_threshold" :min=".01" :max="1" :step=".01" @change="dirty=true"/><small>自动模式探针成功率×探针速度达到此值才恢复</small></el-form-item><el-form-item label="熔断静默期（分钟）"><el-input-number v-model="policy.continuous.silent_minutes" :min="1" @change="dirty=true"/><small>自动模式熔断后等待多久再开始探测</small></el-form-item><el-form-item label="探测间隔（秒）"><el-input-number v-model="policy.continuous.probe_interval_seconds" :min="1" @change="dirty=true"/><small>连续探测请求之间的等待时间</small></el-form-item><el-form-item label="探测次数"><el-input-number v-model="policy.continuous.probe_count" :min="1" @change="dirty=true"/><small>一次恢复判断发送多少次请求</small></el-form-item><el-form-item label="恢复初始倍率"><el-input-number v-model="policy.continuous.soft_start_multiplier" :min=".01" :max="1" :step=".05" @change="dirty=true"/><small>恢复首轮使用基础权重的比例</small></el-form-item></div></el-collapse-item></el-collapse>
-    </el-card></el-tab-pane>
+<el-tab-pane label="规则设置" name="settings"><el-card shadow="never" class="settings-card"><template #header><div class="head"><div><b>规则设置</b><small>当前站点 · {{ siteID }}</small></div><el-button @click="helpOpen=true">使用说明</el-button></div></template><el-tabs v-model="settingsSection" class="settings-sections"><el-tab-pane label="基础评估" name="basic"><div class="settings-intro"><div><h3>基础评估</h3><p>样本与评估周期，决定每轮使用的数据范围。</p></div><TuningInfo label="系数如何参与计算"><p>速度 × 输出 × 缓存 × 错误</p><p>TTFT 不足：输出² × 缓存 × 错误</p><p>最终受综合倍率、容量保护及单次上调上限约束。</p></TuningInfo></div><el-form label-position="top" class="settings-form"><div class="params"><el-form-item label="评估窗口（分钟）"><el-input-number v-model="policy.continuous.window_minutes" :min="1" @change="dirty=true"/><small>每次计算使用最近多少分钟的指标</small></el-form-item><el-form-item label="每渠道最少请求数"><el-input-number v-model="policy.continuous.min_samples" :min="1" @change="dirty=true"/><small>低于此数量不参与本轮性能比较，错误历史仍参与可靠性计算</small></el-form-item><el-form-item label="单次上调上限（%）"><el-input-number v-model="policy.continuous.max_increase_percent" :min="1" :max="100" :step="1" :precision="0" @change="dirty=true"/><small>自动模式每轮最多按当前有效权重上调该比例（至少允许 +1），默认 10%；下调不受限制</small></el-form-item><el-form-item label="调整灵敏度 S"><el-input-number v-model="policy.continuous.sensitivity" :min=".1" :max="5" :step=".1" @change="dirty=true"/><small>放大或缩小渠道相对差异；1 为标准</small></el-form-item></div></el-form></el-tab-pane><el-tab-pane label="性能系数" name="performance"><div class="settings-intro"><div><h3>性能系数</h3><p>TTFT 不足时复用本轮输出系数；缓存保留原逻辑。</p></div><TuningInfo label="系数如何参与计算"><p>速度 × 输出 × 缓存 × 错误</p><p>TTFT 不足：输出² × 缓存 × 错误</p><p>最终受综合倍率、容量保护及单次上调上限约束。</p></TuningInfo></div><el-form label-position="top" class="settings-form"><div class="factor-matrix"><div class="factor-matrix-head"><span>指标</span><span>影响指数</span><span>系数下限</span><span>系数上限</span></div><div class="factor-matrix-row"><b>TTFT 速度</b><el-form-item label="速度影响指数 αs"><el-input-number v-model="policy.continuous.speed_exponent" :min=".01" :max="2" :step=".05" :precision="2" @change="dirty=true"/><small>速度差异进入幂运算的强度；默认 0.35</small></el-form-item><el-form-item label="速度系数下限 Ls"><el-input-number v-model="policy.continuous.speed_min_factor" :min=".01" :max="1" :step=".05" :precision="2" @change="dirty=true"/><small>慢渠道速度系数最低值；默认 0.75</small></el-form-item><el-form-item label="速度系数上限 Us"><el-input-number v-model="policy.continuous.speed_max_factor" :min="1" :max="3" :step=".05" :precision="2" @change="dirty=true"/><small>快渠道速度系数最高值；默认 1.25</small></el-form-item></div><div class="factor-matrix-row"><b>平均输出速度</b><el-form-item label="输出影响指数 αo"><el-input-number v-model="policy.continuous.otps_exponent" :min=".01" :max="2" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="输出系数下限 Lo"><el-input-number v-model="policy.continuous.otps_min_factor" :min=".01" :max="1" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="输出系数上限 Uo"><el-input-number v-model="policy.continuous.otps_max_factor" :min="1" :max="3" :step=".05" :precision="2" @change="dirty=true"/></el-form-item></div><div class="factor-matrix-row"><b>缓存</b><el-form-item label="缓存影响指数 αc"><el-input-number v-model="policy.continuous.cache_exponent" :min=".01" :max="2" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="缓存系数下限 Lc"><el-input-number v-model="policy.continuous.cache_min_factor" :min=".01" :max="1" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="缓存系数上限 Uc"><el-input-number v-model="policy.continuous.cache_max_factor" :min="1" :max="3" :step=".05" :precision="2" @change="dirty=true"/></el-form-item></div></div><h4 class="parameter-heading">综合倍率边界</h4><div class="params two-columns"><el-form-item label="综合倍率下限 Lm"><el-input-number v-model="policy.continuous.combined_min_factor" :min=".01" :max="1" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="综合倍率上限 Um"><el-input-number v-model="policy.continuous.combined_max_factor" :min="1" :max="5" :step=".05" :precision="2" @change="dirty=true"/></el-form-item></div><h4 class="parameter-heading">TTFT 分位权重</h4><div class="params"><el-form-item label="P50 占比 w50"><el-input-number v-model="policy.continuous.speed_p50_weight" :min="0" :max="1" :step=".05" :precision="2" @change="dirty=true"/><small>默认 0.50；三个占比之和必须为 1</small></el-form-item><el-form-item label="P90 占比 w90"><el-input-number v-model="policy.continuous.speed_p90_weight" :min="0" :max="1" :step=".05" :precision="2" @change="dirty=true"/><small>默认 0.30；三个占比之和必须为 1</small></el-form-item><el-form-item label="P95 占比 w95"><el-input-number v-model="policy.continuous.speed_p95_weight" :min="0" :max="1" :step=".05" :precision="2" @change="dirty=true"/><small>默认 0.20；三个占比之和必须为 1</small></el-form-item></div></el-form></el-tab-pane><el-tab-pane label="错误率曲线" name="errors"><div class="settings-intro"><div><h3>错误率曲线</h3><p>错误率节点与惩罚系数之间采用线性插值。</p></div><TuningInfo label="系数如何参与计算"><p>速度 × 输出 × 缓存 × 错误</p><p>TTFT 不足：输出² × 缓存 × 错误</p><p>最终受综合倍率、容量保护及单次上调上限约束。</p></TuningInfo></div><el-form label-position="top" class="settings-form"><div class="params"><el-form-item label="健康错误率节点 E1"><el-input-number v-model="policy.continuous.error_healthy_rate" :min="0" :max="1" :step=".01" :precision="2" @change="dirty=true"/><small>此错误率以内系数为 1</small></el-form-item><el-form-item label="轻度错误率节点 E2"><el-input-number v-model="policy.continuous.error_degraded_rate" :min="0" :max="1" :step=".01" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="轻度错误系数 K2"><el-input-number v-model="policy.continuous.error_degraded_factor" :min=".01" :max=".99" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="严重错误率节点 E3"><el-input-number v-model="policy.continuous.error_poor_rate" :min="0" :max="1" :step=".01" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="严重错误系数 K3"><el-input-number v-model="policy.continuous.error_poor_factor" :min=".01" :max=".99" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="封底错误率节点 E4"><el-input-number v-model="policy.continuous.error_floor_rate" :min="0" :max="1" :step=".01" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="错误系数下限 Kmin"><el-input-number v-model="policy.continuous.error_min_factor" :min=".01" :max=".99" :step=".05" :precision="2" @change="dirty=true"/></el-form-item></div></el-form></el-tab-pane><el-tab-pane label="熔断与恢复" name="safety"><div class="settings-intro"><div><h3>熔断与恢复</h3><p>自动模式静默后主动探测，观察模式使用真实流量恢复。</p></div><TuningInfo label="系数如何参与计算"><p>速度 × 输出 × 缓存 × 错误</p><p>TTFT 不足：输出² × 缓存 × 错误</p><p>最终受综合倍率、容量保护及单次上调上限约束。</p></TuningInfo></div><el-form label-position="top" class="settings-form"><div class="params"><el-form-item label="启用批次快速熔断"><el-switch v-model="policy.continuous.fast_circuit_enabled" @change="dirty=true"/><small>直接检查每次 Agent 上报的渠道增量，不等待分钟桶稳定</small></el-form-item><el-form-item label="快速熔断最少请求数"><el-input-number v-model="policy.continuous.fast_circuit_min_samples" :min="1" :max="100000" @change="dirty=true"/><small>单次上报达到该请求数后才判断，默认 50</small></el-form-item><el-form-item label="快速熔断错误率"><el-input-number v-model="policy.continuous.fast_circuit_error_rate" :min=".01" :max="1" :step=".05" :precision="2" @change="dirty=true"/><small>非用户错误率达到阈值立即熔断，默认 50%</small></el-form-item><el-form-item label="熔断错误率"><el-input-number v-model="policy.continuous.circuit_error_rate" :min=".01" :max="1" :step=".01" @change="dirty=true"/><small>平滑渠道错误率达到此值才停止分流</small></el-form-item><el-form-item label="被动恢复错误率"><el-input-number v-model="policy.continuous.recovery_error_rate" :min="0" :max=".99" :step=".01" @change="dirty=true"/><small>观察模式降到此值后解除模拟熔断</small></el-form-item><el-form-item label="探针恢复阈值"><el-input-number v-model="policy.continuous.recovery_threshold" :min=".01" :max="1" :step=".01" @change="dirty=true"/><small>自动模式探针成功率×探针速度达到此值才恢复</small></el-form-item><el-form-item label="熔断静默期（分钟）"><el-input-number v-model="policy.continuous.silent_minutes" :min="1" @change="dirty=true"/><small>自动模式熔断后等待多久再开始探测</small></el-form-item><el-form-item label="探测间隔（秒）"><el-input-number v-model="policy.continuous.probe_interval_seconds" :min="1" @change="dirty=true"/><small>连续探测请求之间的等待时间</small></el-form-item><el-form-item label="探测次数"><el-input-number v-model="policy.continuous.probe_count" :min="1" @change="dirty=true"/><small>一次恢复判断发送多少次请求</small></el-form-item><el-form-item label="恢复初始倍率"><el-input-number v-model="policy.continuous.soft_start_multiplier" :min=".01" :max="1" :step=".05" @change="dirty=true"/><small>恢复首轮使用基础权重的比例</small></el-form-item></div></el-form></el-tab-pane></el-tabs></el-card></el-tab-pane>
   </el-tabs>
+  <div v-if="dirty" class="tuning-save-bar" role="status"><span><i/>有未保存更改<span class="save-context">基础值、容量与规则统一保存</span></span><div><el-button :disabled="saving" @click="cancelChanges()">取消更改</el-button><el-button type="primary" :loading="saving" @click="save">保存更改</el-button></div></div>
   <el-drawer v-model="helpOpen" title="调权中心使用说明" size="min(860px, 92vw)" class="tuning-help">
-    <div class="help-guide">
-      <section><h3>完整计算流程</h3><ol><li>按模型分组，只比较提供同一个模型的渠道；多模型渠道为避免互相影响，不参与自动调权。</li><li>读取最近“评估窗口”内的请求，形成每个渠道的 TTFT、缓存命中、OTPS 和错误率指标。</li><li>用至少 2 个合格渠道计算同模型平均基线，再得到速度、缓存、输出、错误四个系数。</li><li>先计算原始目标：<code>Wtarget = round(Wbase × clamp(Ks × Kc × Ko × Ke, Lm, Um))</code>。</li><li>自动模式再应用容量保护和单次上调限制，得到页面展示并写入 new-api 的本轮权重；下调不受单次比例限制。</li></ol><p class="help-warning">表格中的“计算权重”是安全限制后的本轮执行值，不一定等于基础权重直接乘四个可见系数。</p></section>
-      <section><h3>第一次使用</h3><ol><li>点击“初始化/刷新基础值”，读取当前线上权重和优先级。</li><li>先选择“只观察”，确认计算结果合理。</li><li>再切换为“自动执行”并保存；系统会先验证 new-api 控制链路。</li></ol></section>
-      <section><h3>指标与统计口径</h3><div class="help-table"><div><b>指标</b><b>定义、来源与参与条件</b></div><div><strong>TTFT P50/P90/P95</strong><span>首字节或首 Token 响应耗时的第 50、90、95 百分位，单位秒，来自 Agent 采集的 new-api 请求日志。P50 代表典型延迟，P90/P95 体现慢请求尾部。仅使用成功流式请求中确认未重试的 TTFT；有效样本达到“每渠道最少请求数”，且三个分位值都大于 0，才参与速度比较。重试和无法确认的样本不用于调权速度，监控统计不变。</span></div><div><strong>同模型平均数</strong><span>对同一模型下所有合格渠道的对应指标做算术平均；速度基线至少需要 2 个未重试样本合格渠道；不足时保留已有新口径速度系数，首次使用 1.000。缓存和输出仍使用原有统计。</span></div><div><strong>大输入缓存命中率 C</strong><span><code>缓存读取 Token 总数 ÷ 提示 Token 总数</code>。只统计成功请求且输入大于 512 Token；当前渠道累计提示 Token 至少 10,000，并且至少 2 个渠道有足够缓存证据时才参与。</span></div><div><strong>OTPS</strong><span><code>成功流式请求输出 Token 总数 ÷ 生成耗时总秒数</code>，表示持续输出速度，不是 RPM。当前渠道窗口内用于计算的输出 Token 至少 100，并且至少 2 个渠道有有效 OTPS 时才参与。</span></div><div><strong>渠道错误率 E</strong><span><code>(总错误数 − 用户自身错误数) ÷ 请求数</code>。用户参数、余额等归类为用户侧的错误不会处罚渠道；渠道错误按完整分钟桶进入 EWMA。</span></div><div><strong>平滑错误率</strong><span><code>Ema(new) = 0.3 × E本分钟 + 0.7 × Ema(old)</code>。最近约 90 秒的未稳定分钟桶暂不折入，避免半桶数据让错误率剧烈跳变。</span></div></div></section>
-      <section><h3>四项评估系数</h3><dl class="formula-list"><div><dt>速度系数 Ks</dt><dd><code>R = w50×TTFT50/平均TTFT50 + w90×TTFT90/平均TTFT90 + w95×TTFT95/平均TTFT95</code><code>Ks = clamp((1/R)^(αs×S), Ls, Us)</code><span>w50、w90、w95 合计必须为 1；αs 是速度影响指数，S 是全局敏感度。渠道越快，R 越小、Ks 越大。</span></dd></div><div><dt>缓存系数 Kc</dt><dd><code>Kc = clamp((C/Cavg)^(αc×S), Lc, Uc)</code><span>C 是本渠道大输入缓存命中率，Cavg 是同模型平均值；αc 控制缓存差异影响强度。证据不足时 Kc=1。</span></dd></div><div><dt>输出系数 Ko</dt><dd><code>Ko = clamp((OTPS/OTPSavg)^(αo×S), Lo, Uo)</code><span>αo 控制输出速度差异影响强度；输出越快 Ko 越大。证据不足时 Ko=1。</span></dd></div><div><dt>错误系数 Ke</dt><dd><code>E≤E1 → 1；E1~E2 → 1 到 K2；E2~E3 → K2 到 K3；E3~E4 → K3 到 Kmin；E≥E4 → Kmin</code><span>区间内采用线性插值。E1/E2/E3/E4 是健康、轻度、严重和封底错误率节点，K2/K3/Kmin 是对应惩罚系数。</span></dd></div></dl></section>
-      <section><h3>参数符号说明</h3><div class="help-table compact"><div><b>参数</b><b>作用</b></div><div><strong>S 敏感度</strong><span>同时放大或减弱速度、缓存、输出三项差异；越大越激进，不直接改变错误系数。</span></div><div><strong>αs / αc / αo</strong><span>对应速度、缓存、输出的指数。等于 1 按原始比例响应；小于 1 压缩差异；大于 1 放大差异。</span></div><div><strong>Ls/Us、Lc/Uc、Lo/Uo</strong><span>单项系数上下限，防止某一个指标独自把权重推得过高或过低。</span></div><div><strong>Lm / Um</strong><span>四项相乘后的综合倍率上下限。即使单项乘积超出范围，原始目标也只按该范围计算。</span></div><div><strong>评估窗口</strong><span>性能指标使用的最近分钟数。窗口越大越稳定但反应越慢；窗口越小越灵敏但更容易波动。</span></div><div><strong>最少请求数</strong><span>速度采用未重试有效 TTFT 样本数；不足时不更新速度系数。缓存、输出和错误仍按各自条件计算。</span></div></div></section>
-      <section><h3>从原始目标到本轮执行权重</h3><ol><li><code>M = clamp(Ks × Kc × Ko × Ke, Lm, Um)</code></li><li><code>Wtarget = max(1, round(Wbase × M))</code>；基础权重为 0 时渠道不参与调权。</li><li>若当前 RPM 或 TPM 达到所配置上限，且 Wtarget 高于当前有效权重，则本轮保持当前权重；下降仍然允许。0 表示该项不限制。</li><li>自动模式上调时：<code>Wmax = max(Wcurrent + 1, floor(Wcurrent × (1 + P/100)))</code>，最终取 <code>min(Wtarget, Wmax)</code>。P 是“单次上调上限”；至少允许 +1，所以下降后的低权重会逐轮恢复。</li><li>只观察模式不写 new-api；自动模式只在整数执行权重变化时写入。</li></ol></section>
-      <section><h3>容量、熔断与恢复参数</h3><dl class="formula-list"><div><dt>最大 RPM / TPM</dt><dd>使用当前滚动速率判断。任一非零上限被达到后只禁止上调，不影响保持和下调；实时速率不可用时，为安全起见，有配置上限的渠道同样禁止上调。</dd></div><div><dt>快速熔断</dt><dd>直接检查每次 Agent 上报增量：非用户错误率达到“快速熔断错误率”，且本批请求数达到门槛时立即熔断，不等待稳定分钟桶。</dd></div><div><dt>常规熔断</dt><dd>平滑错误率达到“熔断错误率”且样本充分时，将权重、优先级置 0。错误系数节点负责渐进降权，熔断阈值负责彻底停流，两者不是同一参数。</dd></div><div><dt>探针恢复阈值</dt><dd><code>探针成功率 × 探针速度得分 ≥ 恢复阈值</code>才通过。静默期决定熔断后等待多久，探测次数与间隔决定一次恢复检测的规模。</dd></div><div><dt>恢复初始倍率</dt><dd>探针通过后先以<code>基础权重 × 恢复初始倍率</code>软启动，下一轮再回到正常公式和单次上调限制。</dd></div></dl></section>
-      <section><h3>三个权重与刷新时序</h3><dl><div><dt>基础权重 Wbase</dt><dd>长期计算基准，可手动修改；不是当前线上权重。</dd></div><div><dt>计算权重</dt><dd>页面展示的是经过容量和上调限制后的本轮执行值。评估系数反映原始评分，因此二者不一定能直接相乘对应。</dd></div><div><dt>当前权重 Wcurrent</dt><dd>new-api 已确认的线上权重。评估、写入和渠道快照更新时间不同，短时间内可能看到计算权重与当前权重相同，下一轮才继续爬升。</dd></div></dl></section>
-      <section><h3>自动模式</h3><p>每分钟重新计算。只要本轮执行权重与上次成功写入值不同，就写入 new-api；没有变化则不重复写。如果线上权重被人工或其他系统修改，系统会在确认外部变化后按当前规则重新计算并写回。</p></section>
-      <section><h3>保留的安全保护</h3><dl><div><dt>熔断</dt><dd>渠道错误率达到阈值且样本足够时，将权重和优先级置为 0。</dd></div><div><dt>恢复</dt><dd>静默期后主动探测；通过后先以低权重恢复，再回到正常计算。</dd></div><div><dt>多模型渠道</dt><dd>一个渠道同时服务多个模型时不自动调权，避免模型之间互相影响。</dd></div><div><dt>写入失败</dt><dd>连续失败 3 次后暂停每分钟写入，改为每 10 分钟重试，成功后自动恢复。</dd></div></dl></section>
-      <section><h3>表格与记录</h3><p>“评估状态”直接显示样本不足、熔断、恢复中或写入失败等原因；“变更记录”保存每次自动写入、熔断和恢复。计算公式可点击“计算权重”旁的 i 查看。</p></section>
-    </div>
+<el-tabs v-model="helpSection"><el-tab-pane label="权重与参数" name="calculation"><div class="help-guide"><section><h3>完整计算流程</h3><ol><li>按模型分组，只比较提供同一个模型的渠道；多模型渠道为避免互相影响，不参与自动调权。</li><li>读取最近“评估窗口”内的请求，形成每个渠道的 TTFT、缓存命中、OTPS 和错误率指标。</li><li>用至少 2 个合格渠道计算同模型平均基线，再得到速度、缓存、输出、错误四个系数。</li><li>先计算原始目标：<code>Wtarget = round(Wbase × clamp(Ks × Kc × Ko × Ke, Lm, Um))</code>。</li><li>自动模式再应用容量保护和单次上调限制，得到页面展示并写入 new-api 的本轮权重；下调不受单次比例限制。</li></ol><p class="help-warning">权重下方的“拟执行”是安全限制后的本轮执行值，不一定等于基础权重直接乘四个可见系数。</p></section><section><h3>第一次使用</h3><ol><li>点击“初始化/刷新基础值”，读取当前线上权重和优先级。</li><li>先选择“只观察”，确认计算结果合理。</li><li>再切换为“自动执行”并保存；系统会先验证 new-api 控制链路。</li></ol></section><section><h3>指标与统计口径</h3><div class="help-table"><div><b>指标</b><b>定义、来源与参与条件</b></div><div><strong>TTFT P50/P90/P95</strong><span>首字节或首 Token 响应耗时的第 50、90、95 百分位，单位秒，来自 Agent 采集的 new-api 请求日志。P50 代表典型延迟，P90/P95 体现慢请求尾部。仅使用成功流式请求中确认未重试的 TTFT；有效样本达到“每渠道最少请求数”，且三个分位值都大于 0，才参与速度比较。重试和无法确认的样本不用于调权速度，监控统计不变。</span></div><div><strong>同模型平均数</strong><span>对同一模型下所有合格渠道的对应指标做算术平均；速度基线至少需要 2 个未重试样本合格渠道；不足时复用本轮有效输出系数，OTPS 参与两次，不沿用历史速度系数。输出独立建立同模型基线，不依赖 TTFT 是否存在。</span></div><div><strong>大输入缓存命中率 C</strong><span><code>缓存读取 Token 总数 ÷ 提示 Token 总数</code>。只统计成功请求且输入大于 512 Token；当前渠道累计提示 Token 至少 10,000，并且至少 2 个渠道有足够缓存证据时才参与。</span></div><div><strong>OTPS</strong><span><code>成功请求输出 Token 总数 ÷ 请求总耗时总秒数</code>，包含流式和非流式，不扣除首字等待；排除 fallback、同渠道重试与无法确认的请求。未重试有效请求达到“每渠道最少请求数”、输出 Token 至少 100，且至少 2 个渠道满足条件时参与，不依赖 TTFT。监控保留重试样本。</span></div><div><strong>渠道错误率 E</strong><span><code>(总错误数 − 用户自身错误数) ÷ 请求数</code>。用户参数、余额等归类为用户侧的错误不会处罚渠道；渠道错误按完整分钟桶进入 EWMA。</span></div><div><strong>平滑错误率</strong><span><code>Ema(new) = 0.3 × E本分钟 + 0.7 × Ema(old)</code>。最近约 90 秒的未稳定分钟桶暂不折入，避免半桶数据让错误率剧烈跳变。</span></div></div></section><section><h3>四项评估系数</h3><dl class="formula-list"><div><dt>速度系数 Ks</dt><dd><code>R = w50×TTFT50/平均TTFT50 + w90×TTFT90/平均TTFT90 + w95×TTFT95/平均TTFT95</code><code>Ks = clamp((1/R)^(αs×S), Ls, Us)</code><span>w50、w90、w95 合计必须为 1；αs 是速度影响指数，S 是全局敏感度。渠道越快，R 越小、Ks 越大。TTFT 样本或基线不足时 Ks=Ko，直接复用本轮输出系数，不再单独应用 TTFT 系数上下限。</span></dd></div><div><dt>缓存系数 Kc</dt><dd><code>Kc = clamp((C/Cavg)^(αc×S), Lc, Uc)</code><span>C 是本渠道大输入缓存命中率，Cavg 是同模型平均值；αc 控制缓存差异影响强度。证据不足时 Kc=1。</span></dd></div><div><dt>输出系数 Ko</dt><dd><code>Ko = clamp((OTPS/OTPSavg)^(αo×S), Lo, Uo)</code><span>αo 控制输出速度差异影响强度；输出越快 Ko 越大。证据不足时 Ko=1。</span></dd></div><div><dt>错误系数 Ke</dt><dd><code>E≤E1 → 1；E1~E2 → 1 到 K2；E2~E3 → K2 到 K3；E3~E4 → K3 到 Kmin；E≥E4 → Kmin</code><span>区间内采用线性插值。E1/E2/E3/E4 是健康、轻度、严重和封底错误率节点，K2/K3/Kmin 是对应惩罚系数。</span></dd></div></dl></section><section><h3>参数符号说明</h3><div class="help-table compact"><div><b>参数</b><b>作用</b></div><div><strong>S 敏感度</strong><span>同时放大或减弱速度、缓存、输出三项差异；越大越激进，不直接改变错误系数。</span></div><div><strong>αs / αc / αo</strong><span>对应速度、缓存、输出的指数。等于 1 按原始比例响应；小于 1 压缩差异；大于 1 放大差异。</span></div><div><strong>Ls/Us、Lc/Uc、Lo/Uo</strong><span>单项系数上下限，防止某一个指标独自把权重推得过高或过低。</span></div><div><strong>Lm / Um</strong><span>四项相乘后的综合倍率上下限。即使单项乘积超出范围，原始目标也只按该范围计算。</span></div><div><strong>评估窗口</strong><span>性能指标使用的最近分钟数。窗口越大越稳定但反应越慢；窗口越小越灵敏但更容易波动。</span></div><div><strong>最少请求数</strong><span>速度采用未重试有效 TTFT 样本数；TTFT 不足时使用本轮有效输出系数；窗口总请求不足时保持已执行权重。缓存和错误规则不变。</span></div></div></section><section><h3>三个权重与刷新时序</h3><dl><div><dt>基础权重 Wbase</dt><dd>长期计算基准，可手动修改；不是当前线上权重。</dd></div><div><dt>计算权重</dt><dd>页面展示的是经过容量和上调限制后的本轮执行值。评估系数反映原始评分，因此二者不一定能直接相乘对应。</dd></div><div><dt>当前权重 Wcurrent</dt><dd>new-api 已确认的线上权重。评估、写入和渠道快照更新时间不同，短时间内可能看到计算权重与当前权重相同，下一轮才继续爬升。</dd></div></dl></section><section><h3>自动模式</h3><p>每分钟重新计算。只要本轮执行权重与上次成功写入值不同，就写入 new-api；没有变化则不重复写。如果线上权重被人工或其他系统修改，系统会在确认外部变化后按当前规则重新计算并写回。</p></section><section><h3>保留的安全保护</h3><dl><div><dt>熔断</dt><dd>渠道错误率达到阈值且样本足够时，将权重和优先级置为 0。</dd></div><div><dt>恢复</dt><dd>静默期后主动探测；通过后先以低权重恢复，再回到正常计算。</dd></div><div><dt>多模型渠道</dt><dd>一个渠道同时服务多个模型时不自动调权，避免模型之间互相影响。</dd></div><div><dt>写入失败</dt><dd>连续失败 3 次后暂停每分钟写入，改为每 10 分钟重试，成功后自动恢复。</dd></div></dl></section><section><h3>表格与记录</h3><p>“状态”列显示样本不足、熔断、恢复中或写入失败等原因；“变更记录”保存每次自动写入、熔断和恢复。计算公式可悬停或点击“计算”数值查看。</p></section></div></el-tab-pane><el-tab-pane label="容量与执行" name="capacity"><div class="help-guide"><section><h3>从原始目标到本轮执行权重</h3><ol><li><code>M = clamp(Ks × Kc × Ko × Ke, Lm, Um)</code></li><li><code>Wtarget = max(1, round(Wbase × M))</code>；基础权重为 0 时渠道不参与调权。</li><li>若当前 RPM 或 TPM 达到所配置上限，且 Wtarget 高于当前有效权重，则本轮保持当前权重；下降仍然允许。0 表示该项不限制。</li><li>自动模式上调时：<code>Wmax = max(Wcurrent + 1, floor(Wcurrent × (1 + P/100)))</code>，最终取 <code>min(Wtarget, Wmax)</code>。P 是“单次上调上限”；至少允许 +1，所以下降后的低权重会逐轮恢复。</li><li>只观察模式不写 new-api；自动模式只在整数执行权重变化时写入。</li></ol></section><section><h3>容量、熔断与恢复参数</h3><dl class="formula-list"><div><dt>最大 RPM / TPM</dt><dd>使用当前滚动速率判断。任一非零上限被达到后只禁止上调，不影响保持和下调；实时速率不可用时，为安全起见，有配置上限的渠道同样禁止上调。</dd></div><div><dt>快速熔断</dt><dd>直接检查每次 Agent 上报增量：非用户错误率达到“快速熔断错误率”，且本批请求数达到门槛时立即熔断，不等待稳定分钟桶。</dd></div><div><dt>常规熔断</dt><dd>平滑错误率达到“熔断错误率”且样本充分时，将权重、优先级置 0。错误系数节点负责渐进降权，熔断阈值负责彻底停流，两者不是同一参数。</dd></div><div><dt>探针恢复阈值</dt><dd><code>探针成功率 × 探针速度得分 ≥ 恢复阈值</code>才通过。静默期决定熔断后等待多久，探测次数与间隔决定一次恢复检测的规模。</dd></div><div><dt>恢复初始倍率</dt><dd>探针通过后先以<code>基础权重 × 恢复初始倍率</code>软启动，下一轮再回到正常公式和单次上调限制。</dd></div></dl></section></div></el-tab-pane></el-tabs>
   </el-drawer>
 </div></AppShell></template>
 
 <style scoped>
-.rate-window-info{display:flex;flex-wrap:wrap;gap:4px 16px;padding:6px 10px;color:#657086}
-.page{display:grid;gap:14px;padding-bottom:70px}.hero{display:flex;justify-content:space-between;align-items:center;gap:20px;padding:20px 24px;border:1px solid #dfe7f3;border-radius:10px;background:linear-gradient(120deg,#fff,#f3f7ff)}.hero span,.hero p,.head small,.hero-state small,.summary small,.proposal small,.model-head small,.model-list small{color:#8491a5}.hero h2{margin:4px 0}.hero p{margin:0}.hero-state{display:flex;align-items:center;gap:12px;min-width:300px;padding:12px 16px;border-radius:8px;background:#fff}.hero-state div{display:flex;flex-direction:column;gap:4px}.hero-state i{width:10px;height:10px;border-radius:50%;background:#f3a326;box-shadow:0 0 0 5px #fdf1db}.hero-state i.active{background:#21a675;box-shadow:0 0 0 5px #dff5ec}.tabs :deep(.el-tabs__header){margin:0;padding:0 16px;border:1px solid #e1e8f2;border-radius:8px;background:#fff}.summary{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:14px 0}.summary>div{display:flex;flex-direction:column;gap:6px;padding:16px 18px;border:1px solid #e1e8f2;border-radius:8px;background:#fff}.summary b{font-size:26px}.summary .danger b{color:#d84a4a}.summary.compact b{font-size:22px}.head,.model-head,.tools{display:flex;align-items:center;justify-content:space-between;gap:12px}.title-line{display:flex;align-items:center;gap:8px}.title-line small{margin-left:4px}.help{display:grid;place-items:center;width:18px;height:18px;padding:0;border:1px solid #aeb9ca;border-radius:50%;background:#fff;color:#718096;font-size:12px;font-weight:700;cursor:help}.help-copy{margin:8px 0 0;color:#596579;line-height:1.6}.model-workspace{display:grid;grid-template-columns:260px minmax(0,1fr);min-height:560px;border:1px solid #e2e8f2;border-radius:8px;overflow:hidden}.model-nav{padding:12px;border-right:1px solid #e2e8f2;background:#f7f9fc}.model-list{display:grid;gap:5px;margin-top:10px;max-height:510px;overflow:auto}.model-list>button{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;padding:10px;border:1px solid transparent;border-radius:7px;background:transparent;text-align:left;cursor:pointer}.model-list>button:hover{background:#fff}.model-list>button.active{border-color:#b9cdfb;background:#eaf1ff;color:#245eea}.model-list>button>span:first-child{display:flex;min-width:0;flex-direction:column;gap:3px}.model-list b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.model-status{display:flex;align-items:center;gap:6px}.model-detail{min-width:0;background:#fff}.model-head{min-height:34px;padding:10px 12px;background:#f7f9fc}.model-head>div{display:flex;align-items:center;gap:10px}.proposal{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.proposal>b{font-size:18px;color:#245eea}.proposal button{padding:0;border:0;background:none;color:#4e73b8;cursor:pointer}.proposal small{flex-basis:100%}.factors p{display:flex;justify-content:space-between}.channel{margin:0 12px}.flow{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:20px}.flow>div{display:grid;grid-template-columns:30px 1fr;gap:3px 8px;padding:14px;border:1px solid #dfe7f3;border-radius:8px;background:#f8faff}.flow i{grid-row:1/3;display:grid;place-items:center;width:28px;height:28px;border-radius:50%;background:#3168e8;color:#fff;font-style:normal}.flow span,.params small{font-size:12px;color:#657086}.params{display:grid;grid-template-columns:repeat(5,minmax(150px,1fr));gap:0 16px}.params :deep(.el-form-item__content){display:flex;flex-direction:column;align-items:flex-start}.safety{padding:10px 12px;border-radius:6px;background:#fff7e8;color:#76551b}.save{position:fixed;z-index:20;right:24px;bottom:18px;display:flex;align-items:center;gap:18px;padding:10px 12px 10px 18px;border:1px solid #f0d59b;border-radius:8px;background:#fffaf0;box-shadow:0 8px 28px #17233b24}@media(max-width:1200px){.summary,.flow{grid-template-columns:1fr 1fr}.params{grid-template-columns:repeat(3,1fr)}.hero{align-items:flex-start;flex-direction:column}.hero-state{width:100%}.model-workspace{grid-template-columns:220px minmax(720px,1fr);overflow:auto}}@media(max-width:760px){.model-workspace{display:block}.model-nav{border-right:0;border-bottom:1px solid #e2e8f2}.model-list{display:flex;max-height:none;overflow:auto}.model-list>button{min-width:190px}.title-line small{display:none}}
-.primary-metrics{display:flex;gap:0;margin:10px 0}.primary-metrics>div{flex-direction:row;align-items:center;gap:8px;padding:5px 16px;border:0;border-right:1px solid #e1e8f2;border-radius:0;background:transparent}.primary-metrics>div:first-child{padding-left:4px}.primary-metrics>div:last-child{border-right:0}.primary-metrics b{font-size:17px}.primary-metrics span{color:#68758a}
-.page{padding-bottom:0}.model-workspace{height:calc(100vh - 256px);min-height:420px}.model-list{max-height:calc(100vh - 330px)}
-.workspace-card :deep(.el-card__header){padding:8px 12px}.workspace-card :deep(.el-card__body){padding:8px}.workspace-card .head{min-height:32px}
-.model-workspace{grid-template-columns:300px minmax(0,1fr)}.model-list{overflow-x:hidden;overflow-y:auto}.model-list>button>span:first-child{flex:1}.model-status{flex:0 0 auto}@media(max-width:760px){.model-list{overflow-x:auto;overflow-y:hidden}}
-.inline-metrics{display:flex;align-items:center;margin-left:8px;color:#68758a}.inline-metrics span{padding:0 10px;border-left:1px solid #dfe6f0;font-size:12px;white-space:nowrap}.inline-metrics b{margin-left:3px;font-size:14px;color:#17233b}.inline-metrics .danger b{color:#d84a4a}@media(max-width:1100px){.title-line>small{display:none}.inline-metrics{margin-left:0}}
-.model-workspace{height:calc(100vh - 176px)}.model-list{max-height:calc(100vh - 250px)}
-.proposal .result{font-size:18px;font-weight:700;color:#245eea}
-.column-help{display:inline-flex;align-items:center;gap:5px}.column-help .help{width:16px;height:16px;font-size:11px}
-:global(.calc-details){color:#3d4859}:global(.calc-title){display:flex;align-items:center;justify-content:space-between;gap:16px}:global(.calc-title code){padding:5px 8px;border-radius:5px;background:#f2f5fa;color:#245eea}:global(.calc-details .formula){margin:10px 0;padding:8px 10px;border-radius:6px;background:#f4f7fc;font-weight:600}:global(.calc-details dl){display:grid;gap:9px;margin:0}:global(.calc-details dl>div){display:grid;grid-template-columns:92px 1fr;gap:10px;padding-top:9px;border-top:1px solid #edf0f5}:global(.calc-details dt){display:flex;justify-content:space-between;font-weight:600}:global(.calc-details dt b){color:#245eea}:global(.calc-details dd){margin:0;line-height:1.45}:global(.calc-details dd small){display:block;margin-top:3px;color:#8491a5}:global(.calc-note){margin:10px 0 0;color:#7b5c24;font-size:12px}
-.help-guide{display:grid;gap:22px;color:#3d4859}.help-guide section{padding-bottom:18px;border-bottom:1px solid #e8edf4}.help-guide section:last-child{border-bottom:0}.help-guide h3{margin:0 0 9px;color:#17233b}.help-guide p,.help-guide li,.help-guide dd{line-height:1.7}.help-guide p,.help-guide ol,.help-guide ul,.help-guide dl{margin:0}.help-guide ol,.help-guide ul{padding-left:22px}.help-guide dl{display:grid;gap:8px}.help-guide dl>div{display:grid;grid-template-columns:90px 1fr;gap:12px}.help-guide dt{font-weight:600;color:#245eea}.help-guide dd{margin:0}
-.help-guide .parameter-guide{gap:0;border:1px solid #e5eaf2;border-radius:8px;overflow:hidden}.help-guide .parameter-guide>div{grid-template-columns:118px 1fr;padding:10px 12px;border-bottom:1px solid #edf1f6}.help-guide .parameter-guide>div:last-child{border-bottom:0}.help-guide .parameter-guide dt{color:#253858}.help-guide .help-note{margin-top:10px;padding:9px 11px;border-radius:6px;background:#f5f7fa;color:#606b7d;font-size:13px}
-.help-guide code{display:inline-block;padding:2px 5px;border-radius:4px;background:#edf2fa;color:#254f9b;font-family:Consolas,monospace;white-space:normal}.help-guide .help-warning{margin-top:10px;padding:9px 11px;border-radius:6px;background:#fff4df;color:#7b5714}.help-table{display:grid;border:1px solid #dfe6f0;border-radius:7px;overflow:hidden}.help-table>div{display:grid;grid-template-columns:180px 1fr}.help-table>div+div{border-top:1px solid #e5eaf2}.help-table b,.help-table strong,.help-table span{padding:9px 11px}.help-table strong{color:#34425a;background:#f7f9fc}.help-table span{border-left:1px solid #e5eaf2;color:#596579;line-height:1.65}.help-table.compact>div{grid-template-columns:160px 1fr}.help-guide .formula-list>div{grid-template-columns:140px 1fr;padding:8px 0;border-bottom:1px dashed #dfe6f0}.help-guide .formula-list>div:last-child{border-bottom:0}.formula-list dd{display:grid;gap:6px}.formula-list code{width:fit-content}@media(max-width:680px){.help-table>div,.help-table.compact>div{grid-template-columns:1fr}.help-table span{border-left:0;border-top:1px solid #e5eaf2}.help-guide dl>div,.help-guide .formula-list>div{grid-template-columns:1fr;gap:4px}}
-.evaluation{display:flex;flex-direction:column;gap:2px}.evaluation small{color:#8491a5}.factors{color:#596579;font-size:12px;white-space:normal;line-height:1.75}.positive{color:#21a675;font-weight:600}.negative{color:#d84a4a;font-weight:600}
-.model-head .stale{color:#d84a4a;font-weight:600}
-.factors.explainable{cursor:help;border-bottom:1px dashed #aeb9ca}:global(.factor-explanation){margin:0;white-space:pre-wrap;color:#3d4859;font:12px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace}:global(.factor-explain-popover){max-width:min(520px,calc(100vw - 32px))}
-.factor-formulas{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:12px 0 20px}.factor-formulas article{display:flex;min-width:0;flex-direction:column;gap:6px;padding:12px 14px;border:1px solid #dfe7f3;border-radius:8px;background:#f8faff}.factor-formulas article.combined{grid-column:1/-1;border-color:#bfd0fb;background:#f2f6ff}.factor-formulas b{color:#253858}.factor-formulas code{overflow-wrap:anywhere;color:#245eea;font:12px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace}.factor-formulas small{color:#728097}@media(max-width:900px){.factor-formulas{grid-template-columns:1fr}.factor-formulas article.combined{grid-column:auto}}
-.evidence-collapse{margin:0 0 8px}.evidence-collapse :deep(.el-collapse-item__header){height:34px;padding:0 10px;color:#596579;font-size:12px}.evidence-grid{display:grid;gap:6px;padding:4px 10px 10px}.evidence-row{display:grid;grid-template-columns:minmax(150px,1.2fr) 2fr 1fr 1fr 1fr;gap:10px;color:#596579;font-size:12px}.evidence-row b{color:#17233b}.evidence-row span{white-space:nowrap}
-.capacity-collapse{margin:0 0 8px}.capacity-collapse :deep(.el-collapse-item__header){height:34px;padding:0 10px;color:#596579;font-size:12px}.capacity-grid{display:grid;gap:6px;padding:4px 10px 10px}.capacity-row{display:grid;grid-template-columns:minmax(130px,1.2fr) minmax(64px,.6fr) minmax(84px,.7fr) minmax(162px,1.1fr) minmax(162px,1.1fr) minmax(72px,.5fr);align-items:center;gap:8px;color:#596579;font-size:12px}.capacity-row b{display:flex;flex-direction:column;color:#17233b}.capacity-row b small{color:#8491a5;font-weight:400}.capacity-row label{display:flex;align-items:center;gap:8px;white-space:nowrap}.capacity-row :deep(.el-input-number){width:100px}
-/* 点击式入口保持表格密度，同时提供键盘焦点和悬停反馈。 */
-.group-tags{display:flex;align-items:center;gap:5px;flex-wrap:wrap}.group-tags .dim{color:#8491a5}.group-cell-trigger{display:block;width:100%;min-height:28px;padding:3px 4px;border:1px solid transparent;border-radius:5px;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}.group-cell-trigger:hover{border-color:#c7d7f7;background:#f4f7ff}.group-cell-trigger:focus-visible{outline:2px solid #3168e8;outline-offset:1px}.group-cell-trigger .group-tags{min-height:22px}.group-editor-context{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px;padding:10px 12px;border-radius:6px;background:#f7f9fc;color:#596579;font-size:12px}.group-editor-context b{color:#17233b;font-size:14px}.group-editor-context span{overflow-wrap:anywhere}.group-editor-context+ :deep(.el-form){margin-bottom:12px}
-.event-toolbar{position:absolute;z-index:2;top:20px;right:20px;left:20px;display:flex;flex-wrap:wrap;align-items:center;gap:12px 16px}.event-filters{display:flex;flex-wrap:wrap;gap:10px}.channel-id{display:block;color:#8491a5;font-weight:400}.event-footer{position:absolute;z-index:3;right:20px;bottom:8px;left:20px;display:flex;height:44px;align-items:center;justify-content:flex-end;background:#fff}
-.page.events-page{height:calc(100vh - 88px);overflow:hidden}.events-page .tabs{height:100%}.events-page .tabs :deep(.el-tabs__content){height:calc(100% - 42px);overflow:hidden}.events-page .tabs :deep(.el-tab-pane){display:flex;height:100%;min-height:0;flex-direction:column;overflow:hidden}.events-page .event-history-card{min-height:0;flex:1}.events-page .event-history-card :deep(.el-card__body){position:relative;height:100%;min-height:0;padding:0}.event-table-wrap{position:absolute;top:64px;right:20px;bottom:60px;left:20px;min-height:0;overflow:hidden}.event-table-wrap :deep(.el-table){min-height:0}.event-history-card :deep(.el-empty){position:absolute;inset:64px 20px 20px}
+.tuning-shell :deep(.content){padding:8px}
+
+.page{--tuning-ink:#17233b;--tuning-muted:#8491a5;color:var(--tuning-ink);display:grid;gap:14px;padding-bottom:0}
+.tabs>.el-tabs__header{margin:0}
+.head,.title-line,.tools,.model-head,.channel-toolbar,.channel-filters{display:flex;align-items:center;gap:12px}
+.head,.model-head,.channel-toolbar{justify-content:space-between}
+.head>div:first-child{display:flex;align-items:center;gap:8px}
+.head b{font-size:14px}
+.head small{color:var(--tuning-muted)}
+.tools{gap:8px;flex-wrap:wrap}
+.tools :deep(.el-button+.el-button){margin-left:0}
+.inline-metrics{display:flex;align-items:center;margin-left:8px;color:#68758a;font-size:12px}
+.inline-metrics b{margin-left:3px;color:#17233b;font-size:14px}
+.workspace-card :deep(.el-card__header){padding:8px 12px}
+.workspace-card :deep(.el-card__body){padding:8px}
+.model-workspace{display:grid;grid-template-columns:220px minmax(0,1fr);height:calc(100vh - 176px);min-height:420px;border:1px solid #e2e8f2;border-radius:8px;overflow:hidden}
+.model-nav{padding:10px 8px;border-right:1px solid #e2e8f2;background:#f7f9fc;min-height:0;display:flex;flex-direction:column}
+.model-list{display:grid;align-content:start;gap:5px;overflow:auto;margin-top:10px;min-height:0}
+.model-list>button{display:flex;width:100%;align-items:center;justify-content:space-between;gap:8px;padding:8px;border:1px solid transparent;background:transparent;text-align:left;cursor:pointer;border-radius:5px;color:var(--tuning-ink)}
+.model-list>button:hover{background:#fff}
+.model-list>button.active{border-color:#b9cdfb;background:#eaf1ff;color:#245eea}
+.model-list b{display:block;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.model-list small{display:block;color:#8491a5;font-size:12px;margin-top:3px}
+.model-secondary{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-top:3px}.model-secondary small{margin-top:0}.model-mode-text{font-size:11px;color:#8491a5;font-weight:400}.model-mode-text.auto{color:#21a675}.model-mode-text.observe{color:#b98015}
+.model-detail{display:flex;flex-direction:column;min-width:0;min-height:0}
+.model-head{min-height:34px;padding:10px 12px;background:#f7f9fc;border-bottom:1px solid #e2e8f2;flex-wrap:wrap}
+.model-head>div:first-child{display:flex;align-items:center;flex-wrap:wrap;gap:10px}
+.model-head b{font-size:14px}
+.model-head small{font-size:11px;color:#8491a5}
+.model-head .stale{color:#ba4c38}
+.channel-toolbar{padding:8px 10px;gap:10px;flex-wrap:wrap}
+.channel-filters{gap:8px}
+.channel-filters :deep(.el-input){width:190px}
+.channel-filters :deep(.el-select){width:125px}
+.load-time{display:flex;align-items:center;gap:5px;font-size:11px;color:#8491a5}
+.channel-table{flex:1;min-height:0;font-variant-numeric:tabular-nums}
+.channel-table :deep(th.el-table__cell),.event-history-card :deep(th.el-table__cell){background:#fff;color:#8491a5;font-weight:500;height:38px;border-bottom:1px solid #e2e8f2}
+.channel-table :deep(td.el-table__cell){padding:8px 0;border-bottom-color:#e2e8f2}
+.channel-table :deep(.cell){padding:0 10px}
+.channel-name{line-height:20px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px;color:#304e80;font-weight:400}
+.channel-heading{display:flex;align-items:baseline;gap:6px;min-width:0;line-height:20px}.channel-heading .channel-name{min-width:0}.channel-key{flex-shrink:0;font-size:12px;line-height:20px;color:#8491a5}
+.channel-meta{display:flex;align-items:center;gap:10px;white-space:nowrap;font-size:11px;color:#8491a5;margin-top:3px}
+.group-cell-trigger{width:100%;max-width:100%;min-width:0;border:1px solid transparent;border-radius:4px;padding:0 3px;background:transparent;cursor:pointer;color:#6b7b91}
+.group-cell-trigger:hover{background:#edf3ff;border-color:#b8ccf6}
+.group-cell-trigger:focus-visible{outline:2px solid #3168e8}
+.group-tags{line-height:18px;display:flex;flex-wrap:wrap;justify-content:center;gap:4px;font-size:11px;text-align:center}
+.group-tags>span{max-width:100%;overflow-wrap:anywhere;white-space:normal;padding:0 4px;background:#ecf5ff;border:1px solid #d9ecff;color:#409eff;border-radius:3px}
+.current-weight{display:block;font-size:14px;line-height:20px;font-weight:500;color:#304e80}
+.weight-next{display:flex;align-items:center;gap:5px;white-space:nowrap;color:#8491a5;font-size:11px;margin-top:0;line-height:18px}
+.channel-table :deep(.el-input-number){width:76px}
+.channel-table :deep(.el-input__wrapper){box-shadow:0 0 0 1px #dfe7f3 inset;border-radius:4px;background:#fff;padding:0 7px}
+.channel-table :deep(.el-input__wrapper:hover){box-shadow:0 0 0 1px #99b5ea inset}
+.channel-table :deep(.el-input__inner){text-align:center;font-variant-numeric:tabular-nums;color:#33465f}
+.channel-table :deep(.modified .el-input__wrapper){box-shadow:0 0 0 1px #dcac4b inset;background:#fffbef}
+.priority-cell{display:flex;align-items:center;gap:8px;font-size:11px;color:#8491a5;white-space:nowrap}
+.priority-cell b{color:#344862;font-weight:500}
+.priority-cell label{display:flex;align-items:center;gap:5px}
+.priority-cell :deep(.el-input-number){width:57px}
+.capacity-cell{display:flex;align-items:center;justify-content:flex-start;gap:5px;font-size:12px;white-space:nowrap}
+.capacity-cell :deep(.el-input-number){width:70px}
+.capacity-cell.tpm :deep(.el-input-number){width:88px}
+.separator{color:#a0acbb}
+.header-sub{font-size:10px;color:#8390a3;font-weight:400;margin-left:3px}
+.unlimited{display:block;text-align:right;color:#9aa6b5;font-size:10px;line-height:14px}
+.row-status{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.status-text,.status-icon{border:0;background:transparent;cursor:help;padding:0;font:inherit}
+.status-text{display:inline-flex;align-items:center;gap:5px;font-size:11px}
+.status-icon{display:inline-grid;place-items:center;min-width:16px;height:16px;font-size:13px;font-weight:600}
+.limit-icon svg{width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.danger,.negative{color:#d24d51}
+.warning{color:#b98015}
+.accent,.positive{color:#3569d1}
+.muted{color:#8592a5}
+.channel-footer{display:flex;justify-content:space-between;gap:8px;padding:8px 10px;font-size:11px;color:#8491a5;border-top:1px solid #e2e8f2}
+.calculation-formula{font-size:17px;font-weight:650;color:#263d60;font-variant-numeric:tabular-nums;margin:8px 0}
+.formula-caption{color:#8491a5;font-size:11px}
+.evidence-pairs{display:grid;grid-template-columns:1fr 1fr;gap:8px;border-block:1px solid #edf0f5;padding:12px 0;font-size:12px}
+.evidence-pairs b{margin-left:5px;color:#253b59}
+.limit-note{padding:8px 10px;background:#fff8eb;color:#a47419;border-radius:5px}
+.full-evidence summary,.event-detail summary{color:#3569d1;cursor:pointer;font-size:12px}
+.factor-explanation{white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.7 ui-monospace,Consolas,monospace;color:#59687d;margin:12px 0}
+.summary{display:flex;gap:0;padding:18px 24px;background:white;border:1px solid #e8edf4;border-radius:7px;margin:0 0 16px}
+.summary>div{display:flex;align-items:center;gap:14px;padding:0 28px;border-right:1px solid #e5eaf1}
+.summary>div:first-child{padding-left:0}
+.summary>div:last-child{border-right:0}
+.summary span{font-size:12px;color:#77849a}
+.summary b{font-size:23px;color:#264a84}
+.event-history-card :deep(.el-card__body){padding:18px 20px}
+.event-scope{display:block;margin-top:10px;color:#8591a5;font-size:11px}
+.event-toolbar{margin-bottom:18px}
+.event-filters{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.event-filters :deep(.el-date-editor){max-width:300px;flex-grow:0}
+.event-table-wrap{height:calc(100vh - 375px);min-height:330px}
+.event-channel{display:block;color:#8491a5;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.channel-id{display:block;color:#8491a5;font-size:11px}
+.event-history-card :deep(td.el-table__cell){padding:8px 0;font-variant-numeric:tabular-nums;border-bottom-color:#e2e8f2}
+.event-footer{display:flex;justify-content:flex-end;padding-top:16px}
+.settings-card :deep(.el-card__body){padding:16px 20px}
+.factor-matrix{max-width:1120px;border:1px solid #e7ecf3;border-radius:6px;overflow:hidden}
+.factor-matrix-head,.factor-matrix-row{display:grid;grid-template-columns:150px repeat(3,minmax(0,1fr));align-items:start;gap:16px;padding:10px 12px}
+.factor-matrix-head{background:#f6f8fb;color:#718097;font-size:12px}
+.factor-matrix-row{border-top:1px solid #edf0f5}
+.factor-matrix-row>b{font-size:13px;font-weight:500;padding-top:9px;color:#354963}
+.factor-matrix-row :deep(.el-form-item){margin:0;min-width:0}
+.factor-matrix-row :deep(.el-form-item__label){position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+.factor-matrix-row :deep(.el-input-number){width:100%}
+.factor-matrix-row small{display:none}
+.parameter-heading{font-size:13px;color:#465974;margin:26px 0 16px}
+.settings-card .two-columns{grid-template-columns:repeat(2,minmax(0,1fr));max-width:760px}
+.settings-card .settings-form{max-width:none}
+.settings-card .params{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0 16px;max-width:1200px}
+.settings-intro{display:flex;justify-content:space-between;align-items:center;margin:8px 0 16px}
+.settings-intro h3{font-size:14px;margin:0 0 7px}
+.settings-intro p{margin:0;color:#8190a5;font-size:12px}
+.params{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px 32px;max-width:1200px}
+.params :deep(.el-form-item__content){display:flex;align-items:flex-start;flex-direction:column}
+.params :deep(.el-form-item__label){font-size:13px;color:#465871;margin-bottom:8px}
+.params :deep(.el-input-number){width:100%;max-width:300px}
+.params small{font-size:11px;color:#8693a6;line-height:1.65;margin-top:7px;max-width:300px}
+.tuning-save-bar{position:sticky;bottom:14px;z-index:12;display:flex;align-items:center;justify-content:space-between;gap:16px;margin-top:16px;padding:14px 20px;border:1px solid #e4e9f1;border-radius:7px;background:#fff;box-shadow:0 5px 22px #20365814;font-size:13px}
+.tuning-save-bar i{display:inline-block;width:7px;height:7px;border-radius:50%;background:#d9a139;margin-right:8px}
+.save-context{color:#8792a5;font-size:11px;margin-left:14px}
+.group-editor-context{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px;padding:10px 12px;border-radius:6px;background:#f7f9fc;color:#596579;font-size:12px}
+.group-editor-context b{color:#17233b;font-size:14px}
+.group-editor-context span{font-size:12px;color:#8491a5}
+.group-preview{padding:14px 16px;background:#f5f8fc;border-radius:6px;margin:6px 0 16px;font-size:12px;overflow-wrap:anywhere}
+.group-preview>b{display:block;margin-bottom:12px}
+.group-preview>div{display:grid;grid-template-columns:65px 1fr;gap:10px;margin:7px 0}
+.group-preview span{color:#8491a5}
+.tuning-group-dialog :deep(.el-checkbox){margin-top:12px}
+.tuning-help :deep(.el-drawer__header){margin-bottom:12px;color:#223652}
+.tuning-help :deep(.el-drawer__body){padding-top:0}
+
+@media(max-width:1250px){.model-workspace{grid-template-columns:220px minmax(0,1fr)}
+.head{flex-wrap:wrap}
+.model-head{gap:10px}
+.params{grid-template-columns:repeat(2,minmax(0,1fr))}
+.summary>div{padding:0 14px}
+.summary span{font-size:11px}
+.save-context{display:none}}
+@media(max-width:760px){.factor-matrix-head,.factor-matrix-row{grid-template-columns:100px repeat(3,minmax(0,1fr));gap:10px;padding:12px}
+.model-workspace{grid-template-columns:150px minmax(0,1fr);min-height:520px}
+.inline-metrics{gap:8px}
+.tools{gap:4px}
+.summary{flex-wrap:wrap;gap:14px}
+.summary>div{border:0;padding:0}
+.params{grid-template-columns:1fr}
+.channel-footer span{display:none}
+.event-filters :deep(.el-date-editor){max-width:100%}
+.tuning-save-bar{flex-wrap:wrap}
+.model-head>div:first-child small:last-child{flex-basis:100%}}
+
+.help-guide{display:grid;gap:22px;color:#3d4859}
+.help-guide section{padding-bottom:18px;border-bottom:1px solid #e8edf4}
+.help-guide section:last-child{border-bottom:0}
+.help-guide h3{margin:0 0 9px;color:#17233b}
+.help-guide p,.help-guide li,.help-guide dd{line-height:1.7}
+.help-guide p,.help-guide ol,.help-guide ul,.help-guide dl{margin:0}
+.help-guide ol,.help-guide ul{padding-left:22px}
+.help-guide dl{display:grid;gap:8px}
+.help-guide dl>div{display:grid;grid-template-columns:90px 1fr;gap:12px}
+.help-guide dt{font-weight:600;color:#245eea}
+.help-guide dd{margin:0}
+.help-guide .parameter-guide{gap:0;border:1px solid #e5eaf2;border-radius:8px;overflow:hidden}
+.help-guide .parameter-guide>div{grid-template-columns:118px 1fr;padding:10px 12px;border-bottom:1px solid #edf1f6}
+.help-guide .parameter-guide>div:last-child{border-bottom:0}
+.help-guide .parameter-guide dt{color:#253858}
+.help-guide .help-note{margin-top:10px;padding:9px 11px;border-radius:6px;background:#f5f7fa;color:#606b7d;font-size:13px}
+.help-guide code{display:inline-block;padding:2px 5px;border-radius:4px;background:#edf2fa;color:#254f9b;font-family:Consolas,monospace;white-space:normal}
+.help-guide .help-warning{margin-top:10px;padding:9px 11px;border-radius:6px;background:#fff4df;color:#7b5714}
+.help-table{display:grid;border:1px solid #dfe6f0;border-radius:7px;overflow:hidden}
+.help-table>div{display:grid;grid-template-columns:180px 1fr}
+.help-table>div+div{border-top:1px solid #e5eaf2}
+.help-table b,.help-table strong,.help-table span{padding:9px 11px}
+.help-table strong{color:#34425a;background:#f7f9fc}
+.help-table span{border-left:1px solid #e5eaf2;color:#596579;line-height:1.65}
+.help-table.compact>div{grid-template-columns:160px 1fr}
+.help-guide .formula-list>div{grid-template-columns:140px 1fr;padding:8px 0;border-bottom:1px dashed #dfe6f0}
+.help-guide .formula-list>div:last-child{border-bottom:0}
+.formula-list dd{display:grid;gap:6px}
+.formula-list code{width:fit-content}
+@media(max-width:680px){.help-table>div,.help-table.compact>div{grid-template-columns:1fr}
+.help-table span{border-left:0;border-top:1px solid #e5eaf2}
+.help-guide dl>div,.help-guide .formula-list>div{grid-template-columns:1fr;gap:4px}}
+
+
+.tabs :deep(.el-tabs__header){margin:0;padding:0 16px;border:1px solid #e1e8f2;border-radius:8px;background:#fff}
+.settings-sections :deep(.el-tabs__header){padding:0;border:0;border-radius:0}
+.workspace-card .head{min-height:32px}
+.inline-metrics span{padding:0 10px;border-left:1px solid #dfe6f0;white-space:nowrap}
+.model-list>button>span:first-child{min-width:0;flex:1}
+.model-status{flex-shrink:0}
+.capacity-cell :deep(.el-input){width:70px;flex:none}
+.capacity-cell.tpm :deep(.el-input){width:92px}
+.channel-table :deep(.el-input-number){max-width:100%}
+.model-nav-tools{display:flex;gap:5px;align-items:center}.model-nav-tools :deep(.el-input){min-width:0}
+.model-nav-toggle{display:grid;place-items:center;flex:0 0 24px;width:24px;height:32px;padding:0;border:1px solid #dfe7f3;border-radius:4px;background:#fff;color:#718097;font-size:12px;line-height:1;cursor:pointer}
+.model-nav-toggle:hover,.model-nav-rail:hover{background:#eaf1ff;color:#245eea}.model-nav-toggle:focus-visible,.model-nav-rail:focus-visible{outline:2px solid #b9cdfb}
+.model-workspace.nav-collapsed{grid-template-columns:36px minmax(0,1fr)}.nav-collapsed .model-nav{padding:10px 5px}.model-nav-rail{border:0;background:transparent;color:#718097;writing-mode:vertical-rl;letter-spacing:4px;padding:12px 5px;cursor:pointer;font-size:12px}
+.evaluation-factors{display:grid;grid-template-columns:1fr 1fr;gap:2px 10px;font-size:12px;line-height:20px;color:#718097;font-variant-numeric:tabular-nums}.evaluation-factors span{white-space:nowrap}.evaluation-factors b{font-weight:500;color:#465974}.evaluation-factors .factor-up{color:#21a675}.evaluation-factors .factor-down{color:#d24d51}
+.weight-calculated{display:flex;align-items:center;justify-content:center;gap:6px;font-variant-numeric:tabular-nums}.channel-table .current-weight{font-weight:400}
+.speed-source{display:block;font-size:10px;color:#8491a5;line-height:14px}
+.coefficient-cell{display:flex;flex-direction:column;gap:2px;line-height:20px;font-size:12px;font-variant-numeric:tabular-nums}.coefficient-cell b{font-weight:500;color:#465974}.coefficient-cell small{font-size:10px;line-height:16px;color:#8491a5;white-space:normal}.coefficient-cell .factor-up{color:#21a675}.coefficient-cell .factor-down{color:#d24d51}
+.channel-table :deep(td.coefficient-merged .cell){padding:0}.coefficient-values{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));align-items:start}.coefficient-values .coefficient-cell{padding:0 8px}.coefficient-overall{margin-top:5px;padding:0 10px;font-size:11px;line-height:18px;text-align:center}
+.coefficient-overall.only-status{margin-top:0;text-align:center}
+/* Respond to available page width, including changes to the application sidebar. */
+/* The global desktop body minimum must not force this page beyond the viewport. */
+:global(body:has(.tuning-shell)){min-width:0}
+.tuning-shell :deep(.workspace),.tuning-shell :deep(.content){min-width:0}
+.page{min-width:0;grid-template-columns:minmax(0,1fr)}
+.page :deep(.el-tabs__content),.workspace-card,.model-nav{min-width:0}
+.model-nav{overflow:hidden}
+.compact-layout .model-workspace:not(.nav-collapsed){grid-template-columns:170px minmax(0,1fr)}
+.compact-layout .head,.compact-layout .model-head{flex-wrap:wrap;gap:8px}
+.compact-layout .head>div:first-child{flex-wrap:wrap}
+.compact-layout .model-head>div:first-child{min-width:0;flex-wrap:wrap}
+.compact-layout .channel-table :deep(.cell){padding-left:6px;padding-right:6px}
+.compact-layout .channel-table :deep(td.coefficient-merged .cell){padding:0}
+.compact-layout .coefficient-values .coefficient-cell{padding:0 4px}
+.compact-layout .channel-table :deep(.el-input-number){width:64px}
+.compact-layout .model-workspace{height:calc(100dvh - 220px);min-height:360px}
+.compact-layout .channel-meta{flex-wrap:wrap;column-gap:8px;row-gap:2px}
 </style>

@@ -229,6 +229,13 @@ Agent 需要与 Server 一起升级到支持 `group` 字段的版本；旧 Agent
 
 ## v2.9-B2 Duty-Rotation Tuning (observe and confirm)
 
+### Server channel inventory source (2026-09-16)
+
+- A nonempty site `logs_readonly_dsn` makes Server the channel inventory owner. Server selects channel ID/name/status/weight/models/group/priority from the NewAPI `channels` table at startup and about once per minute (operational runners only), and when the existing channel refresh endpoint is called. The readonly account must have SELECT access to these columns. No channel keys are read and no source database writes are issued.
+- Agent requests and binaries are unchanged. Server ignores both complete and partial Agent channel snapshots for configured sites, including when the readonly query fails; logs, metrics and command results retain their existing paths. Removing the readonly configuration re-enables Agent inventories. Sites without readonly configuration retain the existing Agent/HTTP refresh behavior.
+- Query errors, cancellation and lists exceeding 5,000 channels preserve the previous snapshot. Server checks source configuration again inside the persistence transaction. Successful complete lists update all enabled instance views of the site from one source and preserve writes newer than the collection start; a genuinely empty successful list removes absent channels.
+- Same-model base values and circuit state are retained during refresh. Agent list cleanup checks all enabled collectors in the site before deleting shared anchors/state. Existing model reassignment and mixed-model eligibility rules remain in effect. This change does not recover already-lost manual base values and does not change channel write/control behavior.
+
 - `GET|PUT /api/dashboard/tuning/policy?instance_id=` reads or writes the instance policy. Supported modes are `observe`, `confirm`, and `auto`. In `auto`, action recommendations are persisted first and then atomically converted into auditable channel commands.
 - `GET /api/dashboard/tuning/base-values?instance_id=&model=` lists the saved v3.0 channel anchors together with the latest new-api weight and priority. `model` is optional.
 - `PUT /api/dashboard/tuning/base-values?instance_id=` saves `{ "items": ChannelBaseValue[] }` in one transaction. Weights and priorities must be non-negative; each changed channel writes a `tuning.base_update` operation audit containing before/after values.
@@ -331,3 +338,12 @@ Agent 在原有 `/api/agent/report` 的 `aggregated_metrics` 渠道条目中可�
 - 调权速度分位数、同模型速度基线均使用专用桶；最低样本数使用有效未重试 TTFT 数，不以总请求数代替。缓存、OTPS、错误及其原有资格条件不变。
 - 速度样本或速度基线不足时保留相同模型之前的新口径速度系数；首次及旧口径评分使用中性 1。旧版本评分不会被当成新口径可信值继承。
 - 状态 API 新增 `speed_sample_count`、`speed_retry_count`、`speed_unknown_count`、`speed_legacy_count`、`speed_stats_version`；变更记录 evidence 同步记录。升级顺序为 Server/079 迁移与前端，然后 Agent；无生产迁移/部署包含在本次代码交付中。
+
+
+## Continuous tuning: current-window OTPS fallback (2026-09-17)
+
+This rule requires the total-request-time output statistics implementation and migration 081 bundled in this worktree. Average OTPS includes eligible streaming and non-streaming requests and has independent evidence readiness; historical generation-time statistics must not be substituted for that input.
+
+When current TTFT evidence and its peer baseline are ready, the performance product is `Kspeed * Kotps * Kcache * Kerror`. Otherwise, if current output evidence and its baseline are ready, set `Kspeed = Kotps` and use `Kotps * Kotps * Kcache * Kerror`. Never reuse the prior TTFT coefficient for a new calculation. Cache scoring remains unchanged; existing combined bounds and dispatch protections continue to apply.
+
+An insufficient total request window, or absence of both usable current TTFT and output evidence, holds the effective current weight without a normal weight write. Circuit, probe and recovery decisions take precedence. Dashboard status distinguishes current output substitution from skipped normal tuning. This fallback itself adds no Agent payload or migration; deploy its Server and frontend with the average-output dependency (Server/migration before Agent).

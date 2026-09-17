@@ -129,6 +129,7 @@ func run() error {
 		startRetentionRunner(workers, store, settingsProvider)
 		startNotificationRunner(workers, store, settingsProvider, cfg.SecretKey, time.Duration(cfg.NotificationIntervalSeconds)*time.Second)
 		fastCircuitSink = startTuningRunner(workers, controlStore)
+		workers.Go(controlStore.RunReadonlyChannelSync)
 	}
 	startBillingJobRunner(workers, store, cfg.SecretKey, time.Duration(cfg.BillingPagePauseMilliseconds)*time.Millisecond)
 	startBillingFileCleanup(workers, store)

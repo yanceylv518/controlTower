@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"controltower/internal/latencyhist"
+	"controltower/internal/outputstats"
 	"controltower/internal/speedstats"
 )
 
@@ -73,6 +74,7 @@ func (a *rollupAccumulator) add(metric Metric) {
 	a.metric.BigInputCount = addNullableInt64(a.metric.BigInputCount, metric.BigInputCount)
 	a.metric.BigInputCacheHits = addNullableInt64(a.metric.BigInputCacheHits, metric.BigInputCacheHits)
 	a.metric.SpeedTTFT = speedstats.Merge(a.metric.SpeedTTFT, metric.SpeedTTFT)
+	a.metric.OutputSpeed = outputstats.Merge(a.metric.OutputSpeed, metric.OutputSpeed)
 	a.metric.TTFTCount = addNullableInt64(a.metric.TTFTCount, metric.TTFTCount)
 	a.metric.TTFTSumMS = addNullableInt64(a.metric.TTFTSumMS, metric.TTFTSumMS)
 	a.metric.OTPSOutputTokens += metric.OTPSOutputTokens

@@ -11,6 +11,13 @@ import (
 )
 
 func (s Store) RefreshChannels(ctx context.Context, siteID, actor string) error {
+	encrypted, err := s.ReadonlyDSNForSite(siteID)
+	if err != nil {
+		return err
+	}
+	if encrypted != "" {
+		return s.refreshReadonlyChannels(ctx, siteID, encrypted)
+	}
 	controller, direct, err := s.controllerForSite(siteID)
 	if err != nil {
 		return err

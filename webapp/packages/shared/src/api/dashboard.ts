@@ -53,6 +53,7 @@ export interface MetricItem {
   ttft_p95_ms: number | null;
   otps: number | null;
   otps_sample_tokens: number;
+  otps_duration_seconds?: number;
 }
 export interface AlertItem {
   id: string;
@@ -449,6 +450,10 @@ export interface TuningContinuousState {
   metric_otps: number;
   baseline_otps: number;
   otps_ready: boolean;
+  otps_sample_count?: number;
+  otps_retry_count?: number;
+  otps_unknown_count?: number;
+  otps_stats_version?: number;
   smoothed_error_rate: number;
   paused_reason?: string;
   phase: "normal" | "circuit" | "probing" | "soft_start";
@@ -582,6 +587,7 @@ export interface BillingJob {
   completed_steps: number;
   abnormal_rows: number;
   billed_rows?: number;
+  mismatch_rows?: number;
   output_days?: number;
   output_latest_day?: string;
   error_message?: string;

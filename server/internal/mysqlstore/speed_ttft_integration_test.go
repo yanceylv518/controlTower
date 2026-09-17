@@ -3,6 +3,7 @@ package mysqlstore
 import (
 	"context"
 	"controltower/internal/latencyhist"
+	"controltower/internal/outputstats"
 	"controltower/internal/speedstats"
 	"controltower/server/internal/aggregator"
 	"controltower/server/internal/tuning"
@@ -45,12 +46,18 @@ func TestSpeedTTFTMySQLIntegration(t *testing.T) {
 	stats.RetryCount = 1
 	stats.UnknownCount = 1
 	m := aggregator.Metric{InstanceID: site, BucketTime: now, DimensionType: "instance_channel", DimensionKey: site + ":channel:7", RequestCount: 3, SuccessCount: 3, TTFTCount: &count, TTFTBuckets: &public, SpeedTTFT: stats}
+	m.OutputSpeed = &outputstats.Stats{}
+	m.OutputSpeed.Add(600, 15, 1, true)
+	m.OutputSpeed.Add(300, 20, 2, true)
+	m.OutputSpeed.Add(100, 5, 0, true)
 	for _, id := range []string{"a", "a", "b"} {
 		if err := s.ApplyMetricBatch(site, site+id, []aggregator.Metric{m}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	m.SpeedTTFT = nil
+	m.OutputSpeed = nil
+	m.OTPSOutputTokens, m.OTPSDurationSecs = 10000, 1 // legacy never contaminates new evidence
 	if err := s.ApplyMetricBatch(site, site+"legacy", []aggregator.Metric{m}); err != nil {
 		t.Fatal(err)
 	}
@@ -60,6 +67,9 @@ func TestSpeedTTFTMySQLIntegration(t *testing.T) {
 			t.Fatalf("%s %+v %v", window, items, err)
 		}
 		v := items[0]
+		if v.OutputSpeed == nil || v.OutputSpeed.Samples != 6 || *v.OutputSpeed.Rate() != 25 || v.OutputSpeed.DirectTokens != 1200 || v.OutputSpeed.DirectSeconds != 30 {
+			t.Fatalf("%s output evidence %+v", window, v.OutputSpeed)
+		}
 		if v.RequestCount != 9 || *v.TTFTCount != 9 || v.SpeedTTFT.Samples() != 2 || v.SpeedTTFT.RetryCount != 2 {
 			t.Fatalf("%s %+v", window, v)
 		}
@@ -69,15 +79,22 @@ func TestSpeedTTFTMySQLIntegration(t *testing.T) {
 		t.Fatalf("%+v %v", metrics, err)
 	}
 	v := metrics[0]
+	if v.OTPS != 40 || v.OTPSSampleTokens != 1200 || v.OTPSSamples != 2 || v.OTPSRetries != 2 || v.OTPSUnknown != 2 || v.OTPSStatsVersion != 1 {
+		t.Fatalf("output query %+v", v)
+	}
 	if v.SpeedSamples != 2 || v.SpeedRetries != 2 || v.SpeedUnknown != 2 || v.SpeedLegacy != 3 || v.TTFTP50 <= v.SpeedTTFTP50 {
 		t.Fatalf("query %+v", v)
 	}
 	state := tuning.ContinuousState{InstanceID: site, ChannelID: 7, ModelName: "m", KSpeed: 1.2, SpeedStatsVersion: 1, SpeedSamples: 2, SpeedRetries: 2, SpeedUnknown: 2, SpeedLegacy: 3, Phase: "normal", UpdatedAt: now}
+	state.OTPSSamples, state.OTPSRetries, state.OTPSUnknown, state.OTPSStatsVersion = 2, 3, 4, 1
 	if err := s.PutContinuousState(state); err != nil {
 		t.Fatal(err)
 	}
 	states, err := s.ListContinuousStates(site)
 	if err != nil || len(states) != 1 || states[0].SpeedSamples != 2 || states[0].SpeedLegacy != 3 || states[0].KSpeed != 1.2 {
 		t.Fatalf("state %+v %v", states, err)
+	}
+	if states[0].OTPSSamples != 2 || states[0].OTPSRetries != 3 || states[0].OTPSUnknown != 4 || states[0].OTPSStatsVersion != 1 {
+		t.Fatalf("output state %+v", states[0])
 	}
 }

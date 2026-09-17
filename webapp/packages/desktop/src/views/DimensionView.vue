@@ -207,14 +207,14 @@ const ttftP95ThresholdMs = computed(() => prefs.ttftP95Threshold * 1000);
 const overThreshold = computed(() => visibleRows.value.filter((item) => (item.ttft_p95_ms || 0) >= ttftP95ThresholdMs.value).length);
 const weightedOTPS = computed(() => {
   let tokens = 0;
-  let weighted = 0;
+  let duration = 0;
   visibleRows.value.forEach((item) => {
-    if (item.otps != null && item.otps_sample_tokens > 0) {
+    if (item.otps != null && item.otps_sample_tokens > 0 && (item.otps_duration_seconds ?? 0) > 0) {
       tokens += item.otps_sample_tokens;
-      weighted += item.otps * item.otps_sample_tokens;
+      duration += item.otps_duration_seconds!;
     }
   });
-  return tokens ? weighted / tokens : null;
+  return duration ? tokens / duration : null;
 });
 const topTen = computed(() => visibleRows.value.slice(0, 10).map((item) => ({
   name: item.display_name || item.display_key || item.dimension_key,
@@ -344,7 +344,7 @@ function rowClass({ row }: { row: DimRow }) {
             <header><div><h2>{{ group.name }}</h2><p>{{ kind === 'channels' ? '渠道' : '模型' }} ID {{ group.id }} · 按 Token 排名</p></div><el-button v-if="group.row" link type="primary" @click="openDetail(group.row)">详情</el-button></header>
             <section v-if="activeMetric === 'ttft'" class="dimension-chart"><h3>TTFT</h3><p>P50 / P90 / P95</p><CustomerCompareChart :series="group.ttft" unit="s" :thresholds="ttftThresholds" /></section>
             <section v-else-if="activeMetric === 'tpm'" class="dimension-chart"><h3>TPM</h3><p>每分钟 Token</p><CustomerCompareChart :series="group.tpm" compact /></section>
-            <section v-else class="dimension-chart"><h3>OTPS</h3><p>流式请求生成阶段每秒输出 Token</p><CustomerCompareChart :series="group.otps" unit=" token/s" /></section>
+            <section v-else class="dimension-chart"><h3>OTPS</h3><p>平均输出 Token 速度 · 输出 Token ÷ 请求总耗时（含非流式）</p><CustomerCompareChart :series="group.otps" unit=" token/s" /></section>
           </article>
         </div>
       </section>
@@ -352,7 +352,7 @@ function rowClass({ row }: { row: DimRow }) {
         <article class="dimension-kpi"><span>总 Token</span><strong>{{ formatTokens(grandTotal) }}</strong><small>当前 {{ hours }} 小时</small></article>
         <article class="dimension-kpi"><span>Token In</span><strong>{{ formatTokens(totalPrompt) }}</strong><small>{{ grandTotal ? `${(totalPrompt / grandTotal * 100).toFixed(1)}%` : '—' }} 占比</small></article>
         <article class="dimension-kpi out"><span>Token Out</span><strong>{{ formatTokens(totalCompletion) }}</strong><small>{{ grandTotal ? `${(totalCompletion / grandTotal * 100).toFixed(1)}%` : '—' }} 占比</small></article>
-        <article class="dimension-kpi otps"><span>OTPS</span><strong>{{ weightedOTPS == null ? '—' : weightedOTPS.toFixed(2) }}</strong><small>按有效输出 Token 加权</small></article>
+        <article class="dimension-kpi otps"><span>OTPS</span><strong>{{ weightedOTPS == null ? '—' : weightedOTPS.toFixed(2) }}</strong><small>有效输出总 Token ÷ 总耗时</small></article>
         <article class="dimension-kpi"><span>活跃{{ kind === 'channels' ? '渠道' : '模型' }}</span><strong>{{ activeCount }}</strong><small>{{ totalRequests.toLocaleString() }} 次请求</small></article>
         <article class="dimension-kpi danger"><span>TTFT 超阈值</span><strong>{{ overThreshold }}</strong><small>P95 阈值 ≥ {{ prefs.ttftP95Threshold }} 秒</small></article>
       </section>

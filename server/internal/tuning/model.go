@@ -249,6 +249,8 @@ type ChannelMetric struct {
 	CacheHitRate                                          float64
 	OTPS                                                  float64
 	CachePromptTokens, OTPSSampleTokens                   int64
+	OTPSSamples, OTPSRetries, OTPSUnknown                 int64
+	OTPSStatsVersion                                      int
 }
 
 type ContinuousState struct {
@@ -287,6 +289,10 @@ type ContinuousState struct {
 	MetricOTPS           float64    `json:"metric_otps"`
 	BaselineOTPS         float64    `json:"baseline_otps"`
 	OTPSReady            bool       `json:"otps_ready"`
+	OTPSSamples          int64      `json:"otps_sample_count"`
+	OTPSRetries          int64      `json:"otps_retry_count"`
+	OTPSUnknown          int64      `json:"otps_unknown_count"`
+	OTPSStatsVersion     int        `json:"otps_stats_version"`
 	SmoothedErrorRate    float64    `json:"smoothed_error_rate"`
 	// LastBucketAt is the newest metric bucket already folded into KError.
 	// Buckets arrive late (agent reports every ~30s), so the decay must walk

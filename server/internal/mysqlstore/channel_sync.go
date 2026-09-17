@@ -40,11 +40,7 @@ WHERE CASE WHEN i.site_id='' THEN i.id ELSE i.site_id END=? AND c.channel_id=?`,
 }
 
 func (s Store) StoreFreshChannels(siteID string, channels []channelcontrol.Channel, at time.Time) error {
-	instanceID, err := controlInstanceForSite(s.db, siteID)
-	if err != nil {
-		return err
-	}
-	return s.StoreInstanceChannels(instanceID, channels, at)
+	return s.storeServerChannels(siteID, channels, at, "")
 }
 
 func (s Store) StoreInstanceChannels(instanceID string, channels []channelcontrol.Channel, at time.Time) error {

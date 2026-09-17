@@ -280,7 +280,7 @@ function openDetail(row: MetricItem) {
           <article v-for="group in selectedTrendGroups" :key="group.key" class="customer-trend-group">
             <header><div><h2>{{ group.name }}</h2><p>客户 ID {{ group.id }} · 按 Token 排名</p></div><el-button link type="primary" @click="openDetail(allRows.find(item => item.dimension_key === group.key)!)">详情</el-button></header>
             <section v-if="activeMetric === 'ttft'" class="customer-metric-card"><h3>TTFT</h3><p>P50 / P90 / P95 首字响应分位数</p><CustomerCompareChart :series="group.ttft" unit="s" :thresholds="ttftThresholds" /></section>
-            <section v-else class="customer-metric-card"><h3>OTPS</h3><p>流式请求生成阶段每秒输出 Token</p><CustomerCompareChart :series="group.otps" unit=" token/s" /></section>
+            <section v-else class="customer-metric-card"><h3>OTPS</h3><p>平均输出 Token 速度 · 输出 Token ÷ 请求总耗时（含非流式）</p><CustomerCompareChart :series="group.otps" unit=" token/s" /></section>
           </article>
         </div>
       </section>

@@ -42,7 +42,7 @@ func TestSpeedBaselineDoesNotUsePublicTTFTOrChangeOtherBaselines(t *testing.T) {
 	rows := []ChannelBaseValue{{ChannelID: 1}, {ChannelID: 2}, {ChannelID: 3}}
 	metrics := map[int64]ChannelMetric{}
 	for i := int64(1); i <= 3; i++ {
-		metrics[i] = ChannelMetric{ChannelID: i, RequestCount: 100, TTFTP50: 30, TTFTP90: 60, TTFTP95: 90, SpeedSamples: 20, SpeedTTFTP50: float64(i), SpeedTTFTP90: float64(i), SpeedTTFTP95: float64(i), CachePromptTokens: cacheEvidenceTokens, CacheHitRate: .5, OTPSSampleTokens: otpsEvidenceTokens, OTPS: 10}
+		metrics[i] = ChannelMetric{ChannelID: i, RequestCount: 100, TTFTP50: 30, TTFTP90: 60, TTFTP95: 90, SpeedSamples: 20, SpeedTTFTP50: float64(i), SpeedTTFTP90: float64(i), SpeedTTFTP95: float64(i), CachePromptTokens: cacheEvidenceTokens, CacheHitRate: .5, OTPSSampleTokens: otpsEvidenceTokens, OTPSSamples: 20, OTPSStatsVersion: 1, OTPS: 10}
 	}
 	m := metrics[3]
 	m.SpeedSamples = 1
@@ -61,7 +61,7 @@ func TestSpeedBaselineDoesNotUsePublicTTFTOrChangeOtherBaselines(t *testing.T) {
 	}
 }
 
-func TestInsufficientDirectSamplesRetainsOnlyNewSpeedScore(t *testing.T) {
+func TestInsufficientDirectSamplesNeverRetainsHistoricalSpeedScore(t *testing.T) {
 	for _, version := range []int{0, 1} {
 		t.Run(string(rune('0'+version)), func(t *testing.T) {
 			f := &continuousFake{bases: []ChannelBaseValue{{ChannelID: 1, ModelName: "m", BaseWeight: 100}, {ChannelID: 2, ModelName: "m", BaseWeight: 100}},
@@ -73,9 +73,6 @@ func TestInsufficientDirectSamplesRetainsOnlyNewSpeedScore(t *testing.T) {
 			NewEngine(f).evaluateContinuous("i", PolicyRecord{Policy: p}, time.Now().UTC(), f)
 			s := f.states[1]
 			want := 1.0
-			if version == 1 {
-				want = 1.2
-			}
 			if s.KSpeed != want || s.MetricReady || s.BaselineReady || s.SpeedRetries != 100 || s.SpeedStatsVersion != 1 {
 				t.Fatalf("state %+v", s)
 			}

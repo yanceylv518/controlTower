@@ -66,7 +66,7 @@ func ConvertRow(row Row) (Event, bool, error) {
 	cachePromptTokens, _ := parseCachePromptTokens(row.Other, row.PromptTokens, cacheTokens)
 	firstResponseMs, _ := parseFirstResponseMs(row.Other)
 	attempts := 0
-	if row.IsStream && firstResponseMs != nil {
+	if (row.IsStream && firstResponseMs != nil) || (logType == "consume" && row.CompletionTokens > 0 && row.UseTime > 0) {
 		attempts = attemptCount(row.Other, row.ChannelID)
 	}
 
