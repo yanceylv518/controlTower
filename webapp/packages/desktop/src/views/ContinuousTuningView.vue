@@ -32,6 +32,29 @@ const manualNavCollapsed = ref(false);
 const narrowNavExpanded = ref(false);
 const pageElement = ref<HTMLElement | null>(null);
 const compactLayout = ref(false);
+const detailElement = ref<HTMLElement | null>(null);
+const detailWidth = ref(900);
+// Size numeric columns to their content; give remaining space to channel names and groups.
+const tableColumns = computed(() => {
+  const width = Math.max(720, detailWidth.value - 2);
+  const factor = width < 1000 ? 52 : 60;
+  const input = width < 1000 ? 68 : 80;
+  const number = width < 1000 ? 56 : 64;
+  const text = width - factor * 4 - input * 2 - number * 2;
+  const channel = Math.round(text * .52);
+  return { factor, input, number, channel, groups: text - channel };
+});
+let detailObserver: ResizeObserver | undefined;
+watch(detailElement, (element) => {
+  detailObserver?.disconnect();
+  if (!element) return;
+  detailWidth.value = element.clientWidth;
+  detailObserver = new ResizeObserver(([entry]) => {
+    if (entry && entry.contentRect.width > 0) detailWidth.value = entry.contentRect.width;
+  });
+  detailObserver.observe(element);
+}, { flush: 'post' });
+onBeforeUnmount(() => detailObserver?.disconnect());
 const modelNavCollapsed = computed({
   get: () => compactLayout.value ? !narrowNavExpanded.value : manualNavCollapsed.value,
   set: (collapsed: boolean) => {
@@ -729,17 +752,17 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
             <button v-if="modelNavCollapsed" class="model-nav-rail" type="button" :title="'当前模型：' + activeModel" aria-label="展开模型列表" @click="modelNavCollapsed=false">模型</button>
             <div v-show="!modelNavCollapsed" class="model-list"><button v-for="model in visibleModels" :key="model" :class="{active:activeModel===model}" :title="model + ' · ' + modeText(model)" :aria-label="model + '，' + modeText(model)" @click="selectModel(model)"><span><b>{{ model }}</b><span class="model-secondary"><small>{{ bases.filter(x=>x.model_name===model).length }} 个渠道</small><span class="model-mode-text" :class="modelMode(model)">{{ modelMode(model) === 'auto' ? '自动' : modelMode(model) === 'observe' ? '观察' : '关闭' }}</span></span></span></button><el-empty v-if="!visibleModels.length" :image-size="48" description="没有匹配模型"/></div>
           </aside>
-          <section class="model-detail"><div class="model-head"><div><b>{{ activeModel }}</b><small>{{ activeRows.length }} 个渠道</small><small v-if="refreshError" class="stale">刷新失败：{{ refreshError }}</small><small v-else-if="evaluationStalled" class="stale">评估已停滞：最后成功于 {{ formatTime(lastEvaluationAt!) }}</small><small v-else-if="lastEvaluationAt">最近评估 {{ formatTime(lastEvaluationAt) }} · 每 30 秒自动刷新</small><TuningInfo label="实时负载统计"><p>负载更新：{{ ratesAsOf ? formatTime(ratesAsOf) : '—' }}</p><p>已覆盖的 60 秒负载，每 5 秒刷新；Agent 保持 30 秒采集。</p><p>统计区间：{{ ratesWindowStart ? formatTime(ratesWindowStart) : '—' }} 至 {{ ratesAsOf ? formatTime(ratesAsOf) : '—' }}（不含结束秒）</p><p>数据延迟 {{ ratesDelay }} 秒。容量输入 0 表示不限制。</p></TuningInfo></div><el-radio-group v-if="activeModel" v-model="policy.dispatch_modes[activeModel]" size="small" @change="dirty=true"><el-radio-button value="off">关闭</el-radio-button><el-radio-button value="observe">只观察</el-radio-button><el-radio-button value="auto">自动执行</el-radio-button></el-radio-group></div>
+          <section ref="detailElement" class="model-detail"><div class="model-head"><div><b>{{ activeModel }}</b><small>{{ activeRows.length }} 个渠道</small><small v-if="refreshError" class="stale">刷新失败：{{ refreshError }}</small><small v-else-if="evaluationStalled" class="stale">评估已停滞：最后成功于 {{ formatTime(lastEvaluationAt!) }}</small><small v-else-if="lastEvaluationAt">最近评估 {{ formatTime(lastEvaluationAt) }} · 每 30 秒自动刷新</small><TuningInfo label="实时负载统计"><p>负载更新：{{ ratesAsOf ? formatTime(ratesAsOf) : '—' }}</p><p>已覆盖的 60 秒负载，每 5 秒刷新；Agent 保持 30 秒采集。</p><p>统计区间：{{ ratesWindowStart ? formatTime(ratesWindowStart) : '—' }} 至 {{ ratesAsOf ? formatTime(ratesAsOf) : '—' }}（不含结束秒）</p><p>数据延迟 {{ ratesDelay }} 秒。容量输入 0 表示不限制。</p></TuningInfo></div><el-radio-group v-if="activeModel" v-model="policy.dispatch_modes[activeModel]" size="small" @change="dirty=true"><el-radio-button value="off">关闭</el-radio-button><el-radio-button value="observe">只观察</el-radio-button><el-radio-button value="auto">自动执行</el-radio-button></el-radio-group></div>
             <el-alert v-if="ratesError" :title="ratesError" type="warning" :closable="false"/>
-            <el-table class="channel-table" :span-method="coefficientSpan" :data="activeRows" :row-key="channelRowKey" size="small" height="100%" empty-text="没有匹配渠道">
-              <el-table-column label="渠道" :width="compactLayout ? 190 : 320" align="left" fixed><template #default="{row}">
+            <el-table class="channel-table" scrollbar-always-on :span-method="coefficientSpan" :data="activeRows" :row-key="channelRowKey" size="small" height="100%" empty-text="没有匹配渠道">
+              <el-table-column label="渠道" :width="tableColumns.channel" align="left" fixed><template #default="{row}">
                 <div class="channel-heading"><span class="channel-key">#{{ row.channel_id }} ·</span><b class="channel-name" :title="row.channel_name">{{ row.channel_name }}</b></div>
                 <div class="channel-meta"><TuningCapacityMetric metric="TPM" :channel="row.channel_name" v-model="row.max_tpm" :current="currentRateFor(row)?.tpm" :modified="fieldChanged(row,'max_tpm')" @change="dirty=true"/><TuningCapacityMetric metric="RPM" :channel="row.channel_name" v-model="row.max_rpm" :current="currentRateFor(row)?.rpm" :modified="fieldChanged(row,'max_rpm')" @change="dirty=true"/></div>
                 <small v-if="pendingGroups.has(row.channel_id) && !groupErrors.has(row.channel_id)" class="warning">分组等待执行</small><small v-if="groupErrors.has(row.channel_id)" class="danger" :title="groupErrors.get(row.channel_id)">分组执行失败</small>
               </template></el-table-column>
-              <el-table-column label="分组" :min-width="compactLayout ? 150 : 260" align="center"><template #default="{row}"><button type="button" class="group-cell-trigger" :aria-label="'编辑 ' + row.channel_name + ' 的分组'" :title="groupCellTitle(row.group_name)" @click="openGroupEditor(groupEditorRowFor(row))"><span class="group-tags"><span v-for="group in splitChannelGroups(row.group_name)" :key="group">{{ group }}</span><span v-if="!splitChannelGroups(row.group_name).length">设置分组</span></span></button></template></el-table-column>
+              <el-table-column label="分组" :width="tableColumns.groups" align="center"><template #default="{row}"><button type="button" class="group-cell-trigger" :aria-label="'编辑 ' + row.channel_name + ' 的分组'" :title="groupCellTitle(row.group_name)" @click="openGroupEditor(groupEditorRowFor(row))"><span class="group-tags"><span v-for="group in splitChannelGroups(row.group_name)" :key="group">{{ group }}</span><span v-if="!splitChannelGroups(row.group_name).length">设置分组</span></span></button></template></el-table-column>
               <el-table-column label="评估系数" align="center">
-                <el-table-column v-for="metric in coefficientColumns" :key="metric.key" :prop="'coefficient_' + metric.key" :label="metric.label" :width="compactLayout ? 60 : 80" align="center" class-name="coefficient-merged"><template #default="{row}">
+                <el-table-column v-for="metric in coefficientColumns" :key="metric.key" :prop="'coefficient_' + metric.key" :label="metric.label" :width="tableColumns.factor" align="center" class-name="coefficient-merged"><template #default="{row}">
                   <div v-if="metric.key === 'speed'" class="coefficient-group">
                     <div v-if="!coefficientEmptyText(row)" class="coefficient-values"><div v-for="item in coefficientColumns" :key="item.key" class="coefficient-cell" :title="coefficientCell(row, item.key).detail"><b v-if="item.key !== 'speed' || coefficientCell(row, item.key).value != null || !coefficientCell(row, item.key).status" :class="{'factor-up':(coefficientCell(row, item.key).value ?? 1)>1,'factor-down':(coefficientCell(row, item.key).value ?? 1)<1}">{{ coefficientCell(row, item.key).value == null ? '—' : factor(coefficientCell(row, item.key).value!) }}</b><small v-if="item.key === 'speed' && !overallEvaluationStatus(row) && coefficientCell(row, item.key).status && coefficientCell(row, item.key).status !== 'TTFT 有效'">{{ coefficientCell(row, item.key).status }}</small></div></div>
                     <div v-if="overallEvaluationStatus(row)" class="coefficient-overall" :class="[rowStatus(row).kind, {'only-status':!!coefficientEmptyText(row)}]" :title="evaluationText(row)">{{ coefficientEmptyText(row) || overallEvaluationStatus(row) }}</div>
@@ -747,13 +770,13 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
                 </template></el-table-column>
               </el-table-column>
               <el-table-column label="权重" align="center">
-                <el-table-column label="基础" :min-width="compactLayout ? 80 : 100" align="center"><template #default="{row}"><el-input-number v-model="row.base_weight" :class="{modified:fieldChanged(row,'base_weight')}" :aria-label="row.channel_name + ' 基础权重'" :min="0" :controls="false" size="small" @change="dirty=true"/></template></el-table-column>
-                <el-table-column label="计算" :min-width="compactLayout ? 70 : 95" align="center"><template #default="{row}"><div class="weight-calculated"><TuningInfo :trigger-text="String(calculatedWeight(row) ?? '—')" :class="{accent: calculatedWeight(row) !== null && calculatedWeight(row) !== row.current_weight}" :key="channelRowKey(row)" :label="'本轮计算 · ' + row.channel_name" :width="500">
+                <el-table-column label="基础" :width="tableColumns.input" align="center"><template #default="{row}"><el-input-number v-model="row.base_weight" :class="{modified:fieldChanged(row,'base_weight')}" :aria-label="row.channel_name + ' 基础权重'" :min="0" :controls="false" size="small" @change="dirty=true"/></template></el-table-column>
+                <el-table-column label="计算" :width="tableColumns.number" align="center"><template #default="{row}"><div class="weight-calculated"><TuningInfo :trigger-text="String(calculatedWeight(row) ?? '—')" :class="{accent: calculatedWeight(row) !== null && calculatedWeight(row) !== row.current_weight}" :key="channelRowKey(row)" :label="'本轮计算 · ' + row.channel_name" :width="500">
                     <template v-if="stateFor(row)"><p class="calculation-formula">{{ originalBase(row) }} × {{ factor(stateFor(row)?.k_speed) }} × {{ factor(stateFor(row)?.k_otps) }} × {{ factor(stateFor(row)?.k_cache) }} × {{ factor(stateFor(row)?.k_error) }}</p><p class="formula-caption">基础 × {{ speedLabel(row) }} × 输出 × 缓存 × 错误</p><p>{{ evaluationText(row) }}</p><p v-if="displayedSpeedFactor(row) === null && calculatedWeight(row) !== null" class="formula-caption">参考值使用接口最近保留的系数；速度当前不可用于本轮评估，此处不代表本轮重新测得。</p><p v-if="speedLabel(row).includes('替代')">TTFT 不足，使用本轮 OTPS；输出系数参与两次。</p><div class="evidence-pairs"><span>窗口样本 <b>{{ sampleText(row) }}</b></span><span>TTFT 有效 <b>{{ stateFor(row)?.speed_sample_count ?? 0 }}</b></span><span>输出有效 <b>{{ stateFor(row)?.otps_sample_count ?? 0 }}</b></span><span>重试排除 <b>{{ stateFor(row)?.speed_retry_count ?? 0 }}</b></span></div><p>公式目标：<b>{{ calculatedWeight(row) ?? '—' }}</b><small>（按最近返回系数与已保存倍率边界推算；仅窗口不足或基础权重为0时不展示，不代表会执行）</small></p><p>安全限制后拟执行：<b>{{ stateFor(row)?.proposed_weight }}</b> · 当前：{{ row.current_weight }}</p><p v-if="fieldChanged(row, 'base_weight')" class="warning">基础值有未保存修改；本轮结果仍对应上次评估。</p><p v-if="limitReason(row)" class="limit-note">{{ limitReason(row) }}</p><details class="full-evidence"><summary>完整指标与计算依据</summary><pre class="factor-explanation">{{ factorExplanation(row) }}</pre></details></template><p v-else>等待首次评估，尚无计算数据。</p>
                   </TuningInfo><el-tooltip v-if="limitReason(row)" :content="limitReason(row)" placement="top"><button class="status-icon warning limit-icon" :aria-label="limitReason(row)"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 3h12M10 17V7m-4 4 4-4 4 4"/></svg></button></el-tooltip></div></template></el-table-column>
-                <el-table-column label="线上" :min-width="compactLayout ? 60 : 80" align="center"><template #default="{row}"><span class="current-weight">{{ row.current_weight }}</span></template></el-table-column>
+                <el-table-column label="线上" :width="tableColumns.number" align="center"><template #default="{row}"><span class="current-weight">{{ row.current_weight }}</span></template></el-table-column>
               </el-table-column>
-              <el-table-column label="优先级" :min-width="compactLayout ? 80 : 100" align="center"><template #default="{row}"><span :title="priorityLocked(row) ? '熔断或探测中，当前逻辑暂停优先级写入' : '线上优先级；修改后点击保存更改同步'"><el-input-number :model-value="displayedPriority(row)" :class="{modified:priorityDrafts.has(row.channel_id)}" :aria-label="row.channel_name + ' 优先级'" :disabled="saving || priorityLocked(row)" :min="0" :precision="0" :controls="false" size="small" @update:model-value="editPriority(row, $event)"/></span></template></el-table-column>
+              <el-table-column label="优先级" :width="tableColumns.input" align="center"><template #default="{row}"><span :title="priorityLocked(row) ? '熔断或探测中，当前逻辑暂停优先级写入' : '线上优先级；修改后点击保存更改同步'"><el-input-number :model-value="displayedPriority(row)" :class="{modified:priorityDrafts.has(row.channel_id)}" :aria-label="row.channel_name + ' 优先级'" :disabled="saving || priorityLocked(row)" :min="0" :precision="0" :controls="false" size="small" @update:model-value="editPriority(row, $event)"/></span></template></el-table-column>
 
             </el-table>
             <div class="channel-footer">{{ activeRows.length }} 个渠道<span>点击 TPM / RPM 编辑上限</span></div>
@@ -833,7 +856,7 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
 .channel-filters :deep(.el-input){width:190px}
 .channel-filters :deep(.el-select){width:125px}
 .load-time{display:flex;align-items:center;gap:5px;font-size:11px;color:#8491a5}
-.channel-table{flex:1;min-height:0;font-variant-numeric:tabular-nums}
+.channel-table{flex:1;min-height:0;width:100%;font-variant-numeric:tabular-nums}
 .channel-table :deep(th.el-table__cell),.event-history-card :deep(th.el-table__cell){background:#fff;color:#8491a5;font-weight:500;height:38px;border-bottom:1px solid #e2e8f2}
 .channel-table :deep(td.el-table__cell){padding:8px 0;border-bottom-color:#e2e8f2}
 .channel-table :deep(.cell){padding:0 10px}
@@ -1020,4 +1043,13 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
 .compact-layout .channel-table :deep(.el-input-number){width:64px}
 .compact-layout .model-workspace{height:calc(100dvh - 220px);min-height:360px}
 .compact-layout .channel-meta{flex-wrap:wrap;column-gap:8px;row-gap:2px}
+/* Keep horizontal overflow inside the table and reserve space for its scrollbar. */
+.model-head{flex-wrap:wrap;gap:8px}
+.model-head>div:first-child{min-width:0;flex-wrap:wrap}
+.channel-table :deep(.cell){padding-left:6px;padding-right:6px}
+.channel-table :deep(.el-input-number){width:100%;max-width:68px}
+.channel-table :deep(.el-scrollbar__bar.is-horizontal){height:8px;bottom:2px}
+.channel-table :deep(.el-scrollbar__thumb){background:#8b99ad}
+.channel-table :deep(.el-table__body-wrapper .el-scrollbar__view){padding-bottom:10px}
+.channel-meta{flex-wrap:wrap;column-gap:8px;row-gap:2px}
 </style>
