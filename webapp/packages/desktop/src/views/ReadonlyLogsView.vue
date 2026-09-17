@@ -11,7 +11,7 @@ import { useAuthStore } from '../stores/auth'
 import { useFiltersStore } from '../stores/filters'
 import { usePrefsStore } from '../stores/prefs'
 import { useAsyncData } from '../composables/useAsyncData'
-import { decodeBillingExpression, dynamicPriceFields, dynamicTierMatched, formatDynamicCondition, normalizeDynamicRequestRules, normalizeDynamicUsageFacts, parseDynamicTiers, type DynamicRequestRule, type DynamicTier, type DynamicUsageFact } from '../utils/billingDetails'
+import { decodeBillingExpression, dynamicBillingSummary, dynamicPriceFields, dynamicTierMatched, formatDynamicCondition, normalizeDynamicRequestRules, normalizeDynamicUsageFacts, parseDynamicTiers, type DynamicRequestRule, type DynamicTier, type DynamicUsageFact } from '../utils/billingDetails'
 import { copyText as copyToClipboard } from '../utils/copyText'
 import { formatNumber } from '../utils/format'
 import { getTokenColorClass, getUserAvatarFallback, getUserAvatarStyle, type UserAvatarStyle } from '../utils/identityColors'
@@ -704,7 +704,12 @@ const detailGroupRatioText = (row: ReadonlyLog) => {
 function billingSummary(row: ReadonlyLog) {
   if (!isConsume(row)) return row.content_summary || '—'
   // 表达式计费的普通倍率可能为零占位值，不能据此展示标准单价。
-  if (isTieredBilling(row)) return '动态计费 · 查看计费详情'
+  if (isTieredBilling(row)) {
+    return dynamicBillingSummary(
+      dynamicExpression(row), textValue(row, 'matched_tier'),
+      cacheReadTokens(row) > 0 || cacheWriteTokens(row) > 0, billingPrice,
+    )
+  }
   const modelPrice = numberValue(row, 'model_price')
   const modelRatio = numberValue(row, 'model_ratio')
   const completionRatio = numberValue(row, 'completion_ratio')

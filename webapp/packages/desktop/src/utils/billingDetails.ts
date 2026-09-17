@@ -94,12 +94,39 @@ export function parseDynamicTiers(value: unknown): DynamicTier[] {
 }
 
 export function normalizeDynamicLabel(value: string | undefined): string {
-  return (value || '').replace(/\s+/g, '').toLocaleLowerCase()
+  return (value || '')
+    .replace(/<[=＝]?|≤|＜[=＝]?/g, '<')
+    .replace(/>[=＝]?|≥|＞[=＝]?/g, '>')
+    .replace(/\s+/g, '').toLowerCase()
 }
 
 export function dynamicTierMatched(tier: DynamicTier, matchedLabel: string | undefined): boolean {
   const expected = normalizeDynamicLabel(matchedLabel)
   return expected !== '' && normalizeDynamicLabel(tier.label) === expected
+}
+
+// 与 NewAPI 日志摘要同源：只展示日志快照命中的档位，不使用当前模型价格或零占位倍率。
+export function dynamicBillingSummary(
+  expression: string,
+  matchedLabel: string,
+  hasCacheTokens: boolean,
+  formatPrice: (price: number) => string,
+): string {
+  const tier = parseDynamicTiers(expression).find((item) => dynamicTierMatched(item, matchedLabel))
+  if (!tier) return '动态计费 · 无匹配结果'
+  const entries = dynamicPriceFields.filter(({ key }) => {
+    if (['cr', 'cc', 'cc1h'].includes(key) && !hasCacheTokens) return false
+    const price = tier.prices[key]
+    return price !== undefined && Number.isFinite(price) && price > 0
+  })
+  const parts: string[] = []
+  const base = entries.filter(({ key }) => key === 'p' || key === 'c')
+  if (base.length) parts.push(`${tier.label} · ${base.map(({ key }) => formatPrice(tier.prices[key]!)).join(' / ')}/1M`)
+  const cache = entries.filter(({ key }) => ['cr', 'cc', 'cc1h'].includes(key))
+  if (cache.length) parts.push('缓存 ' + cache.map(({ key }) => formatPrice(tier.prices[key]!)).join(' / '))
+  const other = entries.filter(({ key }) => !['p', 'c', 'cr', 'cc', 'cc1h'].includes(key))
+  if (other.length) parts.push(other.map(({ key, label }) => `${label} ${formatPrice(tier.prices[key]!)}/1M`).join(' · '))
+  return parts.join('；') || `${tier.label} · 未记录可展示的单价`
 }
 
 // request_rules 已经由 New API 写入条件文本，保留原条件可避免把未知字段翻译错。
