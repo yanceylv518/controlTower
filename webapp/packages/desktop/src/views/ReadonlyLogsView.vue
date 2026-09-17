@@ -703,6 +703,8 @@ const detailGroupRatioText = (row: ReadonlyLog) => {
 }
 function billingSummary(row: ReadonlyLog) {
   if (!isConsume(row)) return row.content_summary || '—'
+  // 表达式计费的普通倍率可能为零占位值，不能据此展示标准单价。
+  if (isTieredBilling(row)) return '动态计费 · 查看计费详情'
   const modelPrice = numberValue(row, 'model_price')
   const modelRatio = numberValue(row, 'model_ratio')
   const completionRatio = numberValue(row, 'completion_ratio')
