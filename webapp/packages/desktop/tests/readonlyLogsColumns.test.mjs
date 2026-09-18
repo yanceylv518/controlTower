@@ -45,7 +45,7 @@ test('readonly logs keeps identity filters before compact model filters', () => 
   const order = ['filter-username', 'filter-channel', 'filter-request', 'filter-model', 'filter-group']
     .map((className) => primary.indexOf(className))
   assert.deepEqual(order, [...order].sort((a, b) => a - b))
-  assert.match(source, /\.filter-model, \.filter-group \{ width: 150px; flex: 0 0 150px; \}/)
+  assert.match(source, /\.filter-model, \.filter-group \{ width: 150px; min-width: 132px; flex: 0 1 150px; \}/)
 })
 
 // 回归保护：所有筛选项始终位于同一组主筛选结构中，不再存在折叠状态。
@@ -58,7 +58,8 @@ test('readonly logs keeps all filters visible in the primary row', () => {
     .map((className) => primary.indexOf(className))
   assert.deepEqual(order, [...order].sort((a, b) => a - b))
   assert.doesNotMatch(source, /advancedOpen|advancedFilterCount|filter-toggle|has-advanced|advanced-filters/)
-  assert.match(source, /\.filter-token, \.filter-upstream \{ width: 184px; flex: 0 1 184px; \}/)
+  assert.match(source, /\.filter-token, \.filter-upstream \{ width: 184px; min-width: 156px; flex: 0 1 184px; \}/)
+  assert.match(source, /\.primary-filters \{[\s\S]*flex-wrap: nowrap;[\s\S]*overflow-x: auto;/)
 })
 
 // 回归保护：日志类型位于敏感字段切换之前，避免把操作控件挤回主筛选行。
@@ -97,9 +98,9 @@ test('readonly logs query and resets use a non-blocking refresh', () => {
   assert.match(source, /const backgroundRefreshing = ref\(false\)/)
   assert.match(source, /const refreshSearch = async \(\) =>/)
   assert.match(source, /state\.refresh\(\)/)
-  assert.match(source, /statState\.refresh\(\)/)
-  assert.match(source, /countState\.refresh\(\)/)
-  assert.match(source, /ElMessage\.warning\('刷新失败，当前仍显示上一次结果'\)/)
+  assert.match(source, /void statState\.reload\(\)/)
+  assert.match(source, /void countState\.reload\(\)/)
+  assert.match(source, /日志查询失败，当前保留上一次列表，请重新查询/)
   assert.match(source, /:reset-enabled="timeRangeChanged && !backgroundRefreshing"/)
   assert.match(source, /:class="\{ 'is-background-refreshing': backgroundRefreshing \}"/)
   assert.match(source, /:aria-busy="backgroundRefreshing"/)
@@ -111,7 +112,7 @@ test('readonly logs query and resets use a non-blocking refresh', () => {
 test('readonly logs mounts only the active responsive layout', () => {
   assert.match(source, /mobileViewport = ref\(/)
   assert.match(source, /matchMedia\('\(max-width: 900px\)'\)/)
-  assert.match(source, /<div v-if="!mobileViewport" v-loading="state\.loading\.value" class="desktop-table">/)
+  assert.match(source, /<div v-if="!mobileViewport" v-loading="state\.loading\.value" class="desktop-table" ref="tableScroll">/)
   assert.match(source, /<div v-else v-loading="state\.loading\.value" class="mobile-log-list">/)
   assert.match(source, /<tbody v-for="view in renderedRows" :key="view.id" v-memo="\[view.memoKey, expandedRetryID === view.id\]"/)
   assert.match(source, /<article v-for="view in renderedRows" v-memo=/)
@@ -182,17 +183,17 @@ test('compact date picker follows the rc35 interaction contract', () => {
   assert.match(datePickerSource, /document\.addEventListener\('pointerdown'/)
 })
 
-// 回归保护：身份颜色必须按 New API 的完整名称哈希生成，且敏感字段隐藏时回到中性色。
-test('readonly logs keeps stable user and token identity colors', () => {
+// 回归保护：用户头像与分组沿用 New API 的身份色，令牌保持中性样式。
+test('readonly logs keeps stable user and group identity colors', () => {
   assert.match(identityColorsSource, /hash = \(hash \* 31 \+ value\.charCodeAt\(index\)\) >>> 0/)
   assert.match(identityColorsSource, /const hue = hash % 360/)
   assert.match(identityColorsSource, /const saturation = 54 \+ \(hash % 8\)/)
   assert.match(identityColorsSource, /const lightness = 52 \+ \(\(hash >> 4\) % 8\)/)
   assert.match(identityColorsSource, /sum \+= name\.charCodeAt\(index\)/)
   assert.match(source, /avatarStyle: visible && row\.username \? getUserAvatarStyle\(row\.username\) : undefined/)
-  assert.match(source, /tokenTone: visible && row\.token_name \? getTokenColorClass\(row\.token_name\) : 'token-tone-hidden'/)
+  assert.match(source, /groupTone: visible && row\.group && row\.group !== 'auto' \? getTokenColorClass\(row\.group\) : 'token-tone-hidden'/)
   assert.match(source, /:class="\{ 'is-hidden': !sensitiveVisible \}" :style="view\.avatarStyle"/)
-  assert.match(source, /:class="view\.tokenTone"/)
+  assert.match(source, /:class="view\.groupTone"/)
   for (const tone of [
     'amber', 'blue', 'cyan', 'green', 'grey', 'indigo', 'light-blue', 'lime',
     'orange', 'pink', 'purple', 'red', 'teal', 'violet', 'yellow', 'hidden',
@@ -206,12 +207,21 @@ test('readonly logs exposes fallback requests and channel chains', () => {
   assert.match(passthroughApiSource, /fallback\?: boolean/)
   assert.match(passthroughApiSource, /fallback_channels\?: string\[\]/)
   assert.match(source, /function fallbackChannelsFor\(row: ReadonlyLog\)/)
+  assert.match(source, /function retryChannelsFor\(row: ReadonlyLog\)/)
   assert.match(source, /function isFallback\(row: ReadonlyLog\)/)
   assert.match(source, /const fallback = isFallback\(row\)/)
   assert.match(source, /fallback,\n\s+fallbackChannels,/)
-  assert.match(source, /retryChain: fallbackChannels\.length > 1 \? fallbackChannels\.join\(' → '\) : ''/)
+  assert.match(source, /const retryChannels = retryChannelsFor\(row\)/)
+  assert.match(source, /retryChain: admin && retryChannels\.length > 1 \? retryChannels\.join\(' → '\) : ''/)
   assert.match(source, /class="retry-chain-trigger"/)
   assert.match(source, /v-if="isAdmin && \(view\.fallback \|\| view\.retryChain\)"/)
+  assert.match(source, /function openRetryHover\(view: LogRowView, event: MouseEvent \| FocusEvent\)/)
+  assert.match(source, /const retryCount = Math\.max\(1, retryChannelsFor\(view\.source\)\.length - 1\)/)
+  assert.match(source, /class="retry-hover-card"/)
+  assert.match(source, /class="channel-cell" :aria-label="isAdmin && view\.retryChain \? requestChainTitle\(view\.source\) : undefined"/)
+  assert.doesNotMatch(source, /class="channel-cell"[^>]*:title=/)
+  assert.match(source, /@mouseenter="openRetryHover\(view, \$event\)" @mouseleave="closeRetryHover"/)
+  assert.match(source, /重试\{\{ retryHover\.retryCount \}\}次：/)
   assert.doesNotMatch(source, /fallback-label/)
   assert.match(source, /const expandedRetryID = ref<number \| null>\(null\)/)
   assert.match(source, /<FallbackRequestChain/)
@@ -222,6 +232,16 @@ test('readonly logs exposes fallback requests and channel chains', () => {
   assert.match(source, /<span class="detail-label">Fallback<\/span>/)
   assert.match(source, /admin_info/)
   assert.match(source, /row\.fallback_channels\?\.length/)
+})
+
+// 渠道按 ID 取文字色，品牌图标使用原始 SVG，不能再次退回通用连接图标。
+test('readonly logs keeps rc35 channel and model semantic colors', () => {
+  assert.match(source, /channelTone: channelID > 0 \? getTokenColorClass\(String\(channelID\)\)/)
+  assert.match(source, /modelTone: row\.model_name \? getTokenColorClass\(row\.model_name\)/)
+  assert.match(source, /view\.channelTone/)
+  assert.match(source, /class="model-icon" :src="view\.modelProvider\.src"/)
+  assert.match(source, /\.channel-badge \{[^}]*border: 0;[^}]*background: transparent;/)
+  assert.doesNotMatch(source, /<Connection\s*\/>|\.token-badge\[class/)
 })
 
 // 回归保护：详情必须采用 rc35 的单列信息流和分组卡片，不得退回旧双列 Element Plus 弹窗。
@@ -299,7 +319,7 @@ test('readonly logs supports direct page navigation and compact pagination order
   const jumpIndex = source.indexOf('class="page-jump"', controlsStart)
   assert.ok(pageSizeIndex >= 0 && pageSizeIndex < navigationIndex)
   assert.ok(navigationIndex < jumpIndex)
-  assert.match(source, /<div class="pager-summary"><span>总计：<\/span><strong>/)
+  assert.match(source, /countIsCurrent \? '总计：' : '已加载至：'/)
   assert.match(source, /<span class="page-size-label">每页行数<\/span>/)
   assert.match(source, /class="page-size page-size-trigger"[^>]*role="combobox"/)
   assert.match(source, /id="readonly-log-page-size-menu"[^>]*class="page-size-menu"[^>]*role="listbox"/)
@@ -325,7 +345,9 @@ test('readonly logs keeps a visible list floor for the total count', () => {
 // 回归保护：桌面日志页固定在视口内，移动端仍由卡片列表自然增长。
 test('readonly logs keeps desktop table scrolling inside the page shell', () => {
   assert.match(source, /@media \(min-width: 761px\) \{[\s\S]*\.logs-page \{[\s\S]*height: calc\(100vh - 52px\);[\s\S]*overflow: hidden;[\s\S]*\.logs-table-shell \{ flex: 1 1 0; \}[\s\S]*\.desktop-table \{ min-height: 0; \}/)
-  assert.match(source, /\.desktop-table \{ height: 100%; min-height: 430px; overflow: auto; \}/)
+  assert.match(source, /\.desktop-table \{[\s\S]*height: 100%;[\s\S]*min-width: 0;[\s\S]*min-height: 430px;[\s\S]*overflow: auto;/)
+  assert.match(source, /\.logs-table \{[\s\S]*width: max-content;[\s\S]*min-width: 100%;[\s\S]*table-layout: auto;/)
+  assert.match(source, /\.logs-table th\.col-channel, \.logs-table td\.col-channel \{ min-width: 112px; \}/)
   assert.match(source, /\.logs-table-shell \{ flex: 0 0 auto; overflow: visible; border: 0; background: transparent; box-shadow: none; \}/)
   assert.match(source, /@media \(max-width: 900px\) \{[\s\S]*\.logs-page \{ height: auto;[\s\S]*overflow: visible;/)
   assert.match(source, /@media \(max-width: 900px\) \{[\s\S]*\.desktop-table \{ display: none; \}[\s\S]*\.mobile-log-list \{ display: grid;/)
