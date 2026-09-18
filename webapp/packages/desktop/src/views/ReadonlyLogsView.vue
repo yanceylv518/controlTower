@@ -5,6 +5,8 @@ import { Connection, Hide, Key, RefreshLeft, Search, View } from '@element-plus/
 import { useRoute } from 'vue-router'
 import type { ReadonlyLog } from '@ct/shared'
 import AppShell from '../components/AppShell.vue'
+import FallbackRequestChain from '../components/FallbackRequestChain.vue'
+import { attemptChannels, type ChainQuery } from '../utils/fallbackRequestChain'
 import CompactDateTimeRangePicker from '../components/CompactDateTimeRangePicker.vue'
 import { passthrough } from '../api'
 import { useAuthStore } from '../stores/auth'
@@ -105,6 +107,8 @@ const filters = useFiltersStore(), prefs = usePrefsStore()
 const route = useRoute()
 const username = ref(''), tokenName = ref(''), modelName = ref(''), group = ref(''), requestID = ref(''), upstreamRequestID = ref('')
 const channelID = ref('')
+const requestScope = ref<{ request: string; user: string } | null>(null)
+const scopedUserIDs = computed(() => requestScope.value?.request === requestID.value ? requestScope.value.user : undefined)
 const logType = ref(0), offset = ref(0), limit = ref(100)
 const sensitiveVisible = ref(true)
 // 桌面和移动布局互斥挂载，避免隐藏的另一套 100 行节点继续参与更新和布局。
@@ -113,7 +117,7 @@ let viewportQuery: MediaQueryList | undefined
 function syncViewport() {
   const next = viewportQuery?.matches ?? (typeof window !== 'undefined' && window.matchMedia('(max-width: 900px)').matches)
   if (next !== mobileViewport.value) {
-    closeRetryPopover()
+    closeRequestChain()
     closePageSizeMenu()
   }
   mobileViewport.value = next
@@ -166,8 +170,8 @@ const parsedChannelID = computed(() => {
   const value = Number(channelID.value)
   return channelID.value.trim() !== '' && Number.isSafeInteger(value) && value >= 0 ? value : undefined
 })
-const params = computed(() => ({ site: filters.site_id, username: username.value, start_time: timeRange.value[0].toISOString(), end_time: timeRange.value[1].toISOString(), token_name: tokenName.value, model_name: modelName.value, group: group.value, request_id: requestID.value, upstream_request_id: upstreamRequestID.value, channel_id: parsedChannelID.value, log_type: logType.value || undefined, limit: limit.value, offset: offset.value }))
-const statParams = computed(() => ({ site: filters.site_id, username: username.value, start_time: timeRange.value[0].toISOString(), end_time: timeRange.value[1].toISOString(), token_name: tokenName.value, model_name: modelName.value, group: group.value, request_id: requestID.value, upstream_request_id: upstreamRequestID.value, channel_id: parsedChannelID.value, log_type: logType.value || undefined }))
+const params = computed(() => ({ site: filters.site_id, user_ids: scopedUserIDs.value, username: username.value, start_time: timeRange.value[0].toISOString(), end_time: timeRange.value[1].toISOString(), token_name: tokenName.value, model_name: modelName.value, group: group.value, request_id: requestID.value, upstream_request_id: upstreamRequestID.value, channel_id: parsedChannelID.value, log_type: logType.value || undefined, limit: limit.value, offset: offset.value }))
+const statParams = computed(() => ({ site: filters.site_id, user_ids: scopedUserIDs.value, username: username.value, start_time: timeRange.value[0].toISOString(), end_time: timeRange.value[1].toISOString(), token_name: tokenName.value, model_name: modelName.value, group: group.value, request_id: requestID.value, upstream_request_id: upstreamRequestID.value, channel_id: parsedChannelID.value, log_type: logType.value || undefined }))
 const countParams = computed(() => {
   const { limit: _limit, offset: _offset, ...rest } = params.value
   return rest
@@ -215,6 +219,7 @@ const reloadAll = () => Promise.allSettled([state.reload(), statState.reload(), 
 // 查询和重置属于高频操作，保留现有列表并在后台更新，避免 v-loading 阻塞整张表。
 const refreshSearch = async () => {
   if (backgroundRefreshing.value) return
+  closeRequestChain()
   offset.value = 0
   backgroundRefreshing.value = true
   try {
@@ -391,6 +396,7 @@ const resetTime = () => {
 // 查询区的“重置”恢复整组筛选条件，和日期控件内的“重置时间”明确区分。
 const reset = () => {
   if (backgroundRefreshing.value) return
+  requestScope.value = null
   username.value = ''
   tokenName.value = ''
   modelName.value = ''
@@ -405,7 +411,7 @@ const reset = () => {
 }
 
 function openDetail(row: ReadonlyLog) {
-  closeRetryPopover()
+  closeRequestChain()
   closePageSizeMenu()
   detailRow.value = row
   detailOpen.value = true
@@ -420,66 +426,37 @@ function handleDetailKeydown(event: KeyboardEvent) {
     closeDetail()
   }
 }
-type RetryPopoverState = { id: number; chain: string; left: number; top: number }
-const retryPopover = ref<RetryPopoverState | null>(null)
-const retryPopoverTrigger = ref<HTMLElement | null>(null)
-const retryPopoverElement = ref<HTMLElement | null>(null)
-const retryPopoverStyle = computed(() => {
-  const state = retryPopover.value
-  return state ? { left: `${state.left}px`, top: `${state.top}px` } : undefined
-})
-function closeRetryPopover() {
-  retryPopover.value = null
-  retryPopoverTrigger.value = null
+const expandedRetryID = ref<number | null>(null)
+const visibleColumnCount = computed(() => 1 + logColumnOptions.filter(column => isColumnVisible(column.key)).length)
+function closeRequestChain() { expandedRetryID.value = null }
+function requestChainTitle(row: ReadonlyLog) {
+  const sequence = attemptChannels(row)
+  return sequence.length > 1 ? `重试 ${sequence.length - 1} 次：${sequence.join(' → ')}；点击展开请求链路` : '点击查看此请求的关联日志'
 }
-// 将弹层限制在视口内；优先显示在图标上方，顶部空间不足时自动切到下方。
-function positionRetryPopover() {
-  const state = retryPopover.value
-  const trigger = retryPopoverTrigger.value
-  if (!state || !trigger || !trigger.isConnected || typeof window === 'undefined') {
-    if (state && (!trigger || !trigger.isConnected)) closeRetryPopover()
-    return
-  }
-  const rect = trigger.getBoundingClientRect()
-  const popover = retryPopoverElement.value
-  const width = popover?.offsetWidth || 220
-  const height = popover?.offsetHeight || 66
-  const margin = 8
-  const left = Math.min(Math.max(margin, rect.left), Math.max(margin, window.innerWidth - width - margin))
-  const preferredTop = rect.top - height - margin
-  const top = preferredTop >= margin
-    ? preferredTop
-    : Math.min(Math.max(margin, rect.bottom + margin), Math.max(margin, window.innerHeight - height - margin))
-  retryPopover.value = { ...state, left, top }
+function toggleRetryChain(view: LogRowView) {
+  if (!isAdmin.value) return
+  expandedRetryID.value = expandedRetryID.value === view.id ? null : view.id
 }
-function toggleRetryPopover(view: LogRowView, event: MouseEvent) {
-  if (!view.retryChain) return
-  const trigger = event.currentTarget
-  if (!(trigger instanceof HTMLElement)) return
-  if (retryPopover.value?.id === view.id) {
-    closeRetryPopover()
-    return
-  }
-  retryPopoverTrigger.value = trigger
-  retryPopover.value = { id: view.id, chain: view.retryChain, left: 0, top: 0 }
-  void nextTick(positionRetryPopover)
+async function filterRequestChain(query: ChainQuery) {
+  if (query.site !== filters.site_id || backgroundRefreshing.value) return
+  username.value = ''; tokenName.value = ''; modelName.value = ''; group.value = ''
+  channelID.value = ''; upstreamRequestID.value = ''; logType.value = 0
+  requestID.value = query.request_id
+  requestScope.value = { request: query.request_id, user: query.user_ids }
+  timeRange.value = [new Date(query.start_time), new Date(query.end_time)]
+  await refreshSearch()
 }
-function handleRetryPopoverPointerdown(event: PointerEvent) {
-  if (!retryPopover.value) return
-  const target = event.target
-  if (target instanceof Element && (target.closest('.retry-chain-trigger') || target.closest('.retry-chain-popover'))) return
-  closeRetryPopover()
-}
-function handleRetryPopoverKeydown(event: KeyboardEvent) {
-  if (event.key === 'Escape' && retryPopover.value) {
+function handleRequestChainKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape' && expandedRetryID.value !== null && !detailOpen.value) {
     event.preventDefault()
-    closeRetryPopover()
+    closeRequestChain()
   }
 }
-function handleRetryPopoverViewportChange() {
-  if (retryPopover.value) positionRetryPopover()
+function handlePageSizeViewportChange() {
   if (pageSizeOpen.value) positionPageSizeMenu()
 }
+watch(() => [filters.site_id, offset.value, limit.value], closeRequestChain)
+watch(() => isColumnVisible('channel'), visible => { if (!visible) closeRequestChain() })
 watch(detailOpen, async (open) => {
   if (typeof document === 'undefined') return
   document.body.classList.toggle('ct-detail-open', open)
@@ -859,7 +836,7 @@ function cancelRowRender() {
 function updateRenderedRows(rows: LogRowView[]) {
   const signature = rows.map(view => view.memoKey).join('\u001e')
   if (signature === renderedRowsSignature) return
-  closeRetryPopover()
+  closeRequestChain()
   cancelRowRender()
   renderedRowsSignature = signature
   const generation = rowRenderGeneration
@@ -1278,12 +1255,11 @@ async function load() {
 onMounted(() => {
   restoreColumnVisibility()
   document.body.classList.add('ct-rc35-logs-theme')
-  document.addEventListener('pointerdown', handleRetryPopoverPointerdown)
   document.addEventListener('pointerdown', handlePageSizePointerdown)
-  window.addEventListener('keydown', handleRetryPopoverKeydown)
+  window.addEventListener('keydown', handleRequestChainKeydown)
   window.addEventListener('keydown', handlePageSizeKeydown)
-  window.addEventListener('resize', handleRetryPopoverViewportChange)
-  window.addEventListener('scroll', handleRetryPopoverViewportChange, true)
+  window.addEventListener('resize', handlePageSizeViewportChange)
+  window.addEventListener('scroll', handlePageSizeViewportChange, true)
   viewportQuery = window.matchMedia('(max-width: 900px)')
   viewportQuery.addEventListener('change', syncViewport)
   syncViewport()
@@ -1311,14 +1287,13 @@ onUnmounted(() => {
   state.cancel()
   statState.cancel()
   countState.cancel()
-  closeRetryPopover()
+  closeRequestChain()
   closePageSizeMenu()
-  document.removeEventListener('pointerdown', handleRetryPopoverPointerdown)
   document.removeEventListener('pointerdown', handlePageSizePointerdown)
-  window.removeEventListener('keydown', handleRetryPopoverKeydown)
+  window.removeEventListener('keydown', handleRequestChainKeydown)
   window.removeEventListener('keydown', handlePageSizeKeydown)
-  window.removeEventListener('resize', handleRetryPopoverViewportChange)
-  window.removeEventListener('scroll', handleRetryPopoverViewportChange, true)
+  window.removeEventListener('resize', handlePageSizeViewportChange)
+  window.removeEventListener('scroll', handlePageSizeViewportChange, true)
   window.removeEventListener('keydown', handleDetailKeydown)
   document.body.classList.remove('ct-detail-open')
   document.body.classList.remove('ct-rc35-logs-theme')
@@ -1327,6 +1302,7 @@ onUnmounted(() => {
 })
 watch(() => filters.site_id, (site, previous) => {
   if (!initialLoadPending && site && site !== previous) {
+    requestScope.value = null
     offset.value = 0
     detailRow.value = null
     detailOpen.value = false
@@ -1377,6 +1353,7 @@ watch(() => filters.site_id, (site, previous) => {
         </div>
       </section>
 
+      <div v-if="scopedUserIDs" class="request-scope-banner"><span>请求关联筛选 · 同一用户 ID {{ sensitiveVisible ? scopedUserIDs : '••••' }}</span><button type="button" class="secondary-action" :disabled="backgroundRefreshing" @click="reset">清除关联筛选</button></div>
       <el-alert v-if="state.error.value" :title="state.error.value" type="error" show-icon :closable="false"><el-button link type="primary" @click="state.reload">重新加载</el-button></el-alert>
       <el-alert v-else-if="!state.loading.value && state.data.value && !state.data.value.configured" title="只读数据库尚未配置，当前暂无数据。配置后可直接在此查询。" type="info" show-icon :closable="false" />
 
@@ -1384,11 +1361,11 @@ watch(() => filters.site_id, (site, previous) => {
         <div v-if="!mobileViewport" v-loading="state.loading.value" class="desktop-table">
           <table class="logs-table">
             <thead><tr><th class="col-time">时间</th><th v-if="isColumnVisible('channel')" class="col-channel">渠道</th><th v-if="isColumnVisible('user')" class="col-user">用户</th><th v-if="isColumnVisible('token')" class="col-token">令牌</th><th v-if="isColumnVisible('model')" class="col-model">模型</th><th v-if="isColumnVisible('stream')" class="col-stream">流</th><th v-if="isColumnVisible('tokens')" class="col-tokens">Tokens</th><th v-if="isColumnVisible('quota')" class="col-quota">费用</th><th v-if="isColumnVisible('timing')" class="col-timing">耗时</th><th v-if="isColumnVisible('details')" class="col-details">详情</th></tr></thead>
-            <tbody>
+            <tbody v-for="view in renderedRows" :key="view.id" v-memo="[view.memoKey, expandedRetryID === view.id]">
               <!-- 日志记录不可变时复用整行 DOM，只有字段或显示偏好变化才重新补丁。 -->
-              <tr v-for="(view, index) in renderedRows" v-memo="[view.memoKey]" :key="index" class="log-row" :class="view.tone">
+              <tr class="log-row" :class="view.tone">
                   <td class="col-time"><div class="time-cell" :title="view.timeFull"><span class="time-text">{{ view.timeText }}</span><span class="status-badge" :class="view.statusClass">{{ view.statusLabel }}</span></div></td>
-                  <td v-if="isColumnVisible('channel')" class="col-channel"><div v-if="view.hasChannel" class="channel-cell"><div class="channel-line"><button type="button" class="channel-badge copyable" title="点击复制渠道 ID" @click.stop="copyText(view.channelID)">#{{ view.channelID }}</button><button v-if="view.retryChain" type="button" class="retry-chain-trigger" :aria-label="'重试链路：' + view.retryChain" :title="'重试链路：' + view.retryChain" :aria-expanded="retryPopover?.id === view.id" @click.stop="toggleRetryPopover(view, $event)"><el-icon aria-hidden="true"><Connection /></el-icon></button></div><span v-if="view.channelName" class="cell-secondary">{{ view.channelName }}</span></div><span v-else class="muted">—</span></td>
+                  <td v-if="isColumnVisible('channel')" class="col-channel"><div v-if="view.hasChannel" class="channel-cell"><div class="channel-line"><button type="button" class="channel-badge copyable" title="点击复制渠道 ID" @click.stop="copyText(view.channelID)">#{{ view.channelID }}</button><button v-if="isAdmin && (view.fallback || view.retryChain)" type="button" class="retry-chain-trigger" :aria-label="'查看请求重试链路：' + view.retryChain" :title="requestChainTitle(view.source)" :aria-expanded="expandedRetryID === view.id" @click.stop="toggleRetryChain(view)"><el-icon aria-hidden="true"><Connection /></el-icon></button></div><span v-if="view.channelName" class="cell-secondary">{{ view.channelName }}</span></div><span v-else class="muted">—</span></td>
                   <td v-if="isColumnVisible('user')" class="col-user"><button v-if="view.source.username" type="button" class="user-cell copyable" :title="sensitiveVisible ? '点击复制用户名' : undefined" @click.stop="copyText(view.usernameCopy)"><i class="user-avatar" :class="{ 'is-hidden': !sensitiveVisible }" :style="view.avatarStyle">{{ view.initial }}</i><span class="truncate">{{ view.username }}</span></button><span v-else class="muted">—</span></td>
                   <td v-if="isColumnVisible('token')" class="col-token"><div v-if="view.hasToken" class="token-cell"><button type="button" class="token-badge copyable" :class="view.tokenTone" :title="sensitiveVisible ? '点击复制令牌名称' : undefined" @click.stop="copyText(sensitiveVisible ? view.source.token_name : '')"><el-icon><Key /></el-icon><span>{{ view.tokenName }}</span></button><span v-if="view.source.group || view.groupRatio !== undefined" class="group-meta"><span v-if="view.source.group">{{ view.group }}</span><span v-if="view.source.group && view.groupRatio !== undefined"> </span><span v-if="view.groupRatio !== undefined" class="ratio">{{ view.groupRatioText }}</span></span></div><span v-else class="muted">—</span></td>
                   <td v-if="isColumnVisible('model')" class="col-model"><div v-if="view.hasModel" class="model-cell"><button type="button" class="model-badge copyable" @click.stop="copyText(view.source.model_name)"><el-icon><Connection /></el-icon>{{ view.modelName }}</button><span v-if="view.modelMapping" class="cell-secondary truncate">{{ view.modelMapping }}</span></div><span v-else class="muted">—</span></td>
@@ -1410,6 +1387,7 @@ watch(() => filters.site_id, (site, previous) => {
                   </td>
                   <td v-if="isColumnVisible('details')" class="col-details"><button type="button" class="details-button" :title="'查看完整详情：' + view.summary" :aria-label="'查看完整详情：' + view.summary" @click.stop="openDetail(view.source)">{{ view.summaryPreview }}</button></td>
               </tr>
+              <tr v-if="expandedRetryID === view.id && isAdmin" class="request-chain-row"><td :colspan="visibleColumnCount"><FallbackRequestChain :row="view.source" :site="filters.site_id" :sensitive="sensitiveVisible" :money="money" @close="closeRequestChain" @filter="filterRequestChain" @detail="openDetail" /></td></tr>
             </tbody>
           </table>
           <div v-if="!state.loading.value && !renderedRows.length && !(state.data.value?.items.length)" class="empty-state"><el-icon><Search /></el-icon><strong>暂无日志</strong><span>调整时间范围或筛选条件后重试</span></div>
@@ -1417,10 +1395,10 @@ watch(() => filters.site_id, (site, previous) => {
 
         <!-- rc35 的移动端摘要布局：首屏保留模型、费用、状态和关键维度。 -->
         <div v-else v-loading="state.loading.value" class="mobile-log-list">
-          <article v-for="(view, index) in renderedRows" v-memo="[view.memoKey]" :key="index" class="mobile-log-card" :class="view.tone">
+          <article v-for="view in renderedRows" v-memo="[view.memoKey, expandedRetryID === view.id]" :key="view.id" class="mobile-log-card" :class="view.tone">
             <div class="mobile-head"><div class="mobile-model"><button v-if="isColumnVisible('model') && view.hasModel" type="button" class="model-badge copyable" @click.stop="copyText(view.source.model_name)"><el-icon><Connection /></el-icon>{{ view.modelName }}</button><div class="mobile-time"><span>{{ view.timeShort }}</span><span class="status-badge" :class="view.statusClass">{{ view.statusLabel }}</span></div></div><span v-if="isColumnVisible('quota')" class="mobile-cost">{{ view.quota }}</span></div>
             <div class="mobile-grid">
-              <div v-if="isColumnVisible('channel')" class="mobile-field"><span>渠道</span><button v-if="view.hasChannel" type="button" class="channel-badge copyable" @click.stop="copyText(view.channelID)">#{{ view.channelID }}<small v-if="view.channelName">{{ view.channelName }}</small></button><small v-if="view.retryChain" class="retry-chain-text">重试链路 {{ view.retryChain }}</small><strong v-if="!view.hasChannel">—</strong></div>
+              <div v-if="isColumnVisible('channel')" class="mobile-field"><span>渠道</span><button v-if="view.hasChannel" type="button" class="channel-badge copyable" @click.stop="copyText(view.channelID)">#{{ view.channelID }}<small v-if="view.channelName">{{ view.channelName }}</small></button><button v-if="isAdmin && (view.fallback || view.retryChain)" type="button" class="retry-chain-trigger" :aria-expanded="expandedRetryID === view.id" aria-label="查看请求重试链路" :title="requestChainTitle(view.source)" @click="toggleRetryChain(view)"><el-icon aria-hidden="true"><Connection /></el-icon></button><strong v-if="!view.hasChannel">—</strong></div>
               <div v-if="isColumnVisible('user')" class="mobile-field"><span>用户</span><button v-if="view.source.username" type="button" class="mobile-user copyable" @click.stop="copyText(view.usernameCopy)"><i class="user-avatar" :class="{ 'is-hidden': !sensitiveVisible }" :style="view.avatarStyle">{{ view.initial }}</i>{{ view.username }}</button><strong v-else>—</strong></div>
               <div v-if="isColumnVisible('token')" class="mobile-field"><span>令牌 / 分组</span><div v-if="view.hasToken" class="mobile-token"><span class="token-badge" :class="view.tokenTone"><el-icon><Key /></el-icon>{{ view.tokenName }}</span><small v-if="view.source.group">{{ view.group }}</small></div><strong v-else>—</strong></div>
               <div v-if="isColumnVisible('tokens')" class="mobile-field"><span>Tokens</span><div v-if="view.hasTokens" class="tokens-cell"><span class="token-pair">{{ view.promptTokens }} / {{ view.completionTokens }}</span><small v-if="view.cacheTotal">缓存 {{ view.cacheTotalText }}</small></div><strong v-else>—</strong></div>
@@ -1441,6 +1419,7 @@ watch(() => filters.site_id, (site, previous) => {
               </div>
               <div v-if="isColumnVisible('details')" class="mobile-field mobile-details-preview"><span>详情</span><button type="button" class="details-button" :title="'查看完整详情：' + view.summary" :aria-label="'查看完整详情：' + view.summary" @click.stop="openDetail(view.source)">{{ view.summaryPreview }}</button></div>
             </div>
+            <div v-if="expandedRetryID === view.id && isAdmin" class="mobile-request-chain"><FallbackRequestChain :row="view.source" :site="filters.site_id" :sensitive="sensitiveVisible" :money="money" @close="closeRequestChain" @filter="filterRequestChain" @detail="openDetail" /></div>
           </article>
           <div v-if="!state.loading.value && !renderedRows.length && !(state.data.value?.items.length)" class="empty-state"><el-icon><Search /></el-icon><strong>暂无日志</strong><span>调整时间范围或筛选条件后重试</span></div>
         </div>
@@ -1481,14 +1460,6 @@ watch(() => filters.site_id, (site, previous) => {
             <span>{{ size }}</span>
             <span class="page-size-check" aria-hidden="true">✓</span>
           </button>
-        </div>
-      </Teleport>
-
-      <!-- 重试链路弹层脱离表格滚动容器，避免 sticky 表头和 overflow 裁剪层级。 -->
-      <Teleport to="body">
-        <div v-if="retryPopover" ref="retryPopoverElement" class="retry-chain-popover retry-chain-popover-layer" role="tooltip" :style="retryPopoverStyle" @pointerdown.stop>
-          <strong>重试链路</strong>
-          <span>{{ retryPopover.chain }}</span>
         </div>
       </Teleport>
 
@@ -2070,30 +2041,7 @@ watch(() => filters.site_id, (site, previous) => {
 .retry-chain-trigger:focus-visible { background: #fff6df; color: #c27b00; }
 .retry-chain-trigger:focus-visible { outline: 2px solid #d8a63c; outline-offset: 1px; }
 .retry-chain-trigger > .el-icon { font-size: 15px; }
-.retry-chain-popover {
-  position: fixed;
-  z-index: 4000;
-  display: flex;
-  min-width: 200px;
-  max-width: 260px;
-  flex-direction: column;
-  gap: 4px;
-  padding: 10px 12px;
-  border: 1px solid var(--rc35-line);
-  border-radius: 8px;
-  background: #fff;
-  box-shadow: 0 8px 24px rgba(28, 43, 68, .16);
-  color: var(--rc35-ink);
-  font-size: 12px;
-  font-weight: 400;
-  line-height: 1.35;
-  text-align: left;
-  animation: retry-chain-popover-in .12s ease-out;
-}
-.retry-chain-popover strong { font-size: 13px; font-weight: 650; }
-.retry-chain-popover span { overflow-wrap: anywhere; color: var(--rc35-ink-2); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
-.retry-chain-popover-layer { pointer-events: auto; }
-@keyframes retry-chain-popover-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: translateY(0); } }
+
 .retry-chain-text { color: var(--rc35-amber); font-size: 10.5px; line-height: 15px; white-space: normal; }
 .channel-badge, .token-badge, .model-badge {
   display: inline-flex;
@@ -3289,4 +3237,11 @@ watch(() => filters.site_id, (site, previous) => {
     max-height: calc(100dvh - 1.5rem);
   }
 }
+</style>
+
+<style scoped>
+.logs-table .request-chain-row>td{padding:0;white-space:normal;text-align:left}
+.mobile-request-chain{margin-top:12px}
+.request-scope-banner{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;color:var(--rc35-ink-2);font-size:12px}
+.retry-chain-trigger[aria-expanded="true"]{box-shadow:0 0 0 2px var(--rc35-accent-weak)}
 </style>
