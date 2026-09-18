@@ -1,0 +1,6 @@
+CREATE TABLE IF NOT EXISTS menu_visibility (
+  id TINYINT NOT NULL PRIMARY KEY,
+  items_json TEXT NOT NULL,
+  updated_by VARCHAR(191) NOT NULL,
+  updated_at DATETIME(6) NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

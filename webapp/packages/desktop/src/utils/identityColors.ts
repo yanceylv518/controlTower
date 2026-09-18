@@ -4,7 +4,7 @@ export type UserAvatarStyle = Readonly<{
   color: string
 }>
 
-// 令牌颜色采用 New API 的语义色顺序，CSS 层再把语义色映射到浅色主题的前景和底色。
+// 令牌颜色采用 New API 的语义色顺序，CSS 层映射当前主题的前景和底色。
 const TOKEN_COLOR_NAMES = [
   'amber',
   'blue',
@@ -43,9 +43,19 @@ export function getUserAvatarStyle(name: string): UserAvatarStyle {
   const saturation = 54 + (hash % 8)
   const lightness = 52 + ((hash >> 4) % 8)
 
+  // Keep the identity hue stable, but don't put white initials on a pale yellow/green.
+  const l = lightness / 100, s = saturation / 100
+  const a = s * Math.min(l, 1 - l)
+  const rgb = [0, 8, 4].map(n => {
+    const k = (n + hue / 30) % 12
+    const value = l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1))
+    return value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4
+  })
+  const luminance = .2126 * rgb[0] + .7152 * rgb[1] + .0722 * rgb[2]
+
   return {
     backgroundColor: `hsl(${hue} ${saturation}% ${lightness}%)`,
-    color: 'white',
+    color: 1.05 / (luminance + .05) >= 4.6 ? '#ffffff' : '#000000',
   }
 }
 

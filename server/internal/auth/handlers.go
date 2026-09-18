@@ -280,6 +280,10 @@ func RequireSessionOrToken(m *Manager, token string, next http.Handler) http.Han
 					return
 				}
 				if u.Role == "viewer" {
+					if r.Method == http.MethodGet && r.URL.Path == "/api/dashboard/menu-visibility" {
+						next.ServeHTTP(w, withUser(withActor(r, u.Username), u))
+						return
+					}
 					passthrough := r.URL.Path == "/api/dashboard/passthrough/currency" || r.URL.Path == "/api/dashboard/passthrough/users" || r.URL.Path == "/api/dashboard/passthrough/logs" || r.URL.Path == "/api/dashboard/passthrough/logs/stat" || r.URL.Path == "/api/dashboard/passthrough/logs/count"
 					if r.Method != http.MethodGet || (r.URL.Path != "/api/dashboard/metrics" && r.URL.Path != "/api/dashboard/metric-history" && r.URL.Path != "/api/dashboard/instances" && !passthrough) {
 						write(w, 403, map[string]string{"error": "forbidden"})

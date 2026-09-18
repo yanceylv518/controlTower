@@ -1,0 +1,63 @@
+/* Decorative depth lives around data, never over table cells or log text. */
+:root {
+  --ct-elevation-card: 0 1px 2px rgb(20 35 56 / 3%), 0 5px 18px rgb(20 35 56 / 4%);
+  --ct-edge-light: rgb(255 255 255 / 70%);
+}
+:root[data-theme="dark"] {
+  --ct-elevation-card: 0 1px 2px rgb(0 0 0 / 12%), 0 6px 20px rgb(0 0 0 / 12%);
+  --ct-edge-light: rgb(255 255 255 / 4%);
+}
+.shell .workspace {
+  background: radial-gradient(ellipse 900px 360px at 15% 0, color-mix(in srgb, var(--ct-accent-weak) 42%, transparent), transparent 100%), var(--ct-bg);
+}
+.shell .sidebar {
+  background: linear-gradient(165deg, color-mix(in srgb, var(--ct-sidebar-hover) 32%, var(--ct-sidebar)) 0, var(--ct-sidebar) 48%, var(--ct-sidebar));
+  box-shadow: 1px 0 8px rgb(0 0 0 / 3%);
+}
+.shell .sidebar .logo span {
+  background: linear-gradient(145deg, var(--ct-primary-solid), var(--ct-primary-hover));
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 18%), 0 3px 8px rgb(0 0 0 / 12%);
+}
+.shell .sidebar a.router-link-active {
+  background: linear-gradient(110deg, var(--ct-sidebar-selected), color-mix(in srgb, var(--ct-sidebar-selected) 75%, var(--ct-sidebar)));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ct-sidebar-ink) 15%, transparent), inset 0 1px 0 rgb(255 255 255 / 5%), 0 3px 8px rgb(0 0 0 / 9%);
+}
+.shell .topbar {
+  background: linear-gradient(110deg, var(--ct-surface), color-mix(in srgb, var(--ct-accent-weak) 18%, var(--ct-surface)));
+  box-shadow: inset 0 1px 0 var(--ct-edge-light), 0 2px 8px rgb(0 0 0 / 3%);
+}
+.shell .el-card, .shell .panel, .shell .spec-card,
+.shell .machine-card, .shell .runtime-instance {
+  box-shadow: inset 0 1px 0 var(--ct-edge-light), var(--ct-elevation-card);
+}
+.shell .kpi-card {
+  background: linear-gradient(135deg, color-mix(in srgb, var(--ct-accent-weak) 30%, var(--ct-surface)), var(--ct-surface) 65%);
+  box-shadow: inset 0 1px 0 var(--ct-edge-light), var(--ct-elevation-card);
+}
+.shell .kpi-card .kpi-icon { width: 28px; height: 28px; padding: 6px; box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 12%, transparent); }
+.shell .kpi-card .kpi-icon svg { width: 16px; height: 16px; flex-shrink: 0; }
+.shell .el-button--primary:not(.is-plain):not(.is-text):not(.is-link):not(.is-disabled) {
+  background-image: linear-gradient(165deg, var(--ct-primary-solid), var(--ct-primary-hover));
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 13%), 0 2px 5px rgb(0 0 0 / 10%);
+}
+.shell .el-button--primary:not(.is-plain):not(.is-text):not(.is-link):not(.is-disabled):hover {
+  background-image: linear-gradient(165deg, var(--ct-primary-hover), var(--ct-primary-hover));
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 13%), 0 3px 8px rgb(0 0 0 / 12%);
+}
+.shell .el-button:not(.is-text):not(.is-link):not(.is-disabled):active { box-shadow: inset 0 1px 3px rgb(0 0 0 / 10%); }
+.shell .theme-switch[aria-expanded="true"], .shell .account-trigger[aria-expanded="true"] {
+  color: var(--ct-accent);
+  background: var(--ct-accent-weak);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ct-accent) 18%, transparent);
+}
+.shell-menu-popper.el-popper {
+  background: var(--ct-surface);
+  box-shadow: inset 0 1px 0 var(--ct-edge-light), var(--ct-shadow-popover);
+}
+.shell-menu-popper .el-dropdown-menu {
+  background: linear-gradient(160deg, color-mix(in srgb, var(--ct-surface-2) 40%, var(--ct-surface)), var(--ct-surface) 60%);
+}
+.shell-menu-popper .theme-selected { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ct-accent) 14%, transparent); }
+@media (forced-colors: active) {
+  .shell .workspace, .shell .sidebar, .shell .topbar, .shell .kpi-card, .shell .sidebar a.router-link-active, .shell-menu-popper .el-dropdown-menu { background-image: none; }
+}

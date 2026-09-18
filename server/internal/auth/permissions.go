@@ -28,7 +28,7 @@ var PermissionCatalog = []Permission{
 	{"billing.users", "用户账单", "查看、导出和维护用户账单"},
 	{"billing.channels", "上游账单", "查看、导出和维护上游账单"},
 	{"billing.tasks", "账单任务", "管理用户及上游账单生成任务"},
-	{"models.manage", "模型管理", "模型、价格和分组倍率维护"},
+	{"models.manage", "模型广场", "查看 NewAPI 模型、价格和分组倍率，刷新缓存"},
 	{"upstreams.manage", "上游管理", "上游配置查询与维护"},
 	{"discounts.manage", "渠道折扣", "渠道折扣查询与维护"},
 	{"tuning.manage", "调权中心", "调权策略维护和渠道指令下发"},
@@ -133,6 +133,12 @@ func allowAdminRequest(u storage.User, r *http.Request) bool {
 		return HasPermission(u, "logs.query")
 	}
 	read := r.Method == http.MethodGet
+	if path == "model-square" {
+		return (read || r.Method == http.MethodPost) && HasPermission(u, "models.manage")
+	}
+	if path == "menu-visibility" {
+		return read || (r.Method == http.MethodPut && HasPermission(u, "settings.manage"))
+	}
 	any := func(keys ...string) bool {
 		for _, k := range keys {
 			if HasPermission(u, k) {

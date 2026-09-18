@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { withChartTheme } from "../utils/chartTheme";
+import { useTheme } from "../composables/useTheme";
+const { themeSignature } = useTheme();
 import { nextTick, onBeforeUnmount, ref, watch } from "vue";
 import * as echarts from "echarts/core";
 import { BarChart } from "echarts/charts";
@@ -31,7 +34,8 @@ function renderNow() {
   const initial = !chart;
   chart ??= echarts.init(chartEl.value);
   const items = [...props.items].reverse();
-  chart.setOption({
+  const css = getComputedStyle(document.documentElement);
+  chart.setOption(withChartTheme({
     animationDuration: initial ? 150 : 0,
     color: ["#2f6fed", "#f08a24"],
     tooltip: { trigger: "axis", axisPointer: { type: "shadow" }, valueFormatter: compact },
@@ -66,13 +70,13 @@ function renderNow() {
             return `{out|Out ${compact(item.completion)}} {pct|${share.toFixed(1)}%}`;
           },
           rich: {
-            out: { color: "#b85c00", fontSize: 10, fontWeight: 700 },
-            pct: { color: "#8b95a7", fontSize: 10 },
+            out: { color: css.getPropertyValue("--ct-warn").trim(), fontSize: 10, fontWeight: 700 },
+            pct: { color: css.getPropertyValue("--ct-ink-3").trim(), fontSize: 10 },
           },
         },
       },
     ],
-  }, true);
+  }), true);
 }
 
 watch(() => props.items, () => void render(), { deep: true, immediate: true });
@@ -85,6 +89,7 @@ onBeforeUnmount(() => {
   observer?.disconnect();
   chart?.dispose();
 });
+watch(themeSignature, () => { void render(); }, { flush: "post" });
 </script>
 
 <template>

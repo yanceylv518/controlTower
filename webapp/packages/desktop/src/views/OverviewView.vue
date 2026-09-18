@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { withChartTheme } from "../utils/chartTheme";
+import { useTheme } from "../composables/useTheme";
+const { themeSignature } = useTheme();
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import {
   CircleCheck,
@@ -170,7 +173,7 @@ function renderChart() {
   );
   if (tpmChartEl.value) {
     tpmChart ??= echarts.init(tpmChartEl.value);
-    tpmChart.setOption({
+    tpmChart.setOption(withChartTheme({
       tooltip: {
         trigger: "axis",
         valueFormatter: (value: unknown) => formatNumber(Number(value)),
@@ -189,11 +192,11 @@ function renderChart() {
           data: history.value.map((x) => x.tpm),
         },
       ],
-    });
+    }));
   }
   if (!successChartEl.value) return;
   successChart ??= echarts.init(successChartEl.value);
-  successChart.setOption({
+  successChart.setOption(withChartTheme({
     tooltip: { trigger: "axis" },
     grid: { left: 54, right: 20, bottom: 30, top: 20 },
     xAxis: { type: "category", boundaryGap: false, data: timeAxis },
@@ -220,7 +223,7 @@ function renderChart() {
         },
       },
     ],
-  });
+  }));
 }
 function resize() {
   tpmChart?.resize();
@@ -238,6 +241,7 @@ onBeforeUnmount(() => {
   tpmChart?.dispose();
   successChart?.dispose();
 });
+watch(themeSignature, () => { scheduleChartRender(renderToken, renderChart); }, { flush: "post" });
 </script>
 <template>
   <AppShell title="运行总览">
@@ -340,14 +344,14 @@ onBeforeUnmount(() => {
 .trend-chart {
   min-width: 0;
   padding-top: 4px;
-  border-top: 1px solid #edf0f5;
+  border-top: 1px solid var(--ct-line);
 }
 .trend-chart:first-child {
   border-top: 0;
 }
 .trend-chart h3 {
   margin: 0 0 4px;
-  color: #46546a;
+  color: var(--ct-ink-2);
   font-size: 13px;
   font-weight: 600;
 }

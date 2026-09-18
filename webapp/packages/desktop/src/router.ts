@@ -27,7 +27,7 @@ import ReadonlyUsersView from './views/ReadonlyUsersView.vue'
 import ReadonlyLogsView from './views/ReadonlyLogsView.vue'
 import BillingView from './views/BillingView.vue'
 import ChannelBillingView from './views/ChannelBillingV4View.vue'
-import BillingPricingView from './views/BillingPricingView.vue'
+import BillingPricingView from './views/ModelSquareView.vue'
 import BillingReconciliationView from './views/BillingReconciliationView.vue'
 import BillingTasksView from './views/BillingTasksView.vue'
 import BillingUpstreamsView from './views/BillingUpstreamsView.vue'
@@ -43,7 +43,7 @@ export const router = createRouter({ history: createWebHistory('/'), routes: [
   { path: '/billing/upstreams', component: BillingUpstreamsView, meta: { title: '上游管理', adminOnly: true } },
   { path: '/billing/discounts', component: BillingDiscountsView, meta: { title: '渠道折扣', adminOnly: true } },
   { path: '/billing/anomalies', alias: '/billing-reconciliation', component: BillingReconciliationView, meta: { title: '账单核对', adminOnly: true } },
-  { path: '/models/manage', alias: '/billing/pricing', component: BillingPricingView, meta: { title: '模型管理', adminOnly: true } },
+  { path: '/models/manage', alias: '/billing/pricing', component: BillingPricingView, meta: { title: '模型广场', adminOnly: true } },
   { path: '/customers', component: CustomerMonitorView, meta: { title: '客户监控' } },
   { path: '/login', name: 'login', component: LoginView, meta: { title: '登录' } }, { path: '/', name: 'overview', component: OverviewView, meta: { title: '运行总览' } },
   { path: '/channels', component: DimensionView, props: { kind: 'channels' }, meta: { title: '渠道监控' } }, { path: '/models', component: DimensionView, props: { kind: 'models' }, meta: { title: '模型监控' } },

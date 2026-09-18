@@ -173,6 +173,9 @@ func NewMux(options Options) *http.ServeMux {
 	if settingsStore, ok := any(options.Store).(dashboard.SettingsStore); ok && options.SettingsProvider != nil {
 		mux.Handle("/api/dashboard/settings", protect(dashboard.SettingsHandler{Store: settingsStore, Provider: options.SettingsProvider}))
 	}
+	if menuStore, ok := any(options.Store).(dashboard.MenuVisibilityStore); ok {
+		mux.Handle("/api/dashboard/menu-visibility", protect(dashboard.MenuVisibilityHandler{Store: menuStore}))
+	}
 	if balanceSettings, ok := any(options.Store).(dashboard.BalanceAlertSettingsStore); ok {
 		mux.Handle("/api/dashboard/balance-alert-users", protect(dashboard.BalanceAlertSettingsHandler{Store: balanceSettings}))
 	}
@@ -241,12 +244,16 @@ func NewMux(options Options) *http.ServeMux {
 		mux.Handle("/api/dashboard/billing/upstreams", protect(dashboard.BillingUpstreamConfigHandler{Store: upstreamConfigStore, Source: dashboard.BillingReadonlySource{Handler: passthrough}}))
 	}
 	if billingConfigStore, ok := any(options.Store).(dashboard.BillingConfigStore); ok {
-		mux.Handle("/api/dashboard/billing/prices", protect(dashboard.BillingPricesHandler{Store: billingConfigStore}))
-		mux.Handle("/api/dashboard/billing/group-ratios", protect(dashboard.BillingGroupRatiosHandler{Store: billingConfigStore}))
+		mux.Handle("GET /api/dashboard/billing/prices", protect(dashboard.BillingPricesHandler{Store: billingConfigStore}))
+		mux.Handle("/api/dashboard/billing/prices", protect(http.HandlerFunc(dashboard.NewAPIModelsReadonly)))
 		mux.Handle("GET /api/dashboard/billing/import-prices", protect(dashboard.BillingImportPricesHandler{Source: dashboard.BillingReadonlySource{Handler: passthrough}}))
 	}
-	if billingModelStore, ok := any(options.Store).(dashboard.BillingModelStore); ok {
-		mux.Handle("/api/dashboard/billing/models", protect(dashboard.BillingModelsHandler{Store: billingModelStore, Source: dashboard.BillingReadonlySource{Handler: passthrough}}))
+	if controlConfig, ok := any(options.Store).(dashboard.ControlConfigStore); ok {
+		square := dashboard.ModelSquareHandler{Config: controlConfig, SecretKey: options.SecretKey, Cache: dashboard.NewModelSquareCache()}
+		mux.Handle("/api/dashboard/model-square", protect(square))
+		mux.Handle("/api/dashboard/billing/models", protect(square))
+		mux.Handle("GET /api/dashboard/billing/group-ratios", protect(square))
+		mux.Handle("/api/dashboard/billing/group-ratios", protect(http.HandlerFunc(dashboard.NewAPIModelsReadonly)))
 	}
 	if billingSummaryStore, ok := any(options.Store).(dashboard.BillingSummaryStore); ok {
 		mux.Handle("GET /api/dashboard/billing/summary", protect(dashboard.BillingSummaryHandler{Store: billingSummaryStore, Source: dashboard.BillingReadonlySource{Handler: passthrough}}))

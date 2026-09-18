@@ -50,12 +50,14 @@ test('moving vertically in cached tooltip changes the focused row without changi
   api.highlightCustomerTooltip(root, 'model-a');
   assert.equal(rows[1].style.fontWeight, '700');
   assert.equal(rows[0].style.fontWeight, '400');
-  assert.equal(rows[0].style.opacity, '0.45');
+  assert.equal(rows[0].style.opacity, '1');
+  assert.equal(rows[0].style.color, 'var(--ct-ink-3)');
   assert.equal(rows[1].style.opacity, '1');
   api.highlightCustomerTooltip(root, 'model-c');
   assert.equal(rows[1].style.backgroundColor, 'transparent');
   assert.equal(rows[2].dataset.active, 'true');
-  assert.equal(rows[1].style.opacity, '0.45');
+  assert.equal(rows[1].style.opacity, '1');
+  assert.equal(rows[1].style.color, 'var(--ct-ink-3)');
   assert.equal(rows[2].style.opacity, '1');
   assert.equal(rows[2].style.borderLeftColor, '#7b63cd');
   assert.equal(root.scrollTop, 30);

@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { withChartTheme } from "../utils/chartTheme";
+import { useTheme } from "../composables/useTheme";
+const { themeSignature } = useTheme();
 import { nextTick, onBeforeUnmount, ref, watch } from "vue";
 import * as echarts from "echarts/core";
 import { LineChart } from "echarts/charts";
@@ -67,7 +70,7 @@ function renderNow() {
       }),
     };
   });
-  chart.setOption({
+  chart.setOption(withChartTheme({
     animationDuration: initial ? 150 : 0,
     color: colors,
     tooltip: yMax == null ? {
@@ -128,7 +131,7 @@ function renderNow() {
         })),
       } : undefined,
     })),
-  }, true);
+  }), true);
 }
 
 watch(() => [props.series, props.unit, props.thresholds, props.compact], () => void render(), { deep: true, immediate: true });
@@ -138,6 +141,7 @@ onBeforeUnmount(() => {
   observer?.disconnect();
   chart?.dispose();
 });
+watch(themeSignature, () => { void render(); }, { flush: "post" });
 </script>
 
 <template>

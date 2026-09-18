@@ -58,7 +58,7 @@ async function submit() {
 </script>
 
 <template>
-  <el-dropdown trigger="click" @command="command">
+  <el-dropdown trigger="click" popper-class="shell-menu-popper" @command="command">
     <el-button text class="account-trigger">
       <el-icon><User /></el-icon>
       <span>{{ auth.user?.username }}</span>

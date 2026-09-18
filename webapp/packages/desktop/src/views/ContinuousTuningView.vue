@@ -34,15 +34,15 @@ const pageElement = ref<HTMLElement | null>(null);
 const compactLayout = ref(false);
 const detailElement = ref<HTMLElement | null>(null);
 const detailWidth = ref(900);
-// Size numeric columns to their content; give remaining space to channel names and groups.
+// Balance the whole table; keep usable minimums inside the table on narrow screens.
 const tableColumns = computed(() => {
-  const width = Math.max(720, detailWidth.value - 2);
-  const factor = width < 1000 ? 52 : 60;
-  const input = width < 1000 ? 68 : 80;
-  const number = width < 1000 ? 56 : 64;
-  const text = width - factor * 4 - input * 2 - number * 2;
-  const channel = Math.round(text * .52);
-  return { factor, input, number, channel, groups: text - channel };
+  const width = Math.max(760, detailWidth.value - 2);
+  const channel = Math.round(width * .25);
+  const groups = Math.round(width * .14);
+  const factor = Math.floor(width * .07);
+  const input = Math.floor(width * .08);
+  const number = input;
+  return { channel, groups, factor, input, number, priority: width - channel - groups - factor * 4 - input - number * 2 };
 });
 let detailObserver: ResizeObserver | undefined;
 watch(detailElement, (element) => {
@@ -91,6 +91,23 @@ const models = computed(() => {
 const visibleModels = computed(() => models.value.filter(model => model.toLowerCase().includes(modelQuery.value.trim().toLowerCase())));
 const activeRows = computed(() => bases.value.filter(x => x.model_name === activeModel.value).sort((a, b) => b.current_priority - a.current_priority || b.current_weight - a.current_weight || a.channel_id - b.channel_id));
 const channelRowKey = (row: ChannelBaseValue) => `${row.channel_id}:${row.model_name}`;
+const priorityGroupStarts = computed(() => {
+  const starts = new Map<string, { priority: number; count: number; first: boolean }>();
+  const rows = activeRows.value;
+  for (let index = 0; index < rows.length; index++) {
+    const row = rows[index];
+    if (index > 0 && rows[index - 1].current_priority === row.current_priority) continue;
+    let end = index + 1;
+    while (end < rows.length && rows[end].current_priority === row.current_priority) end++;
+    starts.set(channelRowKey(row), { priority: row.current_priority, count: end - index, first: index === 0 });
+  }
+  return starts;
+});
+const priorityRowClass = ({ row }: { row: ChannelBaseValue }) => {
+  const group = priorityGroupStarts.value.get(channelRowKey(row));
+  return group && !group.first ? 'priority-group-start' : '';
+};
+
 // 总览表可能先于全渠道目录完成加载；缺少目录行时用基础值补齐编辑器上下文。
 const channelDirectoryByID = computed(() => new Map(channels.value.map(row => [row.channel_id, row])));
 const groupEditorRowFor = (row: ChannelBaseValue): TuningChannel => channelDirectoryByID.value.get(row.channel_id) ?? ({
@@ -185,7 +202,7 @@ const phaseText = (s?: TuningContinuousState) => !s ? "等待首次评估" : eff
 const phaseType = (s?: TuningContinuousState) => s?.phase === "circuit" ? "danger" : s?.phase === "probing" || s?.phase === "soft_start" || effectivePause(s) ? "warning" : "success";
 const eventName = (rule: string) => ({ weight_observed: "观察到权重变化", weight_write: "自动调整权重", manual_takeover: "检测到人工修改", auto_paused: "安全保护暂停", circuit_opened: "渠道熔断", probe_started: "开始恢复检测", probe_failed: "恢复检测未通过", circuit_recovered: "渠道恢复" } as Record<string, string>)[rule] || rule;
 const eventCount = (days: number, rule: string) => events.value.filter(x => validEvent(x) && x.rule === rule && new Date(x.created_at).getTime() >= Date.now() - days * 86400000).length;
-const sampleText = (row: ChannelBaseValue) => { const state = stateFor(row); return state ? `${state.last_observed_requests}/${policy.continuous.min_samples}` : "—"; };
+const sampleText = (row: ChannelBaseValue) => { const state = stateFor(row); return state ? `${state.last_observed_requests}/${(savedPolicy.value?.continuous ?? policy.continuous).min_samples}` : "—"; };
 const rateText = (value?: number) => value == null ? "—" : Math.round(value).toLocaleString("zh-CN");
 const currentRates = ref(new Map<number, { rpm: number; tpm: number }>());
 const ratesReady = ref(false), ratesError = ref("");
@@ -740,22 +757,26 @@ onMounted(() => { void load(true); void watchChannelChanges(); void refreshCurre
 onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPolls(); if (refreshTimer) clearInterval(refreshTimer); if (ratesTimer) clearInterval(ratesTimer); });
 </script>
 
-<template><AppShell title="调权中心" class="tuning-shell"><div ref="pageElement" v-loading="loading" class="page" :class="{'events-page':activeTab==='events', 'compact-layout':compactLayout}">
+<template><AppShell title="调权中心" class="tuning-shell"><template #tools><div class="tuning-header-actions"><span v-if="dirty" class="unsaved-status" role="status">有未保存更改</span><el-button v-if="dirty" :disabled="saving" @click="cancelChanges()">取消更改</el-button><el-button type="primary" :disabled="!dirty || loading || !siteID" :loading="saving" @click="save">保存更改</el-button></div></template><div ref="pageElement" v-loading="loading" class="page" :class="{'events-page':activeTab==='events', 'compact-layout':compactLayout}">
   <el-alert v-if="channelSyncError" :title="channelSyncError" type="warning" :closable="false" />
+  <div class="tuning-tabs-shell" :class="{'has-overview-actions':activeTab==='overview'}">
+    <div v-if="activeTab==='overview'" class="tools overview-actions"><el-button :loading="channelsRefreshing" :disabled="saving" @click="refreshChannelsNow">刷新渠道信息</el-button><el-button :disabled="!siteID" @click="groupManagerOpen = true">分组组合</el-button><el-dropdown trigger="click"><el-button :disabled="saving">更多 ···</el-button><template #dropdown><el-dropdown-menu><el-dropdown-item @click="helpOpen=true">使用说明</el-dropdown-item><el-dropdown-item divided :disabled="saving || !siteID" @click="sync('weight')">初始化/刷新基础值</el-dropdown-item></el-dropdown-menu></template></el-dropdown></div>
   <el-tabs v-model="activeTab" class="tabs">
     <el-tab-pane label="运行概览" name="overview">
-      <el-card shadow="never" class="workspace-card"><template #header><div class="head"><div class="title-line"><b>模型与渠道</b><div class="inline-metrics"><span>自动 <b>{{ counts.auto }}</b></span><span>观察 <b>{{ counts.observe }}</b></span><span>关闭 <b>{{ counts.off }}</b></span></div></div><div class="tools"><el-button :disabled="!siteID" @click="groupManagerOpen = true">分组组合</el-button><el-button @click="helpOpen=true">使用说明</el-button><el-button :loading="channelsRefreshing" :disabled="saving" @click="refreshChannelsNow">刷新渠道信息</el-button><el-button :loading="saving" @click="sync('weight')">初始化/刷新基础值</el-button></div></div></template>
+      <el-card shadow="never" class="workspace-card">
         <el-empty v-if="!models.length" description="还没有渠道基础值"><el-button type="primary" @click="sync('weight')">立即从 new-api 读取</el-button></el-empty>
         <div v-else class="model-workspace" :class="{'nav-collapsed':modelNavCollapsed}">
           <aside class="model-nav">
             <div class="model-nav-tools"><el-input v-if="!modelNavCollapsed" v-model="modelQuery" clearable placeholder="搜索模型" aria-label="搜索模型"/><button type="button" class="model-nav-toggle" :aria-label="modelNavCollapsed ? '展开模型列表' : '收起模型列表'" :title="modelNavCollapsed ? '展开模型列表' : '收起模型列表'" :aria-expanded="!modelNavCollapsed" @click="modelNavCollapsed=!modelNavCollapsed"><el-icon aria-hidden="true"><ArrowRight v-if="modelNavCollapsed"/><ArrowLeft v-else/></el-icon></button></div>
+            <div v-if="!modelNavCollapsed" class="model-mode-summary" aria-label="模型运行统计"><span>自动 <b>{{ counts.auto }}</b></span><span>观察 <b>{{ counts.observe }}</b></span><span>关闭 <b>{{ counts.off }}</b></span></div>
             <button v-if="modelNavCollapsed" class="model-nav-rail" type="button" :title="'当前模型：' + activeModel" aria-label="展开模型列表" @click="modelNavCollapsed=false">模型</button>
             <div v-show="!modelNavCollapsed" class="model-list"><button v-for="model in visibleModels" :key="model" :class="{active:activeModel===model}" :title="model + ' · ' + modeText(model)" :aria-label="model + '，' + modeText(model)" @click="selectModel(model)"><span><b>{{ model }}</b><span class="model-secondary"><small>{{ bases.filter(x=>x.model_name===model).length }} 个渠道</small><span class="model-mode-text" :class="modelMode(model)">{{ modelMode(model) === 'auto' ? '自动' : modelMode(model) === 'observe' ? '观察' : '关闭' }}</span></span></span></button><el-empty v-if="!visibleModels.length" :image-size="48" description="没有匹配模型"/></div>
           </aside>
-          <section ref="detailElement" class="model-detail"><div class="model-head"><div><b>{{ activeModel }}</b><small>{{ activeRows.length }} 个渠道</small><small v-if="refreshError" class="stale">刷新失败：{{ refreshError }}</small><small v-else-if="evaluationStalled" class="stale">评估已停滞：最后成功于 {{ formatTime(lastEvaluationAt!) }}</small><small v-else-if="lastEvaluationAt">最近评估 {{ formatTime(lastEvaluationAt) }} · 每 30 秒自动刷新</small><TuningInfo label="实时负载统计"><p>负载更新：{{ ratesAsOf ? formatTime(ratesAsOf) : '—' }}</p><p>已覆盖的 60 秒负载，每 5 秒刷新；Agent 保持 30 秒采集。</p><p>统计区间：{{ ratesWindowStart ? formatTime(ratesWindowStart) : '—' }} 至 {{ ratesAsOf ? formatTime(ratesAsOf) : '—' }}（不含结束秒）</p><p>数据延迟 {{ ratesDelay }} 秒。容量输入 0 表示不限制。</p></TuningInfo></div><el-radio-group v-if="activeModel" v-model="policy.dispatch_modes[activeModel]" size="small" @change="dirty=true"><el-radio-button value="off">关闭</el-radio-button><el-radio-button value="observe">只观察</el-radio-button><el-radio-button value="auto">自动执行</el-radio-button></el-radio-group></div>
+          <section ref="detailElement" class="model-detail"><div class="model-head"><div><b class="active-model-name">{{ activeModel }}</b><span class="active-model-status" :class="modelMode(activeModel)">{{ modeText(activeModel) }}</span><small>{{ activeRows.length }} 个渠道</small><TuningInfo label="实时负载统计"><p>负载更新：{{ ratesAsOf ? formatTime(ratesAsOf) : '—' }}</p><p>已覆盖的 60 秒负载，每 5 秒刷新；Agent 保持 30 秒采集。</p><p>统计区间：{{ ratesWindowStart ? formatTime(ratesWindowStart) : '—' }} 至 {{ ratesAsOf ? formatTime(ratesAsOf) : '—' }}（不含结束秒）</p><p>数据延迟 {{ ratesDelay }} 秒。容量输入 0 表示不限制。</p></TuningInfo><small v-if="refreshError" class="evaluation-time stale">刷新失败：{{ refreshError }}</small><small v-else-if="evaluationStalled" class="evaluation-time stale">评估已停滞：最后成功于 {{ formatTime(lastEvaluationAt!) }}</small><small v-else-if="lastEvaluationAt" class="evaluation-time">最近评估 {{ formatTime(lastEvaluationAt) }} · 每 30 秒自动刷新</small></div><el-radio-group v-if="activeModel" v-model="policy.dispatch_modes[activeModel]" size="small" @change="dirty=true"><el-radio-button value="off">关闭</el-radio-button><el-radio-button value="observe">只观察</el-radio-button><el-radio-button value="auto">自动执行</el-radio-button></el-radio-group></div>
             <el-alert v-if="ratesError" :title="ratesError" type="warning" :closable="false"/>
-            <el-table class="channel-table" scrollbar-always-on :span-method="coefficientSpan" :data="activeRows" :row-key="channelRowKey" size="small" height="100%" empty-text="没有匹配渠道">
+            <el-table class="channel-table" scrollbar-always-on :span-method="coefficientSpan" :data="activeRows" :row-key="channelRowKey" :row-class-name="priorityRowClass" size="small" height="100%" empty-text="没有匹配渠道">
               <el-table-column label="渠道" :width="tableColumns.channel" align="left" fixed><template #default="{row}">
+                <div v-if="priorityGroupStarts.has(channelRowKey(row))" class="priority-group-label" title="按已生效的线上优先级分组，修改保存后更新"><span>优先级 {{ priorityGroupStarts.get(channelRowKey(row))!.priority }}</span><small>{{ priorityGroupStarts.get(channelRowKey(row))!.count }} 个渠道</small></div>
                 <div class="channel-heading"><span class="channel-key">#{{ row.channel_id }} ·</span><b class="channel-name" :title="row.channel_name">{{ row.channel_name }}</b></div>
                 <div class="channel-meta"><TuningCapacityMetric metric="TPM" :channel="row.channel_name" v-model="row.max_tpm" :current="currentRateFor(row)?.tpm" :modified="fieldChanged(row,'max_tpm')" @change="dirty=true"/><TuningCapacityMetric metric="RPM" :channel="row.channel_name" v-model="row.max_rpm" :current="currentRateFor(row)?.rpm" :modified="fieldChanged(row,'max_rpm')" @change="dirty=true"/></div>
                 <small v-if="pendingGroups.has(row.channel_id) && !groupErrors.has(row.channel_id)" class="warning">分组等待执行</small><small v-if="groupErrors.has(row.channel_id)" class="danger" :title="groupErrors.get(row.channel_id)">分组执行失败</small>
@@ -766,6 +787,7 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
                   <div v-if="metric.key === 'speed'" class="coefficient-group">
                     <div v-if="!coefficientEmptyText(row)" class="coefficient-values"><div v-for="item in coefficientColumns" :key="item.key" class="coefficient-cell" :title="coefficientCell(row, item.key).detail"><b v-if="item.key !== 'speed' || coefficientCell(row, item.key).value != null || !coefficientCell(row, item.key).status" :class="{'factor-up':(coefficientCell(row, item.key).value ?? 1)>1,'factor-down':(coefficientCell(row, item.key).value ?? 1)<1}">{{ coefficientCell(row, item.key).value == null ? '—' : factor(coefficientCell(row, item.key).value!) }}</b><small v-if="item.key === 'speed' && !overallEvaluationStatus(row) && coefficientCell(row, item.key).status && coefficientCell(row, item.key).status !== 'TTFT 有效'">{{ coefficientCell(row, item.key).status }}</small></div></div>
                     <div v-if="overallEvaluationStatus(row)" class="coefficient-overall" :class="[rowStatus(row).kind, {'only-status':!!coefficientEmptyText(row)}]" :title="evaluationText(row)">{{ coefficientEmptyText(row) || overallEvaluationStatus(row) }}</div>
+                    <span class="coefficient-samples" :title="'本轮评估窗口请求数；最低要求 ' + (savedPolicy?.continuous.min_samples ?? policy.continuous.min_samples) + ' 条'">样本 <b>{{ sampleText(row) }}</b></span>
                   </div>
                 </template></el-table-column>
               </el-table-column>
@@ -776,7 +798,7 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
                   </TuningInfo><el-tooltip v-if="limitReason(row)" :content="limitReason(row)" placement="top"><button class="status-icon warning limit-icon" :aria-label="limitReason(row)"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 3h12M10 17V7m-4 4 4-4 4 4"/></svg></button></el-tooltip></div></template></el-table-column>
                 <el-table-column label="线上" :width="tableColumns.number" align="center"><template #default="{row}"><span class="current-weight">{{ row.current_weight }}</span></template></el-table-column>
               </el-table-column>
-              <el-table-column label="优先级" :width="tableColumns.input" align="center"><template #default="{row}"><span :title="priorityLocked(row) ? '熔断或探测中，当前逻辑暂停优先级写入' : '线上优先级；修改后点击保存更改同步'"><el-input-number :model-value="displayedPriority(row)" :class="{modified:priorityDrafts.has(row.channel_id)}" :aria-label="row.channel_name + ' 优先级'" :disabled="saving || priorityLocked(row)" :min="0" :precision="0" :controls="false" size="small" @update:model-value="editPriority(row, $event)"/></span></template></el-table-column>
+              <el-table-column label="优先级" :width="tableColumns.priority" align="center"><template #default="{row}"><span :title="priorityLocked(row) ? '熔断或探测中，当前逻辑暂停优先级写入' : '线上优先级；修改后点击保存更改同步'"><el-input-number :model-value="displayedPriority(row)" :class="{modified:priorityDrafts.has(row.channel_id)}" :aria-label="row.channel_name + ' 优先级'" :disabled="saving || priorityLocked(row)" :min="0" :precision="0" :controls="false" size="small" @update:model-value="editPriority(row, $event)"/></span></template></el-table-column>
 
             </el-table>
             <div class="channel-footer">{{ activeRows.length }} 个渠道<span>点击 TPM / RPM 编辑上限</span></div>
@@ -814,7 +836,8 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
     </el-tab-pane>
 <el-tab-pane label="规则设置" name="settings"><el-card shadow="never" class="settings-card"><template #header><div class="head"><div><b>规则设置</b><small>当前站点 · {{ siteID }}</small></div><el-button @click="helpOpen=true">使用说明</el-button></div></template><el-tabs v-model="settingsSection" class="settings-sections"><el-tab-pane label="基础评估" name="basic"><div class="settings-intro"><div><h3>基础评估</h3><p>样本与评估周期，决定每轮使用的数据范围。</p></div><TuningInfo label="系数如何参与计算"><p>速度 × 输出 × 缓存 × 错误</p><p>TTFT 不足：输出² × 缓存 × 错误</p><p>最终受综合倍率、容量保护及单次上调上限约束。</p></TuningInfo></div><el-form label-position="top" class="settings-form"><div class="params"><el-form-item label="评估窗口（分钟）"><el-input-number v-model="policy.continuous.window_minutes" :min="1" @change="dirty=true"/><small>每次计算使用最近多少分钟的指标</small></el-form-item><el-form-item label="每渠道最少请求数"><el-input-number v-model="policy.continuous.min_samples" :min="1" @change="dirty=true"/><small>低于此数量不参与本轮性能比较，错误历史仍参与可靠性计算</small></el-form-item><el-form-item label="单次上调上限（%）"><el-input-number v-model="policy.continuous.max_increase_percent" :min="1" :max="100" :step="1" :precision="0" @change="dirty=true"/><small>自动模式每轮最多按当前有效权重上调该比例（至少允许 +1），默认 10%；下调不受限制</small></el-form-item><el-form-item label="调整灵敏度 S"><el-input-number v-model="policy.continuous.sensitivity" :min=".1" :max="5" :step=".1" @change="dirty=true"/><small>放大或缩小渠道相对差异；1 为标准</small></el-form-item></div></el-form></el-tab-pane><el-tab-pane label="性能系数" name="performance"><div class="settings-intro"><div><h3>性能系数</h3><p>TTFT 不足时复用本轮输出系数；缓存保留原逻辑。</p></div><TuningInfo label="系数如何参与计算"><p>速度 × 输出 × 缓存 × 错误</p><p>TTFT 不足：输出² × 缓存 × 错误</p><p>最终受综合倍率、容量保护及单次上调上限约束。</p></TuningInfo></div><el-form label-position="top" class="settings-form"><div class="factor-matrix"><div class="factor-matrix-head"><span>指标</span><span>影响指数</span><span>系数下限</span><span>系数上限</span></div><div class="factor-matrix-row"><b>TTFT 速度</b><el-form-item label="速度影响指数 αs"><el-input-number v-model="policy.continuous.speed_exponent" :min=".01" :max="2" :step=".05" :precision="2" @change="dirty=true"/><small>速度差异进入幂运算的强度；默认 0.35</small></el-form-item><el-form-item label="速度系数下限 Ls"><el-input-number v-model="policy.continuous.speed_min_factor" :min=".01" :max="1" :step=".05" :precision="2" @change="dirty=true"/><small>慢渠道速度系数最低值；默认 0.75</small></el-form-item><el-form-item label="速度系数上限 Us"><el-input-number v-model="policy.continuous.speed_max_factor" :min="1" :max="3" :step=".05" :precision="2" @change="dirty=true"/><small>快渠道速度系数最高值；默认 1.25</small></el-form-item></div><div class="factor-matrix-row"><b>平均输出速度</b><el-form-item label="输出影响指数 αo"><el-input-number v-model="policy.continuous.otps_exponent" :min=".01" :max="2" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="输出系数下限 Lo"><el-input-number v-model="policy.continuous.otps_min_factor" :min=".01" :max="1" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="输出系数上限 Uo"><el-input-number v-model="policy.continuous.otps_max_factor" :min="1" :max="3" :step=".05" :precision="2" @change="dirty=true"/></el-form-item></div><div class="factor-matrix-row"><b>缓存</b><el-form-item label="缓存影响指数 αc"><el-input-number v-model="policy.continuous.cache_exponent" :min=".01" :max="2" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="缓存系数下限 Lc"><el-input-number v-model="policy.continuous.cache_min_factor" :min=".01" :max="1" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="缓存系数上限 Uc"><el-input-number v-model="policy.continuous.cache_max_factor" :min="1" :max="3" :step=".05" :precision="2" @change="dirty=true"/></el-form-item></div></div><h4 class="parameter-heading">综合倍率边界</h4><div class="params two-columns"><el-form-item label="综合倍率下限 Lm"><el-input-number v-model="policy.continuous.combined_min_factor" :min=".01" :max="1" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="综合倍率上限 Um"><el-input-number v-model="policy.continuous.combined_max_factor" :min="1" :max="5" :step=".05" :precision="2" @change="dirty=true"/></el-form-item></div><h4 class="parameter-heading">TTFT 分位权重</h4><div class="params"><el-form-item label="P50 占比 w50"><el-input-number v-model="policy.continuous.speed_p50_weight" :min="0" :max="1" :step=".05" :precision="2" @change="dirty=true"/><small>默认 0.50；三个占比之和必须为 1</small></el-form-item><el-form-item label="P90 占比 w90"><el-input-number v-model="policy.continuous.speed_p90_weight" :min="0" :max="1" :step=".05" :precision="2" @change="dirty=true"/><small>默认 0.30；三个占比之和必须为 1</small></el-form-item><el-form-item label="P95 占比 w95"><el-input-number v-model="policy.continuous.speed_p95_weight" :min="0" :max="1" :step=".05" :precision="2" @change="dirty=true"/><small>默认 0.20；三个占比之和必须为 1</small></el-form-item></div></el-form></el-tab-pane><el-tab-pane label="错误率曲线" name="errors"><div class="settings-intro"><div><h3>错误率曲线</h3><p>错误率节点与惩罚系数之间采用线性插值。</p></div><TuningInfo label="系数如何参与计算"><p>速度 × 输出 × 缓存 × 错误</p><p>TTFT 不足：输出² × 缓存 × 错误</p><p>最终受综合倍率、容量保护及单次上调上限约束。</p></TuningInfo></div><el-form label-position="top" class="settings-form"><div class="params"><el-form-item label="健康错误率节点 E1"><el-input-number v-model="policy.continuous.error_healthy_rate" :min="0" :max="1" :step=".01" :precision="2" @change="dirty=true"/><small>此错误率以内系数为 1</small></el-form-item><el-form-item label="轻度错误率节点 E2"><el-input-number v-model="policy.continuous.error_degraded_rate" :min="0" :max="1" :step=".01" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="轻度错误系数 K2"><el-input-number v-model="policy.continuous.error_degraded_factor" :min=".01" :max=".99" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="严重错误率节点 E3"><el-input-number v-model="policy.continuous.error_poor_rate" :min="0" :max="1" :step=".01" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="严重错误系数 K3"><el-input-number v-model="policy.continuous.error_poor_factor" :min=".01" :max=".99" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="封底错误率节点 E4"><el-input-number v-model="policy.continuous.error_floor_rate" :min="0" :max="1" :step=".01" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="错误系数下限 Kmin"><el-input-number v-model="policy.continuous.error_min_factor" :min=".01" :max=".99" :step=".05" :precision="2" @change="dirty=true"/></el-form-item></div></el-form></el-tab-pane><el-tab-pane label="熔断与恢复" name="safety"><div class="settings-intro"><div><h3>熔断与恢复</h3><p>自动模式静默后主动探测，观察模式使用真实流量恢复。</p></div><TuningInfo label="系数如何参与计算"><p>速度 × 输出 × 缓存 × 错误</p><p>TTFT 不足：输出² × 缓存 × 错误</p><p>最终受综合倍率、容量保护及单次上调上限约束。</p></TuningInfo></div><el-form label-position="top" class="settings-form"><div class="params"><el-form-item label="启用批次快速熔断"><el-switch v-model="policy.continuous.fast_circuit_enabled" @change="dirty=true"/><small>直接检查每次 Agent 上报的渠道增量，不等待分钟桶稳定</small></el-form-item><el-form-item label="快速熔断最少请求数"><el-input-number v-model="policy.continuous.fast_circuit_min_samples" :min="1" :max="100000" @change="dirty=true"/><small>单次上报达到该请求数后才判断，默认 50</small></el-form-item><el-form-item label="快速熔断错误率"><el-input-number v-model="policy.continuous.fast_circuit_error_rate" :min=".01" :max="1" :step=".05" :precision="2" @change="dirty=true"/><small>非用户错误率达到阈值立即熔断，默认 50%</small></el-form-item><el-form-item label="熔断错误率"><el-input-number v-model="policy.continuous.circuit_error_rate" :min=".01" :max="1" :step=".01" @change="dirty=true"/><small>平滑渠道错误率达到此值才停止分流</small></el-form-item><el-form-item label="被动恢复错误率"><el-input-number v-model="policy.continuous.recovery_error_rate" :min="0" :max=".99" :step=".01" @change="dirty=true"/><small>观察模式降到此值后解除模拟熔断</small></el-form-item><el-form-item label="探针恢复阈值"><el-input-number v-model="policy.continuous.recovery_threshold" :min=".01" :max="1" :step=".01" @change="dirty=true"/><small>自动模式探针成功率×探针速度达到此值才恢复</small></el-form-item><el-form-item label="熔断静默期（分钟）"><el-input-number v-model="policy.continuous.silent_minutes" :min="1" @change="dirty=true"/><small>自动模式熔断后等待多久再开始探测</small></el-form-item><el-form-item label="探测间隔（秒）"><el-input-number v-model="policy.continuous.probe_interval_seconds" :min="1" @change="dirty=true"/><small>连续探测请求之间的等待时间</small></el-form-item><el-form-item label="探测次数"><el-input-number v-model="policy.continuous.probe_count" :min="1" @change="dirty=true"/><small>一次恢复判断发送多少次请求</small></el-form-item><el-form-item label="恢复初始倍率"><el-input-number v-model="policy.continuous.soft_start_multiplier" :min=".01" :max="1" :step=".05" @change="dirty=true"/><small>恢复首轮使用基础权重的比例</small></el-form-item></div></el-form></el-tab-pane></el-tabs></el-card></el-tab-pane>
   </el-tabs>
-  <div v-if="dirty" class="tuning-save-bar" role="status"><span><i/>有未保存更改<span class="save-context">基础值、容量与规则统一保存</span></span><div><el-button :disabled="saving" @click="cancelChanges()">取消更改</el-button><el-button type="primary" :loading="saving" @click="save">保存更改</el-button></div></div>
+  </div>
+
   <el-drawer v-model="helpOpen" title="调权中心使用说明" size="min(860px, 92vw)" class="tuning-help">
 <el-tabs v-model="helpSection"><el-tab-pane label="权重与参数" name="calculation"><div class="help-guide"><section><h3>完整计算流程</h3><ol><li>按模型分组，只比较提供同一个模型的渠道；多模型渠道为避免互相影响，不参与自动调权。</li><li>读取最近“评估窗口”内的请求，形成每个渠道的 TTFT、缓存命中、OTPS 和错误率指标。</li><li>用至少 2 个合格渠道计算同模型平均基线，再得到速度、缓存、输出、错误四个系数。</li><li>先计算原始目标：<code>Wtarget = round(Wbase × clamp(Ks × Kc × Ko × Ke, Lm, Um))</code>。</li><li>自动模式再应用容量保护和单次上调限制，得到页面展示并写入 new-api 的本轮权重；下调不受单次比例限制。</li></ol><p class="help-warning">权重下方的“拟执行”是安全限制后的本轮执行值，不一定等于基础权重直接乘四个可见系数。</p></section><section><h3>第一次使用</h3><ol><li>点击“初始化/刷新基础值”，读取当前线上权重和优先级。</li><li>先选择“只观察”，确认计算结果合理。</li><li>再切换为“自动执行”并保存；系统会先验证 new-api 控制链路。</li></ol></section><section><h3>指标与统计口径</h3><div class="help-table"><div><b>指标</b><b>定义、来源与参与条件</b></div><div><strong>TTFT P50/P90/P95</strong><span>首字节或首 Token 响应耗时的第 50、90、95 百分位，单位秒，来自 Agent 采集的 new-api 请求日志。P50 代表典型延迟，P90/P95 体现慢请求尾部。仅使用成功流式请求中确认未重试的 TTFT；有效样本达到“每渠道最少请求数”，且三个分位值都大于 0，才参与速度比较。重试和无法确认的样本不用于调权速度，监控统计不变。</span></div><div><strong>同模型平均数</strong><span>对同一模型下所有合格渠道的对应指标做算术平均；速度基线至少需要 2 个未重试样本合格渠道；不足时复用本轮有效输出系数，OTPS 参与两次，不沿用历史速度系数。输出独立建立同模型基线，不依赖 TTFT 是否存在。</span></div><div><strong>大输入缓存命中率 C</strong><span><code>缓存读取 Token 总数 ÷ 提示 Token 总数</code>。只统计成功请求且输入大于 512 Token；当前渠道累计提示 Token 至少 10,000，并且至少 2 个渠道有足够缓存证据时才参与。</span></div><div><strong>OTPS</strong><span><code>成功请求输出 Token 总数 ÷ 请求总耗时总秒数</code>，包含流式和非流式，不扣除首字等待；排除 fallback、同渠道重试与无法确认的请求。未重试有效请求达到“每渠道最少请求数”、输出 Token 至少 100，且至少 2 个渠道满足条件时参与，不依赖 TTFT。监控保留重试样本。</span></div><div><strong>渠道错误率 E</strong><span><code>(总错误数 − 用户自身错误数) ÷ 请求数</code>。用户参数、余额等归类为用户侧的错误不会处罚渠道；渠道错误按完整分钟桶进入 EWMA。</span></div><div><strong>平滑错误率</strong><span><code>Ema(new) = 0.3 × E本分钟 + 0.7 × Ema(old)</code>。最近约 90 秒的未稳定分钟桶暂不折入，避免半桶数据让错误率剧烈跳变。</span></div></div></section><section><h3>四项评估系数</h3><dl class="formula-list"><div><dt>速度系数 Ks</dt><dd><code>R = w50×TTFT50/平均TTFT50 + w90×TTFT90/平均TTFT90 + w95×TTFT95/平均TTFT95</code><code>Ks = clamp((1/R)^(αs×S), Ls, Us)</code><span>w50、w90、w95 合计必须为 1；αs 是速度影响指数，S 是全局敏感度。渠道越快，R 越小、Ks 越大。TTFT 样本或基线不足时 Ks=Ko，直接复用本轮输出系数，不再单独应用 TTFT 系数上下限。</span></dd></div><div><dt>缓存系数 Kc</dt><dd><code>Kc = clamp((C/Cavg)^(αc×S), Lc, Uc)</code><span>C 是本渠道大输入缓存命中率，Cavg 是同模型平均值；αc 控制缓存差异影响强度。证据不足时 Kc=1。</span></dd></div><div><dt>输出系数 Ko</dt><dd><code>Ko = clamp((OTPS/OTPSavg)^(αo×S), Lo, Uo)</code><span>αo 控制输出速度差异影响强度；输出越快 Ko 越大。证据不足时 Ko=1。</span></dd></div><div><dt>错误系数 Ke</dt><dd><code>E≤E1 → 1；E1~E2 → 1 到 K2；E2~E3 → K2 到 K3；E3~E4 → K3 到 Kmin；E≥E4 → Kmin</code><span>区间内采用线性插值。E1/E2/E3/E4 是健康、轻度、严重和封底错误率节点，K2/K3/Kmin 是对应惩罚系数。</span></dd></div></dl></section><section><h3>参数符号说明</h3><div class="help-table compact"><div><b>参数</b><b>作用</b></div><div><strong>S 敏感度</strong><span>同时放大或减弱速度、缓存、输出三项差异；越大越激进，不直接改变错误系数。</span></div><div><strong>αs / αc / αo</strong><span>对应速度、缓存、输出的指数。等于 1 按原始比例响应；小于 1 压缩差异；大于 1 放大差异。</span></div><div><strong>Ls/Us、Lc/Uc、Lo/Uo</strong><span>单项系数上下限，防止某一个指标独自把权重推得过高或过低。</span></div><div><strong>Lm / Um</strong><span>四项相乘后的综合倍率上下限。即使单项乘积超出范围，原始目标也只按该范围计算。</span></div><div><strong>评估窗口</strong><span>性能指标使用的最近分钟数。窗口越大越稳定但反应越慢；窗口越小越灵敏但更容易波动。</span></div><div><strong>最少请求数</strong><span>速度采用未重试有效 TTFT 样本数；TTFT 不足时使用本轮有效输出系数；窗口总请求不足时保持已执行权重。缓存和错误规则不变。</span></div></div></section><section><h3>三个权重与刷新时序</h3><dl><div><dt>基础权重 Wbase</dt><dd>长期计算基准，可手动修改；不是当前线上权重。</dd></div><div><dt>计算权重</dt><dd>页面展示的是经过容量和上调限制后的本轮执行值。评估系数反映原始评分，因此二者不一定能直接相乘对应。</dd></div><div><dt>当前权重 Wcurrent</dt><dd>new-api 已确认的线上权重。评估、写入和渠道快照更新时间不同，短时间内可能看到计算权重与当前权重相同，下一轮才继续爬升。</dd></div></dl></section><section><h3>自动模式</h3><p>每分钟重新计算。只要本轮执行权重与上次成功写入值不同，就写入 new-api；没有变化则不重复写。如果线上权重被人工或其他系统修改，系统会在确认外部变化后按当前规则重新计算并写回。</p></section><section><h3>保留的安全保护</h3><dl><div><dt>熔断</dt><dd>渠道错误率达到阈值且样本足够时，将权重和优先级置为 0。</dd></div><div><dt>恢复</dt><dd>静默期后主动探测；通过后先以低权重恢复，再回到正常计算。</dd></div><div><dt>多模型渠道</dt><dd>一个渠道同时服务多个模型时不自动调权，避免模型之间互相影响。</dd></div><div><dt>写入失败</dt><dd>连续失败 3 次后暂停每分钟写入，改为每 10 分钟重试，成功后自动恢复。</dd></div></dl></section><section><h3>表格与记录</h3><p>“状态”列显示样本不足、熔断、恢复中或写入失败等原因；“变更记录”保存每次自动写入、熔断和恢复。计算公式可悬停或点击“计算”数值查看。</p></section></div></el-tab-pane><el-tab-pane label="容量与执行" name="capacity"><div class="help-guide"><section><h3>从原始目标到本轮执行权重</h3><ol><li><code>M = clamp(Ks × Kc × Ko × Ke, Lm, Um)</code></li><li><code>Wtarget = max(1, round(Wbase × M))</code>；基础权重为 0 时渠道不参与调权。</li><li>若当前 RPM 或 TPM 达到所配置上限，且 Wtarget 高于当前有效权重，则本轮保持当前权重；下降仍然允许。0 表示该项不限制。</li><li>自动模式上调时：<code>Wmax = max(Wcurrent + 1, floor(Wcurrent × (1 + P/100)))</code>，最终取 <code>min(Wtarget, Wmax)</code>。P 是“单次上调上限”；至少允许 +1，所以下降后的低权重会逐轮恢复。</li><li>只观察模式不写 new-api；自动模式只在整数执行权重变化时写入。</li></ol></section><section><h3>容量、熔断与恢复参数</h3><dl class="formula-list"><div><dt>最大 RPM / TPM</dt><dd>使用当前滚动速率判断。任一非零上限被达到后只禁止上调，不影响保持和下调；实时速率不可用时，为安全起见，有配置上限的渠道同样禁止上调。</dd></div><div><dt>快速熔断</dt><dd>直接检查每次 Agent 上报增量：非用户错误率达到“快速熔断错误率”，且本批请求数达到门槛时立即熔断，不等待稳定分钟桶。</dd></div><div><dt>常规熔断</dt><dd>平滑错误率达到“熔断错误率”且样本充分时，将权重、优先级置 0。错误系数节点负责渐进降权，熔断阈值负责彻底停流，两者不是同一参数。</dd></div><div><dt>探针恢复阈值</dt><dd><code>探针成功率 × 探针速度得分 ≥ 恢复阈值</code>才通过。静默期决定熔断后等待多久，探测次数与间隔决定一次恢复检测的规模。</dd></div><div><dt>恢复初始倍率</dt><dd>探针通过后先以<code>基础权重 × 恢复初始倍率</code>软启动，下一轮再回到正常公式和单次上调限制。</dd></div></dl></section></div></el-tab-pane></el-tabs>
   </el-drawer>
@@ -823,7 +846,7 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
 <style scoped>
 .tuning-shell :deep(.content){padding:8px}
 
-.page{--tuning-ink:#17233b;--tuning-muted:#8491a5;color:var(--tuning-ink);display:grid;gap:14px;padding-bottom:0}
+.page{--tuning-ink:var(--ct-ink);--tuning-muted:var(--ct-ink-3);color:var(--tuning-ink);display:grid;gap:14px;padding-bottom:0}
 .tabs>.el-tabs__header{margin:0}
 .head,.title-line,.tools,.model-head,.channel-toolbar,.channel-filters{display:flex;align-items:center;gap:12px}
 .head,.model-head,.channel-toolbar{justify-content:space-between}
@@ -832,126 +855,126 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
 .head small{color:var(--tuning-muted)}
 .tools{gap:8px;flex-wrap:wrap}
 .tools :deep(.el-button+.el-button){margin-left:0}
-.inline-metrics{display:flex;align-items:center;margin-left:8px;color:#68758a;font-size:12px}
-.inline-metrics b{margin-left:3px;color:#17233b;font-size:14px}
+.inline-metrics{display:flex;align-items:center;margin-left:8px;color:var(--ct-ink-2);font-size:12px}
+.inline-metrics b{margin-left:3px;color:var(--ct-ink);font-size:14px}
 .workspace-card :deep(.el-card__header){padding:8px 12px}
 .workspace-card :deep(.el-card__body){padding:8px}
-.model-workspace{display:grid;grid-template-columns:220px minmax(0,1fr);height:calc(100vh - 176px);min-height:420px;border:1px solid #e2e8f2;border-radius:8px;overflow:hidden}
-.model-nav{padding:10px 8px;border-right:1px solid #e2e8f2;background:#f7f9fc;min-height:0;display:flex;flex-direction:column}
-.model-list{display:grid;align-content:start;gap:5px;overflow:auto;margin-top:10px;min-height:0}
+.model-workspace{display:grid;grid-template-columns:220px minmax(0,1fr);height:calc(100vh - 176px);min-height:420px;border:1px solid var(--ct-line);border-radius:8px;overflow:hidden}
+.model-nav{padding:10px 8px;border-right:1px solid var(--ct-line);background:var(--ct-surface-2);min-height:0;display:flex;flex-direction:column}
+.model-list{display:grid;grid-template-columns:minmax(0,1fr);align-content:start;gap:5px;overflow-x:hidden;overflow-y:auto;margin-top:10px;min-height:0;min-width:0}
 .model-list>button{display:flex;width:100%;align-items:center;justify-content:space-between;gap:8px;padding:8px;border:1px solid transparent;background:transparent;text-align:left;cursor:pointer;border-radius:5px;color:var(--tuning-ink)}
-.model-list>button:hover{background:#fff}
-.model-list>button.active{border-color:#b9cdfb;background:#eaf1ff;color:#245eea}
+.model-list>button:hover{background:var(--ct-surface)}
+.model-list>button.active{border-color:var(--ct-line);background:var(--ct-accent-weak);color:var(--ct-accent)}
 .model-list b{display:block;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.model-list small{display:block;color:#8491a5;font-size:12px;margin-top:3px}
-.model-secondary{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-top:3px}.model-secondary small{margin-top:0}.model-mode-text{font-size:11px;color:#8491a5;font-weight:400}.model-mode-text.auto{color:#21a675}.model-mode-text.observe{color:#b98015}
+.model-list small{display:block;color:var(--ct-ink-3);font-size:12px;margin-top:3px}
+.model-secondary{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-top:3px}.model-secondary small{margin-top:0}.model-mode-text{font-size:11px;color:var(--ct-ink-3);font-weight:400}.model-mode-text.auto{color:var(--ct-ok)}.model-mode-text.observe{color:var(--ct-warn)}
 .model-detail{display:flex;flex-direction:column;min-width:0;min-height:0}
-.model-head{min-height:34px;padding:10px 12px;background:#f7f9fc;border-bottom:1px solid #e2e8f2;flex-wrap:wrap}
+.model-head{min-height:34px;padding:10px 12px;background:var(--ct-surface-2);border-bottom:1px solid var(--ct-line);flex-wrap:wrap}
 .model-head>div:first-child{display:flex;align-items:center;flex-wrap:wrap;gap:10px}
 .model-head b{font-size:14px}
-.model-head small{font-size:11px;color:#8491a5}
-.model-head .stale{color:#ba4c38}
+.model-head small{font-size:11px;color:var(--ct-ink-3)}
+.model-head .stale{color:var(--ct-crit)}
 .channel-toolbar{padding:8px 10px;gap:10px;flex-wrap:wrap}
 .channel-filters{gap:8px}
 .channel-filters :deep(.el-input){width:190px}
 .channel-filters :deep(.el-select){width:125px}
-.load-time{display:flex;align-items:center;gap:5px;font-size:11px;color:#8491a5}
+.load-time{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--ct-ink-3)}
 .channel-table{flex:1;min-height:0;width:100%;font-variant-numeric:tabular-nums}
-.channel-table :deep(th.el-table__cell),.event-history-card :deep(th.el-table__cell){background:#fff;color:#8491a5;font-weight:500;height:38px;border-bottom:1px solid #e2e8f2}
-.channel-table :deep(td.el-table__cell){padding:8px 0;border-bottom-color:#e2e8f2}
+.channel-table :deep(th.el-table__cell),.event-history-card :deep(th.el-table__cell){background:var(--ct-surface);color:var(--ct-ink-3);font-weight:500;height:38px;border-bottom:1px solid var(--ct-line)}
+.channel-table :deep(td.el-table__cell){padding:8px 0;border-bottom-color:var(--ct-line)}
 .channel-table :deep(.cell){padding:0 10px}
-.channel-name{line-height:20px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px;color:#304e80;font-weight:400}
-.channel-heading{display:flex;align-items:baseline;gap:6px;min-width:0;line-height:20px}.channel-heading .channel-name{min-width:0}.channel-key{flex-shrink:0;font-size:12px;line-height:20px;color:#8491a5}
-.channel-meta{display:flex;align-items:center;gap:10px;white-space:nowrap;font-size:11px;color:#8491a5;margin-top:3px}
-.group-cell-trigger{width:100%;max-width:100%;min-width:0;border:1px solid transparent;border-radius:4px;padding:0 3px;background:transparent;cursor:pointer;color:#6b7b91}
-.group-cell-trigger:hover{background:#edf3ff;border-color:#b8ccf6}
-.group-cell-trigger:focus-visible{outline:2px solid #3168e8}
+.channel-name{line-height:20px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px;color:var(--ct-ink-2);font-weight:400}
+.channel-heading{display:flex;align-items:baseline;gap:6px;min-width:0;line-height:20px}.channel-heading .channel-name{min-width:0}.channel-key{flex-shrink:0;font-size:12px;line-height:20px;color:var(--ct-ink-3)}
+.channel-meta{display:flex;align-items:center;gap:10px;white-space:nowrap;font-size:11px;color:var(--ct-ink-3);margin-top:3px}
+.group-cell-trigger{width:100%;max-width:100%;min-width:0;border:1px solid transparent;border-radius:4px;padding:0 3px;background:transparent;cursor:pointer;color:var(--ct-ink-3)}
+.group-cell-trigger:hover{background:var(--ct-accent-weak);border-color:var(--ct-line)}
+.group-cell-trigger:focus-visible{outline:2px solid var(--ct-accent)}
 .group-tags{line-height:18px;display:flex;flex-wrap:wrap;justify-content:center;gap:4px;font-size:11px;text-align:center}
-.group-tags>span{max-width:100%;overflow-wrap:anywhere;white-space:normal;padding:0 4px;background:#ecf5ff;border:1px solid #d9ecff;color:#409eff;border-radius:3px}
-.current-weight{display:block;font-size:14px;line-height:20px;font-weight:500;color:#304e80}
-.weight-next{display:flex;align-items:center;gap:5px;white-space:nowrap;color:#8491a5;font-size:11px;margin-top:0;line-height:18px}
+.group-tags>span{max-width:100%;overflow-wrap:anywhere;white-space:normal;padding:0 4px;background:var(--ct-accent-weak);border:1px solid var(--ct-line);color:var(--ct-accent);border-radius:3px}
+.current-weight{display:block;font-size:14px;line-height:20px;font-weight:500;color:var(--ct-ink-2)}
+.weight-next{display:flex;align-items:center;gap:5px;white-space:nowrap;color:var(--ct-ink-3);font-size:11px;margin-top:0;line-height:18px}
 .channel-table :deep(.el-input-number){width:76px}
-.channel-table :deep(.el-input__wrapper){box-shadow:0 0 0 1px #dfe7f3 inset;border-radius:4px;background:#fff;padding:0 7px}
+.channel-table :deep(.el-input__wrapper){box-shadow:0 0 0 1px #dfe7f3 inset;border-radius:4px;background:var(--ct-surface);padding:0 7px}
 .channel-table :deep(.el-input__wrapper:hover){box-shadow:0 0 0 1px #99b5ea inset}
-.channel-table :deep(.el-input__inner){text-align:center;font-variant-numeric:tabular-nums;color:#33465f}
-.channel-table :deep(.modified .el-input__wrapper){box-shadow:0 0 0 1px #dcac4b inset;background:#fffbef}
-.priority-cell{display:flex;align-items:center;gap:8px;font-size:11px;color:#8491a5;white-space:nowrap}
-.priority-cell b{color:#344862;font-weight:500}
+.channel-table :deep(.el-input__inner){text-align:center;font-variant-numeric:tabular-nums;color:var(--ct-ink)}
+.channel-table :deep(.modified .el-input__wrapper){box-shadow:0 0 0 1px #dcac4b inset;background:var(--ct-warn-weak)}
+.priority-cell{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--ct-ink-3);white-space:nowrap}
+.priority-cell b{color:var(--ct-ink-2);font-weight:500}
 .priority-cell label{display:flex;align-items:center;gap:5px}
 .priority-cell :deep(.el-input-number){width:57px}
 .capacity-cell{display:flex;align-items:center;justify-content:flex-start;gap:5px;font-size:12px;white-space:nowrap}
 .capacity-cell :deep(.el-input-number){width:70px}
 .capacity-cell.tpm :deep(.el-input-number){width:88px}
-.separator{color:#a0acbb}
-.header-sub{font-size:10px;color:#8390a3;font-weight:400;margin-left:3px}
-.unlimited{display:block;text-align:right;color:#9aa6b5;font-size:10px;line-height:14px}
+.separator{color:var(--ct-ink-3)}
+.header-sub{font-size:10px;color:var(--ct-ink-3);font-weight:400;margin-left:3px}
+.unlimited{display:block;text-align:right;color:var(--ct-ink-3);font-size:10px;line-height:14px}
 .row-status{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
 .status-text,.status-icon{border:0;background:transparent;cursor:help;padding:0;font:inherit}
 .status-text{display:inline-flex;align-items:center;gap:5px;font-size:11px}
 .status-icon{display:inline-grid;place-items:center;min-width:16px;height:16px;font-size:13px;font-weight:600}
 .limit-icon svg{width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
-.danger,.negative{color:#d24d51}
-.warning{color:#b98015}
-.accent,.positive{color:#3569d1}
-.muted{color:#8592a5}
-.channel-footer{display:flex;justify-content:space-between;gap:8px;padding:8px 10px;font-size:11px;color:#8491a5;border-top:1px solid #e2e8f2}
-.calculation-formula{font-size:17px;font-weight:650;color:#263d60;font-variant-numeric:tabular-nums;margin:8px 0}
-.formula-caption{color:#8491a5;font-size:11px}
-.evidence-pairs{display:grid;grid-template-columns:1fr 1fr;gap:8px;border-block:1px solid #edf0f5;padding:12px 0;font-size:12px}
-.evidence-pairs b{margin-left:5px;color:#253b59}
-.limit-note{padding:8px 10px;background:#fff8eb;color:#a47419;border-radius:5px}
-.full-evidence summary,.event-detail summary{color:#3569d1;cursor:pointer;font-size:12px}
-.factor-explanation{white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.7 ui-monospace,Consolas,monospace;color:#59687d;margin:12px 0}
-.summary{display:flex;gap:0;padding:18px 24px;background:white;border:1px solid #e8edf4;border-radius:7px;margin:0 0 16px}
-.summary>div{display:flex;align-items:center;gap:14px;padding:0 28px;border-right:1px solid #e5eaf1}
+.danger,.negative{color:var(--ct-crit)}
+.warning{color:var(--ct-warn)}
+.accent,.positive{color:var(--ct-accent)}
+.muted{color:var(--ct-ink-3)}
+.channel-footer{display:flex;justify-content:space-between;gap:8px;padding:8px 10px;font-size:11px;color:var(--ct-ink-3);border-top:1px solid var(--ct-line)}
+.calculation-formula{font-size:17px;font-weight:650;color:var(--ct-ink);font-variant-numeric:tabular-nums;margin:8px 0}
+.formula-caption{color:var(--ct-ink-3);font-size:11px}
+.evidence-pairs{display:grid;grid-template-columns:1fr 1fr;gap:8px;border-block:1px solid var(--ct-line);padding:12px 0;font-size:12px}
+.evidence-pairs b{margin-left:5px;color:var(--ct-ink)}
+.limit-note{padding:8px 10px;background:var(--ct-warn-weak);color:var(--ct-warn);border-radius:5px}
+.full-evidence summary,.event-detail summary{color:var(--ct-accent);cursor:pointer;font-size:12px}
+.factor-explanation{white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.7 ui-monospace,Consolas,monospace;color:var(--ct-ink-2);margin:12px 0}
+.summary{display:flex;gap:0;padding:18px 24px;background:var(--ct-surface);border:1px solid var(--ct-line);border-radius:7px;margin:0 0 16px}
+.summary>div{display:flex;align-items:center;gap:14px;padding:0 28px;border-right:1px solid var(--ct-line)}
 .summary>div:first-child{padding-left:0}
 .summary>div:last-child{border-right:0}
-.summary span{font-size:12px;color:#77849a}
-.summary b{font-size:23px;color:#264a84}
+.summary span{font-size:12px;color:var(--ct-ink-3)}
+.summary b{font-size:23px;color:var(--ct-accent)}
 .event-history-card :deep(.el-card__body){padding:18px 20px}
-.event-scope{display:block;margin-top:10px;color:#8591a5;font-size:11px}
+.event-scope{display:block;margin-top:10px;color:var(--ct-ink-3);font-size:11px}
 .event-toolbar{margin-bottom:18px}
 .event-filters{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
 .event-filters :deep(.el-date-editor){max-width:300px;flex-grow:0}
 .event-table-wrap{height:calc(100vh - 375px);min-height:330px}
-.event-channel{display:block;color:#8491a5;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.channel-id{display:block;color:#8491a5;font-size:11px}
-.event-history-card :deep(td.el-table__cell){padding:8px 0;font-variant-numeric:tabular-nums;border-bottom-color:#e2e8f2}
+.event-channel{display:block;color:var(--ct-ink-3);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.channel-id{display:block;color:var(--ct-ink-3);font-size:11px}
+.event-history-card :deep(td.el-table__cell){padding:8px 0;font-variant-numeric:tabular-nums;border-bottom-color:var(--ct-line)}
 .event-footer{display:flex;justify-content:flex-end;padding-top:16px}
 .settings-card :deep(.el-card__body){padding:16px 20px}
-.factor-matrix{max-width:1120px;border:1px solid #e7ecf3;border-radius:6px;overflow:hidden}
+.factor-matrix{max-width:1120px;border:1px solid var(--ct-line);border-radius:6px;overflow:hidden}
 .factor-matrix-head,.factor-matrix-row{display:grid;grid-template-columns:150px repeat(3,minmax(0,1fr));align-items:start;gap:16px;padding:10px 12px}
-.factor-matrix-head{background:#f6f8fb;color:#718097;font-size:12px}
-.factor-matrix-row{border-top:1px solid #edf0f5}
-.factor-matrix-row>b{font-size:13px;font-weight:500;padding-top:9px;color:#354963}
+.factor-matrix-head{background:var(--ct-surface-2);color:var(--ct-ink-3);font-size:12px}
+.factor-matrix-row{border-top:1px solid var(--ct-line)}
+.factor-matrix-row>b{font-size:13px;font-weight:500;padding-top:9px;color:var(--ct-ink-2)}
 .factor-matrix-row :deep(.el-form-item){margin:0;min-width:0}
 .factor-matrix-row :deep(.el-form-item__label){position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
 .factor-matrix-row :deep(.el-input-number){width:100%}
 .factor-matrix-row small{display:none}
-.parameter-heading{font-size:13px;color:#465974;margin:26px 0 16px}
+.parameter-heading{font-size:13px;color:var(--ct-ink-2);margin:26px 0 16px}
 .settings-card .two-columns{grid-template-columns:repeat(2,minmax(0,1fr));max-width:760px}
 .settings-card .settings-form{max-width:none}
 .settings-card .params{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0 16px;max-width:1200px}
 .settings-intro{display:flex;justify-content:space-between;align-items:center;margin:8px 0 16px}
 .settings-intro h3{font-size:14px;margin:0 0 7px}
-.settings-intro p{margin:0;color:#8190a5;font-size:12px}
+.settings-intro p{margin:0;color:var(--ct-ink-3);font-size:12px}
 .params{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px 32px;max-width:1200px}
 .params :deep(.el-form-item__content){display:flex;align-items:flex-start;flex-direction:column}
-.params :deep(.el-form-item__label){font-size:13px;color:#465871;margin-bottom:8px}
+.params :deep(.el-form-item__label){font-size:13px;color:var(--ct-ink-2);margin-bottom:8px}
 .params :deep(.el-input-number){width:100%;max-width:300px}
-.params small{font-size:11px;color:#8693a6;line-height:1.65;margin-top:7px;max-width:300px}
-.tuning-save-bar{position:sticky;bottom:14px;z-index:12;display:flex;align-items:center;justify-content:space-between;gap:16px;margin-top:16px;padding:14px 20px;border:1px solid #e4e9f1;border-radius:7px;background:#fff;box-shadow:0 5px 22px #20365814;font-size:13px}
-.tuning-save-bar i{display:inline-block;width:7px;height:7px;border-radius:50%;background:#d9a139;margin-right:8px}
-.save-context{color:#8792a5;font-size:11px;margin-left:14px}
+.params small{font-size:11px;color:var(--ct-ink-3);line-height:1.65;margin-top:7px;max-width:300px}
+.tuning-save-bar{position:sticky;bottom:14px;z-index:12;display:flex;align-items:center;justify-content:space-between;gap:16px;margin-top:16px;padding:14px 20px;border:1px solid var(--ct-line);border-radius:7px;background:var(--ct-surface);box-shadow:0 5px 22px #20365814;font-size:13px}
+.tuning-save-bar i{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--ct-warning-solid);margin-right:8px}
+.save-context{color:var(--ct-ink-3);font-size:11px;margin-left:14px}
 .group-editor-context{margin-bottom:10px;padding:12px 14px;border:1px solid var(--ct-line);border-radius:8px;background:var(--ct-surface-2)}
 .group-channel-heading{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.group-channel-heading b{color:var(--ct-ink);font-size:14px;font-weight:600;overflow-wrap:anywhere}.group-channel-id{color:var(--ct-ink-2);font-size:11px;border:1px solid var(--ct-line);background:var(--ct-surface);border-radius:4px;padding:1px 6px;font-variant-numeric:tabular-nums}
 .group-current-line{display:grid;grid-template-columns:56px 1fr;gap:12px;font-size:12px;line-height:1.8;color:var(--ct-ink-2);margin-top:10px;overflow-wrap:anywhere}.group-current-line>span:first-child{color:var(--ct-ink-3)}
-.group-preview{padding:14px 16px;background:#f5f8fc;border-radius:6px;margin:6px 0 16px;font-size:12px;overflow-wrap:anywhere}
+.group-preview{padding:14px 16px;background:var(--ct-accent-weak);border-radius:6px;margin:6px 0 16px;font-size:12px;overflow-wrap:anywhere}
 .group-preview>b{display:block;margin-bottom:12px}
 .group-preview>div{display:grid;grid-template-columns:65px 1fr;gap:10px;margin:7px 0}
-.group-preview span{color:#8491a5}
+.group-preview span{color:var(--ct-ink-3)}
 
-.tuning-help :deep(.el-drawer__header){margin-bottom:12px;color:#223652}
+.tuning-help :deep(.el-drawer__header){margin-bottom:12px;color:var(--ct-ink)}
 .tuning-help :deep(.el-drawer__body){padding-top:0}
 
 @media(max-width:1250px){.model-workspace{grid-template-columns:220px minmax(0,1fr)}
@@ -973,57 +996,57 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
 .tuning-save-bar{flex-wrap:wrap}
 .model-head>div:first-child small:last-child{flex-basis:100%}}
 
-.help-guide{display:grid;gap:22px;color:#3d4859}
-.help-guide section{padding-bottom:18px;border-bottom:1px solid #e8edf4}
+.help-guide{display:grid;gap:22px;color:var(--ct-ink-2)}
+.help-guide section{padding-bottom:18px;border-bottom:1px solid var(--ct-line)}
 .help-guide section:last-child{border-bottom:0}
-.help-guide h3{margin:0 0 9px;color:#17233b}
+.help-guide h3{margin:0 0 9px;color:var(--ct-ink)}
 .help-guide p,.help-guide li,.help-guide dd{line-height:1.7}
 .help-guide p,.help-guide ol,.help-guide ul,.help-guide dl{margin:0}
 .help-guide ol,.help-guide ul{padding-left:22px}
 .help-guide dl{display:grid;gap:8px}
 .help-guide dl>div{display:grid;grid-template-columns:90px 1fr;gap:12px}
-.help-guide dt{font-weight:600;color:#245eea}
+.help-guide dt{font-weight:600;color:var(--ct-accent)}
 .help-guide dd{margin:0}
-.help-guide .parameter-guide{gap:0;border:1px solid #e5eaf2;border-radius:8px;overflow:hidden}
-.help-guide .parameter-guide>div{grid-template-columns:118px 1fr;padding:10px 12px;border-bottom:1px solid #edf1f6}
+.help-guide .parameter-guide{gap:0;border:1px solid var(--ct-line);border-radius:8px;overflow:hidden}
+.help-guide .parameter-guide>div{grid-template-columns:118px 1fr;padding:10px 12px;border-bottom:1px solid var(--ct-line)}
 .help-guide .parameter-guide>div:last-child{border-bottom:0}
-.help-guide .parameter-guide dt{color:#253858}
-.help-guide .help-note{margin-top:10px;padding:9px 11px;border-radius:6px;background:#f5f7fa;color:#606b7d;font-size:13px}
-.help-guide code{display:inline-block;padding:2px 5px;border-radius:4px;background:#edf2fa;color:#254f9b;font-family:Consolas,monospace;white-space:normal}
-.help-guide .help-warning{margin-top:10px;padding:9px 11px;border-radius:6px;background:#fff4df;color:#7b5714}
-.help-table{display:grid;border:1px solid #dfe6f0;border-radius:7px;overflow:hidden}
+.help-guide .parameter-guide dt{color:var(--ct-ink)}
+.help-guide .help-note{margin-top:10px;padding:9px 11px;border-radius:6px;background:var(--ct-surface-2);color:var(--ct-ink-2);font-size:13px}
+.help-guide code{display:inline-block;padding:2px 5px;border-radius:4px;background:var(--ct-accent-weak);color:var(--ct-accent);font-family:Consolas,monospace;white-space:normal}
+.help-guide .help-warning{margin-top:10px;padding:9px 11px;border-radius:6px;background:var(--ct-warn-weak);color:var(--ct-warn)}
+.help-table{display:grid;border:1px solid var(--ct-line);border-radius:7px;overflow:hidden}
 .help-table>div{display:grid;grid-template-columns:180px 1fr}
-.help-table>div+div{border-top:1px solid #e5eaf2}
+.help-table>div+div{border-top:1px solid var(--ct-line)}
 .help-table b,.help-table strong,.help-table span{padding:9px 11px}
-.help-table strong{color:#34425a;background:#f7f9fc}
-.help-table span{border-left:1px solid #e5eaf2;color:#596579;line-height:1.65}
+.help-table strong{color:var(--ct-ink);background:var(--ct-surface-2)}
+.help-table span{border-left:1px solid var(--ct-line);color:var(--ct-ink-2);line-height:1.65}
 .help-table.compact>div{grid-template-columns:160px 1fr}
-.help-guide .formula-list>div{grid-template-columns:140px 1fr;padding:8px 0;border-bottom:1px dashed #dfe6f0}
+.help-guide .formula-list>div{grid-template-columns:140px 1fr;padding:8px 0;border-bottom:1px dashed var(--ct-line)}
 .help-guide .formula-list>div:last-child{border-bottom:0}
 .formula-list dd{display:grid;gap:6px}
 .formula-list code{width:fit-content}
 @media(max-width:680px){.help-table>div,.help-table.compact>div{grid-template-columns:1fr}
-.help-table span{border-left:0;border-top:1px solid #e5eaf2}
+.help-table span{border-left:0;border-top:1px solid var(--ct-line)}
 .help-guide dl>div,.help-guide .formula-list>div{grid-template-columns:1fr;gap:4px}}
 
 
-.tabs :deep(.el-tabs__header){margin:0;padding:0 16px;border:1px solid #e1e8f2;border-radius:8px;background:#fff}
+.tabs :deep(.el-tabs__header){margin:0;padding:0 16px;border:1px solid var(--ct-line);border-radius:8px;background:var(--ct-surface)}
 .settings-sections :deep(.el-tabs__header){padding:0;border:0;border-radius:0}
 .workspace-card .head{min-height:32px}
-.inline-metrics span{padding:0 10px;border-left:1px solid #dfe6f0;white-space:nowrap}
+.inline-metrics span{padding:0 10px;border-left:1px solid var(--ct-line);white-space:nowrap}
 .model-list>button>span:first-child{min-width:0;flex:1}
 .model-status{flex-shrink:0}
 .capacity-cell :deep(.el-input){width:70px;flex:none}
 .capacity-cell.tpm :deep(.el-input){width:92px}
 .channel-table :deep(.el-input-number){max-width:100%}
 .model-nav-tools{display:flex;gap:5px;align-items:center}.model-nav-tools :deep(.el-input){min-width:0}
-.model-nav-toggle{display:grid;place-items:center;flex:0 0 24px;width:24px;height:32px;padding:0;border:1px solid #dfe7f3;border-radius:4px;background:#fff;color:#718097;font-size:12px;line-height:1;cursor:pointer}
-.model-nav-toggle:hover,.model-nav-rail:hover{background:#eaf1ff;color:#245eea}.model-nav-toggle:focus-visible,.model-nav-rail:focus-visible{outline:2px solid #b9cdfb}
-.model-workspace.nav-collapsed{grid-template-columns:36px minmax(0,1fr)}.nav-collapsed .model-nav{padding:10px 5px}.model-nav-rail{border:0;background:transparent;color:#718097;writing-mode:vertical-rl;letter-spacing:4px;padding:12px 5px;cursor:pointer;font-size:12px}
-.evaluation-factors{display:grid;grid-template-columns:1fr 1fr;gap:2px 10px;font-size:12px;line-height:20px;color:#718097;font-variant-numeric:tabular-nums}.evaluation-factors span{white-space:nowrap}.evaluation-factors b{font-weight:500;color:#465974}.evaluation-factors .factor-up{color:#21a675}.evaluation-factors .factor-down{color:#d24d51}
+.model-nav-toggle{display:grid;place-items:center;flex:0 0 24px;width:24px;height:32px;padding:0;border:1px solid var(--ct-line);border-radius:4px;background:var(--ct-surface);color:var(--ct-ink-3);font-size:12px;line-height:1;cursor:pointer}
+.model-nav-toggle:hover,.model-nav-rail:hover{background:var(--ct-accent-weak);color:var(--ct-accent)}.model-nav-toggle:focus-visible,.model-nav-rail:focus-visible{outline:2px solid var(--ct-line)}
+.model-workspace.nav-collapsed{grid-template-columns:36px minmax(0,1fr)}.nav-collapsed .model-nav{padding:10px 5px}.model-nav-rail{border:0;background:transparent;color:var(--ct-ink-3);writing-mode:vertical-rl;letter-spacing:4px;padding:12px 5px;cursor:pointer;font-size:12px}
+.evaluation-factors{display:grid;grid-template-columns:1fr 1fr;gap:2px 10px;font-size:12px;line-height:20px;color:var(--ct-ink-3);font-variant-numeric:tabular-nums}.evaluation-factors span{white-space:nowrap}.evaluation-factors b{font-weight:500;color:var(--ct-ink-2)}.evaluation-factors .factor-up{color:var(--ct-ok)}.evaluation-factors .factor-down{color:var(--ct-crit)}
 .weight-calculated{display:flex;align-items:center;justify-content:center;gap:6px;font-variant-numeric:tabular-nums}.channel-table .current-weight{font-weight:400}
-.speed-source{display:block;font-size:10px;color:#8491a5;line-height:14px}
-.coefficient-cell{display:flex;flex-direction:column;gap:2px;line-height:20px;font-size:12px;font-variant-numeric:tabular-nums}.coefficient-cell b{font-weight:500;color:#465974}.coefficient-cell small{font-size:10px;line-height:16px;color:#8491a5;white-space:normal}.coefficient-cell .factor-up{color:#21a675}.coefficient-cell .factor-down{color:#d24d51}
+.speed-source{display:block;font-size:10px;color:var(--ct-ink-3);line-height:14px}
+.coefficient-cell{display:flex;flex-direction:column;gap:2px;line-height:20px;font-size:12px;font-variant-numeric:tabular-nums}.coefficient-cell b{font-weight:500;color:var(--ct-ink-2)}.coefficient-cell small{font-size:10px;line-height:16px;color:var(--ct-ink-3);white-space:normal}.coefficient-cell .factor-up{color:var(--ct-ok)}.coefficient-cell .factor-down{color:var(--ct-crit)}
 .channel-table :deep(td.coefficient-merged .cell){padding:0}.coefficient-values{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));align-items:start}.coefficient-values .coefficient-cell{padding:0 8px}.coefficient-overall{margin-top:5px;padding:0 10px;font-size:11px;line-height:18px;text-align:center}
 .coefficient-overall.only-status{margin-top:0;text-align:center}
 /* Respond to available page width, including changes to the application sidebar. */
@@ -1049,7 +1072,76 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
 .channel-table :deep(.cell){padding-left:6px;padding-right:6px}
 .channel-table :deep(.el-input-number){width:100%;max-width:68px}
 .channel-table :deep(.el-scrollbar__bar.is-horizontal){height:8px;bottom:2px}
-.channel-table :deep(.el-scrollbar__thumb){background:#8b99ad}
+.channel-table :deep(.el-scrollbar__thumb){background:var(--ct-line-strong)}
 .channel-table :deep(.el-table__body-wrapper .el-scrollbar__view){padding-bottom:10px}
 .channel-meta{flex-wrap:wrap;column-gap:8px;row-gap:2px}
+
+/* Tuning workspace: clear hierarchy without a spreadsheet-style grid. */
+.workspace-card :deep(.el-card__header){padding:14px 16px}
+.workspace-card :deep(.el-card__body){padding:10px}
+.model-workspace{grid-template-columns:204px minmax(0,1fr);border:0;border-radius:8px;height:calc(100dvh - 198px)}
+.model-nav{padding:12px 10px;background:var(--ct-surface-2)}
+.model-list{gap:4px;margin-top:12px}
+.model-list>button{min-width:0;box-sizing:border-box;position:relative;padding:11px 10px;border-radius:6px}
+.model-list>button.active{border-color:transparent;box-shadow:inset 3px 0 var(--ct-accent)}
+.model-list b{font-weight:600}
+.model-mode-text{display:inline-flex;align-items:center;gap:5px}
+.model-mode-text:before,.active-model-status:before{content:'';width:5px;height:5px;border-radius:50%;background:currentColor;flex-shrink:0}
+.model-head{padding:16px 18px;min-height:76px;box-sizing:border-box;background:var(--ct-surface)}
+.model-head>div:first-child{column-gap:10px;row-gap:6px;flex:1}
+.model-head .active-model-name{font-size:20px;line-height:28px;font-weight:650;overflow-wrap:anywhere}
+.active-model-status{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--ct-ink-3)}
+.active-model-status.auto{color:var(--ct-ok)}.active-model-status.observe{color:var(--ct-warn)}
+.model-head .evaluation-time{flex-basis:100%;font-size:11px;line-height:18px}
+.channel-table :deep(th.el-table__cell){height:32px;background:var(--ct-surface-2);border-right:0!important;color:var(--ct-ink-2)}
+.channel-table :deep(td.el-table__cell){height:64px;box-sizing:border-box;padding:10px 0;border-right:0!important}
+.channel-table :deep(.el-table__border-left-patch){display:none}
+.channel-table :deep(.cell){padding-left:6px;padding-right:6px}
+.channel-table :deep(td:first-child .cell){padding-left:12px;padding-right:8px}
+.channel-table :deep(td.coefficient-merged .cell){padding:0}
+.channel-name{font-weight:500;color:var(--ct-ink);font-size:12px}
+.channel-key{font-size:11px}
+.channel-meta{margin-top:5px;gap:5px 12px;line-height:18px}
+.coefficient-samples{display:block;margin-top:4px;text-align:center;white-space:nowrap;font-size:11px;line-height:18px;color:var(--ct-ink-3)}.coefficient-samples b{font-weight:500;color:var(--ct-ink-2)}
+.group-tags{gap:4px;line-height:18px}.group-tags>span{background:var(--ct-surface-2);color:var(--ct-ink-2);border-color:transparent;border-radius:4px;padding:1px 5px}
+.channel-table :deep(.el-input-number){width:100%;max-width:76px}
+.channel-table :deep(.el-input__wrapper){min-height:28px;box-shadow:0 0 0 1px var(--ct-line) inset;background:var(--ct-surface-2);border-radius:5px}
+.channel-table :deep(.el-input__wrapper:hover){box-shadow:0 0 0 1px var(--ct-line-strong) inset}
+.channel-table :deep(.el-input__wrapper.is-focus){box-shadow:0 0 0 1px var(--ct-accent) inset;background:var(--ct-surface)}
+.channel-table :deep(.modified .el-input__wrapper){box-shadow:0 0 0 1px var(--ct-warn) inset;background:var(--ct-warn-weak)}
+.coefficient-cell{font-size:12px;line-height:22px}.coefficient-cell small{font-size:11px;line-height:18px}
+.coefficient-overall.only-status{display:block;margin:0 12px;padding:4px 10px;border-radius:5px;background:var(--ct-surface-2)}
+.channel-footer{padding:10px 14px;background:var(--ct-surface);border-top:1px solid var(--ct-line)}
+@media(max-width:760px){.model-head{padding:12px}.model-head .active-model-name{font-size:17px}}
+
+.tuning-header-actions{display:flex;align-items:center;gap:8px}.tuning-header-actions .el-button+.el-button{margin-left:0}.unsaved-status{font-size:12px;color:var(--ct-warn)}
+@media(max-width:760px){.unsaved-status{display:none}}
+.tuning-shell :deep(.topbar-tools){order:1}.tuning-shell :deep(.topbar .user){order:2}
+.compact-layout .model-head{min-height:68px;padding:12px}.compact-layout .model-head .active-model-name{font-size:18px}
+
+.priority-group-label{display:flex;align-items:center;gap:8px;margin:0 0 7px;font-size:11px;line-height:18px;color:var(--ct-ink-2)}
+.priority-group-label>span{font-weight:600}.priority-group-label small{font-size:10px;color:var(--ct-ink-3)}
+.channel-table :deep(tr.priority-group-start>td.el-table__cell){border-top:1px solid color-mix(in srgb, var(--ct-line) 45%, transparent);padding-top:12px}
+
+/* Compact overview: tabs and actions share a row. */
+.tuning-tabs-shell{position:relative;min-width:0;container-type:inline-size}
+.overview-actions{position:absolute;right:12px;top:6px;z-index:3;gap:8px;flex-wrap:nowrap}
+.tuning-tabs-shell .tabs :deep(>.el-tabs__header){min-height:44px;border-radius:8px 8px 0 0;box-sizing:border-box}
+.has-overview-actions .tabs :deep(>.el-tabs__header){padding-right:350px}
+.workspace-card{border-top:0;border-radius:0 0 8px 8px}
+.workspace-card :deep(.el-card__body){padding:0}
+.model-workspace,.compact-layout .model-workspace{height:calc(100dvh - 130px);min-height:360px;border-radius:0 0 8px 8px}
+.model-mode-summary{display:flex;align-items:center;gap:10px;margin:10px 0 2px;font-size:11px;line-height:20px;color:var(--ct-ink-3);white-space:nowrap}
+.model-mode-summary b{font-weight:500;color:var(--ct-ink-2)}
+.model-head,.compact-layout .model-head{min-height:54px;padding:10px 16px;gap:10px}
+.model-head .active-model-name,.compact-layout .model-head .active-model-name{font-size:18px;line-height:26px}
+.model-head .evaluation-time{flex-basis:auto;padding-left:10px;border-left:1px solid var(--ct-line);white-space:normal}
+.model-head>div:first-child{flex:1 1 460px;gap:6px 10px}
+.model-head :deep(.el-radio-group){flex-shrink:0;margin-left:auto}
+@container(max-width:680px){
+ .overview-actions{position:static;justify-content:flex-end;padding:8px 10px;background:var(--ct-surface);border:1px solid var(--ct-line);border-bottom:0;border-radius:8px 8px 0 0;flex-wrap:wrap}
+ .has-overview-actions .tabs :deep(>.el-tabs__header){padding-right:16px;border-radius:0}
+ .model-workspace,.compact-layout .model-workspace{height:calc(100dvh - 180px)}
+ .model-head .evaluation-time{flex-basis:100%;padding-left:0;border-left:0}
+}
 </style>

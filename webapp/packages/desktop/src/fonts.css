@@ -1,0 +1,15 @@
+:root {
+  --ct-font-system: -apple-system, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", "Segoe UI", sans-serif;
+  --ct-font-yahei: "Microsoft YaHei", "Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC", sans-serif;
+  --ct-font-dengxian: "DengXian", "等线", "Microsoft YaHei", "PingFang SC", sans-serif;
+  --ct-font-simsun: "SimSun", "宋体", "Songti SC", "Noto Serif CJK SC", serif;
+  --ct-font-family: var(--ct-font-system);
+  --el-font-family: var(--ct-font-family);
+  font-family: var(--ct-font-family);
+}
+:root[data-font="yahei"] { --ct-font-family: var(--ct-font-yahei); }
+:root[data-font="dengxian"] { --ct-font-family: var(--ct-font-dengxian); }
+:root[data-font="simsun"] { --ct-font-family: var(--ct-font-simsun); }
+body, input, button, select, textarea { font-family: var(--ct-font-family); }
+.theme-font-sample { width: 18px; flex: 0 0 18px; font-size: 14px; line-height: 1; text-align: center; }
+.theme-menu .theme-font-option { font-family: var(--ct-font-preview); }

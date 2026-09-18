@@ -260,18 +260,18 @@ onUnmounted(() => {
   align-items: center;
   gap: 8px;
   padding: 0 38px 0 10px;
-  border: 1px solid #d3dae4;
+  border: 1px solid var(--ct-line-strong);
   border-radius: 6px;
-  background: #f7f9fc;
-  color: #1c2534;
+  background: var(--ct-surface-2);
+  color: var(--ct-ink);
   cursor: pointer;
   font: inherit;
   font-size: 12px;
   text-align: left;
   transition: border-color .16s ease, box-shadow .16s ease, background .16s ease;
 }
-.compact-date-trigger:hover { border-color: #b8c3d2; background: #fff; }
-.compact-date-trigger:focus-visible { outline: 2px solid #2f5fe0; outline-offset: 2px; }
+.compact-date-trigger:hover { border-color: var(--ct-line-strong); background: var(--ct-surface); }
+.compact-date-trigger:focus-visible { outline: 2px solid var(--ct-accent); outline-offset: 2px; }
 .compact-date-reset {
   position: absolute;
   top: 4px;
@@ -284,12 +284,12 @@ onUnmounted(() => {
   border: 0;
   border-radius: 5px;
   background: transparent;
-  color: #8b95a7;
+  color: var(--ct-ink-3);
   cursor: pointer;
   font: inherit;
 }
-.compact-date-reset:hover:not(:disabled) { background: #e8eefc; color: #2f5fe0; }
-.compact-date-reset:focus-visible { outline: 2px solid #2f5fe0; outline-offset: 1px; }
+.compact-date-reset:hover:not(:disabled) { background: var(--ct-accent-weak); color: var(--ct-accent); }
+.compact-date-reset:focus-visible { outline: 2px solid var(--ct-accent); outline-offset: 1px; }
 .compact-date-reset:disabled { cursor: default; opacity: .35; pointer-events: none; }
 .reset-glyph { display: block; font-size: 19px; line-height: 24px; }
 .calendar-glyph {
@@ -299,11 +299,11 @@ onUnmounted(() => {
   height: 15px;
   flex: 0 0 15px;
   box-sizing: border-box;
-  border: 1.5px solid #8b95a7;
+  border: 1.5px solid var(--ct-ink-3);
   border-radius: 4px;
 }
-.calendar-glyph::before { position: absolute; top: 3px; right: 1px; left: 1px; border-top: 1.5px solid #8b95a7; content: ''; }
-.calendar-glyph::after { position: absolute; top: -3px; left: 3px; width: 1.5px; height: 4px; border-radius: 1px; background: #8b95a7; box-shadow: 5px 0 #8b95a7; content: ''; }
+.calendar-glyph::before { position: absolute; top: 3px; right: 1px; left: 1px; border-top: 1.5px solid var(--ct-ink-3); content: ''; }
+.calendar-glyph::after { position: absolute; top: -3px; left: 3px; width: 1.5px; height: 4px; border-radius: 1px; background: var(--ct-ink-3); box-shadow: 5px 0 #8b95a7; content: ''; }
 .compact-date-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Teleport 后的弹层仍使用 rc35 的单行输入、快捷项和确认栏结构。 */
@@ -312,52 +312,52 @@ onUnmounted(() => {
   z-index: 3000;
   box-sizing: border-box;
   padding: 12px;
-  border: 1px solid #e3e8ef;
+  border: 1px solid var(--ct-line);
   border-radius: 8px;
-  background: #fff;
-  color: #1c2534;
+  background: var(--ct-surface);
+  color: var(--ct-ink);
   box-shadow: 0 8px 24px rgba(16, 24, 40, .14);
 }
 .compact-date-fields { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 10px; align-items: end; }
 .compact-date-field { display: block; min-width: 0; }
-.compact-date-field > span { display: block; margin-bottom: 5px; color: #8b95a7; font-size: 11px; }
+.compact-date-field > span { display: block; margin-bottom: 5px; color: var(--ct-ink-3); font-size: 11px; }
 .compact-date-input {
   width: 100%;
   height: 32px;
   min-width: 0;
   box-sizing: border-box;
   padding: 0 7px;
-  border: 1px solid #d3dae4;
+  border: 1px solid var(--ct-line-strong);
   border-radius: 6px;
   outline: 0;
-  background: #f7f9fc;
-  color: #1c2534;
+  background: var(--ct-surface-2);
+  color: var(--ct-ink);
   font: 12px ui-monospace, SFMono-Regular, Consolas, monospace;
   font-variant-numeric: tabular-nums;
 }
-.compact-date-input:focus { border-color: #2f5fe0; box-shadow: 0 0 0 1px #2f5fe0 inset; }
-.compact-date-separator { padding-bottom: 9px; color: #8b95a7; font-size: 12px; }
-.compact-date-error { margin: 8px 0 0; color: #c94a5a; font-size: 11px; }
+.compact-date-input:focus { border-color: var(--ct-accent); box-shadow: 0 0 0 1px #2f5fe0 inset; }
+.compact-date-separator { padding-bottom: 9px; color: var(--ct-ink-3); font-size: 12px; }
+.compact-date-error { margin: 8px 0 0; color: var(--ct-crit); font-size: 11px; }
 .compact-date-presets { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
 .compact-date-preset {
   height: 28px;
   flex: 1 1 84px;
   min-width: 0;
   padding: 0 9px;
-  border: 1px solid #e3e8ef;
+  border: 1px solid var(--ct-line);
   border-radius: 6px;
-  background: #f7f9fc;
-  color: #5b6779;
+  background: var(--ct-surface-2);
+  color: var(--ct-ink-2);
   cursor: pointer;
   font: inherit;
   font-size: 11px;
   white-space: nowrap;
 }
-.compact-date-preset:hover { border-color: #cbdafa; background: #eef3ff; color: #2f5fe0; }
-.compact-date-preset:focus-visible, .compact-date-confirm:focus-visible { outline: 2px solid #2f5fe0; outline-offset: 2px; }
-.compact-date-footer { display: flex; justify-content: flex-end; margin-top: 12px; padding-top: 10px; border-top: 1px solid #e3e8ef; }
-.compact-date-confirm { height: 30px; padding: 0 13px; border: 1px solid #2f5fe0; border-radius: 6px; background: #2f5fe0; color: #fff; cursor: pointer; font: inherit; font-size: 12px; }
-.compact-date-confirm:hover { background: #244ec2; }
+.compact-date-preset:hover { border-color: var(--ct-line); background: var(--ct-accent-weak); color: var(--ct-accent); }
+.compact-date-preset:focus-visible, .compact-date-confirm:focus-visible { outline: 2px solid var(--ct-accent); outline-offset: 2px; }
+.compact-date-footer { display: flex; justify-content: flex-end; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--ct-line); }
+.compact-date-confirm { height: 30px; padding: 0 13px; border: 1px solid var(--ct-accent); border-radius: 6px; background: var(--ct-primary-solid); color: var(--ct-on-solid); cursor: pointer; font: inherit; font-size: 12px; }
+.compact-date-confirm:hover { background: var(--ct-primary-solid); }
 
 @media (max-width: 520px) {
   .compact-date-fields { grid-template-columns: minmax(0, 1fr); gap: 8px; }

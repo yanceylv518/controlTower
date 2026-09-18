@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { withChartTheme } from "../utils/chartTheme";
+import { useTheme } from "../composables/useTheme";
+const { themeSignature } = useTheme();
 import { nextTick, onBeforeUnmount, ref, watch } from "vue";
 import * as echarts from "echarts/core";
 import { LineChart } from "echarts/charts";
@@ -37,7 +40,7 @@ function renderNow() {
   const css = getComputedStyle(element.value);
   const muted = css.getPropertyValue("--ct-ink-3").trim() || "#8390a5";
   const line = css.getPropertyValue("--ct-line").trim() || "#e9edf5";
-  chart.setOption({
+  chart.setOption(withChartTheme({
     animation: false,
     grid: { left: 48, right: 12, top: 12, bottom: 27 },
     tooltip: {
@@ -81,7 +84,7 @@ function renderNow() {
       areaStyle: { opacity: 1, color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: trafficRGBA(item.color, .16) }, { offset: 1, color: trafficRGBA(item.color, .40) }]) },
       emphasis: { focus: "series", lineStyle: { width: 1.4 } },
     })),
-  }, true);
+  }), true);
 }
 function highlight(key?: string) {
   focusTooltip(key);
@@ -95,6 +98,7 @@ watch(element, node => {
   if (node) { observer = new ResizeObserver(() => { chart?.resize(); }); observer.observe(node); scheduleChartRender(token, renderNow); }
 });
 onBeforeUnmount(() => { cancelChartRender(token); observer?.disconnect(); chart?.dispose(); tooltipElement = undefined; });
+watch(themeSignature, () => { scheduleChartRender(token, renderNow); }, { flush: "post" });
 </script>
 
 <template><div ref="element" class="traffic-chart" :class="{ expanded }" role="img" aria-label="该客户按固定顺序叠加的 TPM 流量趋势" /></template>

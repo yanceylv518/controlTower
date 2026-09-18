@@ -5,6 +5,7 @@ import { ElMessage } from "element-plus";
 import { dashboard } from "../api";
 import AppShell from "../components/AppShell.vue";
 import VoiceAlertsSettings from "../components/VoiceAlertsSettings.vue";
+import MenuVisibilitySettings from "../components/MenuVisibilitySettings.vue";
 
 import { usePrefsStore } from "../stores/prefs";
 
@@ -122,12 +123,14 @@ onMounted(load);
       <el-radio-group v-model="activeTab" size="small" aria-label="设置分类">
         <el-radio-button value="voice">电话预警</el-radio-button>
         <el-radio-button value="system">系统与监控</el-radio-button>
+        <el-radio-button value="menus">菜单显示</el-radio-button>
       </el-radio-group>
       <el-button v-if="activeTab === 'system'" type="primary" :loading="saving" :disabled="loading" @click="save"
         >保存系统设置</el-button
       >
     </template>
     <div class="settings-page">
+      <MenuVisibilitySettings v-if="activeTab === 'menus'" />
       <VoiceAlertsSettings v-show="activeTab === 'voice'" />
       <div v-show="activeTab === 'system'" v-loading="loading" class="system-settings-grid">
        <div v-for="(column, index) in displayColumns" :key="index" class="settings-column">

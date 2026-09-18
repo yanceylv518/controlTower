@@ -520,8 +520,8 @@ function rowClass({ row }: { row: DimRow }) {
 .dimension-chart :deep(.customer-chart-canvas) { height: 190px; }
 .dimension-kpis { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
 .dimension-kpi { position: relative; overflow: hidden; min-height: 92px; padding: 13px 15px; border: 1px solid var(--ct-line); border-radius: var(--ct-r-card); background: var(--ct-surface); box-shadow: var(--ct-shadow); display: flex; flex-direction: column; }
-.dimension-kpi::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 3px; background: #2f6fed; }
-.dimension-kpi.out::before { background: #f08a24; }.dimension-kpi.otps::before { background: #7a5af8; }.dimension-kpi.danger::before { background: #ce3b44; }
+.dimension-kpi::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 3px; background: var(--ct-primary-solid); }
+.dimension-kpi.out::before { background: var(--ct-warning-solid); }.dimension-kpi.otps::before { background: var(--ct-purple); }.dimension-kpi.danger::before { background: var(--ct-danger-solid); }
 .dimension-kpi span { color: var(--ct-ink-2); font-size: 12px; }.dimension-kpi strong { margin-top: 4px; font-size: 24px; line-height: 1.2; }.dimension-kpi small { margin-top: auto; color: var(--ct-ink-3); font-size: 11px; }
 .dimension-ranking-chart { min-width: 0; margin-bottom: 12px; padding: 13px 15px; border: 1px solid var(--ct-line); border-radius: var(--ct-r-card); background: var(--ct-surface); box-shadow: var(--ct-shadow); }
 .dimension-ranking-chart header { margin-bottom: 4px; }.dimension-ranking-chart h2 { margin: 0; font-size: 14px; }.dimension-ranking-chart p { margin: 2px 0 0; color: var(--ct-ink-3); font-size: 11px; }

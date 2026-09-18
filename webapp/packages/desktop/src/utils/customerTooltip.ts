@@ -9,8 +9,9 @@ export function highlightCustomerTooltip(root: HTMLElement | undefined, key?: st
   rows.forEach(row => {
     const active = hasActive && row.dataset.trafficKey === key;
     row.style.fontWeight = active ? "700" : "400";
-    row.style.opacity = hasActive && !active ? "0.45" : "1";
-    row.style.backgroundColor = active ? "rgba(65,112,205,.10)" : "transparent";
+    row.style.opacity = "1";
+    row.style.color = hasActive && !active ? "var(--ct-ink-3)" : "var(--ct-ink)";
+    row.style.backgroundColor = active ? "var(--ct-accent-weak)" : "transparent";
     row.style.borderLeftColor = active ? row.dataset.trafficColor || "#4170cd" : "transparent";
     row.dataset.active = String(active);
     if (active) {

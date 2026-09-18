@@ -5,7 +5,7 @@ import test from 'node:test'
 const source = readFileSync(
   new URL('../src/views/ReadonlyLogsView.vue', import.meta.url),
   'utf8'
-)
+).replace(/\r\n/g, '\n')
 const asyncDataSource = readFileSync(
   new URL('../src/composables/useAsyncData.ts', import.meta.url),
   'utf8'
@@ -20,7 +20,7 @@ test('readonly logs exposes a persistent rc35 column menu', () => {
   assert.match(source, /ct\.readonly-logs\.columns\.v1/)
   assert.match(source, /restoreColumnVisibility\(\)/)
   assert.match(source, /toggleColumn\(column\.key, Boolean\(\$event\)\)/)
-  assert.match(source, /background: #fff !important/)
+  assert.match(source, /background: var\(--ct-surface\) !important/)
   assert.match(source, /z-index: 3000 !important/)
   assert.doesNotMatch(source, /<header class=\"logs-heading\">/)
   for (const label of ['渠道', '用户', '令牌', '模型', '流', 'Tokens', '费用', '耗时', '详情']) {
@@ -146,9 +146,10 @@ test('async data ignores stale responses', () => {
 })
 
 // 回归保护：日期范围必须使用 rc35 独立组件，不能回退到 Element Plus 双月面板。
-test('readonly logs uses one rc35 style baseline and light poppers', () => {
+test('readonly logs keeps rc35 geometry and theme-aware poppers', () => {
   assert.doesNotMatch(source, /logs-table th:nth-child|logs-table td:nth-child/)
-  assert.doesNotMatch(source, /var\(--ct-/)
+  assert.match(source, /--rc35-surface: var\(--ct-surface\)/)
+  assert.match(source, /--rc35-ink: var\(--ct-ink\)/)
   assert.match(source, /<CompactDateTimeRangePicker v-model="timeRange" :reset-enabled="timeRangeChanged && !backgroundRefreshing" class="filter-time" @reset="resetTime" \/>/)
   assert.doesNotMatch(source, /<el-date-picker[^>]+v-model="timeRange"/)
   assert.match(source, /CompactDateTimeRangePicker from '\.\.\/components\/CompactDateTimeRangePicker\.vue'/)
@@ -264,10 +265,10 @@ test('readonly logs binds optional table columns to stable classes', () => {
 // 回归保护：流状态和日志类型必须使用 rc35 的纯文字语义色，不能重新引入前置圆点或旧胶囊。
 test('readonly logs renders stream and log types as text-only status labels', () => {
   assert.match(source, /class="stream-label"/)
-  assert.match(source, /\.stream-label\.is-stream \{ color: #2f80d0/)
+  assert.match(source, /\.stream-label\.is-stream \{ color: var\(--ct-accent\)/)
   assert.match(source, /\.stream-label\.is-nonstream, \.stream-label\.is-unknown \{ color: var\(--rc35-ink-3\)/)
   assert.match(source, /\.status-consume \{ color: var\(--rc35-green\)/)
-  assert.match(source, /\.status-error \{ color: #cf4b5e/)
+  assert.match(source, /\.status-error \{ color: var\(--ct-crit\)/)
   assert.doesNotMatch(source, /stream-pill/)
   assert.doesNotMatch(source, /status-badge i/)
   assert.doesNotMatch(source, /<span class="status-badge"[^>]*>\s*<i/)
@@ -305,7 +306,7 @@ test('readonly logs supports direct page navigation and compact pagination order
   assert.match(source, /id="readonly-log-page-size-menu"[^>]*class="page-size-menu"[^>]*role="listbox"/)
   assert.match(source, /class="page-size-option"[^>]*role="option"[^>]*:aria-selected="size === limit"/)
   assert.match(source, /<Teleport to="body">[\s\S]*readonly-log-page-size-menu/)
-  assert.match(source, /\.page-size-menu \{[\s\S]*--rc35-surface: #fff;[\s\S]*--rc35-line: #e3e8ef;[\s\S]*position: fixed;[\s\S]*border-radius: 8px;[\s\S]*background: var\(--rc35-surface\);[\s\S]*box-shadow:/)
+  assert.match(source, /\.page-size-menu \{[\s\S]*--rc35-surface: var\(--ct-surface\);[\s\S]*--rc35-line: var\(--ct-line\);[\s\S]*position: fixed;[\s\S]*border-radius: 8px;[\s\S]*background: var\(--rc35-surface\);[\s\S]*box-shadow:/)
   assert.match(source, /\.page-size \{[\s\S]*border-radius: 8px;/)
   assert.match(source, /const measuredHeight = \(menu\?\.scrollHeight \|\| pageSizeOptions\.length \* 28 \+ 8\) \+ 2/)
   assert.match(source, /\.page-size-option \{[\s\S]*min-height: 28px;[\s\S]*padding: 4px 32px 4px 6px;/)

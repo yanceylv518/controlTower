@@ -340,7 +340,7 @@ onBeforeUnmount(() => { disposed = true; selection++; if (timer) clearInterval(t
 .notice-details { padding: 0; border: 0; background: none; color: var(--el-text-color-regular); font: inherit; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
 .notice-details:hover { color: var(--el-color-primary); }
 .notice-details:focus-visible { outline: 2px solid var(--el-color-primary); outline-offset: 3px; }
-.log-output { box-sizing: border-box; margin: 0; background: #101827; color: #dce7f7; font: 12px/1.85 Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; min-height: 260px; max-height: max(320px, calc(100vh - 290px)); overflow: auto; border: 1px solid #202d43; border-radius: 8px; padding: 16px; tab-size: 4; scrollbar-color: #48556c #101827; }
+.log-output { box-sizing: border-box; margin: 0; background: var(--ct-log-bg); color: var(--ct-log-ink); font: 12px/1.85 Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; min-height: 260px; max-height: max(320px, calc(100vh - 290px)); overflow: auto; border: 1px solid var(--ct-line-strong); border-radius: 8px; padding: 16px; tab-size: 4; scrollbar-color: var(--ct-line-strong) var(--ct-log-bg); }
 .log-line { display: grid; grid-template-columns: max-content minmax(24ch, 1fr); min-height: 1.85em; }
 .log-prefix { white-space: pre; }
 .log-body { white-space: pre-wrap; overflow-wrap: anywhere; }

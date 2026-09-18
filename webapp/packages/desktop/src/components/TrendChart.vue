@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { withChartTheme } from "../utils/chartTheme";
+import { useTheme } from "../composables/useTheme";
+const { themeSignature } = useTheme();
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import * as echarts from "echarts/core";
 import { BarChart, LineChart } from "echarts/charts";
@@ -59,7 +62,7 @@ function renderNow() {
   const initial = !chart;
   chart ??= echarts.init(chartEl.value);
   chart.setOption(
-    {
+    withChartTheme({
       animationDuration: initial ? 150 : 0,
       color: props.series.map((item) => item.color),
       tooltip: { trigger: "axis" },
@@ -85,7 +88,7 @@ function renderNow() {
             value == null ? "—" : `${value}${item.unit || ""}`,
         },
       })),
-    },
+    }),
     true,
   );
 }
@@ -111,6 +114,7 @@ onBeforeUnmount(() => {
   observer?.disconnect();
   chart?.dispose();
 });
+watch(themeSignature, () => { void render(); }, { flush: "post" });
 </script>
 
 <template>

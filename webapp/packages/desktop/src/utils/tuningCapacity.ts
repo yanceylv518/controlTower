@@ -16,3 +16,17 @@ export function parseCapacity(text: string): number | null {
   const value = numerator / denominator;
   return value <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(value) : null;
 }
+
+// Editor values use ten-thousands; transport values remain integer counts.
+export function capacityInWan(value: number): string {
+  if (!Number.isSafeInteger(value) || value < 0) return '';
+  const count = BigInt(value);
+  const fraction = String(count % 10000n).padStart(4, '0').replace(/0+$/, '');
+  return String(count / 10000n) + (fraction ? '.' + fraction : '');
+}
+export function parseCapacityWan(text: string): number | null {
+  const value = text.trim();
+  if (!value) return 0;
+  if (!/^\d+(?:\.\d{1,4})?$/.test(value)) return null;
+  return parseCapacity(value + '万');
+}

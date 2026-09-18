@@ -1,5 +1,19 @@
 # Agent API Contracts
 
+
+## NewAPI model square (2026-09-18)
+
+- `GET /api/dashboard/model-square?instance_id=<site>` reads NewAPI `/api/pricing`; `POST` refreshes the same read-only cache. Requires existing admin `models.manage` access. Returns `items`, `vendors`, `group_ratios`, `usable_groups`, `source`, `updated_at`, `expires_at`, `stale`, optional `warning`.
+- Process-local cache TTL 5 minutes, keyed by site and API configuration fingerprint; successful refresh cooldown 10 seconds, failure backoff 60 seconds. On upstream failure, last successful data is returned with stale/warning; no prior data returns 502. Missing site API configuration returns 422. Restart clears cache; no model records are independently maintained.
+- Explicit retirement requested by user: legacy `/billing/models` now aliases the square response/refresh (GET shape changed); model PUT and price/group-ratio writes are disabled. `/billing/group-ratios` GET reads the same NewAPI cache in legacy items shape. `/billing/prices` GET remains historical configuration read only. Historical invoice records and recalculation behavior are preserved. Upgrade frontend and Server together; external consumers of legacy model response must migrate.
+
+## Global menu visibility (2026-09-18)
+
+- `GET /api/dashboard/menu-visibility`: authenticated admins and viewers receive `{ "items": { "/tuning": false } }`. Missing menu paths default to visible. Response uses `Cache-Control: no-store`.
+- `PUT /api/dashboard/menu-visibility`: session requires `settings.manage` (existing trusted dashboard bearer token also supported). Body has the same `items` map; replaces the whole configuration. Unknown paths, non-booleans, null items/values, extra fields, and trailing JSON are rejected with 400. Successful updates create `menu_visibility.update` audit records.
+- Hidden entries are absent from every role's sidebar regardless of permissions. Showing an entry does not grant access. This API does not change page/API authorization; authorized admins can directly access `/settings` to restore hidden settings navigation.
+- Persisted in the singleton `menu_visibility` table introduced by migration `083_menu_visibility.sql`. General system-setting replacement cannot overwrite it. Clients refresh on navigation/focus and every 30 seconds while visible; this is not push delivery.
+
 > **Dashboard API v1 — 契约冻结（2026-07-13）：此后仅允许向后兼容的新增，禁止修改既有字段语义。**
 
 Control Tower Agent reports to Control Tower Server through outbound HTTPS. The Agent does not expose an inbound port.
