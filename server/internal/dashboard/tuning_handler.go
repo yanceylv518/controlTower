@@ -203,19 +203,7 @@ func syncSavedBasePriorities(store BasePrioritySyncStore, siteID, actor string, 
 	for _, value := range before {
 		current[value.ChannelID] = value
 	}
-	states, err := store.ListContinuousStates(siteID)
-	if err != nil {
-		return err
-	}
-	phases := make(map[int64]string, len(states))
-	for _, state := range states {
-		phases[state.ChannelID] = state.Phase
-	}
 	for _, value := range saved {
-		phase := phases[value.ChannelID]
-		if phase == "circuit" || phase == "probing" {
-			continue
-		}
 		observed := current[value.ChannelID]
 		if observed.ChannelID == 0 {
 			observed = value
@@ -231,7 +219,7 @@ func syncSavedBasePriorities(store BasePrioritySyncStore, siteID, actor string, 
 			CurrentWeight: observed.CurrentWeight, ProposedWeight: observed.CurrentWeight,
 			CurrentPriority: &currentPriority, ProposedPriority: &proposedPriority, ModeAtCreation: "manual", Status: "recorded",
 		}
-		if _, err = store.CreateContinuousWeightChange(rec, actor, now); err != nil {
+		if _, err := store.CreateContinuousWeightChange(rec, actor, now); err != nil {
 			return err
 		}
 	}

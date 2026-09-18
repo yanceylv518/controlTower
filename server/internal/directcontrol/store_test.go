@@ -41,7 +41,7 @@ func TestExecuteWeightUpdateMapsFields(t *testing.T) {
 	if len(f.updates) != 1 || f.updates[0].ChannelID != 9 || f.updates[0].Weight == nil || *f.updates[0].Weight != 25 {
 		t.Fatalf("weight not mapped: %#v", f.updates)
 	}
-	if f.updates[0].Priority == nil || *f.updates[0].Priority != 7 || f.updates[0].Status != nil {
+	if f.updates[0].Priority != nil || f.updates[0].Status != nil {
 		t.Fatalf("priority mapping wrong: %#v", f.updates[0])
 	}
 }

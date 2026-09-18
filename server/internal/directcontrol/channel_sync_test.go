@@ -62,6 +62,10 @@ func TestDirectRefreshAndWriteImmediatelyUpdateDashboard(t *testing.T) {
 		t.Fatalf("live refresh failed: %#v %v", rows, err)
 	}
 	priority := int64(9)
+	rows[0].BasePriority = priority
+	if err = s.SaveChannelBaseValues(site, "test", rows, now); err != nil {
+		t.Fatal(err)
+	}
 	rec := tuning.Recommendation{ID: site + "-write", InstanceID: site, ChannelID: 7, ChannelName: "fresh", Rule: "base_priority_sync", CurrentWeight: 15, ProposedWeight: 15, CurrentPriority: &rows[0].CurrentPriority, ProposedPriority: &priority, CreatedAt: now, ModeAtCreation: "manual"}
 	commandID, err := s.CreateContinuousWeightChange(rec, "test", now)
 	if err != nil || commandID == "" {

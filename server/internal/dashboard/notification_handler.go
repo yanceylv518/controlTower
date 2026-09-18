@@ -58,6 +58,8 @@ type NotificationChannelListResponse struct {
 }
 
 type NotificationDeliveryItem struct {
+	AlertTitle    string    `json:"alert_title"`
+	AlertSummary  string    `json:"alert_summary"`
 	ID            string    `json:"id"`
 	AlertID       string    `json:"alert_id"`
 	ChannelID     string    `json:"channel_id"`
@@ -70,7 +72,8 @@ type NotificationDeliveryItem struct {
 }
 
 type NotificationDeliveryListResponse struct {
-	Items []NotificationDeliveryItem `json:"items"`
+	FiltersSupported bool                       `json:"filters_supported"`
+	Items            []NotificationDeliveryItem `json:"items"`
 }
 
 func (h Handler) WithNotificationStore(store NotificationStore) Handler {
@@ -186,6 +189,26 @@ func (h Handler) HandleNotificationDeliveries(w http.ResponseWriter, r *http.Req
 		return
 	}
 	query := parseNotificationDeliveryQuery(r)
+	for key, target := range map[string]*time.Time{"start_time": &query.StartTime, "end_time": &query.EndTime} {
+		if raw := r.URL.Query().Get(key); raw != "" {
+			value, err := time.Parse(time.RFC3339, raw)
+			if err != nil {
+				writeDashboardError(w, 400, "invalid_time_range")
+				return
+			}
+			*target = value
+		}
+	}
+	if !query.StartTime.IsZero() && !query.EndTime.IsZero() && !query.StartTime.Before(query.EndTime) {
+		writeDashboardError(w, 400, "invalid_time_range")
+		return
+	}
+	query.Search = strings.TrimSpace(r.URL.Query().Get("search"))
+	if len(query.Search) > 500 {
+		writeDashboardError(w, 400, "search_too_long")
+		return
+	}
+
 	if query.SiteID == "" {
 		writeDashboardError(w, http.StatusBadRequest, "site_id_required")
 		return
@@ -195,7 +218,7 @@ func (h Handler) HandleNotificationDeliveries(w http.ResponseWriter, r *http.Req
 		writeDashboardError(w, http.StatusInternalServerError, "query_failed")
 		return
 	}
-	writeDashboardJSON(w, http.StatusOK, NotificationDeliveryListResponse{Items: notificationDeliveryItems(deliveries)})
+	writeDashboardJSON(w, http.StatusOK, NotificationDeliveryListResponse{FiltersSupported: true, Items: notificationDeliveryItems(deliveries)})
 }
 func (h Handler) HandleNotificationResend(w http.ResponseWriter, r *http.Request) {
 	if h.notificationStore == nil {
@@ -451,7 +474,7 @@ func notificationChannelItems(channels []storage.NotificationChannel) []Notifica
 func notificationDeliveryItems(deliveries []storage.NotificationDelivery) []NotificationDeliveryItem {
 	items := make([]NotificationDeliveryItem, 0, len(deliveries))
 	for _, delivery := range deliveries {
-		items = append(items, NotificationDeliveryItem{ID: delivery.ID, AlertID: delivery.AlertID, ChannelID: delivery.ChannelID, Status: delivery.Status, AttemptedAt: delivery.AttemptedAt, NextAttemptAt: delivery.NextAttemptAt, Attempts: delivery.Attempts, StatusCode: delivery.StatusCode, ErrorSummary: delivery.ErrorSummary})
+		items = append(items, NotificationDeliveryItem{AlertTitle: delivery.AlertTitle, AlertSummary: delivery.AlertSummary, ID: delivery.ID, AlertID: delivery.AlertID, ChannelID: delivery.ChannelID, Status: delivery.Status, AttemptedAt: delivery.AttemptedAt, NextAttemptAt: delivery.NextAttemptAt, Attempts: delivery.Attempts, StatusCode: delivery.StatusCode, ErrorSummary: delivery.ErrorSummary})
 	}
 	return items
 }

@@ -240,7 +240,7 @@ test('readonly logs keeps rc35 channel and model semantic colors', () => {
   assert.match(source, /channelTone: channelID > 0 \? getTokenColorClass\(String\(channelID\)\)/)
   assert.match(source, /modelTone: row\.model_name \? getTokenColorClass\(row\.model_name\)/)
   assert.match(source, /view\.channelTone/)
-  assert.match(source, /class="model-icon" :src="view\.modelProvider\.src"/)
+  assert.match(source, /<ModelProviderIcon v-if="view\.modelProvider" :name="view\.modelProvider\.name"/)
   assert.match(source, /\.channel-badge \{[^}]*border: 0;[^}]*background: transparent;/)
   assert.doesNotMatch(source, /<Connection\s*\/>|\.token-badge\[class/)
 })

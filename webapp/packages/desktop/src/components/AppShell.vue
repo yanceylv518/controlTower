@@ -71,7 +71,7 @@ const nav = [
     items: [
       ["/tuning", "调权中心", TrendCharts],
       ["/alerts", "告警中心", Monitor],
-      ["/notifications", "通知设置", Connection],
+      ["/notifications", "通知中心", Connection],
       ["/instances", "实例管理", Management],
       ["/log-archives", "日志归档", Document],
       ["/access-users", "账号管理", User],

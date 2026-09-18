@@ -207,7 +207,7 @@ Instance tokens are stored only as `SHA-256(pepper + token)` hashes. A token may
 | --- | --- | --- |
 | `GET /api/dashboard/notification-channels` | 必填 Query `site_id`；旧渠道待分配列表使用 `unassigned=true` | `{"items":[{"id":"c1","site_id":"site-a","rule_keys":["user_low_balance"],"channel_type":"dingtalk","has_secret":true}]}` |
 | `POST /api/dashboard/notification-channels` | JSON `id,site_id,rule_keys,channel_type,name,webhook_url,enabled,secret` | `{"items":[{"id":"c1","site_id":"site-a","rule_keys":["user_low_balance"],"has_secret":true}]}` |
-| `GET /api/dashboard/notification-deliveries` | 必填 Query `site_id`；可选 `alert_id,channel_id,status,limit,offset` | `{"items":[{"id":"d1","status":"failed","attempts":1}]}` |
+| `GET /api/dashboard/notification-deliveries` | 必填 Query `site_id`；可选 `alert_id,channel_id,status,limit,offset,start_time,end_time,search`；时间为 RFC3339、起点包含/终点不含，search 匹配告警标题或摘要 | `{"filters_supported":true,"items":[{"id":"d1","status":"failed","attempts":1,"alert_title":"告警标题","alert_summary":"告警摘要"}]}` |
 | `POST /api/dashboard/notification-deliveries/{id}/resend` | 必填 Query `site_id`，其他站点记录返回 404 | `{"ok":true}` |
 
 通知渠道必须绑定单个有效站点，已绑定渠道不能跨站点更新（409）。站点和 `rule_keys` 同时匹配才投递；空 `rule_keys` 表示该站点全部告警类型，未知类型返回 400。多渠道匹配则分别投递，未匹配不回退到其他站点。前端按余额、系统、请求三类选择，保存时展开成具体规则。旧的部分规则选择保持原样直到编辑保存，并明确标为“部分规则”。

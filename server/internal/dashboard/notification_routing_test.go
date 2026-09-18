@@ -199,3 +199,55 @@ func TestNotificationDeliveriesAndResendStayInSite(t *testing.T) {
 		}
 	}
 }
+
+func TestNotificationDeliveryFiltersAndSummary(t *testing.T) {
+	store := ingest.NewMemoryStore()
+	start := time.Date(2026, 9, 18, 0, 0, 0, 0, time.UTC)
+	if err := store.CreateInstance(storage.Instance{ID: "instance", SiteID: "site"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertCurrentAlerts([]storage.Alert{{ID: "alert", InstanceID: "instance", Title: "CPU alert", Summary: "over threshold", Status: "firing"}}, start); err != nil {
+		t.Fatal(err)
+	}
+	for i, id := range []string{"first", "second", "end"} {
+		if err := store.InsertNotificationDelivery(storage.NotificationDelivery{ID: id, AlertID: "alert", ChannelID: "channel-" + id, Status: "sent", AttemptedAt: start.Add(time.Duration(i) * time.Hour)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := NewHandler(store).WithNotificationStore(store)
+	for _, tc := range []struct {
+		query string
+		code  int
+		id    string
+	}{
+		{"&start_time=2026-09-18T00:00:00Z&end_time=2026-09-18T02:00:00Z&search=threshold&limit=1", 200, "second"},
+		{"&start_time=2026-09-18T00:00:00Z&end_time=2026-09-18T02:00:00Z&search=CPU&limit=1&offset=1", 200, "first"},
+		{"&search=missing", 200, ""}, {"&status=failed", 200, ""}, {"&channel_id=other", 200, ""},
+		{"&start_time=invalid", 400, ""}, {"&start_time=2026-09-19T00:00:00Z&end_time=2026-09-18T00:00:00Z", 400, ""},
+	} {
+		rr := httptest.NewRecorder()
+		h.HandleNotificationDeliveries(rr, httptest.NewRequest("GET", "/?site_id=site"+tc.query, nil))
+		if rr.Code != tc.code {
+			t.Fatalf("%s: %d %s", tc.query, rr.Code, rr.Body.String())
+		}
+		if tc.code != 200 {
+			continue
+		}
+		var result NotificationDeliveryListResponse
+		if err := json.Unmarshal(rr.Body.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		if !result.FiltersSupported {
+			t.Fatal("missing capability")
+		}
+		if tc.id == "" {
+			if len(result.Items) != 0 {
+				t.Fatalf("unexpected result: %v", result.Items)
+			}
+			continue
+		}
+		if len(result.Items) != 1 || result.Items[0].ID != tc.id || result.Items[0].AlertTitle != "CPU alert" || result.Items[0].AlertSummary != "over threshold" {
+			t.Fatalf("wrong result: %v", result.Items)
+		}
+	}
+}

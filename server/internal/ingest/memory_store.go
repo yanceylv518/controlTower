@@ -840,9 +840,34 @@ func (s *MemoryStore) QueryNotificationDeliveries(query storage.NotificationDeli
 		if query.Status != "" && delivery.Status != query.Status {
 			continue
 		}
+		alert := s.alerts[delivery.AlertID]
+		delivery.AlertTitle, delivery.AlertSummary = alert.Title, alert.Summary
+		if !query.StartTime.IsZero() && delivery.AttemptedAt.Before(query.StartTime) {
+			continue
+		}
+		if !query.EndTime.IsZero() && !delivery.AttemptedAt.Before(query.EndTime) {
+			continue
+		}
+		if query.Search != "" && !strings.Contains(strings.ToLower(alert.Title+" "+alert.Summary), strings.ToLower(query.Search)) {
+			continue
+		}
 		deliveries = append(deliveries, delivery)
 	}
-	return deliveries, nil
+	sort.Slice(deliveries, func(i, j int) bool {
+		if deliveries[i].AttemptedAt.Equal(deliveries[j].AttemptedAt) {
+			return deliveries[i].ID > deliveries[j].ID
+		}
+		return deliveries[i].AttemptedAt.After(deliveries[j].AttemptedAt)
+	})
+	limit, offset := storage.NormalizeNotificationPagination(query.Limit, query.Offset)
+	if offset >= len(deliveries) {
+		return []storage.NotificationDelivery{}, nil
+	}
+	end := offset + limit
+	if end > len(deliveries) {
+		end = len(deliveries)
+	}
+	return deliveries[offset:end], nil
 }
 
 func (s *MemoryStore) InsertChannelSnapshot(snapshot storage.ChannelSnapshot) error {

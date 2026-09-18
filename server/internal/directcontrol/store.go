@@ -106,6 +106,9 @@ func (s Store) CreateContinuousWeightChange(v tuning.Recommendation, actor strin
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
 	defer cancel()
+	if err := s.CheckPrioritySync(v); err != nil {
+		return "", err
+	}
 	if err := executeWeightUpdate(ctx, controller, v); err != nil {
 		log.Printf("direct control: weight write site=%s channel=%d target=%d duration=%s failed: %v", v.InstanceID, v.ChannelID, v.ProposedWeight, time.Since(started), err)
 		return "", fmt.Errorf("direct weight write: %w", err)
@@ -116,7 +119,7 @@ func (s Store) CreateContinuousWeightChange(v tuning.Recommendation, actor strin
 		weight = &value
 	}
 	var priority *int64
-	if v.Rule == "base_priority_sync" || v.Rule == "circuit_opened" || v.Rule == "circuit_recovered" {
+	if v.Rule == "base_priority_sync" {
 		priority = v.ProposedPriority
 	}
 	writtenAt := time.Now().UTC()
@@ -231,9 +234,6 @@ func executeWeightUpdate(ctx context.Context, controller Controller, v tuning.Re
 	}
 	weight := uint(v.ProposedWeight)
 	request := channelcontrol.UpdateRequest{ChannelID: v.ChannelID, Weight: &weight}
-	if v.ProposedPriority != nil && (v.Rule == "circuit_opened" || v.Rule == "circuit_recovered") {
-		request.Priority = v.ProposedPriority
-	}
 	_, err := controller.Update(ctx, request)
 	return err
 }

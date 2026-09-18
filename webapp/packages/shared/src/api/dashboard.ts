@@ -224,6 +224,8 @@ export interface NotificationChannelInput {
   secret?: string;
 }
 export interface NotificationDeliveryItem {
+  alert_title?: string;
+  alert_summary?: string;
   id: string;
   alert_id: string;
   channel_id: string;
@@ -844,6 +846,9 @@ export const dashboardApi = (client: ApiClient) => ({
   notificationDeliveries: (
     params: {
       site_id?: string;
+      start_time?: string;
+      end_time?: string;
+      search?: string;
       alert_id?: string;
       channel_id?: string;
       status?: string;
@@ -851,7 +856,7 @@ export const dashboardApi = (client: ApiClient) => ({
       offset?: number;
     } = {},
   ) =>
-    client.request<ListResponse<NotificationDeliveryItem>>(
+    client.request<ListResponse<NotificationDeliveryItem> & { filters_supported?: boolean }>(
       `/api/dashboard/notification-deliveries${query(params)}`,
     ),
   resendDelivery: (id: string, site_id: string) =>

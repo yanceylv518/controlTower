@@ -24,3 +24,13 @@ test('rc35 model providers resolve namespaced and case-insensitive models to ori
 test('unknown models never receive a fabricated provider icon', () => {
   for (const model of ['', 'custom-model', 'foo3-model', 'unknown']) assert.equal(resolveModelProvider(model), undefined)
 })
+
+test('monochrome provider assets retain currentColor while colored brands retain their colors', () => {
+  for (const model of ['kimi-k3','gpt-4.1','grok-3','mimo-v2','step-2']) {
+    assert.match(decodeURIComponent(resolveModelProvider(model).src), /currentColor/)
+  }
+  assert.match(decodeURIComponent(resolveModelProvider('deepseek-v4-flash').src), /#4D6BFE/)
+  const component = readFileSync(new URL('../src/components/ModelProviderIcon.vue', import.meta.url), 'utf8')
+  assert.match(component, /color:var\(--ct-ink\)/)
+  assert.match(component, /hasOwnProperty.call\(modelProviderIcons, props.name\)/)
+})

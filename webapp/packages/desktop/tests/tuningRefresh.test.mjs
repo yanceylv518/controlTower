@@ -9,7 +9,7 @@ import { computed, reactive, ref } from 'vue'
 const sfc = readFileSync(new URL('../src/views/ContinuousTuningView.vue', import.meta.url), 'utf8')
 const script = sfc.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1].replace(/^import .*;\r?\n/gm, '')
 const compiled = ts.transpileModule(script, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText
-const row = { channel_id: 1, model_name: 'm', base_weight: 100, current_weight: 80, current_priority: 1, models: ['m'] }
+const row = { channel_id: 1, model_name: 'm', base_weight: 100, base_priority: 1, current_weight: 80, current_priority: 1, models: ['m'] }
 const state = (requests, weight = 80) => ({ channel_id: 1, model_name: 'm', last_observed_requests: requests, proposed_weight: weight, speed_stats_version: 1, phase: 'normal', metric_ready: true, baseline_ready: true, updated_at: '2026-09-14T00:00:00Z' })
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no }); return { promise, resolve, reject } }
 
@@ -22,7 +22,7 @@ function page() {
     tuningContinuousStates: async () => ({ items: [state(42)] }),
   }
   const names = ['computed', 'reactive', 'ref', 'watch', 'onMounted', 'onBeforeUnmount', 'useFiltersStore', 'dashboard', 'formatTime', 'ApiError', 'ElMessage', 'ElMessageBox']
-  const create = new Function(...names, `${compiled}\nreturn { load, refreshRuntime, acceptStates, stateFor, sampleText, evaluationText, states, refreshError, bases, policy, channelQuery, channelStatusFilter, displayedRows, activeModel, dirty, selectModel, fieldChanged, savedBases, originalBase, calculatedWeight, displayedSpeedFactor, coefficientCell, overallEvaluationStatus, coefficientEmptyText, coefficientSpan, displayedPriority, editPriority, priorityLocked, cancelChanges, limitReason, currentRates, ratesReady, rowStatus, eventResult, eventResultClass, events, filteredEvents, eventDateRange };`)
+  const create = new Function(...names, `${compiled}\nreturn { load, refreshRuntime, acceptStates, stateFor, sampleText, evaluationText, states, refreshError, bases, policy, channelQuery, channelStatusFilter, displayedRows, activeModel, dirty, selectModel, fieldChanged, savedBases, originalBase, calculatedWeight, displayedSpeedFactor, coefficientCell, overallEvaluationStatus, coefficientEmptyText, coefficientSpan, displayedPriority, editPriority, cancelChanges, limitReason, currentRates, ratesReady, rowStatus, eventResult, eventResultClass, events, filteredEvents, eventDateRange };`)
   const view = create(computed, reactive, ref, () => {}, () => {}, () => {}, () => filters, dashboard, String, class extends Error {}, {}, {})
   return { ...view, filters, dashboard }
 }
@@ -247,11 +247,11 @@ test('formula target is independent of execution limits and unsaved base edits',
   assert.equal(p.calculatedWeight({...row, base_weight:0}), null);
 });
 
-test('priority editor shows online value, shares channel draft and preserves circuit lock', async () => {
+test('priority editor shows saved target and allows editing during circuit', async () => {
   const p = page(); await p.load();
   p.bases.value[0].base_priority = 11;
   p.bases.value.push({ ...row, model_name: 'other', base_priority: 11 });
-  assert.equal(p.displayedPriority(p.bases.value[0]), 1);
+  assert.equal(p.displayedPriority(p.bases.value[0]), 11);
   p.editPriority(p.bases.value[0], 12);
   assert.equal(p.displayedPriority(p.bases.value[0]), 12);
   assert.equal(p.bases.value[1].base_priority, 12);
@@ -260,7 +260,7 @@ test('priority editor shows online value, shares channel draft and preserves cir
   assert.equal(p.displayedPriority(p.bases.value[0]), 1);
   p.states.value[0].phase = 'circuit';
   p.editPriority(p.bases.value[0], 13);
-  assert.equal(p.displayedPriority(p.bases.value[0]), 1);
+  assert.equal(p.displayedPriority(p.bases.value[0]), 13);
 });
 
 test('speed display suppresses stale factors and labels only valid output fallback', async () => {

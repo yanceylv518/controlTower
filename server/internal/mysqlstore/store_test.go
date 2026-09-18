@@ -260,7 +260,7 @@ func TestChannelSnapshotBaseValueUpsertPreservesAnchorUntilModelChanges(t *testi
 	for _, fragment := range []string{
 		"ON DUPLICATE KEY UPDATE",
 		"base_weight=IF(model_name<>VALUES(model_name),VALUES(base_weight),base_weight)",
-		"base_priority=IF(model_name<>VALUES(model_name),VALUES(base_priority),base_priority)",
+		"base_priority=base_priority",
 		"updated_by=IF(model_name<>VALUES(model_name),VALUES(updated_by),updated_by)",
 		"model_name=VALUES(model_name)",
 	} {

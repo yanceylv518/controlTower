@@ -292,8 +292,7 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 					state.Multiplier = p.SoftStartMultiplier
 					state.ProposedWeight = max(int64(1), int64(math.Round(float64(base.BaseWeight)*state.Multiplier)))
 					rec := continuousEvent(id, base, state, "circuit_recovered", mode, now)
-					latestPriority := base.BasePriority
-					rec.ProposedPriority = &latestPriority
+					rec.ProposedPriority = nil
 					if mode == "auto" {
 						if _, err = cs.CreateContinuousWeightChange(rec, "system:auto", now); err == nil {
 							recoveredNow = true
@@ -447,8 +446,7 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 				state.OriginalPriority = &original
 				state.ProbeAttempts, state.ProbeSuccesses, state.ProbeDurationSum = 0, 0, 0
 				rec := continuousEvent(id, base, state, "circuit_opened", mode, now)
-				zero := int64(0)
-				rec.ProposedPriority = &zero
+				rec.ProposedPriority = nil
 				if mode == "auto" {
 					if _, err = cs.CreateContinuousWeightChange(rec, "system:auto", now); err == nil {
 						w := int64(0)
@@ -808,7 +806,7 @@ func continuousEvent(id string, base ChannelBaseValue, state ContinuousState, ru
 			"otps_sample_count": state.OTPSSamples, "otps_retry_count": state.OTPSRetries, "otps_unknown_count": state.OTPSUnknown, "otps_stats_version": state.OTPSStatsVersion,
 			"smoothed_error_rate": state.SmoothedErrorRate, "probe_attempts": state.ProbeAttempts, "probe_successes": state.ProbeSuccesses,
 		},
-		CurrentWeight: base.CurrentWeight, ProposedWeight: state.ProposedWeight, CurrentPriority: &base.CurrentPriority, ProposedPriority: &base.BasePriority, ModeAtCreation: mode, Status: "recorded"}
+		CurrentWeight: base.CurrentWeight, ProposedWeight: state.ProposedWeight, CurrentPriority: &base.CurrentPriority, ProposedPriority: nil, ModeAtCreation: mode, Status: "recorded"}
 }
 
 func speedEvidenceReady(m ChannelMetric, minSamples int64) bool {

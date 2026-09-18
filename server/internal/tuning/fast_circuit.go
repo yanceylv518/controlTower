@@ -93,8 +93,7 @@ func (e *Engine) evaluateFastCircuit(batch FastCircuitBatch, now time.Time) {
 		state.ProbeAttempts, state.ProbeSuccesses, state.ProbeDurationSum = 0, 0, 0
 		state.SoftStartPending = false
 		rec := continuousEvent(siteID, base, state, "circuit_opened", "auto", now)
-		zero := int64(0)
-		rec.ProposedPriority = &zero
+		rec.ProposedPriority = nil
 		rec.Evidence["trigger"] = "agent_report_batch"
 		rec.Evidence["request_count"] = metric.RequestCount
 		rec.Evidence["channel_error_count"] = channelErrors

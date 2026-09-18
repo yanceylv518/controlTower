@@ -41,7 +41,7 @@ func TestEmptySamplesDoNotBlockCircuitRecovery(t *testing.T) {
 			if f.states[2] != peer {
 				t.Fatal("normal peer must retain its last evaluation without a weight write")
 			}
-			if tc.wantWrites > 0 && (f.writes[0].ProposedWeight != 20 || *f.writes[0].ProposedPriority != 7) {
+			if tc.wantWrites > 0 && (f.writes[0].ProposedWeight != 20 || f.writes[0].ProposedPriority != nil) {
 				t.Fatalf("successful probe must restore traffic with soft start: %#v", f.writes[0])
 			}
 			if tc.name == "soft start hold" {

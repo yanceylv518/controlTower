@@ -40,7 +40,10 @@ func (s Store) refreshReadonlyChannels(ctx context.Context, site, encrypted stri
 	if err != nil {
 		return fmt.Errorf("readonly channel query failed: %w", err)
 	}
-	return s.StoreReadonlyChannels(site, channels, at, encrypted)
+	if err := s.StoreReadonlyChannels(site, channels, at, encrypted); err != nil {
+		return err
+	}
+	return s.ReconcilePriorities(ctx, site)
 }
 
 func readReadonlyChannels(ctx context.Context, db *sql.DB) ([]channelcontrol.Channel, error) {
@@ -98,9 +101,11 @@ func (s Store) syncReadonlyChannelSites(ctx context.Context) {
 		encrypted, err := s.ReadonlyDSNForSite(site)
 		if err == nil && encrypted != "" {
 			err = s.refreshReadonlyChannels(ctx, site, encrypted)
+		} else if err == nil {
+			err = s.ReconcilePriorities(ctx, site)
 		}
 		if err != nil {
-			log.Printf("readonly channel sync site=%s failed; preserving previous snapshot: %v", site, err)
+			log.Printf("readonly channel sync site=%s refresh/correction failed: %v", site, err)
 		}
 	}
 }

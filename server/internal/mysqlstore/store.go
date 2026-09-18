@@ -20,12 +20,12 @@ type Store struct {
 
 // A channel snapshot owns the channel's model assignment, but it must not
 // continuously overwrite an operator's tuning anchor. When the model changes,
-// reset the anchor to the current online values; otherwise preserve it.
+// reset only the weight anchor; the saved priority remains authoritative.
 const channelBaseValueSnapshotUpsertSQL = `INSERT INTO channel_base_values(instance_id,channel_id,model_name,base_weight,base_priority,updated_at,updated_by)
 VALUES(?,?,?,?,?,?,?)
 ON DUPLICATE KEY UPDATE
 base_weight=IF(model_name<>VALUES(model_name),VALUES(base_weight),base_weight),
-base_priority=IF(model_name<>VALUES(model_name),VALUES(base_priority),base_priority),
+base_priority=base_priority,
 updated_at=IF(model_name<>VALUES(model_name),VALUES(updated_at),updated_at),
 updated_by=IF(model_name<>VALUES(model_name),VALUES(updated_by),updated_by),
 model_name=VALUES(model_name)`
@@ -334,11 +334,12 @@ VALUES (?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE id=VALUES(id),channel_name=
 			}
 		} else {
 			// A channel-wide weight cannot safely be attributed to zero or
-			// multiple models. Remove its anchor and any old runtime state.
+			// multiple models. Keep the saved priority, but clear the weight
+			// anchor and runtime state until a single model is assigned.
 			if _, err = tx.Exec(`DELETE FROM tuning_continuous_states WHERE instance_id=? AND channel_id=?`, siteID, snapshot.ChannelID); err != nil {
 				return err
 			}
-			if _, err = tx.Exec(`DELETE FROM channel_base_values WHERE instance_id=? AND channel_id=?`, siteID, snapshot.ChannelID); err != nil {
+			if _, err = tx.Exec(`UPDATE channel_base_values SET model_name='' WHERE instance_id=? AND channel_id=?`, siteID, snapshot.ChannelID); err != nil {
 				return err
 			}
 		}

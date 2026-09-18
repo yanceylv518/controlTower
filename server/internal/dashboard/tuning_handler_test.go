@@ -172,7 +172,7 @@ func TestTuningBaseValuesSyncDoesNotPersistAndPutValidates(t *testing.T) {
 	}
 }
 
-func TestSavingBasePrioritySyncsOnlineUnlessChannelIsCircuiting(t *testing.T) {
+func TestSavingBasePrioritySyncsOnlineIncludingCircuitChannels(t *testing.T) {
 	now := time.Now().UTC()
 	before := []tuning.ChannelBaseValue{
 		{ChannelID: 7, ChannelName: "normal", ModelName: "m", BaseWeight: 10, BasePriority: 1, CurrentWeight: 8, CurrentPriority: 1},
@@ -183,12 +183,15 @@ func TestSavingBasePrioritySyncsOnlineUnlessChannelIsCircuiting(t *testing.T) {
 	body := `{"items":[{"channel_id":7,"channel_name":"normal","model_name":"m","base_weight":10,"base_priority":3},{"channel_id":8,"channel_name":"circuit","model_name":"m","base_weight":10,"base_priority":4}]}`
 	rr := httptest.NewRecorder()
 	h.HandleTuningBaseValues(rr, httptest.NewRequest(http.MethodPut, "/api/dashboard/tuning/base-values?site_id=i", bytes.NewBufferString(body)))
-	if rr.Code != http.StatusOK || len(s.priorityWrites) != 1 {
-		t.Fatalf("expected only normal channel priority sync: %d %s %#v", rr.Code, rr.Body.String(), s.priorityWrites)
+	if rr.Code != http.StatusOK || len(s.priorityWrites) != 2 {
+		t.Fatalf("expected normal and circuit priority sync: %d %s %#v", rr.Code, rr.Body.String(), s.priorityWrites)
 	}
 	write := s.priorityWrites[0]
 	if write.ChannelID != 7 || write.CurrentPriority == nil || *write.CurrentPriority != 1 || write.ProposedPriority == nil || *write.ProposedPriority != 3 || write.Rule != "base_priority_sync" || write.CreatedAt.Before(now.Add(-time.Minute)) {
 		t.Fatalf("unexpected priority sync: %#v", write)
+	}
+	if r := s.priorityWrites[1]; r.ChannelID != 8 || r.ProposedPriority == nil || *r.ProposedPriority != 4 || r.ProposedWeight != 0 {
+		t.Fatalf("circuit save must change only priority: %#v", r)
 	}
 	if len(s.baseSaved) != 2 || s.baseSaved[1].BasePriority != 4 {
 		t.Fatalf("circuit channel must still save latest base priority: %#v", s.baseSaved)

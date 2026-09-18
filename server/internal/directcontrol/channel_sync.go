@@ -52,7 +52,10 @@ func (s Store) RefreshChannels(ctx context.Context, siteID, actor string) error 
 		case <-time.After(channelListRetryDelay):
 		}
 	}
-	return s.Store.StoreFreshChannels(siteID, channels, at)
+	if err := s.Store.StoreFreshChannels(siteID, channels, at); err != nil {
+		return err
+	}
+	return s.ReconcilePriorities(ctx, siteID)
 }
 
 const (

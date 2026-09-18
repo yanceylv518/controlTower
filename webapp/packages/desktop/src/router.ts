@@ -53,7 +53,7 @@ export const router = createRouter({ history: createWebHistory('/'), routes: [
   { path: '/samples', component: SamplesView, meta: { title: '样本分析' } }, { path: '/runtime', component: RuntimeView, meta: { title: '系统状态' } }, { path: '/usage', component: UsageView, meta: { title: '用量统计' } },
   { path: '/latency', component: LatencyView, meta: { title: '延时分诊' } },
   { path: '/tuning', component: TuningView, meta: { title: '调权中心' } },
-  { path: '/alerts', component: AlertsView, meta: { title: '告警中心' } }, { path: '/notifications', component: NotificationsView, meta: { title: '通知设置' } }, { path: '/instances', component: InstancesView, meta: { title: '实例管理' } }, { path: '/audits', component: AuditsView, meta: { title: '操作审计' } },
+  { path: '/alerts', component: AlertsView, meta: { title: '告警中心' } }, { path: '/notifications', component: NotificationsView, meta: { title: '通知中心' } }, { path: '/instances', component: InstancesView, meta: { title: '实例管理' } }, { path: '/audits', component: AuditsView, meta: { title: '操作审计' } },
   { path: '/settings', component: SettingsView, meta: { title: '设置' } },
   { path: '/access-users', component: UsersView, meta: { title: '账号管理', adminOnly: true } },
   { path: '/no-access', component: NoAccessView, meta: { title: '尚未分配权限' } },

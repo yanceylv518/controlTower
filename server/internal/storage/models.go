@@ -248,6 +248,8 @@ type NotificationChannel struct {
 }
 
 type NotificationDelivery struct {
+	AlertTitle    string
+	AlertSummary  string
 	ID            string
 	AlertID       string
 	ChannelID     string

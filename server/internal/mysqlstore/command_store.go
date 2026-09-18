@@ -2,7 +2,9 @@ package mysqlstore
 
 import (
 	"context"
+	"controltower/server/internal/tuning"
 	"database/sql"
+	"errors"
 	"strings"
 	"time"
 
@@ -43,6 +45,31 @@ FROM channel_commands WHERE instance_id=? AND status='pending' ORDER BY created_
 		return nil, err
 	}
 	rows.Close()
+	valid := out[:0]
+	for _, cmd := range out {
+		var rec tuning.Recommendation
+		err := tx.QueryRowContext(ctx, `SELECT instance_id,channel_id,rule,mode_at_creation,proposed_priority FROM tuning_recommendations WHERE command_id=? AND rule='base_priority_sync'`, cmd.ID).Scan(&rec.InstanceID, &rec.ChannelID, &rec.Rule, &rec.ModeAtCreation, &rec.ProposedPriority)
+		if err != nil && err != sql.ErrNoRows {
+			return nil, err
+		}
+		if err == nil {
+			err = checkPrioritySync(tx, rec)
+			if errors.Is(err, ErrPrioritySyncSuperseded) {
+				if _, err = tx.ExecContext(ctx, `UPDATE channel_commands SET status='expired',error_summary='priority target or mode changed',updated_at=? WHERE id=?`, now, cmd.ID); err != nil {
+					return nil, err
+				}
+				if _, err = tx.ExecContext(ctx, `UPDATE tuning_recommendations SET status='expired',outcome_at=? WHERE command_id=?`, now, cmd.ID); err != nil {
+					return nil, err
+				}
+				continue
+			}
+			if err != nil {
+				return nil, err
+			}
+		}
+		valid = append(valid, cmd)
+	}
+	out = valid
 	if len(out) > 0 {
 		ids := make([]string, len(out))
 		args := make([]any, 0, len(out)+1)

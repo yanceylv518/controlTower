@@ -54,7 +54,7 @@ JOIN (SELECT cs.* FROM channel_current cs JOIN instances i ON i.id=cs.instance_i
       AND NOT EXISTS (SELECT 1 FROM channel_current tie JOIN instances ti ON ti.id=tie.instance_id
         WHERE tie.channel_id=cs.channel_id AND tie.captured_at=cs.captured_at AND tie.instance_id<cs.instance_id AND ti.enabled=1
         AND CASE WHEN ti.site_id='' THEN ti.id ELSE ti.site_id END=CASE WHEN i.site_id='' THEN i.id ELSE i.site_id END)) c ON c.channel_id=b.channel_id
-WHERE b.instance_id=? AND LOWER(c.status) IN ('enabled','enable','active','normal','1')`+filter+` ORDER BY b.model_name,c.channel_name`, args...)
+WHERE b.instance_id=? AND b.model_name<>'' AND LOWER(c.status) IN ('enabled','enable','active','normal','1')`+filter+` ORDER BY b.model_name,c.channel_name`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -113,6 +113,14 @@ func (s Store) SyncChannelBaseValues(instanceID string, models []string) ([]tuni
 	if err != nil {
 		return nil, err
 	}
+	saved, err := s.ListChannelBaseValues(instanceID, "")
+	if err != nil {
+		return nil, err
+	}
+	priorities := map[int64]int64{}
+	for _, v := range saved {
+		priorities[v.ChannelID] = v.BasePriority
+	}
 	wanted := map[string]bool{}
 	for _, m := range models {
 		wanted[m] = true
@@ -130,7 +138,11 @@ func (s Store) SyncChannelBaseValues(instanceID string, models []string) ([]tuni
 		if len(wanted) > 0 && !wanted[m] {
 			continue
 		}
-		out = append(out, tuning.ChannelBaseValue{InstanceID: instanceID, ChannelID: c.ID, ChannelName: c.Name, GroupName: c.GroupName, ModelName: m, BaseWeight: c.Weight, BasePriority: c.Priority, CurrentWeight: c.Weight, CurrentPriority: c.Priority})
+		priority := c.Priority
+		if saved, ok := priorities[c.ID]; ok {
+			priority = saved
+		}
+		out = append(out, tuning.ChannelBaseValue{InstanceID: instanceID, ChannelID: c.ID, ChannelName: c.Name, GroupName: c.GroupName, ModelName: m, BaseWeight: c.Weight, BasePriority: priority, CurrentWeight: c.Weight, CurrentPriority: c.Priority})
 	}
 	return out, nil
 }
@@ -353,6 +365,9 @@ func (s Store) PutContinuousState(v tuning.ContinuousState) error {
 }
 
 func (s Store) CreateContinuousWeightChange(v tuning.Recommendation, actor string, now time.Time) (string, error) {
+	if err := s.CheckPrioritySync(v); err != nil {
+		return "", err
+	}
 	if v.Rule == "base_priority_sync" && (v.CurrentPriority == nil || v.ProposedPriority == nil) {
 		return "", fmt.Errorf("base priority sync requires current and proposed priority")
 	}
@@ -371,7 +386,7 @@ func (s Store) CreateContinuousWeightChange(v tuning.Recommendation, actor strin
 	if v.Rule != "base_priority_sync" {
 		payloadValues["weight"] = v.ProposedWeight
 	}
-	if v.ProposedPriority != nil && (v.Rule == "circuit_opened" || v.Rule == "circuit_recovered" || v.Rule == "base_priority_sync") {
+	if v.ProposedPriority != nil && v.Rule == "base_priority_sync" {
 		payloadValues["priority"] = *v.ProposedPriority
 	}
 	payload, _ := json.Marshal(payloadValues)
@@ -442,7 +457,7 @@ func (s Store) RecordDirectWeightChange(v tuning.Recommendation, actor string, n
 	if v.Rule != "base_priority_sync" {
 		payloadValues["weight"] = v.ProposedWeight
 	}
-	if v.ProposedPriority != nil && (v.Rule == "circuit_opened" || v.Rule == "circuit_recovered" || v.Rule == "base_priority_sync") {
+	if v.ProposedPriority != nil && v.Rule == "base_priority_sync" {
 		payloadValues["priority"] = *v.ProposedPriority
 	}
 	payload, _ := json.Marshal(payloadValues)

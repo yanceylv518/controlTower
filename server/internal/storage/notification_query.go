@@ -1,8 +1,13 @@
 package storage
 
+import "time"
+
 const MaxNotificationQueryLimit = 200
 
 type NotificationDeliveryQuery struct {
+	StartTime time.Time
+	EndTime   time.Time
+	Search    string
 	ID        string
 	SiteID    string
 	AlertID   string

@@ -148,7 +148,11 @@ html, body { background: var(--ct-bg); color: var(--ct-ink); }
 .el-switch { --el-switch-on-color: var(--ct-primary-solid); }
 .el-checkbox, .el-radio { --el-checkbox-checked-bg-color: var(--ct-primary-solid); --el-radio-input-border-color-hover: var(--ct-accent); }
 .el-checkbox__input.is-checked .el-checkbox__inner, .el-radio__input.is-checked .el-radio__inner { background: var(--ct-primary-solid); border-color: var(--ct-primary-solid); }
-.el-radio-button__original-radio:checked + .el-radio-button__inner { background: var(--ct-primary-solid); border-color: var(--ct-primary-solid); color: var(--ct-on-solid); box-shadow: -1px 0 0 0 var(--ct-primary-solid); }
+.el-radio-button {
+  --el-radio-button-checked-bg-color: var(--ct-primary-solid);
+  --el-radio-button-checked-border-color: var(--ct-primary-solid);
+  --el-radio-button-checked-text-color: var(--ct-on-solid);
+}
 .el-pagination.is-background .el-pager li.is-active { background: var(--ct-primary-solid); color: var(--ct-on-solid); }
 .el-date-table td.current:not(.disabled) .el-date-table-cell__text { background: var(--ct-primary-solid); color: var(--ct-on-solid); }
 .el-table { --el-table-header-bg-color: var(--ct-surface-2); --el-table-header-text-color: var(--ct-ink-2); --el-table-row-hover-bg-color: var(--ct-surface-2); --el-table-current-row-bg-color: var(--ct-accent-weak); }

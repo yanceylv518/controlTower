@@ -134,7 +134,7 @@ func (s Store) QueryNotificationDeliveries(query storage.NotificationDeliveryQue
 	var deliveries []storage.NotificationDelivery
 	for rows.Next() {
 		var delivery storage.NotificationDelivery
-		if err := rows.Scan(&delivery.ID, &delivery.AlertID, &delivery.ChannelID, &delivery.Status, &delivery.AttemptedAt, &delivery.NextAttemptAt, &delivery.Attempts, &delivery.StatusCode, &delivery.ErrorSummary); err != nil {
+		if err := rows.Scan(&delivery.ID, &delivery.AlertID, &delivery.ChannelID, &delivery.Status, &delivery.AttemptedAt, &delivery.NextAttemptAt, &delivery.Attempts, &delivery.StatusCode, &delivery.ErrorSummary, &delivery.AlertTitle, &delivery.AlertSummary); err != nil {
 			return nil, err
 		}
 		deliveries = append(deliveries, delivery)
@@ -161,10 +161,22 @@ func buildNotificationDeliveryQuery(query storage.NotificationDeliveryQuery) (st
 	if query.Status != "" {
 		where, args = appendWhere(where, args, "status = ?", query.Status)
 	}
+	if !query.StartTime.IsZero() {
+		where, args = appendWhere(where, args, "attempted_at >= ?", query.StartTime)
+	}
+	if !query.EndTime.IsZero() {
+		where, args = appendWhere(where, args, "attempted_at < ?", query.EndTime)
+	}
+	if query.Search != "" {
+		where, args = appendWhere(where, args, "EXISTS (SELECT 1 FROM alerts a WHERE a.id=notification_deliveries.alert_id AND (LOCATE(?, a.title)>0 OR LOCATE(?, a.summary)>0))", query.Search)
+		args = append(args, query.Search)
+	}
 	args = append(args, limit, offset)
-	return `SELECT id, alert_id, channel_id, status, attempted_at, next_attempt_at, attempts, status_code, error_summary
+	return `SELECT id, alert_id, channel_id, status, attempted_at, next_attempt_at, attempts, status_code, error_summary,
+ COALESCE((SELECT a.title FROM alerts a WHERE a.id=notification_deliveries.alert_id),''),
+ COALESCE((SELECT a.summary FROM alerts a WHERE a.id=notification_deliveries.alert_id),'')
 FROM notification_deliveries` + where + `
-ORDER BY attempted_at DESC
+ORDER BY attempted_at DESC, id DESC
 LIMIT ? OFFSET ?`, args
 }
 

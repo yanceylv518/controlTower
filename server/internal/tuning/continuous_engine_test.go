@@ -533,7 +533,7 @@ func TestContinuousCircuitProbeAndSoftStart(t *testing.T) {
 	e := NewEngine(f)
 	e.evaluateContinuous("i", p, now, f)
 	s := f.states[1]
-	if s.Phase != "circuit" || s.ProposedWeight != 0 || s.NextProbeAt == nil || len(f.writes) != 1 || f.writes[0].ProposedPriority == nil || *f.writes[0].ProposedPriority != 0 {
+	if s.Phase != "circuit" || s.ProposedWeight != 0 || s.NextProbeAt == nil || len(f.writes) != 1 || f.writes[0].ProposedPriority != nil {
 		t.Fatalf("circuit did not open safely: %#v writes=%#v", s, f.writes)
 	}
 	e.evaluateContinuous("i", p, now.Add(5*time.Minute), f)
@@ -551,7 +551,7 @@ func TestContinuousCircuitProbeAndSoftStart(t *testing.T) {
 	f.bases[0].BasePriority = 9
 	e.evaluateContinuous("i", p, now.Add(6*time.Minute), f)
 	s = f.states[1]
-	if s.Phase != "soft_start" || s.ProposedWeight != 20 || !s.SoftStartPending || len(f.writes) != 2 || f.writes[1].ProposedPriority == nil || *f.writes[1].ProposedPriority != 9 {
+	if s.Phase != "soft_start" || s.ProposedWeight != 20 || !s.SoftStartPending || len(f.writes) != 2 || f.writes[1].ProposedPriority != nil {
 		t.Fatalf("successful probe must soft-start: %#v", s)
 	}
 }
