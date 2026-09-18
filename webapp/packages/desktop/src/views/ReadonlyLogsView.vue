@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Connection, Hide, Key, RefreshLeft, Search, View } from '@element-plus/icons-vue'
+import { Hide, RefreshLeft, Search, View } from '@element-plus/icons-vue'
 import { useRoute } from 'vue-router'
 import type { ReadonlyLog } from '@ct/shared'
+import { resolveModelProvider } from '../utils/modelProvider'
 import AppShell from '../components/AppShell.vue'
 import FallbackRequestChain from '../components/FallbackRequestChain.vue'
 import { attemptChannels, type ChainQuery } from '../utils/fallbackRequestChain'
@@ -39,6 +40,7 @@ type LogRowView = {
   displayable: boolean
   timing: boolean
   channelID: number
+  channelTone: string
   channelName: string
   hasChannel: boolean
   fallback: boolean
@@ -49,12 +51,14 @@ type LogRowView = {
   initial: string
   avatarStyle?: UserAvatarStyle
   tokenName: string
-  tokenTone: string
   hasToken: boolean
   group: string
   groupRatio?: number
   groupRatioText: string
   modelName: string
+  modelTone: string
+  modelProvider?: { name: string; src: string }
+  groupTone: string
   modelMapping: string
   hasModel: boolean
   stream?: boolean
@@ -171,14 +175,33 @@ const parsedChannelID = computed(() => {
   return channelID.value.trim() !== '' && Number.isSafeInteger(value) && value >= 0 ? value : undefined
 })
 const params = computed(() => ({ site: filters.site_id, user_ids: scopedUserIDs.value, username: username.value, start_time: timeRange.value[0].toISOString(), end_time: timeRange.value[1].toISOString(), token_name: tokenName.value, model_name: modelName.value, group: group.value, request_id: requestID.value, upstream_request_id: upstreamRequestID.value, channel_id: parsedChannelID.value, log_type: logType.value || undefined, limit: limit.value, offset: offset.value }))
-const statParams = computed(() => ({ site: filters.site_id, user_ids: scopedUserIDs.value, username: username.value, start_time: timeRange.value[0].toISOString(), end_time: timeRange.value[1].toISOString(), token_name: tokenName.value, model_name: modelName.value, group: group.value, request_id: requestID.value, upstream_request_id: upstreamRequestID.value, channel_id: parsedChannelID.value, log_type: logType.value || undefined }))
-const countParams = computed(() => {
-  const { limit: _limit, offset: _offset, ...rest } = params.value
+// 输入框为草稿；翻页与附属查询只消费点击查询时保存的快照。
+const submitted = shallowRef({ ...params.value })
+const queryRevision = ref(0)
+const statParams = computed(() => {
+  const { limit: _limit, offset: _offset, ...rest } = submitted.value
   return rest
 })
-const state = useAsyncData((signal) => passthrough.logs(params.value, signal))
-const statState = useAsyncData((signal) => passthrough.logStat(statParams.value, signal))
-const countState = useAsyncData((signal) => passthrough.logCount(countParams.value, signal))
+const countParams = computed(() => {
+  const { limit: _limit, offset: _offset, ...rest } = submitted.value
+  return rest
+})
+// 响应携带查询批次与分页位置，失败时保留的数据不能冒充新条件的结果。
+const state = useAsyncData(async (signal) => {
+  const revision = queryRevision.value, pageOffset = offset.value, pageLimit = limit.value
+  return { ...await passthrough.logs({ ...submitted.value, offset: pageOffset, limit: pageLimit }, signal), revision, pageOffset, pageLimit }
+})
+const statState = useAsyncData(async (signal) => {
+  const revision = queryRevision.value
+  return { ...await passthrough.logStat(statParams.value, signal), revision }
+})
+const countState = useAsyncData(async (signal) => {
+  const revision = queryRevision.value
+  return { ...await passthrough.logCount(countParams.value, signal), revision }
+})
+const listIsCurrent = computed(() => state.data.value?.revision === queryRevision.value)
+const countIsCurrent = computed(() => listIsCurrent.value && countState.data.value?.revision === queryRevision.value && !countState.loading.value && !countState.error.value)
+const tableScroll = ref<HTMLElement | null>(null)
 const backgroundRefreshing = ref(false)
 // 首屏加载实例时会同步设置站点；在首次统一刷新完成前忽略 watcher，避免重复发起三组请求。
 let initialLoadPending = true
@@ -215,36 +238,58 @@ function textValue(row: ReadonlyLog, ...keys: string[]) {
   return typeof value === 'string' ? value : JSON.stringify(value)
 }
 // 首次进入页面和分页仍使用完整加载；已显示结果后的查询、重置统一走后台刷新。
-const reloadAll = () => Promise.allSettled([state.reload(), statState.reload(), countState.reload()])
+function commitQuery() {
+  if (channelID.value.trim() && (!/^\d+$/.test(channelID.value.trim()) || parsedChannelID.value === undefined)) {
+    ElMessage.warning('渠道 ID 必须是非负整数')
+    return false
+  }
+  submitted.value = { ...params.value }
+  queryRevision.value += 1
+  return true
+}
+const reloadAll = () => {
+  if (!commitQuery()) return Promise.resolve([])
+  return Promise.allSettled([state.reload(), statState.reload(), countState.reload()])
+}
 // 查询和重置属于高频操作，保留现有列表并在后台更新，避免 v-loading 阻塞整张表。
 const refreshSearch = async () => {
   if (backgroundRefreshing.value) return
+  if (!commitQuery()) return
+  const revision = queryRevision.value
   closeRequestChain()
   offset.value = 0
   backgroundRefreshing.value = true
   try {
-    await Promise.allSettled([state.refresh(), statState.refresh(), countState.refresh()])
-    // 后台请求失败时继续保留旧结果，但必须明确告知用户本次操作未完全更新。
-    if ([state.lastRefreshError.value, statState.lastRefreshError.value, countState.lastRefreshError.value].some(Boolean)) {
-      ElMessage.warning('刷新失败，当前仍显示上一次结果')
+    // 统计与总数独立加载；列表返回即可继续操作，后续查询由各自的取消机制接管。
+    void statState.reload()
+    void countState.reload()
+    await state.refresh()
+    if (revision !== queryRevision.value) return
+    if (state.lastRefreshError.value) ElMessage.warning('日志查询失败，当前保留上一次列表，请重新查询')
+    else {
+      state.error.value = ''
+      if (tableScroll.value) tableScroll.value.scrollTop = 0
     }
   } finally {
-    backgroundRefreshing.value = false
+    if (revision === queryRevision.value) backgroundRefreshing.value = false
   }
 }
 const search = () => {
   if (backgroundRefreshing.value) return
   void refreshSearch()
 }
-const fallbackTotal = computed(() => offset.value + (state.data.value?.items.length || 0) + (state.data.value?.has_more ? 1 : 0))
+const fallbackTotal = computed(() => (state.data.value?.pageOffset || 0) + (state.data.value?.items.length || 0) + (state.data.value?.has_more ? 1 : 0))
 // 总数不能低于当前已返回的列表行，防止聚合短暂失配时出现“有记录但总计为 0”。
 const effectiveTotal = computed(() => {
-  if (!countState.loading.value && !countState.error.value && countState.data.value) {
+  if (countIsCurrent.value && countState.data.value) {
     return Math.max(countState.data.value.total, fallbackTotal.value)
   }
   return fallbackTotal.value
 })
-const currentPage = computed(() => Math.floor(offset.value / limit.value) + 1)
+// 新条件失败时保留的是旧页，页码必须与该页实际记录一致。
+const currentPage = computed(() => !listIsCurrent.value && state.data.value
+  ? Math.floor(state.data.value.pageOffset / state.data.value.pageLimit) + 1
+  : Math.floor(offset.value / limit.value) + 1)
 const totalPages = computed(() => Math.max(1, Math.ceil(effectiveTotal.value / limit.value)))
 const pageSizeOptions = [10, 20, 30, 40, 50, 100] as const
 type PageNumber = number | 'ellipsis'
@@ -264,16 +309,26 @@ const pageSizeMenuStyle = ref<Record<string, string>>({})
 // 页码输入只作为一次性跳转参数，避免和当前页状态产生双向同步抖动。
 const pageJump = ref('')
 const changePage = (page: number) => {
-  if (backgroundRefreshing.value) return
+  if (backgroundRefreshing.value || state.loading.value || !listIsCurrent.value) return
   offset.value = (page - 1) * limit.value
-  void state.reload()
+  void reloadPage()
+}
+// 翻页失败恢复已显示页码；成功只重置纵向位置，保留正在查看的横向列。
+async function reloadPage() {
+  const revision = queryRevision.value
+  await state.reload()
+  if (revision !== queryRevision.value) return
+  if (state.error.value && state.data.value) {
+    offset.value = state.data.value.pageOffset
+    limit.value = state.data.value.pageLimit
+  } else if (tableScroll.value) tableScroll.value.scrollTop = 0
 }
 const changePageSize = (size: number) => {
-  if (backgroundRefreshing.value) return
+  if (backgroundRefreshing.value || state.loading.value || !listIsCurrent.value) return
   if (!(pageSizeOptions as readonly number[]).includes(size)) return
   limit.value = size
   offset.value = 0
-  void state.reload()
+  void reloadPage()
 }
 function closePageSizeMenu() {
   pageSizeOpen.value = false
@@ -428,13 +483,64 @@ function handleDetailKeydown(event: KeyboardEvent) {
 }
 const expandedRetryID = ref<number | null>(null)
 const visibleColumnCount = computed(() => 1 + logColumnOptions.filter(column => isColumnVisible(column.key)).length)
-function closeRequestChain() { expandedRetryID.value = null }
+// 记录渠道单元格与浮层位置，滚动表格时可重新定位而不会撑开列表布局。
+type RetryHoverState = { id: number; chain: string; retryCount: number; left: number; top: number }
+const retryHover = ref<RetryHoverState | null>(null)
+const retryHoverTrigger = ref<HTMLElement | null>(null)
+const retryHoverElement = ref<HTMLElement | null>(null)
+const retryHoverStyle = computed(() => {
+  const state = retryHover.value
+  return state ? { left: `${state.left}px`, top: `${state.top}px` } : undefined
+})
+function closeRetryHover() {
+  retryHover.value = null
+  retryHoverTrigger.value = null
+}
+// 将重试提示限制在视口内，优先显示在渠道单元格上方，首行空间不足时自动转到下方。
+function positionRetryHover() {
+  const state = retryHover.value
+  const trigger = retryHoverTrigger.value
+  if (!state || !trigger || !trigger.isConnected || typeof window === 'undefined') {
+    if (state && (!trigger || !trigger.isConnected)) closeRetryHover()
+    return
+  }
+  const rect = trigger.getBoundingClientRect()
+  const popover = retryHoverElement.value
+  const width = popover?.offsetWidth || 260
+  const height = popover?.offsetHeight || 52
+  const margin = 8
+  const left = Math.min(Math.max(margin, rect.left), Math.max(margin, window.innerWidth - width - margin))
+  const preferredTop = rect.top - height - margin
+  const top = preferredTop >= margin
+    ? preferredTop
+    : Math.min(Math.max(margin, rect.bottom + margin), Math.max(margin, window.innerHeight - height - margin))
+  retryHover.value = { ...state, left, top }
+}
+function openRetryHover(view: LogRowView, event: MouseEvent | FocusEvent) {
+  if (!isAdmin.value || !view.hasChannel || !(view.retryChain || view.fallback)) return
+  const trigger = event.currentTarget
+  if (!(trigger instanceof HTMLElement)) return
+  retryHoverTrigger.value = trigger
+  const retryCount = Math.max(1, retryChannelsFor(view.source).length - 1)
+  retryHover.value = { id: view.id, chain: view.retryChain || '未记录完整重试链路', retryCount: view.retryChain ? retryCount : 0, left: 0, top: 0 }
+  void nextTick(positionRetryHover)
+}
+function handleRetryHoverViewportChange() {
+  if (retryHover.value) positionRetryHover()
+}
+function closeRequestChain() {
+  expandedRetryID.value = null
+  closeRetryHover()
+}
 function requestChainTitle(row: ReadonlyLog) {
-  const sequence = attemptChannels(row)
-  return sequence.length > 1 ? `重试 ${sequence.length - 1} 次：${sequence.join(' → ')}；点击展开请求链路` : '点击查看此请求的关联日志'
+  const sequence = retryChannelsFor(row)
+  return sequence.length > 1
+    ? `重试${sequence.length - 1}次：${sequence.join(' → ')}`
+    : 'Fallback 请求（未记录完整重试链路）'
 }
 function toggleRetryChain(view: LogRowView) {
   if (!isAdmin.value) return
+  closeRetryHover()
   expandedRetryID.value = expandedRetryID.value === view.id ? null : view.id
 }
 async function filterRequestChain(query: ChainQuery) {
@@ -506,7 +612,7 @@ const money = (quota: number) => {
   if (amount === 0) return prefs.currencySymbol + '0'
   return prefs.currencySymbol + (amount >= 1 ? amount.toFixed(2) : amount.toFixed(6))
 }
-const logSummary = computed(() => statState.data.value?.summary)
+const logSummary = computed(() => listIsCurrent.value && !statState.loading.value && !statState.error.value && statState.data.value?.revision === queryRevision.value ? statState.data.value.summary : undefined)
 const billingPrice = (value: number) => Number.isFinite(prefs.priceMultiplier) ? prefs.currencySymbol + Number((value * prefs.priceMultiplier).toFixed(6)) : '—'
 const two = (n: number) => String(n).padStart(2, '0')
 const timeText = (iso: string) => {
@@ -636,19 +742,25 @@ function fallbackChannelsFor(row: ReadonlyLog): string[] {
   }
   return []
 }
+// 优先保留原始 use_channel 的重复尝试顺序；旧日志只有归一化链路时再回退到兼容字段。
+function retryChannelsFor(row: ReadonlyLog): string[] {
+  const recorded = attemptChannels(row)
+  if (recorded.length > 1) return recorded
+  return fallbackChannelsFor(row)
+}
 function isFallback(row: ReadonlyLog): boolean {
   if (row.fallback === true) return true
   const explicit = first(row, 'fallback', 'is_fallback', 'fallback_flag')
   if (explicit === true || explicit === 1 || (typeof explicit === 'string' && ['1', 'true', 'yes'].includes(explicit.toLowerCase()))) return true
-  return fallbackChannelsFor(row).length > 1
+  return retryChannelsFor(row).length > 1
 }
 function retryChain(row: ReadonlyLog) {
   if (!isAdmin.value) return ''
-  const channels = fallbackChannelsFor(row)
+  const channels = retryChannelsFor(row)
   return channels.length > 1 ? channels.join(' → ') : ''
 }
 function fallbackChain(row: ReadonlyLog) {
-  const channels = fallbackChannelsFor(row)
+  const channels = retryChannelsFor(row)
   return channels.length > 1 ? channels.join(' → ') : ''
 }
 function detailInputPrice(row: ReadonlyLog) {
@@ -748,6 +860,7 @@ const logRows = computed<LogRowView[]>(() => {
     const stream = streamFlag(row)
     const fallback = isFallback(row)
     const fallbackChannels = fallbackChannelsFor(row)
+    const retryChannels = retryChannelsFor(row)
     const firstSeconds = timing && stream === true ? firstResponse(row) : undefined
     const firstVariant = firstResponseVariant(firstSeconds)
     const durationTone = durationVariant(row)
@@ -756,7 +869,9 @@ const logRows = computed<LogRowView[]>(() => {
     const rate = timing ? outputRate(row) : 0
     const channelID = row.channel_id || row.channel || 0
     const userGroupRatio = numberValue(row, 'user_group_ratio')
-    const groupRatio = userGroupRatio !== undefined && userGroupRatio !== -1 ? userGroupRatio : numberValue(row, 'group_ratio')
+    const recordedGroupRatio = numberValue(row, 'group_ratio')
+    // rc35 省略默认分组的 1x，用户专属倍率仍按实际记录展示。
+    const groupRatio = userGroupRatio !== undefined && userGroupRatio !== -1 ? userGroupRatio : recordedGroupRatio === 1 ? undefined : recordedGroupRatio
     const summary = billingSummary(row)
     const view: LogRowView = {
       source: row,
@@ -771,22 +886,25 @@ const logRows = computed<LogRowView[]>(() => {
       displayable,
       timing,
       channelID,
+      channelTone: channelID > 0 ? getTokenColorClass(String(channelID)) : 'token-tone-hidden',
       channelName: visible ? row.channel_name || '' : row.channel_name ? '••••' : '',
       hasChannel: displayable && channelID > 0,
       fallback,
       fallbackChannels,
-      retryChain: fallbackChannels.length > 1 ? fallbackChannels.join(' → ') : '',
+      retryChain: admin && retryChannels.length > 1 ? retryChannels.join(' → ') : '',
       username: visible ? row.username || '用户 ' + row.user_id : '••••',
       usernameCopy: visible ? String(row.username || row.user_id || '') : '',
       initial: visible ? getUserAvatarFallback(row.username) : '•',
       avatarStyle: visible && row.username ? getUserAvatarStyle(row.username) : undefined,
       tokenName: visible ? row.token_name : row.token_name ? '••••' : '',
-      tokenTone: visible && row.token_name ? getTokenColorClass(row.token_name) : 'token-tone-hidden',
       hasToken: displayable && Boolean(row.token_name),
       group: visible ? row.group : row.group ? '••••' : '',
       groupRatio,
       groupRatioText: groupRatio === undefined ? '' : ratioText(groupRatio),
       modelName: row.model_name,
+      modelProvider: resolveModelProvider(row.model_name || ''),
+      groupTone: visible && row.group && row.group !== 'auto' ? getTokenColorClass(row.group) : 'token-tone-hidden',
+      modelTone: row.model_name ? getTokenColorClass(row.model_name) : 'token-tone-hidden',
       modelMapping: admin ? textValue(row, 'upstream_model_name') : '',
       hasModel: displayable && Boolean(row.model_name),
       stream,
@@ -1260,6 +1378,8 @@ onMounted(() => {
   window.addEventListener('keydown', handlePageSizeKeydown)
   window.addEventListener('resize', handlePageSizeViewportChange)
   window.addEventListener('scroll', handlePageSizeViewportChange, true)
+  window.addEventListener('resize', handleRetryHoverViewportChange)
+  window.addEventListener('scroll', handleRetryHoverViewportChange, true)
   viewportQuery = window.matchMedia('(max-width: 900px)')
   viewportQuery.addEventListener('change', syncViewport)
   syncViewport()
@@ -1294,6 +1414,8 @@ onUnmounted(() => {
   window.removeEventListener('keydown', handlePageSizeKeydown)
   window.removeEventListener('resize', handlePageSizeViewportChange)
   window.removeEventListener('scroll', handlePageSizeViewportChange, true)
+  window.removeEventListener('resize', handleRetryHoverViewportChange)
+  window.removeEventListener('scroll', handleRetryHoverViewportChange, true)
   window.removeEventListener('keydown', handleDetailKeydown)
   document.body.classList.remove('ct-detail-open')
   document.body.classList.remove('ct-rc35-logs-theme')
@@ -1302,6 +1424,10 @@ onUnmounted(() => {
 })
 watch(() => filters.site_id, (site, previous) => {
   if (!initialLoadPending && site && site !== previous) {
+    // 站点隔离：加载新站点时立即移除上一站点结果，取消其仍在执行的请求。
+    state.cancel(); statState.cancel(); countState.cancel()
+    backgroundRefreshing.value = false
+    state.data.value = undefined; statState.data.value = undefined; countState.data.value = undefined
     requestScope.value = null
     offset.value = 0
     detailRow.value = null
@@ -1315,6 +1441,8 @@ watch(() => filters.site_id, (site, previous) => {
   <AppShell title="使用日志">
     <div class="logs-page">
       <el-alert v-if="statState.error.value" title="统计数据加载失败，日志列表仍可正常查询" type="warning" show-icon :closable="false"><el-button link type="primary" @click="statState.reload">重新加载统计</el-button></el-alert>
+      <el-alert v-if="countState.error.value" title="总数加载失败，当前显示已加载的位置" type="warning" :closable="false"><el-button link type="primary" @click="countState.reload">重新加载总数</el-button></el-alert>
+      <el-alert v-if="state.data.value && !listIsCurrent && !backgroundRefreshing && !state.loading.value" title="本次查询未成功，以下是上一次查询结果，请重新查询后翻页" type="warning" :closable="false" />
 
       <!-- rc35 的工具栏按“筛选器 → 统计与操作”分两行排列，所有筛选字段始终可见。 -->
       <section class="logs-toolbar">
@@ -1332,9 +1460,9 @@ watch(() => filters.site_id, (site, previous) => {
         </div>
         <div class="toolbar-meta">
           <div class="stat-badges">
-            <span class="stat-badge"><i class="accent-sky" /><span>用量</span><strong>{{ sensitiveVisible ? money(logSummary?.quota || 0) : '••••' }}</strong></span>
-            <span class="stat-badge"><i class="accent-rose" /><span>RPM</span><strong>{{ formatNumber(logSummary?.rpm || 0) }}</strong></span>
-            <span class="stat-badge"><i class="accent-slate" /><span>TPM</span><strong>{{ formatNumber(logSummary?.tpm || 0) }}</strong></span>
+            <span class="stat-badge"><i class="accent-sky" /><span>用量</span><strong>{{ sensitiveVisible ? (logSummary ? money(logSummary.quota) : '—') : '••••' }}</strong></span>
+            <span class="stat-badge"><i class="accent-rose" /><span>RPM</span><strong>{{ logSummary ? formatNumber(logSummary.rpm) : '—' }}</strong></span>
+            <span class="stat-badge"><i class="accent-slate" /><span>TPM</span><strong>{{ logSummary ? formatNumber(logSummary.tpm) : '—' }}</strong></span>
           </div>
           <div class="toolbar-actions">
             <el-select v-model="logType" placeholder="全部类型" class="filter-type action-type"><el-option label="全部类型" :value="0" /><el-option label="消费" :value="2" /><el-option label="错误" :value="5" /><el-option label="充值" :value="1" /><el-option label="管理" :value="3" /><el-option label="系统" :value="4" /><el-option label="退款" :value="6" /><el-option label="登录" :value="7" /></el-select>
@@ -1358,17 +1486,17 @@ watch(() => filters.site_id, (site, previous) => {
       <el-alert v-else-if="!state.loading.value && state.data.value && !state.data.value.configured" title="只读数据库尚未配置，当前暂无数据。配置后可直接在此查询。" type="info" show-icon :closable="false" />
 
       <section class="logs-table-shell" :class="{ 'is-background-refreshing': backgroundRefreshing }" :aria-busy="backgroundRefreshing">
-        <div v-if="!mobileViewport" v-loading="state.loading.value" class="desktop-table">
+        <div v-if="!mobileViewport" v-loading="state.loading.value" class="desktop-table" ref="tableScroll">
           <table class="logs-table">
             <thead><tr><th class="col-time">时间</th><th v-if="isColumnVisible('channel')" class="col-channel">渠道</th><th v-if="isColumnVisible('user')" class="col-user">用户</th><th v-if="isColumnVisible('token')" class="col-token">令牌</th><th v-if="isColumnVisible('model')" class="col-model">模型</th><th v-if="isColumnVisible('stream')" class="col-stream">流</th><th v-if="isColumnVisible('tokens')" class="col-tokens">Tokens</th><th v-if="isColumnVisible('quota')" class="col-quota">费用</th><th v-if="isColumnVisible('timing')" class="col-timing">耗时</th><th v-if="isColumnVisible('details')" class="col-details">详情</th></tr></thead>
             <tbody v-for="view in renderedRows" :key="view.id" v-memo="[view.memoKey, expandedRetryID === view.id]">
               <!-- 日志记录不可变时复用整行 DOM，只有字段或显示偏好变化才重新补丁。 -->
               <tr class="log-row" :class="view.tone">
                   <td class="col-time"><div class="time-cell" :title="view.timeFull"><span class="time-text">{{ view.timeText }}</span><span class="status-badge" :class="view.statusClass">{{ view.statusLabel }}</span></div></td>
-                  <td v-if="isColumnVisible('channel')" class="col-channel"><div v-if="view.hasChannel" class="channel-cell"><div class="channel-line"><button type="button" class="channel-badge copyable" title="点击复制渠道 ID" @click.stop="copyText(view.channelID)">#{{ view.channelID }}</button><button v-if="isAdmin && (view.fallback || view.retryChain)" type="button" class="retry-chain-trigger" :aria-label="'查看请求重试链路：' + view.retryChain" :title="requestChainTitle(view.source)" :aria-expanded="expandedRetryID === view.id" @click.stop="toggleRetryChain(view)"><el-icon aria-hidden="true"><Connection /></el-icon></button></div><span v-if="view.channelName" class="cell-secondary">{{ view.channelName }}</span></div><span v-else class="muted">—</span></td>
+                  <td v-if="isColumnVisible('channel')" class="col-channel" @mouseenter="openRetryHover(view, $event)" @mouseleave="closeRetryHover" @focusin="openRetryHover(view, $event)" @focusout="closeRetryHover"><div v-if="view.hasChannel" class="channel-cell" :aria-label="isAdmin && view.retryChain ? requestChainTitle(view.source) : undefined"><div class="channel-line"><button type="button" :class="['channel-badge', 'copyable', view.channelTone]" title="点击复制渠道 ID" @click.stop="copyText(view.channelID)">#{{ view.channelID }}</button><button v-if="isAdmin && (view.fallback || view.retryChain)" type="button" class="retry-chain-trigger" :aria-label="'查看请求重试链路：' + view.retryChain" :aria-expanded="expandedRetryID === view.id" @click.stop="toggleRetryChain(view)"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v12M18 9a9 9 0 0 1-9 9"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="6" r="3"/></svg></button></div><span v-if="view.channelName" class="cell-secondary">{{ view.channelName }}</span></div><span v-else class="muted">—</span></td>
                   <td v-if="isColumnVisible('user')" class="col-user"><button v-if="view.source.username" type="button" class="user-cell copyable" :title="sensitiveVisible ? '点击复制用户名' : undefined" @click.stop="copyText(view.usernameCopy)"><i class="user-avatar" :class="{ 'is-hidden': !sensitiveVisible }" :style="view.avatarStyle">{{ view.initial }}</i><span class="truncate">{{ view.username }}</span></button><span v-else class="muted">—</span></td>
-                  <td v-if="isColumnVisible('token')" class="col-token"><div v-if="view.hasToken" class="token-cell"><button type="button" class="token-badge copyable" :class="view.tokenTone" :title="sensitiveVisible ? '点击复制令牌名称' : undefined" @click.stop="copyText(sensitiveVisible ? view.source.token_name : '')"><el-icon><Key /></el-icon><span>{{ view.tokenName }}</span></button><span v-if="view.source.group || view.groupRatio !== undefined" class="group-meta"><span v-if="view.source.group">{{ view.group }}</span><span v-if="view.source.group && view.groupRatio !== undefined"> </span><span v-if="view.groupRatio !== undefined" class="ratio">{{ view.groupRatioText }}</span></span></div><span v-else class="muted">—</span></td>
-                  <td v-if="isColumnVisible('model')" class="col-model"><div v-if="view.hasModel" class="model-cell"><button type="button" class="model-badge copyable" @click.stop="copyText(view.source.model_name)"><el-icon><Connection /></el-icon>{{ view.modelName }}</button><span v-if="view.modelMapping" class="cell-secondary truncate">{{ view.modelMapping }}</span></div><span v-else class="muted">—</span></td>
+                  <td v-if="isColumnVisible('token')" class="col-token"><div v-if="view.hasToken" class="token-cell"><button type="button" class="token-badge copyable" :title="sensitiveVisible ? '点击复制令牌名称' : undefined" @click.stop="copyText(sensitiveVisible ? view.source.token_name : '')"><svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3v-3h3v-3h2.172a2 2 0 0 0 1.414-.586l1.814-1.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5" fill="currentColor"/></svg><span>{{ view.tokenName }}</span></button><span v-if="view.source.group || view.groupRatio !== undefined" class="group-meta"><span v-if="view.source.group" :class="view.groupTone">{{ view.group }}</span><span v-if="view.source.group && view.groupRatio !== undefined"> </span><span v-if="view.groupRatio !== undefined" class="ratio">{{ view.groupRatioText }}</span></span></div><span v-else class="muted">—</span></td>
+                  <td v-if="isColumnVisible('model')" class="col-model"><div v-if="view.hasModel" class="model-cell"><button type="button" class="model-badge copyable" :class="view.modelProvider ? undefined : view.modelTone" @click.stop="copyText(view.source.model_name)"><img v-if="view.modelProvider" class="model-icon" :src="view.modelProvider.src" :alt="view.modelProvider.name" width="18" height="18" />{{ view.modelName }}</button><span v-if="view.modelMapping" class="cell-secondary truncate">{{ view.modelMapping }}</span></div><span v-else class="muted">—</span></td>
                   <td v-if="isColumnVisible('stream')" class="col-stream"><div v-if="view.timing" class="stream-cell"><span class="stream-label" :class="view.streamClass">{{ view.streamLabel }}</span><small v-if="view.outputRateText">{{ view.outputRateText }}</small></div><span v-else class="muted">—</span></td>
                   <td v-if="isColumnVisible('tokens')" class="col-tokens"><div v-if="view.hasTokens" class="tokens-cell"><span class="token-pair">{{ view.promptTokens }} <b>/</b> {{ view.completionTokens }}</span><small v-if="view.cacheTotal"><span v-if="view.cacheReadTokens">缓存↓ {{ view.cacheReadText }}</span><span v-if="view.cacheWriteTokens"> ↑ {{ view.cacheWriteText }}</span></small></div><span v-else class="muted">—</span></td>
                   <td v-if="isColumnVisible('quota')" class="col-quota"><span v-if="view.displayable" class="cost-text">{{ view.quota }}</span><span v-else class="muted">—</span></td>
@@ -1396,11 +1524,11 @@ watch(() => filters.site_id, (site, previous) => {
         <!-- rc35 的移动端摘要布局：首屏保留模型、费用、状态和关键维度。 -->
         <div v-else v-loading="state.loading.value" class="mobile-log-list">
           <article v-for="view in renderedRows" v-memo="[view.memoKey, expandedRetryID === view.id]" :key="view.id" class="mobile-log-card" :class="view.tone">
-            <div class="mobile-head"><div class="mobile-model"><button v-if="isColumnVisible('model') && view.hasModel" type="button" class="model-badge copyable" @click.stop="copyText(view.source.model_name)"><el-icon><Connection /></el-icon>{{ view.modelName }}</button><div class="mobile-time"><span>{{ view.timeShort }}</span><span class="status-badge" :class="view.statusClass">{{ view.statusLabel }}</span></div></div><span v-if="isColumnVisible('quota')" class="mobile-cost">{{ view.quota }}</span></div>
+            <div class="mobile-head"><div class="mobile-model"><button v-if="isColumnVisible('model') && view.hasModel" type="button" class="model-badge copyable" :class="view.modelProvider ? undefined : view.modelTone" @click.stop="copyText(view.source.model_name)"><img v-if="view.modelProvider" class="model-icon" :src="view.modelProvider.src" :alt="view.modelProvider.name" width="18" height="18" />{{ view.modelName }}</button><div class="mobile-time"><span>{{ view.timeShort }}</span><span class="status-badge" :class="view.statusClass">{{ view.statusLabel }}</span></div></div><span v-if="isColumnVisible('quota')" class="mobile-cost">{{ view.quota }}</span></div>
             <div class="mobile-grid">
-              <div v-if="isColumnVisible('channel')" class="mobile-field"><span>渠道</span><button v-if="view.hasChannel" type="button" class="channel-badge copyable" @click.stop="copyText(view.channelID)">#{{ view.channelID }}<small v-if="view.channelName">{{ view.channelName }}</small></button><button v-if="isAdmin && (view.fallback || view.retryChain)" type="button" class="retry-chain-trigger" :aria-expanded="expandedRetryID === view.id" aria-label="查看请求重试链路" :title="requestChainTitle(view.source)" @click="toggleRetryChain(view)"><el-icon aria-hidden="true"><Connection /></el-icon></button><strong v-if="!view.hasChannel">—</strong></div>
+              <div v-if="isColumnVisible('channel')" class="mobile-field" :aria-label="isAdmin && view.retryChain ? requestChainTitle(view.source) : undefined" @mouseenter="openRetryHover(view, $event)" @mouseleave="closeRetryHover"><span>渠道</span><button v-if="view.hasChannel" type="button" :class="['channel-badge', 'copyable', view.channelTone]" title="点击复制渠道 ID" @click.stop="copyText(view.channelID)">#{{ view.channelID }}<small v-if="view.channelName">{{ view.channelName }}</small></button><button v-if="isAdmin && (view.fallback || view.retryChain)" type="button" class="retry-chain-trigger" :aria-expanded="expandedRetryID === view.id" aria-label="查看请求重试链路" @click="toggleRetryChain(view)"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v12M18 9a9 9 0 0 1-9 9"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="6" r="3"/></svg></button><strong v-if="!view.hasChannel">—</strong></div>
               <div v-if="isColumnVisible('user')" class="mobile-field"><span>用户</span><button v-if="view.source.username" type="button" class="mobile-user copyable" @click.stop="copyText(view.usernameCopy)"><i class="user-avatar" :class="{ 'is-hidden': !sensitiveVisible }" :style="view.avatarStyle">{{ view.initial }}</i>{{ view.username }}</button><strong v-else>—</strong></div>
-              <div v-if="isColumnVisible('token')" class="mobile-field"><span>令牌 / 分组</span><div v-if="view.hasToken" class="mobile-token"><span class="token-badge" :class="view.tokenTone"><el-icon><Key /></el-icon>{{ view.tokenName }}</span><small v-if="view.source.group">{{ view.group }}</small></div><strong v-else>—</strong></div>
+              <div v-if="isColumnVisible('token')" class="mobile-field"><span>令牌 / 分组</span><div v-if="view.hasToken" class="mobile-token"><span class="token-badge"><svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3v-3h3v-3h2.172a2 2 0 0 0 1.414-.586l1.814-1.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5" fill="currentColor"/></svg>{{ view.tokenName }}</span><small v-if="view.source.group" :class="view.groupTone">{{ view.group }}</small></div><strong v-else>—</strong></div>
               <div v-if="isColumnVisible('tokens')" class="mobile-field"><span>Tokens</span><div v-if="view.hasTokens" class="tokens-cell"><span class="token-pair">{{ view.promptTokens }} / {{ view.completionTokens }}</span><small v-if="view.cacheTotal">缓存 {{ view.cacheTotalText }}</small></div><strong v-else>—</strong></div>
               <div v-if="isColumnVisible('stream') || isColumnVisible('timing')" class="mobile-field">
                 <span>{{ isColumnVisible('stream') && isColumnVisible('timing') ? '流 / 耗时' : isColumnVisible('stream') ? '流' : '耗时' }}</span>
@@ -1426,30 +1554,30 @@ watch(() => filters.site_id, (site, previous) => {
       </section>
 
       <footer class="pagination-bar">
-        <div class="pager-summary"><span>总计：</span><strong>{{ formatNumber(effectiveTotal) }}</strong></div>
+        <div class="pager-summary"><span>{{ countIsCurrent ? '总计：' : '已加载至：' }}</span><strong>{{ formatNumber(countIsCurrent ? effectiveTotal : (state.data.value?.pageOffset || 0) + (state.data.value?.items.length || 0)) }}</strong></div>
         <div class="pager-controls">
           <div class="page-size-control">
             <span class="page-size-label">每页行数</span>
-            <button ref="pageSizeTrigger" type="button" class="page-size page-size-trigger" role="combobox" aria-haspopup="listbox" aria-controls="readonly-log-page-size-menu" :aria-expanded="pageSizeOpen" aria-label="每页行数" :disabled="backgroundRefreshing" @click="togglePageSizeMenu" @keydown="handlePageSizeTriggerKeydown">
+            <button ref="pageSizeTrigger" type="button" class="page-size page-size-trigger" role="combobox" aria-haspopup="listbox" aria-controls="readonly-log-page-size-menu" :aria-expanded="pageSizeOpen" aria-label="每页行数" :disabled="backgroundRefreshing || state.loading.value || !listIsCurrent" @click="togglePageSizeMenu" @keydown="handlePageSizeTriggerKeydown">
               <span>{{ limit }}</span>
               <i class="page-size-chevron" aria-hidden="true" />
             </button>
           </div>
           <nav class="pager-navigation" aria-label="日志分页">
-            <button type="button" class="page-button page-edge" :disabled="currentPage <= 1 || backgroundRefreshing" aria-label="跳转到第一页" title="第一页" @click="changePage(1)"><span aria-hidden="true">&laquo;</span></button>
-            <button type="button" class="page-button" :disabled="currentPage <= 1 || backgroundRefreshing" aria-label="上一页" title="上一页" @click="changePage(currentPage - 1)"><span aria-hidden="true">&lsaquo;</span></button>
+            <button type="button" class="page-button page-edge" :disabled="currentPage <= 1 || backgroundRefreshing || state.loading.value || !listIsCurrent" aria-label="跳转到第一页" title="第一页" @click="changePage(1)"><span aria-hidden="true">&laquo;</span></button>
+            <button type="button" class="page-button" :disabled="currentPage <= 1 || backgroundRefreshing || state.loading.value || !listIsCurrent" aria-label="上一页" title="上一页" @click="changePage(currentPage - 1)"><span aria-hidden="true">&lsaquo;</span></button>
             <template v-for="(page, index) in pageNumbers" :key="page + '-' + index">
               <span v-if="page === 'ellipsis'" class="page-ellipsis" aria-hidden="true">&hellip;</span>
-              <button v-else type="button" class="page-button page-number" :class="{ active: page === currentPage }" :disabled="page === currentPage || backgroundRefreshing" :aria-current="page === currentPage ? 'page' : undefined" :aria-label="'跳转到第 ' + page + ' 页'" @click="changePage(page)">{{ page }}</button>
+              <button v-else type="button" class="page-button page-number" :class="{ active: page === currentPage }" :disabled="page === currentPage || backgroundRefreshing || state.loading.value || !listIsCurrent" :aria-current="page === currentPage ? 'page' : undefined" :aria-label="'跳转到第 ' + page + ' 页'" @click="changePage(page)">{{ page }}</button>
             </template>
-            <button type="button" class="page-button" :disabled="currentPage >= totalPages || backgroundRefreshing" aria-label="下一页" title="下一页" @click="changePage(currentPage + 1)"><span aria-hidden="true">&rsaquo;</span></button>
-            <button type="button" class="page-button page-edge" :disabled="currentPage >= totalPages || backgroundRefreshing" aria-label="跳转到最后一页" title="最后一页" @click="changePage(totalPages)"><span aria-hidden="true">&raquo;</span></button>
+            <button type="button" class="page-button" :disabled="currentPage >= totalPages || backgroundRefreshing || state.loading.value || !listIsCurrent" aria-label="下一页" title="下一页" @click="changePage(currentPage + 1)"><span aria-hidden="true">&rsaquo;</span></button>
+            <button type="button" class="page-button page-edge" :disabled="currentPage >= totalPages || backgroundRefreshing || state.loading.value || !listIsCurrent" aria-label="跳转到最后一页" title="最后一页" @click="changePage(totalPages)"><span aria-hidden="true">&raquo;</span></button>
           </nav>
         </div>
         <form class="page-jump" novalidate @submit.prevent="jumpToPage">
           <label for="readonly-log-page-jump">跳至</label>
           <input id="readonly-log-page-jump" v-model="pageJump" type="number" min="1" :max="totalPages" step="1" inputmode="numeric" placeholder="页码" aria-label="跳转到页码" />
-          <button type="submit" :disabled="backgroundRefreshing" aria-label="确认跳转页码">跳转</button>
+          <button type="submit" :disabled="backgroundRefreshing || state.loading.value || !listIsCurrent" aria-label="确认跳转页码">跳转</button>
         </form>
       </footer>
 
@@ -1462,6 +1590,7 @@ watch(() => filters.site_id, (site, previous) => {
           </button>
         </div>
       </Teleport>
+
 
       <!-- 详情按 rc35 的信息流重构：标题、单列概览、分组卡片和内部滚动彼此独立。 -->
       <Teleport to="body">
@@ -1716,6 +1845,14 @@ watch(() => filters.site_id, (site, previous) => {
       </Teleport>
     </div>
   </AppShell>
+      <!-- 重试提示独立于表格滚动层，鼠标进入整个渠道单元格即可查看。 -->
+      <Teleport to="body">
+        <div v-if="retryHover" ref="retryHoverElement" class="retry-hover-card" role="tooltip" :style="retryHoverStyle">
+          <strong v-if="retryHover.retryCount">重试{{ retryHover.retryCount }}次：</strong><strong v-else>Fallback：</strong>
+          <span>{{ retryHover.chain }}</span>
+        </div>
+      </Teleport>
+
 </template>
 
 <style scoped>
@@ -1773,7 +1910,7 @@ watch(() => filters.site_id, (site, previous) => {
   background: var(--rc35-surface);
 }
 
-/* 工具栏按 rc35 的“主筛选、统计与操作”两层组织，筛选字段始终可见。 */
+/* 工具栏按 rc35 的“主筛选、统计与操作”两层组织；主筛选保持单行，窄桌面在行内横向查看。 */
 .logs-toolbar {
   flex: none;
   padding: 12px 14px 10px;
@@ -1786,9 +1923,13 @@ watch(() => filters.site_id, (site, previous) => {
 .primary-filters {
   display: flex;
   min-width: 0;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 2px;
+  scrollbar-width: thin;
 }
 .filter-time {
   width: 294px;
@@ -1803,11 +1944,11 @@ watch(() => filters.site_id, (site, previous) => {
   max-width: 294px !important;
   flex: 0 0 294px !important;
 }
-.filter-username { width: 145px; flex: 0 1 145px; }
-.filter-channel { width: 125px; flex: 0 1 125px; }
-.filter-request { width: 165px; flex: 0 1 165px; }
-.filter-model, .filter-group { width: 150px; flex: 0 0 150px; }
-.filter-token, .filter-upstream { width: 184px; flex: 0 1 184px; }
+.filter-username { width: 145px; min-width: 128px; flex: 0 1 145px; }
+.filter-channel { width: 125px; min-width: 112px; flex: 0 1 125px; }
+.filter-request { width: 165px; min-width: 145px; flex: 0 1 165px; }
+.filter-model, .filter-group { width: 150px; min-width: 132px; flex: 0 1 150px; }
+.filter-token, .filter-upstream { width: 184px; min-width: 156px; flex: 0 1 184px; }
 .logs-toolbar :deep(.el-input__wrapper),
 .logs-toolbar :deep(.el-select__wrapper) {
   min-height: 34px;
@@ -1915,10 +2056,11 @@ watch(() => filters.site_id, (site, previous) => {
 .primary-action:hover { background: var(--ct-primary-solid); }
 .primary-action:disabled { cursor: wait; opacity: .62; }
 
-/* 表格默认列宽固定，隐藏任意可选列后剩余列也不会发生 nth-child 错位。 */
+/* 列按内容确定宽度，可选列隐藏后仍保持各自语义样式。 */
 .logs-table-shell {
   flex: 1;
   min-height: 0;
+  min-width: 0;
   overflow: hidden;
   border: 1px solid var(--rc35-line);
   border-radius: 8px;
@@ -1931,7 +2073,14 @@ watch(() => filters.site_id, (site, previous) => {
   opacity: .78;
   transition: opacity .16s ease;
 }
-.desktop-table { height: 100%; min-height: 430px; overflow: auto; }
+/* 表格使用内容驱动的最小宽度，视口不足时由这一层提供底部横向滚动条。 */
+.desktop-table {
+  height: 100%;
+  min-width: 0;
+  min-height: 430px;
+  overflow: auto;
+  scrollbar-width: thin;
+}
 
 /* 桌面端把日志页锁定在壳层视口内，长列表只在表格区域滚动。 */
 @media (min-width: 761px) {
@@ -1944,11 +2093,11 @@ watch(() => filters.site_id, (site, previous) => {
   .desktop-table { min-height: 0; }
 }
 .logs-table {
-  width: 100%;
-  min-width: 0;
+  width: max-content;
+  min-width: 100%;
   border-collapse: separate;
   border-spacing: 0;
-  table-layout: fixed;
+  table-layout: auto;
   font-size: 13px;
 }
 .logs-table th {
@@ -1973,16 +2122,23 @@ watch(() => filters.site_id, (site, previous) => {
   color: var(--rc35-ink-2);
   vertical-align: middle;
 }
-.logs-table th.col-time, .logs-table td.col-time { width: 132px; }
-.logs-table th.col-channel, .logs-table td.col-channel { width: 112px; }
-.logs-table th.col-user, .logs-table td.col-user { width: 124px; }
-.logs-table th.col-token, .logs-table td.col-token { width: 146px; }
-.logs-table th.col-model, .logs-table td.col-model { width: 150px; }
-.logs-table th.col-stream, .logs-table td.col-stream { width: 62px; }
-.logs-table th.col-tokens, .logs-table td.col-tokens { width: 110px; }
-.logs-table th.col-quota, .logs-table td.col-quota { width: 86px; }
-.logs-table th.col-timing, .logs-table td.col-timing { width: 96px; }
-.logs-table th.col-details, .logs-table td.col-details { width: 154px; }
+.logs-table th.col-time, .logs-table td.col-time { min-width: 132px; }
+.logs-table th.col-channel, .logs-table td.col-channel { min-width: 112px; }
+.logs-table th.col-user, .logs-table td.col-user { min-width: 124px; }
+.logs-table th.col-token, .logs-table td.col-token { min-width: 146px; }
+.logs-table th.col-model, .logs-table td.col-model { min-width: 150px; }
+.logs-table th.col-stream, .logs-table td.col-stream { min-width: 62px; }
+.logs-table th.col-tokens, .logs-table td.col-tokens { min-width: 110px; }
+.logs-table th.col-quota, .logs-table td.col-quota { min-width: 86px; }
+.logs-table th.col-timing, .logs-table td.col-timing { min-width: 96px; }
+.logs-table th.col-details, .logs-table td.col-details { min-width: 154px; }
+/* 保留内容自适应与横向滚动，但限制异常长名称和错误摘要对整表宽度的影响。 */
+.logs-table .channel-cell, .logs-table .user-cell { max-width: 260px; }
+.logs-table .channel-cell .cell-secondary { max-width: 100%; }
+.logs-table .token-cell { max-width: 280px; }
+.logs-table .token-badge > span { overflow: hidden; text-overflow: ellipsis; }
+.logs-table .model-cell { max-width: 320px; }
+.logs-table .details-button { max-width: 360px; }
 .log-row { cursor: default; transition: background-color .14s ease; }
 .log-row:hover td { background: var(--ct-accent-weak); }
 .log-row.row-error td { background: rgba(206, 59, 68, .045); }
@@ -2041,6 +2197,37 @@ watch(() => filters.site_id, (site, previous) => {
 .retry-chain-trigger:focus-visible { background: var(--ct-warn-weak); color: var(--ct-warn); }
 .retry-chain-trigger:focus-visible { outline: 2px solid var(--ct-warn); outline-offset: 1px; }
 .retry-chain-trigger > .el-icon { font-size: 15px; }
+.retry-hover-card {
+  position: fixed;
+  z-index: 4100;
+  display: flex;
+  --rc35-ink-2: #525252;
+  --rc35-amber: var(--ct-warn);
+  max-width: min(320px, calc(100vw - 16px));
+  align-items: baseline;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid #d7dee8;
+  border-radius: 6px;
+  background: #fff;
+  box-shadow: 0 8px 22px rgba(28, 43, 68, .16);
+  color: var(--rc35-ink-2);
+  font-size: 12px;
+  line-height: 18px;
+  pointer-events: none;
+  white-space: normal;
+}
+.retry-hover-card strong {
+  flex: none;
+  color: var(--rc35-amber);
+  font-weight: 600;
+}
+.retry-hover-card span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--rc35-ink-2);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
 
 .retry-chain-text { color: var(--rc35-amber); font-size: 10.5px; line-height: 15px; white-space: normal; }
 .channel-badge, .token-badge, .model-badge {
@@ -2058,21 +2245,23 @@ watch(() => filters.site_id, (site, previous) => {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.channel-badge {
-  height: 23px;
-  padding: 0 7px;
-  border-color: var(--ct-line);
-  background: var(--ct-accent-weak);
-  color: var(--rc35-blue);
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-weight: 600;
-}
-.channel-badge:hover { background: var(--ct-accent-weak); }
+.channel-badge { height: 20px; padding: 0 6px; border: 0; border-radius: 0; background: transparent; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-weight: 500; }
+/* 对应 rc35 StatusBadge 的 textColorMap 和浅色主题变量。 */
+.token-tone-amber, .token-tone-orange, .token-tone-yellow { --identity-ink: var(--ct-warn); }
+.token-tone-blue, .token-tone-indigo { --identity-ink: var(--ct-accent); }
+.token-tone-cyan, .token-tone-teal { --identity-ink: var(--ct-accent); }
+.token-tone-green { --identity-ink: var(--ct-ok); }
+.token-tone-light-green { --identity-ink: var(--ct-ok); }
+.token-tone-grey, .token-tone-hidden { --identity-ink: var(--ct-ink-3); }
+.token-tone-light-blue { --identity-ink: var(--ct-accent); }
+.token-tone-lime { --identity-ink: var(--ct-purple); }
+.token-tone-pink { --identity-ink: var(--ct-ok); }
+.token-tone-purple, .token-tone-violet { --identity-ink: var(--ct-purple); }
+.token-tone-red { --identity-ink: var(--ct-crit); }
+.channel-badge, .group-meta [class*="token-tone-"], .mobile-token small, .model-badge[class*="token-tone-"] { color: var(--identity-ink); }
 .copyable { cursor: pointer; }
 .copyable:hover {
   filter: brightness(.97);
-  text-decoration: underline dotted;
-  text-underline-offset: 3px;
 }
 .copyable:focus-visible,
 .user-cell:focus-visible,
@@ -2121,93 +2310,12 @@ watch(() => filters.site_id, (site, previous) => {
   color: var(--rc35-ink-3);
 }
 .truncate { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.token-badge {
-  height: 24px;
-  padding: 0 7px;
-  border-color: var(--ct-line-strong);
-  background: var(--ct-surface-2);
-  color: var(--rc35-ink);
-}
-/* 令牌语义色与 New API 的 stringToColor 对齐，使用浅色底保证文字对比度。 */
-.token-badge[class*="token-tone-"] {
-  border-color: var(--token-line);
-  background: var(--token-bg);
-  color: var(--token-ink);
-}
-.token-badge.token-tone-amber,
-.token-badge.token-tone-orange,
-.token-badge.token-tone-yellow {
-  --token-line: var(--ct-line-strong);
-  --token-bg: var(--ct-warn-weak);
-  --token-ink: var(--ct-warn);
-}
-.token-badge.token-tone-blue,
-.token-badge.token-tone-indigo {
-  --token-line: var(--ct-line);
-  --token-bg: var(--ct-accent-weak);
-  --token-ink: var(--rc35-blue);
-}
-.token-badge.token-tone-cyan,
-.token-badge.token-tone-teal {
-  --token-line: var(--ct-line);
-  --token-bg: var(--ct-surface-2);
-  --token-ink: var(--ct-accent);
-}
-.token-badge.token-tone-green,
-.token-badge.token-tone-light-green {
-  --token-line: var(--ct-line);
-  --token-bg: var(--ct-ok-weak);
-  --token-ink: var(--rc35-green);
-}
-.token-badge.token-tone-grey {
-  --token-line: var(--rc35-line-strong);
-  --token-bg: var(--rc35-surface-2);
-  --token-ink: var(--rc35-ink-2);
-}
-.token-badge.token-tone-light-blue {
-  --token-line: var(--ct-line);
-  --token-bg: var(--ct-accent-weak);
-  --token-ink: var(--ct-accent);
-}
-.token-badge.token-tone-lime {
-  --token-line: var(--ct-line);
-  --token-bg: var(--ct-ok-weak);
-  --token-ink: var(--ct-ok);
-}
-.token-badge.token-tone-pink {
-  --token-line: var(--ct-line);
-  --token-bg: var(--ct-purple-weak);
-  --token-ink: var(--ct-purple);
-}
-.token-badge.token-tone-purple,
-.token-badge.token-tone-violet {
-  --token-line: var(--ct-line);
-  --token-bg: var(--ct-purple-weak);
-  --token-ink: var(--ct-purple);
-}
-.token-badge.token-tone-red {
-  --token-line: var(--ct-line);
-  --token-bg: var(--ct-crit-weak);
-  --token-ink: var(--ct-crit);
-}
-.token-badge.token-tone-hidden {
-  --token-line: var(--rc35-line-strong);
-  --token-bg: var(--rc35-surface-2);
-  --token-ink: var(--rc35-ink-3);
-}
-.group-meta { color: var(--rc35-ink-3); }
-.group-meta .ratio { color: var(--rc35-ink-3); font-variant-numeric: tabular-nums; }
-.model-badge {
-  width: fit-content;
-  min-height: 26px;
-  padding: 2px 8px;
-  border-color: var(--ct-line);
-  background: var(--ct-purple-weak);
-  color: var(--ct-purple);
-  font-weight: 600;
-  text-align: left;
-}
-.model-badge .el-icon { color: var(--ct-accent); font-size: 14px; }
+/* 与 rc35 的 border-border/60、bg-muted/30、rounded-md、h-6 对应。 */
+.token-badge, .model-badge { width: fit-content; height: 24px; min-height: 24px; padding: 0 8px; gap: 6px; border: 1px solid var(--ct-line); border-radius: 6px; background: var(--ct-surface-2); color: var(--ct-ink); font-weight: 500; text-align: left; }
+.token-badge svg, .model-icon { flex: none; }
+.model-icon { width: 18px; height: 18px; object-fit: contain; }
+.group-meta { color: var(--ct-ink-3); }
+.group-meta .ratio { color: var(--ct-ink-3); font-variant-numeric: tabular-nums; }
 .stream-cell { gap: 3px; }
 .stream-label {
   display: inline-flex;
@@ -2232,7 +2340,7 @@ watch(() => filters.site_id, (site, previous) => {
 }
 .token-pair b { color: var(--rc35-ink-3); font-weight: 400; }
 .tokens-cell small { max-width: 116px; }
-.cost-text { font-weight: 600; }
+.cost-text { display: inline-block; padding: 2px 8px; border: 1px solid var(--ct-line); border-radius: 6px; background: var(--ct-surface-2); font-weight: 600; }
 
 /* 首字和总耗时分别取色，色条仅表达同一行的两个独立指标。 */
 .timing-cell {
@@ -2253,8 +2361,9 @@ watch(() => filters.site_id, (site, previous) => {
 }
 .timing-segment { display: block; min-height: 0; flex: 1 1 0; }
 .timing-segment.timing-success { background: var(--rc35-green); }
-.timing-segment.timing-warning { background: var(--rc35-amber); }
-.timing-segment.timing-danger { background: var(--ct-danger-solid); }
+/* 警告用金黄色条与深金文字，危险用正红色，避免橙色与玫红在紧凑列表中混淆。 */
+.timing-segment.timing-warning { background: var(--ct-warning-solid); }
+.timing-segment.timing-danger { background: var(--ct-crit); }
 .timing-segment.timing-neutral { background: var(--rc35-ink-3); }
 .timing-values {
   display: flex;
@@ -2264,9 +2373,9 @@ watch(() => filters.site_id, (site, previous) => {
   white-space: nowrap;
 }
 .timing-value { color: var(--rc35-ink-2); font-size: 10.5px; }
-.timing-value b { font-size: 11.5px; }
+.timing-value b { font-size: 11.5px; font-weight: 400; }
 .timing-value.timing-success b { color: var(--rc35-green); }
-.timing-value.timing-warning b { color: var(--rc35-amber); }
+.timing-value.timing-warning b { color: var(--ct-warn); }
 .timing-value.timing-danger b { color: var(--ct-crit); }
 .timing-value.timing-neutral b { color: var(--rc35-ink-3); }
 .details-button {
@@ -3090,23 +3199,23 @@ watch(() => filters.site_id, (site, previous) => {
   }
 }
 
-/* 常用桌面宽度下压缩列宽，避免 1280px 视口出现横向滚动。 */
+/* 窄桌面只调整最小宽度，完整内容仍可横向滚动查看。 */
 @media (min-width: 761px) and (max-width: 1320px) {
   .filter-time { min-width: 280px; flex-basis: 300px; }
   .filter-username { width: 132px; flex-basis: 132px; }
   .filter-channel { width: 112px; flex-basis: 112px; }
   .filter-request { width: 145px; flex-basis: 145px; }
   .filter-model, .filter-group { width: 138px; flex-basis: 138px; }
-  .logs-table th.col-time, .logs-table td.col-time { width: 130px; }
-  .logs-table th.col-channel, .logs-table td.col-channel { width: 102px; }
-  .logs-table th.col-user, .logs-table td.col-user { width: 110px; }
-  .logs-table th.col-token, .logs-table td.col-token { width: 126px; }
-  .logs-table th.col-model, .logs-table td.col-model { width: 134px; }
-  .logs-table th.col-stream, .logs-table td.col-stream { width: 54px; }
-  .logs-table th.col-tokens, .logs-table td.col-tokens { width: 98px; }
-  .logs-table th.col-quota, .logs-table td.col-quota { width: 70px; }
-  .logs-table th.col-timing, .logs-table td.col-timing { width: 86px; }
-  .logs-table th.col-details, .logs-table td.col-details { width: 128px; }
+  .logs-table th.col-time, .logs-table td.col-time { min-width: 130px; }
+  .logs-table th.col-channel, .logs-table td.col-channel { min-width: 102px; }
+  .logs-table th.col-user, .logs-table td.col-user { min-width: 110px; }
+  .logs-table th.col-token, .logs-table td.col-token { min-width: 126px; }
+  .logs-table th.col-model, .logs-table td.col-model { min-width: 134px; }
+  .logs-table th.col-stream, .logs-table td.col-stream { min-width: 54px; }
+  .logs-table th.col-tokens, .logs-table td.col-tokens { min-width: 98px; }
+  .logs-table th.col-quota, .logs-table td.col-quota { min-width: 70px; }
+  .logs-table th.col-timing, .logs-table td.col-timing { min-width: 86px; }
+  .logs-table th.col-details, .logs-table td.col-details { min-width: 128px; }
 }
 
 /* 移动端保持控件可触达，主筛选使用两列，日期和操作横跨整行。 */
