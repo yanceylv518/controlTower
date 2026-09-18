@@ -79,3 +79,10 @@ export async function loadRequestChain(
   }
   return { rows: [...rows.values()], truncated: true }
 }
+
+// An explicit false comes from a failed supplemental lookup. Older servers that
+// omit the field retain their existing display behavior.
+export function retryLookupUnknown(row: ReadonlyLog): boolean {
+  return row.fallback_checked === false && row.fallback !== true
+    && Boolean(row.request_id) && row.user_id > 0 && attemptChannels(row).length <= 1
+}

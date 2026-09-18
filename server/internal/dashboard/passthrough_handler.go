@@ -756,12 +756,15 @@ func configureReadonlyDB(db *sql.DB) {
 }
 
 type PassthroughHandler struct {
-	Config    ReadonlyConfigStore
-	Audit     PassthroughAuditStore
-	Rollups   ReadonlyLogRollupStore
-	SecretKey string
-	mu        sync.Mutex
-	pools     map[string]passthroughPool
+	Config       ReadonlyConfigStore
+	Audit        PassthroughAuditStore
+	Rollups      ReadonlyLogRollupStore
+	SecretKey    string
+	mu           sync.Mutex
+	pools        map[string]passthroughPool
+	summaryCache *readonlyQueryCache
+	summarySlots map[*sql.DB]chan struct{}
+	channelNames map[readonlyChannelKey]readonlyChannelName
 }
 
 type PassthroughUser struct {
@@ -825,6 +828,7 @@ type PassthroughLog struct {
 	IP                string    `json:"ip"`
 	IsStream          bool      `json:"is_stream"`
 	// Fallback 表示同一请求是否实际尝试过多个渠道；它不依赖 admin_info 投影。
+	FallbackChecked  bool     `json:"fallback_checked"`
 	Fallback         bool     `json:"fallback"`
 	FallbackChannels []string `json:"fallback_channels,omitempty"`
 	Other            string   `json:"other"`
@@ -981,6 +985,9 @@ func markReadonlyFallbackRequests(ctx context.Context, tx *sql.Tx, items []Passt
 		return
 	}
 	for i := range items {
+		if items[i].RequestID != "" {
+			items[i].FallbackChecked = true
+		}
 		if _, ok := fallbackKeys[readonlyRequestKey(items[i].RequestID, items[i].UserID)]; ok {
 			items[i].Fallback = true
 		}
@@ -1034,6 +1041,7 @@ func (h *PassthroughHandler) database(site string) (*sql.DB, bool, error) {
 	configureReadonlyDB(db)
 	if old, ok := h.pools[site]; ok {
 		_ = old.db.Close()
+		delete(h.summarySlots, old.db)
 	}
 	h.pools[site] = passthroughPool{encrypted: encrypted, db: db}
 	return db, true, nil
@@ -1247,7 +1255,7 @@ func projectReadonlyLogOther(value string, viewer bool) string {
 }
 
 // hydrateReadonlyChannelNames 只为管理员批量补全渠道名称；channels 不可读时保留日志结果并显示 ID。
-func hydrateReadonlyChannelNames(ctx context.Context, tx *sql.Tx, items []PassthroughLog) {
+func hydrateReadonlyChannelNames(ctx context.Context, tx *sql.Tx, items []PassthroughLog) bool {
 	ids := make([]int64, 0, len(items))
 	seen := make(map[int64]struct{}, len(items))
 	for _, item := range items {
@@ -1261,7 +1269,7 @@ func hydrateReadonlyChannelNames(ctx context.Context, tx *sql.Tx, items []Passth
 		ids = append(ids, item.ChannelID)
 	}
 	if len(ids) == 0 {
-		return
+		return false
 	}
 	args := make([]any, len(ids))
 	for i, id := range ids {
@@ -1269,20 +1277,25 @@ func hydrateReadonlyChannelNames(ctx context.Context, tx *sql.Tx, items []Passth
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT id,COALESCE(name,'') FROM channels WHERE id IN (`+placeholders(len(ids))+`)`, args...)
 	if err != nil {
-		return
+		return false
 	}
 	defer rows.Close()
 	names := make(map[int64]string, len(ids))
 	for rows.Next() {
 		var id int64
 		var name string
-		if rows.Scan(&id, &name) == nil {
-			names[id] = name
+		if rows.Scan(&id, &name) != nil {
+			return false
 		}
+		names[id] = name
+	}
+	if rows.Err() != nil {
+		return false
 	}
 	for i := range items {
 		items[i].ChannelName = names[items[i].ChannelID]
 	}
+	return true
 }
 func queryWindow(r *http.Request) (time.Time, time.Time, error) {
 	now := time.Now().UTC()
@@ -1364,13 +1377,16 @@ func redactSummary(value string) string {
 }
 
 func (h *PassthroughHandler) audit(r *http.Request, site, operation string, summary any) {
+	h.auditStatus(r, site, operation, summary, "succeeded")
+}
+func (h *PassthroughHandler) auditStatus(r *http.Request, site, operation string, summary any, status string) {
 	if h.Audit == nil {
 		return
 	}
 	raw := make([]byte, 12)
 	_, _ = rand.Read(raw)
 	body, _ := json.Marshal(summary)
-	_ = h.Audit.InsertOperationAudit(storage.OperationAudit{ID: hex.EncodeToString(raw), InstanceID: site, OperationType: operation, TargetType: "newapi_readonly", TargetID: site, ActorID: ctauth.Actor(r), AfterSummary: string(body), Status: "succeeded", CreatedAt: time.Now().UTC()})
+	_ = h.Audit.InsertOperationAudit(storage.OperationAudit{ID: hex.EncodeToString(raw), InstanceID: site, OperationType: operation, TargetType: "newapi_readonly", TargetID: site, ActorID: ctauth.Actor(r), AfterSummary: string(body), Status: status, CreatedAt: time.Now().UTC()})
 }
 
 func (h *PassthroughHandler) Users(w http.ResponseWriter, r *http.Request) {
@@ -1476,7 +1492,13 @@ func (h *PassthroughHandler) Logs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	args := append([]any{start.Unix(), end.Unix()}, filters.args...)
-	pageArgs := append(append([]any{}, args...), limit+1, offset)
+	scope := readonlyPageScope(site, viewer, filters.where, args)
+	cursor, err := parseReadonlyPageCursor(r.URL.Query().Get("cursor"), scope)
+	if err != nil {
+		writeDashboardError(w, 400, "invalid_cursor")
+		return
+	}
+	listSQL, pageArgs := readonlyPageSQL(filters.where, args, limit, offset, cursor)
 	ctx, cancel := context.WithTimeout(r.Context(), readonlyLogQueryTimeout)
 	defer cancel()
 	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
@@ -1485,7 +1507,7 @@ func (h *PassthroughHandler) Logs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	rows, err := tx.QueryContext(ctx, readonlyLogsListQuery+filters.where+readonlyLogsListOrder, pageArgs...)
+	rows, err := tx.QueryContext(ctx, listSQL, pageArgs...)
 	if err != nil {
 		writeDashboardError(w, 502, "readonly_query_failed")
 		return
@@ -1505,6 +1527,7 @@ func (h *PassthroughHandler) Logs(w http.ResponseWriter, r *http.Request) {
 		v.Content = v.ContentSummary
 		v.Channel = v.ChannelID
 		v.Fallback, v.FallbackChannels = readonlyLogFallbackInfo(v.Other)
+		v.FallbackChecked = v.Fallback
 		v.Other = projectReadonlyLogOther(v.Other, viewer)
 		if viewer {
 			v.ChannelName = ""
@@ -1521,7 +1544,11 @@ func (h *PassthroughHandler) Logs(w http.ResponseWriter, r *http.Request) {
 		writeDashboardError(w, 502, "readonly_query_failed")
 		return
 	}
-	markReadonlyFallbackRequests(ctx, tx, items)
+	// Optional lookup cannot hold the list for the full query timeout.
+	enrichCtx, enrichCancel := context.WithTimeout(ctx, time.Second)
+	markReadonlyFallbackRequests(enrichCtx, tx, items)
+	enrichCancel()
+	_ = tx.Rollback()
 	if viewer {
 		for i := range items {
 			// viewer 只收到事实标志，不暴露其它尝试渠道的运营链路。
@@ -1532,14 +1559,29 @@ func (h *PassthroughHandler) Logs(w http.ResponseWriter, r *http.Request) {
 	if hasMore {
 		items = items[:limit]
 	}
+	if cursor != nil && cursor.Previous {
+		for i, j := 0, len(items)-1; i < j; i, j = i+1, j-1 {
+			items[i], items[j] = items[j], items[i]
+		}
+		hasMore = true
+	}
 	if !viewer {
-		hydrateReadonlyChannelNames(ctx, tx, items)
+		h.hydrateCachedChannelNames(ctx, db, items)
+	}
+	nextCursor, previousCursor := "", ""
+	if len(items) > 0 {
+		if hasMore {
+			nextCursor = readonlyPageToken(items[len(items)-1], false, scope)
+		}
+		if offset > 0 {
+			previousCursor = readonlyPageToken(items[0], true, scope)
+		}
 	}
 	h.audit(r, site, "passthrough.logs", map[string]any{"user_ids": ids, "start_time": start, "end_time": end, "limit": limit, "offset": offset})
-	writeDashboardJSON(w, 200, map[string]any{"items": items, "configured": true, "total": offset + len(items), "page": offset/limit + 1, "page_size": limit, "has_more": hasMore})
+	writeDashboardJSON(w, 200, map[string]any{"items": items, "configured": true, "total": offset + len(items), "page": offset/limit + 1, "page_size": limit, "has_more": hasMore, "next_cursor": nextCursor, "previous_cursor": previousCursor})
 }
 
-func (h *PassthroughHandler) LogStat(w http.ResponseWriter, r *http.Request) {
+func (h *PassthroughHandler) logStat(w http.ResponseWriter, r *http.Request) {
 	site, ids, err := passthroughScope(r)
 	if err != nil {
 		writeDashboardError(w, 400, err.Error())
@@ -1567,6 +1609,12 @@ func (h *PassthroughHandler) LogStat(w http.ResponseWriter, r *http.Request) {
 	where, args := filters.where, filters.args
 	ctx, cancel := context.WithTimeout(r.Context(), readonlyLogQueryTimeout)
 	defer cancel()
+	release, err := h.acquireReadonlySummary(ctx, db)
+	if err != nil {
+		writeDashboardError(w, 502, "readonly_query_failed")
+		return
+	}
+	defer release()
 	var summary PassthroughLogSummary
 	quotaWhere := where
 	if filters.logType == nil {
@@ -1622,11 +1670,10 @@ func (h *PassthroughHandler) LogStat(w http.ResponseWriter, r *http.Request) {
 		writeDashboardError(w, 502, "readonly_query_failed")
 		return
 	}
-	h.audit(r, site, "passthrough.logs.stat", map[string]any{"user_ids": ids, "start_time": start, "end_time": end})
 	writeDashboardJSON(w, 200, map[string]any{"configured": true, "summary": summary})
 }
 
-func (h *PassthroughHandler) LogCount(w http.ResponseWriter, r *http.Request) {
+func (h *PassthroughHandler) logCount(w http.ResponseWriter, r *http.Request) {
 	site, ids, err := passthroughScope(r)
 	if err != nil {
 		writeDashboardError(w, 400, err.Error())
@@ -1656,6 +1703,12 @@ func (h *PassthroughHandler) LogCount(w http.ResponseWriter, r *http.Request) {
 	args := append([]any{start.Unix(), end.Unix()}, filters.args...)
 	ctx, cancel := context.WithTimeout(r.Context(), readonlyLogCountTimeout)
 	defer cancel()
+	release, err := h.acquireReadonlySummary(ctx, db)
+	if err != nil {
+		writeDashboardError(w, 502, "readonly_query_failed")
+		return
+	}
+	defer release()
 	var total int64
 	rollupFrom, rollupTo, useRollup := completeHourWindow(start, end)
 	if useRollup && !viewer && !filters.hasRequestFilter && !filters.hasLike && h.readonlyRollupReady(ctx, site, rollupFrom) {
@@ -1697,7 +1750,6 @@ func (h *PassthroughHandler) LogCount(w http.ResponseWriter, r *http.Request) {
 		writeDashboardError(w, 502, "readonly_query_failed")
 		return
 	}
-	h.audit(r, site, "passthrough.logs.count", map[string]any{"user_ids": ids, "start_time": start, "end_time": end, "total": total})
 	writeDashboardJSON(w, 200, map[string]any{"configured": true, "total": total})
 }
 

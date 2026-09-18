@@ -5,7 +5,7 @@ import ts from 'typescript'
 
 const source = readFileSync(new URL('../src/utils/fallbackRequestChain.ts', import.meta.url), 'utf8')
 const code = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 } }).outputText
-const { chainQuery, attemptChannels, buildRequestChain, loadRequestChain } = await import('data:text/javascript;base64,' + Buffer.from(code).toString('base64'))
+const { chainQuery, attemptChannels, buildRequestChain, loadRequestChain, retryLookupUnknown } = await import('data:text/javascript;base64,' + Buffer.from(code).toString('base64'))
 const row = (id, channel, path, overrides = {}) => ({ id, channel_id: channel, type: 5, user_id: 7, request_id: 'request-a', created_at: `2026-09-18T00:00:${String(id).padStart(2, '0')}Z`, use_time: 3, other: JSON.stringify({ admin_info: { use_channel: path } }), ...overrides })
 const final = row(3, 148, ['141', '191', '148'], { type: 2 })
 
@@ -111,4 +111,22 @@ test('only-this-request clears conflicting filters and refuses a stale site', as
   assert.equal(context.requestID.value, 'request-a')
   assert.deepEqual(context.requestScope.value, { request: 'request-a', user: '7' })
   assert.deepEqual(context.timeRange.value.map(date => date.toISOString()), [query.start_time, query.end_time])
+})
+
+
+test('unknown retry lookup stays inspectable without claiming a retry happened',async()=>{
+  const unknown=row(1,0,[],{fallback:false,fallback_checked:false})
+  assert.equal(retryLookupUnknown(unknown),true)
+  const query=chainQuery('a',unknown)
+  assert.equal(query.request_id,'request-a');assert.equal(query.user_ids,'7')
+  const result=await loadRequestChain(query,async()=>({configured:true,items:[unknown],has_more:false}),new AbortController().signal)
+  assert.equal(result.rows.length,1)
+  assert.equal(retryLookupUnknown({...unknown,fallback_checked:true}),false)
+  assert.equal(retryLookupUnknown({...unknown,fallback_checked:undefined}),false)
+  assert.equal(retryLookupUnknown({...unknown,fallback:true}),false)
+  assert.equal(retryLookupUnknown({...unknown,request_id:''}),false)
+  assert.equal(retryLookupUnknown({...unknown,user_id:0}),false)
+  const page=readFileSync(new URL('../src/views/ReadonlyLogsView.vue',import.meta.url),'utf8')
+  assert.equal((page.match(/v-if="view.retryUnknown">待确认/g)||[]).length,2)
+  assert.match(page,/retryUnknown: admin && retryLookupUnknown\(row\)/)
 })

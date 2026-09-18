@@ -17,7 +17,7 @@ function setup() {
   const passthrough=Object.fromEntries(Object.keys(calls).map(name=>[name,(params,signal)=>{const d=deferred();calls[name].push({...d,params,signal});return d.promise}]))
   const deps={ref,shallowRef,computed,useAsyncData,passthrough,filters:{site_id:'a'},scopedUserIDs:ref(undefined),timeRange:ref([new Date('2026-09-01'),new Date('2026-09-02')]),logType:ref(0),limit:ref(100),offset:ref(0),closeRequestChain(){},ElMessage:{warning:m=>messages.push(m)},pageSizeOptions:[10,20,50,100]}
   for(const key of ['channelID','username','tokenName','modelName','group','requestID','upstreamRequestID'])deps[key]=ref('')
-  const state=new Function(...Object.keys(deps),compile(code)+';return {state,statState,countState,refreshSearch,changePage,changePageSize,submitted,listIsCurrent,countIsCurrent,backgroundRefreshing,tableScroll} ')(...Object.values(deps))
+  const state=new Function(...Object.keys(deps),compile(code)+';return {state,statState,countState,refreshSearch,reloadPage,changePage,changePageSize,submitted,listIsCurrent,countIsCurrent,backgroundRefreshing,tableScroll} ')(...Object.values(deps))
   return {...deps,...state,calls,messages}
 }
 const response={items:[{id:1}],configured:true,total:1000,has_more:true}
@@ -34,10 +34,10 @@ test('pagination uses submitted filters and slow statistics do not block the lis
 })
 
 test('failed and superseded counts cannot appear as the current query total',async()=>{
-  const h=setup();let job=h.refreshSearch();h.calls.logs[0].resolve(response);h.calls.logCount[0].resolve({total:1000});await job;await Promise.resolve()
+  const h=setup();let job=h.refreshSearch();h.calls.logs[0].resolve(response);await job;h.calls.logCount[0].resolve({total:1000});await new Promise(resolve=>setImmediate(resolve))
   assert.equal(h.countIsCurrent.value,true)
   h.modelName.value='new';job=h.refreshSearch();assert.equal(h.countIsCurrent.value,false)
-  h.calls.logs[1].resolve(response);h.calls.logCount[1].reject(new Error('count failed'));await job;await Promise.resolve()
+  h.calls.logs[1].resolve(response);await job;h.calls.logCount[1].reject(new Error('count failed'));await new Promise(resolve=>setImmediate(resolve))
   assert.equal(h.countIsCurrent.value,false)
   assert.ok(h.countState.error.value)
   h.calls.logStat[0].resolve({summary:{quota:999}});await Promise.resolve();await Promise.resolve()
@@ -64,4 +64,70 @@ test('pagination failures restore the shown page and successful pages reset only
   assert.equal(h.offset.value,0);assert.equal(h.tableScroll.value.scrollTop,500)
   h.changePage(2);h.calls.logs[2].resolve(response);await new Promise(resolve=>setImmediate(resolve))
   assert.equal(h.offset.value,100);assert.equal(h.tableScroll.value.scrollTop,0);assert.equal(h.tableScroll.value.scrollLeft,150)
+})
+
+
+test('list is issued before statistics; new searches cancel old statistics immediately',async()=>{
+  const h=setup();let job=h.refreshSearch()
+  assert.equal(h.calls.logs.length,1);assert.equal(h.calls.logStat.length,0);assert.equal(h.calls.logCount.length,0)
+  h.calls.logs[0].resolve(response);await job
+  assert.equal(h.calls.logStat.length,1);assert.equal(h.calls.logCount.length,1)
+  job=h.refreshSearch()
+  assert.equal(h.calls.logStat[0].signal.aborted,true);assert.equal(h.calls.logCount[0].signal.aborted,true)
+  assert.equal(h.calls.logCount.length,1)
+  h.calls.logs[1].resolve(response);await job
+})
+
+test('adjacent pages use server cursors, jumps and page-size changes use offsets',async()=>{
+  const h=setup();const job=h.refreshSearch()
+  h.calls.logs[0].resolve({...response,next_cursor:'next-1'});await job
+  h.changePage(2);assert.equal(h.calls.logs[1].params.cursor,'next-1')
+  h.calls.logs[1].resolve({...response,next_cursor:'next-2',previous_cursor:'prev-2'})
+  await new Promise(resolve=>setImmediate(resolve))
+  h.changePage(1);assert.equal(h.calls.logs[2].params.cursor,'prev-2')
+  h.calls.logs[2].resolve({...response,next_cursor:'next-1'});await new Promise(resolve=>setImmediate(resolve))
+  h.changePage(8);assert.equal(h.calls.logs[3].params.cursor,undefined);assert.equal(h.calls.logs[3].params.offset,700)
+  h.calls.logs[3].resolve(response);await new Promise(resolve=>setImmediate(resolve))
+  h.changePageSize(20);assert.equal(h.calls.logs[4].params.cursor,undefined);assert.equal(h.calls.logs[4].params.offset,0)
+})
+
+
+test('failed cursor navigation restores the complete request used by the displayed page',async()=>{
+  const h=setup();const first=h.refreshSearch()
+  h.calls.logs[0].resolve({...response,next_cursor:'next-1'});await first
+  h.changePage(2);h.calls.logs[1].reject(new Error('temporary failure'));await new Promise(setImmediate)
+  let retry=h.reloadPage()
+  assert.equal(h.calls.logs[2].params.offset,0);assert.equal(h.calls.logs[2].params.cursor,undefined)
+  h.calls.logs[2].resolve({...response,next_cursor:'next-1'});await retry
+  h.changePage(2);h.calls.logs[3].resolve({...response,next_cursor:'next-2',previous_cursor:'prev-2'});await new Promise(setImmediate)
+  h.changePage(3);h.calls.logs[4].reject(new Error('temporary failure'));await new Promise(setImmediate)
+  retry=h.reloadPage()
+  assert.equal(h.calls.logs[5].params.offset,100);assert.equal(h.calls.logs[5].params.cursor,'next-1')
+  h.calls.logs[5].resolve({...response,next_cursor:'next-2',previous_cursor:'prev-2'});await retry
+  h.changePageSize(20);h.calls.logs[6].reject(new Error('size failed'));await new Promise(setImmediate)
+  retry=h.reloadPage()
+  assert.equal(h.calls.logs[7].params.offset,100);assert.equal(h.calls.logs[7].params.limit,100);assert.equal(h.calls.logs[7].params.cursor,'next-1')
+  h.calls.logs[7].resolve(response);await retry
+  assert.match(source, /@click="reloadPage">重新加载/)
+})
+
+test('pagination cancels pending summaries and resumes only after the list completes',async()=>{
+  const h=setup();const first=h.refreshSearch();h.calls.logs[0].resolve(response);await first
+  h.changePage(2)
+  assert.equal(h.calls.logStat[0].signal.aborted,true);assert.equal(h.calls.logCount[0].signal.aborted,true)
+  assert.equal(h.calls.logStat.length,1);assert.equal(h.calls.logCount.length,1)
+  h.calls.logStat[0].resolve({summary:{quota:999}});h.calls.logCount[0].resolve({total:999});await new Promise(setImmediate)
+  assert.equal(h.statState.data.value,undefined);assert.equal(h.countState.data.value,undefined)
+  h.calls.logs[1].resolve(response);await new Promise(setImmediate)
+  assert.equal(h.calls.logStat.length,2);assert.equal(h.calls.logCount.length,2)
+})
+
+test('stale pagination cannot resume statistics or roll back a new search',async()=>{
+  const h=setup();const first=h.refreshSearch();h.calls.logs[0].resolve(response);await first
+  h.changePage(2);h.modelName.value='new';const next=h.refreshSearch()
+  h.calls.logs[1].reject(new Error('old failure'));await new Promise(setImmediate)
+  assert.equal(h.calls.logStat.length,1);assert.equal(h.calls.logCount.length,1)
+  h.calls.logs[2].resolve(response);await next
+  assert.equal(h.calls.logStat.length,2);assert.equal(h.calls.logStat[1].params.model_name,'new')
+  assert.equal(h.offset.value,0)
 })

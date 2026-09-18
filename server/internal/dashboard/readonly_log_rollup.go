@@ -7,6 +7,7 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"controltower/server/internal/storage"
@@ -141,18 +142,33 @@ func (r ReadonlyLogRollupRunner) runOnce(ctx context.Context) {
 			sites[siteOf(instance)] = true
 		}
 	}
+	// Two sites can catch up independently, while each site retains its
+	// ten-batch budget and settled-head semantics. Never overlap rounds.
+	var workers sync.WaitGroup
+	slots := make(chan struct{}, 2)
+	defer workers.Wait()
 	for site := range sites {
 		if ctx.Err() != nil {
 			return
 		}
-		if err = r.syncSite(ctx, site); err != nil {
-			message := err.Error()
-			if len(message) > 1000 {
-				message = message[:1000]
-			}
-			_ = r.Store.RecordReadonlyLogRollupError(ctx, site, message, time.Now().UTC())
-			log.Printf("readonly log rollup site=%s failed: %v", site, err)
+		select {
+		case slots <- struct{}{}:
+		case <-ctx.Done():
+			return
 		}
+		workers.Add(1)
+		go func(site string) {
+			defer workers.Done()
+			defer func() { <-slots }()
+			if err := r.syncSite(ctx, site); err != nil {
+				message := err.Error()
+				if len(message) > 1000 {
+					message = message[:1000]
+				}
+				_ = r.Store.RecordReadonlyLogRollupError(ctx, site, message, time.Now().UTC())
+				log.Printf("readonly log rollup site=%s failed: %v", site, err)
+			}
+		}(site)
 	}
 }
 

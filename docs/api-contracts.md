@@ -361,3 +361,18 @@ This rule requires the total-request-time output statistics implementation and m
 When current TTFT evidence and its peer baseline are ready, the performance product is `Kspeed * Kotps * Kcache * Kerror`. Otherwise, if current output evidence and its baseline are ready, set `Kspeed = Kotps` and use `Kotps * Kotps * Kcache * Kerror`. Never reuse the prior TTFT coefficient for a new calculation. Cache scoring remains unchanged; existing combined bounds and dispatch protections continue to apply.
 
 An insufficient total request window, or absence of both usable current TTFT and output evidence, holds the effective current weight without a normal weight write. Circuit, probe and recovery decisions take precedence. Dashboard status distinguishes current output substitution from skipped normal tuning. This fallback itself adds no Agent payload or migration; deploy its Server and frontend with the average-output dependency (Server/migration before Agent).
+
+
+## 使用日志查询优化（2026-09-18）
+
+- `GET /api/dashboard/passthrough/logs` 新增可选 `cursor`，响应新增 `next_cursor` / `previous_cursor`。游标是不可依赖内部格式的字符串，绑定站点、角色、有效用户范围、时间及筛选条件；不替代后端权限检查。无游标继续支持原 `offset`/页码契约；无效或不同筛选范围的游标返回 400 `invalid_cursor`。
+- 游标排序键为 `(created_at,id)`。下一页使用严格小于条件降序读取，上一页严格大于升序读取再倒序返回；同秒记录以 ID 决定边界。游标请求中的 offset 仅用于响应页码和展示位置，SQL offset 为 0。前端仅相邻页使用游标，跳页/改页大小/新筛选回到普通分页；旧 Server 未返回游标时自动兼容。
+- 列表先加载，返回后才启动总数与统计；新搜索取消旧附属请求，卸载/切站不启动已失效请求。翻页/失败重试暂停本页面未完成的统计，列表请求结束后仅恢复被暂停的请求，过期查询不恢复。Server 每个站点连接池只允许一项 count/stat 计算同时执行，为列表保留第二个连接；不保证源库本身无锁等待或其他业务查询无竞争。
+- 前端保存当前成功页面的请求游标、offset、limit；翻页或改页大小失败时一起恢复，错误提示的重试入口经过同一分页加载逻辑，避免游标与页码错配。
+- 固定时间窗口的 count/stat 使用进程内 5 秒缓存与相同请求合并，最多 256 个条目。键包含有效站点/用户范围/角色、连接配置身份和查询条件；分页参数不影响统计键。失败不缓存；所有等待者取消时终止底层查询，单个等待者取消不影响其他等待者。隐式滚动窗口不缓存。响应禁止浏览器缓存，并以 `X-CT-Statistics-Max-Age: 5` 标明服务端最大缓存时间。
+- Viewer 去重计数、模糊筛选、请求 ID 筛选仍维持原表语义，可复用上述短时结果缓存。小时汇总为空时整段回源校验继续保留，避免将源库重置或覆盖异常误判成零条。
+- 管理员渠道名称按数据库连接身份与渠道 ID 缓存一分钟，最多 2048 条，成功确认的空名称/不存在也缓存，查询失败不缓存；Viewer 不执行名称补查。重试标记、未命中名称各有 1 秒补查预算，失败保留原基础日志及已有元数据。
+- 列表新增 `fallback_checked`：true 表示已有肯定的重试证据或本轮补查成功，false 表示未确认；必须结合 `fallback` 判断，不能把 false 当成没有重试。前端对具备请求ID/用户ID的未知状态显示“待确认”，管理员可独立打开请求链路查询（含渠道ID缺失场景）；Viewer 不新增链路入口，旧接口缺少该字段时维持原显示。
+- count/stat 的审计集中在每次 HTTP 请求返回处，冷查询、缓存命中、合并等待者各记录一次，使用原操作类型。按实际 HTTP 状态记录 succeeded/failed，取消记 failed/http_status=499；后台共享计算不重复记录审计。
+- 小时汇总每轮最多两个站点并行，同站点仍去重并保留 10 秒稳定等待和每轮 10×5000 条预算；一轮完成后再等 30 秒，不重叠执行。未修改 NewAPI 表、计数口径或 Agent。
+- 游标分页不提供跨页数据库快照；历史记录删除或迟到写入时页码/短时总数可能变化。生产执行计划与性能收益需现场验证。

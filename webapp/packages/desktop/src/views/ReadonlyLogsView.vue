@@ -8,7 +8,7 @@ import { resolveModelProvider } from '../utils/modelProvider'
 import ModelProviderIcon from '../components/ModelProviderIcon.vue'
 import AppShell from '../components/AppShell.vue'
 import FallbackRequestChain from '../components/FallbackRequestChain.vue'
-import { attemptChannels, type ChainQuery } from '../utils/fallbackRequestChain'
+import { attemptChannels, retryLookupUnknown, type ChainQuery } from '../utils/fallbackRequestChain'
 import CompactDateTimeRangePicker from '../components/CompactDateTimeRangePicker.vue'
 import { passthrough } from '../api'
 import { useAuthStore } from '../stores/auth'
@@ -45,6 +45,7 @@ type LogRowView = {
   channelName: string
   hasChannel: boolean
   fallback: boolean
+  retryUnknown: boolean
   fallbackChannels: string[]
   retryChain: string
   username: string
@@ -179,6 +180,7 @@ const params = computed(() => ({ site: filters.site_id, user_ids: scopedUserIDs.
 // 输入框为草稿；翻页与附属查询只消费点击查询时保存的快照。
 const submitted = shallowRef({ ...params.value })
 const queryRevision = ref(0)
+const pageCursor = ref<string | undefined>(undefined)
 const statParams = computed(() => {
   const { limit: _limit, offset: _offset, ...rest } = submitted.value
   return rest
@@ -189,8 +191,8 @@ const countParams = computed(() => {
 })
 // 响应携带查询批次与分页位置，失败时保留的数据不能冒充新条件的结果。
 const state = useAsyncData(async (signal) => {
-  const revision = queryRevision.value, pageOffset = offset.value, pageLimit = limit.value
-  return { ...await passthrough.logs({ ...submitted.value, offset: pageOffset, limit: pageLimit }, signal), revision, pageOffset, pageLimit }
+  const revision = queryRevision.value, pageOffset = offset.value, pageLimit = limit.value, requestCursor = pageCursor.value
+  return { ...await passthrough.logs({ ...submitted.value, offset: pageOffset, limit: pageLimit, cursor: requestCursor }, signal), revision, pageOffset, pageLimit, requestCursor }
 })
 const statState = useAsyncData(async (signal) => {
   const revision = queryRevision.value
@@ -244,13 +246,20 @@ function commitQuery() {
     ElMessage.warning('渠道 ID 必须是非负整数')
     return false
   }
+  statState.cancel()
+  countState.cancel()
+  pageCursor.value = undefined
   submitted.value = { ...params.value }
   queryRevision.value += 1
   return true
 }
-const reloadAll = () => {
-  if (!commitQuery()) return Promise.resolve([])
-  return Promise.allSettled([state.reload(), statState.reload(), countState.reload()])
+const reloadAll = async () => {
+  if (!commitQuery()) return
+  const revision = queryRevision.value
+  await state.reload()
+  if (revision !== queryRevision.value) return
+  void statState.reload()
+  void countState.reload()
 }
 // 查询和重置属于高频操作，保留现有列表并在后台更新，避免 v-loading 阻塞整张表。
 const refreshSearch = async () => {
@@ -262,10 +271,10 @@ const refreshSearch = async () => {
   backgroundRefreshing.value = true
   try {
     // 统计与总数独立加载；列表返回即可继续操作，后续查询由各自的取消机制接管。
-    void statState.reload()
-    void countState.reload()
     await state.refresh()
     if (revision !== queryRevision.value) return
+    void statState.reload()
+    void countState.reload()
     if (state.lastRefreshError.value) ElMessage.warning('日志查询失败，当前保留上一次列表，请重新查询')
     else {
       state.error.value = ''
@@ -311,23 +320,34 @@ const pageSizeMenuStyle = ref<Record<string, string>>({})
 const pageJump = ref('')
 const changePage = (page: number) => {
   if (backgroundRefreshing.value || state.loading.value || !listIsCurrent.value) return
+  const current = state.data.value
+  const currentNumber = Math.floor(offset.value / limit.value) + 1
+  pageCursor.value = page === currentNumber + 1 ? current?.next_cursor
+    : page === currentNumber - 1 ? current?.previous_cursor : undefined
   offset.value = (page - 1) * limit.value
   void reloadPage()
 }
 // 翻页失败恢复已显示页码；成功只重置纵向位置，保留正在查看的横向列。
 async function reloadPage() {
   const revision = queryRevision.value
+  const resumeStat = statState.loading.value, resumeCount = countState.loading.value
+  if (resumeStat) statState.cancel()
+  if (resumeCount) countState.cancel()
   await state.reload()
   if (revision !== queryRevision.value) return
-  if (state.error.value && state.data.value) {
+  if (state.error.value && state.data.value?.revision === revision) {
     offset.value = state.data.value.pageOffset
     limit.value = state.data.value.pageLimit
+    pageCursor.value = state.data.value.requestCursor
   } else if (tableScroll.value) tableScroll.value.scrollTop = 0
+  if (resumeStat) void statState.reload()
+  if (resumeCount) void countState.reload()
 }
 const changePageSize = (size: number) => {
   if (backgroundRefreshing.value || state.loading.value || !listIsCurrent.value) return
   if (!(pageSizeOptions as readonly number[]).includes(size)) return
   limit.value = size
+  pageCursor.value = undefined
   offset.value = 0
   void reloadPage()
 }
@@ -518,12 +538,12 @@ function positionRetryHover() {
   retryHover.value = { ...state, left, top }
 }
 function openRetryHover(view: LogRowView, event: MouseEvent | FocusEvent) {
-  if (!isAdmin.value || !view.hasChannel || !(view.retryChain || view.fallback)) return
+  if (!isAdmin.value || !(view.hasChannel || view.retryUnknown) || !(view.retryChain || view.fallback || view.retryUnknown)) return
   const trigger = event.currentTarget
   if (!(trigger instanceof HTMLElement)) return
   retryHoverTrigger.value = trigger
   const retryCount = Math.max(1, retryChannelsFor(view.source).length - 1)
-  retryHover.value = { id: view.id, chain: view.retryChain || '未记录完整重试链路', retryCount: view.retryChain ? retryCount : 0, left: 0, top: 0 }
+  retryHover.value = { id: view.id, chain: view.retryUnknown ? '重试状态未确认，点击查看请求记录' : view.retryChain || '未记录完整重试链路', retryCount: view.retryChain ? retryCount : 0, left: 0, top: 0 }
   void nextTick(positionRetryHover)
 }
 function handleRetryHoverViewportChange() {
@@ -534,6 +554,7 @@ function closeRequestChain() {
   closeRetryHover()
 }
 function requestChainTitle(row: ReadonlyLog) {
+  if (retryLookupUnknown(row)) return '重试状态未确认，点击查看请求记录'
   const sequence = retryChannelsFor(row)
   return sequence.length > 1
     ? `重试${sequence.length - 1}次：${sequence.join(' → ')}`
@@ -835,7 +856,7 @@ function logRowMemoKey(row: ReadonlyLog, visible: boolean, admin: boolean) {
     row.prompt_tokens, row.completion_tokens, row.quota, row.use_time, row.request_id,
     row.upstream_request_id, row.content, row.content_summary, row.group, row.ip,
     row.is_stream, row.other, visible ? 1 : 0, admin ? 1 : 0,
-    row.fallback ? 1 : 0, (row.fallback_channels || []).join(','),
+    row.fallback ? 1 : 0, row.fallback_checked, (row.fallback_channels || []).join(','),
     // 列偏好也属于行模板的输入，签名变化可让 v-memo 正确重建可选单元格。
     logColumnOptions.map(option => columnVisibility.value[option.key] ? 1 : 0).join(''),
     prefs.quotaPerUnit, prefs.currencySymbol, prefs.priceMultiplier,
@@ -892,6 +913,7 @@ const logRows = computed<LogRowView[]>(() => {
       hasChannel: displayable && channelID > 0,
       fallback,
       fallbackChannels,
+      retryUnknown: admin && retryLookupUnknown(row),
       retryChain: admin && retryChannels.length > 1 ? retryChannels.join(' → ') : '',
       username: visible ? row.username || '用户 ' + row.user_id : '••••',
       usernameCopy: visible ? String(row.username || row.user_id || '') : '',
@@ -1404,6 +1426,7 @@ onMounted(() => {
   void load()
 })
 onUnmounted(() => {
+  queryRevision.value += 1
   cancelRowRender()
   state.cancel()
   statState.cancel()
@@ -1483,7 +1506,7 @@ watch(() => filters.site_id, (site, previous) => {
       </section>
 
       <div v-if="scopedUserIDs" class="request-scope-banner"><span>请求关联筛选 · 同一用户 ID {{ sensitiveVisible ? scopedUserIDs : '••••' }}</span><button type="button" class="secondary-action" :disabled="backgroundRefreshing" @click="reset">清除关联筛选</button></div>
-      <el-alert v-if="state.error.value" :title="state.error.value" type="error" show-icon :closable="false"><el-button link type="primary" @click="state.reload">重新加载</el-button></el-alert>
+      <el-alert v-if="state.error.value" :title="state.error.value" type="error" show-icon :closable="false"><el-button link type="primary" @click="reloadPage">重新加载</el-button></el-alert>
       <el-alert v-else-if="!state.loading.value && state.data.value && !state.data.value.configured" title="只读数据库尚未配置，当前暂无数据。配置后可直接在此查询。" type="info" show-icon :closable="false" />
 
       <section class="logs-table-shell" :class="{ 'is-background-refreshing': backgroundRefreshing }" :aria-busy="backgroundRefreshing">
@@ -1494,7 +1517,7 @@ watch(() => filters.site_id, (site, previous) => {
               <!-- 日志记录不可变时复用整行 DOM，只有字段或显示偏好变化才重新补丁。 -->
               <tr class="log-row" :class="view.tone">
                   <td class="col-time"><div class="time-cell" :title="view.timeFull"><span class="time-text">{{ view.timeText }}</span><span class="status-badge" :class="view.statusClass">{{ view.statusLabel }}</span></div></td>
-                  <td v-if="isColumnVisible('channel')" class="col-channel" @mouseenter="openRetryHover(view, $event)" @mouseleave="closeRetryHover" @focusin="openRetryHover(view, $event)" @focusout="closeRetryHover"><div v-if="view.hasChannel" class="channel-cell" :aria-label="isAdmin && view.retryChain ? requestChainTitle(view.source) : undefined"><div class="channel-line"><button type="button" :class="['channel-badge', 'copyable', view.channelTone]" title="点击复制渠道 ID" @click.stop="copyText(view.channelID)">#{{ view.channelID }}</button><button v-if="isAdmin && (view.fallback || view.retryChain)" type="button" class="retry-chain-trigger" :aria-label="'查看请求重试链路：' + view.retryChain" :aria-expanded="expandedRetryID === view.id" @click.stop="toggleRetryChain(view)"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v12M18 9a9 9 0 0 1-9 9"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="6" r="3"/></svg></button></div><span v-if="view.channelName" class="cell-secondary">{{ view.channelName }}</span></div><span v-else class="muted">—</span></td>
+                  <td v-if="isColumnVisible('channel')" class="col-channel" @mouseenter="openRetryHover(view, $event)" @mouseleave="closeRetryHover" @focusin="openRetryHover(view, $event)" @focusout="closeRetryHover"><div v-if="view.hasChannel || view.retryUnknown" class="channel-cell" :aria-label="isAdmin && view.retryChain ? requestChainTitle(view.source) : undefined"><div class="channel-line"><button v-if="view.hasChannel" type="button" :class="['channel-badge', 'copyable', view.channelTone]" title="点击复制渠道 ID" @click.stop="copyText(view.channelID)">#{{ view.channelID }}</button><button v-if="isAdmin && (view.fallback || view.retryChain || view.retryUnknown)" type="button" class="retry-chain-trigger" :class="{ 'retry-chain-unknown': view.retryUnknown }" :aria-label="requestChainTitle(view.source)" :aria-expanded="expandedRetryID === view.id" @click.stop="toggleRetryChain(view)"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v12M18 9a9 9 0 0 1-9 9"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="6" r="3"/></svg><span v-if="view.retryUnknown">待确认</span></button></div><span v-if="view.channelName" class="cell-secondary">{{ view.channelName }}</span></div><span v-else class="muted">—</span></td>
                   <td v-if="isColumnVisible('user')" class="col-user"><button v-if="view.source.username" type="button" class="user-cell copyable" :title="sensitiveVisible ? '点击复制用户名' : undefined" @click.stop="copyText(view.usernameCopy)"><i class="user-avatar" :class="{ 'is-hidden': !sensitiveVisible }" :style="view.avatarStyle">{{ view.initial }}</i><span class="truncate">{{ view.username }}</span></button><span v-else class="muted">—</span></td>
                   <td v-if="isColumnVisible('token')" class="col-token"><div v-if="view.hasToken" class="token-cell"><button type="button" class="token-badge copyable" :title="sensitiveVisible ? '点击复制令牌名称' : undefined" @click.stop="copyText(sensitiveVisible ? view.source.token_name : '')"><svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3v-3h3v-3h2.172a2 2 0 0 0 1.414-.586l1.814-1.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5" fill="currentColor"/></svg><span>{{ view.tokenName }}</span></button><span v-if="view.source.group || view.groupRatio !== undefined" class="group-meta"><span v-if="view.source.group" :class="view.groupTone">{{ view.group }}</span><span v-if="view.source.group && view.groupRatio !== undefined"> </span><span v-if="view.groupRatio !== undefined" class="ratio">{{ view.groupRatioText }}</span></span></div><span v-else class="muted">—</span></td>
                   <td v-if="isColumnVisible('model')" class="col-model"><div v-if="view.hasModel" class="model-cell"><button type="button" class="model-badge copyable" :class="view.modelProvider ? undefined : view.modelTone" @click.stop="copyText(view.source.model_name)"><ModelProviderIcon v-if="view.modelProvider" :name="view.modelProvider.name" />{{ view.modelName }}</button><span v-if="view.modelMapping" class="cell-secondary truncate">{{ view.modelMapping }}</span></div><span v-else class="muted">—</span></td>
@@ -1527,7 +1550,7 @@ watch(() => filters.site_id, (site, previous) => {
           <article v-for="view in renderedRows" v-memo="[view.memoKey, expandedRetryID === view.id]" :key="view.id" class="mobile-log-card" :class="view.tone">
             <div class="mobile-head"><div class="mobile-model"><button v-if="isColumnVisible('model') && view.hasModel" type="button" class="model-badge copyable" :class="view.modelProvider ? undefined : view.modelTone" @click.stop="copyText(view.source.model_name)"><ModelProviderIcon v-if="view.modelProvider" :name="view.modelProvider.name" />{{ view.modelName }}</button><div class="mobile-time"><span>{{ view.timeShort }}</span><span class="status-badge" :class="view.statusClass">{{ view.statusLabel }}</span></div></div><span v-if="isColumnVisible('quota')" class="mobile-cost">{{ view.quota }}</span></div>
             <div class="mobile-grid">
-              <div v-if="isColumnVisible('channel')" class="mobile-field" :aria-label="isAdmin && view.retryChain ? requestChainTitle(view.source) : undefined" @mouseenter="openRetryHover(view, $event)" @mouseleave="closeRetryHover"><span>渠道</span><button v-if="view.hasChannel" type="button" :class="['channel-badge', 'copyable', view.channelTone]" title="点击复制渠道 ID" @click.stop="copyText(view.channelID)">#{{ view.channelID }}<small v-if="view.channelName">{{ view.channelName }}</small></button><button v-if="isAdmin && (view.fallback || view.retryChain)" type="button" class="retry-chain-trigger" :aria-expanded="expandedRetryID === view.id" aria-label="查看请求重试链路" @click="toggleRetryChain(view)"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v12M18 9a9 9 0 0 1-9 9"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="6" r="3"/></svg></button><strong v-if="!view.hasChannel">—</strong></div>
+              <div v-if="isColumnVisible('channel')" class="mobile-field" :aria-label="isAdmin && view.retryChain ? requestChainTitle(view.source) : undefined" @mouseenter="openRetryHover(view, $event)" @mouseleave="closeRetryHover"><span>渠道</span><button v-if="view.hasChannel" type="button" :class="['channel-badge', 'copyable', view.channelTone]" title="点击复制渠道 ID" @click.stop="copyText(view.channelID)">#{{ view.channelID }}<small v-if="view.channelName">{{ view.channelName }}</small></button><button v-if="isAdmin && (view.fallback || view.retryChain || view.retryUnknown)" type="button" class="retry-chain-trigger" :class="{ 'retry-chain-unknown': view.retryUnknown }" :aria-expanded="expandedRetryID === view.id" :aria-label="requestChainTitle(view.source)" @click="toggleRetryChain(view)"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v12M18 9a9 9 0 0 1-9 9"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="6" r="3"/></svg><span v-if="view.retryUnknown">待确认</span></button><strong v-if="!view.hasChannel && !view.retryUnknown">—</strong></div>
               <div v-if="isColumnVisible('user')" class="mobile-field"><span>用户</span><button v-if="view.source.username" type="button" class="mobile-user copyable" @click.stop="copyText(view.usernameCopy)"><i class="user-avatar" :class="{ 'is-hidden': !sensitiveVisible }" :style="view.avatarStyle">{{ view.initial }}</i>{{ view.username }}</button><strong v-else>—</strong></div>
               <div v-if="isColumnVisible('token')" class="mobile-field"><span>令牌 / 分组</span><div v-if="view.hasToken" class="mobile-token"><span class="token-badge"><svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3v-3h3v-3h2.172a2 2 0 0 0 1.414-.586l1.814-1.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5" fill="currentColor"/></svg>{{ view.tokenName }}</span><small v-if="view.source.group" :class="view.groupTone">{{ view.group }}</small></div><strong v-else>—</strong></div>
               <div v-if="isColumnVisible('tokens')" class="mobile-field"><span>Tokens</span><div v-if="view.hasTokens" class="tokens-cell"><span class="token-pair">{{ view.promptTokens }} / {{ view.completionTokens }}</span><small v-if="view.cacheTotal">缓存 {{ view.cacheTotalText }}</small></div><strong v-else>—</strong></div>
@@ -2132,14 +2155,14 @@ watch(() => filters.site_id, (site, previous) => {
 .logs-table th.col-tokens, .logs-table td.col-tokens { min-width: 110px; }
 .logs-table th.col-quota, .logs-table td.col-quota { min-width: 86px; }
 .logs-table th.col-timing, .logs-table td.col-timing { min-width: 96px; }
-.logs-table th.col-details, .logs-table td.col-details { min-width: 154px; }
+.logs-table th.col-details, .logs-table td.col-details { width: 160px; min-width: 160px; max-width: 160px; box-sizing: border-box; }
 /* 保留内容自适应与横向滚动，但限制异常长名称和错误摘要对整表宽度的影响。 */
 .logs-table .channel-cell, .logs-table .user-cell { max-width: 260px; }
 .logs-table .channel-cell .cell-secondary { max-width: 100%; }
 .logs-table .token-cell { max-width: 280px; }
 .logs-table .token-badge > span { overflow: hidden; text-overflow: ellipsis; }
 .logs-table .model-cell { max-width: 320px; }
-.logs-table .details-button { max-width: 360px; }
+.logs-table .details-button { width: 140px; max-width: 140px; }
 .log-row { cursor: default; transition: background-color .14s ease; }
 .log-row:hover td { background: var(--ct-accent-weak); }
 .log-row.row-error td { background: rgba(206, 59, 68, .045); }
@@ -2194,6 +2217,8 @@ watch(() => filters.site_id, (site, previous) => {
   color: var(--rc35-amber);
   cursor: pointer;
 }
+.retry-chain-unknown { width: auto; flex: 0 0 auto; gap: 3px; padding: 0 4px; border-radius: 4px; white-space: nowrap; font-size: 11px; }
+.retry-chain-unknown svg { flex: 0 0 15px; }
 .retry-chain-trigger:hover,
 .retry-chain-trigger:focus-visible { background: var(--ct-warn-weak); color: var(--ct-warn); }
 .retry-chain-trigger:focus-visible { outline: 2px solid var(--ct-warn); outline-offset: 1px; }
@@ -3216,7 +3241,8 @@ watch(() => filters.site_id, (site, previous) => {
   .logs-table th.col-tokens, .logs-table td.col-tokens { min-width: 98px; }
   .logs-table th.col-quota, .logs-table td.col-quota { min-width: 70px; }
   .logs-table th.col-timing, .logs-table td.col-timing { min-width: 86px; }
-  .logs-table th.col-details, .logs-table td.col-details { min-width: 128px; }
+  .logs-table th.col-details, .logs-table td.col-details { width: 128px; min-width: 128px; max-width: 128px; }
+  .logs-table .details-button { width: 108px; max-width: 108px; }
 }
 
 /* 移动端保持控件可触达，主筛选使用两列，日期和操作横跨整行。 */

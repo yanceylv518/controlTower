@@ -215,7 +215,7 @@ test('readonly logs exposes fallback requests and channel chains', () => {
   assert.match(source, /const retryChannels = retryChannelsFor\(row\)/)
   assert.match(source, /retryChain: admin && retryChannels\.length > 1 \? retryChannels\.join\(' → '\) : ''/)
   assert.match(source, /class="retry-chain-trigger"/)
-  assert.match(source, /v-if="isAdmin && \(view\.fallback \|\| view\.retryChain\)"/)
+  assert.match(source, /v-if="isAdmin && \(view\.fallback \|\| view\.retryChain \|\| view\.retryUnknown\)"/)
   assert.match(source, /function openRetryHover\(view: LogRowView, event: MouseEvent \| FocusEvent\)/)
   assert.match(source, /const retryCount = Math\.max\(1, retryChannelsFor\(view\.source\)\.length - 1\)/)
   assert.match(source, /class="retry-hover-card"/)
