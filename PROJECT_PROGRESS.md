@@ -3,7 +3,7 @@
 <!-- AI_CURRENT_START -->
 ## 当前总览
 
-- **使用日志优化已合并main（2026-09-18）**：业务提交00c14b2c2已推送origin/main及codex/readonly-log-performance，包含列表优先/游标分页/统计与渠道缓存、双站点汇总、四项复审补修及详情列收紧。此前232项前端回归和5个Go包test/vet通过，本轮最终CSS版本类型检查/生产构建通过；5200保留预览，远程Server未升级。实库/浏览器/生产性能未验，未发布部署，主目录既有改动保留。见[任务记录](docs/tasks/2026-09-18-readonly-log-performance.md)。
+- **使用日志优化rc123已发布（2026-09-18）**：日志优化/四项补修/详情列收紧已合并main，标签v2.0.0-rc123指向6dc56893d（业务00c14b2c2）。CI 35324048563和release 35324632475均成功；Server amd64、Agent双架构及SHA256SUMS已下载到主工作区dist/releases/v2.0.0-rc123，大小/哈希/归档及前端新字段样式核验通过，GHCR镜像已发布。相对rc122无Agent代码或迁移新增；未部署，实库/生产性能未验，5200及主目录既有改动保留。见[任务记录](docs/tasks/2026-09-18-readonly-log-performance.md)。
 
 - **本地代码已整合main、rc122发布完成（2026-09-18）**：业务提交bc743c0e7含主题/通知/上游及优先级自动纠正；226项前端测试、类型检查/构建、Go test/vet通过。rc122发布工作流success，Server amd64与Agent双架构包已下载至主工作区dist/releases/v2.0.0-rc122，SHA256及归档内容核验通过；本轮无实库/生产部署，原工作区保留。见[任务记录](docs/tasks/2026-09-18-main-release.md)。
 

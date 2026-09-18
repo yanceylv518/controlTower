@@ -1,21 +1,33 @@
 # 使用日志查询性能优化
 
 - 目标：按列表优先、游标分页、统计减负、展示补查缓存及汇总调度顺序优化使用日志查询。
-- 状态：四项补修及详情列收紧完成，已提交推送并快进合并origin/main；5200前端预览保留，未发布部署；更新时间：2026-09-18。
+- 状态：代码已提交推送并合并origin/main；v2.0.0-rc123发布成功，三个安装包下载及校验通过，未部署；更新时间：2026-09-18。
 - 任务 ID：01a0b32d-a588-7670-80fb-22a4561b7ad3。
 - 工作目录：E:/projects/controlTower/.tmp/readonly-log-performance；分支：codex/readonly-log-performance，基于 origin/main 7bd0d09e8（含 rc122）。
 - 文件范围：日志前端/API、passthrough 查询及缓存、小时汇总 runner、专项回归、接口文档和本任务记录。
 - 追加范围：用户反馈使用日志详情列过宽，仅收紧同一页面桌面列宽及摘要上限，保留移动卡片和完整详情入口；验收样式约束、既有页面回归及类型检查。
 - 交付授权：用户要求“提交推送本地代码”，随后明确“合并到main”；提交本任务的代码、测试与文档，推送origin/codex/readonly-log-performance并合并origin/main。
-- 范围外：NewAPI DDL、Agent、归档账单设计、生产部署及版本发布；不采用可能漏查的时间转 ID 窗口。
+- 追加交付：按用户“打包”要求沿用项目v*标签发布流程，生成标准Linux包及GHCR镜像，下载并校验产物。
+- 范围外：NewAPI DDL、Agent业务改动、归档账单设计及生产部署；不采用可能漏查的时间转 ID 窗口。
 - 验收：权限/站点/筛选隔离不退化；顺序游标与跳页兼容；统计缓存有界并可取消、失败不缓存；列表优先；汇总站点并发有界；相关 Go/前端回归、类型检查和构建通过。
 - 已确认：主目录与主题目录有既有改动；最新整合已发布 rc122，以新隔离工作区实施，不覆盖源目录。生产查询耗时、执行计划和索引未实测，不承诺提速倍数。
 - 已完成：列表优先、取消旧统计；相邻页使用时间+ID游标，跳页/旧Server兼容；固定窗口统计5秒缓存与并发合并（256条），有效scope/连接配置隔离，全部等待者取消才终止共享查询，失败不缓存；渠道名1分钟缓存（2048条），补查各1秒预算；最多两个站点并行汇总、同站点不重叠。
 - 保留：Viewer 去重、模糊/请求ID过滤继续查询原表；汇总为空的整段回源仍保留，以免将覆盖异常当零条。没有直接复用不等价的小时计数，也没有用时间推算ID范围。
 - 验证：228项前端测试通过、vue-tsc及Vite生产构建通过（既有大包提示）；dashboard/httpapi/auth/mysqlstore/server cmd Go test与vet通过；diff检查通过。新增受控Promise前端查询顺序/游标回归、缓存并发/过期/取消/错误/范围隔离、SQL同秒边界、渠道缓存与汇总站点并发回归。渠道缓存测试首次因测试驱动缺少只读BeginTx失败，补全驱动后相关包重跑通过。
 - 限制：未配置CT_MYSQL_TEST_DSN，实库集成未运行；未运行浏览器视觉验收、生产EXPLAIN/性能基准或竞态检测；不能承诺具体提速倍数。缓存会引入最多5秒统计、1分钟名称滞后；跨页不是数据库快照。未修改NewAPI DDL/Agent，无迁移。
-- 交付位置：业务提交00c14b2c274d7f9130e5bde37a0be7c818fdc258已推送origin/main及origin/codex/readonly-log-performance；5200使用本目录前端，仍代理原远程后端。未发布或远程部署，没有调整5201；下方历史条目的未提交描述为当时状态。
+- 交付位置：业务提交00c14b2c274d7f9130e5bde37a0be7c818fdc258已合并main，rc123标签指向其后文档提交6dc56893d；安装包位于主工作区dist/releases/v2.0.0-rc123。5200使用本目录前端，仍代理原远程后端；未远程部署，没有调整5201。下方历史未提交/未发布描述为当时状态。
 - 下一步：用户在5200验收详情列；后续按需交付Server/前端，在真实MySQL上验证性能与补查场景；无需NewAPI DDL/Agent升级。
+
+## rc123打包发布（2026-09-18）
+
+- 已发布v2.0.0-rc123，源码固定为main提交6dc56893d186f6bdffcd66c5d0fc2c4eabbcac7c（包含日志优化00c14b2c2）；开始时最新版本为rc122，本隔离目录干净。后续发布记录提交不改变该标签源码。
+- 该提交CI运行35324048563已success，包含完整Go vet/test与Linux构建、Web类型检查及构建；本轮无需重复相同本地检查。尚未执行本轮实库/生产验收。
+- release运行35324632475最终success，安装包构建、GHCR镜像推送及GitHub Release创建均成功，来源SHA已核对；工作流：https://github.com/yanceylv518/controlTower/actions/runs/35324632475 ，发布页：https://github.com/yanceylv518/controlTower/releases/tag/v2.0.0-rc123 。
+- 三个tar.gz及SHA256SUMS已下载至E:/projects/controlTower/dist/releases/v2.0.0-rc123；大小与GitHub资产元数据一致，SHA256与GitHub摘要和发布校验清单双重匹配。
+- 包内验证：Server归档94项，含程序、完整前端和083_menu_visibility.sql；前端产物含详情列160/108px规则、fallback_checked及前后游标字段。Agent两个架构各10项，双程序及安装脚本齐全。相对rc122，agent与server/migrations无代码差异，本次功能更新Server/前端即可。
+- SHA256：Server amd64 c09230ea64bcbc385852b87014cdd28ecaf0663c702f86ae1c222b2fc1d84ac2；Agent amd64 e6f7af11dcc4d4064ad53787101b885be11e15443ed6f078be616dbfed9e400a；Agent arm64 0bd75db6d339cceb0611a29d07972991e6b12fc036d838f5349c2c3133430b19。
+- 下载过程：沙箱TLS失败后正常权限下载，arm64首次超时后重试成功；校验脚本最初误写083迁移文件名，按仓库实际文件名修正后全部验证通过，产物本身完整。
+- 未部署、未执行实库/生产性能验收；下一步按需升级Server/前端并验收查询性能和补查场景。
 
 ## 提交推送验收（2026-09-18）
 
