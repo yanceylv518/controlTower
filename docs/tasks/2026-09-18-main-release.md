@@ -1,7 +1,7 @@
 # 本地改动整合 main 与打包
 
 - 目标：按用户明确授权将全部尚未交付本地代码整合到 origin/main，生成项目标准发布包。
-- 状态：整合与检查完成，待提交推送/打包；更新时间：2026-09-18。
+- 状态：已提交推送origin/main，rc122打包发布成功，三个包下载校验通过；未部署。更新时间：2026-09-18。
 - 任务 ID：01a0b317-381b-7bd3-bdca-04d98b2e6d0f。
 - 工作目录：E:/projects/controlTower/.tmp/main-release-20260918；分支：codex/main-release-20260918，基于 origin/main。
 - 范围：各工作区新增且未交付的业务代码、相关回归和文档，提交推送与标准Linux包。
@@ -11,5 +11,9 @@
 - 整合：核对16个既有工作区；主目录93个候选业务文件中64个无变化、27个历史已交付、1个三方合并无新增；BillingRecords保留主线更完整的上游账单分组。旧direct-TTFT的4个重叠文件保留后续OTPS替代及新版UI，未回退算法。其他旧工作区无独有业务差异。
 - 新增交付：主题目录22项业务文件、优先级目录21项业务文件（含新增文件）；调权页面手工合并保存优先级/熔断可编辑语义与最新紧凑布局，同时修正帮助文案；通知、图标、上游重设计与按钮对比度一并纳入。
 - 验证：226项前端测试、vue-tsc/Vite生产构建、Go test ./...、Go vet ./...通过；diff检查通过。首次前端优先级测试在冲突未解时失败，完成合并后全量重跑226/226通过。未配置MySQL DSN，本轮不声明实库验证。构建保留既有大包提示。
-- 版本：远程最新Release核实为v2.0.0-rc121；计划v2.0.0-rc122。沿用v*标签release工作流生成Linux Agent amd64/arm64、Server amd64、SHA256SUMS和GHCR镜像，未部署。
-- 下一步：提交并快进推送origin/main，推送版本标签启动标准打包，核对工作流/发布资产与提交对应关系。
+- 版本：v2.0.0-rc122已发布。标准v*标签工作流生成Linux Agent amd64/arm64、Server amd64、SHA256SUMS和GHCR镜像，未部署。
+- 交付：业务提交bc743c0e7283bee0635c145bba8f5438f8ddb49b（48文件）已快进推送origin/main，标签v2.0.0-rc122解引用同一提交。工作流 https://github.com/yanceylv518/controlTower/actions/runs/35315522341 最终success；发布页 https://github.com/yanceylv518/controlTower/releases/tag/v2.0.0-rc122 。后续交付文档提交不改变发布代码。
+- 本地范围：原主工作区仍是旧main及其既有混合改动，未强制重置或清理；本次以隔离目录向远程main完成整合。所有源工作区保留，残留差异不代表尚未交付同一代码。
+- 产物：三个tar.gz及SHA256SUMS已下载至E:/projects/controlTower/dist/releases/v2.0.0-rc122；逐包大小和SHA256与发布清单匹配，Agent包各10项含双程序及双安装脚本，Server包94项含程序、前端和083迁移。
+- 校验：Agent amd64 d56f52675ae95b82c2dd85c6e81437e5694133cb69efda76db0dac59043fb7b6；Agent arm64 92ac1c00880371748cf925fed708a2c3a36ef1727de9804fe6b018986acf7488；Server amd64 1b0b2bd390343b75eb1285419e2a761f17fef204dd4eeaf6ef35c0cacba056cb。
+- 下一步：按需部署Server/前端并执行现场验收；本次未重启或升级任何生产服务。
