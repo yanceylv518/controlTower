@@ -48,6 +48,14 @@ test('readonly logs keeps identity filters before compact model filters', () => 
   assert.match(source, /\.filter-model, \.filter-group \{ width: 150px; min-width: 132px; flex: 0 1 150px; \}/)
 })
 
+// viewer 使用后端固定的站点和用户范围，仍可使用用户名与渠道 ID 做范围内筛选。
+test('readonly logs exposes username and channel filters to viewer accounts', () => {
+  assert.match(source, /<el-input v-model="username" clearable placeholder="用户名称"/)
+  assert.match(source, /<el-input v-model="channelID" clearable placeholder="渠道 ID"/)
+  assert.doesNotMatch(source, /<el-input v-if="isAdmin"[^>]+placeholder="用户名称"/)
+  assert.doesNotMatch(source, /<el-input v-if="isAdmin"[^>]+placeholder="渠道 ID"/)
+})
+
 // 回归保护：所有筛选项始终位于同一组主筛选结构中，不再存在折叠状态。
 test('readonly logs keeps all filters visible in the primary row', () => {
   const primary = source.match(/<div class="primary-filters"[^>]*>([\s\S]*?)<\/div>/)?.[1] || ''

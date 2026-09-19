@@ -1473,8 +1473,8 @@ watch(() => filters.site_id, (site, previous) => {
         <div class="toolbar-primary">
           <div class="primary-filters">
             <CompactDateTimeRangePicker v-model="timeRange" :reset-enabled="timeRangeChanged && !backgroundRefreshing" class="filter-time" @reset="resetTime" />
-            <el-input v-if="isAdmin" v-model="username" clearable placeholder="用户名称" @keyup.enter="search" class="filter-username" />
-            <el-input v-if="isAdmin" v-model="channelID" clearable placeholder="渠道 ID" @keyup.enter="search" class="filter-channel" />
+            <el-input v-model="username" clearable placeholder="用户名称" @keyup.enter="search" class="filter-username" />
+            <el-input v-model="channelID" clearable placeholder="渠道 ID" @keyup.enter="search" class="filter-channel" />
             <el-input v-model="requestID" clearable placeholder="请求ID" @keyup.enter="search" class="filter-request" />
             <el-input v-model="modelName" clearable placeholder="模型名称" @keyup.enter="search" class="filter-model" />
             <el-input v-model="group" clearable placeholder="分组" @keyup.enter="search" class="filter-group" />
