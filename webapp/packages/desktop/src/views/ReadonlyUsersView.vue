@@ -8,6 +8,9 @@ import { useAuthStore } from '../stores/auth'
 import { useFiltersStore } from '../stores/filters'
 import { usePrefsStore } from '../stores/prefs'
 import { useAsyncData } from '../composables/useAsyncData'
+import { useAppendPages } from '../composables/useAppendPages'
+import ScrollLoadMore from '../components/ScrollLoadMore.vue'
+import type { ReadonlyUser } from '@ct/shared'
 import { formatQuota, formatTime } from '../utils/format'
 
 const auth = useAuthStore()
@@ -28,7 +31,13 @@ const params = computed(() => ({
   limit: pageSize.value,
   offset: (page.value - 1) * pageSize.value,
 }))
-const state = useAsyncData(() => passthrough.users(params.value))
+const state = useAsyncData(async () => {
+  const feedQuery = { ...params.value }
+  return { ...await passthrough.users(feedQuery), feedQuery }
+})
+const mobileFeed = useAppendPages(() => state.data.value, () => state.loading.value,
+  (base, offset) => passthrough.users({ ...base.feedQuery, offset }),
+  (user: ReadonlyUser) => user.id, base => base.feedQuery.offset)
 const total = computed(() => state.data.value?.total ?? 0)
 const pageStart = computed(() => total.value ? (page.value - 1) * pageSize.value + 1 : 0)
 const pageEnd = computed(() => Math.min(page.value * pageSize.value, total.value))
@@ -92,6 +101,17 @@ watch(() => filters.site_id, (site, previous) => {
     <el-alert v-if="state.error.value" :title="state.error.value" type="error" show-icon :closable="false"><el-button link type="primary" @click="state.reload">重新加载</el-button></el-alert>
     <el-alert v-else-if="!state.loading.value && state.data.value && !state.data.value.configured" title="只读数据库尚未配置，当前暂无数据。" type="info" show-icon :closable="false"/>
     <div v-loading="state.loading.value" class="users-card">
+      <div class="mobile-users">
+        <el-empty v-if="!state.loading.value && !state.data.value?.items?.length" description="暂无用户数据" />
+        <article v-for="user in mobileFeed.items.value" :key="user.id" class="mobile-user-card">
+          <header><span class="user-avatar">{{ userInitial(user) }}</span><div class="mobile-user-identity"><strong>{{ user.display_name || user.username }}</strong><span>@{{ user.username }} · ID {{ user.id }}</span></div><span class="status-pill" :class="user.status === 1 ? 'is-active' : 'is-disabled'">{{ user.status === 1 ? '正常' : '停用' }}</span></header>
+          <div class="mobile-quota"><span>剩余额度</span><strong>{{ money(user.quota) }}</strong><el-progress :percentage="Math.max(0, remainingPercent(user))" :color="quotaColor(user)" :stroke-width="5" :show-text="false" /></div>
+          <dl><div><dt>已用额度</dt><dd>{{ money(user.used_quota) }}</dd></div><div><dt>总额度</dt><dd>{{ money(totalQuota(user)) }}</dd></div></dl>
+          <details><summary>账户信息</summary><dl class="mobile-user-times"><div><dt>创建时间</dt><dd>{{ formatUnixTime(user.created_at) }}</dd></div><div><dt>最后登录</dt><dd>{{ formatUnixTime(user.last_login_at) }}</dd></div></dl></details>
+          <div v-if="can(auth.user, 'alerts.manage')" class="mobile-alert-control"><span>余额告警</span><el-switch :aria-label="`${user.username} 的余额告警`" :model-value="balanceAlertUsers.has(user.id)" :loading="savingAlertUser === user.id" :disabled="user.status !== 1" @change="(value: string | number | boolean) => changeBalanceAlert(user.id, value)" /></div>
+        </article>
+        <ScrollLoadMore :loading="mobileFeed.loading.value || state.loading.value" :disabled="!!state.error.value" :has-more="mobileFeed.hasMore.value" :error="mobileFeed.error.value" @load="mobileFeed.loadMore" />
+      </div>
       <div class="table-panel">
         <el-table :data="state.data.value?.items||[]" height="100%" empty-text="暂无用户数据">
           <el-table-column prop="id" label="ID" width="72"><template #default="s"><span class="user-id">{{s.row.id}}</span></template></el-table-column>
@@ -119,4 +139,34 @@ watch(() => filters.site_id, (site, previous) => {
 </template>
 <style scoped>
 .filter-bar,.filter-fields,.filter-actions,.pagination,.pagination-controls,.quota-line,.user-cell{display:flex;align-items:center}.filter-bar{justify-content:space-between;gap:16px;padding:12px 14px;margin-bottom:12px;background:var(--ct-surface);border:1px solid var(--ct-line);border-radius:10px;box-shadow:var(--ct-shadow)}.filter-fields{flex:1;gap:8px;min-width:0}.filter-actions{gap:8px;padding-left:14px;border-left:1px solid var(--ct-line)}.filter-actions :deep(.el-button+.el-button){margin-left:0}.filter-bar :deep(.el-input__wrapper),.filter-bar :deep(.el-select__wrapper){min-height:36px;border-radius:7px;box-shadow:0 0 0 1px var(--ct-line) inset;transition:box-shadow .18s ease,background .18s ease}.filter-bar :deep(.el-input__wrapper:hover),.filter-bar :deep(.el-select__wrapper:hover){box-shadow:0 0 0 1px var(--ct-line-strong) inset}.filter-bar :deep(.is-focus){box-shadow:0 0 0 1px var(--ct-accent) inset!important}.keyword{width:min(360px,32vw)}.status-filter{width:142px}.user-filter{width:250px}.users-card{background:var(--ct-surface);border:1px solid var(--ct-line);border-radius:10px;box-shadow:0 1px 3px rgba(16,24,40,.06);overflow:hidden}.table-panel{height:calc(100vh - 220px);min-height:430px}.table-panel :deep(.el-table){--el-table-header-bg-color:var(--ct-surface-2);--el-table-header-text-color:var(--ct-ink-3);--el-table-row-hover-bg-color:var(--ct-accent-weak);font-size:13px}.table-panel :deep(.el-table__header th.el-table__cell){height:42px;padding:0;border-bottom-color:var(--ct-line);font-size:12px;font-weight:600;letter-spacing:.02em}.table-panel :deep(.el-table__body td.el-table__cell){height:62px;padding:0;border-bottom-color:var(--ct-line)}.table-panel :deep(.el-table .cell){padding-left:13px;padding-right:13px}.table-panel :deep(.el-table__row){transition:background-color .15s ease}.user-id{color:var(--ct-ink-3);font-variant-numeric:tabular-nums}.user-cell{gap:11px}.user-avatar{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;flex:0 0 32px;border-radius:9px;background:var(--ct-accent-weak);color:var(--ct-accent);font-size:12px;font-weight:700}.user-name{max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ct-ink);font-weight:600;line-height:1.35}.subtle{margin-top:3px;color:var(--ct-ink-3);font-size:11.5px;line-height:1.2}.status-pill{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:500;line-height:20px}.status-pill i{width:6px;height:6px;border-radius:50%}.status-pill.is-active{background:var(--ct-ok-weak);color:var(--ct-ok)}.status-pill.is-active i{background:var(--ct-ok)}.status-pill.is-disabled{background:var(--ct-surface-2);color:var(--ct-ink-3)}.status-pill.is-disabled i{background:var(--ct-line-strong)}.quota-cell{max-width:500px}.quota-line{gap:8px;margin-bottom:7px;line-height:1}.quota-line strong{color:var(--ct-ink);font-size:13px;font-weight:650;font-variant-numeric:tabular-nums}.quota-line span{color:var(--ct-ink-3);font-size:11.5px}.quota-line em{margin-left:auto;color:var(--ct-ink-3);font-size:11px;font-style:normal;font-variant-numeric:tabular-nums}.quota-cell :deep(.el-progress-bar__outer){background:var(--ct-surface-2)}.used-quota,time{color:var(--ct-ink-2);font-variant-numeric:tabular-nums}.used-quota{font-weight:500}time{font-size:12px;white-space:nowrap}.is-empty{color:var(--ct-ink-3)}.pagination{justify-content:space-between;min-height:54px;padding:8px 14px;border-top:1px solid var(--ct-line);background:var(--ct-accent-weak);color:var(--ct-ink-3);font-size:12px}.pagination-controls{gap:12px;color:var(--ct-ink-2)}.pagination-controls :deep(.el-pagination){--el-pagination-button-bg-color:transparent;--el-pagination-hover-color:var(--ct-accent)}.pagination-controls :deep(.el-pager li),.pagination-controls :deep(.btn-prev),.pagination-controls :deep(.btn-next){border-radius:7px}.pagination-controls :deep(.el-pager li.is-active){background:var(--ct-accent-weak);color:var(--ct-accent);font-weight:600}.page-size-select{width:142px}.pagination-controls :deep(.page-size-select .el-select__wrapper){min-height:32px;border-radius:16px;background:var(--ct-surface-2);box-shadow:none}@media(max-width:1280px){.keyword{width:280px}.user-filter{width:210px}.table-panel :deep(.el-table .cell){padding-left:10px;padding-right:10px}}
+</style>
+<style scoped>
+.mobile-users { display:none; }
+@media(max-width:900px) {
+  .filter-bar { flex-wrap:wrap;padding:12px;gap:10px; }
+  .filter-fields { display:grid;grid-template-columns:minmax(0,1fr);flex-basis:100%;gap:10px; }
+  .keyword,.status-filter,.user-filter { width:100%; }
+  .filter-actions { width:100%;border:0;padding:0;display:grid;grid-template-columns:1fr 1fr; }
+  .filter-bar :deep(.el-input__wrapper),.filter-bar :deep(.el-select__wrapper),.filter-actions .el-button { min-height:36px; }
+  .filter-bar :deep(input) { font-size:14px; }
+  .users-card { background:none;border:0;box-shadow:none;overflow:visible; }
+  .table-panel,.pagination { display:none; }
+  .mobile-users { display:grid;gap:12px; }
+  .mobile-user-card { padding:14px;background:var(--ct-surface);border:1px solid var(--ct-line);border-radius:10px;min-width:0; }
+  .mobile-user-card header { display:flex;gap:10px;align-items:center; }
+  .mobile-user-identity { display:flex;flex-direction:column;gap:4px;flex:1;min-width:0;overflow-wrap:anywhere; }
+  .mobile-user-identity span,.mobile-quota>span,dt { font-size:12px;color:var(--ct-ink-3); }
+  .status-pill { flex-shrink:0; }
+  .mobile-quota { margin-top:20px; }
+  .mobile-quota>strong { display:block;font-size:24px;margin:6px 0 10px;color:var(--ct-accent);overflow-wrap:anywhere; }
+  dl { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:16px 0; }
+  dd { margin:6px 0 0;font-variant-numeric:tabular-nums;overflow-wrap:anywhere; }
+  details { border-top:1px solid var(--ct-line); }
+  summary { min-height:36px;align-content:center;color:var(--ct-ink-2);cursor:pointer;font-size:13px; }
+  .mobile-user-times { grid-template-columns:1fr;font-size:13px; }
+  .mobile-alert-control { display:flex;align-items:center;justify-content:space-between;min-height:36px; }
+  .mobile-user-pagination { display:grid;gap:10px;text-align:center;font-size:13px;color:var(--ct-ink-3); }
+  .mobile-user-pagination>div { display:flex;align-items:center;justify-content:space-between;gap:12px; }
+  .mobile-user-pagination .el-button { min-height:44px;margin:0; }
+}
 </style>

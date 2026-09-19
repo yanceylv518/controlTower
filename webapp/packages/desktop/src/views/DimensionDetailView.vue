@@ -424,7 +424,7 @@ const firingCount = computed(
           </el-tab-pane>
           <el-tab-pane :label="crossLabel" name="cross">
             <div class="dim-table">
-              <el-table :data="crossRows" :max-height="480">
+              <el-table v-mobile-cards :data="crossRows" :max-height="480">
                 <el-table-column :label="crossLabel" min-width="200">
                   <template #default="{ row }">
                     <span class="dim-name"
@@ -495,7 +495,7 @@ const firingCount = computed(
           </el-tab-pane>
           <el-tab-pane v-if="can(auth.user, 'monitor.samples')" label="慢样本" name="samples">
             <div v-loading="samplesLoading" class="dim-table">
-              <el-table :data="samples" :max-height="480">
+              <el-table v-mobile-cards :data="samples" :max-height="480">
                 <el-table-column label="时间" width="160">
                   <template #default="s">{{
                     formatTime(s.row.created_at)
@@ -548,7 +548,7 @@ const firingCount = computed(
               }}</span>
             </template>
             <div class="dim-table">
-              <el-table :data="alerts" :max-height="480">
+              <el-table v-mobile-cards :data="alerts" :max-height="480">
                 <el-table-column label="级别" width="90">
                   <template #default="s"
                     ><StatusTag :value="s.row.severity"
@@ -587,4 +587,16 @@ const firingCount = computed(
 
 <style scoped>
 .cross-user-id { margin-left: 6px; color: var(--ct-ink-3); font-size: 11px; font-weight: 400; }
+@media(max-width:900px) {
+  .detail-dimension-select { width:100%;min-width:0; }
+  .detail-dimension-select :deep(.el-select__wrapper) { min-height:36px; }
+  .detail-sub { overflow-wrap:anywhere;max-width:100%; }
+  .detail-chips { flex-wrap:wrap; }
+  .mini-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .mini-grid>* { min-width:0;overflow-wrap:anywhere; }
+  .trend-grid { grid-template-columns:minmax(0,1fr); }
+  .quality-bars { grid-template-columns:minmax(0,1fr); }
+  .detail-tabs,.dim-table { min-width:0;max-width:100%; }
+  .crumb-back { display:inline-flex;align-items:center;min-height:44px; }
+}
 </style>

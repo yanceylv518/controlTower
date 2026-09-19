@@ -4,7 +4,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 type DateRange = [Date, Date]
 type PresetKey = 'today' | '7d' | 'week' | '30d' | 'month'
 
-const props = withDefaults(defineProps<{ modelValue: DateRange; resetEnabled?: boolean }>(), {
+const props = withDefaults(defineProps<{ modelValue: DateRange; resetEnabled?: boolean; compact?: boolean }>(), {
   resetEnabled: false,
 })
 const emit = defineEmits<{
@@ -63,6 +63,12 @@ function triggerText(value: Date | undefined) {
 // rc35 触发器只显示到分钟，避免长秒级文本挤压其他筛选控件。
 const label = computed(() => {
   if (!start.value && !end.value) return '日期范围'
+  if (props.compact) {
+    const from = inputDate(start.value), to = inputDate(end.value)
+    const today = inputDate(new Date())
+    if (from === today && to === today) return '今天'
+    return from === to ? from.slice(5) : `${from.slice(5)} ~ ${to.slice(5)}`
+  }
   return triggerText(start.value) + ' ~ ' + triggerText(end.value)
 })
 
@@ -95,6 +101,7 @@ function updatePosition() {
   let top = rect.bottom + 8
   const height = popover.value?.offsetHeight || 0
   if (height > 0 && top + height > window.innerHeight - 16 && rect.top > height + 8) top = rect.top - height - 8
+  if (height > 0) top = Math.max(16, Math.min(top, window.innerHeight - height - 16))
   popoverStyle.value = { top: Math.round(top) + 'px', left: Math.round(left) + 'px', width: Math.round(width) + 'px' }
 }
 
@@ -228,7 +235,7 @@ onUnmounted(() => {
       <span class="calendar-glyph" aria-hidden="true" />
       <span class="compact-date-label">{{ label }}</span>
     </button>
-    <button type="button" class="compact-date-reset" :disabled="!props.resetEnabled" title="重置时间" aria-label="重置时间" @click.stop="resetRange">
+    <button v-if="!compact" type="button" class="compact-date-reset" :disabled="!props.resetEnabled" title="重置时间" aria-label="重置时间" @click.stop="resetRange">
       <span class="reset-glyph" aria-hidden="true">↻</span>
     </button>
 
@@ -360,6 +367,9 @@ onUnmounted(() => {
 .compact-date-confirm:hover { background: var(--ct-primary-solid); }
 
 @media (max-width: 520px) {
+  .compact-date-popover { max-height:calc(100dvh - 32px);overflow-y:auto; }
+  .compact-date-input { height:44px;font-size:16px; }
+  .compact-date-preset,.compact-date-confirm { min-height:44px; }
   .compact-date-fields { grid-template-columns: minmax(0, 1fr); gap: 8px; }
   .compact-date-separator { display: none; }
   .compact-date-presets { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }

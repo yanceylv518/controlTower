@@ -237,7 +237,7 @@ async function copyRequestID(value: string) {
           RT：请求总耗时；UHT：上游首响应时间；URT：上游总耗时。Request ID
           为空或采样日志未保留对应记录时会显示未关联。
         </p>
-        <el-table :data="samples">
+        <el-table v-mobile-cards :data="samples">
           <el-table-column
             prop="occurred_at"
             label="时间"

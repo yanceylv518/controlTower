@@ -147,4 +147,17 @@ const panelProps = computed(() => ({
 <style>
 .customer-traffic-dialog { max-height: 84vh; overflow-y: auto; border-radius: 12px; }
 .customer-traffic-dialog .traffic-chart.expanded { height: clamp(260px, 48vh, 520px); }
+@media(max-width:900px) {
+  .customer-traffic-dialog { width:100%!important;height:100dvh;max-height:100dvh;margin:0!important;border-radius:0;padding:16px;padding-bottom:calc(16px + env(safe-area-inset-bottom)); }
+  .customer-traffic-dialog .el-dialog__header { padding-right:40px;overflow-wrap:anywhere; }
+  .customer-traffic-dialog .el-dialog__headerbtn { width:44px;height:44px; }
+}
+</style>
+<style scoped>
+@media(max-width:900px) {
+  .traffic-card>header { flex-wrap:wrap; }
+  .customer-link { min-height:36px;white-space:normal;overflow-wrap:anywhere; }
+  .expand-button { width:36px;min-height:36px; }
+  .compact-rate { max-width:100%; }
+}
 </style>

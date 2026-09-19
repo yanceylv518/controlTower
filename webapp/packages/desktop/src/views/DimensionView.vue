@@ -361,7 +361,7 @@ function rowClass({ row }: { row: DimRow }) {
         <CustomerTokenChart :items="topTen" />
       </section>
       <div v-show="activeTab === 'ranking'" class="dim-table dimension-ranking">
-        <el-table
+        <el-table v-mobile-cards
           :data="visibleRows"
           :row-class-name="rowClass"
           :max-height="720"

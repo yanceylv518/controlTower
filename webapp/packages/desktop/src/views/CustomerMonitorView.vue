@@ -4,6 +4,7 @@ import { Refresh, Search } from "@element-plus/icons-vue";
 import { siteOf, type MetricItem } from "@ct/shared";
 import { dashboard } from "../api";
 import AppShell from "../components/AppShell.vue";
+import ScrollLoadMore from "../components/ScrollLoadMore.vue";
 import AsyncPanel from "../components/AsyncPanel.vue";
 import CustomerTokenChart from "../components/CustomerTokenChart.vue";
 import CustomerCompareChart from "../components/CustomerCompareChart.vue";
@@ -32,6 +33,7 @@ const search = ref("");
 const selectedKeys = ref<string[]>([]);
 const page = ref(1);
 const pageSize = ref(50);
+const mobileCount = ref(20);
 const history = ref<MetricItem[]>([]);
 const recentHistory = shallowRef<MetricItem[]>([]);
 const coverageByInstance = shallowRef(new Map<string, number[]>());
@@ -167,6 +169,8 @@ const filteredRows = computed(() => {
   return allRows.value.filter(item => !keyword || `${customerName(item)} ${item.dimension_key}`.toLowerCase().includes(keyword));
 });
 const pagedRows = computed(() => filteredRows.value.slice((page.value - 1) * pageSize.value, page.value * pageSize.value));
+const mobileRows = computed(() => filteredRows.value.slice(0, mobileCount.value));
+watch([search, hours, () => filters.site_id], () => { mobileCount.value = 20; });
 const minuteByKey = computed(() => {
   const groups = new Map<string, MetricItem[]>();
   recentHistory.value.forEach(item => { const items = groups.get(item.dimension_key) || []; items.push(item); groups.set(item.dimension_key, items); });
@@ -227,9 +231,11 @@ function openDetail(row: MetricItem) {
 <template>
   <AppShell title="客户监控">
     <template #tools>
+      <div class="customer-top-controls">
       <el-segmented v-model="hours" :options="[{ label: '1小时', value: 1 }, { label: '6小时', value: 6 }, { label: '24小时', value: 24 }]" size="small" />
       <el-input v-model="search" :prefix-icon="Search" placeholder="搜索客户名称或 ID" clearable size="small" class="customer-search" @input="page = 1" />
       <el-button :icon="Refresh" circle size="small" :loading="state.loading.value" title="刷新" @click="state.reload" />
+      </div>
     </template>
 
     <el-alert v-if="state.error.value && allRows.length" :title="state.error.value" type="warning" :closable="false" show-icon />
@@ -270,6 +276,7 @@ function openDetail(row: MetricItem) {
       </section>
 
       <section v-show="activeTab === 'charts'" class="customer-metric-view">
+        <el-empty v-if="activeMetric === 'tpm' && !filteredRows.length" description="没有匹配的客户" />
         <template v-if="activeMetric === 'tpm' && activeTab === 'charts'">
           <div class="customer-traffic-grid">
             <CustomerTrafficCard v-for="row in sortedTrafficRows" :key="`${filters.site_id}:${row.dimension_key}`" :customer="row" :totals="historyByKey.get(row.dimension_key) || []" :minute="minuteByKey.get(row.dimension_key) || null" :verified-buckets="coverageByInstance.get(row.instance_id) || []" :hours="hours" :as-of="asOf" :refresh-key="refreshKey" @detail="openDetail(row)" />
@@ -290,6 +297,15 @@ function openDetail(row: MetricItem) {
           <div><h2>全部客户 · 按总 Token 降序</h2><p>勾选客户可加入上方独立趋势图，最多 8 个</p></div>
           <span class="customer-count">共 {{ filteredRows.length }} 个客户</span>
         </header>
+        <div class="mobile-customer-list">
+          <el-empty v-if="!pagedRows.length" description="没有匹配的客户" />
+          <article v-for="row in mobileRows" :key="row.dimension_key" class="mobile-customer-card">
+            <header><div class="customer-name"><b>{{ customerName(row) }}</b><span>ID {{ customerID(row) }} · {{ row.instance_name }}</span></div><span :class="['status-label', ttftStatus(row.ttft_p95_ms).key]">{{ ttftStatus(row.ttft_p95_ms).label }}</span></header>
+            <dl><div><dt>总 Token</dt><dd>{{ formatTokens(totalTokens(row)) }}</dd></div><div><dt>峰值 TPM</dt><dd>{{ formatTokens(peakCustomerTPM(row.dimension_key)) }}</dd></div><div><dt>Token In / Out</dt><dd>{{ formatTokens(row.prompt_tokens) }} / {{ formatTokens(row.completion_tokens) }}</dd></div><div><dt>TTFT P95</dt><dd>{{ ms(row.ttft_p95_ms) }}</dd></div><div><dt>请求数</dt><dd>{{ row.request_count.toLocaleString() }}</dd></div><div><dt>流量占比</dt><dd>{{ grandTotal ? `${(totalTokens(row) / grandTotal * 100).toFixed(1)}%` : '—' }}</dd></div></dl>
+            <footer><el-checkbox :model-value="selectedKeys.includes(row.dimension_key)" :disabled="!selectedKeys.includes(row.dimension_key) && selectedKeys.length >= 8" @change="toggleCompare(row.dimension_key, Boolean($event))">加入趋势图</el-checkbox><el-button text type="primary" @click="openDetail(row)">查看详情</el-button></footer>
+          </article>
+          <ScrollLoadMore :loading="false" :disabled="activeTab !== 'ranking'" :has-more="mobileCount < filteredRows.length" @load="mobileCount += 20" />
+        </div>
         <el-table :data="pagedRows" class="customer-table" @row-click="openDetail">
           <el-table-column width="46" align="center">
             <template #default="{ row }">
@@ -328,6 +344,8 @@ function openDetail(row: MetricItem) {
 </template>
 
 <style scoped>
+.customer-top-controls { display:flex;align-items:center;gap:8px;min-width:0; }
+.mobile-customer-list { display:none; }
 .customer-search { width: 220px; }
 .customer-traffic-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; align-items: start; }
 .customer-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 18px; min-height: 52px; padding: 8px 12px; margin-bottom: 14px; border: 1px solid var(--ct-line); border-radius: 8px; background: var(--ct-surface); }
@@ -380,4 +398,44 @@ function openDetail(row: MetricItem) {
 @media (max-width: 1380px) { .customer-kpis { grid-template-columns: repeat(3, 1fr); }.customer-chart-grid { grid-template-columns: 1fr; } }
 @media (max-width: 1000px) { .customer-trend-groups { grid-template-columns: 1fr; } }
 @media (max-width: 900px) { .customer-kpis { grid-template-columns: repeat(2, 1fr); }.customer-search { width: 170px; } }
+</style>
+<style scoped>
+@media(max-width:900px) {
+  .customer-top-controls { width:100%;display:grid;grid-template-columns:minmax(0,1fr) 36px;gap:6px; }
+  .customer-top-controls>.el-segmented { grid-column:1 / -1; }
+  .customer-search { width:100%; }
+  .customer-top-controls :deep(.el-input__wrapper),.customer-top-controls>.el-button { min-height:36px; }
+  .customer-top-controls :deep(.el-segmented__item) { min-height:32px; }
+  .customer-top-controls>.el-button { width:36px; }
+  .customer-top-controls :deep(input) { font-size:14px; }
+  .customer-toolbar { padding:8px;gap:6px;margin-bottom:10px; }
+  .customer-view-switch { width:100%;display:grid;grid-template-columns:1fr 1fr;gap:8px; }
+  .customer-view-switch button { min-height:32px;padding:6px 8px;border-radius:6px;background:var(--ct-surface-2); }
+  .customer-view-switch button.active { background:var(--ct-accent-weak); }
+  .customer-toolbar-divider { display:none; }
+  .customer-metric-switch { width:100%; }
+  .customer-metric-switch :deep(.el-segmented__item) { min-height:32px; }
+  .customer-toolbar-right :deep(.el-select__wrapper) { min-height:36px; }
+  .customer-kpis { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .customer-kpi { padding:12px;min-width:0; }
+  .customer-kpi strong { font-size:22px;overflow-wrap:anywhere; }
+  .customer-chart-grid,.customer-traffic-grid,.customer-trend-groups { grid-template-columns:minmax(0,1fr); }
+  .customer-trend-group { min-width:0;padding:12px; }
+  .customer-trend-group h2 { overflow-wrap:anywhere; }
+  .customer-trend-group>header .el-button { min-height:36px; }
+  .customer-table,.customer-pagination { display:none; }
+  .customer-table-panel { background:none;border:0;box-shadow:none; }
+  .customer-table-panel>header { padding:12px 0;flex-wrap:wrap; }
+  .mobile-customer-list { display:grid;gap:12px; }
+  .mobile-customer-card { background:var(--ct-surface);border:1px solid var(--ct-line);border-radius:10px;padding:14px;min-width:0; }
+  .mobile-customer-card>header,.mobile-customer-card>footer { display:flex;justify-content:space-between;align-items:center;gap:12px; }
+  .mobile-customer-card .customer-name { gap:5px;overflow-wrap:anywhere; }
+  .mobile-customer-card .status-label { flex-shrink:0; }
+  .mobile-customer-card dl { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 12px;margin:20px 0; }
+  .mobile-customer-card dt { font-size:12px;color:var(--ct-ink-3); }
+  .mobile-customer-card dd { margin:5px 0 0;font-weight:600;overflow-wrap:anywhere; }
+  .mobile-customer-card>footer { border-top:1px solid var(--ct-line);padding-top:6px; }
+  .mobile-customer-card .el-checkbox,.mobile-customer-card .el-button,.mobile-customer-pagination .el-button { min-height:36px; }
+  .mobile-customer-pagination { display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:13px; }
+}
 </style>

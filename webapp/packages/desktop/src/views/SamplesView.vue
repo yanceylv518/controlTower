@@ -105,7 +105,7 @@ watch([page, pageSize], () => void state.reload());
       :error="state.error.value"
       :empty="!state.data.value?.length"
       @retry="state.reload"
-      ><el-table :data="state.data.value" @row-click="openDetail"
+      ><el-table v-mobile-cards :data="state.data.value" @row-click="openDetail"
         ><el-table-column label="时间" width="180"
           ><template #default="s">{{
             formatTime(s.row.created_at)

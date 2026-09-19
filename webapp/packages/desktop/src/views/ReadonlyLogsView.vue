@@ -10,13 +10,17 @@ import AppShell from '../components/AppShell.vue'
 import FallbackRequestChain from '../components/FallbackRequestChain.vue'
 import { attemptChannels, retryLookupUnknown, type ChainQuery } from '../utils/fallbackRequestChain'
 import CompactDateTimeRangePicker from '../components/CompactDateTimeRangePicker.vue'
+import MobileLogFilters, { type MobileLogFilterValues } from '../components/MobileLogFilters.vue'
 import { passthrough } from '../api'
 import { useAuthStore } from '../stores/auth'
 import { useFiltersStore } from '../stores/filters'
 import { usePrefsStore } from '../stores/prefs'
 import { useAsyncData } from '../composables/useAsyncData'
+import { useAppendPages } from '../composables/useAppendPages'
+import ScrollLoadMore from '../components/ScrollLoadMore.vue'
 import { decodeBillingExpression, dynamicBillingSummary, dynamicPriceFields, dynamicTierMatched, formatDynamicCondition, normalizeDynamicRequestRules, normalizeDynamicUsageFacts, parseDynamicTiers, type DynamicRequestRule, type DynamicTier, type DynamicUsageFact } from '../utils/billingDetails'
 import { copyText as copyToClipboard } from '../utils/copyText'
+import { logErrorCode } from '../utils/logErrorCode'
 import { formatNumber } from '../utils/format'
 import { getTokenColorClass, getUserAvatarFallback, getUserAvatarStyle, type UserAvatarStyle } from '../utils/identityColors'
 
@@ -37,6 +41,7 @@ type LogRowView = {
   timeShort: string
   timeFull: string
   statusLabel: string
+  errorCode: string
   statusClass: string
   displayable: boolean
   timing: boolean
@@ -162,6 +167,7 @@ function toggleColumn(key: LogColumnKey, visible: boolean) {
 const detailRow = shallowRef<ReadonlyLog | null>(null)
 const detailOpen = ref(false)
 const detailCloseButton = ref<HTMLButtonElement | null>(null)
+let detailReturnFocus: HTMLElement | null = null
 const defaultTimeRange = (): [Date, Date] => {
   const now = new Date()
   // 默认覆盖当天已产生的记录，并给时钟误差预留一小时，避免新打开页面误报为空。
@@ -193,7 +199,8 @@ const countParams = computed(() => {
 // 响应携带查询批次与分页位置，失败时保留的数据不能冒充新条件的结果。
 const state = useAsyncData(async (signal) => {
   const revision = queryRevision.value, pageOffset = offset.value, pageLimit = limit.value, requestCursor = pageCursor.value
-  return { ...await passthrough.logs({ ...submitted.value, offset: pageOffset, limit: pageLimit, cursor: requestCursor }, signal), revision, pageOffset, pageLimit, requestCursor }
+  const feedQuery = { ...submitted.value, offset: pageOffset, limit: pageLimit }
+  return { ...await passthrough.logs({ ...feedQuery, cursor: requestCursor }, signal), feedQuery, revision, pageOffset, pageLimit, requestCursor }
 })
 const statState = useAsyncData(async (signal) => {
   const revision = queryRevision.value
@@ -207,6 +214,25 @@ const listIsCurrent = computed(() => state.data.value?.revision === queryRevisio
 const countIsCurrent = computed(() => listIsCurrent.value && countState.data.value?.revision === queryRevision.value && !countState.loading.value && !countState.error.value)
 const tableScroll = ref<HTMLElement | null>(null)
 const backgroundRefreshing = ref(false)
+const mobileFeed = useAppendPages(() => state.data.value, () => state.loading.value || backgroundRefreshing.value || !listIsCurrent.value,
+  (base, offset, signal) => passthrough.logs({ ...base.feedQuery, offset }, signal),
+  (row: ReadonlyLog) => row.id, base => base.feedQuery.offset)
+const mobileFilters = computed<MobileLogFilterValues>(() => ({ logType:logType.value, modelName:modelName.value, group:group.value, tokenName:tokenName.value, requestID:requestID.value, upstreamRequestID:upstreamRequestID.value, channelID:channelID.value }))
+function applyMobileFilters(value: MobileLogFilterValues) {
+  logType.value = value.logType
+  modelName.value = value.modelName
+  group.value = value.group
+  tokenName.value = value.tokenName
+  requestID.value = value.requestID
+  upstreamRequestID.value = value.upstreamRequestID
+  channelID.value = value.channelID
+  search()
+}
+function filterMobileUser(value: string) {
+  if (!sensitiveVisible.value || backgroundRefreshing.value) return
+  username.value = value
+  search()
+}
 // 首屏加载实例时会同步设置站点；在首次统一刷新完成前忽略 watcher，避免重复发起三组请求。
 let initialLoadPending = true
 const extraCache = new WeakMap<object, LogExtra>()
@@ -489,6 +515,7 @@ const reset = () => {
 }
 
 function openDetail(row: ReadonlyLog) {
+  detailReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
   closeRequestChain()
   closePageSizeMenu()
   detailRow.value = row
@@ -502,6 +529,12 @@ function handleDetailKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape' && detailOpen.value) {
     event.preventDefault()
     closeDetail()
+  }
+  if (event.key === 'Tab' && detailOpen.value) {
+    const controls = [...document.querySelectorAll<HTMLElement>('.detail-dialog button:not(:disabled), .detail-dialog summary, .detail-dialog a[href], .detail-dialog input:not(:disabled)')].filter(node => node.getClientRects().length)
+    const first = controls[0], last = controls.at(-1)
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
   }
 }
 const expandedRetryID = ref<number | null>(null)
@@ -596,6 +629,7 @@ watch(detailOpen, async (open) => {
     detailCloseButton.value?.focus()
   } else {
     window.removeEventListener('keydown', handleDetailKeydown)
+    if (detailReturnFocus?.isConnected) detailReturnFocus.focus()
   }
 })
 // 错误和退款行沿用 rc35 的轻底色提示，不改变记录内容或排序。
@@ -867,7 +901,7 @@ function logRowMemoKey(row: ReadonlyLog, visible: boolean, admin: boolean) {
 // 查询会不断返回新对象，缓存上限控制在 500 条，避免长时间切换筛选条件造成内存增长。
 const logRowCache = new Map<string, LogRowView>()
 const logRows = computed<LogRowView[]>(() => {
-  const items = state.data.value?.items || []
+  const items = mobileViewport.value ? mobileFeed.items.value : state.data.value?.items || []
   const visible = sensitiveVisible.value
   const admin = isAdmin.value
   return items.map((row): LogRowView => {
@@ -906,6 +940,7 @@ const logRows = computed<LogRowView[]>(() => {
       timeShort: timeShort(row.created_at),
       timeFull: timeFull(row.created_at),
       statusLabel: meta[0],
+      errorCode: logErrorCode(row),
       statusClass: 'status-' + meta[1],
       displayable,
       timing,
@@ -1504,7 +1539,8 @@ watch(() => filters.site_id, (site, previous) => {
 
       <!-- rc35 的工具栏按“筛选器 → 统计与操作”分两行排列，所有筛选字段始终可见。 -->
       <section class="logs-toolbar">
-        <div class="toolbar-primary">
+        <MobileLogFilters v-if="mobileViewport" v-model:username="username" v-model:time-range="timeRange" :filters="mobileFilters" :busy="state.loading.value || backgroundRefreshing" :admin="isAdmin" :sensitive="sensitiveVisible" @apply="applyMobileFilters" @search="search" @reset="reset" @privacy="sensitiveVisible = !sensitiveVisible" />
+        <div v-else class="toolbar-primary">
           <div class="primary-filters">
             <CompactDateTimeRangePicker v-model="timeRange" :reset-enabled="timeRangeChanged && !backgroundRefreshing" class="filter-time" @reset="resetTime" />
             <el-input v-model="username" clearable placeholder="用户名称" @keyup.enter="search" class="filter-username" />
@@ -1522,7 +1558,7 @@ watch(() => filters.site_id, (site, previous) => {
             <span class="stat-badge"><i class="accent-rose" /><span>RPM</span><strong>{{ logSummary ? formatNumber(logSummary.rpm) : '—' }}</strong></span>
             <span class="stat-badge"><i class="accent-slate" /><span>TPM</span><strong>{{ logSummary ? formatNumber(logSummary.tpm) : '—' }}</strong></span>
           </div>
-          <div class="toolbar-actions">
+          <div v-if="!mobileViewport" class="toolbar-actions">
             <el-select v-model="logType" placeholder="全部类型" class="filter-type action-type"><el-option label="全部类型" :value="0" /><el-option label="消费" :value="2" /><el-option label="错误" :value="5" /><el-option label="充值" :value="1" /><el-option label="管理" :value="3" /><el-option label="系统" :value="4" /><el-option label="退款" :value="6" /><el-option label="登录" :value="7" /></el-select>
             <button type="button" class="icon-action" :title="sensitiveVisible ? '隐藏敏感字段' : '显示敏感字段'" :aria-label="sensitiveVisible ? '隐藏敏感字段' : '显示敏感字段'" @click="sensitiveVisible = !sensitiveVisible"><el-icon><component :is="sensitiveVisible ? View : Hide" /></el-icon></button>
             <button type="button" class="secondary-action" :disabled="backgroundRefreshing" @click="reset"><el-icon><RefreshLeft /></el-icon><span>{{ backgroundRefreshing ? '更新中' : '重置' }}</span></button>
@@ -1543,6 +1579,7 @@ watch(() => filters.site_id, (site, previous) => {
       <el-alert v-if="state.error.value" :title="state.error.value" type="error" show-icon :closable="false"><el-button link type="primary" @click="reloadPage">重新加载</el-button></el-alert>
       <el-alert v-else-if="!state.loading.value && state.data.value && !state.data.value.configured" title="只读数据库尚未配置，当前暂无数据。配置后可直接在此查询。" type="info" show-icon :closable="false" />
 
+      <div v-if="mobileViewport" class="mobile-result-count" aria-live="polite">{{ state.loading.value ? '正在加载日志…' : backgroundRefreshing ? '正在更新…' : `共 ${formatNumber(effectiveTotal)} 条记录` }}</div>
       <section class="logs-table-shell" :class="{ 'is-background-refreshing': backgroundRefreshing }" :aria-busy="backgroundRefreshing">
         <div v-if="!mobileViewport" v-loading="state.loading.value" class="desktop-table" ref="tableScroll">
           <table class="logs-table">
@@ -1585,36 +1622,25 @@ watch(() => filters.site_id, (site, previous) => {
         <!-- rc35 的移动端摘要布局：首屏保留模型、费用、状态和关键维度。 -->
         <div v-else v-loading="state.loading.value" class="mobile-log-list">
           <article v-for="view in renderedRows" v-memo="[view.memoKey, expandedRetryID === view.id]" :key="view.id" class="mobile-log-card" :class="view.tone">
-            <div class="mobile-head"><div class="mobile-model"><button v-if="isColumnVisible('model') && view.hasModel" type="button" class="model-badge copyable" :class="view.modelProvider ? undefined : view.modelTone" @click.stop="copyText(view.source.model_name)"><ModelProviderIcon v-if="view.modelProvider" :name="view.modelProvider.name" />{{ view.modelName }}</button><div class="mobile-time"><span>{{ view.timeShort }}</span><span class="status-badge" :class="view.statusClass">{{ view.statusLabel }}</span></div></div><span v-if="isColumnVisible('quota')" class="mobile-cost">{{ view.quota }}</span></div>
-            <div class="mobile-grid">
-              <div v-if="isColumnVisible('channel')" class="mobile-field" :aria-label="isAdmin && view.retryChain ? requestChainTitle(view.source) : undefined" @mouseenter="openRetryHover(view, $event)" @mouseleave="closeRetryHover"><span>渠道</span><button v-if="view.hasChannel" type="button" :class="['channel-badge', 'copyable', view.channelTone]" title="点击复制渠道 ID" @click.stop="copyText(view.channelID)">#{{ view.channelID }}<small v-if="view.channelName">{{ view.channelName }}</small></button><button v-if="isAdmin && (view.fallback || view.retryChain || view.retryUnknown)" type="button" class="retry-chain-trigger" :class="{ 'retry-chain-unknown': view.retryUnknown }" :aria-expanded="expandedRetryID === view.id" :aria-label="requestChainTitle(view.source)" @click="toggleRetryChain(view)"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v12M18 9a9 9 0 0 1-9 9"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="6" r="3"/></svg><span v-if="view.retryUnknown">待确认</span></button><strong v-if="!view.hasChannel && !view.retryUnknown">—</strong></div>
-              <div v-if="isColumnVisible('user')" class="mobile-field"><span>用户</span><button v-if="view.source.username" type="button" class="mobile-user copyable" @click.stop="copyText(view.usernameCopy)"><i class="user-avatar" :class="{ 'is-hidden': !sensitiveVisible }" :style="view.avatarStyle">{{ view.initial }}</i>{{ view.username }}</button><strong v-else>—</strong></div>
-              <div v-if="isColumnVisible('token')" class="mobile-field"><span>令牌 / 分组</span><div v-if="view.hasToken" class="mobile-token"><span class="token-badge"><svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3v-3h3v-3h2.172a2 2 0 0 0 1.414-.586l1.814-1.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5" fill="currentColor"/></svg>{{ view.tokenName }}</span><small v-if="view.source.group" :class="view.groupTone">{{ view.group }}</small></div><strong v-else>—</strong></div>
-              <div v-if="isColumnVisible('tokens')" class="mobile-field"><span>Tokens</span><div v-if="view.hasTokens" class="tokens-cell"><span class="token-pair">{{ view.promptTokens }} / {{ view.completionTokens }}</span><small v-if="view.cacheTotal">缓存 {{ view.cacheTotalText }}</small></div><strong v-else>—</strong></div>
-              <div v-if="isColumnVisible('stream') || isColumnVisible('timing')" class="mobile-field">
-                <span>{{ isColumnVisible('stream') && isColumnVisible('timing') ? '流 / 耗时' : isColumnVisible('stream') ? '流' : '耗时' }}</span>
-                <div v-if="view.timing" class="mobile-timing">
-                  <span v-if="isColumnVisible('timing')" class="timing-bar" aria-hidden="true">
-                    <i v-if="view.stream === true" class="timing-segment" :class="view.firstResponseClass" />
-                    <i class="timing-segment" :class="view.durationClass" />
-                  </span>
-                  <span v-if="isColumnVisible('stream')" class="stream-label" :class="view.streamClass">{{ view.streamLabel }}</span>
-                  <small v-if="isColumnVisible('timing')" class="mobile-timing-values">
-                    <span v-if="view.stream === true" class="timing-value" :class="view.firstResponseClass">首字 <b>{{ view.firstResponseText }}</b></span>
-                    <span class="timing-value" :class="view.durationClass">耗时 <b>{{ view.durationText }}</b></span>
-                  </small>
-                </div>
-                <strong v-else>—</strong>
-              </div>
-              <div v-if="isColumnVisible('details')" class="mobile-field mobile-details-preview"><span>详情</span><button type="button" class="details-button" :title="'查看完整详情：' + view.summary" :aria-label="'查看完整详情：' + view.summary" @click.stop="openDetail(view.source)">{{ view.summaryPreview }}</button></div>
-            </div>
+            <div class="mobile-card-time"><time :title="view.timeFull">{{ view.timeText }}</time><span class="status-badge" :class="view.statusClass">{{ view.statusLabel }}<template v-if="view.errorCode"> · {{ view.errorCode }}</template></span></div>
+            <div class="mobile-card-identity"><button type="button" :disabled="!sensitiveVisible || backgroundRefreshing" :aria-label="'按用户名筛选：' + view.username" @click="filterMobileUser(view.source.username)">{{ view.username }}</button><span aria-hidden="true">·</span><strong>{{ view.modelName || '未记录模型' }}</strong></div>
+            <div class="mobile-card-token">令牌：{{ view.tokenName || '—' }}</div>
+            <dl class="mobile-card-metrics">
+              <div><dt>费用</dt><dd>{{ view.quota }}</dd></div>
+              <div><dt>输入 / 输出</dt><dd>{{ view.hasTokens ? view.promptTokens + ' / ' + view.completionTokens : '—' }}</dd></div>
+              <div><dt>首字</dt><dd>{{ view.firstResponseText }}</dd></div>
+              <div><dt>总耗时</dt><dd>{{ view.timing ? view.durationText : '—' }}</dd></div>
+            </dl>
+            <div v-if="view.hasChannel || view.retryUnknown" class="mobile-card-channel"><span>渠道 #{{ view.channelID }} {{ view.channelName }}</span><button v-if="isAdmin && (view.fallback || view.retryChain || view.retryUnknown)" type="button" class="retry-chain-trigger" :aria-expanded="expandedRetryID === view.id" aria-label="查看请求重试链路" @click="toggleRetryChain(view)"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3v12M18 9a9 9 0 0 1-9 9"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="6" r="3"/></svg><span v-if="view.retryUnknown">待确认</span></button></div>
+            <button type="button" class="mobile-card-detail" @click="openDetail(view.source)">{{ view.source.type === 5 ? '查看错误详情' : '查看详情' }}<span aria-hidden="true">›</span></button>
             <div v-if="expandedRetryID === view.id && isAdmin" class="mobile-request-chain"><FallbackRequestChain :row="view.source" :site="filters.site_id" :sensitive="sensitiveVisible" :money="money" @close="closeRequestChain" @filter="filterRequestChain" @detail="openDetail" /></div>
           </article>
           <div v-if="!state.loading.value && !renderedRows.length && !(state.data.value?.items.length)" class="empty-state"><el-icon><Search /></el-icon><strong>暂无日志</strong><span>调整时间范围或筛选条件后重试</span></div>
         </div>
       </section>
 
-      <footer class="pagination-bar">
+      <ScrollLoadMore v-if="mobileViewport" :loading="mobileFeed.loading.value || state.loading.value" :disabled="backgroundRefreshing || !!state.error.value" :has-more="mobileFeed.hasMore.value" :error="mobileFeed.error.value" @load="mobileFeed.loadMore" />
+      <footer v-else class="pagination-bar">
         <div class="pager-summary"><span>{{ countIsCurrent ? '总计：' : '已加载至：' }}</span><strong>{{ formatNumber(countIsCurrent ? effectiveTotal : (state.data.value?.pageOffset || 0) + (state.data.value?.items.length || 0)) }}</strong></div>
         <div class="pager-controls">
           <div class="page-size-control">
@@ -1670,6 +1696,32 @@ watch(() => filters.site_id, (site, previous) => {
             <div class="detail-dialog-body">
               <div class="detail-dialog-body-inner">
                 <div class="detail-dialog-content">
+                <div v-if="mobileViewport" class="mobile-detail-summary">
+                  <section class="mobile-detail-card mobile-detail-intro">
+                    <div><strong>{{ visibleValue(detailRow.username) }}</strong><p>{{ detailRow.model_name || '未记录模型' }}</p><time>{{ timeFull(detailRow.created_at) }}</time></div>
+                    <div class="mobile-detail-amount"><span>本次费用</span><b>{{ isDisplayableLog(detailRow) ? money(detailRow.quota) : '—' }}</b></div>
+                  </section>
+                  <section v-if="isTimingLog(detailRow)" class="mobile-detail-card">
+                    <h3>请求表现</h3>
+                    <dl class="mobile-performance">
+                      <div><dt>首字时间</dt><dd>{{ streamFlag(detailRow) === true ? firstResponseText(detailRow) : '—' }}</dd></div>
+                      <div><dt>总耗时</dt><dd>{{ detailRow.use_time }}s</dd></div>
+                      <div><dt>输出速度</dt><dd>{{ outputRate(detailRow) > 0 ? outputRate(detailRow) + ' Tokens/s' : '—' }}</dd></div>
+                      <div><dt>流式响应</dt><dd>{{ streamFlag(detailRow) === true ? '是' : streamFlag(detailRow) === false ? '否' : '未知' }}</dd></div>
+                    </dl>
+                  </section>
+                  <section v-if="isDisplayableLog(detailRow)" class="mobile-detail-card">
+                    <h3>用量明细</h3>
+                    <dl class="mobile-detail-rows"><div><dt>输入 Tokens</dt><dd>{{ formatNumber(detailRow.prompt_tokens) }}</dd></div><div><dt>输出 Tokens</dt><dd>{{ formatNumber(detailRow.completion_tokens) }}</dd></div><div v-if="cacheReadTokens(detailRow)"><dt>缓存读取</dt><dd>{{ formatNumber(cacheReadTokens(detailRow)) }}</dd></div><div v-if="cacheWriteTokens(detailRow)"><dt>缓存写入</dt><dd>{{ formatNumber(cacheWriteTokens(detailRow)) }}</dd></div></dl>
+                  </section>
+                  <section class="mobile-detail-card">
+                    <h3>请求信息</h3>
+                    <dl class="mobile-detail-rows"><div><dt>令牌</dt><dd>{{ visibleValue(detailRow.token_name) }}</dd></div><div><dt>分组</dt><dd>{{ detailGroup(detailRow) }}</dd></div><div><dt>请求 ID</dt><dd>{{ visibleValue(detailRow.request_id) }}</dd></div></dl>
+                  </section>
+                  <section v-if="detailRow.type === 5 && detailContentFor(detailRow)" class="mobile-detail-card mobile-error-content"><h3>错误详情</h3><p>{{ detailContentFor(detailRow) }}</p></section>
+                </div>
+                <details class="detail-full-information" :open="!mobileViewport">
+                <summary v-if="mobileViewport">计费与完整信息</summary>
                 <!-- 详情顺序与 rc35 的 DetailsDialog 一致，基础信息之后按审计、用量、计费和内容分组。 -->
                 <div class="detail-overview">
                   <div v-if="detailRow.request_id" class="detail-row"><span class="detail-label">请求ID</span><span class="detail-value detail-mono copyable-value"><button type="button" class="detail-copy-value" @click="copyText(detailRow.request_id)">{{ detailRow.request_id }}<i class="copy-glyph" aria-hidden="true" /></button></span></div>
@@ -1899,9 +1951,11 @@ watch(() => filters.site_id, (site, previous) => {
                   <h3>{{ detailRow.type === 5 ? '错误详情' : '内容' }}</h3>
                   <div class="detail-section-card detail-content-card"><button type="button" class="detail-copy-button" aria-label="复制内容" title="复制内容" @click="copyText(detailContentFor(detailRow))"><i class="copy-glyph" aria-hidden="true" /></button><div class="detail-value multiline detail-content-value">{{ detailContentFor(detailRow) }}</div></div>
                 </section>
+                </details>
                 </div>
               </div>
             </div>
+            <footer v-if="mobileViewport" class="mobile-detail-footer"><button type="button" :disabled="!detailRow.request_id || !sensitiveVisible" @click="copyText(detailRow.request_id)">复制请求 ID</button></footer>
           </section>
         </div>
       </Teleport>
@@ -3293,17 +3347,7 @@ watch(() => filters.site_id, (site, previous) => {
 /* 移动端保持控件可触达，主筛选使用两列，日期和操作横跨整行。 */
 @media (max-width: 900px) {
   :global(body.ct-rc35-logs-theme) { min-width: 0 !important; overflow-x: hidden; }
-  :global(.shell .sidebar) { width: 56px !important; padding-inline: 6px !important; }
-  :global(.shell .sidebar .logo) { margin: 0 !important; }
-  :global(.shell .sidebar .logo b),
-  :global(.shell .sidebar .nav-group),
-  :global(.shell .sidebar a span) { display: none !important; }
-  :global(.shell .sidebar a) { justify-content: center !important; gap: 0 !important; padding-inline: 0 !important; }
-  :global(.shell .workspace) { width: calc(100% - 56px) !important; margin-left: 56px !important; }
-  :global(.shell .topbar) { padding-inline: 10px !important; }
-  :global(.shell .topbar h1) { font-size: 14px !important; }
-  :global(.shell .topbar .user) { min-width: 0; gap: 4px !important; }
-  :global(.shell .content) { width: 100% !important; min-width: 0 !important; padding: 10px 8px 18px !important; }
+  /* 外壳尺寸、侧栏隐藏和底部导航留白由共享手机布局统一管理。 */
   .logs-page { height: auto; min-height: 0; margin: -10px -8px -18px; overflow: visible; padding: 14px 8px 18px; }
   .logs-toolbar { padding: 12px; }
   .primary-filters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -3425,4 +3469,70 @@ watch(() => filters.site_id, (site, previous) => {
 .mobile-request-chain{margin-top:12px}
 .request-scope-banner{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;color:var(--rc35-ink-2);font-size:12px}
 .retry-chain-trigger[aria-expanded="true"]{box-shadow:0 0 0 2px var(--rc35-accent-weak)}
+.detail-full-information { display:contents; }
+@media(max-width:900px) {
+  .logs-page { margin:0;padding:0;gap:8px; }
+  .logs-toolbar { padding:0;background:transparent;border:0;box-shadow:none; }
+  .toolbar-meta { margin-top:8px;padding-top:0;border-top:0;gap:8px; }
+  .stat-badges { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0;width:100%;padding:8px 0;background:#fff;border:1px solid #e5e9f0;border-radius:8px; }
+  .stat-badge { display:flex;flex-direction:column;gap:4px;min-width:0;height:auto;min-height:36px;padding:0 6px;border:0;border-radius:0;background:none;font-size:12px; }
+  .stat-badge+.stat-badge { border-left:1px solid #e5e9f0; }
+  .stat-badge i { display:none; }
+  .stat-badge strong { font-size:14px;color:#315edb;overflow-wrap:anywhere; }
+  .mobile-result-count { font-size:12px;color:#637086; }
+  .mobile-log-list { gap:8px;align-content:start; }
+  .mobile-log-card { padding:10px 12px 0;border-radius:9px;box-shadow:none; }
+  .mobile-card-time { display:flex;justify-content:space-between;align-items:center;gap:8px;color:#637086;font-size:12px; }
+  .mobile-card-time time { flex-shrink:0; }
+  .mobile-card-time .status-badge { min-width:0;text-align:right;overflow-wrap:anywhere; }
+  .mobile-card-identity { display:flex;align-items:center;gap:6px;min-width:0;flex-wrap:wrap;color:#202b3d; }
+  .mobile-card-identity button { padding:4px 0;min-height:32px;max-width:100%;white-space:normal;border:0;background:transparent;color:inherit;font-size:14px;font-weight:600;overflow-wrap:anywhere;text-align:left; }
+  .mobile-card-identity strong { min-width:0;max-width:100%;font-size:14px;overflow-wrap:anywhere; }
+  .mobile-card-identity>span { color:#8190a5; }
+  .mobile-card-token { margin:0 0 6px;color:#637086;font-size:12px;overflow-wrap:anywhere; }
+  .mobile-card-metrics { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px 12px;margin:0 0 6px;font-size:12px; }
+  .mobile-card-metrics>div { display:flex;flex-wrap:wrap;gap:4px 8px;min-width:0; }
+  .mobile-card-metrics dt { color:#637086; }
+  .mobile-card-metrics dd { margin:0;color:#202b3d;font-weight:600;overflow-wrap:anywhere;font-variant-numeric:tabular-nums; }
+  .mobile-card-channel { display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:4px;font-size:12px;color:#637086;overflow-wrap:anywhere; }
+  .mobile-card-channel>span { min-width:0;max-width:100%; }
+  .mobile-card-detail { display:flex;align-items:center;justify-content:space-between;min-height:36px;width:100%;padding:4px 0;border:0;border-top:1px solid #edf0f4;background:transparent;color:#315edb;font:inherit;font-size:13px;text-align:left; }
+  .mobile-card-detail span { font-size:22px; }
+  .mobile-pagination { display:flex;justify-content:space-between;align-items:center;gap:12px;color:#637086;font-size:13px; }
+  .mobile-pagination button,.mobile-detail-footer button { min-height:44px;padding:8px 16px;border:1px solid #d3dae4;border-radius:7px;background:#fff;color:#315edb;font:inherit; }
+  .mobile-pagination button:disabled,.mobile-detail-footer button:disabled { color:#9ba5b5;background:#f7f9fc; }
+  .detail-dialog,.detail-dialog:not(.is-wide),.detail-dialog.is-wide { width:100%;max-width:100%;height:100dvh;max-height:100dvh;border-radius:0;padding:0;gap:0; }
+  .detail-dialog-header { padding:16px 54px 16px 16px;min-height:60px;border-bottom:1px solid #e5e9f0; }
+  .detail-dialog-title { flex-wrap:wrap; }
+  .detail-dialog-close { top:8px;right:8px;width:44px;height:44px; }
+  .detail-dialog-body { flex:1;min-height:0;height:auto;max-height:none;margin:0;background:#f1f3f7; }
+  .detail-dialog-body-inner { padding:12px; }
+  .detail-dialog-content { gap:12px; }
+  .mobile-detail-summary { display:grid;gap:12px; }
+  .mobile-detail-card { padding:16px;background:#fff;border:1px solid #e5e9f0;border-radius:9px;min-width:0; }
+  .mobile-detail-card h3 { margin:0 0 14px;font-size:14px;font-weight:600;color:#202b3d; }
+  .mobile-detail-intro { display:flex;flex-wrap:wrap;justify-content:space-between;gap:12px; }
+  .mobile-detail-intro>div { min-width:0;overflow-wrap:anywhere; }
+  .mobile-detail-intro strong { font-size:18px;color:#202b3d; }
+  .mobile-detail-intro p { margin:6px 0;color:#202b3d; }
+  .mobile-detail-intro time { color:#637086;font-size:12px; }
+  .mobile-detail-amount { display:flex;flex-direction:column;gap:8px; }
+  .mobile-detail-amount span { color:#637086;font-size:12px; }
+  .mobile-detail-amount b { color:#315edb;font-size:24px;line-height:1.2; }
+  .mobile-performance { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px 12px;margin:0; }
+  .mobile-performance dt,.mobile-detail-rows dt { color:#637086;font-size:13px; }
+  .mobile-performance dd { margin:6px 0 0;color:#202b3d;font-weight:600;overflow-wrap:anywhere; }
+  .mobile-detail-rows { margin:0; }
+  .mobile-detail-rows>div { display:flex;justify-content:space-between;gap:16px;padding:12px 0;border-bottom:1px solid #edf0f4; }
+  .mobile-detail-rows>div:last-child { border-bottom:0;padding-bottom:0; }
+  .mobile-detail-rows dt { flex-shrink:0; }
+  .mobile-detail-rows dd { margin:0;min-width:0;text-align:right;color:#202b3d;overflow-wrap:anywhere; }
+  .mobile-error-content p { margin:0;white-space:pre-wrap;overflow-wrap:anywhere;color:#b42318; }
+  .detail-full-information { display:block;padding:16px;background:#fff;border:1px solid #e5e9f0;border-radius:9px; }
+  .detail-full-information summary { min-height:28px;cursor:pointer;font-weight:600; }
+  .detail-full-information[open]>summary { margin-bottom:16px; }
+  .detail-full-information .detail-section { margin-top:16px; }
+  .mobile-detail-footer { flex:none;padding:12px 16px calc(12px + env(safe-area-inset-bottom));border-top:1px solid #e5e9f0;background:#fff; }
+  .mobile-detail-footer button { width:100%; }
+}
 </style>

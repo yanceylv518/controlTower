@@ -15,7 +15,7 @@ const deferred = () => {let resolve,reject;const promise=new Promise((a,b)=>{res
 function setup() {
   const calls={logs:[],logStat:[],logCount:[]}, messages=[]
   const passthrough=Object.fromEntries(Object.keys(calls).map(name=>[name,(params,signal)=>{const d=deferred();calls[name].push({...d,params,signal});return d.promise}]))
-  const deps={ref,shallowRef,computed,useAsyncData,passthrough,filters:{site_id:'a'},scopedUserIDs:ref(undefined),timeRange:ref([new Date('2026-09-01'),new Date('2026-09-02')]),logType:ref(0),limit:ref(100),offset:ref(0),closeRequestChain(){},ElMessage:{warning:m=>messages.push(m)},pageSizeOptions:[10,20,50,100]}
+  const deps={ref,shallowRef,computed,useAsyncData,useAppendPages:()=>({}),passthrough,filters:{site_id:'a'},scopedUserIDs:ref(undefined),timeRange:ref([new Date('2026-09-01'),new Date('2026-09-02')]),logType:ref(0),limit:ref(100),offset:ref(0),closeRequestChain(){},ElMessage:{warning:m=>messages.push(m)},pageSizeOptions:[10,20,50,100]}
   for(const key of ['channelID','username','tokenName','modelName','group','requestID','upstreamRequestID'])deps[key]=ref('')
   const state=new Function(...Object.keys(deps),compile(code)+';return {state,statState,countState,refreshSearch,reloadPage,changePage,changePageSize,submitted,listIsCurrent,countIsCurrent,backgroundRefreshing,tableScroll} ')(...Object.values(deps))
   return {...deps,...state,calls,messages}

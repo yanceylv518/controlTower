@@ -133,7 +133,7 @@ const customerOptions = computed(() => {
   <div class="support-panel-head card-heading"><h2>预警记录 <span class="record-caption">最近 100 次拨号</span></h2><el-button size="small" @click="request(false, true)">刷新记录</el-button></div>
   <el-tabs v-model="recordsTab">
    <el-tab-pane label="检测状态" name="status">
-  <el-table :data="statuses" size="small" empty-text="尚未启用或等待首次检测" max-height="280">
+  <el-table v-mobile-cards :data="statuses" size="small" empty-text="尚未启用或等待首次检测" max-height="280">
    <el-table-column prop="site" label="站点" /><el-table-column prop="user_id" label="用户 ID" />
    <el-table-column label="状态" min-width="200"><template #default="{ row }">{{ labels[row.state] || row.state }}</template></el-table-column>
    <el-table-column prop="direction" label="方向" width="80" />
@@ -141,7 +141,7 @@ const customerOptions = computed(() => {
   </el-table>
    </el-tab-pane>
    <el-tab-pane label="拨号记录" name="calls">
-  <el-table :data="calls" size="small" empty-text="暂无拨号记录" max-height="320">
+  <el-table v-mobile-cards :data="calls" size="small" empty-text="暂无拨号记录" max-height="320">
    <el-table-column label="时间" min-width="160"><template #default="{ row }">{{ new Date(row.created_at).toLocaleString() }}</template></el-table-column>
    <el-table-column prop="site" label="站点" /><el-table-column prop="user_id" label="用户" />
    <el-table-column prop="phone" label="接听号码" min-width="120" />

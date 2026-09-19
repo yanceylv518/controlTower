@@ -34,13 +34,14 @@ function renderNow() {
   const initial = !chart;
   chart ??= echarts.init(chartEl.value);
   const items = [...props.items].reverse();
+  const narrow = chartEl.value.clientWidth < 480;
   const css = getComputedStyle(document.documentElement);
   chart.setOption(withChartTheme({
     animationDuration: initial ? 150 : 0,
     color: ["#2f6fed", "#f08a24"],
     tooltip: { trigger: "axis", axisPointer: { type: "shadow" }, valueFormatter: compact },
     legend: { top: 0, right: 4, data: ["Token In", "Token Out"] },
-    grid: { left: 94, right: 142, top: 34, bottom: 22 },
+    grid: { left: narrow ? 76 : 94, right: narrow ? 18 : 142, top: 34, bottom: 22 },
     xAxis: { type: "value", axisLabel: { formatter: compact }, splitLine: { lineStyle: { color: "#edf0f5" } } },
     yAxis: { type: "category", data: items.map(item => item.name), axisTick: { show: false }, axisLine: { show: false }, axisLabel: { width: 82, overflow: "truncate" } },
     series: [
@@ -60,7 +61,7 @@ function renderNow() {
         data: items.map(item => item.completion),
         itemStyle: { borderRadius: [0, 3, 3, 0] },
         label: {
-          show: true,
+          show: !narrow,
           position: "right",
           distance: 8,
           formatter: (p: { dataIndex: number }) => {
@@ -82,7 +83,7 @@ function renderNow() {
 watch(() => props.items, () => void render(), { deep: true, immediate: true });
 watch(chartEl, element => {
   observer?.disconnect();
-  if (element) { observer = new ResizeObserver(() => chart?.resize()); observer.observe(element); void render(); }
+  if (element) { observer = new ResizeObserver(() => { chart?.resize(); void render(); }); observer.observe(element); void render(); }
 });
 onBeforeUnmount(() => {
   cancelChartRender(renderToken);

@@ -168,7 +168,7 @@ void report.reload();
         剩余差额 = 总差额 - 异常订单差额 - 缓存写策略差额；下表“剩余差额”列合计与顶部一致。
       </p>
 
-      <el-table :data="report.data.value?.items || []" :row-class-name="reconciliationRowClass">
+      <el-table v-mobile-cards :data="report.data.value?.items || []" :row-class-name="reconciliationRowClass">
         <el-table-column label="用户" min-width="180"><template #default="s"><b>{{ s.row.username || `用户 ${s.row.user_id}` }}</b><small>ID {{ s.row.user_id }}</small></template></el-table-column>
         <el-table-column prop="request_count" label="计费请求" min-width="105" align="right"><template #default="s">{{ formatNumber(s.row.request_count) }}</template></el-table-column>
         <el-table-column prop="abnormal_rows" label="异常订单" min-width="105" align="right"><template #default="s">{{ formatNumber(s.row.abnormal_rows) }}</template></el-table-column>
@@ -201,7 +201,7 @@ void report.reload();
           <span>差异维度 <b class="danger-text">{{ formatNumber(verification.data.value.summary.mismatched_rows) }}</b></span>
         </div>
         <el-alert v-if="!verification.data.value.summary.mismatched_rows" type="success" :closable="false" title="账单核对通过：原始日志、正常账单和待确认记录一致" />
-        <el-table v-else :data="verification.data.value.items" class="verification-table">
+        <el-table v-mobile-cards v-else :data="verification.data.value.items" class="verification-table">
           <el-table-column prop="day" label="日期" width="110" />
           <el-table-column label="用户" min-width="150"><template #default="s">{{ s.row.username || `用户 ${s.row.user_id}` }}</template></el-table-column>
           <el-table-column prop="model_name" label="模型" min-width="150" />
@@ -217,7 +217,7 @@ void report.reload();
 
     <el-drawer v-model="detailOpen" :title="`${selectedUser?.username || '用户'} · L2 日/模型/分组核对`" size="86%">
       <AsyncPanel :loading="detail.loading.value" :error="detail.error.value" :empty="!detail.data.value?.items.length" @retry="detail.reload">
-        <el-table :data="detail.data.value?.items || []" :row-class-name="reconciliationRowClass">
+        <el-table v-mobile-cards :data="detail.data.value?.items || []" :row-class-name="reconciliationRowClass">
           <el-table-column prop="day" label="日期" width="110" />
           <el-table-column prop="model_name" label="模型" min-width="170" />
           <el-table-column prop="group_name" label="分组" min-width="105" />
@@ -236,7 +236,7 @@ void report.reload();
       <AsyncPanel :loading="requests.loading.value" :error="requests.error.value" :empty="!requests.data.value?.items.length" @retry="requests.reload">
         <el-alert v-if="requests.data.value" :type="requests.data.value.truncated || Number(requests.data.value.rebuild_residual) !== 0 ? 'warning' : 'info'" :closable="false" :title="`扫描 ${formatNumber(requests.data.value.scanned)} 条，匹配 ${formatNumber(requests.data.value.matched)} 条，重建残差 ${money(requests.data.value.rebuild_residual)}${Number(requests.data.value.rebuild_residual) !== 0 ? '；行内倍率不完整，重建口径不可全信' : ''}${requests.data.value.truncated ? `；仅分析前 ${formatNumber(requests.data.value.scanned)} 条（已达到扫描上限）` : ''}`" />
         <div v-if="requests.data.value" class="lane-totals"><span>输入差额 <b>{{ money(requests.data.value.component_diffs.input) }}</b></span><span>输出差额 <b>{{ money(requests.data.value.component_diffs.output) }}</b></span><span>缓存读差额 <b>{{ money(requests.data.value.component_diffs.cache_read) }}</b></span><span>缓存写差额 <b>{{ money(requests.data.value.component_diffs.cache_write) }}</b></span><span>分组差额 <b>{{ money(requests.data.value.component_diffs.group) }}</b></span></div>
-        <el-table :data="requests.data.value?.items || []" class="request-table">
+        <el-table v-mobile-cards :data="requests.data.value?.items || []" class="request-table">
           <el-table-column prop="created_at" label="时间" min-width="165" />
           <el-table-column prop="request_id" label="Request ID" min-width="250" show-overflow-tooltip />
           <el-table-column label="实扣" min-width="110" align="right"><template #default="s">{{ money(s.row.actual_amount) }}</template></el-table-column>

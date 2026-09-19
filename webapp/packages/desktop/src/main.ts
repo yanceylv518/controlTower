@@ -22,5 +22,7 @@ import './fonts.css'
 import './shell.css'
 import './surfaces.css'
 import { initializeTheme } from './composables/useTheme'
+import './mobile.css'
+import { mobileCards } from './utils/mobileCards'
 initializeTheme()
-createApp(App).use(createPinia()).use(router).use(ElementPlus).mount('#app')
+createApp(App).directive('mobile-cards', mobileCards).use(createPinia()).use(router).use(ElementPlus).mount('#app')

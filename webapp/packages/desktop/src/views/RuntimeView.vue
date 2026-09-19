@@ -222,7 +222,7 @@ const networkSeries = (group: (typeof grouped.value)[number]): TrendSeries[] => 
         </div>
         <el-collapse class="raw-metrics">
           <el-collapse-item title="原始采样（排障使用）" name="raw">
-            <el-table :data="[...group.items].reverse()">
+            <el-table v-mobile-cards :data="[...group.items].reverse()">
               <el-table-column label="时间" width="180">
                 <template #default="s">{{
                   formatTime(s.row.collected_at)
@@ -258,7 +258,7 @@ const networkSeries = (group: (typeof grouped.value)[number]): TrendSeries[] => 
     <div v-if="state.data.value" class="support-grid">
       <section class="panel sub-panel">
         <h2>Agent</h2>
-        <el-table :data="state.data.value.agents">
+        <el-table v-mobile-cards :data="state.data.value.agents">
           <el-table-column prop="id" label="Agent" />
           <el-table-column label="状态" width="90">
             <template #default="s"
@@ -295,7 +295,7 @@ const networkSeries = (group: (typeof grouped.value)[number]): TrendSeries[] => 
           </div>
         </div>
         <p class="sub-note">每个目标仅展示最近一次检查，异常项优先。</p>
-        <el-table :data="latestHealth">
+        <el-table v-mobile-cards :data="latestHealth">
           <el-table-column prop="target" label="目标" />
           <el-table-column label="状态" width="90">
             <template #default="s"><StatusTag :value="s.row.status" /></template>
@@ -313,7 +313,7 @@ const networkSeries = (group: (typeof grouped.value)[number]): TrendSeries[] => 
             :title="`历史记录（${state.data.value.health.length}）`"
             name="history"
           >
-            <el-table :data="state.data.value.health" max-height="320">
+            <el-table v-mobile-cards :data="state.data.value.health" max-height="320">
               <el-table-column label="时间" width="148">
                 <template #default="s">{{ formatTime(s.row.checked_at) }}</template>
               </el-table-column>
@@ -328,7 +328,7 @@ const networkSeries = (group: (typeof grouped.value)[number]): TrendSeries[] => 
       </section>
       <section class="panel sub-panel">
         <h2>容器</h2>
-        <el-table :data="state.data.value.docker">
+        <el-table v-mobile-cards :data="state.data.value.docker">
           <el-table-column prop="container_name" label="容器" />
           <el-table-column label="状态" width="90">
             <template #default="s"

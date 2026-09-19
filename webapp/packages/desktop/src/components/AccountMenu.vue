@@ -59,7 +59,7 @@ async function submit() {
 
 <template>
   <el-dropdown trigger="click" popper-class="shell-menu-popper" @command="command">
-    <el-button text class="account-trigger">
+    <el-button text class="account-trigger" :aria-label="'账号菜单：' + (auth.user?.username || '')">
       <el-icon><User /></el-icon>
       <span>{{ auth.user?.username }}</span>
       <el-icon><ArrowDown /></el-icon>

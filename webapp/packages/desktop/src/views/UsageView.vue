@@ -58,7 +58,7 @@ useAutoRefresh(state.reload);
       ><div class="usage-grid">
         <section v-for="group in groups" :key="group.title" class="panel">
           <h2>{{ group.title }}</h2>
-          <el-table :data="group.items"
+          <el-table v-mobile-cards :data="group.items"
             ><el-table-column label="名称" min-width="160"
               ><template #default="s"
                 ><el-tooltip :content="s.row.dimension_key"

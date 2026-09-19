@@ -23,6 +23,9 @@ import type { AlertItem, MetricItem, Overview } from "@ct/shared";
 import { dashboard } from "../api";
 import { useAutoRefresh } from "../composables/useAutoRefresh";
 import { useFiltersStore } from "../stores/filters";
+import { useAuthStore } from "../stores/auth";
+import { canVisit } from "../permissions";
+import { useMobileViewport } from "../composables/useMobileViewport";
 import AppShell from "../components/AppShell.vue";
 import { formatNumber, formatPercent, formatSeconds } from "../utils/format";
 import {
@@ -37,6 +40,8 @@ echarts.use([
   CanvasRenderer,
 ]);
 const filters = useFiltersStore();
+const auth = useAuthStore();
+const mobile = useMobileViewport();
 const loading = ref(false);
 const error = ref("");
 const overview = ref<Overview | null>(null);
@@ -250,7 +255,8 @@ watch(themeSignature, () => { scheduleChartRender(renderToken, renderChart); }, 
         >最后刷新：{{ lastUpdated ? lastUpdated.toLocaleTimeString() : "—" }}</span
       >
     </template>
-    <section v-loading="loading">
+    <section v-loading="loading" class="overview-page">
+      <router-link v-if="mobile && canVisit(auth.user, '/tuning')" to="/tuning" class="mobile-tuning-shortcut"><div><b>调权中心</b><span>查看渠道权重、优先级与分组</span></div><span>进入 ›</span></router-link>
       <el-alert
         v-if="error"
         :title="error"
@@ -357,5 +363,18 @@ watch(themeSignature, () => { scheduleChartRender(renderToken, renderChart); }, 
 }
 .trend-chart .chart {
   height: 205px;
+}
+@media(max-width:900px) {
+  .overview-page .kpi-grid { gap:8px;margin-bottom:10px; }
+  .overview-page .kpi-card { position:relative;padding:10px 12px;min-height:0; }
+  .overview-page .kpi-icon { display:none; }
+  .overview-page .kpi-card>span { margin:0 0 4px;font-size:12px;line-height:18px; }
+  .overview-page .kpi-card>strong { font-size:20px;line-height:26px; }
+  .overview-page .mobile-tuning-shortcut { padding:10px 12px;margin-bottom:8px;gap:8px; }
+  .overview-page .mobile-tuning-shortcut>div { display:flex;align-items:center;gap:8px;min-width:0; }
+  .overview-page .mobile-tuning-shortcut b { flex-shrink:0;font-size:13px; }
+  .overview-page .mobile-tuning-shortcut>div>span { font-size:11px;line-height:16px; }
+  .overview-page .mobile-tuning-shortcut>span { flex-shrink:0;font-size:12px; }
+  .overview-page .trend-charts { margin-top:10px;gap:12px; }
 }
 </style>

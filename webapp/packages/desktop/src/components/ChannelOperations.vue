@@ -95,7 +95,7 @@ useAutoRefresh(state.reload);
       :error="state.error.value"
       :empty="!state.data.value?.length"
       @retry="state.reload"
-      ><el-table :data="commands"
+      ><el-table v-mobile-cards :data="commands"
         ><el-table-column prop="created_at" label="时间" /><el-table-column
           prop="id"
           label="命令 ID" /><el-table-column label="状态"

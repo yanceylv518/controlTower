@@ -169,10 +169,10 @@ onBeforeUnmount(()=>{channels.cancel();deliveries.cancel()});
           <p class="notification-caption">配置通知方式及接收的告警类型。多个渠道匹配时，各发送一份。</p>
           <section v-if="channels.data.value?.unassigned.length" class="legacy-channels">
             <el-alert title="旧渠道尚未绑定站点，已暂停投递。请确认归属后分配。" type="warning" :closable="false" />
-            <el-table :data="channels.data.value.unassigned"><el-table-column prop="name" label="待分配渠道"/><el-table-column label="操作" width="220"><template #default="{row}"><el-button :disabled="!filters.site_id" @click="openChannel(row)">分配到当前站点</el-button></template></el-table-column></el-table>
+            <el-table v-mobile-cards :data="channels.data.value.unassigned"><el-table-column prop="name" label="待分配渠道"/><el-table-column label="操作" width="220"><template #default="{row}"><el-button :disabled="!filters.site_id" @click="openChannel(row)">分配到当前站点</el-button></template></el-table-column></el-table>
           </section>
           <AsyncPanel :loading="channels.loading.value" :error="channels.error.value" :empty="!channels.data.value?.items.length" empty-text="当前站点尚无通知渠道" @retry="channels.reload">
-            <el-table :data="channels.data.value?.items" class="notification-table">
+            <el-table v-mobile-cards :data="channels.data.value?.items" class="notification-table">
               <el-table-column prop="name" label="渠道名称" min-width="200"/>
               <el-table-column label="通知方式" min-width="170"><template #default="{row}">{{ typeLabels[row.channel_type] || row.channel_type }}</template></el-table-column>
               <el-table-column label="接收告警" min-width="260"><template #default="{row}">{{ categorySummary(row.rule_keys || []) }}</template></el-table-column>
@@ -192,7 +192,7 @@ onBeforeUnmount(()=>{channels.cancel();deliveries.cancel()});
           </form>
           <p v-if="!advancedSupported && !deliveries.loading.value" class="notification-caption">当前服务版本暂不支持日期、内容筛选及告警摘要；渠道和状态筛选仍可使用。</p>
           <AsyncPanel :loading="deliveries.loading.value" :error="deliveries.error.value" :empty="!deliveries.data.value?.length" empty-text="暂无匹配的投递记录" @retry="deliveries.reload">
-            <el-table :data="deliveries.data.value" class="notification-table" max-height="calc(100vh - 310px)">
+            <el-table v-mobile-cards :data="deliveries.data.value" class="notification-table" max-height="calc(100vh - 310px)">
               <el-table-column label="时间" width="165"><template #default="{row}">{{ formatTime(row.attempted_at) }}</template></el-table-column>
               <el-table-column label="通知渠道" min-width="160"><template #default="{row}">{{ channelName(row.channel_id) }}</template></el-table-column>
               <el-table-column label="告警摘要" min-width="260" show-overflow-tooltip><template #default="{row}">{{ row.alert_title || row.alert_summary || '告警摘要暂不可用' }}</template></el-table-column>

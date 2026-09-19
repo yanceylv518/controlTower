@@ -189,7 +189,7 @@ useAutoRefresh(state.reload);
   <AppShell title="实例管理">
     <template #tools><el-button type="primary" @click="createOpen = true">创建实例</el-button></template>
     <AsyncPanel :loading="state.loading.value" :error="state.error.value" :empty="!state.data.value?.length" @retry="state.reload">
-      <el-table :data="state.data.value" table-layout="fixed">
+      <el-table v-mobile-cards :data="state.data.value" table-layout="fixed">
         <el-table-column prop="instance_id" label="实例 ID" min-width="160" show-overflow-tooltip />
         <el-table-column prop="site_id" label="站点" min-width="150" show-overflow-tooltip />
         <el-table-column prop="name" label="名称" min-width="150" show-overflow-tooltip />

@@ -79,3 +79,9 @@ watch(() => [props.dimension, props.active], () => { moreVisible.value = false; 
 <style>
 .customer-traffic-popover { max-width: calc(100vw - 24px); box-sizing: border-box; }
 </style>
+<style scoped>
+@media(max-width:900px) {
+  .traffic-mode :deep(.el-segmented__item),.traffic-legend button { min-height:32px; }
+  .traffic-mode { flex-wrap:wrap; }
+}
+</style>

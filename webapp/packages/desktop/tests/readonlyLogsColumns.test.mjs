@@ -72,7 +72,7 @@ test('readonly logs keeps all filters visible in the primary row', () => {
 
 // 回归保护：日志类型位于敏感字段切换之前，避免把操作控件挤回主筛选行。
 test('readonly logs places type selector before sensitive toggle', () => {
-  const actions = source.match(/<div class="toolbar-actions">([\s\S]*?)<\/div>/)?.[1] || ''
+  const actions = source.match(/<div[^>]*class="toolbar-actions">([\s\S]*?)<\/div>/)?.[1] || ''
   assert.ok(actions.indexOf('action-type') >= 0)
   assert.ok(actions.indexOf('action-type') < actions.indexOf('sensitiveVisible'))
   assert.doesNotMatch(source.match(/<div class="primary-filters"[^>]*>([\s\S]*?)<\/div>/)?.[1] || '', /filter-type/)

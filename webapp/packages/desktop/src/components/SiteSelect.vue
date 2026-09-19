@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, watch } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
+import { useMobileViewport } from '../composables/useMobileViewport';
 import { siteOf } from "@ct/shared";
 import { useAuthStore } from "../stores/auth";
 import { useFiltersStore } from "../stores/filters";
@@ -8,6 +9,9 @@ import { usePrefsStore } from "../stores/prefs";
 const props = withDefaults(defineProps<{ readonlyOnly?: boolean }>(), { readonlyOnly: false });
 
 const auth = useAuthStore();
+const mobile = useMobileViewport();
+const siteOpen = ref(false), siteQuery = ref('');
+watch(mobile, value => { if (!value) siteOpen.value = false; });
 const filters = useFiltersStore();
 const prefs = usePrefsStore();
 watch(() => filters.site_id, (site) => void prefs.loadCurrency(site), { immediate: true, flush: "sync" });
@@ -48,6 +52,14 @@ watch(sites, (available) => {
   >
     {{ viewerSite || filters.site_id }}
   </div>
+  <template v-else-if="mobile && sites.length">
+    <button type="button" class="mobile-site-trigger" aria-label="切换站点" @click="siteQuery = ''; siteOpen = true">{{ filters.site_id || '选择站点' }}⌄</button>
+    <el-drawer v-model="siteOpen" title="切换站点" direction="btt" size="75%" class="mobile-site-drawer" append-to-body>
+      <el-input v-model="siteQuery" placeholder="搜索站点" aria-label="搜索站点" clearable />
+      <button v-for="site in sites.filter(value => value.toLowerCase().includes(siteQuery.trim().toLowerCase()))" :key="site" class="mobile-site-option" type="button" :aria-pressed="site === filters.site_id" @click="filters.selectSite(site); siteOpen = false">{{ site }}<span v-if="site === filters.site_id">✓</span></button>
+      <el-empty v-if="!sites.some(value => value.toLowerCase().includes(siteQuery.trim().toLowerCase()))" description="没有匹配站点" />
+    </el-drawer>
+  </template>
   <el-select
     v-else-if="sites.length"
     :model-value="filters.site_id"

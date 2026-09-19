@@ -21,9 +21,9 @@ function page() {
     tuningRecommendations: async () => ({ items: [] }),
     tuningContinuousStates: async () => ({ items: [state(42)] }),
   }
-  const names = ['computed', 'reactive', 'ref', 'watch', 'onMounted', 'onBeforeUnmount', 'useFiltersStore', 'dashboard', 'formatTime', 'ApiError', 'ElMessage', 'ElMessageBox']
-  const create = new Function(...names, `${compiled}\nreturn { load, refreshRuntime, acceptStates, stateFor, sampleText, evaluationText, states, refreshError, bases, policy, channelQuery, channelStatusFilter, displayedRows, activeModel, dirty, selectModel, fieldChanged, savedBases, originalBase, calculatedWeight, displayedSpeedFactor, coefficientCell, overallEvaluationStatus, coefficientEmptyText, coefficientSpan, displayedPriority, editPriority, cancelChanges, limitReason, currentRates, ratesReady, rowStatus, eventResult, eventResultClass, events, filteredEvents, eventDateRange };`)
-  const view = create(computed, reactive, ref, () => {}, () => {}, () => {}, () => filters, dashboard, String, class extends Error {}, {}, {})
+  const names = ['computed', 'reactive', 'ref', 'watch', 'onMounted', 'onBeforeUnmount', 'useFiltersStore', 'dashboard', 'formatTime', 'ApiError', 'ElMessage', 'ElMessageBox', 'useMobileViewport']
+  const create = new Function(...names, `${compiled}\nreturn { mobileEditRow, stageMobileEdit, mobileChanges, mobilePriorityChanges, mobileRuleChanges, mobileSaveOpen, load, refreshRuntime, acceptStates, stateFor, sampleText, evaluationText, states, refreshError, bases, policy, channelQuery, channelStatusFilter, displayedRows, activeModel, dirty, selectModel, fieldChanged, savedBases, originalBase, calculatedWeight, displayedSpeedFactor, coefficientCell, overallEvaluationStatus, coefficientEmptyText, coefficientSpan, displayedPriority, editPriority, priorityLocked, cancelChanges, limitReason, currentRates, ratesReady, rowStatus, eventResult, eventResultClass, events, filteredEvents, eventDateRange };`)
+  const view = create(computed, reactive, ref, () => {}, () => {}, () => {}, () => filters, dashboard, String, class extends Error {}, {info() {}}, {}, () => ref(false))
   return { ...view, filters, dashboard }
 }
 
@@ -330,4 +330,31 @@ test('coefficient empty labels distinguish nonparticipation from circuit', async
  p.policy.dispatch_modes.m='auto';p.states.value[0].phase='circuit';
  assert.equal(p.coefficientEmptyText(row),'');
  assert.equal(p.overallEvaluationStatus(row),'熔断');
+});
+
+test('mobile preview applies edits to the current row after a refresh; cancel restores saved values', async () => {
+ const p=page(); await p.load();
+ p.mobileEditRow.value=p.bases.value[0];
+ p.bases.value=p.bases.value.map(item=>({...item}));
+ p.stageMobileEdit({base_weight:120,priority:7,max_rpm:30,max_tpm:4000});
+ assert.equal(p.bases.value[0].base_weight,120);
+ assert.equal(p.mobileSaveOpen.value,true);
+ assert.deepEqual(p.mobileChanges.value.find(change=>change.label==='基础权重')?.after,120);
+ assert.equal(p.mobilePriorityChanges.value[0].after,7);
+ p.cancelChanges();
+ assert.equal(p.bases.value[0].base_weight,100);
+ assert.equal(p.displayedPriority(p.bases.value[0]),1);
+ assert.equal(p.dirty.value,false);
+});
+
+test('mobile staging edits saved base priority during circuit and lists changed rule values', async () => {
+ const p=page(); await p.load();
+ p.states.value=[{...state(42),phase:'circuit'}];
+ p.mobileEditRow.value=p.bases.value[0];
+ p.stageMobileEdit({base_weight:120,priority:7,max_rpm:30,max_tpm:4000});
+ assert.equal(p.mobilePriorityChanges.value.length,1);
+ assert.equal(p.displayedPriority(p.bases.value[0]),7);
+ assert.equal(p.bases.value[0].base_priority,7);
+ p.policy.continuous.min_samples=50;
+ assert.deepEqual(p.mobileRuleChanges.value.find(change=>change.key==='min_samples'),{key:'min_samples',label:'每渠道最少请求数',before:20,after:50});
 });

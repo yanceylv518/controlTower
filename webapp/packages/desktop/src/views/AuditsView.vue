@@ -49,7 +49,7 @@ useAutoRefresh(state.reload);
       :error="state.error.value"
       :empty="!state.data.value?.length"
       @retry="state.reload"
-      ><el-table :data="pageItems"
+      ><el-table v-mobile-cards :data="pageItems"
         ><el-table-column label="时间"
           ><template #default="s">{{
             formatTime(s.row.created_at)

@@ -151,7 +151,7 @@ void load().catch(showError)
     <template #tools><el-button type="primary" @click="showCreate">{{ tab === 'admin' ? '创建管理员' : '创建查看账号' }}</el-button></template>
     <el-tabs v-model="tab"><el-tab-pane label="管理员" name="admin" /><el-tab-pane label="查看账号" name="viewer" /></el-tabs>
     <el-alert class="intro" type="info" :closable="false" :title="tab === 'admin' ? '管理员按勾选的功能授权；未分配权限的账号无法访问业务功能。账号创建和权限变更会记录操作人。' : '查看账号按指定站点和客户 ID 隔离数据，保留原有查看权限。'" />
-    <el-table :data="visibleItems" row-key="id">
+    <el-table v-mobile-cards :data="visibleItems" row-key="id">
       <el-table-column prop="username" label="账号" />
       <el-table-column v-if="tab === 'admin'" prop="display_name" label="姓名" />
       <el-table-column v-if="tab === 'admin'" label="权限" min-width="240"><template #default="s">
