@@ -3,6 +3,10 @@
 <!-- AI_CURRENT_START -->
 ## 当前总览
 
+- **rc124正式发布成功（2026-09-20）**：用户明确确认后推送v2.0.0-rc124标签至3a7f57bb。release运行35476816881成功，GitHub Release已公开，Server amd64、Agent双架构及SHA256SUMS四附件均uploaded；GHCR版本镜像及latest随流程发布成功。CI 35476402140成功。正式附件由Linux CI重建，与先前Windows本地候选包哈希不同，以Release附件配套校验和为准；未部署服务器。
+
+- **rc124本地打包完成（2026-09-20）**：基于已推送3a7f57bb（手机业务278f0251），生成Server linux-amd64（含前端）、Agent linux-amd64/arm64及SHA256SUMS，位于dist/releases/v2.0.0-rc124。本次前端构建通过；三包哈希、ELF架构、可执行位、安装脚本LF及083迁移/前端入口核验通过。Windows tar初始权限644已修正为755并重算哈希。仅本地产物，未创建tag/GitHub Release、未部署，未Linux实机安装。
+
 - **手机适配已提交推送（2026-09-20）**：提交278f0251已推送origin/main，包含手机布局、日志滚动加载/错误码、调权编辑及交接记录，共49文件；已衔接远端日志优化2a38432d。最终247项前端测试、typecheck/build及提交diff检查通过（已有chunk提示）；缓存、产物和无关历史文件未纳入。未发布部署，更新前stash备份保留。
 
 - **手机页签文字居中修正（2026-09-20）**：36px最小高度与small按钮原内边距叠加导致文字偏上；手机radio按钮改inline-flex双向居中。真实5192设置三页签实测文字与按钮中心偏差0px；typecheck/build、diff check通过，桌面规则不变，未推送部署。

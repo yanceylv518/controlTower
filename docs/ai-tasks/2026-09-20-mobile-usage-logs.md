@@ -82,6 +82,10 @@
 
 ### 调权首屏精修（2026-09-20）
 
+- 正式发布续记：用户明确确认GitHub Release及GHCR/latest发布后，推送v2.0.0-rc124到3a7f57bb。release运行35476816881全部成功；Release非草稿，Server amd64、Agent amd64/arm64及SHA256SUMS均uploaded，API提供四附件digest。此前CI 35476402140成功。正式附件在Linux CI独立重建，大小/哈希不等于Windows本地候选包；使用Release对应SHA256SUMS。gh未登录，改用已连接GitHub只读接口检查发布结果。未部署服务器或修改业务配置。
+
+- 本地打包交付：用户要求打包，核对远端最新tag为rc123，基于3a7f57bb生成v2.0.0-rc124本地候选包。按deploy/package.sh内容生成到独立dist/releases/v2.0.0-rc124（旧dist/release不动，复用已安装锁定依赖、重新构建前端）。Server amd64 6,432,452字节；Agent amd64 6,154,248字节、arm64 5,561,310字节。Windows打包初始执行位缺失，已统一包内目录/二进制/安装脚本755、其余文件644并重算SHA256SUMS。核验三包哈希、ELF机器架构、脚本LF、Agent辅助log-reader及配置示例、Server 083迁移与最新前端入口通过。未创建远端tag/Release、未推送镜像或部署，未Linux实机执行；本地stage和打包脚本保留用于溯源。
+
 - 提交交付（2026-09-20）：按用户明确授权，将本轮49个文件提交为278f0251并成功推送origin/main。推送前衔接远端新增日志渲染优化2a38432d，重新执行247项前端回归、typecheck/build、提交diff检查全部通过（已有chunk提示）。缓存、构建产物和无关历史文件未纳入；本次未发布部署，未上传AI Workspace。此前各轮“未提交推送”描述为对应阶段历史状态。
 
 - 设置页签文字偏上续修：共享手机规则把small radio按钮最小高度提升至36px，但原文字仍按小尺寸padding排列；使用inline-flex、align-items/justify-content:center保持实际高度及文字居中。Chrome真实5192设置三个页签均36px，DOM文字范围与按钮垂直中心差0px。typecheck/build、diff check通过（已有chunk提示），仅≤900px样式，无业务逻辑变更未重复单元测试；未提交推送部署。
