@@ -158,7 +158,8 @@ function toggleColumn(key: LogColumnKey, visible: boolean) {
   }
 }
 // 详情沿用 rc35 的独立弹窗，避免展开行改变表格高度和扫描节奏。
-const detailRow = ref<ReadonlyLog | null>(null)
+// 详情只读日志对象，不需要深度代理；避免打开弹窗时为整条日志建立额外响应式代理。
+const detailRow = shallowRef<ReadonlyLog | null>(null)
 const detailOpen = ref(false)
 const detailCloseButton = ref<HTMLButtonElement | null>(null)
 const defaultTimeRange = (): [Date, Date] => {
@@ -352,6 +353,7 @@ const changePageSize = (size: number) => {
   void reloadPage()
 }
 function closePageSizeMenu() {
+  if (!pageSizeOpen.value && Object.keys(pageSizeMenuStyle.value).length === 0) return
   pageSizeOpen.value = false
   pageSizeMenuStyle.value = {}
 }
@@ -1032,6 +1034,20 @@ type DetailDiscountSnapshot = { before: number; after: number; savings: number }
 type DetailSubscriptionField = { label: string; value: string }
 type DetailParameterOverride = { action: string; content: string }
 
+// 详情模板会在一次渲染中多次读取相同的解析结果；日志对象不可变，按对象缓存纯派生值，避免重复解码和 JSON 规范化阻塞点击反馈。
+const detailDerivedCache = new WeakMap<object, Map<string, unknown>>()
+function detailCached<T>(row: ReadonlyLog, key: string, factory: () => T): T {
+  let cache = detailDerivedCache.get(row)
+  if (!cache) {
+    cache = new Map<string, unknown>()
+    detailDerivedCache.set(row, cache)
+  }
+  if (cache.has(key)) return cache.get(key) as T
+  const value = factory()
+  cache.set(key, value)
+  return value
+}
+
 // 详情字段来自 New API 的 JSON 快照，所有嵌套对象先经过类型收窄再交给模板。
 function recordValue(value: unknown): LogExtra | undefined {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -1079,19 +1095,21 @@ function isViolation(row: ReadonlyLog): boolean {
 }
 
 function topupAuditFieldsFor(row: ReadonlyLog): DetailSubscriptionField[] {
-  const info = adminInfoFor(row)
-  if (!info || row.type !== 1 || !isAdmin.value) return []
-  const fields: DetailSubscriptionField[] = []
-  const values: [string, string][] = [
-    ['支付方式', stringField(info.payment_method)],
-    ['回调支付方式', stringField(info.callback_payment_method)],
-    ['回调调用方 IP', stringField(info.caller_ip)],
-    ['服务器 IP', stringField(info.server_ip)],
-    ['节点名称', stringField(info.node_name)],
-    ['系统版本', stringField(info.version)],
-  ]
-  for (const [label, value] of values) if (value) fields.push({ label, value })
-  return fields
+  return detailCached(row, 'topupAuditFields', () => {
+    const info = adminInfoFor(row)
+    if (!info || row.type !== 1 || !isAdmin.value) return []
+    const fields: DetailSubscriptionField[] = []
+    const values: [string, string][] = [
+      ['支付方式', stringField(info.payment_method)],
+      ['回调支付方式', stringField(info.callback_payment_method)],
+      ['回调调用方 IP', stringField(info.caller_ip)],
+      ['服务器 IP', stringField(info.server_ip)],
+      ['节点名称', stringField(info.node_name)],
+      ['系统版本', stringField(info.version)],
+    ]
+    for (const [label, value] of values) if (value) fields.push({ label, value })
+    return fields
+  })
 }
 
 function manageOperatorFor(row: ReadonlyLog): string {
@@ -1139,14 +1157,16 @@ function changedFieldsFor(row: ReadonlyLog): string {
 }
 
 function loginFieldsFor(row: ReadonlyLog): DetailSubscriptionField[] {
-  if (row.type !== 7) return []
-  const fields: DetailSubscriptionField[] = []
-  const method = textValue(row, 'login_method')
-  const userAgent = textValue(row, 'user_agent')
-  if (method) fields.push({ label: '登录方式', value: method })
-  if (row.ip) fields.push({ label: 'IP 地址', value: row.ip })
-  if (userAgent) fields.push({ label: 'User Agent', value: userAgent })
-  return fields
+  return detailCached(row, 'loginFields', () => {
+    if (row.type !== 7) return []
+    const fields: DetailSubscriptionField[] = []
+    const method = textValue(row, 'login_method')
+    const userAgent = textValue(row, 'user_agent')
+    if (method) fields.push({ label: '登录方式', value: method })
+    if (row.ip) fields.push({ label: 'IP 地址', value: row.ip })
+    if (userAgent) fields.push({ label: 'User Agent', value: userAgent })
+    return fields
+  })
 }
 
 function auditRequestFor(row: ReadonlyLog): string {
@@ -1191,24 +1211,26 @@ function dynamicExpression(row: ReadonlyLog): string {
 }
 
 function dynamicTiersFor(row: ReadonlyLog): DynamicTier[] {
-  return parseDynamicTiers(dynamicExpression(row))
+  return detailCached(row, 'dynamicTiers', () => parseDynamicTiers(dynamicExpression(row)))
 }
 
 function dynamicRulesFor(row: ReadonlyLog): DynamicRequestRule[] {
-  return normalizeDynamicRequestRules(first(row, 'request_rules'))
+  return detailCached(row, 'dynamicRules', () => normalizeDynamicRequestRules(first(row, 'request_rules')))
 }
 
 function dynamicUsageFactsFor(row: ReadonlyLog): DynamicUsageFact[] {
-  return normalizeDynamicUsageFacts(first(row, 'usage_facts'))
+  return detailCached(row, 'dynamicUsageFacts', () => normalizeDynamicUsageFacts(first(row, 'usage_facts')))
 }
 
 // 动态阶梯只显示表达式中实际出现的价格列，避免空列把紧凑弹窗撑宽。
 function dynamicPriceFieldsFor(row: ReadonlyLog) {
-  const tiers = dynamicTiersFor(row)
-  return dynamicPriceFields.filter((field) => tiers.some((tier) => {
-    const value = tier.prices[field.key]
-    return value !== undefined && Number.isFinite(value) && value > 0
-  }))
+  return detailCached(row, 'dynamicPriceFields', () => {
+    const tiers = dynamicTiersFor(row)
+    return dynamicPriceFields.filter((field) => tiers.some((tier) => {
+      const value = tier.prices[field.key]
+      return value !== undefined && Number.isFinite(value) && value > 0
+    }))
+  })
 }
 
 function dynamicTierPriceText(row: ReadonlyLog, tier: DynamicTier, key: keyof DynamicTier['prices']): string {
@@ -1223,53 +1245,61 @@ function isTieredBilling(row: ReadonlyLog): boolean {
 }
 
 function discountSnapshot(row: ReadonlyLog): DetailDiscountSnapshot | undefined {
-  const before = numberValue(row, 'quota_before_discount')
-  const after = numberValue(row, 'quota_after_discount')
-  const savings = numberValue(row, 'discount_quota')
-  if (before === undefined || after === undefined || savings === undefined) return undefined
-  if (!Number.isSafeInteger(before) || !Number.isSafeInteger(after) || !Number.isSafeInteger(savings) || before < 0 || after < 0 || savings < 0 || before - after !== savings) return undefined
-  return { before, after, savings }
+  return detailCached(row, 'discountSnapshot', () => {
+    const before = numberValue(row, 'quota_before_discount')
+    const after = numberValue(row, 'quota_after_discount')
+    const savings = numberValue(row, 'discount_quota')
+    if (before === undefined || after === undefined || savings === undefined) return undefined
+    if (!Number.isSafeInteger(before) || !Number.isSafeInteger(after) || !Number.isSafeInteger(savings) || before < 0 || after < 0 || savings < 0 || before - after !== savings) return undefined
+    return { before, after, savings }
+  })
 }
 
 function toolSurchargesFor(row: ReadonlyLog): DetailToolSurcharge[] {
-  let value: unknown = first(row, 'tool_surcharges')
-  if (typeof value === 'string') {
-    try { value = JSON.parse(value) } catch { return [] }
-  }
-  if (!Array.isArray(value)) return []
-  return value.flatMap((item) => {
-    if (!item || typeof item !== 'object' || Array.isArray(item)) return []
-    const record = item as LogExtra
-    const name = typeof record.name === 'string' ? record.name.trim() : ''
-    const count = Number(record.count)
-    const price = Number(record.price)
-    if (!name || !Number.isFinite(count) || count <= 0 || !Number.isFinite(price) || price <= 0) return []
-    return [{ name, count, price }]
-  }).slice(0, 50)
+  return detailCached(row, 'toolSurcharges', () => {
+    let value: unknown = first(row, 'tool_surcharges')
+    if (typeof value === 'string') {
+      try { value = JSON.parse(value) } catch { return [] }
+    }
+    if (!Array.isArray(value)) return []
+    return value.flatMap((item) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return []
+      const record = item as LogExtra
+      const name = typeof record.name === 'string' ? record.name.trim() : ''
+      const count = Number(record.count)
+      const price = Number(record.price)
+      if (!name || !Number.isFinite(count) || count <= 0 || !Number.isFinite(price) || price <= 0) return []
+      return [{ name, count, price }]
+    }).slice(0, 50)
+  })
 }
 
 function legacyToolSurchargesFor(row: ReadonlyLog): DetailToolSurcharge[] {
-  const entries: DetailToolSurcharge[] = []
-  const add = (enabled: unknown, count: unknown, price: unknown, name: string) => {
-    const amount = Number(price)
-    const calls = Number(count)
-    if (booleanField(enabled) && Number.isFinite(calls) && calls > 0 && Number.isFinite(amount) && amount > 0) {
-      entries.push({ name, count: calls, price: amount })
+  return detailCached(row, 'legacyToolSurcharges', () => {
+    const entries: DetailToolSurcharge[] = []
+    const add = (enabled: unknown, count: unknown, price: unknown, name: string) => {
+      const amount = Number(price)
+      const calls = Number(count)
+      if (booleanField(enabled) && Number.isFinite(calls) && calls > 0 && Number.isFinite(amount) && amount > 0) {
+        entries.push({ name, count: calls, price: amount })
+      }
     }
-  }
-  add(first(row, 'web_search'), first(row, 'web_search_call_count'), first(row, 'web_search_price'), '网页搜索')
-  add(first(row, 'file_search'), first(row, 'file_search_call_count'), first(row, 'file_search_price'), '文件搜索')
-  add(first(row, 'image_generation_call'), first(row, 'image_generation_call_count') || 1, first(row, 'image_generation_call_price'), '图片生成')
-  return entries
+    add(first(row, 'web_search'), first(row, 'web_search_call_count'), first(row, 'web_search_price'), '网页搜索')
+    add(first(row, 'file_search'), first(row, 'file_search_call_count'), first(row, 'file_search_price'), '文件搜索')
+    add(first(row, 'image_generation_call'), first(row, 'image_generation_call_count') || 1, first(row, 'image_generation_call_price'), '图片生成')
+    return entries
+  })
 }
 
 function allToolSurchargesFor(row: ReadonlyLog): DetailToolSurcharge[] {
-  const structured = toolSurchargesFor(row)
-  return structured.length > 0 ? structured : legacyToolSurchargesFor(row)
+  return detailCached(row, 'allToolSurcharges', () => {
+    const structured = toolSurchargesFor(row)
+    return structured.length > 0 ? structured : legacyToolSurchargesFor(row)
+  })
 }
 
 function streamStatusDetails(row: ReadonlyLog): LogExtra | undefined {
-  return recordValue(first(row, 'stream_status'))
+  return detailCached(row, 'streamStatusDetails', () => recordValue(first(row, 'stream_status')))
 }
 
 function streamStatusValue(row: ReadonlyLog): string {
@@ -1296,26 +1326,30 @@ function streamErrorCountFor(row: ReadonlyLog): number {
 }
 
 function streamErrorsFor(row: ReadonlyLog): string[] {
-  const errors = streamStatusDetails(row)?.errors
-  return Array.isArray(errors) ? errors.map(String).filter(Boolean).slice(0, 100) : []
+  return detailCached(row, 'streamErrors', () => {
+    const errors = streamStatusDetails(row)?.errors
+    return Array.isArray(errors) ? errors.map(String).filter(Boolean).slice(0, 100) : []
+  })
 }
 
 function parameterOverrideLines(row: ReadonlyLog): string[] {
-  let value: unknown = first(row, 'po', 'parameter_overrides')
-  if (typeof value === 'string') {
-    const raw = value
-    try { value = JSON.parse(raw) } catch { return raw.trim() ? [raw.trim()] : [] }
-  }
-  if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string' && item.trim() !== '').slice(0, 50)
-  return value === undefined || value === null || value === '' ? [] : [String(value)]
+  return detailCached(row, 'parameterOverrideLines', () => {
+    let value: unknown = first(row, 'po', 'parameter_overrides')
+    if (typeof value === 'string') {
+      const raw = value
+      try { value = JSON.parse(raw) } catch { return raw.trim() ? [raw.trim()] : [] }
+    }
+    if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string' && item.trim() !== '').slice(0, 50)
+    return value === undefined || value === null || value === '' ? [] : [String(value)]
+  })
 }
 
 function parameterOverridesFor(row: ReadonlyLog): DetailParameterOverride[] {
-  return parameterOverrideLines(row).map((line) => {
+  return detailCached(row, 'parameterOverrides', () => parameterOverrideLines(row).map((line) => {
     const separator = line.indexOf(' ')
     if (separator <= 0) return { action: line, content: line }
     return { action: line.slice(0, separator), content: line.slice(separator + 1) }
-  })
+  }))
 }
 
 function parameterActionLabel(action: string): string {
@@ -1513,9 +1547,11 @@ watch(() => filters.site_id, (site, previous) => {
         <div v-if="!mobileViewport" v-loading="state.loading.value" class="desktop-table" ref="tableScroll">
           <table class="logs-table">
             <thead><tr><th class="col-time">时间</th><th v-if="isColumnVisible('channel')" class="col-channel">渠道</th><th v-if="isColumnVisible('user')" class="col-user">用户</th><th v-if="isColumnVisible('token')" class="col-token">令牌</th><th v-if="isColumnVisible('model')" class="col-model">模型</th><th v-if="isColumnVisible('stream')" class="col-stream">流</th><th v-if="isColumnVisible('tokens')" class="col-tokens">Tokens</th><th v-if="isColumnVisible('quota')" class="col-quota">费用</th><th v-if="isColumnVisible('timing')" class="col-timing">耗时</th><th v-if="isColumnVisible('details')" class="col-details">详情</th></tr></thead>
-            <tbody v-for="view in renderedRows" :key="view.id" v-memo="[view.memoKey, expandedRetryID === view.id]">
+            <tbody>
+              <!-- 所有记录共用一个行组，减少分页查询时反复计算 table section 的布局。 -->
+              <template v-for="view in renderedRows" :key="view.id">
               <!-- 日志记录不可变时复用整行 DOM，只有字段或显示偏好变化才重新补丁。 -->
-              <tr class="log-row" :class="view.tone">
+              <tr v-memo="[view.memoKey, expandedRetryID === view.id]" class="log-row" :class="view.tone">
                   <td class="col-time"><div class="time-cell" :title="view.timeFull"><span class="time-text">{{ view.timeText }}</span><span class="status-badge" :class="view.statusClass">{{ view.statusLabel }}</span></div></td>
                   <td v-if="isColumnVisible('channel')" class="col-channel" @mouseenter="openRetryHover(view, $event)" @mouseleave="closeRetryHover" @focusin="openRetryHover(view, $event)" @focusout="closeRetryHover"><div v-if="view.hasChannel || view.retryUnknown" class="channel-cell" :aria-label="isAdmin && view.retryChain ? requestChainTitle(view.source) : undefined"><div class="channel-line"><button v-if="view.hasChannel" type="button" :class="['channel-badge', 'copyable', view.channelTone]" title="点击复制渠道 ID" @click.stop="copyText(view.channelID)">#{{ view.channelID }}</button><button v-if="isAdmin && (view.fallback || view.retryChain || view.retryUnknown)" type="button" class="retry-chain-trigger" :class="{ 'retry-chain-unknown': view.retryUnknown }" :aria-label="requestChainTitle(view.source)" :aria-expanded="expandedRetryID === view.id" @click.stop="toggleRetryChain(view)"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v12M18 9a9 9 0 0 1-9 9"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="6" r="3"/></svg><span v-if="view.retryUnknown">待确认</span></button></div><span v-if="view.channelName" class="cell-secondary">{{ view.channelName }}</span></div><span v-else class="muted">—</span></td>
                   <td v-if="isColumnVisible('user')" class="col-user"><button v-if="view.source.username" type="button" class="user-cell copyable" :title="sensitiveVisible ? '点击复制用户名' : undefined" @click.stop="copyText(view.usernameCopy)"><i class="user-avatar" :class="{ 'is-hidden': !sensitiveVisible }" :style="view.avatarStyle">{{ view.initial }}</i><span class="truncate">{{ view.username }}</span></button><span v-else class="muted">—</span></td>
@@ -1540,6 +1576,7 @@ watch(() => filters.site_id, (site, previous) => {
                   <td v-if="isColumnVisible('details')" class="col-details"><button type="button" class="details-button" :title="'查看完整详情：' + view.summary" :aria-label="'查看完整详情：' + view.summary" @click.stop="openDetail(view.source)">{{ view.summaryPreview }}</button></td>
               </tr>
               <tr v-if="expandedRetryID === view.id && isAdmin" class="request-chain-row"><td :colspan="visibleColumnCount"><FallbackRequestChain :row="view.source" :site="filters.site_id" :sensitive="sensitiveVisible" :money="money" @close="closeRequestChain" @filter="filterRequestChain" @detail="openDetail" /></td></tr>
+              </template>
             </tbody>
           </table>
           <div v-if="!state.loading.value && !renderedRows.length && !(state.data.value?.items.length)" class="empty-state"><el-icon><Search /></el-icon><strong>暂无日志</strong><span>调整时间范围或筛选条件后重试</span></div>
@@ -1618,7 +1655,8 @@ watch(() => filters.site_id, (site, previous) => {
 
       <!-- 详情按 rc35 的信息流重构：标题、单列概览、分组卡片和内部滚动彼此独立。 -->
       <Teleport to="body">
-        <div v-if="detailOpen && detailRow" class="detail-dialog-backdrop" @mousedown.self="closeDetail">
+        <!-- 首次打开后保留详情 DOM，仅切换显示状态，关闭时不再同步销毁整棵信息流。 -->
+        <div v-if="detailRow" v-show="detailOpen" class="detail-dialog-backdrop" @mousedown.self="closeDetail">
           <section class="detail-dialog" :class="{ 'is-wide': isConsume(detailRow) && first(detailRow, 'billing_mode') === 'tiered_expr' }" role="dialog" aria-modal="true" aria-labelledby="readonly-log-detail-title" aria-describedby="readonly-log-detail-description" @mousedown.stop>
             <header class="detail-dialog-header">
               <div class="detail-dialog-title">
@@ -2635,6 +2673,13 @@ watch(() => filters.site_id, (site, previous) => {
   font-weight: 500;
   line-height: 30px;
   font-variant-numeric: tabular-nums;
+}
+/* 图标按钮固定尺寸，数字页码按内容增长，避免五位以上页码溢出边框。 */
+.page-button.page-number {
+  width: auto;
+  min-width: 32px;
+  flex-basis: auto;
+  padding-inline: 8px;
 }
 .page-button:hover:not(:disabled) { border-color: var(--rc35-blue); color: var(--rc35-blue); }
 .page-button.active { border-color: var(--rc35-blue); background: var(--ct-primary-solid); color: var(--ct-on-solid); font-weight: 600; }

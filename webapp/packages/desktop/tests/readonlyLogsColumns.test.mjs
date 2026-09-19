@@ -122,7 +122,9 @@ test('readonly logs mounts only the active responsive layout', () => {
   assert.match(source, /matchMedia\('\(max-width: 900px\)'\)/)
   assert.match(source, /<div v-if="!mobileViewport" v-loading="state\.loading\.value" class="desktop-table" ref="tableScroll">/)
   assert.match(source, /<div v-else v-loading="state\.loading\.value" class="mobile-log-list">/)
-  assert.match(source, /<tbody v-for="view in renderedRows" :key="view.id" v-memo="\[view.memoKey, expandedRetryID === view.id\]"/)
+  assert.match(source, /<template v-for="view in renderedRows" :key="view.id">/)
+  assert.match(source, /<tr v-memo="\[view.memoKey, expandedRetryID === view.id\]" class="log-row"/)
+  assert.match(source, /<tbody>\s*<!-- 所有记录共用一个行组/)
   assert.match(source, /<article v-for="view in renderedRows" v-memo=/)
   assert.match(source, /const logRowChunkSize = 10/)
   assert.match(source, /window\.requestAnimationFrame\(appendChunk\)/)
@@ -257,6 +259,7 @@ test('readonly logs keeps rc35 channel and model semantic colors', () => {
 test('readonly logs keeps the rc35 native detail dialog layout', () => {
   assert.match(source, /<Teleport to="body">/)
   assert.match(source, /class="detail-dialog-backdrop"[\s\S]*@mousedown\.self="closeDetail"/)
+  assert.match(source, /<div v-if="detailRow" v-show="detailOpen" class="detail-dialog-backdrop"/)
   assert.match(source, /class="detail-dialog" :class="[^"]+" role="dialog" aria-modal="true"/)
   assert.match(source, /class="detail-dialog-title"[\s\S]*日志详情[\s\S]*detail-dialog-status/)
   assert.match(source, /class="detail-overview"/)
@@ -344,6 +347,7 @@ test('readonly logs supports direct page navigation and compact pagination order
   assert.doesNotMatch(source, /<el-pagination/)
   assert.doesNotMatch(source, /每页条数：/)
   assert.match(source, /aria-label="跳转到页码"/)
+  assert.match(source, /\.page-button\.page-number \{[\s\S]*width: auto;[\s\S]*min-width: 32px;[\s\S]*padding-inline: 8px;/)
 })
 
 // 回归保护：聚合短暂失配时，总计不能低于当前列表已有行数。
