@@ -803,6 +803,82 @@ func TestWriteFailurePauseClearsWhenDueChangeEvaporates(t *testing.T) {
 	}
 }
 
+func TestLegacyWriteFailurePauseRecoversWithoutTimestamp(t *testing.T) {
+	now := time.Now().UTC()
+	for _, tc := range []struct {
+		name         string
+		current      int64
+		noEvidence   bool
+		mixedModels  bool
+		pausedReason string
+		wantAttempts int
+		wantPause    string
+	}{
+		{name: "successful retry", current: 20, pausedReason: "write_failed", wantAttempts: 1},
+		{name: "change evaporated", current: 10, pausedReason: "write_failed"},
+		{name: "still needs evidence", current: 20, noEvidence: true, pausedReason: "write_failed", wantPause: "write_failed"},
+		{name: "mixed channel stays blocked", current: 20, mixedModels: true, pausedReason: "write_failed", wantPause: "mixed_channel"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &continuousFake{
+				bases: []ChannelBaseValue{{ChannelID: 1, ModelName: "m", Models: []string{"m"}, BaseWeight: 10, CurrentWeight: tc.current, SnapshotAt: now.Add(-time.Hour)}},
+				states: map[int64]ContinuousState{1: {InstanceID: "i", ChannelID: 1, ModelName: "m", KError: 1,
+					PausedReason: tc.pausedReason, WriteFailureStreak: 3, LastWriteError: "boom", UpdatedAt: now}},
+			}
+			if tc.mixedModels {
+				f.bases[0].Models = []string{"m", "other"}
+			}
+			if !tc.noEvidence {
+				addNeutralPerformanceEvidence(f)
+			}
+			NewEngine(f).evaluateContinuous("i", autoPolicy(), now, f)
+			state := f.states[1]
+			if f.writeAttempts != tc.wantAttempts || state.PausedReason != tc.wantPause {
+				t.Fatalf("legacy pause recovery: attempts=%d state=%#v", f.writeAttempts, state)
+			}
+			if tc.wantPause == "" && (state.WriteFailureStreak != 0 || state.LastWriteError != "" || state.LastWriteFailureAt != nil) {
+				t.Fatalf("recovery must clear failure state: %#v", state)
+			}
+			if tc.wantAttempts == 1 && (state.LastWrittenWeight == nil || *state.LastWrittenWeight != 10) {
+				t.Fatalf("recovered write must land: %#v", state)
+			}
+		})
+	}
+}
+
+func TestLegacyWriteFailureRetryRestoresBackoff(t *testing.T) {
+	now := time.Now().UTC()
+	f := &continuousFake{
+		bases: []ChannelBaseValue{{ChannelID: 1, ModelName: "m", Models: []string{"m"}, BaseWeight: 10, CurrentWeight: 20, SnapshotAt: now.Add(-time.Hour)}},
+		states: map[int64]ContinuousState{1: {InstanceID: "i", ChannelID: 1, ModelName: "m", KError: 1,
+			PausedReason: "write_failed", WriteFailureStreak: 3, LastWriteError: "old failure"}},
+		writeErr: errors.New("still unavailable"),
+	}
+	addNeutralPerformanceEvidence(f)
+	e := NewEngine(f)
+	e.evaluateContinuous("i", autoPolicy(), now, f)
+	state := f.states[1]
+	if f.writeAttempts != 1 || state.LastWriteFailureAt == nil || !state.LastWriteFailureAt.Equal(now) || state.WriteFailureStreak != 4 {
+		t.Fatalf("legacy retry must establish a new backoff: attempts=%d state=%#v", f.writeAttempts, state)
+	}
+	for elapsed := 30 * time.Second; elapsed < writeFailureRetryInterval; elapsed += 30 * time.Second {
+		e.evaluateContinuous("i", autoPolicy(), now.Add(elapsed), f)
+	}
+	if f.writeAttempts != 1 {
+		t.Fatalf("failed legacy retry must not hammer new-api: attempts=%d", f.writeAttempts)
+	}
+	e.evaluateContinuous("i", autoPolicy(), now.Add(writeFailureRetryInterval), f)
+	state = f.states[1]
+	if f.writeAttempts != 2 || state.PausedReason != "write_failed" || state.WriteFailureStreak != 5 || state.LastWriteFailureAt == nil || !state.LastWriteFailureAt.Equal(now.Add(writeFailureRetryInterval)) {
+		t.Fatalf("retry at boundary must renew backoff: attempts=%d state=%#v", f.writeAttempts, state)
+	}
+	for _, rec := range f.recommendations {
+		if rec.Rule == "auto_paused" {
+			t.Fatalf("legacy pause must not emit duplicate pause events: %#v", rec)
+		}
+	}
+}
+
 func TestWriteFailurePauseKeepsRetryFailuresQuiet(t *testing.T) {
 	now := time.Now().UTC()
 	f := &continuousFake{

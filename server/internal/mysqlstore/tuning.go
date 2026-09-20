@@ -316,6 +316,14 @@ func (s Store) ListContinuousStates(id string) ([]tuning.ContinuousState, error)
 			x := written.Int64
 			v.LastWrittenWeight = &x
 		}
+		if observed.Valid {
+			x := observed.Int64
+			v.LastObservedWeight = &x
+		}
+		if writeFailAt.Valid {
+			x := writeFailAt.Time
+			v.LastWriteFailureAt = &x
+		}
 		if writeAt.Valid {
 			x := writeAt.Time
 			v.LastWriteAt = &x

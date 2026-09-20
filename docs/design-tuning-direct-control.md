@@ -73,6 +73,7 @@ channelcontrol 客户端从 `agent/internal/` 移至共享 `internal/`(agent 侧
 
 - **连续 3 次写失败 → 暂停**:paused_reason=write_failed,流水落一条 auto_paused 事件(evidence 带 reason+完整传输错误),只发一次不重复;
 - **慢速自愈重试**:暂停后每 10 分钟放行一次写尝试(不再每 tick 烧 15s 超时),成功即自动解除暂停、清零计数,失败刷新计时继续暂停;
+- **持久化与旧记录兼容（2026-09-21修复）**：MySQL读取必须回填LastWriteFailureAt与LastObservedWeight，分别保留重试时钟和observe事件锚点。旧版本可能已将失败时间覆盖为NULL；此类write_failed记录在下一次满足既有调权条件时允许尝试一次，失败后恢复十分钟退避，成功或无需写入时解除暂停。不以每轮更新的UpdatedAt替代失败时间，无需数据迁移；部署Server后生效。
 - **三个写入点全覆盖**(常规 weight_write/熔断置零/探针恢复),熔断在暂停期间退化为 observe 式记录(事件照发,不写);页面状态签显示"写入 new-api 失败已暂停"+具体错误,帮助抽屉同步;
 - 引擎层实现,**命令队列路径同等受益**(入队失败同样计数),路径无关。
 

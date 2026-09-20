@@ -768,7 +768,14 @@ func writeAttemptAllowed(state ContinuousState, now time.Time) bool {
 	if state.PausedReason == "" {
 		return true
 	}
-	return state.PausedReason == "write_failed" && state.LastWriteFailureAt != nil && !now.Before(state.LastWriteFailureAt.Add(writeFailureRetryInterval))
+	if state.PausedReason != "write_failed" {
+		return false
+	}
+	// Older stores dropped the failure timestamp on read and then persisted
+	// NULL on the next tick. Let these rows retry once through the normal
+	// eligibility gates; another failure records a timestamp and restores
+	// the slow interval. UpdatedAt cannot substitute: every tick advances it.
+	return state.LastWriteFailureAt == nil || !now.Before(state.LastWriteFailureAt.Add(writeFailureRetryInterval))
 }
 
 func writeReference(state ContinuousState, base ChannelBaseValue) int64 {
