@@ -19,6 +19,8 @@ const preview=ref(false)
 let version=0,keyVersion=0
 const blank=():Watch=>({id:'',site:filters.site_id,user_id:0,token_id:0,label:'',rule:'first',gap_minutes:30,include_failed:true,phone:true,message:true,person_ids:[],enabled:false,revision:0,round:0,started_at:'0001-01-01T00:00:00Z',last_at:'0001-01-01T00:00:00Z',last_id:0,fired:false})
 const draft=ref<Watch>(blank())
+const selectedUser=computed({get:()=>draft.value.user_id||undefined,set:(id:number|undefined)=>{draft.value.user_id=id??0}})
+const selectedKey=computed({get:()=>draft.value.token_id||undefined,set:(id:number|undefined)=>{draft.value.token_id=id??0}})
 function previewData(site:string):Response {
  const people=[{id:'preview-person',name:'示例运营人员',phone:'示例号码',enabled:true}]
  const watch:Watch={...blank(),id:'preview-watch',site,user_id:101,token_id:201,label:'示例客户',enabled:true,person_ids:[people[0].id]}
@@ -70,15 +72,15 @@ watch(()=>filters.site_id,()=>{++version;++keyVersion;preview.value=false;data.v
     <h2>配置测试跟进</h2><el-alert v-if="identityError" :title="identityError" type="warning" :closable="false"/>
     <el-form-item label="站点通知显示名称"><el-input v-model="alias" maxlength="80" :placeholder="filters.site_id"/><span class="sub-note">本站点测试提醒共用；留空使用站点名称。历史提醒保持原名称。</span></el-form-item>
     <el-form-item label="监控对象"><el-radio-group v-model="mode" :disabled="Boolean(draft.id)"><el-radio-button value="account">整个账户</el-radio-button><el-radio-button value="key">指定 Key</el-radio-button></el-radio-group></el-form-item>
-    <el-form-item label="测试账户"><el-select v-model="draft.user_id" filterable :loading="identityLoading" :disabled="Boolean(draft.id)" @change="loadKeys()"><el-option v-for="u in users" :key="u.id" :value="u.id" :label="`${u.name} · #${u.id}`"/></el-select></el-form-item>
-    <el-form-item v-if="mode==='key'" label="测试 Key"><el-select v-model="draft.token_id" filterable :disabled="Boolean(draft.id)"><el-option v-for="k in keys" :key="k.id" :value="k.id" :label="`${k.name} · #${k.id}`"/></el-select><span class="sub-note">只关联 Key ID，不读取或保存完整密钥。</span></el-form-item>
+    <el-form-item label="测试账户"><el-select v-model="selectedUser" placeholder="请选择测试账户" no-data-text="暂无可选账户" filterable :loading="identityLoading" :disabled="Boolean(draft.id)" @change="loadKeys()"><el-option v-for="u in users" :key="u.id" :value="u.id" :label="`${u.name} · #${u.id}`"/></el-select></el-form-item>
+    <el-form-item v-if="mode==='key'" label="测试 Key"><el-select v-model="selectedKey" :placeholder="draft.user_id?'请选择测试 Key':'请先选择测试账户'" no-data-text="该账户暂无可选 Key" filterable :disabled="Boolean(draft.id)||!draft.user_id"><el-option v-for="k in keys" :key="k.id" :value="k.id" :label="`${k.name} · #${k.id}`"/></el-select><span class="sub-note">只关联 Key ID，不读取或保存完整密钥。</span></el-form-item>
     <el-form-item label="客户显示名称"><el-input v-model="draft.label" maxlength="80"/></el-form-item>
     <el-form-item label="何时提醒"><el-select v-model="draft.rule"><el-option value="first" label="本轮首次调用，只提醒一次"/><el-option value="resume" label="静默后再次调用时提醒"/></el-select></el-form-item>
     <el-form-item v-if="draft.rule==='resume'" label="静默时间（分钟）"><el-input-number v-model="draft.gap_minutes" :min="1" :max="10080"/></el-form-item>
     <el-checkbox v-model="draft.include_failed">失败调用尝试也提醒</el-checkbox>
     <el-alert v-if="draft.phone&&!data.phone_ready" type="warning" :closable="false" title="电话服务或测试模板未就绪。可保存草稿，或关闭电话后使用群消息。"/>
     <el-form-item label="通知方式"><el-checkbox v-model="draft.phone">电话提醒</el-checkbox><el-checkbox v-model="draft.message">同步发送消息到本站点运营群</el-checkbox></el-form-item>
-    <el-form-item v-if="draft.phone" label="通知运营人员（可多选）"><el-select v-model="draft.person_ids" multiple filterable><el-option v-for="p in data.people" :key="p.id" :value="p.id" :label="`${p.name} · ${p.phone}${p.enabled?'':' · 已停用'}`" :disabled="!p.enabled"/></el-select></el-form-item>
+    <el-form-item v-if="draft.phone" label="通知运营人员（可多选）"><el-select v-model="draft.person_ids" placeholder="请选择通知运营人员" no-data-text="暂无运营人员，请先在测试开始提醒中添加" multiple filterable><el-option v-for="p in data.people" :key="p.id" :value="p.id" :label="`${p.name} · ${p.phone}${p.enabled?'':' · 已停用'}`" :disabled="!p.enabled"/></el-select></el-form-item>
     <p class="sub-note">从开启检测后开始观察，历史调用不触发。恢复不重置已触发状态；需要再次首次提醒时使用“新一轮”。</p>
     <div class="trial-actions"><el-button :disabled="preview" :loading="saving" @click="saveWatch(false)">保存并暂停</el-button><el-button type="primary" :disabled="preview" :loading="saving" @click="saveWatch(true)">保存并开启检测</el-button></div>
    </el-form><aside class="panel sub-panel trial-preview"><h2>通知预览</h2><h3>电话播报</h3><p>您好，您关注的<strong>{{ displayName }}</strong>客户<strong>{{ draft.label||'客户显示名称' }}</strong>已开始接口测试，请运营人员及时查看调用情况并跟进。</p><h3>通知人员</h3><p v-for="id in draft.person_ids" :key="id">{{ data.people.find(p=>p.id===id)?.name }} · {{ data.people.find(p=>p.id===id)?.phone }}</p><h3>运营群消息</h3><p>站点：{{ displayName }}<br>客户：{{ draft.label||'—' }}<br>对象：账户 #{{ draft.user_id||'—' }}{{ mode==='key'?' · Key #'+draft.token_id:' · 全部 Key' }}<br>触发后附调用时间、模型及成功/失败结果。</p><p class="sub-note">多人分别拨打，逐人记录结果。群消息沿用本站点匹配“测试开始提醒”的通知渠道。</p></aside></div></template>
