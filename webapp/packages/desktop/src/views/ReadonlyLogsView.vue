@@ -25,6 +25,18 @@ import { formatNumber } from '../utils/format'
 import { getTokenColorClass, getUserAvatarFallback, getUserAvatarStyle, type UserAvatarStyle } from '../utils/identityColors'
 
 type LogExtra = Record<string, unknown>
+// New API 会把渠道亲和性命中快照写入管理员专属的 admin_info，字段缺失时保持兼容旧日志。
+type ChannelAffinityInfo = {
+  reason: string
+  ruleName: string
+  usingGroup: string
+  selectedGroup: string
+  keySource: string
+  keyPath: string
+  keyKey: string
+  keyHint: string
+  keyFingerprint: string
+}
 type LogColumnKey = 'channel' | 'user' | 'token' | 'model' | 'stream' | 'tokens' | 'quota' | 'timing' | 'details'
 // new-api rc35 的耗时等级，neutral 仅用于缺失首字时间的流式记录。
 type TimingVariant = 'success' | 'warning' | 'danger' | 'neutral'
@@ -53,6 +65,7 @@ type LogRowView = {
   retryUnknown: boolean
   fallbackChannels: string[]
   retryChain: string
+  channelAffinity?: ChannelAffinityInfo
   username: string
   usernameCopy: string
   initial: string
@@ -168,6 +181,11 @@ const detailRow = shallowRef<ReadonlyLog | null>(null)
 const detailOpen = ref(false)
 const detailCloseButton = ref<HTMLButtonElement | null>(null)
 let detailReturnFocus: HTMLElement | null = null
+// 亲和性弹窗只保存当前渠道的命中快照，避免打开标志时重新渲染整条日志详情。
+type ChannelAffinityDialogTarget = { channelID: number; channelName: string; affinity: ChannelAffinityInfo }
+const affinityTarget = shallowRef<ChannelAffinityDialogTarget | null>(null)
+const affinityOpen = ref(false)
+const affinityCloseButton = ref<HTMLButtonElement | null>(null)
 const defaultTimeRange = (): [Date, Date] => {
   const now = new Date()
   // 默认覆盖当天已产生的记录，并给时钟误差预留一小时，避免新打开页面误报为空。
@@ -521,6 +539,24 @@ function openDetail(row: ReadonlyLog) {
   detailRow.value = row
   detailOpen.value = true
 }
+// 渠道亲和性标志沿用 New API 的独立 CacheStatsDialog 语义，不再复用整条日志详情弹窗。
+function openChannelAffinity(view: LogRowView) {
+  if (!view.channelAffinity) return
+  closeRequestChain()
+  closePageSizeMenu()
+  closeDetail()
+  affinityTarget.value = { channelID: view.channelID, channelName: view.channelName, affinity: view.channelAffinity }
+  affinityOpen.value = true
+}
+function closeAffinity() {
+  affinityOpen.value = false
+}
+function handleAffinityKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape' && affinityOpen.value) {
+    event.preventDefault()
+    closeAffinity()
+  }
+}
 // 详情弹窗使用原生结构时仍需具备可访问的关闭和焦点生命周期。
 function closeDetail() {
   detailOpen.value = false
@@ -540,7 +576,7 @@ function handleDetailKeydown(event: KeyboardEvent) {
 const expandedRetryID = ref<number | null>(null)
 const visibleColumnCount = computed(() => 1 + logColumnOptions.filter(column => isColumnVisible(column.key)).length)
 // 记录渠道单元格与浮层位置，滚动表格时可重新定位而不会撑开列表布局。
-type RetryHoverState = { id: number; chain: string; retryCount: number; left: number; top: number }
+type RetryHoverState = { id: number; chain: string; retryCount: number; hasRetry: boolean; affinity?: ChannelAffinityInfo; left: number; top: number }
 const retryHover = ref<RetryHoverState | null>(null)
 const retryHoverTrigger = ref<HTMLElement | null>(null)
 const retryHoverElement = ref<HTMLElement | null>(null)
@@ -573,12 +609,13 @@ function positionRetryHover() {
   retryHover.value = { ...state, left, top }
 }
 function openRetryHover(view: LogRowView, event: MouseEvent | FocusEvent) {
-  if (!isAdmin.value || !(view.hasChannel || view.retryUnknown) || !(view.retryChain || view.fallback || view.retryUnknown)) return
+  const hasRetry = Boolean(view.retryChain || view.fallback || view.retryUnknown)
+  if (!isAdmin.value || !(view.hasChannel || view.retryUnknown) || (!hasRetry && !view.channelAffinity)) return
   const trigger = event.currentTarget
   if (!(trigger instanceof HTMLElement)) return
   retryHoverTrigger.value = trigger
   const retryCount = Math.max(1, retryChannelsFor(view.source).length - 1)
-  retryHover.value = { id: view.id, chain: view.retryUnknown ? '重试状态未确认，点击查看请求记录' : view.retryChain || '未记录完整重试链路', retryCount: view.retryChain ? retryCount : 0, left: 0, top: 0 }
+  retryHover.value = { id: view.id, chain: view.retryUnknown ? '重试状态未确认，点击查看请求记录' : view.retryChain || '未记录完整重试链路', retryCount: view.retryChain ? retryCount : 0, hasRetry, affinity: view.channelAffinity, left: 0, top: 0 }
   void nextTick(positionRetryHover)
 }
 function handleRetryHoverViewportChange() {
@@ -610,7 +647,7 @@ async function filterRequestChain(query: ChainQuery) {
   await refreshSearch()
 }
 function handleRequestChainKeydown(event: KeyboardEvent) {
-  if (event.key === 'Escape' && expandedRetryID.value !== null && !detailOpen.value) {
+  if (event.key === 'Escape' && expandedRetryID.value !== null && !detailOpen.value && !affinityOpen.value) {
     event.preventDefault()
     closeRequestChain()
   }
@@ -630,6 +667,17 @@ watch(detailOpen, async (open) => {
   } else {
     window.removeEventListener('keydown', handleDetailKeydown)
     if (detailReturnFocus?.isConnected) detailReturnFocus.focus()
+  }
+})
+watch(affinityOpen, async (open) => {
+  if (typeof document === 'undefined') return
+  document.body.classList.toggle('ct-affinity-open', open)
+  if (open) {
+    window.addEventListener('keydown', handleAffinityKeydown)
+    await nextTick()
+    affinityCloseButton.value?.focus()
+  } else {
+    window.removeEventListener('keydown', handleAffinityKeydown)
   }
 })
 // 错误和退款行沿用 rc35 的轻底色提示，不改变记录内容或排序。
@@ -952,6 +1000,7 @@ const logRows = computed<LogRowView[]>(() => {
       fallbackChannels,
       retryUnknown: admin && retryLookupUnknown(row),
       retryChain: admin && retryChannels.length > 1 ? retryChannels.join(' → ') : '',
+      channelAffinity: channelAffinityFor(row),
       username: visible ? row.username || '用户 ' + row.user_id : '••••',
       usernameCopy: visible ? String(row.username || row.user_id || '') : '',
       initial: visible ? getUserAvatarFallback(row.username) : '•',
@@ -1118,6 +1167,40 @@ function stringField(value: unknown): string {
   if (typeof value === 'string') return value.trim()
   if (typeof value === 'number' || typeof value === 'boolean') return String(value)
   return ''
+}
+
+// 亲和性只从管理员快照读取；viewer 的后端投影会移除 admin_info，避免前端误显示敏感缓存键。
+function channelAffinityFor(row: ReadonlyLog): ChannelAffinityInfo | undefined {
+  if (!isAdmin.value) return undefined
+  const value = recordValue(adminInfoFor(row)?.channel_affinity)
+  if (!value) return undefined
+  const affinity: ChannelAffinityInfo = {
+    reason: stringField(value.reason),
+    ruleName: stringField(value.rule_name),
+    usingGroup: stringField(value.using_group),
+    selectedGroup: stringField(value.selected_group),
+    keySource: stringField(value.key_source),
+    keyPath: stringField(value.key_path),
+    keyKey: stringField(value.key_key),
+    keyHint: stringField(value.key_hint),
+    keyFingerprint: stringField(value.key_fp),
+  }
+  return Object.values(affinity).some(Boolean) ? affinity : undefined
+}
+
+function channelAffinityGroup(affinity: ChannelAffinityInfo | undefined): string {
+  return affinity?.usingGroup || affinity?.selectedGroup || ''
+}
+
+// 亲和性键摘要属于敏感字段，关闭敏感字段显示时只保留命中事实和规则名称。
+function channelAffinitySensitive(value: string): string {
+  return value ? (sensitiveVisible.value ? value : '••••') : ''
+}
+
+function channelAffinityTitle(affinity: ChannelAffinityInfo): string {
+  const rule = affinity.ruleName || '未命名规则'
+  const group = channelAffinityGroup(affinity)
+  return `渠道亲和性命中：${rule}${group ? ` · 分组 ${sensitiveVisible.value ? group : '••••'}` : ''}`
 }
 
 function booleanField(value: unknown): boolean {
@@ -1510,7 +1593,9 @@ onUnmounted(() => {
   window.removeEventListener('resize', handleRetryHoverViewportChange)
   window.removeEventListener('scroll', handleRetryHoverViewportChange, true)
   window.removeEventListener('keydown', handleDetailKeydown)
+  window.removeEventListener('keydown', handleAffinityKeydown)
   document.body.classList.remove('ct-detail-open')
+  document.body.classList.remove('ct-affinity-open')
   document.body.classList.remove('ct-rc35-logs-theme')
   viewportQuery?.removeEventListener('change', syncViewport)
   viewportQuery = undefined
@@ -1590,7 +1675,7 @@ watch(() => filters.site_id, (site, previous) => {
               <!-- 日志记录不可变时复用整行 DOM，只有字段或显示偏好变化才重新补丁。 -->
               <tr v-memo="[view.memoKey, expandedRetryID === view.id]" class="log-row" :class="view.tone">
                   <td class="col-time"><div class="time-cell" :title="view.timeFull"><span class="time-text">{{ view.timeText }}</span><span class="status-badge" :class="view.statusClass">{{ view.statusLabel }}</span></div></td>
-                  <td v-if="isColumnVisible('channel')" class="col-channel" @mouseenter="openRetryHover(view, $event)" @mouseleave="closeRetryHover" @focusin="openRetryHover(view, $event)" @focusout="closeRetryHover"><div v-if="view.hasChannel || view.retryUnknown" class="channel-cell" :aria-label="isAdmin && view.retryChain ? requestChainTitle(view.source) : undefined"><div class="channel-line"><button v-if="view.hasChannel" type="button" :class="['channel-badge', 'copyable', view.channelTone]" title="点击复制渠道 ID" @click.stop="copyText(view.channelID)">#{{ view.channelID }}</button><button v-if="isAdmin && (view.fallback || view.retryChain || view.retryUnknown)" type="button" class="retry-chain-trigger" :class="{ 'retry-chain-unknown': view.retryUnknown }" :aria-label="requestChainTitle(view.source)" :aria-expanded="expandedRetryID === view.id" @click.stop="toggleRetryChain(view)"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v12M18 9a9 9 0 0 1-9 9"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="6" r="3"/></svg><span v-if="view.retryUnknown">待确认</span></button></div><span v-if="view.channelName" class="cell-secondary">{{ view.channelName }}</span></div><span v-else class="muted">—</span></td>
+                  <td v-if="isColumnVisible('channel')" class="col-channel" @mouseenter="openRetryHover(view, $event)" @mouseleave="closeRetryHover" @focusin="openRetryHover(view, $event)" @focusout="closeRetryHover"><div v-if="view.hasChannel || view.retryUnknown" class="channel-cell" :aria-label="isAdmin && view.retryChain ? requestChainTitle(view.source) : undefined"><div class="channel-line"><span v-if="view.hasChannel" class="channel-affinity-anchor"><button type="button" :class="['channel-badge', 'copyable', view.channelTone]" title="点击复制渠道 ID" @click.stop="copyText(view.channelID)">#{{ view.channelID }}</button><button v-if="view.channelAffinity" type="button" class="channel-affinity-trigger" :title="channelAffinityTitle(view.channelAffinity)" :aria-label="channelAffinityTitle(view.channelAffinity)" @click.stop="openChannelAffinity(view)"><svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 1-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z"/><path d="M20 2v4"/><path d="M22 4h-4"/><circle cx="4" cy="20" r="2"/></svg></button></span><button v-if="isAdmin && (view.fallback || view.retryChain || view.retryUnknown)" type="button" class="retry-chain-trigger" :class="{ 'retry-chain-unknown': view.retryUnknown }" :aria-label="requestChainTitle(view.source)" :aria-expanded="expandedRetryID === view.id" @click.stop="toggleRetryChain(view)"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v12M18 9a9 9 0 0 1-9 9"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="6" r="3"/></svg><span v-if="view.retryUnknown">待确认</span></button></div><span v-if="view.channelName" class="cell-secondary">{{ view.channelName }}</span></div><span v-else class="muted">—</span></td>
                   <td v-if="isColumnVisible('user')" class="col-user"><button v-if="view.source.username" type="button" class="user-cell copyable" :title="sensitiveVisible ? '点击复制用户名' : undefined" @click.stop="copyText(view.usernameCopy)"><i class="user-avatar" :class="{ 'is-hidden': !sensitiveVisible }" :style="view.avatarStyle">{{ view.initial }}</i><span class="truncate">{{ view.username }}</span></button><span v-else class="muted">—</span></td>
                   <td v-if="isColumnVisible('token')" class="col-token"><div v-if="view.hasToken" class="token-cell"><button type="button" class="token-badge copyable" :title="sensitiveVisible ? '点击复制令牌名称' : undefined" @click.stop="copyText(sensitiveVisible ? view.source.token_name : '')"><svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3v-3h3v-3h2.172a2 2 0 0 0 1.414-.586l1.814-1.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5" fill="currentColor"/></svg><span>{{ view.tokenName }}</span></button><span v-if="view.source.group || view.groupRatio !== undefined" class="group-meta"><span v-if="view.source.group" :class="view.groupTone">{{ view.group }}</span><span v-if="view.source.group && view.groupRatio !== undefined"> </span><span v-if="view.groupRatio !== undefined" class="ratio">{{ view.groupRatioText }}</span></span></div><span v-else class="muted">—</span></td>
                   <td v-if="isColumnVisible('model')" class="col-model"><div v-if="view.hasModel" class="model-cell"><button type="button" class="model-badge copyable" :class="view.modelProvider ? undefined : view.modelTone" @click.stop="copyText(view.source.model_name)"><ModelProviderIcon v-if="view.modelProvider" :name="view.modelProvider.name" />{{ view.modelName }}</button><span v-if="view.modelMapping" class="cell-secondary truncate">{{ view.modelMapping }}</span></div><span v-else class="muted">—</span></td>
@@ -1631,7 +1716,8 @@ watch(() => filters.site_id, (site, previous) => {
               <div><dt>首字</dt><dd>{{ view.firstResponseText }}</dd></div>
               <div><dt>总耗时</dt><dd>{{ view.timing ? view.durationText : '—' }}</dd></div>
             </dl>
-            <div v-if="view.hasChannel || view.retryUnknown" class="mobile-card-channel"><span>渠道 #{{ view.channelID }} {{ view.channelName }}</span><button v-if="isAdmin && (view.fallback || view.retryChain || view.retryUnknown)" type="button" class="retry-chain-trigger" :aria-expanded="expandedRetryID === view.id" aria-label="查看请求重试链路" @click="toggleRetryChain(view)"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3v12M18 9a9 9 0 0 1-9 9"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="6" r="3"/></svg><span v-if="view.retryUnknown">待确认</span></button></div>
+            <div v-if="view.hasChannel || view.retryUnknown" class="mobile-card-channel" @mouseenter="openRetryHover(view, $event)" @mouseleave="closeRetryHover" @focusin="openRetryHover(view, $event)" @focusout="closeRetryHover">
+              <span v-if="view.hasChannel" class="channel-affinity-anchor"><button type="button" :class="['channel-badge', 'copyable', view.channelTone]" title="点击复制渠道 ID" @click.stop="copyText(view.channelID)">#{{ view.channelID }}</button><button v-if="view.channelAffinity" type="button" class="channel-affinity-trigger" :title="channelAffinityTitle(view.channelAffinity)" :aria-label="channelAffinityTitle(view.channelAffinity)" @click.stop="openChannelAffinity(view)"><svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11.017 2.814a1 1 0 0 0 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a2 2 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 1-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051 5.558a2 2 0 0 1-1.594 1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 1-1.594-1.594z"/><path d="M20 2v4"/><path d="M22 4h-4"/><circle cx="4" cy="20" r="2"/></svg></button></span><span v-else>渠道 #{{ view.channelID }} {{ view.channelName }}</span><span v-if="view.hasChannel && view.channelName" class="cell-secondary">{{ view.channelName }}</span><button v-if="isAdmin && (view.fallback || view.retryChain || view.retryUnknown)" type="button" class="retry-chain-trigger" :aria-expanded="expandedRetryID === view.id" aria-label="查看请求重试链路" @click="toggleRetryChain(view)"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3v12M18 9a9 9 0 0 1-9 9"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="6" r="3"/></svg><span v-if="view.retryUnknown">待确认</span></button></div>
             <button type="button" class="mobile-card-detail" @click="openDetail(view.source)">{{ view.source.type === 5 ? '查看错误详情' : '查看详情' }}<span aria-hidden="true">›</span></button>
             <div v-if="expandedRetryID === view.id && isAdmin" class="mobile-request-chain"><FallbackRequestChain :row="view.source" :site="filters.site_id" :sensitive="sensitiveVisible" :money="money" @close="closeRequestChain" @filter="filterRequestChain" @detail="openDetail" /></div>
           </article>
@@ -1733,10 +1819,25 @@ watch(() => filters.site_id, (site, previous) => {
                   <div v-if="detailRow.token_name" class="detail-row"><span class="detail-label">令牌</span><span class="detail-value detail-mono">{{ visibleValue(detailRow.token_name) }}</span></div>
                   <div v-if="detailRow.group || textValue(detailRow, 'group')" class="detail-row"><span class="detail-label">分组</span><span class="detail-value detail-mono">{{ detailGroup(detailRow) }}</span></div>
                   <div v-if="detailRow.ip && (isAdmin || isTimingLog(detailRow))" class="detail-row"><span class="detail-label">IP 地址</span><span class="detail-value detail-mono">{{ sensitiveVisible ? detailRow.ip : '••••' }}</span></div>
-                  <div v-if="isTimingLog(detailRow) && detailRow.use_time > 0" class="detail-row"><span class="detail-label">响应时间</span><span class="detail-value detail-mono detail-timing"><strong :class="timingClass(durationVariant(detailRow))">{{ detailRow.use_time.toFixed(1) }}s</strong><span v-if="streamFlag(detailRow) === true && firstResponse(detailRow) !== undefined" :class="timingClass(firstResponseVariant(firstResponse(detailRow)))">（首字 {{ firstResponseText(detailRow) }}）</span></span></div>
-                </div>
+                   <div v-if="isTimingLog(detailRow) && detailRow.use_time > 0" class="detail-row"><span class="detail-label">响应时间</span><span class="detail-value detail-mono detail-timing"><strong :class="timingClass(durationVariant(detailRow))">{{ detailRow.use_time.toFixed(1) }}s</strong><span v-if="streamFlag(detailRow) === true && firstResponse(detailRow) !== undefined" :class="timingClass(firstResponseVariant(firstResponse(detailRow)))">（首字 {{ firstResponseText(detailRow) }}）</span></span></div>
+                 </div>
 
-                <!-- 金额拆分沿用 rc35 的快照字段，历史日志缺字段时不反推金额。 -->
+                 <section v-if="channelAffinityFor(detailRow)" class="detail-section">
+                   <h3>渠道亲和性</h3>
+                   <div class="detail-section-card channel-affinity-card">
+                     <div class="detail-row"><span class="detail-label">状态</span><span class="detail-value detail-success"><span class="channel-affinity-status"><svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063L2 12l6.5-2.063A2 2 0 0 0 9.937 8.5L12 2l2.063 6.5A2 2 0 0 0 15.5 9.937L22 12l-6.5 2.063a2 2 0 0 0-1.437 1.437L12 22z"/><path d="M20 3v4M22 5h-4"/></svg>已命中</span></span></div>
+                     <div v-if="channelAffinityFor(detailRow)?.ruleName" class="detail-row"><span class="detail-label">规则</span><span class="detail-value detail-mono">{{ channelAffinityFor(detailRow)?.ruleName }}</span></div>
+                     <div v-if="channelAffinityGroup(channelAffinityFor(detailRow))" class="detail-row"><span class="detail-label">分组</span><span class="detail-value detail-mono">{{ channelAffinitySensitive(channelAffinityGroup(channelAffinityFor(detailRow))) }}</span></div>
+                     <div v-if="channelAffinityFor(detailRow)?.reason" class="detail-row"><span class="detail-label">命中原因</span><span class="detail-value">{{ channelAffinityFor(detailRow)?.reason }}</span></div>
+                     <div v-if="channelAffinityFor(detailRow)?.keySource" class="detail-row"><span class="detail-label">Key 来源</span><span class="detail-value detail-mono">{{ channelAffinityFor(detailRow)?.keySource }}</span></div>
+                     <div v-if="channelAffinityFor(detailRow)?.keyPath" class="detail-row"><span class="detail-label">Key 路径</span><span class="detail-value detail-mono">{{ channelAffinityFor(detailRow)?.keyPath }}</span></div>
+                     <div v-if="channelAffinityFor(detailRow)?.keyKey" class="detail-row"><span class="detail-label">Key 字段</span><span class="detail-value detail-mono">{{ channelAffinityFor(detailRow)?.keyKey }}</span></div>
+                     <div v-if="channelAffinityFor(detailRow)?.keyHint" class="detail-row"><span class="detail-label">Key 摘要</span><span class="detail-value detail-mono">{{ channelAffinitySensitive(channelAffinityFor(detailRow)?.keyHint || '') }}</span></div>
+                     <div v-if="channelAffinityFor(detailRow)?.keyFingerprint" class="detail-row"><span class="detail-label">Key 指纹</span><span class="detail-value detail-mono">{{ channelAffinitySensitive(channelAffinityFor(detailRow)?.keyFingerprint || '') }}</span></div>
+                   </div>
+                 </section>
+
+                 <!-- 金额拆分沿用 rc35 的快照字段，历史日志缺字段时不反推金额。 -->
                 <section v-if="(isConsume(detailRow) || detailRow.type === 6) && discountSnapshot(detailRow)" class="detail-section">
                   <h3>{{ textValue(detailRow, 'discount_cost_scope') === 'task_total' ? '任务总费用' : '费用明细' }}</h3>
                   <div class="detail-section-card">
@@ -1750,7 +1851,7 @@ watch(() => filters.site_id, (site, previous) => {
                   <h3>请求转换</h3>
                   <div class="detail-section-card">
                     <div v-if="requestPath(detailRow) !== '—'" class="detail-row"><span class="detail-label">路径</span><span class="detail-value detail-mono">{{ requestPath(detailRow) }}</span></div>
-                    <div class="detail-row detail-conversion-row"><span class="detail-label">格式</span><span class="detail-value"><span class="conversion-mark" aria-hidden="true" />{{ conversion(detailRow) }}</span><button type="button" class="detail-copy-button" aria-label="复制请求转换" title="复制请求转换" @click="copyText(conversion(detailRow))"><i class="copy-glyph" aria-hidden="true" /></button></div>
+                    <div class="detail-row detail-conversion-row"><span class="detail-label">格式</span><span class="detail-value">{{ conversion(detailRow) }}</span><button type="button" class="detail-copy-button" aria-label="复制请求转换" title="复制请求转换" @click="copyText(conversion(detailRow))"><i class="copy-glyph" aria-hidden="true" /></button></div>
                   </div>
                 </section>
 
@@ -1961,11 +2062,44 @@ watch(() => filters.site_id, (site, previous) => {
       </Teleport>
     </div>
   </AppShell>
+      <!-- 渠道亲和性沿用 New API 的独立信息弹窗，避免点击角标时打开展开内容过多的日志详情。 -->
+      <Teleport to="body">
+        <div v-if="affinityTarget" v-show="affinityOpen" class="affinity-dialog-backdrop" @mousedown.self="closeAffinity">
+          <section class="affinity-dialog" role="dialog" aria-modal="true" aria-labelledby="readonly-log-affinity-title" aria-describedby="readonly-log-affinity-description" @mousedown.stop>
+            <header class="detail-dialog-header affinity-dialog-header">
+              <div class="detail-dialog-title">
+                <span class="affinity-dialog-icon" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11.017 2.814a1 1 0 0 0 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 1-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 1-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 1 1.594-1.594z"/><path d="M20 2v4"/><path d="M22 4h-4"/><circle cx="4" cy="20" r="2"/></svg></span>
+                <h2 id="readonly-log-affinity-title">渠道亲和性</h2>
+                <span class="affinity-dialog-status">已命中</span>
+              </div>
+              <button ref="affinityCloseButton" type="button" class="detail-dialog-close" aria-label="关闭渠道亲和性详情" title="关闭" @click="closeAffinity"><span class="detail-close-glyph" aria-hidden="true" /></button>
+            </header>
+            <p id="readonly-log-affinity-description" class="affinity-dialog-hint">该请求命中了渠道亲和性规则。</p>
+            <div class="affinity-dialog-body">
+              <div class="affinity-dialog-channel"><span>渠道</span><strong>#{{ affinityTarget.channelID }}</strong><span v-if="affinityTarget.channelName">{{ affinityTarget.channelName }}</span></div>
+              <div class="affinity-dialog-card">
+                <div v-if="affinityTarget.affinity.ruleName" class="affinity-dialog-row"><span>规则</span><code>{{ affinityTarget.affinity.ruleName }}</code></div>
+                <div v-if="channelAffinityGroup(affinityTarget.affinity)" class="affinity-dialog-row"><span>分组</span><code>{{ channelAffinitySensitive(channelAffinityGroup(affinityTarget.affinity)) }}</code></div>
+                <div v-if="affinityTarget.affinity.reason" class="affinity-dialog-row"><span>命中原因</span><code>{{ affinityTarget.affinity.reason }}</code></div>
+                <div v-if="affinityTarget.affinity.keySource" class="affinity-dialog-row"><span>Key 来源</span><code>{{ affinityTarget.affinity.keySource }}</code></div>
+                <div v-if="affinityTarget.affinity.keyPath" class="affinity-dialog-row"><span>Key 路径</span><code>{{ affinityTarget.affinity.keyPath }}</code></div>
+                <div v-if="affinityTarget.affinity.keyKey" class="affinity-dialog-row"><span>Key 字段</span><code>{{ affinityTarget.affinity.keyKey }}</code></div>
+                <div v-if="affinityTarget.affinity.keyHint" class="affinity-dialog-row"><span>Key 摘要</span><code>{{ channelAffinitySensitive(affinityTarget.affinity.keyHint) }}</code></div>
+                <div v-if="affinityTarget.affinity.keyFingerprint" class="affinity-dialog-row"><span>Key 指纹</span><code>{{ channelAffinitySensitive(affinityTarget.affinity.keyFingerprint) }}</code></div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </Teleport>
       <!-- 重试提示独立于表格滚动层，鼠标进入整个渠道单元格即可查看。 -->
       <Teleport to="body">
-        <div v-if="retryHover" ref="retryHoverElement" class="retry-hover-card" role="tooltip" :style="retryHoverStyle">
-          <strong v-if="retryHover.retryCount">重试{{ retryHover.retryCount }}次：</strong><strong v-else>Fallback：</strong>
-          <span>{{ retryHover.chain }}</span>
+        <div v-if="retryHover" ref="retryHoverElement" class="retry-hover-card" :class="{ 'has-affinity': retryHover.affinity }" role="tooltip" :style="retryHoverStyle">
+          <div v-if="retryHover.hasRetry" class="retry-hover-line"><strong v-if="retryHover.retryCount">重试{{ retryHover.retryCount }}次：</strong><strong v-else>Fallback：</strong><span>{{ retryHover.chain }}</span></div>
+          <div v-if="retryHover.affinity" class="retry-hover-affinity">
+            <strong>渠道亲和性命中</strong>
+            <span v-if="retryHover.affinity.ruleName">规则：{{ retryHover.affinity.ruleName }}</span>
+            <span v-if="channelAffinityGroup(retryHover.affinity)">分组：{{ channelAffinitySensitive(channelAffinityGroup(retryHover.affinity)) }}</span>
+          </div>
         </div>
       </Teleport>
 
@@ -1993,6 +2127,19 @@ watch(() => filters.site_id, (site, previous) => {
   background: var(--ct-surface);
   border-color: var(--ct-line-strong);
   color: var(--ct-ink-2);
+}
+
+/* rc35 的三种耗时状态直接挂在根节点，主题切换时不会被 scoped 容器变量覆盖。 */
+:global(:root) {
+  --rc35-timing-success: oklch(0.596 0.145 163.225);
+  --rc35-timing-warning: oklch(0.681 0.162 75.834);
+  --rc35-timing-danger: oklch(0.577 0.245 27.325);
+}
+:global(:root[data-theme="dark"]) {
+  /* 暗色模式同步 NewAPI rc35 的明度和色相，保证三种状态可直接对照。 */
+  --rc35-timing-success: oklch(0.696 0.17 162.48);
+  --rc35-timing-warning: oklch(0.769 0.188 70.08);
+  --rc35-timing-danger: oklch(0.704 0.191 22.216);
 }
 
 .logs-page {
@@ -2294,6 +2441,34 @@ watch(() => filters.site_id, (site, previous) => {
 .status-unknown { color: var(--rc35-ink-3); }
 .channel-cell { display: flex; min-width: 0; flex-direction: column; align-items: flex-start; gap: 4px; }
 .channel-line { display: inline-flex; min-width: 0; align-items: center; gap: 3px; }
+.channel-affinity-anchor {
+  position: relative;
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  overflow: visible;
+}
+.channel-affinity-trigger {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  z-index: 1;
+  display: inline-flex;
+  width: 12px;
+  height: 12px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #f59e0b;
+  cursor: pointer;
+  line-height: 1;
+}
+.channel-affinity-trigger:hover,
+.channel-affinity-trigger:focus-visible { color: #d97706; }
+.channel-affinity-trigger:focus-visible { outline: 2px solid var(--ct-warn); outline-offset: 1px; border-radius: 3px; }
+.channel-affinity-trigger svg { display: block; width: 12px; height: 12px; fill: currentColor; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .retry-chain-trigger {
   position: relative;
   display: inline-flex;
@@ -2335,6 +2510,8 @@ watch(() => filters.site_id, (site, previous) => {
   pointer-events: none;
   white-space: normal;
 }
+.retry-hover-card.has-affinity { flex-direction: column; align-items: stretch; gap: 6px; }
+.retry-hover-line { display: flex; min-width: 0; align-items: baseline; gap: 4px; }
 .retry-hover-card strong {
   flex: none;
   color: var(--rc35-amber);
@@ -2346,6 +2523,9 @@ watch(() => filters.site_id, (site, previous) => {
   color: var(--rc35-ink-2);
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
 }
+.retry-hover-affinity { display: flex; min-width: 0; flex-direction: column; gap: 2px; padding-top: 6px; border-top: 1px solid #e5e7eb; }
+.retry-hover-affinity strong { color: #f59e0b; }
+.retry-hover-affinity span { color: var(--rc35-ink-2); font-family: inherit; }
 
 .retry-chain-text { color: var(--rc35-amber); font-size: 10.5px; line-height: 15px; white-space: normal; }
 .channel-badge, .token-badge, .model-badge {
@@ -2478,10 +2658,10 @@ watch(() => filters.site_id, (site, previous) => {
   border-radius: 2px;
 }
 .timing-segment { display: block; min-height: 0; flex: 1 1 0; }
-.timing-segment.timing-success { background: var(--rc35-green); }
-/* 警告用金黄色条与深金文字，危险用正红色，避免橙色与玫红在紧凑列表中混淆。 */
-.timing-segment.timing-warning { background: var(--ct-warning-solid); }
-.timing-segment.timing-danger { background: var(--ct-crit); }
+.timing-segment.timing-success { background: color-mix(in srgb, var(--rc35-timing-success) 90%, transparent); }
+/* 色条透明度与 rc35 的 bg-success/90、bg-warning/80、bg-destructive/80 保持一致。 */
+.timing-segment.timing-warning { background: color-mix(in srgb, var(--rc35-timing-warning) 80%, transparent); }
+.timing-segment.timing-danger { background: color-mix(in srgb, var(--rc35-timing-danger) 80%, transparent); }
 .timing-segment.timing-neutral { background: var(--rc35-ink-3); }
 .timing-values {
   display: flex;
@@ -2492,9 +2672,9 @@ watch(() => filters.site_id, (site, previous) => {
 }
 .timing-value { color: var(--rc35-ink-2); font-size: 10.5px; }
 .timing-value b { font-size: 11.5px; font-weight: 400; }
-.timing-value.timing-success b { color: var(--rc35-green); }
-.timing-value.timing-warning b { color: var(--ct-warn); }
-.timing-value.timing-danger b { color: var(--ct-crit); }
+.timing-value.timing-success b { color: var(--rc35-timing-success); }
+.timing-value.timing-warning b { color: var(--rc35-timing-warning); }
+.timing-value.timing-danger b { color: var(--rc35-timing-danger); }
 .timing-value.timing-neutral b { color: var(--rc35-ink-3); }
 .details-button {
   display: block;
@@ -2858,6 +3038,53 @@ watch(() => filters.site_id, (site, previous) => {
   border: 0;
 }
 :global(body.ct-detail-open) { overflow: hidden; }
+.affinity-dialog-backdrop {
+  --rc35-surface: var(--ct-surface);
+  --rc35-surface-2: var(--ct-surface-2);
+  --rc35-line: var(--ct-line);
+  --rc35-line-strong: var(--ct-line-strong);
+  --rc35-ink: var(--ct-ink);
+  --rc35-ink-2: var(--ct-ink-2);
+  --rc35-ink-3: var(--ct-ink-3);
+  position: fixed;
+  z-index: 3100;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--ct-overlay);
+  backdrop-filter: blur(2px);
+}
+:global(body.ct-affinity-open) { overflow: hidden; }
+.affinity-dialog {
+  position: relative;
+  display: flex;
+  width: min(512px, calc(100% - 2rem));
+  max-height: calc(100vh - 2rem);
+  min-height: 0;
+  flex-direction: column;
+  gap: 12px;
+  overflow: hidden;
+  padding: 16px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--rc35-surface);
+  color: var(--rc35-ink);
+  box-shadow: 0 0 0 1px rgba(28, 37, 52, .1);
+}
+.affinity-dialog-header { min-height: 28px; }
+.affinity-dialog-icon { display: inline-flex; width: 16px; height: 16px; align-items: center; justify-content: center; color: #f59e0b; }
+.affinity-dialog-icon svg { display: block; width: 14px; height: 14px; }
+.affinity-dialog-status { color: #f59e0b; font-size: 12px; font-weight: 600; line-height: 20px; }
+.affinity-dialog-hint { margin: 0; color: var(--rc35-ink-3); font-size: 12px; line-height: 18px; }
+.affinity-dialog-body { min-height: 0; overflow-y: auto; scrollbar-color: var(--rc35-line-strong) transparent; scrollbar-width: thin; }
+.affinity-dialog-channel { display: flex; min-width: 0; align-items: baseline; gap: 8px; margin-bottom: 10px; color: var(--rc35-ink-2); font-size: 13px; }
+.affinity-dialog-channel strong { color: #f59e0b; font: 600 13px ui-monospace, SFMono-Regular, Consolas, monospace; }
+.affinity-dialog-channel span:last-child { min-width: 0; overflow: hidden; color: var(--rc35-ink-3); text-overflow: ellipsis; white-space: nowrap; }
+.affinity-dialog-card { display: flex; min-width: 0; flex-direction: column; gap: 4px; padding: 10px; border: 1px solid var(--rc35-line); border-radius: 6px; background: var(--rc35-surface-2); }
+.affinity-dialog-row { display: grid; min-width: 0; grid-template-columns: 5.25rem minmax(0, 1fr); gap: 8px; align-items: baseline; min-height: 20px; font-size: 12px; line-height: 16px; }
+.affinity-dialog-row > span { color: var(--rc35-ink-3); white-space: nowrap; }
+.affinity-dialog-row > code { min-width: 0; overflow-wrap: anywhere; color: var(--rc35-ink-2); font: 12px/16px ui-monospace, SFMono-Regular, Consolas, monospace; }
 .detail-dialog-backdrop {
   --rc35-surface: var(--ct-surface);
   --rc35-surface-2: var(--ct-surface-2);
@@ -3073,9 +3300,15 @@ watch(() => filters.site_id, (site, previous) => {
 .detail-copy-value:focus-visible .copy-glyph { opacity: .75; }
 .detail-timing strong { font-weight: 650; }
 .detail-timing > span { margin-left: 8px; }
+/* 详情弹窗中的首字和总耗时与列表使用同一套 rc35 状态颜色。 */
+.detail-timing .timing-success { color: var(--rc35-timing-success); }
+.detail-timing .timing-warning { color: var(--rc35-timing-warning); }
+.detail-timing .timing-danger { color: var(--rc35-timing-danger); }
 .detail-success { color: var(--rc35-green); }
 .detail-danger { color: var(--ct-crit); }
 .detail-warning { color: var(--rc35-amber); }
+.channel-affinity-status { display: inline-flex; align-items: center; gap: 4px; color: var(--rc35-amber); font-weight: 600; }
+.channel-affinity-status svg { display: block; color: currentColor; fill: currentColor; }
 .detail-fallback-chain { color: var(--rc35-ink-2); font-weight: 400; }
 .detail-total-cost { color: var(--rc35-ink); font-weight: 650; }
 .detail-section {
@@ -3139,35 +3372,6 @@ watch(() => filters.site_id, (site, previous) => {
   border: 1.5px solid currentColor;
   border-radius: 2px;
   background: var(--rc35-surface-2);
-  content: '';
-}
-.conversion-mark {
-  position: relative;
-  display: inline-block;
-  width: 14px;
-  height: 14px;
-  margin-right: 7px;
-  vertical-align: -2px;
-}
-.conversion-mark::before {
-  position: absolute;
-  top: 6px;
-  left: 2px;
-  width: 10px;
-  height: 2px;
-  background: var(--rc35-ink-3);
-  content: '';
-}
-.conversion-mark::after {
-  position: absolute;
-  top: 2px;
-  left: 0;
-  width: 5px;
-  height: 5px;
-  border: 1px solid var(--rc35-ink-3);
-  border-radius: 50%;
-  background: var(--rc35-surface-2);
-  box-shadow: 9px 5px 0 -1px var(--rc35-surface-2), 9px 5px 0 0 var(--rc35-ink-3);
   content: '';
 }
 .multiline { white-space: pre-line; }

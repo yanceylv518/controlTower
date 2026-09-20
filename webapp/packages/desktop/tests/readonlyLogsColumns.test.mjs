@@ -246,6 +246,33 @@ test('readonly logs exposes fallback requests and channel chains', () => {
   assert.match(source, /row\.fallback_channels\?\.length/)
 })
 
+// 回归保护：管理员日志中的渠道亲和性命中必须像 New API 一样在渠道 ID 角标显示，并能进入快照详情。
+test('readonly logs marks channel affinity hits on the channel cell', () => {
+  assert.match(source, /type ChannelAffinityInfo = \{/)
+  assert.match(source, /function channelAffinityFor\(row: ReadonlyLog\)/)
+  assert.match(source, /if \(!isAdmin\.value\) return undefined/)
+  assert.match(source, /channelAffinity: channelAffinityFor\(row\)/)
+  assert.match(source, /class="channel-affinity-anchor"/)
+  assert.match(source, /class="channel-affinity-trigger"/)
+  assert.match(source, /M11\.017 2\.814a1 1 0 0 0 1\.966 0l1\.051 5\.558/)
+  assert.match(source, /function channelAffinityTitle\(affinity: ChannelAffinityInfo\)/)
+  assert.match(source, /@click\.stop="openChannelAffinity\(view\)"/)
+  assert.match(source, /class="affinity-dialog-backdrop"/)
+  assert.match(source, /class="affinity-dialog" role="dialog" aria-modal="true"/)
+  assert.match(source, /const affinityOpen = ref\(false\)/)
+  assert.match(source, /watch\(affinityOpen, async \(open\)/)
+  assert.match(source, /class="affinity-dialog-status"/)
+  assert.match(source, /affinityTarget\.value = { channelID: view\.channelID/)
+  assert.doesNotMatch(source, /if \(view\.channelAffinity\) openDetail\(view\.source\)/)
+  assert.match(source, /retryHover\.affinity/)
+  assert.match(source, /class="retry-hover-affinity"/)
+  assert.match(source, /<h3>渠道亲和性<\/h3>/)
+  for (const field of ['ruleName', 'usingGroup', 'selectedGroup', 'keyHint', 'keyFingerprint']) {
+    assert.match(source, new RegExp(field))
+  }
+  assert.match(source, /class="channel-affinity-status"/)
+})
+
 // 渠道按 ID 取文字色，品牌图标使用原始 SVG，不能再次退回通用连接图标。
 test('readonly logs keeps rc35 channel and model semantic colors', () => {
   assert.match(source, /channelTone: channelID > 0 \? getTokenColorClass\(String\(channelID\)\)/)
@@ -268,6 +295,7 @@ test('readonly logs keeps the rc35 native detail dialog layout', () => {
   assert.match(source, /<h3>模型映射<\/h3>/)
   assert.match(source, /<h3>Token 明细<\/h3>/)
   assert.match(source, /<h3>计费详情<\/h3>/)
+  assert.doesNotMatch(source, /conversion-mark/)
   assert.match(source, /\.detail-dialog \{[\s\S]*max-width: calc\(100% - 2rem\);/)
   assert.match(source, /\.detail-dialog:not\(\.is-wide\) \{ max-width: 512px; \}/)
   assert.match(source, /\.detail-dialog\.is-wide \{ max-width: 1024px; \}/)
@@ -387,6 +415,11 @@ test('readonly logs follows rc35 timing severity rules', () => {
   assert.match(source, /class=\"timing-segment\"/)
   assert.match(source, /const firstVariant = firstResponseVariant\(firstSeconds\)/)
   assert.match(source, /const durationTone = durationVariant\(row\)/)
+  assert.match(source, /--rc35-timing-success: oklch\(0\.596 0\.145 163\.225\)/)
+  assert.match(source, /--rc35-timing-warning: oklch\(0\.681 0\.162 75\.834\)/)
+  assert.match(source, /--rc35-timing-danger: oklch\(0\.577 0\.245 27\.325\)/)
+  assert.match(source, /--rc35-timing-success: oklch\(0\.696 0\.17 162\.48\)/)
+  assert.match(source, /color-mix\(in srgb, var\(--rc35-timing-success\) 90%, transparent\)/)
   assert.doesNotMatch(source, /timingTone\(row\)/)
 })
 
