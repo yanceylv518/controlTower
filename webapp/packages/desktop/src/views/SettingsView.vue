@@ -131,7 +131,7 @@ onMounted(load);
     </template>
     <div class="settings-page">
       <MenuVisibilitySettings v-if="activeTab === 'menus'" />
-      <VoiceAlertsSettings v-show="activeTab === 'voice'" />
+      <VoiceAlertsSettings v-if="activeTab === 'voice'" />
       <div v-show="activeTab === 'system'" v-loading="loading" class="system-settings-grid">
        <div v-for="(column, index) in displayColumns" :key="index" class="settings-column">
         <section

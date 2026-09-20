@@ -8,7 +8,8 @@ const compiled = ts.transpileModule(source, { compilerOptions: { target: ts.Scri
 const { alertCategories, categoriesForRules, rulesForCategories, categorySummary } = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`)
 
 test('categories partition alert types including circuit lifecycle without overlap', () => {
-  assert.deepEqual(alertCategories.map(c => c.label), ['渠道熔断', '余额告警', '系统告警', '请求告警'])
+  assert.deepEqual(alertCategories.map(c => c.label), ['测试开始提醒', '渠道熔断', '余额告警', '系统告警', '请求告警'])
+  assert.deepEqual(rulesForCategories(['trial']), ['trial_started'])
   const rules = rulesForCategories(['circuit', 'balance', 'system', 'request'])
   assert.equal(rules.length, 13)
   assert.equal(new Set(rules).size, 13)

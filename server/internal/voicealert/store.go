@@ -225,6 +225,31 @@ func (s Store) Claim(ctx context.Context, t Target, end time.Time, low, high int
 	if err = tx.QueryRowContext(ctx, "SELECT id FROM voice_dispatch_guard WHERE id=1 FOR UPDATE").Scan(&guard); err != nil {
 		return "", err
 	}
+	// Re-read the service switch and phone subscriptions just before reserving a call.
+	var configRaw string
+	if err = tx.QueryRowContext(ctx, `SELECT config_json FROM voice_alert_site_config WHERE site_id=?`, t.Site).Scan(&configRaw); err != nil {
+		return "", err
+	}
+	var current Config
+	if err = json.Unmarshal([]byte(configRaw), &current); err != nil {
+		return "", err
+	}
+	if !current.Enabled || (current.ServiceEnabled != nil && !*current.ServiceEnabled) {
+		return "", nil
+	}
+	allowed := false
+	for _, r := range current.Recipients {
+		if !r.Matches(t) {
+			continue
+		}
+		phone := r.Phone
+		if phone == t.Phone {
+			allowed = true
+		}
+	}
+	if !allowed {
+		return "", nil
+	}
 	var n int
 	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM voice_alert_calls WHERE site_id=? AND user_id=? AND phone=? AND suppress_until>?`, t.Site, t.UserID, t.Phone, now).Scan(&n); err != nil {
 		return "", err
@@ -275,7 +300,7 @@ type CallRecord struct {
 }
 
 func (s Store) Calls(ctx context.Context, site string) ([]CallRecord, error) {
-	rows, err := s.DB.QueryContext(ctx, `SELECT id,site_id,user_id,phone,window_end,min_tpm,max_tpm,direction,status,call_id,request_id,result_code,created_at,suppress_until FROM voice_alert_calls WHERE site_id=? ORDER BY created_at DESC LIMIT 100`, site)
+	rows, err := s.DB.QueryContext(ctx, `SELECT id,site_id,user_id,phone,window_end,min_tpm,max_tpm,direction,status,call_id,request_id,result_code,created_at,suppress_until FROM voice_alert_calls WHERE site_id=? AND direction<>'测试开始' ORDER BY created_at DESC LIMIT 100`, site)
 	if err != nil {
 		return nil, err
 	}

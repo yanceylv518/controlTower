@@ -16,6 +16,21 @@ type settingsMemory struct {
 	saved  bool
 }
 
+func TestLegacySavePreservesTrialAndServiceConfiguration(t *testing.T) {
+	off := false
+	c := DefaultConfig()
+	c.ServiceEnabled = &off
+	c.TrialTtsCode = "TTS_trial"
+	c.TrialTemplateReady = true
+	s := &settingsMemory{config: c}
+	h := Handler{Store: s, Caller: &fakeCaller{}}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("PUT", "/?site_id=a", strings.NewReader(`{"enabled":false,"tts_code":"TTS_traffic","recipients":[]}`)))
+	if w.Code != 200 || s.config.ServiceEnabled == nil || *s.config.ServiceEnabled || s.config.TrialTtsCode != "TTS_trial" || !s.config.TrialTemplateReady {
+		t.Fatal(w.Code, s.config)
+	}
+}
+
 func (s *settingsMemory) Config(context.Context, string) (Config, error) { return s.config, nil }
 func (s *settingsMemory) SaveConfig(_ context.Context, _ string, c Config, _ string) error {
 	s.config = c

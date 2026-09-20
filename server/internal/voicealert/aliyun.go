@@ -47,6 +47,10 @@ func randomID(bytes int) (string, error) {
 // No automatic retries: a timeout may follow a successfully placed call.
 // Public mode omits CalledShowNumber. Never log signed requests or raw errors.
 func (a *Aliyun) Call(ctx context.Context, c Config, t Target, id, direction string) Result {
+	return a.CallTemplate(ctx, c, t, id, map[string]string{"customer": t.Label, "direction": direction})
+}
+
+func (a *Aliyun) CallTemplate(ctx context.Context, c Config, t Target, id string, variables map[string]string) Result {
 	if !a.Ready() {
 		return Result{Status: "rejected", Code: "credentials_missing"}
 	}
@@ -54,7 +58,7 @@ func (a *Aliyun) Call(ctx context.Context, c Config, t Target, id, direction str
 	if err != nil {
 		return Result{Status: "rejected", Code: "nonce_failed"}
 	}
-	params, _ := json.Marshal(map[string]string{"customer": t.Label, "direction": direction})
+	params, _ := json.Marshal(variables)
 	p := url.Values{"Action": {"SingleCallByTts"}, "Version": {"2017-05-25"}, "RegionId": {"cn-hangzhou"}, "Format": {"JSON"}, "AccessKeyId": {a.AccessKeyID}, "SignatureMethod": {"HMAC-SHA1"}, "SignatureVersion": {"1.0"}, "SignatureNonce": {nonce}, "Timestamp": {time.Now().UTC().Format("2006-01-02T15:04:05Z")}, "CalledNumber": {t.Phone}, "TtsCode": {c.TtsCode}, "TtsParam": {string(params)}, "OutId": {id}, "PlayTimes": {"2"}}
 	if c.CalledShowNumber != "" {
 		p.Set("CalledShowNumber", c.CalledShowNumber)

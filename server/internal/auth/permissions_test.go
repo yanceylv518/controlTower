@@ -15,6 +15,12 @@ func TestRestrictedAdminEndpointMatrix(t *testing.T) {
 		permission, method, path string
 		want                     bool
 	}{
+		{"monitor.trials", "GET", "trial-followup", true},
+		{"monitor.trials", "PUT", "trial-followup", true},
+		{"monitor.trials", "GET", "trial-followup/identities", true},
+		{"monitor.trials", "PUT", "operations-people", false},
+		{"settings.manage", "PUT", "operations-people", true},
+		{"monitor.customers", "GET", "trial-followup", false},
 		{"monitor.customers", "GET", "menu-visibility", true},
 		{"monitor.customers", "PUT", "menu-visibility", false},
 		{"settings.manage", "PUT", "menu-visibility", true},

@@ -36,6 +36,8 @@ func TestUserVoiceIntegration(t *testing.T) {
 		}
 		_, _ = db.Exec("DELETE FROM instances WHERE id=?", site)
 		_, _ = db.Exec("DELETE FROM voice_alert_calls WHERE site_id=?", site)
+		_, _ = db.Exec("DELETE FROM voice_alert_site_config WHERE site_id=?", site)
+		_, _ = db.Exec("DELETE FROM operation_audits WHERE target_id=?", site)
 	}
 	defer cleanup()
 	if _, err := db.Exec(`INSERT INTO instances(id,name,site_id,env,region,base_url,enabled,created_at,updated_at) VALUES(?,?,?,'test','local','',1,?,?)`, site, site, site, now, now); err != nil {
@@ -54,7 +56,15 @@ func TestUserVoiceIntegration(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	target := voicealert.Target{Site: site, UserID: 7, Phone: "13800000000"}
+	target := voicealert.Target{Site: site, UserID: 7, Phone: fmt.Sprintf("138%08d",time.Now().UnixNano()%100000000)}
+	secondPhone:=fmt.Sprintf("139%08d",time.Now().UnixNano()%100000000)
+	config := voicealert.DefaultConfig()
+	config.Enabled = true
+	config.TtsCode = "TTS_test"
+	config.Recipients = []voicealert.Recipient{{Phone: target.Phone}, {Phone: secondPhone}}
+	if err = voice.SaveConfig(ctx, site, config, "test"); err != nil {
+		t.Fatal(err)
+	}
 	values, end, err := voice.Snapshot(ctx, target, now)
 	if err != nil {
 		t.Fatal(err)
@@ -68,8 +78,7 @@ func TestUserVoiceIntegration(t *testing.T) {
 			t.Fatal("special dimension leaked", table, n, err)
 		}
 	}
-	// Use a test-specific recipient so parallel test runs cannot share quotas.
-	target.Phone = fmt.Sprintf("test-%d", time.Now().UnixNano())
+	// Both valid recipient numbers are unique to this test run.
 	var winners atomic.Int32
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
@@ -99,7 +108,7 @@ func TestUserVoiceIntegration(t *testing.T) {
 	}
 	// A second subscribed phone for the same customer is claimed independently.
 	copyTarget := target
-	copyTarget.Phone += "other"
+	copyTarget.Phone = secondPhone
 	id, e := (voicealert.Store{DB: db}).Claim(ctx, copyTarget, end, 0, 20000001, "上涨", now)
 	if e != nil || id == "" {
 		t.Fatal("second recipient suppressed", id, e)
@@ -128,7 +137,7 @@ func TestUserVoiceIntegration(t *testing.T) {
 	}
 	// The second recipient has its own customer cooldown.
 	copyTarget = target
-	copyTarget.Phone += "other"
+	copyTarget.Phone = secondPhone
 	id, e = voice.Claim(ctx, copyTarget, end, 0, 20000001, "上涨", now.Add(10*time.Minute+19*time.Second))
 	if e != nil || id != "" {
 		t.Fatal("early expiry", id, e)

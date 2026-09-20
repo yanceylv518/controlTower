@@ -5,7 +5,7 @@ import ts from 'typescript'
 import { computed, ref } from 'vue'
 
 const sfc = readFileSync(new URL('../src/components/VoiceAlertsSettings.vue', import.meta.url), 'utf8')
-const script = sfc.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1].replace(/^import .*\r?\n/gm, '')
+const script = sfc.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1].replace(/^import .*\r?\n/gm, '').replace('const router = useRouter()', 'const router = {}').replace('const emit = defineEmits<{ people: [] }>()', 'const emit = () => {}')
 const compiled = ts.transpileModule(script, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText
 function settings() {
  const calls = [], errors = []
@@ -15,6 +15,17 @@ function settings() {
  const create = new Function('computed', 'ref', 'watch', 'useFiltersStore', 'ElMessage', 'client', `${compiled}\nreturn {request, config, customers, customerOptions, directoryWarning, deltaWan};`)
  return { ...create(computed, ref, () => {}, () => filters, {error: e => errors.push(e), success: () => {}}, client), calls, errors, response, filters }
 }
+
+test('preview fields are not sent when saving traffic on an older server', async () => {
+ const s=settings();await s.request()
+ s.config.value.trial_tts_code='TTS_preview';s.config.value.trial_template_ready=true;s.config.value.service_enabled=false
+ await s.request(true)
+ const body=JSON.parse(s.calls.at(-1).body)
+ assert.equal('trial_tts_code' in body,false)
+ assert.equal('trial_template_ready' in body,false)
+ assert.equal('service_enabled' in body,false)
+ assert.equal(body.recipients[0].phone,'13800000000')
+})
 
 test('all recipients save dynamic all scope without a manual customer list', async () => {
  const s = settings(); await s.request()

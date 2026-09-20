@@ -25,16 +25,19 @@ type DirectionRule struct {
 	Delta      int64   `json:"delta"`
 }
 type Config struct {
-	Rise             *DirectionRule `json:"rise,omitempty"`
-	Fall             *DirectionRule `json:"fall,omitempty"`
-	Enabled          bool           `json:"enabled"`
-	TtsCode          string         `json:"tts_code"`
-	CalledShowNumber string         `json:"called_show_number"`
-	Percent          float64        `json:"percent"`
-	UsePercent       bool           `json:"use_percent"`
-	Delta            int64          `json:"delta"`
-	Targets          []Target       `json:"targets,omitempty"` // Legacy input only; discovery uses the system directory.
-	Recipients       []Recipient    `json:"recipients"`
+	ServiceEnabled     *bool          `json:"service_enabled,omitempty"`
+	TrialTtsCode       string         `json:"trial_tts_code,omitempty"`
+	TrialTemplateReady bool           `json:"trial_template_ready"`
+	Rise               *DirectionRule `json:"rise,omitempty"`
+	Fall               *DirectionRule `json:"fall,omitempty"`
+	Enabled            bool           `json:"enabled"`
+	TtsCode            string         `json:"tts_code"`
+	CalledShowNumber   string         `json:"called_show_number"`
+	Percent            float64        `json:"percent"`
+	UsePercent         bool           `json:"use_percent"`
+	Delta              int64          `json:"delta"`
+	Targets            []Target       `json:"targets,omitempty"` // Legacy input only; discovery uses the system directory.
+	Recipients         []Recipient    `json:"recipients"`
 }
 
 func DefaultConfig() Config {
@@ -62,6 +65,9 @@ func (c Config) WithDirectionRules() Config {
 var phonePattern = regexp.MustCompile(`^(1[3-9][0-9]{9}|0[0-9]{9,11})$`)
 
 func (c Config) Validate() error {
+	if len(c.TrialTtsCode) > 128 || (c.TrialTemplateReady && (!strings.HasPrefix(c.TrialTtsCode, "TTS_") || len(c.TrialTtsCode) <= 4)) {
+		return fmt.Errorf("请填写已审核的测试开始模板ID")
+	}
 	for _, direction := range []string{"上涨", "下降"} {
 		rule := c.Rule(direction)
 		if math.IsNaN(rule.Percent) || math.IsInf(rule.Percent, 0) || rule.Percent <= 0 || rule.Percent > 10000 || rule.Delta <= 0 || rule.Delta > 1000000000000 {

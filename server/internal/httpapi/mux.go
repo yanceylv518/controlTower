@@ -34,6 +34,7 @@ type Options struct {
 	SettingsProvider        *settings.Provider
 	BillingPagePause        time.Duration
 	VoiceHandler            http.Handler
+	TrialHandler            http.Handler
 	AfterAgentReport        func()
 }
 
@@ -97,6 +98,11 @@ func NewMux(options Options) *http.ServeMux {
 	}
 	if options.VoiceHandler != nil {
 		mux.Handle("/api/dashboard/voice-alerts", protect(options.VoiceHandler))
+	}
+	if options.TrialHandler != nil {
+		mux.Handle("/api/dashboard/trial-followup", protect(options.TrialHandler))
+		mux.Handle("/api/dashboard/trial-followup/identities", protect(options.TrialHandler))
+		mux.Handle("/api/dashboard/operations-people", protect(options.TrialHandler))
 	}
 	mux.HandleFunc("/api/auth/login", a.Login)
 	mux.HandleFunc("/api/auth/logout", a.Logout)

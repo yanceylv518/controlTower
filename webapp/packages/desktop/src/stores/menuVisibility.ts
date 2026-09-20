@@ -4,7 +4,7 @@ import { client } from '../api'
 
 export const menuGroups = [
   { title: '总览', items: [['/', '总览']] },
-  { title: '监控分析', items: [['/customers', '客户监控'], ['/channels', '渠道监控'], ['/models', '模型监控'], ['/runtime', '系统状态']] },
+  { title: '监控分析', items: [['/customers', '客户监控'], ['/trial-followup','测试跟进'], ['/channels', '渠道监控'], ['/models', '模型监控'], ['/runtime', '系统状态']] },
   { title: '数据查询', items: [['/usage', '用量统计'], ['/readonly-users', '用户管理'], ['/readonly-logs', '使用日志'], ['/container-logs', '容器日志']] },
   { title: '账单管理', items: [['/billing', '用户账单'], ['/billing/channels', '上游账单'], ['/billing/tasks', '账单任务'], ['/billing/discounts', '渠道折扣']] },
   { title: '系统管理', items: [['/tuning', '调权中心'], ['/alerts', '告警中心'], ['/notifications', '通知中心'], ['/instances', '实例管理'], ['/log-archives', '日志归档'], ['/access-users', '账号管理'], ['/models/manage', '模型广场'], ['/billing/upstreams', '上游管理'], ['/settings', '系统设置'], ['/audits', '操作审计']] },

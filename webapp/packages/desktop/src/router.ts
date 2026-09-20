@@ -10,6 +10,7 @@ import DimensionView from './views/DimensionView.vue'
 import ContainerLogsView from './views/ContainerLogsView.vue'
 import LogArchiveView from './views/LogArchiveView.vue'
 import CustomerMonitorView from './views/CustomerMonitorView.vue'
+import TrialFollowupView from './views/TrialFollowupView.vue'
 import DimensionDetailView from './views/DimensionDetailView.vue'
 import SamplesView from './views/SamplesView.vue'
 import RuntimeView from './views/RuntimeView.vue'
@@ -33,6 +34,7 @@ import BillingTasksView from './views/BillingTasksView.vue'
 import BillingUpstreamsView from './views/BillingUpstreamsView.vue'
 import BillingDiscountsView from './views/BillingDiscountsView.vue'
 export const router = createRouter({ history: createWebHistory('/'), routes: [
+  { path:'/trial-followup',component:TrialFollowupView,meta:{title:'测试跟进',adminOnly:true} },
   { path: '/log-archives', component: LogArchiveView, meta: { title: '日志归档' } },
   { path: '/container-logs', component: ContainerLogsView, meta: { title: '容器日志' } },
   { path: '/readonly-users', component: ReadonlyUsersView, meta: { title: '用户管理' } },

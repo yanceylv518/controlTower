@@ -5,6 +5,7 @@ export function can(user: CurrentUser | null, permission: string): boolean {
 }
 
 export const permissionPages: Array<[string, string]> = [
+  ['/trial-followup','monitor.trials'],
   ['/', 'overview.read'], ['/container-logs', 'logs.query'], ['/customers', 'monitor.customers'], ['/channels', 'monitor.channels'], ['/models', 'monitor.models'],
   ['/runtime', 'monitor.runtime'], ['/samples', 'monitor.samples'], ['/latency', 'monitor.latency'],
   ['/usage', 'data.usage'], ['/readonly-users', 'data.users'], ['/readonly-logs', 'data.logs'],

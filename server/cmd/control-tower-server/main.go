@@ -98,9 +98,12 @@ func run() error {
 	voiceStore := voicealert.Store{DB: db}
 	voiceStore.Directory = &voicealert.Directory{Sites: voiceStore, Source: &dashboard.PassthroughHandler{SecretKey: cfg.SecretKey, Config: store}}
 	voiceCaller := voicealert.AliyunFromEnv()
+	trialSource := &dashboard.PassthroughHandler{SecretKey: cfg.SecretKey, Config: store}
+	trialRunner := &voicealert.TrialRunner{Store: voiceStore, Source: trialSource, Caller: voiceCaller, Message: dashboard.TrialMessageSender(store)}
 	var voiceRunner *voicealert.Runner
 	var afterReport func()
 	if !cfg.APIOnly {
+		workers.Go(trialRunner.Run)
 		voiceRunner = voicealert.NewRunner(voiceStore, voiceCaller)
 		afterReport = voiceRunner.Notify
 		workers.Go(voiceRunner.Run)
@@ -137,7 +140,7 @@ func run() error {
 
 	server := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           httpapi.NewMux(httpapi.Options{VoiceHandler: voicealert.Handler{Store: voiceStore, Caller: voiceCaller, Runner: voiceRunner}, AfterAgentReport: afterReport, AgentToken: cfg.AgentToken, DashboardToken: cfg.DashboardToken, Store: store, TuningStore: controlStore, FastCircuitSink: fastCircuitSink, AuthManager: authManager, AgentTokenPepper: cfg.AgentTokenPepper, SecretKey: cfg.SecretKey, NotificationMaxAttempts: cfg.NotificationMaxAttempts, CommandExpiry: time.Duration(cfg.CommandExpiryMinutes) * time.Minute, SettingsProvider: settingsProvider, BillingPagePause: time.Duration(cfg.BillingPagePauseMilliseconds) * time.Millisecond}),
+		Handler:           httpapi.NewMux(httpapi.Options{TrialHandler: voicealert.TrialHandler{Store: voiceStore, Source: trialSource, WorkerEnabled: !cfg.APIOnly}, VoiceHandler: voicealert.Handler{Store: voiceStore, Caller: voiceCaller, Runner: voiceRunner}, AfterAgentReport: afterReport, AgentToken: cfg.AgentToken, DashboardToken: cfg.DashboardToken, Store: store, TuningStore: controlStore, FastCircuitSink: fastCircuitSink, AuthManager: authManager, AgentTokenPepper: cfg.AgentTokenPepper, SecretKey: cfg.SecretKey, NotificationMaxAttempts: cfg.NotificationMaxAttempts, CommandExpiry: time.Duration(cfg.CommandExpiryMinutes) * time.Minute, SettingsProvider: settingsProvider, BillingPagePause: time.Duration(cfg.BillingPagePauseMilliseconds) * time.Millisecond}),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	log.Printf("control tower server listening on %s", cfg.ListenAddr)

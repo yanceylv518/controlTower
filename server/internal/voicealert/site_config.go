@@ -90,7 +90,14 @@ func (s Store) Configs(ctx context.Context) (map[string]Config, error) {
 		if err := c.ValidateSite(site); err != nil {
 			return nil, err
 		}
+		if c.ServiceEnabled != nil && !*c.ServiceEnabled {
+			c.Enabled = false
+		}
 		out[site] = c
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	return out, nil
 }

@@ -1,6 +1,7 @@
 package voicealert
 
 import (
+	"bytes"
 	"context"
 	ctauth "controltower/server/internal/auth"
 	"encoding/json"
@@ -38,7 +39,12 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	if r.Method == http.MethodPut {
 		c := DefaultConfig()
-		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 64<<10))
+		if err != nil {
+			fail(400, "配置格式错误")
+			return
+		}
+		decoder := json.NewDecoder(bytes.NewReader(body))
 		decoder.DisallowUnknownFields()
 		if err := decoder.Decode(&c); err != nil {
 			fail(400, "配置格式错误")
@@ -47,6 +53,25 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if err := decoder.Decode(&struct{}{}); err != io.EOF {
 			fail(400, "配置格式错误")
 			return
+		}
+		var fields map[string]json.RawMessage
+		if json.Unmarshal(body, &fields) != nil {
+			fail(400, "配置格式错误")
+			return
+		}
+		previous, err := h.Store.Config(ctx, site)
+		if err != nil {
+			fail(500, "原配置读取失败，未保存")
+			return
+		}
+		if _, ok := fields["service_enabled"]; !ok {
+			c.ServiceEnabled = previous.ServiceEnabled
+		}
+		if _, ok := fields["trial_tts_code"]; !ok {
+			c.TrialTtsCode = previous.TrialTtsCode
+		}
+		if _, ok := fields["trial_template_ready"]; !ok {
+			c.TrialTemplateReady = previous.TrialTemplateReady
 		}
 		if err := c.ValidateSite(site); err != nil {
 			fail(400, err.Error())
@@ -105,5 +130,5 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	list = filtered
-	_ = json.NewEncoder(w).Encode(map[string]any{"site_id": site, "site_scoped": true, "direction_rules": true, "config": c, "credentials_ready": h.Caller.Ready(), "worker_enabled": h.Runner != nil, "calls": calls, "targets": statuses, "customers": list.Customers, "unavailable_sites": list.UnavailableSites, "directory_error": directoryError})
+	_ = json.NewEncoder(w).Encode(map[string]any{"site_id": site, "site_scoped": true, "direction_rules": true, "operations_supported": true, "config": c, "credentials_ready": h.Caller.Ready(), "worker_enabled": h.Runner != nil, "calls": calls, "targets": statuses, "customers": list.Customers, "unavailable_sites": list.UnavailableSites, "directory_error": directoryError})
 }
