@@ -82,6 +82,10 @@
 
 ### 调权首屏精修（2026-09-20）
 
+- 时间范围交付续记：用户要求提交推送，随后明确暂不打包。全量249项前端测试通过，本修复此前typecheck/build通过；本次仅提交推送修复及相关测试记录，不创建版本标签，不发布安装包或镜像。真机/浏览器验收仍待完成，rc124不含本修复。
+
+- 日志时间区间续修：用户反馈仅有日期，定位为compact触发器隐藏时间且原生datetime-local手机时间入口不明显。compact弹窗每端显示独立date/time（step=1），草稿仍统一保存本地日期时间并确认后emit；触发器独立一行显示两端月日与时分秒。解析支持可选秒，拒绝非法日期/时间及结束不晚于开始；桌面保留双datetime-local并支持秒，原分钟触发摘要不变。新增解析与编辑行为测试，更新旧禁止拆分控件的静态断言；36项相关测试、typecheck/build、diff check通过，已有chunk提示。未进行浏览器或真机验收，未提交推送打包发布，不包含在rc124中。
+
 - 正式发布续记：用户明确确认GitHub Release及GHCR/latest发布后，推送v2.0.0-rc124到3a7f57bb。release运行35476816881全部成功；Release非草稿，Server amd64、Agent amd64/arm64及SHA256SUMS均uploaded，API提供四附件digest。此前CI 35476402140成功。正式附件在Linux CI独立重建，大小/哈希不等于Windows本地候选包；使用Release对应SHA256SUMS。gh未登录，改用已连接GitHub只读接口检查发布结果。未部署服务器或修改业务配置。
 
 - 本地打包交付：用户要求打包，核对远端最新tag为rc123，基于3a7f57bb生成v2.0.0-rc124本地候选包。按deploy/package.sh内容生成到独立dist/releases/v2.0.0-rc124（旧dist/release不动，复用已安装锁定依赖、重新构建前端）。Server amd64 6,432,452字节；Agent amd64 6,154,248字节、arm64 5,561,310字节。Windows打包初始执行位缺失，已统一包内目录/二进制/安装脚本755、其余文件644并重算SHA256SUMS。核验三包哈希、ELF机器架构、脚本LF、Agent辅助log-reader及配置示例、Server 083迁移与最新前端入口通过。未创建远端tag/Release、未推送镜像或部署，未Linux实机执行；本地stage和打包脚本保留用于溯源。

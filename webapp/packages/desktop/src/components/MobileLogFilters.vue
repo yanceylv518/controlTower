@@ -83,8 +83,8 @@ function applyFilters() {
 .mobile-search .el-input { flex:1;min-width:0; }
 .mobile-log-filters :deep(.el-input__inner) { font-size:14px; }
 .mobile-log-filters :deep(.el-input__wrapper),.mobile-log-filters .el-button { min-height:36px; }
-.mobile-filter-actions { display:flex;gap:8px;margin-top:6px;align-items:center; }
-.mobile-filter-actions .compact-date-range { flex:1;min-width:0; }
+.mobile-filter-actions { display:grid;grid-template-columns:minmax(0,1fr) 36px 36px;gap:6px 8px;margin-top:6px;align-items:center; }
+.mobile-filter-actions .compact-date-range { grid-column:1 / -1;min-width:0; }
 .mobile-filter-actions :deep(.compact-date-trigger) { height:36px;padding-right:8px;font-size:13px; }
 .mobile-filter-actions .el-button { margin:0;padding:8px; }
 .filter-count { display:inline-grid;place-items:center;min-width:18px;height:18px;margin-left:4px;border-radius:9px;background:#edf2ff;color:#315edb; }

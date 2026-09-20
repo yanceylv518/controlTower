@@ -52,7 +52,13 @@ function inputTime(value: Date | undefined) {
 
 function toInputValue(value: Date | undefined) {
   if (!validDate(value)) return ''
-  return inputDate(value) + 'T' + inputTime(value)
+  return inputDate(value) + 'T' + inputTime(value) + ':' + two(value.getSeconds())
+}
+
+function updateDraftPart(edge: 'start' | 'end', part: 'date' | 'time', value: string) {
+  const draft = edge === 'start' ? draftStart : draftEnd
+  const [date = '', time = ''] = draft.value.split('T')
+  draft.value = part === 'date' ? `${value}T${time}` : `${date}T${value}`
 }
 
 function triggerText(value: Date | undefined) {
@@ -64,10 +70,7 @@ function triggerText(value: Date | undefined) {
 const label = computed(() => {
   if (!start.value && !end.value) return '日期范围'
   if (props.compact) {
-    const from = inputDate(start.value), to = inputDate(end.value)
-    const today = inputDate(new Date())
-    if (from === today && to === today) return '今天'
-    return from === to ? from.slice(5) : `${from.slice(5)} ~ ${to.slice(5)}`
+    return toInputValue(start.value).slice(5).replace('T', ' ') + ' ~ ' + toInputValue(end.value).slice(5).replace('T', ' ')
   }
   return triggerText(start.value) + ' ~ ' + triggerText(end.value)
 })
@@ -79,16 +82,17 @@ function syncDraft() {
 
 // 严格按本地时间解析 datetime-local，避免浏览器对非法日期自动进位。
 function parseInput(value: string): Date | undefined {
-  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(value)
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(value)
   if (!match) return undefined
-  const [, yearText, monthText, dayText, hourText, minuteText] = match
+  const [, yearText, monthText, dayText, hourText, minuteText, secondText = '0'] = match
   const year = Number(yearText)
   const month = Number(monthText)
   const day = Number(dayText)
   const hour = Number(hourText)
   const minute = Number(minuteText)
-  const parsed = new Date(year, month - 1, day, hour, minute, 0, 0)
-  return parsed.getFullYear() === year && parsed.getMonth() === month - 1 && parsed.getDate() === day && parsed.getHours() === hour && parsed.getMinutes() === minute ? parsed : undefined
+  const second = Number(secondText)
+  const parsed = new Date(year, month - 1, day, hour, minute, second, 0)
+  return parsed.getFullYear() === year && parsed.getMonth() === month - 1 && parsed.getDate() === day && parsed.getHours() === hour && parsed.getMinutes() === minute && parsed.getSeconds() === second ? parsed : undefined
 }
 
 function updatePosition() {
@@ -241,10 +245,17 @@ onUnmounted(() => {
 
     <Teleport to="body">
       <div v-if="open" ref="popover" class="compact-date-popover" :style="popoverStyle" role="dialog" aria-label="日期范围">
-        <div class="compact-date-fields">
-          <label class="compact-date-field"><span>开始时间</span><input v-model="draftStart" class="compact-date-input" type="datetime-local" step="60" aria-label="开始时间" /></label>
+        <div v-if="compact" class="compact-split-fields">
+          <fieldset v-for="edge in (['start', 'end'] as const)" :key="edge">
+            <legend>{{ edge === 'start' ? '开始时间' : '结束时间' }}</legend>
+            <input class="compact-date-input" type="date" :aria-label="edge === 'start' ? '开始日期' : '结束日期'" :value="(edge === 'start' ? draftStart : draftEnd).split('T')[0]" @input="updateDraftPart(edge, 'date', ($event.target as HTMLInputElement).value)" />
+            <input class="compact-date-input" type="time" step="1" :aria-label="edge === 'start' ? '开始时分秒' : '结束时分秒'" :value="(edge === 'start' ? draftStart : draftEnd).split('T')[1]" @input="updateDraftPart(edge, 'time', ($event.target as HTMLInputElement).value)" />
+          </fieldset>
+        </div>
+        <div v-else class="compact-date-fields">
+          <label class="compact-date-field"><span>开始时间</span><input v-model="draftStart" class="compact-date-input" type="datetime-local" step="1" aria-label="开始时间" /></label>
           <span class="compact-date-separator" aria-hidden="true">~</span>
-          <label class="compact-date-field"><span>结束时间</span><input v-model="draftEnd" class="compact-date-input" type="datetime-local" step="60" aria-label="结束时间" /></label>
+          <label class="compact-date-field"><span>结束时间</span><input v-model="draftEnd" class="compact-date-input" type="datetime-local" step="1" aria-label="结束时间" /></label>
         </div>
         <p v-if="error" class="compact-date-error" role="alert">{{ error }}</p>
         <div class="compact-date-presets">
@@ -327,6 +338,10 @@ onUnmounted(() => {
 }
 .compact-date-fields { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 10px; align-items: end; }
 .compact-date-field { display: block; min-width: 0; }
+ .compact-split-fields { display:grid;gap:12px; }
+ .compact-split-fields fieldset { display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:8px;margin:0;padding:0;border:0;min-width:0; }
+ .compact-split-fields legend { margin-bottom:6px;font-size:12px;color:var(--ct-ink-2); }
+ .compact-split-fields input { width:100%;min-width:0; }
 .compact-date-field > span { display: block; margin-bottom: 5px; color: var(--ct-ink-3); font-size: 11px; }
 .compact-date-input {
   width: 100%;

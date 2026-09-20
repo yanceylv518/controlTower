@@ -180,9 +180,10 @@ const identityColorsSource = readFileSync(
 // rc35 日期组件的快捷项、确认提交和边界行为必须独立于 Element Plus。
 test('compact date picker follows the rc35 interaction contract', () => {
   assert.doesNotMatch(datePickerSource, /<el-/)
-  // rc35 每端只使用一个 datetime-local 输入，避免回退到双月面板或四个拆分控件。
+  // 桌面保留 datetime-local；手机明确展示日期和秒级时间。
   assert.equal((datePickerSource.match(/type="datetime-local"/g) || []).length, 2)
-  assert.doesNotMatch(datePickerSource, /type="date"|type="time"/)
+  assert.match(datePickerSource, /v-if="compact" class="compact-split-fields"/)
+  assert.match(datePickerSource, /type="time" step="1"/)
   for (const label of ['今天', '近 7 天', '本周', '近 30 天', '本月']) {
     assert.match(datePickerSource, new RegExp(`label: '${label}'`))
   }
