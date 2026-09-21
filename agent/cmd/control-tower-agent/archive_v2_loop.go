@@ -89,7 +89,9 @@ func (v *archiveV2Runner) step(ctx context.Context, w atomicArchiveWorker, cfg c
 			var progress logarchive.BatchResult
 			progress, err = w.ProgressV2(checkCtx, cfg.LogArchiveIdentity)
 			if errors.Is(err, logarchive.ErrWriterLegacyData) {
-				if _, supported := w.(wholeArchiveWorker); supported { err = nil }
+				if _, supported := w.(wholeArchiveWorker); supported {
+					err = nil
+				}
 			}
 			if err == nil {
 				setArchiveV2Progress(st, progress)
@@ -176,7 +178,19 @@ func archiveWriterError(err error) string {
 // Polling runs concurrently with the writer. Never share mutable status
 // pointers or slices across that boundary (including after publication).
 func cloneArchiveStatus(st ac.Status) ac.Status {
-	if st.Workflow != nil { value := *st.Workflow; value.Issues=append([]af.WorkflowIssue(nil),st.Workflow.Issues...); st.Workflow = &value }
+	if st.PrepareIdentity != nil {
+		value := *st.PrepareIdentity
+		st.PrepareIdentity = &value
+	}
+	if st.Prepared != nil {
+		value := *st.Prepared
+		st.Prepared = &value
+	}
+	if st.Workflow != nil {
+		value := *st.Workflow
+		value.Issues = append([]af.WorkflowIssue(nil), st.Workflow.Issues...)
+		st.Workflow = &value
+	}
 	if st.Reconcile != nil {
 		value := *st.Reconcile
 		st.Reconcile = &value

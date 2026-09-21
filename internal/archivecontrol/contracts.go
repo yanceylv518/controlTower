@@ -11,22 +11,24 @@ import (
 var ErrConflict = errors.New("archive_config_conflict")
 
 type Config struct {
-	FullHistory bool `json:"full_history,omitempty"`
-	HistoryImmutable bool `json:"history_immutable,omitempty"`
-	ReconcileID     string `json:"reconcile_id,omitempty"`
-	ReconcileDate   string `json:"reconcile_date,omitempty"`
-	Version         int64  `json:"version"`
-	AgentID         string `json:"agent_id"`
-	InstanceID      string `json:"instance_id"`
-	Running         bool   `json:"running"`
-	BatchSize       int    `json:"batch_size"`
-	IntervalSeconds int    `json:"interval_seconds"`
-	DelaySeconds    int    `json:"delay_seconds"`
+	FullHistory      bool   `json:"full_history,omitempty"`
+	HistoryImmutable bool   `json:"history_immutable,omitempty"`
+	ReconcileID      string `json:"reconcile_id,omitempty"`
+	ReconcileDate    string `json:"reconcile_date,omitempty"`
+	Version          int64  `json:"version"`
+	AgentID          string `json:"agent_id"`
+	InstanceID       string `json:"instance_id"`
+	Running          bool   `json:"running"`
+	BatchSize        int    `json:"batch_size"`
+	IntervalSeconds  int    `json:"interval_seconds"`
+	DelaySeconds     int    `json:"delay_seconds"`
 }
 
 func Default() Config { return Config{BatchSize: 500, IntervalSeconds: 30, DelaySeconds: 300} }
 func (c Config) Validate() bool {
-	if c.FullHistory && (c.ReconcileID!="" || c.ReconcileDate!="") { return false }
+	if c.FullHistory && (c.ReconcileID != "" || c.ReconcileDate != "") {
+		return false
+	}
 	if c.ReconcileID != "" || c.ReconcileDate != "" {
 		d, err := time.ParseInLocation("2006-01-02", c.ReconcileDate, time.FixedZone("Beijing", 28800))
 		if err != nil || len(c.ReconcileID) != 32 || !d.AddDate(0, 0, 1).Before(time.Now().Add(-time.Duration(c.DelaySeconds)*time.Second)) {
@@ -47,7 +49,13 @@ type Reconciliation struct {
 }
 
 type Status struct {
-	Workflow *archivecontract.WorkflowStatus `json:"workflow,omitempty"`
+	PreparedToken      string                            `json:"prepared_token,omitempty"`
+	PreparePhase       string                            `json:"prepare_phase,omitempty"`
+	AutoPrepare        bool                              `json:"auto_prepare,omitempty"`
+	PrepareDiscovered  bool                              `json:"prepare_discovered,omitempty"`
+	PrepareIdentity    *archivecontract.Identity         `json:"prepare_identity,omitempty"`
+	Prepared           *archivecontract.Registration     `json:"prepared,omitempty"`
+	Workflow           *archivecontract.WorkflowStatus   `json:"workflow,omitempty"`
 	Reconcile          *archivecontract.ReconcileStatus  `json:"reconcile,omitempty"`
 	Seal               *archivecontract.SealStatus       `json:"seal,omitempty"`
 	Backfill           *archivecontract.BackfillStatus   `json:"backfill,omitempty"`
@@ -71,7 +79,25 @@ type Status struct {
 }
 
 func (s Status) Validate() bool {
-	if s.Workflow != nil && (s.Foundation == nil || !s.Foundation.SupportsWorkflow() || s.Workflow.Validate() != nil) { return false }
+	switch s.PreparePhase {
+	case "", "checking", "waiting_authorization", "waiting_lease", "migrating", "registering", "failed":
+	default:
+		return false
+	}
+	if s.PrepareIdentity != nil && (!s.AutoPrepare || s.PrepareIdentity.Validate() != nil) {
+		return false
+	}
+	if s.Prepared != nil && (!s.AutoPrepare || s.Prepared.Validate() != nil) {
+		return false
+	}
+	if s.Prepared != nil {
+		if _, err := archivecontract.IDBytes(s.PreparedToken); err != nil {
+			return false
+		}
+	}
+	if s.Workflow != nil && (s.Foundation == nil || !s.Foundation.SupportsWorkflow() || s.Workflow.Validate() != nil) {
+		return false
+	}
 	if s.Reconcile != nil && (s.Foundation == nil || !s.Foundation.SupportsReconcile() || s.Reconcile.Validate() != nil || s.Reconcile.WriterEpoch != s.Foundation.WriterEpoch) {
 		return false
 	}
@@ -138,6 +164,10 @@ type Target struct {
 	SeenAt     time.Time `json:"seen_at"`
 }
 type Response struct {
+	PrepareError      string                          `json:"prepare_error,omitempty"`
+	PrepareToken      string                          `json:"prepare_token,omitempty"`
+	Prepare           *archivecontract.Identity       `json:"prepare,omitempty"`
+	PreparedAccepted  bool                            `json:"prepared_accepted,omitempty"`
 	ReconcileTask     *archivecontract.ReconcileTask  `json:"reconcile_task,omitempty"`
 	ReconcileAccepted bool                            `json:"reconcile_accepted,omitempty"`
 	SealTask          *archivecontract.SealTask       `json:"seal_task,omitempty"`

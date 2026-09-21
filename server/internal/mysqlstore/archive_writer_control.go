@@ -30,11 +30,19 @@ func archiveLeaseLive(ctx context.Context, tx *sql.Tx, lease sql.NullTime) (bool
 // an administrator's request. A foundation-only Agent cannot start the writer.
 func archiveWriterTarget(ctx context.Context, tx *sql.Tx, site string, active []byte, config ac.Config) error {
 	var raw []byte
-	if err := tx.QueryRowContext(ctx, `SELECT foundation_json FROM log_archive_targets WHERE instance_id=? AND agent_id=? AND configured=1 AND seen_at>UTC_TIMESTAMP()-INTERVAL 90 SECOND`, config.InstanceID, config.AgentID).Scan(&raw); err != nil {
+	var automatic bool
+	if err := tx.QueryRowContext(ctx, `SELECT foundation_json,auto_prepare FROM log_archive_targets WHERE instance_id=? AND agent_id=? AND configured=1 AND seen_at>UTC_TIMESTAMP()-INTERVAL 90 SECOND`, config.InstanceID, config.AgentID).Scan(&raw, &automatic); err != nil {
 		return ac.ErrConflict
 	}
+	// Starting a freshly restarted automatic Agent authorizes preparation;
+	// actual writes still require a verified Foundation and writer grant.
+	if automatic && len(raw) == 0 {
+		return nil
+	}
 	var foundation af.FoundationStatus
-	if config.FullHistory && (json.Unmarshal(raw, &foundation) != nil || !foundation.SupportsWorkflow()) { return ac.ErrConflict }
+	if config.FullHistory && (json.Unmarshal(raw, &foundation) != nil || !foundation.SupportsWorkflow()) {
+		return ac.ErrConflict
+	}
 	if json.Unmarshal(raw, &foundation) != nil || foundation.Validate() != nil || !archiveAtomicWriter(foundation) {
 		return ac.ErrConflict
 	}
@@ -71,7 +79,9 @@ func archiveWriterPoll(ctx context.Context, tx *sql.Tx, out ac.Response, st, obs
 		}
 	}
 	grant := atomic && enabled && out.Config.Running && out.Config.ReconcileID == "" && st.Configured && st.AppliedVersion == out.Config.Version
-	if out.Config.FullHistory && !st.Foundation.SupportsWorkflow() { grant = false }
+	if out.Config.FullHistory && !st.Foundation.SupportsWorkflow() {
+		grant = false
+	}
 	if grant {
 		bootstrapRetry := session == st.Session && live && st.Foundation.WriterEpoch < epoch
 		if !bootstrapRetry {

@@ -142,14 +142,26 @@ func (s Store) UpdateLogArchive(ctx context.Context, site string, c ac.Config, a
 	if c.Version != prev.Version {
 		return ac.ErrConflict
 	}
-	if c.FullHistory && (len(active)==0 || c.ReconcileID!="") { return ac.ErrConflict }
-	if prev.FullHistory && !c.FullHistory { return ac.ErrConflict }
-	if prev.Running && c.HistoryImmutable!=prev.HistoryImmutable { return ac.ErrConflict }
-	if c.HistoryImmutable!=prev.HistoryImmutable && observed.Workflow!=nil && (observed.Workflow.Phase=="verify" || observed.Workflow.Phase=="seal") { return ac.ErrConflict }
+	if c.FullHistory && (len(active) == 0 || c.ReconcileID != "") {
+		return ac.ErrConflict
+	}
+	if prev.FullHistory && !c.FullHistory {
+		return ac.ErrConflict
+	}
+	if prev.Running && c.HistoryImmutable != prev.HistoryImmutable {
+		return ac.ErrConflict
+	}
+	if c.HistoryImmutable != prev.HistoryImmutable && observed.Workflow != nil && (observed.Workflow.Phase == "verify" || observed.Workflow.Phase == "seal") {
+		return ac.ErrConflict
+	}
 	if c.FullHistory && !prev.FullHistory {
 		var pending int
-		if err=tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM archive_tasks WHERE dataset_id=? AND status IN ('running','retry_wait')`, active).Scan(&pending);err!=nil{return err}
-		if pending!=0{return ac.ErrConflict}
+		if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM archive_tasks WHERE dataset_id=? AND status IN ('running','retry_wait')`, active).Scan(&pending); err != nil {
+			return err
+		}
+		if pending != 0 {
+			return ac.ErrConflict
+		}
 	}
 	changed := c.AgentID != prev.AgentID || c.InstanceID != prev.InstanceID
 	if c.ReconcileID != "" && c.ReconcileID != prev.ReconcileID && (changed || prev.Running || observed.State != "paused" || observed.AppliedVersion != prev.Version || !observed.SupportsDailyCheck) {
@@ -238,6 +250,12 @@ func (s Store) PollLogArchive(ctx context.Context, instance string, st ac.Status
 	if err != nil {
 		return out, err
 	}
+	if handled, e := archiveAutoPreparePoll(ctx, tx, &out, instance, st, active, enabled, session, lease); handled {
+		if e != nil {
+			return out, e
+		}
+		return out, tx.Commit()
+	}
 	if err = archiveFoundationPoll(ctx, tx, site, active, st); err != nil {
 		return out, err
 	}
@@ -268,7 +286,7 @@ func (s Store) PollLogArchive(ctx context.Context, instance string, st ac.Status
 		foundation = string(b)
 	}
 	// Advertise every member; only the configured executor may update site progress.
-	_, err = tx.ExecContext(ctx, `INSERT INTO log_archive_targets(instance_id,agent_id,configured,seen_at,protocol_version,foundation_json) VALUES(?,?,?,?,?,?) ON DUPLICATE KEY UPDATE configured=VALUES(configured),seen_at=VALUES(seen_at),protocol_version=VALUES(protocol_version),foundation_json=VALUES(foundation_json)`, instance, st.AgentID, st.Configured, now, protocol, foundation)
+	_, err = tx.ExecContext(ctx, `INSERT INTO log_archive_targets(instance_id,agent_id,configured,seen_at,protocol_version,foundation_json,auto_prepare) VALUES(?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE configured=VALUES(configured),seen_at=VALUES(seen_at),protocol_version=VALUES(protocol_version),foundation_json=VALUES(foundation_json),auto_prepare=VALUES(auto_prepare)`, instance, st.AgentID, st.Configured, now, protocol, foundation, st.AutoPrepare)
 	if err != nil {
 		return out, err
 	}
