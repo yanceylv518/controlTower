@@ -77,6 +77,7 @@ type UserSetting struct {
 }
 
 type Job struct {
+	MoneySnapshot     *MoneySnapshot `json:"money_snapshot,omitempty"`
 	ID                string    `json:"id"`
 	BillNo            string    `json:"bill_no,omitempty"`
 	RequestKey        string    `json:"-"`
@@ -421,7 +422,13 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 		}
 	}
 	quotaPerUnit := defaultQuotaPerUnit
-	if source, ok := r.Source.(SnapshotSource); ok {
+	money, moneyErr := r.jobMoneySnapshot(ctx, job)
+	if moneyErr != nil {
+		return moneyErr
+	}
+	if money != nil {
+		quotaPerUnit = money.QuotaPerUnit
+	} else if source, ok := r.Source.(SnapshotSource); ok {
 		raw, snapshotErr := source.RatioSnapshot(ctx, job.InstanceID)
 		if snapshotErr != nil {
 			return snapshotErr
@@ -631,7 +638,18 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 }
 
 func (r JobRunner) publishJob(ctx context.Context, job Job) error {
-	if source, ok := r.Source.(SnapshotSource); ok {
+	money, moneyErr := r.jobMoneySnapshot(ctx, job)
+	if moneyErr != nil {
+		return moneyErr
+	}
+	if money != nil {
+		job.MoneySnapshot = money
+		if store, ok := r.Store.(anomalyActualAmountStore); ok {
+			if err := store.UpdateBillingAnomalyActualAmounts(ctx, job.ID, money.QuotaPerUnit); err != nil {
+				return err
+			}
+		}
+	} else if source, ok := r.Source.(SnapshotSource); ok {
 		if store, ok := r.Store.(SnapshotStore); ok {
 			raw, err := source.RatioSnapshot(ctx, job.InstanceID)
 			if err != nil {

@@ -411,6 +411,9 @@ func (h *PassthroughHandler) RatioSnapshotForBilling(ctx context.Context, site s
 	// price conversion nevertheless needs the effective QuotaPerUnit value.
 	if strings.TrimSpace(values["QuotaPerUnit"]) == "" {
 		values["QuotaPerUnit"] = "500000"
+		values["ct.quota_per_unit_source"] = "newapi_builtin_default_500000"
+	} else {
+		values["ct.quota_per_unit_source"] = "newapi_options"
 	}
 	raw, err := json.Marshal(values)
 	return string(raw), err

@@ -133,7 +133,7 @@ func allowAdminRequest(u storage.User, r *http.Request) bool {
 	if path == "operations-people" {
 		return HasPermission(u, "settings.manage")
 	}
-	if path == "log-archives" || strings.HasPrefix(path, "log-archives/") {
+	if path == "log-archives" || strings.HasPrefix(path, "log-archives/") || path == "archive-datasets" || strings.HasPrefix(path, "archive-datasets/") {
 		return HasPermission(u, "archive.manage")
 	}
 	if strings.HasPrefix(path, "container-log-") {

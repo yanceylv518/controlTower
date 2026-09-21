@@ -2,6 +2,7 @@ package mysqlstore
 
 import (
 	"context"
+	af "controltower/internal/archivecontract"
 	ac "controltower/internal/archivecontrol"
 	"crypto/rand"
 	"database/sql"
@@ -23,12 +24,14 @@ func (s Store) ListLogArchives(ctx context.Context, site string) ([]ac.Item, err
 		return []ac.Item{}, nil
 	}
 	var cb, sb string
+	var active []byte
 	var seen sql.NullTime
-	err := s.db.QueryRowContext(ctx, `SELECT config_json,status_json,seen_at FROM site_log_archive_control WHERE site_id=?`, site).Scan(&cb, &sb, &seen)
+	err := s.db.QueryRowContext(ctx, `SELECT config_json,status_json,seen_at,active_dataset_id,required_protocol_version FROM site_log_archive_control WHERE site_id=?`, site).Scan(&cb, &sb, &seen, &active, &v.RequiredProtocolVersion)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
 	if err == nil {
+		v.ActiveDatasetID = hex.EncodeToString(active)
 		if json.Unmarshal([]byte(cb), &v.Config) != nil || json.Unmarshal([]byte(sb), &v.Status) != nil {
 			return nil, errors.New("invalid archive state")
 		}
@@ -53,7 +56,7 @@ func (s Store) ListLogArchives(ctx context.Context, site string) ([]ac.Item, err
 
 func (s Store) LatestLogArchiveMonth(ctx context.Context, site string) (string, error) {
 	var date string
-	err := s.db.QueryRowContext(ctx, `SELECT log_date FROM site_log_archive_days WHERE site_id=? AND log_date BETWEEN '0001-01-01' AND '9999-12-31' ORDER BY log_date DESC LIMIT 1`, site).Scan(&date)
+	err := s.db.QueryRowContext(ctx, `SELECT log_date FROM site_log_archive_days WHERE site_id=? AND NOT EXISTS (SELECT 1 FROM site_log_archive_control WHERE site_id=? AND active_dataset_id IS NOT NULL) AND log_date BETWEEN '0001-01-01' AND '9999-12-31' ORDER BY log_date DESC LIMIT 1`, site, site).Scan(&date)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
@@ -72,7 +75,7 @@ func (s Store) ListLogArchiveDays(ctx context.Context, site, month string) ([]ac
 	if err != nil {
 		return nil, errors.New("invalid archive month")
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT log_date,archived_rows,request_rows,error_rows,last_log_id,verified_at FROM site_log_archive_days WHERE site_id=? AND log_date>=? AND log_date<? ORDER BY log_date DESC`, site, start.Format("2006-01-02"), start.AddDate(0, 1, 0).Format("2006-01-02"))
+	rows, err := s.db.QueryContext(ctx, `SELECT log_date,archived_rows,request_rows,error_rows,last_log_id,verified_at FROM site_log_archive_days WHERE site_id=? AND NOT EXISTS (SELECT 1 FROM site_log_archive_control WHERE site_id=? AND active_dataset_id IS NOT NULL) AND log_date>=? AND log_date<? ORDER BY log_date DESC`, site, site, start.Format("2006-01-02"), start.AddDate(0, 1, 0).Format("2006-01-02"))
 	if err != nil {
 		return nil, err
 	}
@@ -128,8 +131,25 @@ func (s Store) UpdateLogArchive(ctx context.Context, site string, c ac.Config, a
 	if err != nil {
 		return err
 	}
+	active, err := archiveFoundationBinding(ctx, tx, site)
+	if err != nil {
+		return err
+	}
+	// Versioned reconciliation is not available until the verification phase.
+	if len(active) != 0 && c.ReconcileID != "" {
+		return ac.ErrConflict
+	}
 	if c.Version != prev.Version {
 		return ac.ErrConflict
+	}
+	if c.FullHistory && (len(active)==0 || c.ReconcileID!="") { return ac.ErrConflict }
+	if prev.FullHistory && !c.FullHistory { return ac.ErrConflict }
+	if prev.Running && c.HistoryImmutable!=prev.HistoryImmutable { return ac.ErrConflict }
+	if c.HistoryImmutable!=prev.HistoryImmutable && observed.Workflow!=nil && (observed.Workflow.Phase=="verify" || observed.Workflow.Phase=="seal") { return ac.ErrConflict }
+	if c.FullHistory && !prev.FullHistory {
+		var pending int
+		if err=tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM archive_tasks WHERE dataset_id=? AND status IN ('running','retry_wait')`, active).Scan(&pending);err!=nil{return err}
+		if pending!=0{return ac.ErrConflict}
 	}
 	changed := c.AgentID != prev.AgentID || c.InstanceID != prev.InstanceID
 	if c.ReconcileID != "" && c.ReconcileID != prev.ReconcileID && (changed || prev.Running || observed.State != "paused" || observed.AppliedVersion != prev.Version || !observed.SupportsDailyCheck) {
@@ -138,8 +158,14 @@ func (s Store) UpdateLogArchive(ctx context.Context, site string, c ac.Config, a
 	if c.ReconcileID != "" && c.ReconcileID == prev.ReconcileID && c.ReconcileDate != prev.ReconcileDate {
 		return ac.ErrConflict
 	}
-	if changed && lease.Valid && lease.Time.After(time.Now().UTC()) {
-		return ac.ErrConflict
+	if changed {
+		live, err := archiveLeaseLive(ctx, tx, lease)
+		if err != nil {
+			return err
+		}
+		if live {
+			return ac.ErrConflict
+		}
 	}
 	if c.Running {
 		var ready bool
@@ -148,6 +174,11 @@ func (s Store) UpdateLogArchive(ctx context.Context, site string, c ac.Config, a
 		}
 		if err := tx.QueryRowContext(ctx, `SELECT configured FROM log_archive_targets WHERE instance_id=? AND agent_id=? AND seen_at>UTC_TIMESTAMP()-INTERVAL 90 SECOND`, c.InstanceID, c.AgentID).Scan(&ready); err != nil || !ready {
 			return ac.ErrConflict
+		}
+		if len(active) != 0 {
+			if err = archiveWriterTarget(ctx, tx, site, active, c); err != nil {
+				return err
+			}
 		}
 	}
 	c.Version++
@@ -161,6 +192,15 @@ func (s Store) UpdateLogArchive(ctx context.Context, site string, c ac.Config, a
 	}
 	if err != nil {
 		return err
+	}
+	if len(active) != 0 {
+		state := "paused"
+		if c.Running {
+			state = "active"
+		}
+		if _, err = tx.ExecContext(ctx, `UPDATE archive_datasets SET lifecycle_state=?,config_revision=config_revision+1,updated_at=UTC_TIMESTAMP(6) WHERE dataset_id=?`, state, active); err != nil {
+			return err
+		}
 	}
 	raw := make([]byte, 16)
 	if _, err = rand.Read(raw); err != nil {
@@ -187,17 +227,63 @@ func (s Store) PollLogArchive(ctx context.Context, instance string, st ac.Status
 	if err = ensureArchive(ctx, tx, site); err != nil {
 		return out, err
 	}
-	c, _, session, lease, err := archiveRow(ctx, tx, site)
+	c, observed, session, lease, err := archiveRow(ctx, tx, site)
 	if err != nil {
 		return out, err
 	}
 	out.Config = c
 	out.SiteID = site
 	now := time.Now().UTC()
-	// Advertise every member; only the configured executor may update site progress.
-	_, err = tx.ExecContext(ctx, `INSERT INTO log_archive_targets(instance_id,agent_id,configured,seen_at) VALUES(?,?,?,?) ON DUPLICATE KEY UPDATE configured=VALUES(configured),seen_at=VALUES(seen_at)`, instance, st.AgentID, st.Configured, now)
+	active, err := archiveFoundationBinding(ctx, tx, site)
 	if err != nil {
 		return out, err
+	}
+	if err = archiveFoundationPoll(ctx, tx, site, active, st); err != nil {
+		return out, err
+	}
+	if st.Foundation != nil && st.Foundation.SupportsAtomicWriter() {
+		if _, err = af.IDBytes(st.Session); err != nil {
+			return out, err
+		}
+	}
+	var epoch uint64
+	if len(active) != 0 {
+		if err = tx.QueryRowContext(ctx, `SELECT writer_epoch,UTC_TIMESTAMP(6) FROM site_log_archive_control WHERE site_id=?`, site).Scan(&epoch, &now); err != nil {
+			return out, err
+		}
+		if st.Foundation != nil && st.Foundation.WriterEpoch != 0 {
+			if st.Foundation.WriterEpoch > epoch {
+				return out, ac.ErrConflict
+			}
+			if st.Session != session {
+				return out, tx.Commit()
+			}
+		}
+	}
+	protocol := 1
+	var foundation any
+	if st.Foundation != nil {
+		protocol = st.Foundation.ProtocolVersion
+		b, _ := json.Marshal(st.Foundation)
+		foundation = string(b)
+	}
+	// Advertise every member; only the configured executor may update site progress.
+	_, err = tx.ExecContext(ctx, `INSERT INTO log_archive_targets(instance_id,agent_id,configured,seen_at,protocol_version,foundation_json) VALUES(?,?,?,?,?,?) ON DUPLICATE KEY UPDATE configured=VALUES(configured),seen_at=VALUES(seen_at),protocol_version=VALUES(protocol_version),foundation_json=VALUES(foundation_json)`, instance, st.AgentID, st.Configured, now, protocol, foundation)
+	if err != nil {
+		return out, err
+	}
+	if len(active) != 0 {
+		atomic := st.Foundation != nil && archiveAtomicWriter(*st.Foundation)
+		if !atomic {
+			out.Config.Running = false
+		}
+		if st.Foundation == nil || c.InstanceID != instance || c.AgentID != st.AgentID {
+			return out, tx.Commit()
+		}
+		if st.AppliedVersion > c.Version {
+			return out, ac.ErrConflict
+		}
+		return archiveWriterPoll(ctx, tx, out, st, observed, enabled, session, lease, epoch, now, atomic)
 	}
 	if c.InstanceID != instance || c.AgentID != st.AgentID || (session != "" && session != st.Session && lease.Valid && lease.Time.After(now)) {
 		return out, tx.Commit()
@@ -206,8 +292,9 @@ func (s Store) PollLogArchive(ctx context.Context, instance string, st ac.Status
 		return out, ac.ErrConflict
 	}
 	if st.SiteID != site {
-		st.AppliedVersion = 0
-		st.State = "waiting"
+		// Bootstrap the authoritative site identity without consuming receipts
+		// or granting execution. Legacy agents echo SiteID on their next poll.
+		return out, tx.Commit()
 	}
 	out.Granted = enabled && c.Running && st.Configured
 	var until any = nil

@@ -2,6 +2,7 @@ package config
 
 import (
 	"bufio"
+	"controltower/internal/archivecontract"
 	"errors"
 	"fmt"
 	"os"
@@ -19,6 +20,7 @@ type Config struct {
 	LogArchiveEnabled              bool
 	LogArchiveManaged              bool
 	LogArchiveDSN                  string
+	LogArchiveIdentity             archivecontract.Identity
 	LogArchiveBatchSize            int
 	LogArchiveIntervalSeconds      int
 	LogArchiveDelaySeconds         int
@@ -96,6 +98,7 @@ func LoadFromMap(values map[string]string) (Config, error) {
 		LogArchiveEnabled:              boolOrDefault(values, "CT_LOG_ARCHIVE_ENABLED", false),
 		LogArchiveManaged:              boolOrDefault(values, "CT_LOG_ARCHIVE_MANAGED", false),
 		LogArchiveDSN:                  values["CT_LOG_ARCHIVE_DSN"],
+		LogArchiveIdentity:             archivecontract.Identity{SiteID: values["CT_LOG_ARCHIVE_SITE_ID"], DatasetID: values["CT_LOG_ARCHIVE_DATASET_ID"], SourceGenerationID: values["CT_LOG_ARCHIVE_GENERATION_ID"]},
 		LogArchiveBatchSize:            intOrDefault(values, "CT_LOG_ARCHIVE_BATCH_SIZE", 500),
 		LogArchiveIntervalSeconds:      intOrDefault(values, "CT_LOG_ARCHIVE_INTERVAL_SECONDS", 30),
 		LogArchiveDelaySeconds:         intOrDefault(values, "CT_LOG_ARCHIVE_DELAY_SECONDS", 300),
@@ -133,6 +136,11 @@ func LoadFromMap(values map[string]string) (Config, error) {
 
 	if !cfg.LogCollectEnabled && values["CT_CHANNEL_SNAPSHOT_ENABLED"] == "" {
 		cfg.ChannelSnapshotEnabled = false
+	}
+	if cfg.LogArchiveIdentity != (archivecontract.Identity{}) {
+		if cfg.LogArchiveIdentity.Validate() != nil || !cfg.LogArchiveManaged || !cfg.LogArchiveEnabled {
+			return Config{}, errors.New("archive dataset identity requires valid site/dataset/generation and enabled managed archival")
+		}
 	}
 	if cfg.LogArchiveEnabled {
 		if cfg.LogArchiveDelaySeconds < 60 || cfg.LogArchiveDelaySeconds > 86400 {
@@ -227,6 +235,7 @@ func envMap() map[string]string {
 		"CT_LOG_ARCHIVE_ENABLED",
 		"CT_LOG_ARCHIVE_MANAGED",
 		"CT_LOG_ARCHIVE_DSN",
+		"CT_LOG_ARCHIVE_SITE_ID", "CT_LOG_ARCHIVE_DATASET_ID", "CT_LOG_ARCHIVE_GENERATION_ID",
 		"CT_LOG_ARCHIVE_BATCH_SIZE",
 		"CT_LOG_ARCHIVE_INTERVAL_SECONDS",
 		"CT_LOG_ARCHIVE_DELAY_SECONDS",

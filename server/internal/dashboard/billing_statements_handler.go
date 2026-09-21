@@ -21,7 +21,10 @@ type BillingStatementsStore interface {
 	BillingStatementUpstream(context.Context, string, int64) (billing.Upstream, error)
 }
 
-type BillingStatementsHandler struct{ Store BillingStatementsStore }
+type BillingStatementsHandler struct {
+	Store  BillingStatementsStore
+	Source BillingRatioSource
+}
 
 func (h BillingStatementsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -104,6 +107,22 @@ func (h BillingStatementsHandler) ServeHTTP(w http.ResponseWriter, r *http.Reque
 	raw += fmt.Sprintf("|pricing:%s|usage:%d", job.PricingSource, job.UsageVersion)
 	sum := sha256.Sum256([]byte(raw))
 	job.RequestKey = "statement:" + hex.EncodeToString(sum[:16])
+	if previous, ok := h.Store.(interface {
+		FailedStatementMoneySnapshot(context.Context, string) (*billing.MoneySnapshot, error)
+	}); ok {
+		job.MoneySnapshot, err = previous.FailedStatementMoneySnapshot(r.Context(), job.RequestKey)
+		if err != nil {
+			writeDashboardError(w, 500, "billing_money_snapshot_query_failed")
+			return
+		}
+	}
+	if job.MoneySnapshot == nil && h.Source != nil {
+		job.MoneySnapshot, err = captureBillingMoney(r.Context(), h.Source, job.InstanceID)
+		if err != nil {
+			writeDashboardError(w, 503, "billing_money_snapshot_unavailable")
+			return
+		}
+	}
 	err = h.Store.CreateBillingStatementJob(r.Context(), job, steps, subjectName)
 	if errors.Is(err, billing.ErrStatementDuplicate) {
 		writeDashboardError(w, 409, "billing_statement_duplicate")

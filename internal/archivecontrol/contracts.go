@@ -2,6 +2,7 @@ package archivecontrol
 
 import (
 	"context"
+	"controltower/internal/archivecontract"
 	"errors"
 	"regexp"
 	"time"
@@ -10,6 +11,8 @@ import (
 var ErrConflict = errors.New("archive_config_conflict")
 
 type Config struct {
+	FullHistory bool `json:"full_history,omitempty"`
+	HistoryImmutable bool `json:"history_immutable,omitempty"`
 	ReconcileID     string `json:"reconcile_id,omitempty"`
 	ReconcileDate   string `json:"reconcile_date,omitempty"`
 	Version         int64  `json:"version"`
@@ -23,6 +26,7 @@ type Config struct {
 
 func Default() Config { return Config{BatchSize: 500, IntervalSeconds: 30, DelaySeconds: 300} }
 func (c Config) Validate() bool {
+	if c.FullHistory && (c.ReconcileID!="" || c.ReconcileDate!="") { return false }
 	if c.ReconcileID != "" || c.ReconcileDate != "" {
 		d, err := time.ParseInLocation("2006-01-02", c.ReconcileDate, time.FixedZone("Beijing", 28800))
 		if err != nil || len(c.ReconcileID) != 32 || !d.AddDate(0, 0, 1).Before(time.Now().Add(-time.Duration(c.DelaySeconds)*time.Second)) {
@@ -43,24 +47,46 @@ type Reconciliation struct {
 }
 
 type Status struct {
-	SupportsDailyCheck bool            `json:"supports_daily_check,omitempty"`
-	Reconciliation     *Reconciliation `json:"reconciliation,omitempty"`
-	Days               []Day           `json:"days,omitempty"`
-	SiteID             string          `json:"site_id,omitempty"`
-	AgentID            string          `json:"agent_id"`
-	Session            string          `json:"session"`
-	Configured         bool            `json:"configured"`
-	AppliedVersion     int64           `json:"applied_version"`
-	State              string          `json:"state"`
-	LastID             int64           `json:"last_id,string"`
-	LastSuccess        *time.Time      `json:"last_success,omitempty"`
-	VerifiedAt         *time.Time      `json:"verified_at,omitempty"`
-	VerifiedRows       int             `json:"verified_rows"`
-	LastBatchRows      int             `json:"last_batch_rows"`
-	Error              string          `json:"error"`
+	Workflow *archivecontract.WorkflowStatus `json:"workflow,omitempty"`
+	Reconcile          *archivecontract.ReconcileStatus  `json:"reconcile,omitempty"`
+	Seal               *archivecontract.SealStatus       `json:"seal,omitempty"`
+	Backfill           *archivecontract.BackfillStatus   `json:"backfill,omitempty"`
+	Metrics            *archivecontract.ArchiveMetrics   `json:"metrics,omitempty"`
+	Foundation         *archivecontract.FoundationStatus `json:"foundation,omitempty"`
+	SupportsDailyCheck bool                              `json:"supports_daily_check,omitempty"`
+	Reconciliation     *Reconciliation                   `json:"reconciliation,omitempty"`
+	Days               []Day                             `json:"days,omitempty"`
+	SiteID             string                            `json:"site_id,omitempty"`
+	AgentID            string                            `json:"agent_id"`
+	Session            string                            `json:"session"`
+	Configured         bool                              `json:"configured"`
+	AppliedVersion     int64                             `json:"applied_version"`
+	State              string                            `json:"state"`
+	LastID             int64                             `json:"last_id,string"`
+	LastSuccess        *time.Time                        `json:"last_success,omitempty"`
+	VerifiedAt         *time.Time                        `json:"verified_at,omitempty"`
+	VerifiedRows       int                               `json:"verified_rows"`
+	LastBatchRows      int                               `json:"last_batch_rows"`
+	Error              string                            `json:"error"`
 }
 
 func (s Status) Validate() bool {
+	if s.Workflow != nil && (s.Foundation == nil || !s.Foundation.SupportsWorkflow() || s.Workflow.Validate() != nil) { return false }
+	if s.Reconcile != nil && (s.Foundation == nil || !s.Foundation.SupportsReconcile() || s.Reconcile.Validate() != nil || s.Reconcile.WriterEpoch != s.Foundation.WriterEpoch) {
+		return false
+	}
+	if s.Seal != nil && (s.Foundation == nil || !s.Foundation.SupportsSeal() || s.Seal.Validate() != nil || s.Seal.WriterEpoch != s.Foundation.WriterEpoch) {
+		return false
+	}
+	if s.Backfill != nil && (s.Foundation == nil || !s.Foundation.SupportsBackfill() || s.Backfill.Validate() != nil || s.Backfill.WriterEpoch != s.Foundation.WriterEpoch) {
+		return false
+	}
+	if s.Metrics != nil && (s.Foundation == nil || s.Metrics.Validate() != nil) {
+		return false
+	}
+	if s.Foundation != nil && (s.Foundation.Validate() != nil || len(s.Days) != 0 || s.Reconciliation != nil || s.SiteID != s.Foundation.SiteID) {
+		return false
+	}
 	if v := s.Reconciliation; v != nil {
 		if len(v.ID) != 32 || len(v.Date) != 10 || v.SourceRows < 0 || v.TargetRows < 0 || len(v.Error) > 256 {
 			return false
@@ -92,15 +118,17 @@ func (s Status) Validate() bool {
 }
 
 type Item struct {
-	Days       []Day      `json:"days"`
-	SiteID     string     `json:"site_id"`
-	Targets    []Target   `json:"targets"`
-	InstanceID string     `json:"instance_id"`
-	Name       string     `json:"name"`
-	Enabled    bool       `json:"enabled"`
-	Config     Config     `json:"config"`
-	Status     Status     `json:"status"`
-	SeenAt     *time.Time `json:"seen_at,omitempty"`
+	ActiveDatasetID         string     `json:"active_dataset_id,omitempty"`
+	RequiredProtocolVersion int        `json:"required_protocol_version,omitempty"`
+	Days                    []Day      `json:"days"`
+	SiteID                  string     `json:"site_id"`
+	Targets                 []Target   `json:"targets"`
+	InstanceID              string     `json:"instance_id"`
+	Name                    string     `json:"name"`
+	Enabled                 bool       `json:"enabled"`
+	Config                  Config     `json:"config"`
+	Status                  Status     `json:"status"`
+	SeenAt                  *time.Time `json:"seen_at,omitempty"`
 }
 type Target struct {
 	InstanceID string    `json:"instance_id"`
@@ -110,11 +138,19 @@ type Target struct {
 	SeenAt     time.Time `json:"seen_at"`
 }
 type Response struct {
-	StatusAccepted bool   `json:"status_accepted"`
-	SiteID         string `json:"site_id"`
-	Config         Config `json:"config"`
-	Granted        bool   `json:"granted"`
-	LeaseSeconds   int    `json:"lease_seconds"`
+	ReconcileTask     *archivecontract.ReconcileTask  `json:"reconcile_task,omitempty"`
+	ReconcileAccepted bool                            `json:"reconcile_accepted,omitempty"`
+	SealTask          *archivecontract.SealTask       `json:"seal_task,omitempty"`
+	SealAccepted      bool                            `json:"seal_accepted,omitempty"`
+	BackfillTask      *archivecontract.BackfillTask   `json:"backfill_task,omitempty"`
+	BackfillAccepted  bool                            `json:"backfill_accepted,omitempty"`
+	ArchivePolicy     *archivecontract.CoveragePolicy `json:"archive_policy,omitempty"`
+	WriterGrant       *archivecontract.WriterGrant    `json:"writer_grant,omitempty"`
+	StatusAccepted    bool                            `json:"status_accepted"`
+	SiteID            string                          `json:"site_id"`
+	Config            Config                          `json:"config"`
+	Granted           bool                            `json:"granted"`
+	LeaseSeconds      int                             `json:"lease_seconds"`
 }
 type Store interface {
 	LatestLogArchiveMonth(context.Context, string) (string, error)

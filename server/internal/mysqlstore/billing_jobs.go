@@ -27,6 +27,9 @@ func createBillingJobTx(ctx context.Context, tx *sql.Tx, j billing.Job, steps []
 	if _, err := tx.ExecContext(ctx, `INSERT INTO billing_jobs(id,request_key,instance_id,job_type,user_id,exclude_zero_output,pricing_source,usage_version,range_from,range_to,status,total_steps,requested_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, j.ID, nullBillingRequestKey(j.RequestKey), j.InstanceID, j.JobType, j.UserID, j.ExcludeZeroOutput, j.PricingSource, j.UsageVersion, j.From, j.To, j.Status, j.TotalSteps, j.RequestedBy, j.CreatedAt, j.UpdatedAt); err != nil {
 		return err
 	}
+	if err := bindBillingMoneySnapshot(ctx, tx, j); err != nil {
+		return err
+	}
 	for _, v := range steps {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO billing_job_steps(job_id,step_no,range_from,range_to,status,updated_at) VALUES(?,?,?,?,?,?)`, v.JobID, v.StepNo, v.From, v.To, "pending", j.UpdatedAt); err != nil {
 			return err
@@ -264,6 +267,9 @@ func (s Store) BillingJob(ctx context.Context, id string) (billing.Job, error) {
 	e := s.db.QueryRowContext(ctx, `SELECT id,instance_id,job_type,user_id,exclude_zero_output,pricing_source,usage_version,range_from,range_to,status,total_steps,completed_steps,abnormal_rows,error_message,output_path,requested_by,created_at,updated_at FROM billing_jobs WHERE id=?`, id).Scan(&j.ID, &j.InstanceID, &j.JobType, &j.UserID, &j.ExcludeZeroOutput, &j.PricingSource, &j.UsageVersion, &j.From, &j.To, &j.Status, &j.TotalSteps, &j.CompletedSteps, &j.AbnormalRows, &j.ErrorMessage, &j.OutputPath, &j.RequestedBy, &j.CreatedAt, &j.UpdatedAt)
 	if e == nil {
 		e = s.enrichBillingStatement(ctx, &j)
+	}
+	if e == nil {
+		j.MoneySnapshot, e = s.BillingJobMoneySnapshot(ctx, id)
 	}
 	return j, e
 }

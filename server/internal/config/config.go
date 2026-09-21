@@ -6,49 +6,51 @@ import (
 )
 
 type Config struct {
-	APIOnly                      bool
-	ListenAddr                   string
-	PublicBaseURL                string
-	DatabaseDriver               string
-	DatabaseDSN                  string
-	MigrationPath                string
-	RedisAddr                    string
-	RedisPassword                string
-	AgentToken                   string
-	DashboardToken               string
-	AgentTokenPepper             string
-	SecretKey                    string
-	AggregationIntervalSeconds   int
-	NotificationIntervalSeconds  int
-	AdminUsername                string
-	AdminInitialPassword         string
-	SessionTTLHours              int
-	NotificationMaxAttempts      int
-	CommandExpiryMinutes         int
-	RetentionDetailDays          int
-	RetentionMetric5mDays        int
-	RetentionRuntimeDays         int
-	RetentionHealthHours         int
-	BillingPagePauseMilliseconds int
+	ArchiveReadonlyConnectionsFile string
+	APIOnly                        bool
+	ListenAddr                     string
+	PublicBaseURL                  string
+	DatabaseDriver                 string
+	DatabaseDSN                    string
+	MigrationPath                  string
+	RedisAddr                      string
+	RedisPassword                  string
+	AgentToken                     string
+	DashboardToken                 string
+	AgentTokenPepper               string
+	SecretKey                      string
+	AggregationIntervalSeconds     int
+	NotificationIntervalSeconds    int
+	AdminUsername                  string
+	AdminInitialPassword           string
+	SessionTTLHours                int
+	NotificationMaxAttempts        int
+	CommandExpiryMinutes           int
+	RetentionDetailDays            int
+	RetentionMetric5mDays          int
+	RetentionRuntimeDays           int
+	RetentionHealthHours           int
+	BillingPagePauseMilliseconds   int
 }
 
 func Load(values map[string]string) (Config, error) {
 	cfg := Config{
-		APIOnly:                     boolOrDefault(values, "CT_API_ONLY", false),
-		ListenAddr:                  valueOrDefault(values, "CT_SERVER_LISTEN_ADDR", "0.0.0.0:8080"),
-		PublicBaseURL:               values["CT_PUBLIC_BASE_URL"],
-		DatabaseDriver:              valueOrDefault(values, "CT_DATABASE_DRIVER", "mysql"),
-		DatabaseDSN:                 values["CT_DATABASE_DSN"],
-		MigrationPath:               valueOrDefault(values, "CT_MIGRATION_PATH", "server/migrations/001_init.sql"),
-		RedisAddr:                   values["CT_REDIS_ADDR"],
-		RedisPassword:               values["CT_REDIS_PASSWORD"],
-		AgentToken:                  values["CT_AGENT_TOKEN"],
-		DashboardToken:              values["CT_DASHBOARD_TOKEN"],
-		AgentTokenPepper:            values["CT_AGENT_TOKEN_PEPPER"],
-		SecretKey:                   values["CT_SECRET_KEY"],
-		AggregationIntervalSeconds:  intOrDefault(values, "CT_AGGREGATION_INTERVAL_SECONDS", 60),
-		NotificationIntervalSeconds: intOrDefault(values, "CT_NOTIFICATION_INTERVAL_SECONDS", 30),
-		AdminUsername:               values["CT_ADMIN_USERNAME"], AdminInitialPassword: values["CT_ADMIN_INITIAL_PASSWORD"], SessionTTLHours: intOrDefault(values, "CT_SESSION_TTL_HOURS", 720),
+		ArchiveReadonlyConnectionsFile: values["CT_ARCHIVE_READONLY_CONNECTIONS_FILE"],
+		APIOnly:                        boolOrDefault(values, "CT_API_ONLY", false),
+		ListenAddr:                     valueOrDefault(values, "CT_SERVER_LISTEN_ADDR", "0.0.0.0:8080"),
+		PublicBaseURL:                  values["CT_PUBLIC_BASE_URL"],
+		DatabaseDriver:                 valueOrDefault(values, "CT_DATABASE_DRIVER", "mysql"),
+		DatabaseDSN:                    values["CT_DATABASE_DSN"],
+		MigrationPath:                  valueOrDefault(values, "CT_MIGRATION_PATH", "server/migrations/001_init.sql"),
+		RedisAddr:                      values["CT_REDIS_ADDR"],
+		RedisPassword:                  values["CT_REDIS_PASSWORD"],
+		AgentToken:                     values["CT_AGENT_TOKEN"],
+		DashboardToken:                 values["CT_DASHBOARD_TOKEN"],
+		AgentTokenPepper:               values["CT_AGENT_TOKEN_PEPPER"],
+		SecretKey:                      values["CT_SECRET_KEY"],
+		AggregationIntervalSeconds:     intOrDefault(values, "CT_AGGREGATION_INTERVAL_SECONDS", 60),
+		NotificationIntervalSeconds:    intOrDefault(values, "CT_NOTIFICATION_INTERVAL_SECONDS", 30),
+		AdminUsername:                  values["CT_ADMIN_USERNAME"], AdminInitialPassword: values["CT_ADMIN_INITIAL_PASSWORD"], SessionTTLHours: intOrDefault(values, "CT_SESSION_TTL_HOURS", 720),
 		NotificationMaxAttempts:      intOrDefault(values, "CT_NOTIFICATION_MAX_ATTEMPTS", 8),
 		CommandExpiryMinutes:         intOrDefault(values, "CT_COMMAND_EXPIRY_MINUTES", 10),
 		RetentionDetailDays:          intOrDefault(values, "CT_RETENTION_DETAIL_DAYS", 30),
@@ -92,6 +94,7 @@ func Load(values map[string]string) (Config, error) {
 
 func Keys() []string {
 	return []string{
+		"CT_ARCHIVE_READONLY_CONNECTIONS_FILE",
 		"CT_API_ONLY",
 		"CT_SERVER_LISTEN_ADDR",
 		"CT_PUBLIC_BASE_URL",

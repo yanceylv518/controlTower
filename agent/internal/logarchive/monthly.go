@@ -21,6 +21,9 @@ var measureNames = []string{"log_rows", "request_rows", "consume_rows", "error_r
 type contribution struct {
 	Day    string   `json:"day"`
 	Values []string `json:"values"`
+	// Versioned writers keep unscoped blockers per ID so replay and relocation
+	// cannot double count them. Legacy contributions have no such assertion.
+	Blocking bool `json:"blocking,omitempty"`
 }
 
 func (c contribution) month() string {

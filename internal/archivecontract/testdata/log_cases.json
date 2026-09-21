@@ -1,0 +1,182 @@
+{
+  "fixture_version": 1,
+  "synthetic": true,
+  "timezone": "Asia/Shanghai",
+  "value_encoding": "utf8_sql_raw_bytes_or_sql_null",
+  "columns": {
+    "id": "BIGINT", "created_at": "BIGINT", "type": "INT", "user_id": "BIGINT",
+    "token_id": "BIGINT", "channel_id": "BIGINT", "username": "VARCHAR(255)",
+    "token_name": "VARCHAR(255)", "model_name": "VARCHAR(255)", "group": "VARCHAR(255)",
+    "request_id": "VARCHAR(255)", "upstream_request_id": "VARCHAR(255)",
+    "quota": "BIGINT", "prompt_tokens": "BIGINT", "completion_tokens": "BIGINT", "other": "TEXT"
+  },
+  "defaults": {
+    "site_id": "synthetic-site",
+    "dataset_id": "11111111111141118111111111111111",
+    "source_generation_id": "aaaaaaaaaaaa4aaa8aaaaaaaaaaaaaaa",
+    "source_values": {
+      "id": "1", "created_at": "1788228000", "type": "2", "user_id": "101",
+      "token_id": "201", "channel_id": "301", "username": "synthetic-user",
+      "token_name": "synthetic-token", "model_name": "synthetic-text", "group": "default",
+      "request_id": "synthetic-request", "upstream_request_id": "synthetic-upstream",
+      "quota": "150", "prompt_tokens": "100", "completion_tokens": "25",
+      "other": "{\"model_price\":-1,\"model_ratio\":1,\"completion_ratio\":2,\"group_ratio\":1}"
+    }
+  },
+  "cases": [
+    {
+      "id": "ordinary_token", "tags": ["ordinary", "same_time_multiple_id", "duplicate_request_id"],
+      "source_overrides": {},
+      "expect": {"business_day": "2026-09-01", "legacy_projection": {"prompt_tokens": "100", "completion_tokens": "25", "context_tokens": "100", "model_ratio": "1"}, "required_behavior": "Preserve logged quota and per-request ratios; no live options substituted."}
+    },
+    {
+      "id": "same_second_second_id", "tags": ["same_time_multiple_id", "duplicate_request_id"],
+      "source_overrides": {"id": "2", "quota": "170", "completion_tokens": "35"},
+      "expect": {"business_day": "2026-09-01", "required_behavior": "Keep both records with identical timestamp and request_id; keyset tie-breaker is source_log_id."}
+    },
+    {
+      "id": "expression_tool", "tags": ["expression", "tool_surcharge"],
+      "source_overrides": {"id": "3", "quota": "5150", "other": "{\"billing_mode\":\"tiered_expr\",\"expr_b64\":\"dGllcigiYmFzZSIsIHAgKiAyICsgYyAqIDQp\",\"matched_tier\":\"base\",\"group_ratio\":1,\"request_rules\":[],\"tool_surcharges\":[{\"name\":\"synthetic-tool\",\"count\":1,\"price\":10}]}"},
+      "expect": {"business_day": "2026-09-01", "legacy_projection": {"billing_mode": "tiered_expr", "matched_tier": "base"}, "required_behavior": "Decode frozen expression using request time; preserve rule trace and surcharge evidence."}
+    },
+    {
+      "id": "anthropic_cache_split", "tags": ["cache_5m_1h", "anthropic"],
+      "source_overrides": {"id": "4", "other": "{\"usage_semantic\":\"anthropic\",\"claude\":true,\"cache_tokens\":30,\"cache_creation_tokens\":10,\"cache_write_tokens\":10,\"cache_creation_tokens_5m\":4,\"cache_creation_tokens_1h\":6,\"model_price\":-1,\"model_ratio\":1,\"completion_ratio\":2,\"cache_ratio\":0.1,\"cache_creation_ratio\":1.25,\"cache_creation_ratio_1h\":2,\"group_ratio\":1}"},
+      "expect": {"business_day": "2026-09-01", "legacy_projection": {"usage_semantic": "anthropic", "prompt_tokens": "100", "context_tokens": "140", "cache_tokens": "30", "cache_write_tokens": "10", "cache_write_5m_tokens": "4", "cache_write_1h_tokens": "6"}, "required_behavior": "Write total is 10, not 20; 5m fallback ratio and explicit 1h ratio remain distinct."}
+    },
+    {
+      "id": "openai_cache_aliases", "tags": ["ordinary", "cache_5m_1h"],
+      "source_overrides": {"id": "5", "other": "{\"cache_tokens\":30,\"cached_tokens\":40,\"cache_creation_tokens\":7,\"cache_write_tokens\":8,\"cache_creation_tokens_5m\":4,\"cache_creation_tokens_1h\":6,\"model_ratio\":1,\"group_ratio\":1}"},
+      "expect": {"business_day": "2026-09-01", "legacy_projection": {"prompt_tokens": "60", "context_tokens": "100", "cache_tokens": "30", "cache_write_tokens": "10"}, "required_behavior": "Read aliases select first positive value, write aliases take max including 5m+1h; never add aliases."}
+    },
+    {
+      "id": "image_explicit", "tags": ["image"],
+      "source_overrides": {"id": "6", "other": "{\"image_input\":12,\"image_output\":999,\"image_output_tokens\":7,\"image_ratio\":1.5,\"model_ratio\":1,\"group_ratio\":1}"},
+      "expect": {"business_day": "2026-09-01", "legacy_projection": {"prompt_tokens": "88", "image_input_tokens": "12", "image_output_tokens": "7"}, "required_behavior": "Explicit image input/output wins; source completion remains 25, ordinary display output is 18."}
+    },
+    {
+      "id": "image_modern_legacy_key", "tags": ["image", "image_version_semantics"],
+      "source_overrides": {"id": "7", "other": "{\"admin_info\":{\"usage_billing_path\":\"gemini\"},\"image_output\":12,\"image_ratio\":1.5,\"model_ratio\":1,\"group_ratio\":1}"},
+      "expect": {"business_day": "2026-09-01", "legacy_projection": {"prompt_tokens": "88", "image_input_tokens": "12", "image_output_tokens": "0"}, "required_behavior": "usage_billing_path makes misleading image_output an input lane."}
+    },
+    {
+      "id": "image_old_diagnostic", "tags": ["image", "image_version_semantics"],
+      "source_overrides": {"id": "8", "other": "{\"image_output\":12,\"image_ratio\":1.5,\"model_ratio\":1,\"group_ratio\":1}"},
+      "expect": {"business_day": "2026-09-01", "legacy_projection": {"prompt_tokens": "100", "image_input_tokens": "0", "image_output_tokens": "0"}, "required_behavior": "Without billing path, retain image_output only as legacy diagnostic evidence."}
+    },
+    {
+      "id": "audio_usage", "tags": ["audio"],
+      "source_overrides": {"id": "9", "other": "{\"audio_input\":20,\"audio_input_token_count\":30,\"audio_output\":5,\"model_ratio\":1,\"completion_ratio\":2,\"group_ratio\":1}"},
+      "expect": {"business_day": "2026-09-01", "legacy_projection": {"prompt_tokens": "100", "audio_input_tokens": "20", "audio_output_tokens": "5"}, "required_behavior": "Pricing prompt lane stays 100; display ordinary input/output is 80/20, separate from audio 20/5."}
+    },
+    {
+      "id": "per_request", "tags": ["per_request"],
+      "source_overrides": {"id": "10", "quota": "10000", "other": "{\"model_price\":\"0.01\",\"group_ratio\":\"2\"}"},
+      "expect": {"business_day": "2026-09-01", "legacy_projection": {"model_price": "0.01", "group_ratio": "2"}, "required_behavior": "At QuotaPerUnit 500000 charge is 0.02 per request; token ratios are not needed."}
+    },
+    {
+      "id": "zero_price", "tags": ["zero_price", "per_request"],
+      "source_overrides": {"id": "11", "quota": "0", "other": "{\"model_price\":0,\"group_ratio\":1}"},
+      "expect": {"business_day": "2026-09-01", "legacy_projection": {"model_price": "0"}, "required_behavior": "Explicit zero is a valid free request, not a missing price."}
+    },
+    {
+      "id": "zero_output", "tags": ["zero_output"],
+      "source_overrides": {"id": "12", "completion_tokens": "0", "quota": "100"},
+      "expect": {"business_day": "2026-09-01", "legacy_projection": {"completion_tokens": "0"}, "required_behavior": "Include by default; exclude only under frozen exclude_zero_output=true policy."}
+    },
+    {
+      "id": "null_output", "tags": ["null", "null_vs_zero"],
+      "source_overrides": {"id": "13", "completion_tokens": null},
+      "expect": {"business_day": "2026-09-01", "issue_codes": ["output_token_missing"], "required_behavior": "Unknown output is not known zero and cannot be silently accepted by zero-output filtering."}
+    },
+    {
+      "id": "null_identity_and_quota", "tags": ["null", "identity", "quota"],
+      "source_overrides": {"id": "14", "user_id": null, "token_id": null, "channel_id": null, "quota": null, "prompt_tokens": null, "username": null},
+      "expect": {"business_day": "2026-09-01", "issue_codes": ["subject_unknown", "quota_missing"], "required_behavior": "Preserve all NULLs; legacy int64 user/quota scan cannot represent this row. No fallback user 0 or quota 0."}
+    },
+    {
+      "id": "bad_other", "tags": ["bad_other", "evidence_bytes"],
+      "source_overrides": {"id": "15", "other": "{\"cache_tokens\": 12,"},
+      "expect": {"business_day": "2026-09-01", "issue_codes": ["other_invalid_json"], "required_behavior": "Preserve malformed bytes; quota pricing may remain possible with complete identity/config, reconstruction cannot assume empty rules."}
+    },
+    {
+      "id": "sql_null_other", "tags": ["null", "evidence_bytes"],
+      "source_overrides": {"id": "16", "other": null},
+      "expect": {"business_day": "2026-09-01", "required_behavior": "SQL NULL other has its own evidence tag and differs from empty text, JSON null and an empty object."}
+    },
+    {
+      "id": "empty_other", "tags": ["evidence_bytes"],
+      "source_overrides": {"id": "17", "other": ""},
+      "expect": {"business_day": "2026-09-01", "required_behavior": "Preserve zero-byte text; no pricing snapshot is inferred."}
+    },
+    {
+      "id": "json_null_other", "tags": ["evidence_bytes"],
+      "source_overrides": {"id": "18", "other": "null"},
+      "expect": {"business_day": "2026-09-01", "required_behavior": "Preserve four bytes n-u-l-l, distinct from SQL NULL."}
+    },
+    {
+      "id": "empty_object_other", "tags": ["evidence_bytes"],
+      "source_overrides": {"id": "19", "other": "{}"},
+      "expect": {"business_day": "2026-09-01", "required_behavior": "Valid JSON without pricing fields is not a complete reconstruction snapshot."}
+    },
+    {
+      "id": "high_precision", "tags": ["high_precision", "large_id", "evidence_bytes"],
+      "source_overrides": {"id": "9007199254740993", "quota": "1", "other": "{ \"cache_tokens\":9007199254740993, \"model_ratio\":0.12345678901234567890123456789, \"group_ratio\":\"1\" }"},
+      "expect": {"business_day": "2026-09-01", "exact_numeric_lexemes": {"cache_tokens": "9007199254740993", "model_ratio": "0.12345678901234567890123456789"}, "required_behavior": "Preserve id and JSON numeric lexemes exactly; do not claim legacy float64 parser preserves this precision."}
+    },
+    {
+      "id": "small_amount_one", "tags": ["small_amount"],
+      "source_overrides": {"id": "21", "quota": "1"},
+      "expect": {"business_day": "2026-09-01", "required_behavior": "Aggregate exact quota before final currency rounding."}
+    },
+    {
+      "id": "small_amount_two", "tags": ["small_amount"],
+      "source_overrides": {"id": "22", "quota": "1"},
+      "expect": {"business_day": "2026-09-01", "required_behavior": "Aggregate exact quota before final currency rounding."}
+    },
+    {
+      "id": "small_amount_three", "tags": ["small_amount"],
+      "source_overrides": {"id": "23", "quota": "1"},
+      "expect": {"business_day": "2026-09-01", "required_behavior": "Aggregate exact quota before final currency rounding."}
+    },
+    {
+      "id": "cross_month_before", "tags": ["crossmonth"],
+      "source_overrides": {"id": "24", "created_at": "1788191999"},
+      "expect": {"business_day": "2026-08-31", "required_behavior": "2026-08-31 23:59:59 Beijing belongs to August despite UTC date semantics."}
+    },
+    {
+      "id": "cross_month_at", "tags": ["crossmonth"],
+      "source_overrides": {"id": "25", "created_at": "1788192000"},
+      "expect": {"business_day": "2026-09-01", "required_behavior": "Exactly September 1 00:00:00 Beijing is included in September's [from,to)."}
+    },
+    {
+      "id": "month_exclusive_end", "tags": ["crossmonth", "half_open_interval"],
+      "source_overrides": {"id": "26", "created_at": "1790784000"},
+      "expect": {"business_day": "2026-10-01", "required_behavior": "Exactly October 1 00:00:00 Beijing is excluded from September's [from,to)."}
+    },
+    {
+      "id": "next_generation_reused_id", "tags": ["generation", "duplicate_request_id"],
+      "identity_overrides": {"dataset_id": "22222222222242228222222222222222", "source_generation_id": "bbbbbbbbbbbb4bbb8bbbbbbbbbbbbbbb"},
+      "source_overrides": {"id": "1"},
+      "expect": {"business_day": "2026-09-01", "required_behavior": "Same site and source log id from a new generation is a distinct identity; no implicit cross-generation bill merge."}
+    },
+    {
+      "id": "channel_model_test", "tags": ["model_test", "cache_diagnostics"],
+      "source_overrides": {"id": "28", "token_name": " 模型测试 ", "other": "{\"cache_tokens\":30,\"cache_creation_tokens\":10,\"cache_creation_tokens_5m\":4,\"cache_creation_tokens_1h\":6,\"model_ratio\":1,\"group_ratio\":1}"},
+      "expect": {"business_day": "2026-09-01", "legacy_projection": {"prompt_tokens": "100", "cache_tokens": "0", "cache_write_tokens": "0"}, "required_behavior": "Cache diagnostics remain in immutable evidence but do not become billable cache lanes for model-test token."}
+    },
+    {
+      "id": "undated_charge", "tags": ["null", "undated", "unscoped_blocker"],
+      "source_overrides": {"id": "29", "created_at": null},
+      "expect": {"business_day": null, "issue_codes": ["date_unknown"], "required_behavior": "Do not assign discovery day; nonzero charge with unknown date blocks new official bills pending impact assessment."}
+    },
+    {
+      "id": "unknown_type_charge", "tags": ["unknown_type", "unscoped_blocker"],
+      "source_overrides": {"id": "30", "type": "99"},
+      "expect": {"business_day": "2026-09-01", "issue_codes": ["unsupported_charge_type"], "required_behavior": "Preserve unknown type with nonzero quota for explicit impact assessment, not silent SQL type=2 exclusion."}
+    }
+  ],
+  "amount_scenarios": [
+    {"id": "round_after_sum", "case_ids": ["small_amount_one", "small_amount_two", "small_amount_three"], "quota_per_unit": "4000000", "expected_rational": "3/4000000", "display_scale": 6, "expected_display": "0.000001", "per_row_rounded_sum": "0.000000"}
+  ]
+}

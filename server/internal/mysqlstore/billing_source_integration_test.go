@@ -42,6 +42,8 @@ func TestBillingSourceAndMultimediaMySQL(t *testing.T) {
 		job.PricingSource = mode
 		job.UsageVersion = 1
 		job.RequestKey = fmt.Sprintf("mode-test-%s-%s", job.ID, mode)
+		job.MoneySnapshot, e = billing.NewMoneySnapshot(job.InstanceID, `{"QuotaPerUnit":"500000"}`, time.Now())
+		if e != nil { t.Fatal(e) }
 		if e = store.CreateBillingStatementJob(ctx, job, steps, ""); e != nil {
 			t.Fatal(e)
 		}

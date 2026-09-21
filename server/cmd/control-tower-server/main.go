@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"controltower/server/internal/aggregator"
+	"controltower/server/internal/archivereader"
 	ctauth "controltower/server/internal/auth"
 	"controltower/server/internal/billing"
 	"controltower/server/internal/config"
@@ -138,9 +139,10 @@ func run() error {
 	startBillingFileCleanup(workers, store)
 	startReadonlyLogRollupRunner(workers, store, cfg.SecretKey)
 
+	muxOptions := httpapi.Options{ArchiveReader: archivereader.Reader{ConnectionsFile: cfg.ArchiveReadonlyConnectionsFile}, TrialHandler: voicealert.TrialHandler{Store: voiceStore, Source: trialSource, WorkerEnabled: !cfg.APIOnly}, VoiceHandler: voicealert.Handler{Store: voiceStore, Caller: voiceCaller, Runner: voiceRunner}, AfterAgentReport: afterReport, AgentToken: cfg.AgentToken, DashboardToken: cfg.DashboardToken, Store: store, TuningStore: controlStore, FastCircuitSink: fastCircuitSink, AuthManager: authManager, AgentTokenPepper: cfg.AgentTokenPepper, SecretKey: cfg.SecretKey, NotificationMaxAttempts: cfg.NotificationMaxAttempts, CommandExpiry: time.Duration(cfg.CommandExpiryMinutes) * time.Minute, SettingsProvider: settingsProvider, BillingPagePause: time.Duration(cfg.BillingPagePauseMilliseconds) * time.Millisecond}
 	server := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           httpapi.NewMux(httpapi.Options{TrialHandler: voicealert.TrialHandler{Store: voiceStore, Source: trialSource, WorkerEnabled: !cfg.APIOnly}, VoiceHandler: voicealert.Handler{Store: voiceStore, Caller: voiceCaller, Runner: voiceRunner}, AfterAgentReport: afterReport, AgentToken: cfg.AgentToken, DashboardToken: cfg.DashboardToken, Store: store, TuningStore: controlStore, FastCircuitSink: fastCircuitSink, AuthManager: authManager, AgentTokenPepper: cfg.AgentTokenPepper, SecretKey: cfg.SecretKey, NotificationMaxAttempts: cfg.NotificationMaxAttempts, CommandExpiry: time.Duration(cfg.CommandExpiryMinutes) * time.Minute, SettingsProvider: settingsProvider, BillingPagePause: time.Duration(cfg.BillingPagePauseMilliseconds) * time.Millisecond}),
+		Handler:           httpapi.NewMux(muxOptions),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	log.Printf("control tower server listening on %s", cfg.ListenAddr)

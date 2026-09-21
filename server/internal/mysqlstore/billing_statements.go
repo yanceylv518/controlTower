@@ -10,6 +10,9 @@ import (
 )
 
 func (s Store) CreateBillingStatementJob(ctx context.Context, job billing.Job, steps []billing.JobStep, subjectName string) error {
+	if job.MoneySnapshot == nil {
+		return fmt.Errorf("billing money snapshot required")
+	}
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
 		return err
@@ -30,6 +33,14 @@ func (s Store) CreateBillingStatementJob(ctx context.Context, job billing.Job, s
 	if err == nil {
 		if duplicateStatus != "failed" {
 			return billing.ErrStatementDuplicate
+		}
+		var previousSnapshot string
+		loadErr := tx.QueryRowContext(ctx, `SELECT snapshot_id FROM billing_job_money_snapshots WHERE job_id=?`, duplicateID).Scan(&previousSnapshot)
+		if loadErr != nil && loadErr != sql.ErrNoRows {
+			return loadErr
+		}
+		if loadErr == nil && previousSnapshot != job.MoneySnapshot.ID {
+			return fmt.Errorf("failed statement must retain its money snapshot")
 		}
 		// A failed attempt did not produce a bill. Remove it atomically so the
 		// same request key can be retried without a manual cleanup step.

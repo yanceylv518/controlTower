@@ -18,6 +18,7 @@ import (
 )
 
 type Options struct {
+	ArchiveReader           dashboard.ArchiveCatalogReader
 	AgentToken              string
 	DashboardToken          string
 	Store                   Store
@@ -95,6 +96,38 @@ func NewMux(options Options) *http.ServeMux {
 		mux.Handle("PUT /api/dashboard/log-archives/{id}", protect(h))
 		controlSections["archive"] = agentHandler.LogArchive(archiveStore)
 		mux.HandleFunc("POST /api/agent/log-archive/poll", controlSections["archive"])
+	}
+	if archiveStore, ok := any(options.Store).(dashboard.ArchiveFoundationStore); ok {
+		h := dashboard.ArchiveFoundationHandler{Store: archiveStore, Reader: options.ArchiveReader}
+		mux.Handle("POST /api/dashboard/archive-datasets", protect(h))
+		mux.Handle("GET /api/dashboard/archive-datasets/{dataset}", protect(h))
+		mux.Handle("POST /api/dashboard/archive-datasets/{dataset}/sync", protect(h))
+		verificationReader, _ := options.ArchiveReader.(dashboard.ArchiveVerificationReader)
+		mux.Handle("GET /api/dashboard/archive-datasets/{dataset}/days/{date}/verification", protect(dashboard.ArchiveVerificationHandler{Store: archiveStore, Reader: verificationReader}))
+	}
+	if archiveStore, ok := any(options.Store).(dashboard.ArchiveBackfillStore); ok {
+		for _, route := range []struct{ pattern, operation string }{
+			{"GET /api/dashboard/archive-datasets/{dataset}/coverage", "coverage"},
+			{"GET /api/dashboard/archive-datasets/{dataset}/coverage-policy", "policy"},
+			{"PUT /api/dashboard/archive-datasets/{dataset}/coverage-policy", "policy"},
+			{"GET /api/dashboard/archive-datasets/{dataset}/backfill-tasks", "tasks"},
+			{"POST /api/dashboard/archive-datasets/{dataset}/backfill-tasks", "tasks"},
+			{"POST /api/dashboard/archive-datasets/{dataset}/backfill-tasks/{task}/retry", "retry"},
+		} {
+			mux.Handle(route.pattern, protect(dashboard.ArchiveBackfillHandler{Store: archiveStore, Operation: route.operation}))
+		}
+	}
+	if archiveStore, ok := any(options.Store).(dashboard.ArchiveVerifyStore); ok {
+		for _, route := range []struct{ pattern, operation string }{
+			{"GET /api/dashboard/archive-datasets/{dataset}/verify-tasks", "verify"},
+			{"POST /api/dashboard/archive-datasets/{dataset}/verify-tasks", "verify"},
+			{"POST /api/dashboard/archive-datasets/{dataset}/verify-tasks/{task}/retry", "verify_retry"},
+			{"GET /api/dashboard/archive-datasets/{dataset}/seal-tasks", "seal"},
+			{"POST /api/dashboard/archive-datasets/{dataset}/seal-tasks", "seal"},
+			{"POST /api/dashboard/archive-datasets/{dataset}/seal-tasks/{task}/retry", "seal_retry"},
+		} {
+			mux.Handle(route.pattern, protect(dashboard.ArchiveVerifyHandler{Store: archiveStore, Operation: route.operation}))
+		}
 	}
 	if options.VoiceHandler != nil {
 		mux.Handle("/api/dashboard/voice-alerts", protect(options.VoiceHandler))
@@ -208,7 +241,7 @@ func NewMux(options Options) *http.ServeMux {
 		mux.Handle("POST /api/dashboard/billing/backfill", protect(dashboard.BillingBackfillHandler{Rollup: billingRollup, Audit: options.Store}))
 	}
 	if statements, ok := any(options.Store).(dashboard.BillingStatementsStore); ok {
-		mux.Handle("POST /api/dashboard/billing/statements", protect(dashboard.BillingStatementsHandler{Store: statements}))
+		mux.Handle("POST /api/dashboard/billing/statements", protect(dashboard.BillingStatementsHandler{Store: statements, Source: dashboard.BillingReadonlySource{Handler: passthrough}}))
 	}
 	if discounts, ok := any(options.Store).(dashboard.BillingDiscountStore); ok {
 		mux.Handle("/api/dashboard/billing/discounts", protect(dashboard.BillingDiscountHandler{Store: discounts}))

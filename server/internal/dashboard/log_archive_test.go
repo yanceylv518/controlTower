@@ -17,10 +17,40 @@ type archiveMonthStore struct {
 	ac.Store
 	latest, queried string
 	lookups         int
+	activeDataset   string
+	site            string
 }
 
 func (s *archiveMonthStore) ListLogArchives(context.Context, string) ([]ac.Item, error) {
-	return []ac.Item{{SiteID: "site"}}, nil
+	site := s.site
+	if site == "" {
+		site = "site"
+	}
+	return []ac.Item{{SiteID: site, ActiveDatasetID: s.activeDataset, Status: ac.Status{
+		Reconciliation: &ac.Reconciliation{Date: "2026-05-20", State: "matched", SourceRows: 42, TargetRows: 42},
+	}}}, nil
+}
+
+func TestArchiveBoundSiteAdvertisesOnlyBackfillCapabilities(t *testing.T) {
+	for _, tc := range []struct {
+		dataset, site string
+		want          bool
+	}{
+		{"", "site", false}, {"11111111111111111111111111111111", "site", true}, {"11111111111111111111111111111111", "other-site", false},
+	} {
+		s := &archiveMonthStore{activeDataset: tc.dataset, site: tc.site}
+		h, cookie := foundationSession(t, LogArchiveHandler{Store: s}, "admin", []string{"archive.manage"})
+		w := foundationRequest(h, cookie, http.MethodGet, "/api/dashboard/log-archives?site_id=site&month=2026-09", "", "")
+		var out struct {
+			Capabilities map[string]bool `json:"capabilities"`
+		}
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &out) != nil {
+			t.Fatalf("capability response: %d %s", w.Code, w.Body.String())
+		}
+		if out.Capabilities["date_backfill"] != tc.want || out.Capabilities["coverage_catalog"] != tc.want || out.Capabilities["day_versions"] || out.Capabilities["archive_billing"] {
+			t.Fatalf("capability escaped site/version boundary: %s", w.Body.String())
+		}
+	}
 }
 func (s *archiveMonthStore) LatestLogArchiveMonth(context.Context, string) (string, error) {
 	s.lookups++
@@ -28,7 +58,7 @@ func (s *archiveMonthStore) LatestLogArchiveMonth(context.Context, string) (stri
 }
 func (s *archiveMonthStore) ListLogArchiveDays(_ context.Context, _ string, month string) ([]ac.Day, error) {
 	s.queried = month
-	return []ac.Day{}, nil
+	return []ac.Day{{Date: month + "-20", ArchivedRows: "42", RequestRows: "40", ErrorRows: "2", LastID: 9007199254740993}}, nil
 }
 
 func TestArchiveDefaultMonthAndExplicitSelection(t *testing.T) {
@@ -54,10 +84,27 @@ func TestArchiveDefaultMonthAndExplicitSelection(t *testing.T) {
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, r)
 		var out struct {
-			Month string `json:"month"`
+			Month        string          `json:"month"`
+			Items        []ac.Item       `json:"items"`
+			Capabilities map[string]bool `json:"capabilities"`
 		}
 		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &out) != nil || out.Month != tc.want || s.queried != tc.want || s.lookups != tc.lookups {
 			t.Fatalf("case %+v: %d %s", tc, w.Code, w.Body.String())
+		}
+		if len(out.Items) != 1 || out.Items[0].SiteID != "site" || len(out.Items[0].Days) != 1 {
+			t.Fatalf("legacy items missing: %s", w.Body.String())
+		}
+		day := out.Items[0].Days[0]
+		if day.Date != tc.want+"-20" || day.ArchivedRows != "42" || day.RequestRows != "40" || day.ErrorRows != "2" || day.LastID != 9007199254740993 {
+			t.Fatalf("legacy day changed: %+v", day)
+		}
+		if result := out.Items[0].Status.Reconciliation; result == nil || result.State != "matched" || result.SourceRows != 42 || result.TargetRows != 42 {
+			t.Fatalf("legacy reconciliation changed: %s", w.Body.String())
+		}
+		for _, capability := range []string{"day_versions", "archive_billing", "date_backfill", "coverage_catalog"} {
+			if enabled, present := out.Capabilities[capability]; !present || enabled {
+				t.Fatalf("capability %q must be explicitly false even with a matched reconciliation: %s", capability, w.Body.String())
+			}
 		}
 	}
 }

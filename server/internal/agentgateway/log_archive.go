@@ -1,7 +1,9 @@
 package agentgateway
 
 import (
+	af "controltower/internal/archivecontract"
 	ac "controltower/internal/archivecontrol"
+	"errors"
 	"net/http"
 )
 
@@ -19,6 +21,10 @@ func (h Handler) LogArchive(store ac.Store) http.HandlerFunc {
 		}
 		out, err := store.PollLogArchive(r.Context(), instance, p)
 		if err != nil {
+			if errors.Is(err, ac.ErrConflict) || errors.Is(err, af.ErrConflict) || errors.Is(err, af.ErrIdentity) || errors.Is(err, af.ErrUnsupported) {
+				writeError(w, 409, "archive_control_conflict")
+				return
+			}
 			writeError(w, 500, "archive_poll_failed")
 			return
 		}

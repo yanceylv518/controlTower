@@ -1,0 +1,23 @@
+CREATE TABLE IF NOT EXISTS archive_scan_tasks (
+  task_id BINARY(16) NOT NULL,
+  attempt INT UNSIGNED NOT NULL,
+  log_date DATE NOT NULL,
+  task_type VARCHAR(24) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  policy_json JSON NOT NULL,
+  state VARCHAR(24) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  scanned_rows BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  read_bytes BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  written_bytes BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  elapsed_millis BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  failures INT UNSIGNED NOT NULL DEFAULT 0,
+  error_code VARCHAR(48) CHARACTER SET ascii COLLATE ascii_bin NULL,
+  retry_after DATETIME(6) NULL,
+  empty_candidate TINYINT UNSIGNED NOT NULL DEFAULT 0,
+  source_now_unix BIGINT NOT NULL DEFAULT 0,
+  writer_epoch BIGINT UNSIGNED NOT NULL,
+  started_at DATETIME(6) NOT NULL,
+  completed_at DATETIME(6) NULL,
+  updated_at DATETIME(6) NOT NULL,
+  PRIMARY KEY (task_id, attempt),
+  KEY idx_archive_scan_state (state, updated_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin

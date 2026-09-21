@@ -52,7 +52,21 @@ func (h LogArchiveHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"items": items, "month": month})
+		// Legacy receipts and a matched daily reconciliation do not establish
+		// versioned coverage or eligibility to generate bills from the archive.
+		backfill := len(items) > 0 && items[0].SiteID == site && items[0].ActiveDatasetID != ""
+		workflow := backfill && items[0].Status.Foundation != nil && items[0].Status.Foundation.SupportsWorkflow()
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"items": items,
+			"month": month,
+			"capabilities": map[string]bool{
+				"full_history": workflow,
+				"day_versions":     false,
+				"archive_billing":  false,
+				"date_backfill":    backfill,
+				"coverage_catalog": backfill,
+			},
+		})
 		return
 	}
 	var c ac.Config

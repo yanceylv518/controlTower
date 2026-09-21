@@ -50,6 +50,11 @@ func (r *Reconciler) Result() ac.Reconciliation { return r.result }
 // Step reads at most one bounded page from each database, without a long-lived
 // transaction or source writes. Data must remain stable during reconciliation.
 func (w *Worker) ReconcileStep(ctx context.Context, r *Reconciler) error {
+	if prepared, err := w.HasFoundation(ctx); err != nil {
+		return err
+	} else if prepared {
+		return ErrFoundationLegacyWriter
+	}
 	if r.result.State != "running" {
 		return nil
 	}

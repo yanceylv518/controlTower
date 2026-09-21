@@ -5,6 +5,7 @@ import (
 	"controltower/agent/internal/config"
 	"controltower/agent/internal/controlpoll"
 	"controltower/agent/internal/logarchive"
+	af "controltower/internal/archivecontract"
 	ac "controltower/internal/archivecontrol"
 	"crypto/rand"
 	"encoding/hex"
@@ -26,7 +27,7 @@ func (s *archiveControlState) poll(ctx context.Context, cfg config.Config) {
 	client := &http.Client{Timeout: 15 * time.Second, Transport: controlpoll.Transport(ctx)}
 	for {
 		s.Lock()
-		st := s.status
+		st := cloneArchiveStatus(s.status)
 		s.Unlock()
 		started := time.Now()
 		out, err := archivePoll(ctx, client, cfg, st)
@@ -49,6 +50,9 @@ func (s *archiveControlState) poll(ctx context.Context, cfg config.Config) {
 }
 
 func archiveMayRun(out ac.Response, expires, now time.Time, cfg config.Config) bool {
+	if cfg.LogArchiveIdentity.DatasetID != "" {
+		return false
+	}
 	return out.Granted && out.Config.Running && out.Config.Validate() && out.Config.AgentID == cfg.AgentID && out.Config.InstanceID == cfg.InstanceID && out.LeaseSeconds >= 60 && out.LeaseSeconds <= 120 && now.Add(45*time.Second).Before(expires)
 }
 
@@ -62,11 +66,21 @@ func startManagedArchive(parent context.Context, cfg config.Config) func() {
 			return
 		}
 		st := ac.Status{SupportsDailyCheck: true, AgentID: cfg.AgentID, Session: hex.EncodeToString(raw), State: "paused", Configured: cfg.LogArchiveEnabled && cfg.LogArchiveDSN != ""}
+		foundationMode := cfg.LogArchiveIdentity.DatasetID != ""
+		if foundationMode {
+			st.SiteID = cfg.LogArchiveIdentity.SiteID
+			st.SupportsDailyCheck = false
+			st.Configured = false
+			st.Foundation = &af.FoundationStatus{Identity: cfg.LogArchiveIdentity, ProtocolVersion: af.ProtocolVersion, FormatVersion: af.FormatVersion, Capabilities: []string{af.CapabilityFoundation, af.CapabilityAtomicWriter, af.CapabilityBackfill, af.CapabilityReconcile, af.CapabilitySeal, af.CapabilityWorkflow}}
+		}
 		if !st.Configured {
 			st.State = "unconfigured"
 		}
 		var w *logarchive.Worker
 		refresh := func() {
+			if foundationMode {
+				return
+			}
 			if w == nil {
 				return
 			}
@@ -82,7 +96,7 @@ func startManagedArchive(parent context.Context, cfg config.Config) func() {
 				st.LastSuccess = &v
 			}
 		}
-		if st.Configured {
+		if st.Configured || foundationMode {
 			w, _ = logarchive.Open(cfg.LogDSN, cfg.LogArchiveDSN, cfg.InstanceID, cfg.DataDir, cfg.LogArchiveBatchSize)
 			refresh()
 		}
@@ -91,10 +105,16 @@ func startManagedArchive(parent context.Context, cfg config.Config) func() {
 				w.Close()
 			}
 		}()
-		shared := &archiveControlState{status: st}
+		shared := &archiveControlState{status: cloneArchiveStatus(st)}
 		pollDone := make(chan struct{})
 		go func() { defer close(pollDone); shared.poll(ctx, cfg) }()
 		defer func() { cancel(); <-pollDone }()
+		v2 := &archiveV2Runner{}
+		defer func() {
+			if w != nil {
+				v2.release(context.Background(), w)
+			}
+		}()
 		var next time.Time
 		failures := 0
 		var check *logarchive.Reconciler
@@ -118,6 +138,22 @@ func startManagedArchive(parent context.Context, cfg config.Config) func() {
 				refresh()
 			}
 			c := out.Config
+			if foundationMode {
+				// V2 requires an identity-bound writer grant. An old Server's
+				// legacy Granted flag can never enter either writer path.
+				if w == nil {
+					w, _ = logarchive.Open(cfg.LogDSN, cfg.LogArchiveDSN, cfg.InstanceID, cfg.DataDir, cfg.LogArchiveBatchSize)
+				}
+				if w == nil {
+					v2.step(ctx, nil, cfg, &st, out, expires, controlErr)
+				} else {
+					v2.step(ctx, w, cfg, &st, out, expires, controlErr)
+				}
+				shared.Lock()
+				shared.status = cloneArchiveStatus(st)
+				shared.Unlock()
+				continue
+			}
 			if out.SiteID != st.SiteID {
 				st.SiteID = out.SiteID
 				st.AppliedVersion = 0
@@ -186,7 +222,7 @@ func startManagedArchive(parent context.Context, cfg config.Config) func() {
 				}
 			}
 			shared.Lock()
-			shared.status = st
+			shared.status = cloneArchiveStatus(st)
 			shared.Unlock()
 		}
 	}()

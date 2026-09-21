@@ -61,6 +61,9 @@ func TestLogArchiveControlLifecycle(t *testing.T) {
 	if err != nil || out.Granted {
 		t.Fatal(out, err)
 	}
+	// The first response supplies the authoritative site identity; subsequent
+	// legacy polls must echo it before progress or execution can be accepted.
+	st.SiteID = out.SiteID
 	c := out.Config
 	c.AgentID = "agent"
 	c.InstanceID = id

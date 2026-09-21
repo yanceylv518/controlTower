@@ -16,15 +16,18 @@ import (
 	"time"
 
 	"controltower/agent/internal/fileatomic"
+	af "controltower/internal/archivecontract"
 	ac "controltower/internal/archivecontrol"
 	"github.com/go-sql-driver/mysql"
 )
 
 type Worker struct {
-	source, target *sql.DB
-	path           string
-	batchSize      int
-	delay          time.Duration
+	source, target  *sql.DB
+	path            string
+	batchSize       int
+	delay           time.Duration
+	budget          af.ScanBudget
+	foundationCache foundationCache
 }
 
 func (w *Worker) WithDelay(delay time.Duration) *Worker { w.delay = delay; return w }
@@ -55,7 +58,7 @@ func Open(sourceDSN, targetDSN, instance, dataDir string, batchSize int) (*Worke
 	if err != nil {
 		return nil, errors.New("invalid target archive DSN")
 	}
-	if src.DBName == "" || dst.DBName == "" || (src.Net == dst.Net && src.Addr == dst.Addr && src.DBName == dst.DBName) {
+	if src.DBName == "" || dst.DBName == "" || (src.Net == dst.Net && src.Addr == dst.Addr && strings.EqualFold(src.DBName, dst.DBName)) {
 		return nil, errors.New("archive requires a dedicated target database distinct from source")
 	}
 	if batchSize < 1 || batchSize > 5000 {
@@ -104,7 +107,7 @@ func (w *Worker) Check(ctx context.Context) error {
 	if err := w.target.QueryRowContext(ctx, "SELECT @@server_uuid, DATABASE()").Scan(&targetUUID, &targetDB); err != nil {
 		return errors.New("archive target identity check failed")
 	}
-	if sourceUUID == targetUUID && sourceDB == targetDB {
+	if samePhysicalArchiveDatabase(sourceUUID, sourceDB, targetUUID, targetDB) {
 		return errors.New("archive target resolves to source database")
 	}
 	var engine string
@@ -146,6 +149,12 @@ func (w *Worker) Check(ctx context.Context) error {
 		return errors.New("archive logs column definitions differ; align target schema before retrying")
 	}
 	return nil
+}
+
+// Database identifiers are folded conservatively even on case-sensitive
+// servers: archives must not depend on case-only source/target separation.
+func samePhysicalArchiveDatabase(sourceUUID, sourceDB, targetUUID, targetDB string) bool {
+	return strings.EqualFold(sourceUUID, targetUUID) && strings.EqualFold(sourceDB, targetDB)
 }
 
 func schema(ctx context.Context, db *sql.DB, table ...string) (string, error) {
@@ -194,6 +203,11 @@ func (w *Worker) load() (checkpoint, error) {
 // Pass copies one bounded prefix older than the delay window. It never skips
 // a visible recent row to advance to an older timestamp with a larger ID.
 func (w *Worker) Pass(ctx context.Context) (int, error) {
+	if prepared, err := w.HasFoundation(ctx); err != nil {
+		return 0, err
+	} else if prepared {
+		return 0, ErrFoundationLegacyWriter
+	}
 	cp, err := w.load()
 	if err != nil {
 		return 0, err

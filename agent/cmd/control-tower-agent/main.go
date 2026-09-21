@@ -71,11 +71,17 @@ func main() {
 func run() error {
 	configPath := flag.String("config", os.Getenv("CT_AGENT_CONFIG"), "path to control tower agent config file")
 	preflightOnly := flag.Bool("preflight", false, "run startup checks and exit")
+	archivePrepare := flag.Bool("archive-prepare", false, "explicitly prepare and bind the archive foundation, then exit; stop legacy writers first")
 	flag.Parse()
 
 	cfg, err := config.LoadFromPath(*configPath)
 	if err != nil {
 		return err
+	}
+	if *archivePrepare {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		return prepareArchiveFoundation(ctx, cfg, os.Stdout)
 	}
 	client := reporter.NewClient(cfg.ServerURL, cfg.AgentToken, time.Duration(cfg.ReportTimeoutSeconds)*time.Second)
 

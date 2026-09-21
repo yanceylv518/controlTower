@@ -20,6 +20,7 @@ var testColumns = []string{"id", "content", "created_at", "type", "prompt_tokens
 
 type testDB struct {
 	source                                   bool
+	foundation                               bool
 	noDateIndex                              bool
 	failWrite, failCommit                    bool
 	commits, rollbacks                       int
@@ -136,6 +137,12 @@ func (c conn) QueryContext(_ context.Context, q string, args []driver.NamedValue
 		}
 		return result([]string{"index"}, []driver.Value{"idx_created_at"}), nil
 	case strings.HasPrefix(q, "SELECT COUNT(*) FROM information_schema.TABLES"):
+		if len(args) == 1 && args[0].Value == "archive_dataset_meta" {
+			if c.db.foundation {
+				return result([]string{"count"}, []driver.Value{int64(1)}), nil
+			}
+			return result([]string{"count"}, []driver.Value{int64(0)}), nil
+		}
 		return result([]string{"count"}, []driver.Value{int64(1)}), nil
 	case strings.HasPrefix(q, "SELECT period_key,log_rows"):
 		out := result([]string{"period_key", "log_rows", "request_rows", "error_rows"})
