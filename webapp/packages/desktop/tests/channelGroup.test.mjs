@@ -32,3 +32,14 @@ test('group editor uses a dedicated site-scoped combination manager', () => {
   assert.match(viewSource, /:site="siteID"/)
   assert.doesNotMatch(viewSource, /当前站点已有组合/)
 })
+
+test('stale channel writes refresh the live channel directory', () => {
+  assert.match(viewSource, /error\.code === "channel_not_found"/)
+  assert.match(viewSource, /await loadChannelDirectory\(groupSite\)/)
+})
+
+test('group targets are selected from the complete site option list', () => {
+  assert.match(viewSource, /channels\.value\.flatMap\(row => splitChannelGroups\(row\.group_name\)\)/)
+  assert.match(viewSource, /bases\.value\.flatMap\(row => splitChannelGroups\(row\.group_name\)\)/)
+  assert.doesNotMatch(readFileSync(new URL('../src/components/ChannelGroupEditor.vue', import.meta.url), 'utf8'), /allow-create/)
+})

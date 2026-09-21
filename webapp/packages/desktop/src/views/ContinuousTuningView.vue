@@ -27,10 +27,14 @@ let channelDirectoryGeneration = 0;
 const groupManagerOpen = ref(false);
 const groupDialogOpen = ref(false), groupSaving = ref(false), groupConfirmed = ref(false);
 const editingChannel = ref<TuningChannel | null>(null), groupDraft = ref<string[]>([]);
+const availableGroups = ref<string[]>([]);
+let groupDirectoryGeneration = 0;
 const pendingGroups = ref(new Map<number, string>());
 const groupErrors = ref(new Map<number, string>());
 const groupPollTimers = new Map<number, ReturnType<typeof setTimeout>>();
 const groupPollTokens = new Map<number, number>();
+// 已确认的分组写入会推进代际；在写入前发起的异步读完成后，只能保留这次写入的分组。
+let groupWriteGeneration = 0;
 const statesSite = ref("");
 const savedBases = ref<ChannelBaseValue[]>([]), savedPolicy = ref<TuningPolicy | null>(null), savedMode = ref<"observe" | "confirm" | "auto">("observe");
 const modelQuery = ref(""), activeModel = ref("");
@@ -125,7 +129,12 @@ const groupEditorRowFor = (row: ChannelBaseValue): TuningChannel => channelDirec
   models: row.models?.length ? row.models : [row.model_name],
   group_name: row.group_name || "",
 });
-const groupOptions = computed(() => [...new Set(channels.value.flatMap(row => splitChannelGroups(row.group_name)))].sort((a, b) => a.localeCompare(b)));
+// 分组候选同时汇总全渠道目录和基础值快照；目录异步刷新时也不会暂时只显示当前渠道的分组。
+const groupOptions = computed(() => [...new Set([
+  ...availableGroups.value,
+  ...channels.value.flatMap(row => splitChannelGroups(row.group_name)),
+  ...bases.value.flatMap(row => splitChannelGroups(row.group_name)),
+])].sort((a, b) => a.localeCompare(b)));
 const groupCellTitle = (value: string | null | undefined) => {
   const groups = splitChannelGroups(value);
   return groups.length > MAX_VISIBLE_CHANNEL_GROUPS ? `点击编辑分组（完整分组：${groups.join("、")}）` : "点击编辑分组";
@@ -284,7 +293,8 @@ const coefficientCell = (row: ChannelBaseValue, key: 'speed' | 'cache' | 'otps' 
   if (state.otps_stats_version !== 1) return result('口径待确认', '接口缺少新版输出统计标记，暂无法确认当前系数的统计口径');
   return result(state.otps_ready ? '有效' : value === 1 ? '中性回退' : '保留值', state.otps_ready ? '输出样本与基线有效' : '输出样本或基线不足');
 };
-const channelQuery = ref(""), channelStatusFilter = ref("");
+// 运行概览分组筛选按逗号分隔的分组项匹配，避免把多个分组组合误当成一个名称。
+const channelQuery = ref(""), groupQuery = ref(""), channelStatusFilter = ref("");
 const eventDateRange = ref<[string, string] | null>(null);
 const settingsSection = ref("basic"), helpSection = ref("calculation");
 const limitReason = (row: ChannelBaseValue) => {
@@ -324,13 +334,15 @@ const coefficientSpan = ({column}: {column: {property?: string}}) => {
 const displayedRows = computed(() => activeRows.value.filter(row => {
   const query = channelQuery.value.trim().toLowerCase();
   if (query && !`${row.channel_name} ${row.channel_id} ${row.group_name}`.toLowerCase().includes(query)) return false;
+  const groupQueryValue = groupQuery.value.trim().toLowerCase();
+  if (groupQueryValue && !splitChannelGroups(row.group_name).some(group => group.toLowerCase().includes(groupQueryValue))) return false;
   if (channelStatusFilter.value === "limited") return !!limitReason(row);
   if (channelStatusFilter.value === "attention") return ["danger", "warning"].includes(rowStatus(row).kind) || !!limitReason(row);
   if (channelStatusFilter.value === "changed") return !!stateFor(row) && stateFor(row)!.proposed_weight !== row.current_weight;
   return true;
 }));
 const priorityDrafts = reactive(new Map<number, number>());
-watch([activeModel, channelQuery, channelStatusFilter], () => { mobileRowCount.value = 20; });
+watch([activeModel, channelQuery, groupQuery, channelStatusFilter], () => { mobileRowCount.value = 20; });
 watch(siteID, () => { mobileEditRow.value = null; mobileSaveOpen.value = false; mobileRowCount.value = 20; });
 watch(mobile, value => { if (!value) { mobileEditRow.value = null; mobileSaveOpen.value = false; } });
 const mobileChanges = computed(() => bases.value.flatMap(row => {
@@ -450,6 +462,7 @@ async function load(syncOnline = false) {
   const generation = ++loadGeneration;
   runtimeRefreshGeneration++;
   loading.value = true;
+  const groupGeneration = groupWriteGeneration;
   const isCurrentLoad = () => generation === loadGeneration && site === siteID.value;
   // Only cached page reads own the loading overlay. Live synchronization
   // continues independently and is merged after the overlay is released.
@@ -458,9 +471,10 @@ async function load(syncOnline = false) {
     const [p, b, r] = await Promise.all([dashboard.tuningPolicy(site), dashboard.tuningBaseValues(site), dashboard.tuningRecommendations(site, 300)]);
     if (!isCurrentLoad()) return;
     mode.value = p.mode; Object.assign(policy, p.policy); policy.continuous = Object.assign(defaults(), p.policy.continuous || {}); policy.continuous.max_increase_percent ??= 10; policy.dispatch_modes ||= {};
-    bases.value = b.items ?? []; events.value = r.items ?? []; for (const model of models.value) policy.dispatch_modes[model] ||= "off";
+    mergeOnlineRows(b.items ?? [], groupGeneration !== groupWriteGeneration); events.value = r.items ?? []; for (const model of models.value) policy.dispatch_modes[model] ||= "off";
     if (!models.value.includes(activeModel.value)) activeModel.value = models.value[0] || "";
     void loadChannelDirectory(site);
+    void loadGroupDirectory(site);
     try {
       const result = await dashboard.tuningContinuousStates(site);
       if (!isCurrentLoad()) return;
@@ -476,7 +490,7 @@ async function load(syncOnline = false) {
       if (!isCurrentLoad() || saving.value) return;
       const rows = await dashboard.tuningBaseValues(site);
       if (!isCurrentLoad() || saving.value) return;
-      mergeOnlineRows(rows.items ?? []);
+      mergeOnlineRows(rows.items ?? [], groupGeneration !== groupWriteGeneration);
     }
   } catch (error) {
     if (isCurrentLoad()) refreshError.value = error instanceof Error ? error.message : "刷新失败";
@@ -509,6 +523,7 @@ async function syncChannels(site: string, explicit: boolean): Promise<boolean> {
 // 分组编辑使用全渠道目录，不能复用只服务调权引擎的基础值列表。
 async function loadChannelDirectory(site: string) {
   const generation = ++channelDirectoryGeneration;
+  const groupGeneration = groupWriteGeneration;
   if (!site) {
     channels.value = [];
     return;
@@ -516,7 +531,14 @@ async function loadChannelDirectory(site: string) {
   try {
     const result = await dashboard.tuningChannels(site);
     if (site !== siteID.value || generation !== channelDirectoryGeneration) return;
-    channels.value = result.items ?? [];
+    let items = result.items ?? [];
+    // 目录请求可能早于分组保存开始；避免它的旧快照覆盖已确认的本地结果。
+    if (groupGeneration !== groupWriteGeneration) {
+      const localGroups = new Map(channels.value.map(row => [row.channel_id, row.group_name]));
+      for (const row of bases.value) localGroups.set(row.channel_id, row.group_name);
+      items = items.map(row => localGroups.has(row.channel_id) ? { ...row, group_name: localGroups.get(row.channel_id)! } : row);
+    }
+    channels.value = items;
     const pending = new Map(pendingGroups.value);
     const errors = new Map(groupErrors.value);
     for (const row of channels.value) {
@@ -531,6 +553,21 @@ async function loadChannelDirectory(site: string) {
   } catch {
     if (site !== siteID.value || generation !== channelDirectoryGeneration) return;
     channels.value = [];
+  }
+}
+// 读取站点完整分组；旧 Server 不提供该接口时保留渠道快照兜底，不阻断分组编辑。
+async function loadGroupDirectory(site: string) {
+  const generation = ++groupDirectoryGeneration;
+  if (!site) {
+    availableGroups.value = [];
+    return;
+  }
+  try {
+    const result = await dashboard.tuningGroups(site);
+    if (site !== siteID.value || generation !== groupDirectoryGeneration) return;
+    availableGroups.value = [...new Set((result.items ?? []).map(value => String(value).trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  } catch {
+    if (site === siteID.value && generation === groupDirectoryGeneration) availableGroups.value = [];
   }
 }
 // 轮询 Agent 命令的终态，避免失败命令长期伪装成“等待执行”；每个渠道
@@ -559,6 +596,7 @@ async function pollGroupCommand(site: string, channelID: number, instanceID: str
     const command = result.items.find(item => item.id === commandID);
     if (command?.status === "succeeded") {
       applyGroupLocally(channelID, expectedGroup);
+      void loadChannelDirectory(site);
       stopGroupPoll(channelID);
       const pending = new Map(pendingGroups.value);
       pending.delete(channelID);
@@ -587,6 +625,7 @@ async function pollGroupCommand(site: string, channelID: number, instanceID: str
   groupPollTimers.set(channelID, setTimeout(() => void pollGroupCommand(site, channelID, instanceID, commandID, expectedGroup, token, attempt + 1), 2000));
 }
 function applyGroupLocally(channelID: number, group: string) {
+  groupWriteGeneration++;
   channels.value = channels.value.map(row => row.channel_id === channelID ? { ...row, group_name: group } : row);
   bases.value = bases.value.map(row => row.channel_id === channelID ? { ...row, group_name: group } : row);
   savedBases.value = savedBases.value.map(row => row.channel_id === channelID ? { ...row, group_name: group } : row);
@@ -624,6 +663,7 @@ async function saveGroup() {
     if (result.status === "succeeded") {
       stopGroupPoll(row.channel_id);
       applyGroupLocally(row.channel_id, result.group);
+      void loadChannelDirectory(groupSite);
       const pending = new Map(pendingGroups.value);
       pending.delete(row.channel_id);
       pendingGroups.value = pending;
@@ -645,8 +685,15 @@ async function saveGroup() {
     }
     groupDialogOpen.value = false;
   } catch (error) {
-    if (error instanceof ApiError && error.code === "group_not_found") {
-      ElMessage.error("当前 Server 尚不支持新增分组名称，请升级后重试");
+    if (error instanceof ApiError && error.code === "channel_not_found") {
+      // 保存前页面可能仍持有旧渠道快照；同步后让失效行立即消失，避免
+      // 用户反复提交同一个已经从 New API 删除的渠道。
+      await syncChannels(groupSite, false);
+      if (groupSite === siteID.value) await loadChannelDirectory(groupSite);
+      if (groupSite === siteID.value) await loadGroupDirectory(groupSite);
+      ElMessage.warning("渠道已不存在，已同步最新渠道列表，请重新选择");
+    } else if (error instanceof ApiError && error.code === "group_not_found") {
+      ElMessage.error("该分组不在 NewAPI 分组列表中，请重新选择");
     } else {
       ElMessage.error(error instanceof Error ? error.message : "分组更新失败");
     }
@@ -665,13 +712,14 @@ async function refreshChannelsNow() {
   channelsRefreshing.value = true;
   try {
     if (await syncChannels(siteID.value, true)) {
+      await loadGroupDirectory(siteID.value);
       await refreshRuntime();
       ElMessage.success("渠道信息已同步");
     }
   } finally { channelsRefreshing.value = false; }
 }
 
-function mergeOnlineRows(refreshed: ChannelBaseValue[]) {
+function mergeOnlineRows(refreshed: ChannelBaseValue[], preserveConfirmedGroups = false) {
   const local = new Map(bases.value.map(row => [`${row.channel_id}:${row.model_name}`, row]));
   const merged = refreshed.map(row => {
     const edited = local.get(`${row.channel_id}:${row.model_name}`);
@@ -679,6 +727,8 @@ function mergeOnlineRows(refreshed: ChannelBaseValue[]) {
     if (edited && new Date(edited.snapshot_at || 0).getTime() > new Date(row.snapshot_at || 0).getTime()) {
       row = { ...row, current_weight: edited.current_weight, current_priority: edited.current_priority, snapshot_at: edited.snapshot_at };
     }
+    // 分组写入没有单独的快照时间字段；代际变化说明当前响应可能早于确认写入。
+    if (preserveConfirmedGroups && edited) row = { ...row, group_name: edited.group_name };
     return row;
   });
   // The saved baseline always tracks the server: cancelling unsaved edits must
@@ -706,10 +756,11 @@ async function watchChannelChanges() {
       if (result.revision !== revision) {
         while ((loading.value || saving.value) && !abort.signal.aborted) await wait(200);
         if (abort.signal.aborted) return;
+        const groupGeneration = groupWriteGeneration;
         const rows = await dashboard.tuningBaseValues(site);
         if (abort.signal.aborted || site !== siteID.value) return;
         if (loading.value || saving.value) { await wait(200); continue; }
-        mergeOnlineRows(rows.items ?? []);
+        mergeOnlineRows(rows.items ?? [], groupGeneration !== groupWriteGeneration);
         void loadChannelDirectory(site);
         revision = result.revision;
       }
@@ -724,6 +775,7 @@ async function refreshRuntime() {
   const site = siteID.value;
   const generation = ++runtimeRefreshGeneration;
   const loadAtStart = loadGeneration;
+  const groupGeneration = groupWriteGeneration;
   // A newer pending poll must not invalidate completed data: otherwise
   // responses slower than the 30-second polling interval never reach the UI.
   const canApply = () => generation > runtimeSettledGeneration && loadAtStart === loadGeneration && site === siteID.value && !loading.value && !saving.value;
@@ -733,7 +785,7 @@ async function refreshRuntime() {
     if (!canApply()) return;
     runtimeSettledGeneration = generation;
     acceptStates(site, s.items ?? []); events.value = r.items ?? [];
-    mergeOnlineRows(b.items ?? []);
+    mergeOnlineRows(b.items ?? [], groupGeneration !== groupWriteGeneration);
     void loadChannelDirectory(site);
     for (const model of models.value) policy.dispatch_modes[model] ||= "off";
     if (!models.value.includes(activeModel.value)) activeModel.value = models.value[0] || "";
@@ -813,7 +865,7 @@ async function save() {
     ElMessage.error(error instanceof Error ? error.message : "保存失败");
   } finally { saving.value = false; }
 }
-watch(() => filters.site_id, () => { groupDialogOpen.value = false; groupManagerOpen.value = false; cancelGroupPolls(); channels.value = []; pendingGroups.value = new Map(); groupErrors.value = new Map(); channelDirectoryGeneration++; void load(true); void watchChannelChanges(); });
+watch(() => filters.site_id, () => { groupDialogOpen.value = false; groupManagerOpen.value = false; cancelGroupPolls(); channels.value = []; availableGroups.value = []; pendingGroups.value = new Map(); groupErrors.value = new Map(); groupQuery.value = ""; channelDirectoryGeneration++; groupDirectoryGeneration++; void load(true); void watchChannelChanges(); });
 watch(siteID, () => { ratesReady.value = false; currentRates.value.clear(); void refreshCurrentRates(); });
 watch([eventModelFilter, eventRuleFilter, eventChannelQuery, eventDateRange, activeModel], () => { eventPage.value = 1; });
 onMounted(() => { void load(true); void watchChannelChanges(); void refreshCurrentRates(); refreshTimer = setInterval(() => void refreshRuntime(), 30000); ratesTimer = setInterval(() => { if (!document.hidden) void refreshCurrentRates(); }, 5000); });
@@ -836,7 +888,7 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
             <button v-if="modelNavCollapsed" class="model-nav-rail" type="button" :title="'当前模型：' + activeModel" aria-label="展开模型列表" @click="modelNavCollapsed=false">模型</button>
             <div v-show="!modelNavCollapsed" class="model-list"><button v-for="model in visibleModels" :key="model" :class="{active:activeModel===model}" :title="model + ' · ' + modeText(model)" :aria-label="model + '，' + modeText(model)" @click="selectModel(model)"><span><b>{{ model }}</b><span class="model-secondary"><small>{{ bases.filter(x=>x.model_name===model).length }} 个渠道</small><span class="model-mode-text" :class="modelMode(model)">{{ modelMode(model) === 'auto' ? '自动' : modelMode(model) === 'observe' ? '观察' : '关闭' }}</span></span></span></button><el-empty v-if="!visibleModels.length" :image-size="48" description="没有匹配模型"/></div>
           </aside>
-          <section ref="detailElement" class="model-detail"><div class="model-head"><div><b v-if="!mobile">{{ activeModel }}</b><small v-if="!mobile">{{ activeRows.length }} 个渠道</small><small v-if="refreshError" class="stale">刷新失败：{{ refreshError }}</small><small v-else-if="evaluationStalled" class="stale">评估已停滞：最后成功于 {{ formatTime(lastEvaluationAt!) }}</small><small v-else-if="lastEvaluationAt">{{ mobile ? '评估 ' + formatTime(lastEvaluationAt).split(' ').pop() : '最近评估 ' + formatTime(lastEvaluationAt) + ' · 每 30 秒自动刷新' }}</small><small v-else-if="mobile">等待首次评估</small><TuningInfo label="实时负载统计"><p>负载更新：{{ ratesAsOf ? formatTime(ratesAsOf) : '—' }}</p><p>已覆盖的 60 秒负载，每 5 秒刷新；Agent 保持 30 秒采集。</p><p>统计区间：{{ ratesWindowStart ? formatTime(ratesWindowStart) : '—' }} 至 {{ ratesAsOf ? formatTime(ratesAsOf) : '—' }}（不含结束秒）</p><p>数据延迟 {{ ratesDelay }} 秒。容量输入 0 表示不限制。</p></TuningInfo></div><el-radio-group v-if="activeModel" v-model="policy.dispatch_modes[activeModel]" size="small" @change="dirty=true"><el-radio-button value="off">关闭</el-radio-button><el-radio-button value="observe">只观察</el-radio-button><el-radio-button value="auto">自动执行</el-radio-button></el-radio-group></div>
+          <section ref="detailElement" class="model-detail"><div class="model-head"><div><b v-if="!mobile">{{ activeModel }}</b><small v-if="!mobile">{{ activeRows.length }} 个渠道</small><small v-if="refreshError" class="stale">刷新失败：{{ refreshError }}</small><small v-else-if="evaluationStalled" class="stale">评估已停滞：最后成功于 {{ formatTime(lastEvaluationAt!) }}</small><small v-else-if="lastEvaluationAt">{{ mobile ? '评估 ' + formatTime(lastEvaluationAt).split(' ').pop() : '最近评估 ' + formatTime(lastEvaluationAt) + ' · 每 30 秒自动刷新' }}</small><small v-else-if="mobile">等待首次评估</small><TuningInfo label="实时负载统计"><p>负载更新：{{ ratesAsOf ? formatTime(ratesAsOf) : '—' }}</p><p>已覆盖的 60 秒负载，每 5 秒刷新；Agent 保持 30 秒采集。</p><p>统计区间：{{ ratesWindowStart ? formatTime(ratesWindowStart) : '—' }} 至 {{ ratesAsOf ? formatTime(ratesAsOf) : '—' }}（不含结束秒）</p><p>数据延迟 {{ ratesDelay }} 秒。容量输入 0 表示不限制。</p></TuningInfo></div><div v-if="!mobile" class="channel-toolbar model-filter"><div class="channel-filters"><el-input v-model="groupQuery" clearable placeholder="按分组筛选，如 vip" aria-label="按分组筛选" /></div><span v-if="groupQuery.trim()" class="channel-filter-summary">匹配 {{ displayedRows.length }} / {{ activeRows.length }} 个渠道</span></div><el-radio-group v-if="activeModel" v-model="policy.dispatch_modes[activeModel]" size="small" @change="dirty=true"><el-radio-button value="off">关闭</el-radio-button><el-radio-button value="observe">只观察</el-radio-button><el-radio-button value="auto">自动执行</el-radio-button></el-radio-group></div>
             <el-alert v-if="ratesError" :title="ratesError" type="warning" :closable="false"/>
             <div v-if="mobile" class="mobile-tuning-list">
               <div class="mobile-channel-filters"><el-input v-model="channelQuery" clearable aria-label="搜索渠道或分组" placeholder="搜索渠道 / ID / 分组" /><el-select v-model="channelStatusFilter" aria-label="渠道筛选" placeholder="全部渠道"><el-option value="" label="全部渠道"/><el-option value="attention" label="需关注"/><el-option value="changed" label="待调整"/></el-select></div>
@@ -853,7 +905,7 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
               </article>
               <ScrollLoadMore :loading="loading" :has-more="mobileRowCount < displayedRows.length" @load="mobileRowCount += 20" />
             </div>
-            <el-table class="channel-table" scrollbar-always-on :span-method="coefficientSpan" :data="activeRows" :row-key="channelRowKey" size="small" height="100%" empty-text="没有匹配渠道">
+            <el-table class="channel-table" scrollbar-always-on :span-method="coefficientSpan" :data="displayedRows" :row-key="channelRowKey" size="small" height="100%" empty-text="没有匹配渠道">
               <el-table-column label="渠道" :width="tableColumns.channel" align="left" fixed><template #default="{row}">
 
                 <div class="channel-heading"><span class="channel-key">#{{ row.channel_id }} ·</span><b class="channel-name" :title="row.channel_name">{{ row.channel_name }}</b></div>
@@ -880,7 +932,7 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
               <el-table-column label="优先级" :width="tableColumns.priority" align="center"><template #default="{row}"><span :title="'调权中心保存的优先级；线上当前为 ' + row.current_priority + '。自动模式会纠正线上差异，修改后保存同步。'"><el-input-number :model-value="displayedPriority(row)" :class="{modified:priorityDrafts.has(row.channel_id)}" :aria-label="row.channel_name + ' 优先级'" :disabled="saving" :min="0" :precision="0" :controls="false" size="small" @update:model-value="editPriority(row, $event)"/></span></template></el-table-column>
 
             </el-table>
-            <div class="channel-footer">{{ activeRows.length }} 个渠道<span>点击 TPM / RPM 编辑上限</span></div>
+            <div class="channel-footer">{{ displayedRows.length }} 个渠道<span>点击 TPM / RPM 编辑上限</span></div>
            </section>
          </div>
        </el-card>
@@ -968,6 +1020,7 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
 .channel-filters{gap:8px}
 .channel-filters :deep(.el-input){width:190px}
 .channel-filters :deep(.el-select){width:125px}
+.channel-filter-summary{font-size:11px;color:var(--ct-ink-3);white-space:nowrap}
 .load-time{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--ct-ink-3)}
 .channel-table{flex:1;min-height:0;width:100%;font-variant-numeric:tabular-nums}
 .channel-table :deep(th.el-table__cell),.event-history-card :deep(th.el-table__cell){background:var(--ct-surface);color:var(--ct-ink-3);font-weight:500;height:38px;border-bottom:1px solid var(--ct-line)}
@@ -1225,12 +1278,16 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
 .model-head .active-model-name,.compact-layout .model-head .active-model-name{font-size:18px;line-height:26px}
 .model-head .evaluation-time{flex-basis:auto;padding-left:10px;border-left:1px solid var(--ct-line);white-space:normal}
 .model-head>div:first-child{flex:1 1 460px;gap:6px 10px}
+.model-head .model-filter{flex:0 1 auto;min-width:0;padding:0;gap:8px;justify-content:flex-end}
+.model-head .model-filter .channel-filters{min-width:0}
+.model-head .model-filter .channel-filters :deep(.el-input){width:190px;max-width:100%}
 .model-head :deep(.el-radio-group){flex-shrink:0;margin-left:auto}
 @container(max-width:680px){
  .overview-actions{position:static;justify-content:flex-end;padding:8px 10px;background:var(--ct-surface);border:1px solid var(--ct-line);border-bottom:0;border-radius:8px 8px 0 0;flex-wrap:wrap}
  .has-overview-actions .tabs :deep(>.el-tabs__header){padding-right:16px;border-radius:0}
  .model-workspace,.compact-layout .model-workspace{height:calc(100dvh - 168px)}
  .model-head .evaluation-time{flex-basis:100%;padding-left:0;border-left:0}
+ .model-head .model-filter{order:3;flex:1 1 100%;justify-content:flex-start}
 }
 
 

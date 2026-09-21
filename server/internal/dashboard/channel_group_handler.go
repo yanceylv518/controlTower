@@ -29,9 +29,13 @@ type ChannelGroupUpdateResponse struct {
 }
 
 type ChannelGroupHandler struct {
-	Updater   ChannelGroupUpdater
-	Directory TuningChannelDirectory
+	Updater        ChannelGroupUpdater
+	Directory      TuningChannelDirectory
+	GroupDirectory TuningGroupDirectory
 }
+
+// groupLookupTimeout 防止分组校验占用写请求过久，尤其是 New API 暂时不可达时。
+const groupLookupTimeout = 10 * time.Second
 
 // Update 在委托直连或 Agent 更新器前校验站点与渠道边界。确认字段用于防止
 // 绕过页面确认框的客户端误发线上写操作。
@@ -90,6 +94,23 @@ func (h ChannelGroupHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if !found {
 		writeDashboardError(w, http.StatusNotFound, "channel_not_found")
 		return
+	}
+	if h.GroupDirectory != nil {
+		groupCtx, cancel := context.WithTimeout(r.Context(), groupLookupTimeout)
+		defer cancel()
+		knownGroups, groupErr := h.GroupDirectory.ListGroups(groupCtx, siteID)
+		if groupErr != nil {
+			writeDashboardError(w, http.StatusBadGateway, "group_query_failed")
+			return
+		}
+		if groupErr = channelcontrol.ValidateKnownGroups(group, knownGroups); groupErr != nil {
+			if errors.Is(groupErr, channelcontrol.ErrGroupNotFound) {
+				writeDashboardError(w, http.StatusBadRequest, "group_not_found")
+			} else {
+				writeDashboardError(w, http.StatusBadRequest, "invalid_group")
+			}
+			return
+		}
 	}
 	command, err := h.Updater.UpdateChannelGroup(r.Context(), siteID, channelID, group, ctauth.Actor(r), time.Now().UTC())
 	if err != nil {

@@ -8,6 +8,7 @@ package directcontrol
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -167,6 +168,11 @@ func (s Store) UpdateChannelGroup(ctx context.Context, siteID string, channelID 
 	defer cancel()
 	result, err := controller.Update(ctx, channelcontrol.UpdateRequest{ChannelID: channelID, Group: &normalized})
 	if err != nil {
+		// New API 的不存在渠道通常以 HTTP 200 + success=false 返回；把该
+		// 业务错误转换为站点级哨兵，供 HTTP 层返回 404 并刷新过期快照。
+		if errors.Is(err, channelcontrol.ErrChannelNotFound) {
+			return storage.ChannelCommand{}, tuning.ErrChannelNotFound
+		}
 		return storage.ChannelCommand{}, fmt.Errorf("direct group write: %w", err)
 	}
 	actual := result.Group

@@ -235,7 +235,8 @@ Instance tokens are stored only as `SHA-256(pepper + token)` hashes. A token may
 | 方法与路径 | 参数 | 响应 |
 | --- | --- | --- |
 | `GET /api/dashboard/tuning/channels?site_id=` | 返回站点内每个渠道的最新名称、状态、模型、权重、优先级和 `group_name`；包含禁用渠道及多模型渠道 | `200 {"items":[{"channel_id":7,"channel_name":"primary","status":"enabled","models":["gpt-4o"],"group_name":"default,vip"}]}` |
-| `PUT /api/dashboard/tuning/channels/{channelID}/group?site_id=` | JSON `{"confirm":true,"group":"default,vip"}`；`group` 是逗号分隔的组合，服务端去首尾空格并去重，且每个分组必须已出现在当前站点渠道快照中。空字符串表示清空全部分组；组合不得包含空项、控制字符，规范化后最多 128 个 Unicode 字符；未知分组返回 `400 group_not_found` | 直连站点成功返回 `200`，Agent 站点排队返回 `202`，两者均返回 `command_id,channel_id,group,status,created_at` |
+| `GET /api/dashboard/tuning/groups?site_id=` | 返回当前站点可选的完整分组名称；直连站点读取 New API `/api/group/`，无直连站点从全渠道快照汇总 | `200 {"items":["default","vip"]}` |
+| `PUT /api/dashboard/tuning/channels/{channelID}/group?site_id=` | JSON `{"confirm":true,"group":"default,vip"}`；`group` 是逗号分隔的组合，服务端去首尾空格并去重，且每个分组必须已出现在当前站点分组目录中。空字符串表示清空全部分组；组合不得包含空项、控制字符，规范化后最多 128 个 Unicode 字符；未知分组返回 `400 group_not_found` | 直连站点成功返回 `200`，Agent 站点排队返回 `202`，两者均返回 `command_id,channel_id,group,status,created_at` |
 
 分组更新沿用 `tuning.manage` 权限和命令状态机 `pending → delivered → succeeded|failed`。直连写入成功后立即同步 `channel_current`；Agent 只有在成功回报后才同步。队列命令保留 `before_group` 内部值，完成审计包含操作人、旧分组、新分组和执行结果；失败不会覆盖当前分组。`site_id` 必须与渠道的最新快照归属一致，未知渠道返回 `404 channel_not_found`。
 

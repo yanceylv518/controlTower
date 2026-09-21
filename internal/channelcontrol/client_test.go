@@ -3,6 +3,7 @@ package channelcontrol
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -180,6 +181,36 @@ func TestGroupUpdateCanClearGroup(t *testing.T) {
 	}
 }
 
+func TestGroupUpdateReportsMissingChannel(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Fatalf("missing channel lookup must stop before %s", r.Method)
+		}
+		_, _ = w.Write([]byte(`{"success":false,"message":"record not found"}`))
+	}))
+	defer server.Close()
+
+	group := "default,vip"
+	_, err := New(server.URL, "admin-token", 7, server.Client()).Update(context.Background(), UpdateRequest{ChannelID: 12, Group: &group})
+	if !errors.Is(err, ErrChannelNotFound) {
+		t.Fatalf("missing channel must be classified separately: %v", err)
+	}
+}
+
+func TestGroupUpdateReportsMissingChannelHTTP404(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"message":"record not found"}`))
+	}))
+	defer server.Close()
+
+	group := "default"
+	_, err := New(server.URL, "admin-token", 7, server.Client()).Update(context.Background(), UpdateRequest{ChannelID: 12, Group: &group})
+	if !errors.Is(err, ErrChannelNotFound) {
+		t.Fatalf("HTTP 404 missing channel must be classified separately: %v", err)
+	}
+}
+
 func mustJSON(value any) []byte {
 	data, _ := json.Marshal(value)
 	return data
@@ -203,6 +234,24 @@ func TestCheckUsesReadOnlyChannelList(t *testing.T) {
 	}
 	if method != http.MethodGet || path != "/api/channel/" {
 		t.Fatalf("check must be a read-only channel list call: %s %s", method, path)
+	}
+}
+
+func TestListGroupsReadsAndNormalizesNewAPIGroups(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/group/" {
+			t.Fatalf("unexpected group request: %s %s", r.Method, r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"success":true,"data":["vip"," default ","vip","svip",""]}`))
+	}))
+	defer server.Close()
+
+	groups, err := New(server.URL, "admin-token", 7, server.Client()).ListGroups(context.Background())
+	if err != nil {
+		t.Fatalf("list groups: %v", err)
+	}
+	if got, want := strings.Join(groups, ","), "default,svip,vip"; got != want {
+		t.Fatalf("groups=%q, want %q", got, want)
 	}
 }
 

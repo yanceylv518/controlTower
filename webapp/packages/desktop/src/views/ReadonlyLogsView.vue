@@ -1674,7 +1674,8 @@ watch(() => filters.site_id, (site, previous) => {
               <template v-for="view in renderedRows" :key="view.id">
               <!-- 日志记录不可变时复用整行 DOM，只有字段或显示偏好变化才重新补丁。 -->
               <tr v-memo="[view.memoKey, expandedRetryID === view.id]" class="log-row" :class="view.tone">
-                  <td class="col-time"><div class="time-cell" :title="view.timeFull"><span class="time-text">{{ view.timeText }}</span><span class="status-badge" :class="view.statusClass">{{ view.statusLabel }}</span></div></td>
+                  <!-- 表格时间列复制当前展示值，移动端卡片和详情时间保持原有交互。 -->
+                  <td class="col-time"><div class="time-cell" :title="view.timeFull"><button type="button" class="time-copy-button copyable" title="点击复制时间" aria-label="复制时间" @click.stop="copyText(view.timeText)"><span class="time-text">{{ view.timeText }}</span></button><span class="status-badge" :class="view.statusClass">{{ view.statusLabel }}</span></div></td>
                   <td v-if="isColumnVisible('channel')" class="col-channel" @mouseenter="openRetryHover(view, $event)" @mouseleave="closeRetryHover" @focusin="openRetryHover(view, $event)" @focusout="closeRetryHover"><div v-if="view.hasChannel || view.retryUnknown" class="channel-cell" :aria-label="isAdmin && view.retryChain ? requestChainTitle(view.source) : undefined"><div class="channel-line"><span v-if="view.hasChannel" class="channel-affinity-anchor"><button type="button" :class="['channel-badge', 'copyable', view.channelTone]" title="点击复制渠道 ID" @click.stop="copyText(view.channelID)">#{{ view.channelID }}</button><button v-if="view.channelAffinity" type="button" class="channel-affinity-trigger" :title="channelAffinityTitle(view.channelAffinity)" :aria-label="channelAffinityTitle(view.channelAffinity)" @click.stop="openChannelAffinity(view)"><svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 1-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z"/><path d="M20 2v4"/><path d="M22 4h-4"/><circle cx="4" cy="20" r="2"/></svg></button></span><button v-if="isAdmin && (view.fallback || view.retryChain || view.retryUnknown)" type="button" class="retry-chain-trigger" :class="{ 'retry-chain-unknown': view.retryUnknown }" :aria-label="requestChainTitle(view.source)" :aria-expanded="expandedRetryID === view.id" @click.stop="toggleRetryChain(view)"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v12M18 9a9 9 0 0 1-9 9"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="6" r="3"/></svg><span v-if="view.retryUnknown">待确认</span></button></div><span v-if="view.channelName" class="cell-secondary">{{ view.channelName }}</span></div><span v-else class="muted">—</span></td>
                   <td v-if="isColumnVisible('user')" class="col-user"><button v-if="view.source.username" type="button" class="user-cell copyable" :title="sensitiveVisible ? '点击复制用户名' : undefined" @click.stop="copyText(view.usernameCopy)"><i class="user-avatar" :class="{ 'is-hidden': !sensitiveVisible }" :style="view.avatarStyle">{{ view.initial }}</i><span class="truncate">{{ view.username }}</span></button><span v-else class="muted">—</span></td>
                   <td v-if="isColumnVisible('token')" class="col-token"><div v-if="view.hasToken" class="token-cell"><button type="button" class="token-badge copyable" :title="sensitiveVisible ? '点击复制令牌名称' : undefined" @click.stop="copyText(sensitiveVisible ? view.source.token_name : '')"><svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3v-3h3v-3h2.172a2 2 0 0 0 1.414-.586l1.814-1.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5" fill="currentColor"/></svg><span>{{ view.tokenName }}</span></button><span v-if="view.source.group || view.groupRatio !== undefined" class="group-meta"><span v-if="view.source.group" :class="view.groupTone">{{ view.group }}</span><span v-if="view.source.group && view.groupRatio !== undefined"> </span><span v-if="view.groupRatio !== undefined" class="ratio">{{ view.groupRatioText }}</span></span></div><span v-else class="muted">—</span></td>
@@ -2422,6 +2423,20 @@ watch(() => filters.site_id, (site, previous) => {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+.time-copy-button {
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  align-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+.time-copy-button:focus-visible { outline: 2px solid var(--rc35-blue); outline-offset: 2px; }
 .status-badge {
   display: inline;
   width: fit-content;

@@ -180,8 +180,14 @@ func NewMux(options Options) *http.ServeMux {
 		mux.Handle("/api/dashboard/tuning/policy", protect(http.HandlerFunc(dashboardHandler.HandleTuningPolicy)))
 		if directory, supported := any(tuningStore).(dashboard.TuningChannelDirectory); supported {
 			mux.Handle("GET /api/dashboard/tuning/channels", protect(http.HandlerFunc(dashboardHandler.HandleTuningChannels)))
+			if _, groupDirectory := any(tuningStore).(dashboard.TuningGroupDirectory); groupDirectory {
+				mux.Handle("GET /api/dashboard/tuning/groups", protect(http.HandlerFunc(dashboardHandler.HandleTuningGroups)))
+			}
 			if updater, writable := any(tuningStore).(dashboard.ChannelGroupUpdater); writable {
 				groupHandler := dashboard.ChannelGroupHandler{Updater: updater, Directory: directory}
+				if groupDirectory, ok := any(tuningStore).(dashboard.TuningGroupDirectory); ok {
+					groupHandler.GroupDirectory = groupDirectory
+				}
 				mux.Handle("PUT /api/dashboard/tuning/channels/{channelID}/group", protect(http.HandlerFunc(groupHandler.Update)))
 			}
 		}

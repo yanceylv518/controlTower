@@ -9,7 +9,7 @@ import { computed, reactive, ref } from 'vue'
 const sfc = readFileSync(new URL('../src/views/ContinuousTuningView.vue', import.meta.url), 'utf8')
 const script = sfc.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1].replace(/^import .*;\r?\n/gm, '')
 const compiled = ts.transpileModule(script, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText
-const row = { channel_id: 1, model_name: 'm', base_weight: 100, base_priority: 1, current_weight: 80, current_priority: 1, models: ['m'] }
+const row = { channel_id: 1, model_name: 'm', base_weight: 100, base_priority: 1, current_weight: 80, current_priority: 1, group_name: 'default,vip', models: ['m'] }
 const state = (requests, weight = 80) => ({ channel_id: 1, model_name: 'm', last_observed_requests: requests, proposed_weight: weight, speed_stats_version: 1, phase: 'normal', metric_ready: true, baseline_ready: true, updated_at: '2026-09-14T00:00:00Z' })
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no }); return { promise, resolve, reject } }
 
@@ -21,9 +21,10 @@ function page() {
     tuningRecommendations: async () => ({ items: [] }),
     tuningContinuousStates: async () => ({ items: [state(42)] }),
   }
-  const names = ['computed', 'reactive', 'ref', 'watch', 'onMounted', 'onBeforeUnmount', 'useFiltersStore', 'dashboard', 'formatTime', 'ApiError', 'ElMessage', 'ElMessageBox', 'useMobileViewport']
-  const create = new Function(...names, `${compiled}\nreturn { mobileEditRow, stageMobileEdit, mobileChanges, mobilePriorityChanges, mobileRuleChanges, mobileSaveOpen, load, refreshRuntime, acceptStates, stateFor, sampleText, evaluationText, states, refreshError, bases, policy, channelQuery, channelStatusFilter, displayedRows, activeModel, dirty, selectModel, fieldChanged, savedBases, originalBase, calculatedWeight, displayedSpeedFactor, coefficientCell, overallEvaluationStatus, coefficientEmptyText, coefficientSpan, displayedPriority, editPriority, priorityLocked, cancelChanges, limitReason, currentRates, ratesReady, rowStatus, eventResult, eventResultClass, events, filteredEvents, eventDateRange };`)
-  const view = create(computed, reactive, ref, () => {}, () => {}, () => {}, () => filters, dashboard, String, class extends Error {}, {info() {}}, {}, () => ref(false))
+  const names = ['computed', 'reactive', 'ref', 'watch', 'onMounted', 'onBeforeUnmount', 'useFiltersStore', 'dashboard', 'formatTime', 'ApiError', 'ElMessage', 'ElMessageBox', 'useMobileViewport', 'splitChannelGroups']
+  const create = new Function(...names, `${compiled}\nreturn { mobileEditRow, stageMobileEdit, mobileChanges, mobilePriorityChanges, mobileRuleChanges, mobileSaveOpen, load, refreshRuntime, loadChannelDirectory, applyGroupLocally, acceptStates, stateFor, sampleText, evaluationText, states, refreshError, bases, channels, policy, channelQuery, groupQuery, channelStatusFilter, displayedRows, activeModel, dirty, selectModel, fieldChanged, savedBases, originalBase, calculatedWeight, displayedSpeedFactor, coefficientCell, overallEvaluationStatus, coefficientEmptyText, coefficientSpan, displayedPriority, editPriority, priorityLocked, cancelChanges, limitReason, currentRates, ratesReady, rowStatus, eventResult, eventResultClass, events, filteredEvents, eventDateRange };`)
+  const splitChannelGroups = value => String(value ?? '').split(',').map(item => item.trim()).filter(Boolean)
+  const view = create(computed, reactive, ref, () => {}, () => {}, () => {}, () => filters, dashboard, String, class extends Error {}, {info() {}}, {}, () => ref(false), splitChannelGroups)
   return { ...view, filters, dashboard }
 }
 
@@ -78,6 +79,31 @@ test('late refresh results cannot overwrite a newer completed refresh', async ()
   latest.resolve({ items: [state(90)] }); await second
   old.resolve({ items: [state(10)] }); await first
   assert.equal(p.stateFor(row).last_observed_requests, 90)
+})
+
+test('a refresh started before a confirmed group write cannot restore the old group', async () => {
+  const p = page()
+  await p.load()
+  const old = deferred()
+  p.dashboard.tuningBaseValues = () => old.promise
+  const refresh = p.refreshRuntime()
+  p.applyGroupLocally(1, 'default')
+  old.resolve({ items: [{ ...row, group_name: 'default,vip' }] })
+  await refresh
+  assert.equal(p.bases.value[0].group_name, 'default')
+})
+
+test('a stale channel directory cannot restore the old group after a confirmed write', async () => {
+  const p = page()
+  await p.load()
+  p.channels.value = [{ channel_id: 1, channel_name: 'primary', group_name: 'default,vip', status: 'enabled', weight: 1, priority: 1, models: ['m'] }]
+  const old = deferred()
+  p.dashboard.tuningChannels = () => old.promise
+  const load = p.loadChannelDirectory('a')
+  p.applyGroupLocally(1, 'default')
+  old.resolve({ items: [{ channel_id: 1, channel_name: 'primary', group_name: 'default,vip', status: 'enabled', weight: 1, priority: 1, models: ['m'] }] })
+  await load
+  assert.equal(p.channels.value[0].group_name, 'default')
 })
 
 test('a refresh started before a full reload cannot overwrite the reload', async () => {
@@ -216,6 +242,22 @@ test('channel search and attention filter retain circuit precedence over output 
   p.channelStatusFilter.value='attention'; assert.equal(p.displayedRows.value.length,1);
   p.channelQuery.value='south'; assert.equal(p.displayedRows.value.length,0);
   p.channelQuery.value='1'; assert.equal(p.displayedRows.value.length,1);
+})
+
+test('runtime overview filters channels by a matching group item', async () => {
+  assert.match(sfc, /v-model="groupQuery" clearable placeholder="按分组筛选，如 vip"/)
+  assert.match(sfc, /:data="displayedRows"/)
+  const p = page(); await p.load(); p.activeModel.value = 'm';
+  p.bases.value = [
+    { ...row, channel_id: 1, channel_name: 'primary', group_name: 'default,vip' },
+    { ...row, channel_id: 2, channel_name: 'fast', group_name: 'default,fast' },
+  ];
+  p.groupQuery.value = 'vip';
+  assert.deepEqual(p.displayedRows.value.map(item => item.channel_id), [1]);
+  p.groupQuery.value = 'FAST';
+  assert.deepEqual(p.displayedRows.value.map(item => item.channel_id), [2]);
+  p.groupQuery.value = 'missing';
+  assert.equal(p.displayedRows.value.length, 0);
 })
 
 test('recorded events are not presented as successful writes and dates include the last day', async () => {

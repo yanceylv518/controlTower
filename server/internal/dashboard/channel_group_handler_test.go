@@ -18,6 +18,15 @@ type channelGroupDirectoryStub struct {
 	err      error
 }
 
+type channelGroupListStub struct {
+	groups []string
+	err    error
+}
+
+func (s channelGroupListStub) ListGroups(context.Context, string) ([]string, error) {
+	return s.groups, s.err
+}
+
 func (s channelGroupDirectoryStub) LatestChannels(string) ([]tuning.Channel, error) {
 	return s.channels, s.err
 }
@@ -33,11 +42,16 @@ type channelGroupUpdaterStub struct {
 type channelGroupTuningStoreStub struct {
 	tuningStub
 	channels []tuning.Channel
+	groups   []string
 	err      error
 }
 
 func (s channelGroupTuningStoreStub) LatestChannels(string) ([]tuning.Channel, error) {
 	return s.channels, s.err
+}
+
+func (s channelGroupTuningStoreStub) ListGroups(context.Context, string) ([]string, error) {
+	return s.groups, s.err
 }
 
 func (s *channelGroupUpdaterStub) UpdateChannelGroup(_ context.Context, site string, channelID int64, group, actor string, _ time.Time) (storage.ChannelCommand, error) {
@@ -124,11 +138,36 @@ func TestChannelGroupHandlerRejectsUnknownChannelAndMapsStatuses(t *testing.T) {
 	}
 }
 
+func TestChannelGroupHandlerRejectsGroupOutsideDirectory(t *testing.T) {
+	updater := &channelGroupUpdaterStub{result: storage.ChannelCommand{ID: "cmd-group", InstanceID: "site-a", ChannelID: 7, Status: "succeeded"}}
+	h := ChannelGroupHandler{
+		Updater:        updater,
+		Directory:      channelGroupDirectoryStub{channels: []tuning.Channel{{ID: 7, Name: "primary", GroupName: "default"}}},
+		GroupDirectory: channelGroupListStub{groups: []string{"default", "vip"}},
+	}
+	r := httptest.NewRequest(http.MethodPut, "/api/dashboard/tuning/channels/7/group?site_id=site-a", bytes.NewBufferString(`{"confirm":true,"group":"svip"}`))
+	r.SetPathValue("channelID", "7")
+	w := httptest.NewRecorder()
+	h.Update(w, r)
+	if w.Code != http.StatusBadRequest || updater.calls != 0 || !bytes.Contains(w.Body.Bytes(), []byte(`"error":"group_not_found"`)) {
+		t.Fatalf("unknown group accepted: status=%d body=%s calls=%d", w.Code, w.Body.String(), updater.calls)
+	}
+}
+
 func TestHandleTuningChannelsReturnsCompleteChannelMetadata(t *testing.T) {
 	h := NewHandler(nil).WithTuningStore(&channelGroupTuningStoreStub{channels: []tuning.Channel{{ID: 7, Name: "primary", Status: "disabled", Weight: 12, Priority: 3, Models: []string{"m-a", "m-b"}, GroupName: "default,vip"}}})
 	w := httptest.NewRecorder()
 	h.HandleTuningChannels(w, httptest.NewRequest(http.MethodGet, "/api/dashboard/tuning/channels?site_id=site-a", nil))
 	if w.Code != http.StatusOK || !bytes.Contains(w.Body.Bytes(), []byte(`"channel_id":7`)) || !bytes.Contains(w.Body.Bytes(), []byte(`"status":"disabled"`)) || !bytes.Contains(w.Body.Bytes(), []byte(`"group_name":"default,vip"`)) {
 		t.Fatalf("channel directory response=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleTuningGroupsReturnsSiteCandidates(t *testing.T) {
+	h := NewHandler(nil).WithTuningStore(&channelGroupTuningStoreStub{groups: []string{"default", "vip", "svip"}})
+	w := httptest.NewRecorder()
+	h.HandleTuningGroups(w, httptest.NewRequest(http.MethodGet, "/api/dashboard/tuning/groups?site_id=site-a", nil))
+	if w.Code != http.StatusOK || !bytes.Contains(w.Body.Bytes(), []byte(`"items":["default","vip","svip"]`)) {
+		t.Fatalf("group directory response=%d body=%s", w.Code, w.Body.String())
 	}
 }

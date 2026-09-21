@@ -322,6 +322,15 @@ test('readonly logs binds optional table columns to stable classes', () => {
   }
 })
 
+// 回归保护：只有桌面表格时间列提供复制入口，移动卡片和详情不增加同类按钮。
+test('readonly logs makes the table time value copyable', () => {
+  const tableTimeCell = source.match(/<td class="col-time">([\s\S]*?)<\/td>/)?.[1] || ''
+  assert.match(tableTimeCell, /class="time-copy-button copyable"/)
+  assert.match(tableTimeCell, /@click\.stop="copyText\(view\.timeText\)"/)
+  assert.match(tableTimeCell, /title="点击复制时间"/)
+  assert.match(source, /\.time-copy-button \{[\s\S]*cursor: pointer;/)
+})
+
 // 回归保护：流状态和日志类型必须使用 rc35 的纯文字语义色，不能重新引入前置圆点或旧胶囊。
 test('readonly logs renders stream and log types as text-only status labels', () => {
   assert.match(source, /class="stream-label"/)

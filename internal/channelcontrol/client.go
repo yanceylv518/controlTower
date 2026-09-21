@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +13,10 @@ import (
 	"strconv"
 	"strings"
 )
+
+// ErrChannelNotFound 表示 New API 已确认目标渠道不存在，调用方可据此
+// 将过期快照与普通控制链路故障区分开，避免误报为通用写入失败。
+var ErrChannelNotFound = errors.New("new-api channel not found")
 
 type UpdateRequest struct {
 	ChannelID int64
@@ -243,9 +248,18 @@ func (c *Client) get(ctx context.Context, channelID int64) (map[string]any, erro
 		return nil, err
 	}
 	if !response.Success || response.Data == nil {
+		if isChannelNotFoundMessage(response.Message) {
+			return nil, fmt.Errorf("%w: %s", ErrChannelNotFound, response.Message)
+		}
 		return nil, fmt.Errorf("new-api channel lookup failed: %s", response.Message)
 	}
 	return response.Data, nil
+}
+
+// isChannelNotFoundMessage 兼容 New API 不同版本对不存在渠道的文本返回。
+func isChannelNotFoundMessage(message string) bool {
+	text := strings.ToLower(strings.TrimSpace(message))
+	return strings.Contains(text, "record not found") || strings.Contains(text, "channel not found") || strings.Contains(text, "not found") || strings.Contains(text, "不存在")
 }
 
 type apiResponse struct {
@@ -299,6 +313,26 @@ func (c *Client) do(ctx context.Context, method, url string, body []byte, target
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		// 不同 New API 版本可能用 HTTP 404 或 success=false 表示渠道不存在；
+		// 仅对渠道详情 GET 解析响应，避免把其他资源的 404 误判成渠道错误。
+		if method == http.MethodGet && strings.Contains(url, "/api/channel/") {
+			body, readErr := io.ReadAll(io.LimitReader(resp.Body, 16<<10))
+			if readErr == nil {
+				var apiError struct {
+					Message string `json:"message"`
+					Error   string `json:"error"`
+				}
+				if json.Unmarshal(body, &apiError) == nil {
+					message := apiError.Message
+					if message == "" {
+						message = apiError.Error
+					}
+					if isChannelNotFoundMessage(message) {
+						return fmt.Errorf("%w: %s", ErrChannelNotFound, message)
+					}
+				}
+			}
+		}
 		return fmt.Errorf("new-api request failed with status %d", resp.StatusCode)
 	}
 	if target == nil {
