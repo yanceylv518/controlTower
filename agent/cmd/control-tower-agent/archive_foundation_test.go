@@ -17,11 +17,11 @@ func TestFoundationAgentNeverAcceptsLegacyWriterGrant(t *testing.T) {
 	now := time.Now()
 	expires := now.Add(120 * time.Second)
 	cfg := config.Config{AgentID: "agent", InstanceID: "instance"}
-	if !archiveMayRun(out, expires, now, cfg) {
-		t.Fatal("legacy grant unexpectedly rejected")
+	if _, _, ok := archiveWriterGrant(out, cfg, "", expires, now); ok {
+		t.Fatal("unprepared agent accepted legacy grant")
 	}
 	cfg.LogArchiveIdentity = af.Identity{SiteID: "site", DatasetID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", SourceGenerationID: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
-	if archiveMayRun(out, expires, now, cfg) {
+	if _, _, ok := archiveWriterGrant(out, cfg, "", expires, now); ok {
 		t.Fatal("foundation agent accepted old server grant")
 	}
 }

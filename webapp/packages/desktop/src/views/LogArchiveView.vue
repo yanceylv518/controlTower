@@ -8,7 +8,7 @@ import { can } from '../permissions'
 import { useAuthStore } from '../stores/auth'
 import { useFiltersStore } from '../stores/filters'
 import {
-  beijingDate, buildArchiveDays, canCheckArchiveDay, formatArchiveCount,
+  beijingDate, buildArchiveDays, canCheckArchiveDay, formatArchiveCount, archiveExecution, archiveWorkflowLabels,
   type ArchiveCalendarDay, type ArchiveConfig, type ArchiveItem, type ArchiveResponse,
 } from '../utils/logArchive'
 
@@ -19,13 +19,14 @@ const loadedMonth = ref(''), readAt = ref(''), dayFilter = ref('all'), detailDat
 const emptyCapabilities = () => ({ full_history: false, day_versions: false, archive_billing: false, date_backfill: false, coverage_catalog: false })
 const capabilities = ref(emptyCapabilities())
 const fullHistory = computed(() => capabilities.value.full_history || item.value?.config.full_history === true)
+const execution = computed(() => item.value ? archiveExecution(item.value, fullHistory.value, now.value, !!failure.value) : undefined)
 
 function workflowReason(code: string) {
   const reasons: Record<string, string> = { source_history_unknown: '源历史保留情况尚未确认', source_history_unconfirmed: '历史完整保留与稳定性尚未确认', verification_mismatched: '源库与归档明细不一致，需检查差异', source_cleared: '源历史已清理，原归档记录已保留', source_index_missing: '源日志缺少日期扫描所需索引', source_invalid_date: '源日志存在空或无效日期，需处理后继续按日归档', cohort_incomplete: '跨日期关联范围过大，需检查关联记录', cohort_not_ended: '关联日期尚未结束，稍后可重试', verification_expired: '本轮核验超时，请重试', row_too_large: '单条日志超过读取预算' }
-  return reasons[code] || '该日期未满足核验或封存条件，请检查归档任务详情'
+  return `${reasons[code] || '该日期未满足核验或封存条件，请检查归档任务详情'}（${code}）`
 }
 function retryWorkflow() { if (item.value && writable.value) void save({ ...item.value.config, full_history: true }, item.value.site_id) }
-const workflowLabels: Record<string, string> = { reset_state: '重建贡献记录', reset_daily: '重建日统计', reset_monthly: '重建月统计', import_target: '接入已有归档', source_scan: '切换逐日推进', live: '持续归档 / 调度日期', backfill: '补齐并比较', verify: '归档库核验', seal: '封存版本' }
+const workflowLabels = archiveWorkflowLabels
 const dialog = ref(false), editingSite = ref(''), checkDialog = ref(false), checkSite = ref(''), checkDate = ref('')
 const form = reactive<ArchiveConfig>({ version: 0, instance_id: '', agent_id: '', running: false, batch_size: 500, interval_seconds: 30, delay_seconds: 300 })
 const today = computed(() => beijingDate(now.value))
@@ -59,6 +60,7 @@ const state = computed<{ text: string; type: 'info' | 'success' | 'warning' | 'd
   if (!online.value) return { text: '离线 · 等待确认', type: 'warning' }
   if (!versionApplied.value) return { text: current.config.running ? '启动 / 配置待确认' : '正在暂停 / 应用配置', type: 'warning' }
   if (!current.status.configured) return { text: '目标未配置', type: 'warning' }
+  if (current.status.prepare_phase && execution.value) return { text: execution.value.title, type: execution.value.attention ? 'danger' : 'warning' }
   if (current.status.error) return { text: '异常 · 等待重试', type: 'danger' }
   if (current.config.reconcile_id && current.config.running && current.status.state === 'running') {
     return { text: current.status.reconciliation?.id === current.config.reconcile_id ? (checkLabels[current.status.reconciliation.state] || '等待对账') : '等待对账', type: 'info' }
@@ -215,10 +217,24 @@ onUnmounted(() => { disposed = true; sequence++; siteEpoch++; saveSequence++; if
     <el-empty v-else-if="!item && !loading && !failure" description="当前站点没有可用的归档配置" />
     <div v-else-if="!item && loading" v-loading="true" class="panel loading-panel" aria-label="正在读取归档状态" />
     <template v-if="item">
+      <section v-if="execution" class="panel execution-summary" aria-label="归档运行情况">
+        <div class="section-title"><div><h3>{{ execution.title }}</h3><p class="secondary">{{ execution.detail }}</p></div><el-tag :type="execution.attention ? 'warning' : 'info'">{{ execution.mode }}</el-tag></div>
+        <div class="execution-grid">
+          <div><span>执行 Agent</span><b>{{ item.config.agent_id || '未选择' }}</b><small>{{ item.config.instance_id || '尚未配置执行节点' }}</small></div>
+          <div><span>最近 Agent 上报</span><b>{{ displayDate(item.seen_at) }}</b><small>{{ online ? '上报连接正常；不代表批次已推进' : '尚无近期上报' }}</small></div>
+          <div><span>最近非空批次提交</span><b>{{ displayDate(item.status.last_success) }}</b><small>没有新日志或处于核验阶段时，时间可能不变</small></div>
+          <div v-if="!fullHistory"><span>已提交日志 ID</span><b>{{ item.status.last_success ? item.status.last_id : '—' }}</b><small>比较两次上报的位置，不代表历史已完整</small></div>
+          <div v-else><span>最近处理日期</span><b>{{ item.status.workflow?.date || '尚未上报' }}</b><small>{{ item.status.workflow ? '已收到阶段记录' : '尚无阶段记录' }}</small></div>
+        </div>
+        <p class="secondary">每批最多 {{ item.config.batch_size }} 条，间隔 {{ item.config.interval_seconds }} 秒，归档延迟 {{ item.config.delay_seconds }} 秒。页面每 15 秒刷新；刷新页面不会启动新批次。</p>
+        <p v-if="!fullHistory && !item.active_dataset_id && item.status.prepare_phase" class="secondary">新版归档由 Agent 和服务端自动准备表结构并绑定数据集，已有月表数据保留，无需手动执行初始化脚本。</p>
+        <p v-else-if="!fullHistory && !item.active_dataset_id" class="secondary">当前未收到新版数据集信息，无法确认全量任务是否已准备好。若仍使用旧版增量模式，需完成归档库准备、数据集注册及配套 Agent 升级后使用全量任务。</p>
+        <el-button v-if="tab !== 'tasks'" link type="primary" @click="tab = 'tasks'">查看执行详情与策略</el-button>
+      </section>
       <el-alert v-if="item.status.error" :title="item.status.error" type="error" :closable="false" show-icon />
       <section v-if="fullHistory" class="panel">
         <div class="section-title"><div><h3>全量归档任务</h3><p class="secondary">从最早日期分批归档并回读校验；当天结束后补齐一次，再核对归档库并封存。</p></div><el-button :type="item.config.running ? 'default' : 'primary'" :disabled="toggleDisabled" :loading="saving" @click="toggle">{{ item.config.running ? '暂停归档' : item.status.workflow ? '继续归档' : '启动归档' }}</el-button></div>
-        <div class="execution-grid"><div><span>当前阶段</span><b>{{ item.status.workflow ? workflowLabels[item.status.workflow.phase] || item.status.workflow.phase : '等待启动' }}</b></div><div><span>已复用历史日志</span><b>{{ formatArchiveCount(item.status.workflow?.imported_rows || '0') }}</b></div><div><span>已封存日期</span><b>{{ formatArchiveCount(item.status.workflow?.completed_days || '0') }} 天</b></div><div><span>受阻日期</span><b>{{ formatArchiveCount(item.status.workflow?.blocked_days || '0') }} 天</b></div></div>
+        <div class="execution-grid"><div><span>最近上报阶段</span><b>{{ item.status.workflow ? workflowLabels[item.status.workflow.phase] || item.status.workflow.phase : '尚未上报' }}</b></div><div><span>已复用历史日志</span><b>{{ formatArchiveCount(item.status.workflow?.imported_rows) }}</b></div><div><span>已封存日期</span><b>{{ formatArchiveCount(item.status.workflow?.completed_days) }} 天</b></div><div><span>受阻日期</span><b>{{ formatArchiveCount(item.status.workflow?.blocked_days) }} 天</b></div></div>
         <p v-if="item.status.workflow?.date" class="secondary">当前处理日期：{{ item.status.workflow.date }}；已发现最早日期：{{ item.status.workflow.first_date || '扫描中' }}。范围来自可读取数据，不代表源库从未清理。</p>
         <p v-if="item.status.workflow?.error_code" class="error-text">任务需关注：{{ workflowReason(item.status.workflow.error_code) }}</p>
         <div v-if="item.status.workflow?.issues?.length"><p v-for="issue in item.status.workflow.issues" :key="issue.date" class="secondary">{{ issue.date }} · {{ workflowReason(issue.code) }}</p><p class="secondary">显示最早 20 个受阻日期。处理原因后重试，其他日期继续归档。</p><el-button :disabled="!writable" :loading="saving" @click="retryWorkflow">重试受阻日期</el-button></div>

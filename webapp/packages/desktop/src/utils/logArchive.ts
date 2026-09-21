@@ -40,6 +40,7 @@ export interface ArchiveReconciliation {
 }
 
 export interface ArchiveItem {
+  active_dataset_id?: string
   site_id: string
   name: string
   enabled: boolean
@@ -51,6 +52,7 @@ export interface ArchiveItem {
 	workflow?: { phase: string; date?: string; first_date?: string; imported_rows: string; completed_days: string; blocked_days: string; error_code?: string; issues?: {date: string; code: string}[] }
     supports_daily_check?: boolean
     reconciliation?: ArchiveReconciliation
+    prepare_phase?: string
     agent_id: string
     configured: boolean
     applied_version: number
@@ -62,6 +64,58 @@ export interface ArchiveItem {
     last_batch_rows: number
     error: string
   }
+}
+
+export const archiveWorkflowLabels: Record<string, string> = {
+  reset_state: '重建贡献记录', reset_daily: '重建日统计', reset_monthly: '重建月统计',
+  import_target: '接入已有归档', source_scan: '切换逐日推进', live: '持续归档 / 调度日期',
+  backfill: '补齐并比较', verify: '归档库核验', seal: '封存版本',
+}
+
+/** Describe reported evidence; a heartbeat is not proof that a batch is advancing. */
+export function archiveExecution(item: ArchiveItem, fullHistory: boolean, now: number, readFailed = false) {
+  const s = item.status
+  const mode = item.config.full_history ? '全量逐日归档' : s.prepare_phase ? '新版归档初始化' : item.active_dataset_id ? '数据集增量归档' : '增量归档'
+  const result = (title: string, detail: string, attention = false) => ({ mode, title, detail, attention })
+  if (readFailed) return result('状态读取失败', '当前内容是上次成功读取的记录，暂时无法确认任务是否继续运行。', true)
+  if (!item.config.agent_id) return result('尚未选择执行节点', '请在任务与策略中配置执行 Agent。', true)
+  const seen = Date.parse(item.seen_at || '')
+  if (!Number.isFinite(seen)) return result('尚未收到 Agent 上报', '开启开关只是提交运行要求，还没有收到执行确认。', true)
+  if (now - seen >= 90000) return result('Agent 上报已中断', '以下为最后一次上报内容，不能据此确认当前任务仍在运行。', true)
+  if (item.config.version !== s.applied_version) return result('等待 Agent 应用配置', `期望版本 v${item.config.version}，Agent 已应用 v${s.applied_version}。`, true)
+  const preparing: Record<string, [string, string]> = {
+    checking: ['正在检查归档库', '正在识别已有数据集身份和归档表。'],
+    waiting_lease: ['等待旧归档退出', '旧写入租约结束后自动准备新版表结构，已有数据保留。'],
+    waiting_authorization: ['等待自动初始化授权', '等待服务端授权建表；若持续等待，请确认 Server 与 Agent 均已更新。'],
+    migrating: ['正在准备归档表结构', '正在自动检查并迁移表结构，完成后接入已有月表并进入新版归档。'],
+    registering: ['正在绑定归档数据集', '表结构已准备完成，正在等待服务端确认数据集身份。'],
+  }
+  if (s.error.startsWith('archive_prepare_')) {
+    const reasons: Record<string, string> = {
+      archive_prepare_identity_mismatch: '站点或数据集身份不一致，请核对归档目标配置。',
+      archive_prepare_registration_conflict: '数据集身份或来源指纹与已登记信息冲突，请核对连接的数据库。',
+      archive_prepare_tasks_pending: '已有独立补齐、核验或封存任务尚未完成，完成原任务后才能切换全量归档。',
+      archive_prepare_connection_configuration_invalid: '归档连接配置不可用，请检查 Agent 配置。',
+      archive_prepare_schema_mismatch: '归档结构与预期不一致，请检查表结构或迁移记录。',
+      archive_prepare_version_unsupported: '归档库版本不受当前 Agent 支持，请核对配套版本。',
+    }
+    return result('归档初始化失败', `${reasons[s.error] || '请检查数据库连接、迁移权限及写入租约。'}（${s.error}）重试会保留同一数据集身份和已有数据。`, true)
+  }
+  if (s.error) return result('执行异常', s.error, true)
+  const preparation = preparing[s.prepare_phase || '']
+  if (preparation) return result(preparation[0], preparation[1])
+  if (!s.configured) return result('归档目标尚未就绪', 'Agent 尚未通过目标连接或归档结构检查，请查看任务与策略。', true)
+  if (!item.enabled) return result('站点未启用', '当前站点未启用，不能仅凭上次运行状态判断仍在执行。', true)
+  if (!item.config.running) return result(s.state === 'paused' ? '已暂停' : '等待暂停确认', '已有进度会保留；恢复后按原位置继续。')
+  if (s.state === 'waiting') return result('等待执行授权', 'Agent 已收到配置，尚未确认可执行；请核对任务与策略中的节点及配置状态。', true)
+  if (s.state !== 'running') return result('等待运行确认', '尚未收到本次运行的有效执行状态。', true)
+  if (item.config.reconcile_id) return result('按日对账', s.reconciliation ? `日期 ${s.reconciliation.date}；状态 ${s.reconciliation.state}。` : '尚未收到本次对账进度。')
+  if (fullHistory && item.config.full_history && !s.workflow) return result('尚未收到全量任务进度', '运行开关已开启，但没有阶段上报；不能判断正在扫描、核验或等待。请核对数据集绑定与 Agent 版本。', true)
+  if (s.workflow) {
+    const stage = archiveWorkflowLabels[s.workflow.phase] || `未知阶段（${s.workflow.phase}）`
+    return result(stage, `${s.workflow.date ? `最近处理日期 ${s.workflow.date}。` : '尚未上报处理日期。'} 阶段来自最近一次 Agent 上报，不代表此刻有数据库查询正在执行。`, !!s.workflow.error_code || /^[1-9]\d*$/.test(s.workflow.blocked_days))
+  }
+  return result('增量任务已启用', '当前上报无法区分批次执行、批次间隔或等待新日志；请结合最近提交时间和已提交日志 ID 观察推进。')
 }
 
 export interface ArchiveResponse {

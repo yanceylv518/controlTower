@@ -7,7 +7,7 @@ const source = readFileSync(new URL('../src/utils/logArchive.ts', import.meta.ur
 const compiled = ts.transpileModule(source, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 },
 }).outputText
-const { beijingDate, buildArchiveDays, formatArchiveCount, canCheckArchiveDay } = await import(
+const { beijingDate, buildArchiveDays, formatArchiveCount, canCheckArchiveDay, archiveExecution } = await import(
   `data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`
 )
 
@@ -20,10 +20,111 @@ const comparison = (date, state = 'matched') => ({
 })
 const byDate = (rows, date) => rows.find(row => row.date === date)
 
+const executionNow = Date.parse('2026-09-21T01:00:00Z')
+const executionItem = () => ({
+  enabled: true, seen_at: new Date(executionNow - 1000).toISOString(),
+  config: {agent_id: 'agent-a', version: 2, running: true},
+  status: {configured: true, applied_version: 2, state: 'running', error: '', last_id: '9007199254740993'},
+})
+
+test('legacy running status does not claim an active batch or caught-up position', () => {
+  const result = archiveExecution(executionItem(), false, executionNow)
+  assert.equal(result.mode, '增量归档')
+  assert.equal(result.title, '增量任务已启用')
+  assert.match(result.detail, /无法区分/)
+})
+
+test('missing workflow cannot appear as a running scan or zero completed days', () => {
+  const item = executionItem(); item.config.full_history = true
+  const result = archiveExecution(item, true, executionNow)
+  assert.equal(result.title, '尚未收到全量任务进度')
+  assert.equal(result.attention, true)
+  assert.equal(formatArchiveCount(item.status.workflow?.completed_days), '—')
+})
+
+test('supporting full history does not mean the operator enabled it', () => {
+  const item = executionItem(); item.active_dataset_id = 'dataset'
+  const result = archiveExecution(item, true, executionNow)
+  assert.equal(result.mode, '数据集增量归档')
+  assert.equal(result.title, '增量任务已启用')
+})
+
+test('read failures and offline status take precedence over stale workflow progress', () => {
+  const item = executionItem(); item.config.full_history = true
+  item.status.workflow = {phase: 'backfill', date: '2026-09-01', blocked_days: '0'}
+  assert.equal(archiveExecution(item, true, executionNow, true).title, '状态读取失败')
+  item.seen_at = new Date(executionNow - 90000).toISOString()
+  assert.equal(archiveExecution(item, true, executionNow).title, 'Agent 上报已中断')
+  item.seen_at = ''
+  assert.equal(archiveExecution(item, true, executionNow).title, '尚未收到 Agent 上报')
+})
+
+test('configuration mismatch, target errors, pause and authorization waits remain distinct', () => {
+  const item = executionItem()
+  item.config.version = 3
+  assert.equal(archiveExecution(item, false, executionNow).title, '等待 Agent 应用配置')
+  item.status.applied_version = 3; item.status.configured = false; item.status.error = 'archive identity/schema/checkpoint preflight failed'
+  assert.equal(archiveExecution(item, false, executionNow).detail, item.status.error)
+  item.status.error = ''
+  assert.equal(archiveExecution(item, false, executionNow).title, '归档目标尚未就绪')
+  item.status.configured = true; item.config.running = false; item.status.state = 'paused'
+  assert.equal(archiveExecution(item, false, executionNow).title, '已暂停')
+  item.config.running = true; item.status.state = 'waiting'
+  assert.equal(archiveExecution(item, false, executionNow).title, '等待执行授权')
+})
+
+test('reported workflow distinguishes verification from copying and preserves blocked evidence', () => {
+  const item = executionItem(); item.config.full_history = true
+  item.status.workflow = {phase: 'verify', date: '2026-09-01', blocked_days: '2'}
+  let result = archiveExecution(item, true, executionNow)
+  assert.equal(result.title, '归档库核验')
+  assert.match(result.detail, /2026-09-01/)
+  assert.equal(result.attention, true)
+  item.status.workflow.phase = 'future_phase'
+  result = archiveExecution(item, true, executionNow)
+  assert.match(result.title, /未知阶段.*future_phase/)
+})
+
 test('archive business date changes at Beijing midnight, including the year boundary', () => {
   assert.equal(beijingDate(Date.parse('2026-09-19T15:59:59.999Z')), '2026-09-19')
   assert.equal(beijingDate(Date.parse('2026-09-19T16:00:00.000Z')), '2026-09-20')
   assert.equal(beijingDate(Date.parse('2026-12-31T16:00:00.000Z')), '2027-01-01')
+})
+
+test('automatic preparation distinguishes draining, migration, registration and failure', () => {
+  const item = executionItem(); item.status.state = 'waiting'
+  for (const [code, title] of Object.entries({
+    waiting_lease: '等待旧归档退出',
+    migrating: '正在准备归档表结构',
+    registering: '正在绑定归档数据集',
+  })) {
+    item.status.prepare_phase = code
+    const result = archiveExecution(item, false, executionNow)
+    assert.equal(result.title, title)
+    assert.equal(result.attention, false)
+    assert.equal(result.mode, '新版归档初始化')
+  }
+  item.status.error = 'archive_prepare_identity_mismatch'
+  const failed = archiveExecution(item, false, executionNow)
+  assert.equal(failed.title, '归档初始化失败')
+  assert.equal(failed.attention, true)
+  assert.match(failed.detail, /archive_prepare_identity_mismatch/)
+})
+
+test('initialization errors show actionable reasons while preserving the error code', () => {
+  const item = executionItem(); item.status.state = 'error'; item.status.prepare_phase = 'failed'
+  for (const [code, reason] of Object.entries({
+    archive_prepare_connection_configuration_invalid: '连接配置不可用',
+    archive_prepare_registration_conflict: '来源指纹',
+    archive_prepare_tasks_pending: '原任务',
+  })) {
+    item.status.error = code
+    const result = archiveExecution(item, false, executionNow)
+    assert.equal(result.title, '归档初始化失败')
+    assert.ok(result.detail.includes(reason))
+    assert.ok(result.detail.includes(code))
+    assert.equal(result.attention, true)
+  }
 })
 
 test('calendar includes every date and follows leap-year century rules', () => {

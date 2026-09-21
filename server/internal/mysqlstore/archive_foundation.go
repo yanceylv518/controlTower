@@ -71,6 +71,13 @@ func (s Store) RegisterArchiveDataset(ctx context.Context, r af.Registration, ac
 	if c.Running || live {
 		return af.ErrConflict
 	}
+	var preparation []byte
+	if err = tx.QueryRowContext(ctx, `SELECT prepare_json FROM site_log_archive_control WHERE site_id=?`, r.SiteID).Scan(&preparation); err != nil {
+		return err
+	}
+	if len(preparation) != 0 {
+		return af.ErrConflict
+	}
 	var active []byte
 	if err = tx.QueryRowContext(ctx, `SELECT active_dataset_id FROM site_log_archive_control WHERE site_id=?`, r.SiteID).Scan(&active); err != nil {
 		return err

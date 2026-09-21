@@ -76,9 +76,10 @@ func (w *Worker) foundationFingerprints(ctx context.Context) (foundationFingerpr
 	return fp, nil
 }
 
-// PrepareFoundation is an explicit, offline preparation operation. Stop legacy
-// archive writers before running it. It does not run from the normal archive
-// loop, copy logs, adopt legacy counts, grant a writer lease, or publish dates.
+// PrepareFoundation migrates under an exclusive target lock with no active
+// writer lease. Managed startup calls it after CT drains old writers and grants
+// preparation; the maintenance CLI requires the caller to stop writers. It
+// never copies logs, adopts legacy counts, grants writer leases or publishes days.
 func (w *Worker) PrepareFoundation(ctx context.Context, identity archivecontract.Identity) (FoundationInfo, error) {
 	var empty FoundationInfo
 	if err := identity.Validate(); err != nil {
