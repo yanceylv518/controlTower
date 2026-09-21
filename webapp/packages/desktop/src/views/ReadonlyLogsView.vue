@@ -11,6 +11,7 @@ import FallbackRequestChain from '../components/FallbackRequestChain.vue'
 import { attemptChannels, retryLookupUnknown, type ChainQuery } from '../utils/fallbackRequestChain'
 import CompactDateTimeRangePicker from '../components/CompactDateTimeRangePicker.vue'
 import MobileLogFilters, { type MobileLogFilterValues } from '../components/MobileLogFilters.vue'
+import UserNamePicker, { type UserPickerOption } from '../components/UserNamePicker.vue'
 import { passthrough } from '../api'
 import { useAuthStore } from '../stores/auth'
 import { useFiltersStore } from '../stores/filters'
@@ -130,6 +131,8 @@ const auth = useAuthStore()
 const filters = useFiltersStore(), prefs = usePrefsStore()
 const route = useRoute()
 const username = ref(''), tokenName = ref(''), modelName = ref(''), group = ref(''), requestID = ref(''), upstreamRequestID = ref('')
+// 选中下拉用户后按 ID 精确筛选；继续手动输入时由组件清除该精确条件。
+const selectedUserID = ref<number | undefined>(undefined)
 const channelID = ref('')
 const requestScope = ref<{ request: string; user: string } | null>(null)
 const scopedUserIDs = computed(() => requestScope.value?.request === requestID.value ? requestScope.value.user : undefined)
@@ -201,7 +204,7 @@ const parsedChannelID = computed(() => {
   const value = Number(channelID.value)
   return channelID.value.trim() !== '' && Number.isSafeInteger(value) && value >= 0 ? value : undefined
 })
-const params = computed(() => ({ site: filters.site_id, user_ids: scopedUserIDs.value, username: username.value, start_time: timeRange.value[0].toISOString(), end_time: timeRange.value[1].toISOString(), token_name: tokenName.value, model_name: modelName.value, group: group.value, request_id: requestID.value, upstream_request_id: upstreamRequestID.value, channel_id: parsedChannelID.value, log_type: logType.value || undefined, limit: limit.value, offset: offset.value }))
+const params = computed(() => ({ site: filters.site_id, user_ids: selectedUserID.value !== undefined ? String(selectedUserID.value) : scopedUserIDs.value, username: selectedUserID.value !== undefined ? undefined : username.value, start_time: timeRange.value[0].toISOString(), end_time: timeRange.value[1].toISOString(), token_name: tokenName.value, model_name: modelName.value, group: group.value, request_id: requestID.value, upstream_request_id: upstreamRequestID.value, channel_id: parsedChannelID.value, log_type: logType.value || undefined, limit: limit.value, offset: offset.value }))
 // 输入框为草稿；翻页与附属查询只消费点击查询时保存的快照。
 const submitted = shallowRef({ ...params.value })
 const queryRevision = ref(0)
@@ -246,9 +249,13 @@ function applyMobileFilters(value: MobileLogFilterValues) {
   channelID.value = value.channelID
   search()
 }
-function filterMobileUser(value: string) {
+function handleUserSelect(option: UserPickerOption | null) {
+  selectedUserID.value = option?.id
+}
+function filterMobileUser(value: string, userID?: number) {
   if (!sensitiveVisible.value || backgroundRefreshing.value) return
   username.value = value
+  selectedUserID.value = userID
   search()
 }
 // 首屏加载实例时会同步设置站点；在首次统一刷新完成前忽略 watcher，避免重复发起三组请求。
@@ -519,6 +526,7 @@ const resetTime = () => {
 const reset = () => {
   if (backgroundRefreshing.value) return
   requestScope.value = null
+  selectedUserID.value = undefined
   username.value = ''
   tokenName.value = ''
   modelName.value = ''
@@ -639,6 +647,7 @@ function toggleRetryChain(view: LogRowView) {
 }
 async function filterRequestChain(query: ChainQuery) {
   if (query.site !== filters.site_id || backgroundRefreshing.value) return
+  selectedUserID.value = undefined
   username.value = ''; tokenName.value = ''; modelName.value = ''; group.value = ''
   channelID.value = ''; upstreamRequestID.value = ''; logType.value = 0
   requestID.value = query.request_id
@@ -1607,6 +1616,7 @@ watch(() => filters.site_id, (site, previous) => {
     backgroundRefreshing.value = false
     state.data.value = undefined; statState.data.value = undefined; countState.data.value = undefined
     requestScope.value = null
+    selectedUserID.value = undefined
     offset.value = 0
     detailRow.value = null
     detailOpen.value = false
@@ -1624,11 +1634,11 @@ watch(() => filters.site_id, (site, previous) => {
 
       <!-- rc35 的工具栏按“筛选器 → 统计与操作”分两行排列，所有筛选字段始终可见。 -->
       <section class="logs-toolbar">
-        <MobileLogFilters v-if="mobileViewport" v-model:username="username" v-model:time-range="timeRange" :filters="mobileFilters" :busy="state.loading.value || backgroundRefreshing" :admin="isAdmin" :sensitive="sensitiveVisible" @apply="applyMobileFilters" @search="search" @reset="reset" @privacy="sensitiveVisible = !sensitiveVisible" />
+        <MobileLogFilters v-if="mobileViewport" v-model:username="username" v-model:time-range="timeRange" :site="filters.site_id" :filters="mobileFilters" :busy="state.loading.value || backgroundRefreshing" :admin="isAdmin" :sensitive="sensitiveVisible" @select-user="handleUserSelect" @apply="applyMobileFilters" @search="search" @reset="reset" @privacy="sensitiveVisible = !sensitiveVisible" />
         <div v-else class="toolbar-primary">
           <div class="primary-filters">
             <CompactDateTimeRangePicker v-model="timeRange" :reset-enabled="timeRangeChanged && !backgroundRefreshing" class="filter-time" @reset="resetTime" />
-            <el-input v-model="username" clearable placeholder="用户名称" @keyup.enter="search" class="filter-username" />
+            <UserNamePicker v-model="username" :site="filters.site_id" class="filter-username" placeholder="用户名称" aria-label="用户名称" @select="handleUserSelect" @submit="search" />
             <el-input v-model="channelID" clearable placeholder="渠道 ID" @keyup.enter="search" class="filter-channel" />
             <el-input v-model="requestID" clearable placeholder="请求ID" @keyup.enter="search" class="filter-request" />
             <el-input v-model="modelName" clearable placeholder="模型名称" @keyup.enter="search" class="filter-model" />
@@ -1709,7 +1719,7 @@ watch(() => filters.site_id, (site, previous) => {
         <div v-else v-loading="state.loading.value" class="mobile-log-list">
           <article v-for="view in renderedRows" v-memo="[view.memoKey, expandedRetryID === view.id]" :key="view.id" class="mobile-log-card" :class="view.tone">
             <div class="mobile-card-time"><time :title="view.timeFull">{{ view.timeText }}</time><span class="status-badge" :class="view.statusClass">{{ view.statusLabel }}<template v-if="view.errorCode"> · {{ view.errorCode }}</template></span></div>
-            <div class="mobile-card-identity"><button type="button" :disabled="!sensitiveVisible || backgroundRefreshing" :aria-label="'按用户名筛选：' + view.username" @click="filterMobileUser(view.source.username)">{{ view.username }}</button><span aria-hidden="true">·</span><strong>{{ view.modelName || '未记录模型' }}</strong></div>
+            <div class="mobile-card-identity"><button type="button" :disabled="!sensitiveVisible || backgroundRefreshing" :aria-label="'按用户名筛选：' + view.username" @click="filterMobileUser(view.source.username, view.source.user_id)">{{ view.username }}</button><span aria-hidden="true">·</span><strong>{{ view.modelName || '未记录模型' }}</strong></div>
             <div class="mobile-card-token">令牌：{{ view.tokenName || '—' }}</div>
             <dl class="mobile-card-metrics">
               <div><dt>费用</dt><dd>{{ view.quota }}</dd></div>

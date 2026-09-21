@@ -50,7 +50,10 @@ test('readonly logs keeps identity filters before compact model filters', () => 
 
 // viewer 使用后端固定的站点和用户范围，仍可使用用户名与渠道 ID 做范围内筛选。
 test('readonly logs exposes username and channel filters to viewer accounts', () => {
-  assert.match(source, /<el-input v-model="username" clearable placeholder="用户名称"/)
+  assert.match(source, /<UserNamePicker v-model="username" :site="filters\.site_id" class="filter-username"/)
+  assert.match(source, /selectedUserID = ref<number \| undefined>\(undefined\)/)
+  assert.match(source, /user_ids: selectedUserID\.value !== undefined \? String\(selectedUserID\.value\) : scopedUserIDs\.value/)
+  assert.match(source, /username: selectedUserID\.value !== undefined \? undefined : username\.value/)
   assert.match(source, /<el-input v-model="channelID" clearable placeholder="渠道 ID"/)
   assert.doesNotMatch(source, /<el-input v-if="isAdmin"[^>]+placeholder="用户名称"/)
   assert.doesNotMatch(source, /<el-input v-if="isAdmin"[^>]+placeholder="渠道 ID"/)

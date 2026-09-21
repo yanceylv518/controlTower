@@ -13,9 +13,11 @@ export interface MobileLogFilterValues {
 import { computed, reactive, ref } from 'vue'
 import { Filter, RefreshLeft, Hide, View } from '@element-plus/icons-vue'
 import CompactDateTimeRangePicker from './CompactDateTimeRangePicker.vue'
+import UserNamePicker, { type UserPickerOption } from './UserNamePicker.vue'
 
 const props = defineProps<{
   username: string
+  site?: string
   timeRange: [Date, Date]
   filters: MobileLogFilterValues
   busy: boolean
@@ -24,6 +26,7 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{
   'update:username': [value: string]
+  'select-user': [value: UserPickerOption | null]
   'update:timeRange': [value: [Date, Date]]
   apply: [value: MobileLogFilterValues]
   search: []
@@ -48,7 +51,7 @@ function applyFilters() {
 <template>
   <div class="mobile-log-filters">
     <form class="mobile-search" @submit.prevent="emit('search')">
-      <el-input :model-value="username" aria-label="用户名称" placeholder="输入用户名" clearable @update:model-value="emit('update:username', $event)" />
+      <UserNamePicker :model-value="username" :site="site" aria-label="用户名称" placeholder="输入用户名" @update:model-value="emit('update:username', $event)" @select="emit('select-user', $event)" @submit="emit('search')" />
       <el-button type="primary" native-type="submit" :loading="busy">查询</el-button>
     </form>
     <div class="mobile-filter-actions">
@@ -80,7 +83,7 @@ function applyFilters() {
 
 <style scoped>
 .mobile-search { display:flex;gap:10px; }
-.mobile-search .el-input { flex:1;min-width:0; }
+.mobile-search .user-name-picker { flex:1;min-width:0; }
 .mobile-log-filters :deep(.el-input__inner) { font-size:14px; }
 .mobile-log-filters :deep(.el-input__wrapper),.mobile-log-filters .el-button { min-height:36px; }
 .mobile-filter-actions { display:grid;grid-template-columns:minmax(0,1fr) 36px 36px;gap:6px 8px;margin-top:6px;align-items:center; }
