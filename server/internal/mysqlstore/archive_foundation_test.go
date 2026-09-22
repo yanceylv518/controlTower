@@ -50,7 +50,7 @@ func archiveFoundationTestStore(t *testing.T) (Store, *sql.DB, af.Registration) 
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		for _, table := range []string{"archive_day_catalog", "archive_tasks", "archive_datasets"} {
+		for _, table := range []string{"archive_workflow_day_reports", "archive_day_catalog", "archive_tasks", "archive_datasets"} {
 			_, _ = db.Exec("DELETE FROM "+table+" WHERE dataset_id=?", archiveIDBytes(r.DatasetID))
 		}
 		for _, table := range []string{"site_log_archive_days", "site_log_archive_control"} {

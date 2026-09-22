@@ -145,6 +145,20 @@ func (s Store) UpdateLogArchive(ctx context.Context, site string, c ac.Config, a
 	if c.FullHistory && (len(active) == 0 || c.ReconcileID != "") {
 		return ac.ErrConflict
 	}
+	if prev.Pipeline != nil && c.Pipeline != nil && !prev.Pipeline.SameRange(*c.Pipeline) && (prev.Running || observed.State != "paused" || observed.AppliedVersion != prev.Version) {
+		return ac.ErrConflict
+	}
+	if prev.Pipeline != nil && c.Pipeline == nil {
+		return ac.ErrConflict
+	}
+	if c.Pipeline != nil && prev.Pipeline == nil {
+		if prev.Running || observed.State != "paused" || observed.AppliedVersion != prev.Version || observed.Foundation == nil || !observed.Foundation.SupportsPipeline() {
+			return ac.ErrConflict
+		}
+		if observed.Workflow != nil && (observed.Workflow.Phase == "backfill" || observed.Workflow.Phase == "verify" || observed.Workflow.Phase == "seal") {
+			return ac.ErrConflict
+		}
+	}
 	if prev.FullHistory && !c.FullHistory {
 		return ac.ErrConflict
 	}

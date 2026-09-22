@@ -4,26 +4,45 @@ import { ElMessage } from 'element-plus'
 import { ApiError } from '@ct/shared'
 import { client } from '../api'
 import AppShell from '../components/AppShell.vue'
+import ArchivePipelineTasks from '../components/ArchivePipelineTasks.vue'
+import ArchiveWorkflowProgress from '../components/ArchiveWorkflowProgress.vue'
+import ArchiveDailyCalendar from '../components/ArchiveDailyCalendar.vue'
+import ArchiveStatusHelp from '../components/ArchiveStatusHelp.vue'
 import { can } from '../permissions'
 import { useAuthStore } from '../stores/auth'
 import { useFiltersStore } from '../stores/filters'
 import {
-  beijingDate, buildArchiveDays, canCheckArchiveDay, formatArchiveCount, archiveExecution, archiveWorkflowLabels,
-  type ArchiveCalendarDay, type ArchiveConfig, type ArchiveItem, type ArchiveResponse,
+  beijingDate, buildArchiveDays, buildWorkflowDays, canCheckArchiveDay, formatArchiveCount, archiveExecution, archiveWorkflowLabels, archivePreparationActivity, archiveWorkflowOperation, archiveDiagnosticReason,
+  type ArchivePipelineSettings, type ArchiveCalendarDay, type ArchiveConfig, type ArchiveItem, type ArchiveResponse,
 } from '../utils/logArchive'
 
 const filters = useFiltersStore(), auth = useAuthStore()
 const item = ref<ArchiveItem>(), loading = ref(false), failure = ref(''), saving = ref(false)
+const dailyView = ref<'calendar' | 'list'>('calendar')
 const tab = ref('overview'), now = ref(Date.now()), month = ref(beijingDate().slice(0, 7))
 const loadedMonth = ref(''), readAt = ref(''), dayFilter = ref('all'), detailDate = ref('')
-const emptyCapabilities = () => ({ full_history: false, day_versions: false, archive_billing: false, date_backfill: false, coverage_catalog: false })
+const emptyCapabilities = () => ({ four_tasks: false, full_history: false, day_versions: false, archive_billing: false, date_backfill: false, coverage_catalog: false })
 const capabilities = ref(emptyCapabilities())
 const fullHistory = computed(() => capabilities.value.full_history || item.value?.config.full_history === true)
 const execution = computed(() => item.value ? archiveExecution(item.value, fullHistory.value, now.value, !!failure.value) : undefined)
+const preparationActivity = computed(() => item.value && !item.value.config.pipeline ? archivePreparationActivity(item.value, now.value, !!failure.value) : undefined)
+const workflowOperation = computed(() => item.value?.status.workflow ? archiveWorkflowOperation(item.value.status.workflow.phase) : undefined)
+const processingMonth = computed(() => {
+  const pipeline=item.value?.status.pipeline
+  if (pipeline) return (pipeline.active.organization?.date || pipeline.active.verification?.date || pipeline.collection_date || '').slice(0,7)
+  const workflow = item.value?.status.workflow
+  const tableMonth = /^logs_(\d{4})(\d{2})$/.exec(workflow?.preparation?.table || '')
+  return workflow?.date?.slice(0, 7) || (tableMonth ? `${tableMonth[1]}-${tableMonth[2]}` : '')
+})
+function showProcessingMonth() {
+  tab.value = 'daily'
+  dayFilter.value = 'all'
+  if (processingMonth.value && month.value !== processingMonth.value) { month.value = processingMonth.value; changeMonth() }
+}
 
 function workflowReason(code: string) {
-  const reasons: Record<string, string> = { source_history_unknown: '源历史保留情况尚未确认', source_history_unconfirmed: '历史完整保留与稳定性尚未确认', verification_mismatched: '源库与归档明细不一致，需检查差异', source_cleared: '源历史已清理，原归档记录已保留', source_index_missing: '源日志缺少日期扫描所需索引', source_invalid_date: '源日志存在空或无效日期，需处理后继续按日归档', cohort_incomplete: '跨日期关联范围过大，需检查关联记录', cohort_not_ended: '关联日期尚未结束，稍后可重试', verification_expired: '本轮核验超时，请重试', row_too_large: '单条日志超过读取预算' }
-  return `${reasons[code] || '该日期未满足核验或封存条件，请检查归档任务详情'}（${code}）`
+  const reason = archiveDiagnosticReason(code)
+  return `${reason.reason}；${reason.action}（${code}）`
 }
 function retryWorkflow() { if (item.value && writable.value) void save({ ...item.value.config, full_history: true }, item.value.site_id) }
 const workflowLabels = archiveWorkflowLabels
@@ -31,12 +50,12 @@ const dialog = ref(false), editingSite = ref(''), checkDialog = ref(false), chec
 const form = reactive<ArchiveConfig>({ version: 0, instance_id: '', agent_id: '', running: false, batch_size: 500, interval_seconds: 30, delay_seconds: 300 })
 const today = computed(() => beijingDate(now.value))
 const monthReady = computed(() => loadedMonth.value === month.value && !!item.value)
-const days = computed(() => monthReady.value ? buildArchiveDays(month.value, item.value?.days || [], today.value, item.value?.status.reconciliation) : [])
+const days = computed(() => monthReady.value ? (fullHistory.value && item.value ? buildWorkflowDays(month.value, item.value, today.value) : buildArchiveDays(month.value, item.value?.days || [], today.value, item.value?.status.reconciliation)) : [])
 const reportedDays = computed(() => days.value.filter(day => day.reported && day.date <= today.value))
 const missingDays = computed(() => days.value.filter(day => day.date < today.value && !day.reported))
-const isIssue = (day: ArchiveCalendarDay) => day.kind === 'mismatched' || day.kind === 'failed'
+const isIssue = (day: ArchiveCalendarDay) => day.kind === 'mismatched' || day.kind === 'failed' || day.kind === 'blocked'
 const pendingDays = computed(() => days.value.filter(day => day.date < today.value && (isIssue(day) || !day.reported)).sort((a, b) => Number(isIssue(b)) - Number(isIssue(a)) || a.date.localeCompare(b.date)))
-const visibleDays = computed(() => days.value.filter(day => dayFilter.value === 'all' || (dayFilter.value === 'reported' ? !!day.reported : day.date < today.value && (isIssue(day) || !day.reported))))
+const visibleDays = computed(() => days.value.filter(day => dayFilter.value === 'all' || (dayFilter.value === 'reported' ? !!(day.workflow || day.reported) : day.date < today.value && (isIssue(day) || !(day.workflow || day.reported)))))
 const detail = computed(() => days.value.find(day => day.date === detailDate.value))
 const detailOpen = computed({ get: () => !!detail.value, set: (value: boolean) => { if (!value) detailDate.value = '' } })
 const calendarOffset = computed(() => {
@@ -61,7 +80,9 @@ const state = computed<{ text: string; type: 'info' | 'success' | 'warning' | 'd
   if (!versionApplied.value) return { text: current.config.running ? '启动 / 配置待确认' : '正在暂停 / 应用配置', type: 'warning' }
   if (!current.status.configured) return { text: '目标未配置', type: 'warning' }
   if (current.status.prepare_phase && execution.value) return { text: execution.value.title, type: execution.value.attention ? 'danger' : 'warning' }
+  if (current.config.pipeline && Object.keys(current.status.pipeline?.errors || {}).length) return {text:'部分任务异常',type:'danger'}
   if (current.status.error) return { text: '异常 · 等待重试', type: 'danger' }
+  if (current.config.running && current.status.state === 'running' && preparationActivity.value) return { text: preparationActivity.value.attention ? '准备进度待确认' : workflowLabels[current.status.workflow!.phase], type: preparationActivity.value.attention ? 'warning' : 'info' }
   if (current.config.reconcile_id && current.config.running && current.status.state === 'running') {
     return { text: current.status.reconciliation?.id === current.config.reconcile_id ? (checkLabels[current.status.reconciliation.state] || '等待对账') : '等待对账', type: 'info' }
   }
@@ -71,6 +92,7 @@ const state = computed<{ text: string; type: 'info' | 'success' | 'warning' | 'd
 })
 const checkReason = computed(() => {
   const current = item.value
+  if (fullHistory.value) return '全量任务自动处理逐日补齐、核验和封存'
   if (!canManage.value) return '需要归档管理权限'
   if (failure.value) return '状态读取失败，请先刷新后操作'
   if (loading.value || saving.value) return '正在读取或提交状态，请稍候'
@@ -92,7 +114,7 @@ const selection = computed({
 const selectedTargetExists = computed(() => item.value?.targets.some(target => target.agent_id === form.agent_id && target.instance_id === form.instance_id))
 const toggleLabel = computed(() => item.value?.config.reconcile_id ? (item.value.config.running ? '暂停对账' : '继续对账') : (item.value?.config.running ? '暂停归档' : '启用归档'))
 const toggleDisabled = computed(() => !writable.value || (!item.value?.config.running && (!chosenReady.value || !item.value?.enabled)))
-const shortLabels: Record<ArchiveCalendarDay['kind'], string> = { future: '未开始', today: '今日', reported: '已上报', unknown: '未上报', matched: '对账一致', mismatched: '有差异', failed: '对账失败', checking: '对账中' }
+const shortLabels: Record<ArchiveCalendarDay['kind'], string> = { collecting: '采集中', waiting_migration: '待迁移', organization: '整理中', verification: '校验中', organized: '待校验', changed: '待重整', collected: '待整理', preparing: '准备中', pending: '待处理', rebuilding: '重建统计', backfill: '补齐中', verify: '核验中', seal: '封存中', sealed: '已封存', blocked: '需关注', future: '未开始', today: '今日', reported: '已上报', unknown: '未上报', matched: '对账一致', mismatched: '有差异', failed: '对账失败', checking: '对账中' }
 function displayDate(value?: string) {
   if (!value) return '—'
   const parsed = new Date(value)
@@ -107,7 +129,7 @@ function errorMessage(error: unknown) {
   return '请求失败，请检查网络、权限及服务端状态'
 }
 function showDay(day: ArchiveCalendarDay) { if (day.kind !== 'future') detailDate.value = day.date }
-function showPending() { dayFilter.value = 'pending'; tab.value = 'daily' }
+function showPending() { dayFilter.value = 'pending'; dailyView.value = 'list'; tab.value = 'daily' }
 function pickerDate(value: Date) { return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}` }
 function disabledCheckDate(value: Date) { return !item.value || !canCheckArchiveDay(pickerDate(value), today.value, item.value.config.delay_seconds, now.value) }
 
@@ -122,8 +144,9 @@ async function load() {
     if (!current()) return
     const received = (Array.isArray(result.items) ? result.items : []).find(entry => entry.site_id === site)
     if (result.month && result.month !== requestedMonth) throw new Error('archive_month_mismatch')
-    item.value = received ? { ...received, targets: Array.isArray(received.targets) ? received.targets : [], days: Array.isArray(received.days) ? received.days : [] } : undefined
+    item.value = received ? { ...received, targets: Array.isArray(received.targets) ? received.targets : [], days: Array.isArray(received.days) ? received.days : [], workflow_days: Array.isArray(received.workflow_days) ? received.workflow_days : [] } : undefined
     capabilities.value = {
+      four_tasks: result.capabilities?.four_tasks === true,
       full_history: result.capabilities?.full_history === true,
       day_versions: result.capabilities?.day_versions === true,
       archive_billing: result.capabilities?.archive_billing === true,
@@ -142,7 +165,7 @@ async function load() {
 function edit() {
   if (!item.value || !writable.value) return
   editingSite.value = item.value.site_id
-  Object.assign(form, { reconcile_id: '', reconcile_date: '', full_history: false, history_immutable: false }, item.value.config)
+  Object.assign(form, { pipeline: undefined, reconcile_id: '', reconcile_date: '', full_history: false, history_immutable: false }, item.value.config)
   dialog.value = true
 }
 async function save(config: ArchiveConfig, site: string): Promise<boolean> {
@@ -164,6 +187,7 @@ async function save(config: ArchiveConfig, site: string): Promise<boolean> {
   }
 }
 async function savePolicy() { if (await save({ ...form }, editingSite.value)) dialog.value = false }
+function savePipeline(settings: ArchivePipelineSettings) { if (item.value && writable.value) void save({ ...item.value.config, full_history:true, pipeline:settings, running:true }, item.value.site_id) }
 function toggle() { if (item.value && !toggleDisabled.value) void save({ ...item.value.config, running: !item.value.config.running, full_history: fullHistory.value, reconcile_id: fullHistory.value ? '' : item.value.config.reconcile_id, reconcile_date: fullHistory.value ? '' : item.value.config.reconcile_date }, item.value.site_id) }
 function exitCheck() { if (item.value && writable.value) void save({ ...item.value.config, running: false, reconcile_id: '', reconcile_date: '' }, item.value.site_id) }
 function openCheck(date = '') {
@@ -180,7 +204,7 @@ async function startCheck() {
 function changeMonth() {
   detailDate.value = ''
   loadedMonth.value = ''
-  if (item.value) item.value.days = []
+  if (item.value) { item.value.days = []; item.value.workflow_days = [] }
   failure.value = ''
   void load()
 }
@@ -204,11 +228,12 @@ onUnmounted(() => { disposed = true; sequence++; siteEpoch++; saveSequence++; if
  <AppShell title="日志归档">
   <div class="archive-page">
     <div class="archive-navigation">
-      <el-tabs v-if="item" v-model="tab" class="archive-tabs" aria-label="归档工作区"><el-tab-pane label="归档总览" name="overview" /><el-tab-pane v-if="!fullHistory" label="每日数据" name="daily" /><el-tab-pane label="任务与策略" name="tasks" /></el-tabs>
+      <el-tabs v-if="item" v-model="tab" class="archive-tabs" aria-label="归档工作区"><el-tab-pane label="归档总览" name="overview" /><el-tab-pane label="每日数据" name="daily" /><el-tab-pane label="任务与策略" name="tasks" /></el-tabs>
       <span v-else class="secondary">按北京时间查看归档上报与对账结果</span>
       <div class="navigation-actions">
         <div v-if="item" class="archive-state-group" aria-live="polite"><el-tooltip :content="`最近非空批次：${displayDate(item.status.last_success)}；点击查看任务与策略`" placement="bottom"><button type="button" class="archive-state" :aria-label="`归档状态：${failure ? '状态待刷新' : state.text}，查看任务与策略`" @click="tab = 'tasks'"><el-tag :type="failure ? 'warning' : state.type">{{ failure ? '状态待刷新' : state.text }}</el-tag></button></el-tooltip><span v-if="!item.enabled" class="secondary">站点未启用</span></div>
-        <div v-if="item && tab !== 'tasks' && !fullHistory" class="month-control"><el-date-picker v-model="month" type="month" value-format="YYYY-MM" format="YYYY 年 MM 月" :clearable="false" aria-label="归档月份" @change="changeMonth" /></div>
+        <el-radio-group v-if="item && tab === 'daily'" v-model="dailyView" size="small" aria-label="每日数据展示方式"><el-radio-button value="calendar">日历</el-radio-button><el-radio-button value="list">列表</el-radio-button></el-radio-group>
+        <div v-if="item && (tab === 'daily' || (tab === 'overview' && !fullHistory))" class="month-control"><el-date-picker v-model="month" type="month" value-format="YYYY-MM" format="YYYY 年 MM 月" :clearable="false" aria-label="归档月份" @change="changeMonth" /></div>
         <el-button :loading="loading" :disabled="!filters.site_id || saving" :title="readAt ? `上次读取于 ${displayDate(readAt)}` : '刷新归档状态'" aria-describedby="archive-read-time" @click="load">刷新状态</el-button><span id="archive-read-time" class="read-time">{{ readAt ? `上次读取于 ${displayDate(readAt)}` : '尚未读取归档状态' }}</span>
       </div>
     </div>
@@ -217,27 +242,58 @@ onUnmounted(() => { disposed = true; sequence++; siteEpoch++; saveSequence++; if
     <el-empty v-else-if="!item && !loading && !failure" description="当前站点没有可用的归档配置" />
     <div v-else-if="!item && loading" v-loading="true" class="panel loading-panel" aria-label="正在读取归档状态" />
     <template v-if="item">
-      <section v-if="execution" class="panel execution-summary" aria-label="归档运行情况">
+      <section v-if="fullHistory && tab === 'overview'" class="panel" aria-label="归档运行概况">
+        <div class="section-title"><div><h3>运行概况</h3><p class="secondary">查看最近上报的执行情况；任务开关和配置在“任务与策略”中管理。</p></div><div class="actions"><el-button @click="tab = 'daily'">查看每日数据</el-button><el-button type="primary" plain @click="tab = 'tasks'">管理任务与策略</el-button></div></div>
+        <div class="execution-grid">
+          <div><span>执行 Agent</span><b>{{ item.config.agent_id || '未选择' }}</b><small>{{ item.config.instance_id || '尚未配置' }}</small></div>
+          <div><span>最近状态上报</span><b>{{ displayDate(item.seen_at) }}</b><small>{{ online ? '连接正常，批次进度见下方任务记录' : '上报过期，当前执行情况待确认' }}</small></div>
+          <div><span>配置同步</span><b>{{ versionApplied ? '已应用' : '等待 Agent 确认' }}</b><small>期望 v{{ item.config.version }} · 已应用 v{{ item.status.applied_version }}</small></div>
+          <div><span>归档流程</span><b>{{ item.config.pipeline ? '日志归档' : '旧流程 · 可升级' }}</b><small>{{ item.config.running ? '任务已启用，实际操作见下方' : versionApplied && item.status.state === 'paused' ? 'Agent 已确认暂停' : '已请求暂停，等待当前批次收尾并确认' }}</small></div>
+        </div>
+      </section>
+      <ArchiveWorkflowProgress v-if="fullHistory && !item.config.pipeline && tab === 'overview'" :item="item" :now="now" :read-failed="!!failure" />
+      <ArchivePipelineTasks v-if="fullHistory && (tab === 'tasks' || (tab === 'overview' && item.config.pipeline))" :mode="tab === 'overview' ? 'overview' : 'manage'" :item="item" :supported="capabilities.four_tasks" :writable="writable && online && versionApplied" :stale="!!failure || !online" @save="savePipeline" @master-toggle="toggle" />
+          <section v-if="!fullHistory && tab === 'daily' && dailyView === 'calendar'" class="panel calendar-panel" v-loading="loading && !monthReady"><div class="section-title"><div><h3>每日日志覆盖</h3><p class="secondary">{{ month }} · 北京时间，点击日期查看已有证据</p></div><el-button link type="primary" @click="dailyView = 'list'">查看列表</el-button></div>
+            <div class="calendar" aria-label="每日日志上报日历"><span v-for="weekday in ['一', '二', '三', '四', '五', '六', '日']" :key="weekday" class="weekday">{{ weekday }}</span><span v-for="blank in calendarOffset" :key="`blank-${blank}`" aria-hidden="true" /><button v-for="day in days" :key="day.date" type="button" class="calendar-day" :class="[`day-${day.kind}`, { 'day-selected': detailDate === day.date }]" :disabled="day.kind === 'future'" :title="`${day.date} · ${day.label}；${day.reason}`" :aria-label="`${day.date}，${day.label}，${day.reported ? '已有累计上报' : '无累计上报'}。查看详情`" @click="showDay(day)"><b>{{ Number(day.date.slice(8)) }}</b><span>{{ shortLabels[day.kind] }}</span></button></div>
+            <div class="legend"><span><i class="dot dot-report" />已上报</span><span><i class="dot dot-unknown" />未上报</span><span><i class="dot dot-error" />对账异常</span><span><i class="dot dot-today" />今日未结束</span></div><p class="secondary calendar-note">无上报日期保留为未知；当前接口没有可信覆盖起点，不计算完整率。</p>
+          </section>
+      <ArchiveDailyCalendar v-if="fullHistory && tab === 'daily' && dailyView === 'calendar'" :days="days" :month="month" :current-date="item.status.workflow?.date" :loading="loading && !monthReady" :paused="!item.config.running" :stale="!!failure || !online" @select="showDay" />
+      <section v-if="execution && !fullHistory && tab === 'overview'" class="panel execution-summary" aria-label="归档运行情况">
         <div class="section-title"><div><h3>{{ execution.title }}</h3><p class="secondary">{{ execution.detail }}</p></div><el-tag :type="execution.attention ? 'warning' : 'info'">{{ execution.mode }}</el-tag></div>
         <div class="execution-grid">
           <div><span>执行 Agent</span><b>{{ item.config.agent_id || '未选择' }}</b><small>{{ item.config.instance_id || '尚未配置执行节点' }}</small></div>
           <div><span>最近 Agent 上报</span><b>{{ displayDate(item.seen_at) }}</b><small>{{ online ? '上报连接正常；不代表批次已推进' : '尚无近期上报' }}</small></div>
-          <div><span>最近非空批次提交</span><b>{{ displayDate(item.status.last_success) }}</b><small>没有新日志或处于核验阶段时，时间可能不变</small></div>
+          <div v-if="preparationActivity"><span>最近准备批次提交</span><b>{{ displayDate(preparationActivity.progress?.last_committed_at) }}</b><small>清理和旧月表接入的实际提交，与 Agent 心跳分开记录</small></div>
+          <div v-else><span>最近非空批次提交</span><b>{{ displayDate(item.status.last_success) }}</b><small>没有新日志或处于核验阶段时，时间可能不变</small></div>
           <div v-if="!fullHistory"><span>已提交日志 ID</span><b>{{ item.status.last_success ? item.status.last_id : '—' }}</b><small>比较两次上报的位置，不代表历史已完整</small></div>
-          <div v-else><span>最近处理日期</span><b>{{ item.status.workflow?.date || '尚未上报' }}</b><small>{{ item.status.workflow ? '已收到阶段记录' : '尚无阶段记录' }}</small></div>
+          <div v-else><span>最近处理日期</span><b>{{ preparationActivity ? '尚未进入逐日归档' : item.status.workflow?.date || '尚未上报' }}</b><small>{{ preparationActivity ? '先完成旧归档准备，再按日期补齐' : item.status.workflow ? '已收到阶段记录' : '尚无阶段记录' }}</small></div>
+        </div>
+        <div v-if="workflowOperation" class="workflow-operation">
+          <p class="secondary">最近上报的处理对象：{{ workflowOperation.target }}。下一步：{{ workflowOperation.next }}。</p>
+          <template v-if="preparationActivity">
+            <p :class="preparationActivity.attention ? 'error-text' : 'secondary'" role="status">{{ preparationActivity.message }}</p>
+            <div class="execution-grid">
+              <div><span>已记录处理量</span><b>{{ formatArchiveCount(preparationActivity.progress?.processed_rows) }} 条</b><small>{{ preparationActivity.progress ? workflowLabels[preparationActivity.progress.phase] : '尚无批次明细，不能当作 0 条' }}</small></div>
+              <div><span>最近一批处理量</span><b>{{ formatArchiveCount(preparationActivity.progress?.last_batch_rows) }} 条</b><small>0 条可能表示该表已清理完或已读到表尾</small></div>
+              <div><span>已记录提交批数</span><b>{{ formatArchiveCount(preparationActivity.progress?.committed_batches) }} 批</b><small>只累计成功提交的批次</small></div>
+              <div><span>最近一批处理表</span><b>{{ preparationActivity.progress?.table || '尚未上报' }}</b><small v-if="preparationActivity.progress?.phase === 'import_target'">该表已读日志 ID：{{ formatArchiveCount(preparationActivity.progress.after_id) }}</small><small v-else>旧统计依据；原始日志月表保留</small></div>
+            </div>
+            <p v-if="preparationActivity.progress" class="secondary">上述计数自 {{ displayDate(preparationActivity.progress.recorded_since) }} 起记录该阶段的已提交工作，重启后接续；升级前已处理量不追溯。未扫描全表统计总量，因此不显示完成百分比或剩余时间。</p>
+          </template>
         </div>
         <p class="secondary">每批最多 {{ item.config.batch_size }} 条，间隔 {{ item.config.interval_seconds }} 秒，归档延迟 {{ item.config.delay_seconds }} 秒。页面每 15 秒刷新；刷新页面不会启动新批次。</p>
         <p v-if="!fullHistory && !item.active_dataset_id && item.status.prepare_phase" class="secondary">新版归档由 Agent 和服务端自动准备表结构并绑定数据集，已有月表数据保留，无需手动执行初始化脚本。</p>
         <p v-else-if="!fullHistory && !item.active_dataset_id" class="secondary">当前未收到新版数据集信息，无法确认全量任务是否已准备好。若仍使用旧版增量模式，需完成归档库准备、数据集注册及配套 Agent 升级后使用全量任务。</p>
-        <el-button v-if="tab !== 'tasks'" link type="primary" @click="tab = 'tasks'">查看执行详情与策略</el-button>
+        <el-button link type="primary" @click="tab = 'tasks'">查看执行详情与策略</el-button>
       </section>
-      <el-alert v-if="item.status.error" :title="item.status.error" type="error" :closable="false" show-icon />
-      <section v-if="fullHistory" class="panel">
+      <el-alert v-if="item.status.error && (!fullHistory || item.config.pipeline || tab === 'daily')" :title="archiveDiagnosticReason(item.status.diagnostic?.code || item.status.error).reason" type="error" :closable="false" show-icon />
+      <section v-if="fullHistory && !item.config.pipeline && tab === 'tasks'" class="panel">
         <div class="section-title"><div><h3>全量归档任务</h3><p class="secondary">从最早日期分批归档并回读校验；当天结束后补齐一次，再核对归档库并封存。</p></div><el-button :type="item.config.running ? 'default' : 'primary'" :disabled="toggleDisabled" :loading="saving" @click="toggle">{{ item.config.running ? '暂停归档' : item.status.workflow ? '继续归档' : '启动归档' }}</el-button></div>
         <div class="execution-grid"><div><span>最近上报阶段</span><b>{{ item.status.workflow ? workflowLabels[item.status.workflow.phase] || item.status.workflow.phase : '尚未上报' }}</b></div><div><span>已复用历史日志</span><b>{{ formatArchiveCount(item.status.workflow?.imported_rows) }}</b></div><div><span>已封存日期</span><b>{{ formatArchiveCount(item.status.workflow?.completed_days) }} 天</b></div><div><span>受阻日期</span><b>{{ formatArchiveCount(item.status.workflow?.blocked_days) }} 天</b></div></div>
         <p v-if="item.status.workflow?.date" class="secondary">当前处理日期：{{ item.status.workflow.date }}；已发现最早日期：{{ item.status.workflow.first_date || '扫描中' }}。范围来自可读取数据，不代表源库从未清理。</p>
         <p v-if="item.status.workflow?.error_code" class="error-text">任务需关注：{{ workflowReason(item.status.workflow.error_code) }}</p>
         <div v-if="item.status.workflow?.issues?.length"><p v-for="issue in item.status.workflow.issues" :key="issue.date" class="secondary">{{ issue.date }} · {{ workflowReason(issue.code) }}</p><p class="secondary">显示最早 20 个受阻日期。处理原因后重试，其他日期继续归档。</p><el-button :disabled="!writable" :loading="saving" @click="retryWorkflow">重试受阻日期</el-button></div>
+        <el-button link type="primary" @click="showProcessingMonth">查看每日日志与处理状态</el-button>
         <p v-if="!item.config.history_immutable" class="secondary">尚未声明源历史完整保留且稳定：仍会扫描、复用和补齐，不自动封存。确认实际保留策略后可在任务与策略中设置。</p>
       </section>
       <template v-if="tab === 'overview' && !fullHistory">
@@ -246,25 +302,22 @@ onUnmounted(() => { disposed = true; sequence++; siteEpoch++; saveSequence++; if
           <button class="metric metric-action" type="button" :disabled="!monthReady" @click="showPending"><span class="label">已结束但未上报</span><strong>{{ monthReady ? missingDays.length : '—' }} <small>天</small></strong><span class="secondary">状态未知，不等于漏采 <span aria-hidden="true">↗</span></span></button>
           <section class="metric"><span class="label">归档出账</span><strong class="metric-status">尚未开放</strong><span class="secondary">待接入封存版本与金额配置</span></section>
         </div>
-        <div class="overview-grid">
-          <section class="panel calendar-panel" v-loading="loading && !monthReady"><div class="section-title"><div><h3>每日日志覆盖</h3><p class="secondary">{{ month }} · 北京时间，点击日期查看已有证据</p></div><el-button link type="primary" @click="tab = 'daily'">查看列表</el-button></div>
-            <div class="calendar" aria-label="每日日志上报日历"><span v-for="weekday in ['一', '二', '三', '四', '五', '六', '日']" :key="weekday" class="weekday">{{ weekday }}</span><span v-for="blank in calendarOffset" :key="`blank-${blank}`" aria-hidden="true" /><button v-for="day in days" :key="day.date" type="button" class="calendar-day" :class="[`day-${day.kind}`, { 'day-selected': detailDate === day.date }]" :disabled="day.kind === 'future'" :title="`${day.date} · ${day.label}；${day.reason}`" :aria-label="`${day.date}，${day.label}，${day.reported ? '已有累计上报' : '无累计上报'}。查看详情`" @click="showDay(day)"><b>{{ Number(day.date.slice(8)) }}</b><span>{{ shortLabels[day.kind] }}</span></button></div>
-            <div class="legend"><span><i class="dot dot-report" />已上报</span><span><i class="dot dot-unknown" />未上报</span><span><i class="dot dot-error" />对账异常</span><span><i class="dot dot-today" />今日未结束</span></div><p class="secondary calendar-note">无上报日期保留为未知；当前接口没有可信覆盖起点，不计算完整率。</p>
-          </section>
+        <div>
           <section class="panel attention-panel"><div class="section-title"><div><h3>优先查看</h3><p class="secondary">已结束日期中的对账异常与未上报记录</p></div></div><div v-if="!monthReady" class="empty-note">等待该月份数据</div><div v-else-if="!pendingDays.length" class="empty-note">没有未上报或对账异常的已结束日期。已有上报仍需后续完整性核验。</div><button v-for="day in pendingDays.slice(0, 5)" :key="day.date" type="button" class="attention-day" @click="showDay(day)"><span><b>{{ day.date }}</b><span class="secondary">{{ isIssue(day) ? day.label : '无累计上报，需确认覆盖' }}</span></span><span aria-hidden="true">›</span></button><el-button v-if="pendingDays.length" link type="primary" class="attention-more" @click="showPending">查看全部 {{ pendingDays.length }} 天</el-button><div class="capability-note"><b>下一步：建立可信日期覆盖</b><p>按日对账可比较当前源与目标明细；封存、指定日期补齐和归档账单仍需后端支持。</p></div></section>
         </div>
       </template>
-      <section v-if="tab === 'daily'" class="panel daily-panel"><div class="section-title daily-heading"><div><h3>每日数据</h3><p class="secondary">全月日期均保留，条数为已归档累计值</p></div><el-radio-group v-model="dayFilter" size="small" aria-label="日期筛选"><el-radio-button value="all">全部</el-radio-button><el-radio-button value="reported">已上报</el-radio-button><el-radio-button value="pending">未上报 / 异常</el-radio-button></el-radio-group></div><p v-if="dayFilter === 'pending'" class="secondary">只显示已结束且无累计上报，或最近对账异常的日期。</p>
+      <section v-if="tab === 'daily' && dailyView === 'list'" class="panel daily-panel"><div class="section-title daily-heading"><div><h3>每日数据</h3><p class="secondary">{{ fullHistory ? '按北京时间查看每天最近上报的状态；月表已有数量与整理中的统计分开显示' : '全月日期均保留，条数为已归档累计值' }}</p></div><el-radio-group v-model="dayFilter" size="small" aria-label="日期筛选"><el-radio-button value="all">全部</el-radio-button><el-radio-button value="reported">已上报</el-radio-button><el-radio-button value="pending">未上报 / 异常</el-radio-button></el-radio-group></div><p v-if="fullHistory" class="secondary">当前任务：{{ execution?.title }}。{{ execution?.detail }} 明细按最多 100 个日期分批采集，约每 30 秒读取一页；页面刷新不会扫描源库。</p><el-alert v-if="fullHistory && item.status.workflow_daily_error" :title="`每日明细读取失败：${archiveDiagnosticReason(item.status.workflow_daily_error).reason}（${item.status.workflow_daily_error}）。以下保留最近记录。`" type="warning" :closable="false" show-icon /><el-alert v-else-if="fullHistory && !item.status.workflow_daily" title="尚未收到新版每日明细；需配套更新 Server 和 Agent 后自动上报。没有明细不表示日志为零。" type="info" :closable="false" show-icon /><p v-if="dayFilter === 'pending'" class="secondary">只显示已结束且无累计上报，或最近处理异常的日期。</p>
         <el-table v-mobile-cards v-loading="loading && !monthReady" :data="visibleDays" row-key="date" empty-text="当前月份没有符合筛选条件的日期">
           <el-table-column label="日志日期" prop="date" min-width="114"><template #default="{ row }"><span class="date-cell">{{ row.date }}</span></template></el-table-column>
-          <el-table-column label="累计上报条数" min-width="126"><template #default="{ row }"><span>{{ formatArchiveCount(row.reported?.archived_rows) }} <small class="secondary">原始</small></span><div class="secondary">请求 {{ formatArchiveCount(row.reported?.request_rows) }} · 错误 {{ formatArchiveCount(row.reported?.error_rows) }}</div></template></el-table-column>
-          <el-table-column label="日志状态" min-width="146"><template #default="{ row }"><el-tag :type="row.tagType" size="small">{{ row.label }}</el-tag></template></el-table-column>
-          <el-table-column label="归档出账条件" min-width="120"><template #default="{ row }"><span class="secondary">{{ row.kind === 'future' ? '—' : row.kind === 'today' ? '等待日期结束' : '尚不能校验' }}</span></template></el-table-column>
+          <el-table-column v-if="fullHistory" label="月表已有日志" min-width="150"><template #default="{ row }">{{ formatArchiveCount(row.raw?.rows) }} 条<div class="secondary">{{ displayDate(row.raw?.observed_at) }}</div><span v-if="row.raw?.error_code" class="error-text">数量刷新失败</span></template></el-table-column>
+          <el-table-column :label="fullHistory ? '已统计日志数' : '累计上报条数'" min-width="126"><template #default="{ row }"><span>{{ formatArchiveCount(row.counts?.log_rows) }} <small class="secondary">原始</small></span><div class="secondary">请求 {{ formatArchiveCount(row.counts?.request_rows) }} · 错误 {{ formatArchiveCount(row.counts?.error_rows) }}</div></template></el-table-column>
+          <el-table-column :label="fullHistory ? '最近处理状态' : '日志状态'" min-width="146"><template #default="{ row }"><el-tag :type="row.tagType" size="small">{{ row.label }}</el-tag></template></el-table-column>
+          <el-table-column v-if="fullHistory" label="说明 / 受阻原因" min-width="240"><template #default="{ row }"><span class="secondary">{{ row.reason }}</span></template></el-table-column><el-table-column v-if="fullHistory" label="明细采集时间" min-width="166"><template #default="{ row }"><span>{{ displayDate(row.workflow?.observed_at) }}</span></template></el-table-column><el-table-column v-if="!fullHistory" label="归档出账条件" min-width="120"><template #default="{ row }"><span class="secondary">{{ row.kind === 'future' ? '—' : row.kind === 'today' ? '等待日期结束' : '尚不能校验' }}</span></template></el-table-column>
           <el-table-column label="操作" width="70"><template #default="{ row }"><el-button link type="primary" :disabled="row.kind === 'future'" @click="showDay(row)">详情</el-button></template></el-table-column>
-        </el-table><p class="secondary">“—”表示没有可信上报计数；上报为 0 或最近对账一致，均不表示已核实零业务、完成封存或可出账。</p>
+        </el-table><p class="secondary">“—”表示尚无可用计数。明细采集时间仅表示读取归档状态的时间，不等于批次提交时间；刷新后的计数变化可用于观察推进。归档出账尚未开放。</p>
       </section>
       <template v-if="tab === 'tasks'">
-        <section class="panel"><div class="section-title"><div><h3>当前执行</h3><p class="secondary">{{ fullHistory ? '同一任务自动衔接扫描、补齐、核验和封存' : '使用现有增量归档与按日对账能力' }}</p></div><div class="actions"><el-button v-if="item.config.reconcile_id" :disabled="!writable" @click="exitCheck">结束对账模式</el-button><el-button v-if="!fullHistory" :disabled="!!checkReason" :title="checkReason || '比较一个历史日期的源与目标明细'" @click="openCheck()">按日对账</el-button><el-button :type="item.config.running ? 'default' : 'primary'" :disabled="toggleDisabled" :loading="saving" @click="toggle">{{ toggleLabel }}</el-button></div></div><p v-if="checkReason && !fullHistory" class="secondary">按日对账：{{ checkReason }}。</p>
+        <section v-if="!fullHistory" class="panel"><div class="section-title"><div><h3>增量归档控制</h3><p class="secondary">{{ item.config.pipeline ? '采集独立推进；整理与校验按日期衔接' : fullHistory ? '同一任务自动衔接扫描、补齐、核验和封存' : '使用现有增量归档与按日对账能力' }}</p></div><div class="actions"><el-button v-if="item.config.reconcile_id" :disabled="!writable" @click="exitCheck">结束对账模式</el-button><el-button v-if="!fullHistory" :disabled="!!checkReason" :title="checkReason || '比较一个历史日期的源与目标明细'" @click="openCheck()">按日对账</el-button><el-button :type="item.config.running ? 'default' : 'primary'" :disabled="toggleDisabled" :loading="saving" @click="toggle">{{ toggleLabel }}</el-button></div></div><p v-if="checkReason && !fullHistory" class="secondary">按日对账：{{ checkReason }}。</p>
           <div class="execution-grid"><div><span>执行 Agent</span><b>{{ item.config.agent_id || '未选择' }}</b><small>{{ item.config.instance_id || '请先配置执行节点' }}</small></div><div><span>已提交日志 ID</span><b>{{ item.status.last_id || '—' }}</b><small>源日志 ID 增量位置，不代表历史已完整</small></div><div><span>最近一批</span><b>{{ numberCount(item.status.last_batch_rows) }} 条</b><small>单批处理量，没有全量进度分母</small></div><div><span>最近写入校验</span><b>{{ item.status.verified_at ? `${numberCount(item.status.verified_rows)} 条通过` : '尚无结果' }}</b><small>{{ displayDate(item.status.verified_at) }}</small></div></div><p class="secondary">最近非空批次提交：{{ displayDate(item.status.last_success) }}。没有新日志时此时间不会前进，不能用它计算数据延迟。</p>
         </section>
         <section v-if="!fullHistory" class="panel"><div class="section-title"><div><h3>最近一次按日对账</h3><p class="secondary">仅保留当前上报结果，尚无持久任务历史或重试队列</p></div><el-tag v-if="item.status.reconciliation" :type="item.status.reconciliation.state === 'matched' ? 'success' : item.status.reconciliation.state === 'running' ? 'info' : 'warning'">{{ checkLabels[item.status.reconciliation.state] || item.status.reconciliation.state }}</el-tag></div><template v-if="item.status.reconciliation"><div class="reconcile-summary"><b>{{ item.status.reconciliation.date }}</b><span>源库 {{ numberCount(item.status.reconciliation.source_rows) }} 条</span><span>目标库 {{ numberCount(item.status.reconciliation.target_rows) }} 条</span><span class="secondary">完成于 {{ displayDate(item.status.reconciliation.finished_at) }}</span></div><p v-if="item.status.reconciliation.error" class="error-text">{{ item.status.reconciliation.error }}</p></template><p v-else class="empty-note">尚无按日对账结果。</p><p class="secondary">对账逐批比较原始明细，不自动修复差异或重算统计，也不产生封存版本。对账结束后，退出对账模式再启用归档。</p></section>
@@ -274,9 +327,9 @@ onUnmounted(() => { disposed = true; sequence++; siteEpoch++; saveSequence++; if
     </template>
   </div>
   <el-dialog v-model="detailOpen" :title="`${detailDate} · 日志详情`" width="min(680px, calc(100vw - 24px))" class="archive-detail-dialog">
-    <template v-if="detail"><div class="detail-title"><span>{{ siteName }}</span><el-tag :type="detail.tagType">{{ detail.label }}</el-tag></div><p class="dialog-note">{{ detail.reason }}</p><div class="detail-counts"><div><span>已上报原始日志</span><b>{{ formatArchiveCount(detail.reported?.archived_rows) }}</b></div><div><span>请求日志</span><b>{{ formatArchiveCount(detail.reported?.request_rows) }}</b></div><div><span>错误请求</span><b>{{ formatArchiveCount(detail.reported?.error_rows) }}</b></div></div>
-      <section class="detail-section"><h3>已有核验记录</h3><dl class="detail-facts"><div><dt>该日已提交 ID</dt><dd>{{ detail.reported?.last_id || '—' }}</dd></div><div><dt>最近写入校验</dt><dd>{{ displayDate(detail.reported?.verified_at) }}</dd></div></dl><p class="secondary">写入校验检查已提交批次，不能证明源库整个日期已归档。</p><template v-if="detail.reconciliation"><p><el-tag :type="detail.tagType" size="small">{{ detail.label }}</el-tag></p><p>源库 {{ numberCount(detail.reconciliation.source_rows) }} 条 · 目标库 {{ numberCount(detail.reconciliation.target_rows) }} 条</p><p class="secondary">完成于 {{ displayDate(detail.reconciliation.finished_at) }}</p><p v-if="detail.reconciliation.error" class="error-text">{{ detail.reconciliation.error }}</p></template><p v-else class="secondary">当前上报没有该日的按日对账结果。</p></section><section class="detail-section"><h3>归档出账条件：尚不能校验</h3><p class="secondary">固定日期版本、历史金额配置和完整性目录尚未接入。已有累计计数或明细一致结果不能作为可出账结论。</p><p class="secondary">指定日期补齐与版本修订尚未开放，当前不会自动修复差异。</p></section>
-    </template><template #footer><el-button @click="detailOpen = false">关闭</el-button><el-button :disabled="!!checkReason || !detail || !canCheckArchiveDay(detail.date, today, item?.config.delay_seconds ?? 0, now)" :title="checkReason || '仅支持已结束且超过归档延迟窗口的日期'" @click="openCheck(detailDate)">按日对账</el-button></template>
+    <template v-if="detail"><div class="detail-title"><span>{{ siteName }}</span><el-tag :type="detail.tagType">{{ detail.label }}</el-tag></div><p class="dialog-note">{{ detail.reason }}</p><section v-if="fullHistory" class="detail-section"><h3>月表已有日志</h3><b>{{ formatArchiveCount(detail.raw?.rows) }} 条</b><p class="secondary">数量统计时间：{{ displayDate(detail.raw?.observed_at) }}。这是月表已有数量，不代表源库全天已采集完整。</p><p v-if="detail.raw?.error_code" class="error-text">数量刷新失败：{{ archiveDiagnosticReason(detail.raw.error_code).reason }}；{{ archiveDiagnosticReason(detail.raw.error_code).action }}。已有数量保留原统计时间。</p></section><div v-if="detail.workflow?.diagnostic" class="error-text">操作：{{ detail.workflow.diagnostic.operation?.code }}；处理表：{{ detail.workflow.diagnostic.operation?.table || '—' }}；日志 ID：{{ detail.workflow.diagnostic.row_id || '—' }}；MySQL：{{ detail.workflow.diagnostic.mysql_number || '—' }}（{{ detail.workflow.diagnostic.sql_state || '—' }}）</div><ArchiveStatusHelp v-if="fullHistory" :kind="detail.kind" /><div class="detail-counts"><div><span>{{ fullHistory ? '已统计原始日志' : '已上报原始日志' }}</span><b>{{ formatArchiveCount(detail.counts?.log_rows) }}</b></div><div><span>请求日志</span><b>{{ formatArchiveCount(detail.counts?.request_rows) }}</b></div><div><span>错误请求</span><b>{{ formatArchiveCount(detail.counts?.error_rows) }}</b></div></div>
+      <section v-if="fullHistory" class="detail-section"><h3>每日处理记录</h3><dl class="detail-facts"><div><dt>日志所在月表</dt><dd>logs_{{ detailDate.slice(0, 7).replace('-', '') }}</dd></div><div><dt>明细采集时间</dt><dd>{{ displayDate(detail.workflow?.observed_at) }}</dd></div><div><dt>日期任务结果提交</dt><dd>{{ displayDate(detail.workflow?.updated_at) }}</dd></div></dl><p class="secondary">归档库准备和接入期间，统计只涵盖已重建记录；日期任务结果提交时间只在有记录时展示。该页面展示处理摘要，不展示原始日志正文。</p><p class="secondary">归档出账尚未开放。</p></section><template v-else><section class="detail-section"><h3>已有核验记录</h3><dl class="detail-facts"><div><dt>该日已提交 ID</dt><dd>{{ detail.reported?.last_id || '—' }}</dd></div><div><dt>最近写入校验</dt><dd>{{ displayDate(detail.reported?.verified_at) }}</dd></div></dl><p class="secondary">写入校验检查已提交批次，不能证明源库整个日期已归档。</p><template v-if="detail.reconciliation"><p><el-tag :type="detail.tagType" size="small">{{ detail.label }}</el-tag></p><p>源库 {{ numberCount(detail.reconciliation.source_rows) }} 条 · 目标库 {{ numberCount(detail.reconciliation.target_rows) }} 条</p><p class="secondary">完成于 {{ displayDate(detail.reconciliation.finished_at) }}</p><p v-if="detail.reconciliation.error" class="error-text">{{ detail.reconciliation.error }}</p></template><p v-else class="secondary">当前上报没有该日的按日对账结果。</p></section><section class="detail-section"><h3>归档出账条件：尚不能校验</h3><p class="secondary">固定日期版本、历史金额配置和完整性目录尚未接入。已有累计计数或明细一致结果不能作为可出账结论。</p><p class="secondary">指定日期补齐与版本修订尚未开放，当前不会自动修复差异。</p></section></template>
+    </template><template #footer><el-button @click="detailOpen = false">关闭</el-button><el-button v-if="!fullHistory" :disabled="!!checkReason || !detail || !canCheckArchiveDay(detail.date, today, item?.config.delay_seconds ?? 0, now)" :title="checkReason || '仅支持已结束且超过归档延迟窗口的日期'" @click="openCheck(detailDate)">按日对账</el-button></template>
   </el-dialog>
   <el-dialog v-model="checkDialog" title="按日对账" width="min(540px, calc(100vw - 24px))" :close-on-click-modal="false" append-to-body>
     <p class="dialog-note">站点：{{ checkSite }}。读取所选日期的源库及目标月表，比较原始明细；不自动修复差异。</p><el-form label-position="top" @submit.prevent><el-form-item label="日志日期（北京时间）"><el-date-picker v-model="checkDate" type="date" value-format="YYYY-MM-DD" :disabled-date="disabledCheckDate" placeholder="选择已结束的日志日期" style="max-width:100%" /></el-form-item></el-form><p class="secondary">需先暂停并等待 Agent 确认；日期结束后还需超过 {{ item?.config.delay_seconds ?? '—' }} 秒归档延迟。仅适用于日志保持不变的历史日期，源库需有 created_at 开头的索引。</p><p v-if="checkReason" class="error-text">{{ checkReason }}</p><p v-else-if="checkDate && !validCheckDate" class="error-text">所选日期尚未结束或仍在归档延迟窗口内。</p><template #footer><el-button :disabled="saving" @click="checkDialog = false">取消</el-button><el-button type="primary" :loading="saving" :disabled="!checkCanSubmit" @click="startCheck">开始对账</el-button></template>
@@ -302,4 +355,5 @@ onUnmounted(() => { disposed = true; sequence++; siteEpoch++; saveSequence++; if
 .detail-title{flex-wrap:wrap;color:var(--ct-ink);font-size:13px;margin-bottom:12px}.dialog-note{font-size:13px;line-height:1.8;color:var(--ct-ink-2);margin:0 0 20px;overflow-wrap:anywhere}.detail-counts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;padding:16px;background:var(--ct-surface-2);border-radius:8px}.detail-counts>div{min-width:0;display:flex;flex-direction:column;gap:8px}.detail-counts b{font-size:20px;color:var(--ct-ink);font-variant-numeric:tabular-nums;overflow-wrap:anywhere}.detail-section{border-top:1px solid var(--ct-line);margin-top:20px;padding-top:18px;color:var(--ct-ink-2);font-size:13px}.detail-facts{margin:12px 0}.detail-facts>div{display:flex;justify-content:space-between;gap:12px;margin:10px 0}.detail-facts dt{color:var(--ct-ink-3)}.detail-facts dd{margin:0;text-align:right;overflow-wrap:anywhere}.form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 16px}.form-grid :deep(.el-input-number){width:100%}
 @media(max-width:1100px){.panel{padding:15px}.overview-grid{grid-template-columns:minmax(0,1.6fr) minmax(215px,1fr);gap:12px}.calendar{gap:4px}.execution-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.daily-heading{align-items:flex-start}}
 @media(max-width:700px){.archive-page{gap:10px}.navigation-actions{width:100%;gap:8px;justify-content:flex-end}.navigation-actions>.el-button{padding:8px 10px}.archive-state-group{margin-right:auto}.archive-navigation{gap:8px}.archive-tabs{flex-basis:100%}.month-control{width:auto}.month-control :deep(.el-date-editor){width:146px}.archive-page .metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.metric{padding:9px 12px;gap:3px 8px}.metric>.label{font-size:12px}.metric strong{font-size:21px}.metrics>.metric:last-child{grid-column:1/-1;border-left:0;border-top:1px solid var(--ct-line);grid-template-columns:auto 1fr;gap:3px 10px}.metrics>.metric:last-child strong{font-size:15px;line-height:1.5}.metrics>.metric:last-child .secondary{grid-column:1/-1}.overview-grid{grid-template-columns:minmax(0,1fr)}.calendar-day{min-height:61px}.calendar-day span{font-size:10px}.attention-day{padding:12px 0}.capability-note{padding-top:18px}.daily-heading{gap:12px}.daily-heading :deep(.el-radio-button__inner){padding:8px 10px}.policy,.execution-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:18px 12px}.planned-list{grid-template-columns:1fr}.section-title>.actions{width:100%}.form-grid{grid-template-columns:1fr}.detail-counts{gap:8px;padding:12px}.detail-counts b{font-size:18px}.detail-facts>div{flex-direction:column;gap:4px}.detail-facts dd{text-align:left}.detail-title>span:first-child{overflow-wrap:anywhere}.archive-tabs :deep(.el-tabs__item){padding:0 15px;font-size:14px}}
+.workflow-operation{border-top:1px solid var(--ct-line);margin-top:18px;padding-top:4px}.workflow-operation>.execution-grid{margin:16px 0}
 </style>

@@ -106,7 +106,7 @@ func (w *Worker) acquireWriter(ctx context.Context, grant archivecontract.Writer
 	}
 	tx, err := w.target.BeginTx(ctx, nil)
 	if err != nil {
-		return errors.New("archive writer lease transaction failed")
+		return &scanError{code: "writer_transaction_failed", cause: err}
 	}
 	defer tx.Rollback()
 	meta, err := readWriterMeta(ctx, tx, grant.Identity, true)
@@ -118,16 +118,18 @@ func (w *Worker) acquireWriter(ctx context.Context, grant archivecontract.Writer
 		return ErrWriterLease
 	}
 	if workflow {
-		if err := initializeWorkflow(ctx, tx); err != nil { return err }
+		if err := initializeWorkflow(ctx, tx); err != nil {
+			return err
+		}
 	} else if err := requireWriterBaseline(ctx, tx); err != nil {
 		return err
 	}
 	// Only a transaction holding the dataset fence and proving an empty
 	// baseline may create the initial cursor. A date scan can then run first.
 	if !workflow {
-	if _, err := tx.ExecContext(ctx, `INSERT INTO archive_checkpoints(stream_key,stream_type,after_id,cursor_version,updated_at) VALUES('incremental','incremental',0,1,UTC_TIMESTAMP(6)) ON DUPLICATE KEY UPDATE stream_key=VALUES(stream_key)`); err != nil {
-		return ErrWriterCheckpoint
-	}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO archive_checkpoints(stream_key,stream_type,after_id,cursor_version,updated_at) VALUES('incremental','incremental',0,1,UTC_TIMESTAMP(6)) ON DUPLICATE KEY UPDATE stream_key=VALUES(stream_key)`); err != nil {
+			return ErrWriterCheckpoint
+		}
 	}
 	remaining = time.Until(deadline)
 	if remaining > 90*time.Second {
@@ -140,14 +142,14 @@ func (w *Worker) acquireWriter(ctx context.Context, grant archivecontract.Writer
 		return ErrWriterLease
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE archive_dataset_meta SET writer_epoch=?,writer_session=?,writer_lease_until=TIMESTAMPADD(MICROSECOND,?,UTC_TIMESTAMP(6)),updated_at=UTC_TIMESTAMP(6) WHERE singleton_id=1`, grant.WriterEpoch, session, remaining.Microseconds()); err != nil {
-		return errors.New("archive writer lease update failed")
+		return &scanError{code: "writer_authorization_failed", cause: err}
 	}
 	// A delayed response cannot extend authority beyond the entry budget.
 	if time.Until(deadline) <= 0 {
 		return ErrWriterLease
 	}
 	if err := tx.Commit(); err != nil {
-		return errors.New("archive writer lease commit uncertain; refresh authorization")
+		return &scanError{code: "writer_commit_uncertain", cause: err}
 	}
 	return nil
 }
@@ -311,6 +313,9 @@ func (w *Worker) PassV2(ctx context.Context, grant archivecontract.WriterGrant) 
 }
 
 func (w *Worker) passV2(ctx context.Context, grant archivecontract.WriterGrant, workflowID string) (result BatchResult, err error) {
+	return w.passV2Mode(ctx, grant, workflowID, false)
+}
+func (w *Worker) passV2Mode(ctx context.Context, grant archivecontract.WriterGrant, workflowID string, rawOnly bool) (result BatchResult, err error) {
 	started := time.Now()
 	budget := w.readBudget()
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(budget.MaxDurationMillis)*time.Millisecond)
@@ -356,7 +361,7 @@ func (w *Worker) passV2(ctx context.Context, grant archivecontract.WriterGrant, 
 	if e != nil {
 		return result, &scanError{code: "source_query_failed"}
 	}
-	batch := writerBatch{BeforeID: progress.AfterID, AfterID: progress.AfterID, WorkflowID: workflowID}
+	batch := writerBatch{BeforeID: progress.AfterID, AfterID: progress.AfterID, WorkflowID: workflowID, RawOnly: rawOnly}
 	readBytes, _, e := readWriterPage(ctx, rows, &batch, budget, sourceNow, int64(delay/time.Second), started)
 	if e != nil {
 		return result, e

@@ -103,7 +103,7 @@ func (s FoundationStatus) Validate() error {
 	}
 	seen := map[string]bool{}
 	for _, capability := range s.Capabilities {
-		if seen[capability] || (capability != CapabilityFoundation && capability != CapabilityAtomicWriter && capability != CapabilityBackfill && capability != CapabilityReconcile && capability != CapabilitySeal && capability != CapabilityWorkflow) {
+		if seen[capability] || (capability != CapabilityFoundation && capability != CapabilityAtomicWriter && capability != CapabilityBackfill && capability != CapabilityReconcile && capability != CapabilitySeal && capability != CapabilityWorkflow && capability != CapabilityPipeline) {
 			return ErrUnsupported
 		}
 		seen[capability] = true
@@ -114,7 +114,7 @@ func (s FoundationStatus) Validate() error {
 	if seen[CapabilityBackfill] && !seen[CapabilityAtomicWriter] {
 		return ErrUnsupported
 	}
-	if seen[CapabilityReconcile] && !seen[CapabilityBackfill] || seen[CapabilitySeal] && !seen[CapabilityReconcile] || seen[CapabilityWorkflow] && !seen[CapabilitySeal] {
+	if seen[CapabilityReconcile] && !seen[CapabilityBackfill] || seen[CapabilitySeal] && !seen[CapabilityReconcile] || seen[CapabilityWorkflow] && !seen[CapabilitySeal] || seen[CapabilityPipeline] && !seen[CapabilityWorkflow] {
 		return ErrUnsupported
 	}
 	if !s.SupportsAtomicWriter() && (s.WriterEpoch != 0 || s.ReceiptID != "") {

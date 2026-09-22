@@ -137,7 +137,7 @@ func (w *Worker) writeScanCommit(ctx context.Context, tx *sql.Tx, grant af.Write
 		if empty {
 			dayState = "empty_candidate"
 		}
-		if t.Policy.SourceRetainedFrom == "" {
+		if t.Policy.SourceRetainedFrom == "" && !b.RawOnly {
 			state = "blocked"
 			code = "source_history_unknown"
 			dayState = "unknown"
@@ -167,6 +167,9 @@ func (w *Worker) ScanDateV3(ctx context.Context, grant af.WriterGrant, t af.Back
 
 // allowOpen is exclusive to the chronological workflow; open days never complete.
 func (w *Worker) scanDate(ctx context.Context, grant af.WriterGrant, t af.BackfillTask, allowOpen bool) (result af.BackfillStatus, err error) {
+	return w.scanDateMode(ctx, grant, t, allowOpen, false)
+}
+func (w *Worker) scanDateMode(ctx context.Context, grant af.WriterGrant, t af.BackfillTask, allowOpen, rawOnly bool) (result af.BackfillStatus, err error) {
 	if grant.Validate() != nil || t.Validate() != nil || !grant.Identity.Equal(t.Identity) {
 		return result, af.ErrConflict
 	}
@@ -201,8 +204,9 @@ func (w *Worker) scanDate(ctx context.Context, grant af.WriterGrant, t af.Backfi
 		}
 	}()
 	var sourceNow int64
+	reportOperation(ctx, "read_source_clock", "source", "")
 	if e := w.source.QueryRowContext(ctx, "SELECT UNIX_TIMESTAMP()").Scan(&sourceNow); e != nil {
-		return result, &scanError{code: "source_clock_unavailable"}
+		return result, &scanError{code: "source_clock_unavailable", cause: e}
 	}
 	from, to, _ := af.DateBounds(t.Date)
 	delay := w.delay
@@ -225,11 +229,12 @@ func (w *Worker) scanDate(ctx context.Context, grant af.WriterGrant, t af.Backfi
 	if err = w.requireScanIndex(ctx); err != nil {
 		return result, err
 	}
-	batch := writerBatch{Capture: allowOpen, Scan: &t, BeforeID: result.AfterID, AfterID: result.AfterID, BeforeCreated: result.AfterCreatedUnix, AfterCreated: result.AfterCreatedUnix, SourceNow: sourceNow}
+	batch := writerBatch{RawOnly: rawOnly, Capture: allowOpen && !rawOnly, Scan: &t, BeforeID: result.AfterID, AfterID: result.AfterID, BeforeCreated: result.AfterCreatedUnix, AfterCreated: result.AfterCreatedUnix, SourceNow: sourceNow}
 	b := budget
+	reportOperation(ctx, "read_source_logs", "source", "logs")
 	rows, e := w.source.QueryContext(ctx, `SELECT * FROM logs WHERE created_at>=? AND created_at<? AND (created_at>? OR (created_at=? AND id>?)) ORDER BY created_at,id LIMIT ?`, from, to, batch.BeforeCreated, batch.BeforeCreated, batch.BeforeID, b.MaxRows+1)
 	if e != nil {
-		return result, &scanError{code: "source_query_failed"}
+		return result, &scanError{code: "source_query_failed", cause: e}
 	}
 	_, batch.Completed, err = readWriterPage(ctx, rows, &batch, b, sourceNow, int64(delay/time.Second), started)
 	if err != nil {
@@ -250,6 +255,11 @@ func (w *Worker) scanDate(ctx context.Context, grant af.WriterGrant, t af.Backfi
 	}
 	batch.ID = hex.EncodeToString(id[:])
 	batch.ElapsedMillis = uint64(time.Since(started).Milliseconds())
+	code := "write_archive_logs"
+	if rawOnly {
+		code = "write_raw_logs"
+	}
+	reportOperation(ctx, code, "archive", "")
 	if _, err = w.commitWriterBatch(ctx, grant, batch, writerFaultHooks{}); err != nil {
 		return result, err
 	}
@@ -257,16 +267,17 @@ func (w *Worker) scanDate(ctx context.Context, grant af.WriterGrant, t af.Backfi
 }
 
 func (w *Worker) requireScanIndex(ctx context.Context) error {
+	reportOperation(ctx, "check_source_index", "source", "logs")
 	var engine string
-	if w.source.QueryRowContext(ctx, `SELECT ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='logs'`).Scan(&engine) != nil {
-		return &scanError{code: "source_index_missing"}
+	if err := w.source.QueryRowContext(ctx, `SELECT ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='logs'`).Scan(&engine); err != nil {
+		return &scanError{code: "source_index_check_failed", cause: err}
 	}
 	rows, err := w.source.QueryContext(ctx, `SELECT INDEX_NAME,COLUMN_NAME,COALESCE(SUB_PART,0),IS_VISIBLE FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='logs' ORDER BY INDEX_NAME,SEQ_IN_INDEX`)
 	if err != nil {
 		// MySQL 5.7 has no invisible indexes or IS_VISIBLE column.
 		rows, err = w.source.QueryContext(ctx, `SELECT INDEX_NAME,COLUMN_NAME,COALESCE(SUB_PART,0),'YES' FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='logs' ORDER BY INDEX_NAME,SEQ_IN_INDEX`)
 		if err != nil {
-			return &scanError{code: "source_index_missing"}
+			return &scanError{code: "source_index_check_failed", cause: err}
 		}
 	}
 	defer rows.Close()
@@ -275,8 +286,8 @@ func (w *Worker) requireScanIndex(ctx context.Context) error {
 	for rows.Next() {
 		var name, column, visible string
 		var prefix int
-		if rows.Scan(&name, &column, &prefix, &visible) != nil {
-			return &scanError{code: "source_index_missing"}
+		if err := rows.Scan(&name, &column, &prefix, &visible); err != nil {
+			return &scanError{code: "source_index_check_failed", cause: err}
 		}
 		indexes[name] = append(indexes[name], column)
 		if prefix != 0 || visible != "YES" {
@@ -284,7 +295,7 @@ func (w *Worker) requireScanIndex(ctx context.Context) error {
 		}
 	}
 	if rows.Err() != nil {
-		return &scanError{code: "source_index_missing"}
+		return &scanError{code: "source_index_check_failed", cause: rows.Err()}
 	}
 	primary := indexes["PRIMARY"]
 	implicit := strings.EqualFold(engine, "InnoDB") && len(primary) == 1 && primary[0] == "id"

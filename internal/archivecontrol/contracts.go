@@ -3,6 +3,7 @@ package archivecontrol
 import (
 	"context"
 	"controltower/internal/archivecontract"
+	ap "controltower/internal/archivepipeline"
 	"errors"
 	"regexp"
 	"time"
@@ -11,21 +12,25 @@ import (
 var ErrConflict = errors.New("archive_config_conflict")
 
 type Config struct {
-	FullHistory      bool   `json:"full_history,omitempty"`
-	HistoryImmutable bool   `json:"history_immutable,omitempty"`
-	ReconcileID      string `json:"reconcile_id,omitempty"`
-	ReconcileDate    string `json:"reconcile_date,omitempty"`
-	Version          int64  `json:"version"`
-	AgentID          string `json:"agent_id"`
-	InstanceID       string `json:"instance_id"`
-	Running          bool   `json:"running"`
-	BatchSize        int    `json:"batch_size"`
-	IntervalSeconds  int    `json:"interval_seconds"`
-	DelaySeconds     int    `json:"delay_seconds"`
+	Pipeline         *ap.Settings `json:"pipeline,omitempty"`
+	FullHistory      bool         `json:"full_history,omitempty"`
+	HistoryImmutable bool         `json:"history_immutable,omitempty"`
+	ReconcileID      string       `json:"reconcile_id,omitempty"`
+	ReconcileDate    string       `json:"reconcile_date,omitempty"`
+	Version          int64        `json:"version"`
+	AgentID          string       `json:"agent_id"`
+	InstanceID       string       `json:"instance_id"`
+	Running          bool         `json:"running"`
+	BatchSize        int          `json:"batch_size"`
+	IntervalSeconds  int          `json:"interval_seconds"`
+	DelaySeconds     int          `json:"delay_seconds"`
 }
 
 func Default() Config { return Config{BatchSize: 500, IntervalSeconds: 30, DelaySeconds: 300} }
 func (c Config) Validate() bool {
+	if c.Pipeline != nil && (!c.FullHistory || !c.Pipeline.Validate()) {
+		return false
+	}
 	if c.FullHistory && (c.ReconcileID != "" || c.ReconcileDate != "") {
 		return false
 	}
@@ -49,6 +54,11 @@ type Reconciliation struct {
 }
 
 type Status struct {
+	Pipeline           *ap.Status                        `json:"pipeline,omitempty"`
+	Operation          *archivecontract.Operation        `json:"operation,omitempty"`
+	Diagnostic         *archivecontract.Diagnostic       `json:"diagnostic,omitempty"`
+	WorkflowDaily      *archivecontract.WorkflowDayPage  `json:"workflow_daily,omitempty"`
+	WorkflowDailyError string                            `json:"workflow_daily_error,omitempty"`
 	PreparedToken      string                            `json:"prepared_token,omitempty"`
 	PreparePhase       string                            `json:"prepare_phase,omitempty"`
 	AutoPrepare        bool                              `json:"auto_prepare,omitempty"`
@@ -79,6 +89,15 @@ type Status struct {
 }
 
 func (s Status) Validate() bool {
+	if s.Pipeline != nil && (s.Foundation == nil || !s.Foundation.SupportsPipeline() || s.Pipeline.Validate() != nil) {
+		return false
+	}
+	if s.Operation != nil && s.Operation.Validate() != nil || s.Diagnostic != nil && s.Diagnostic.Validate() != nil {
+		return false
+	}
+	if len(s.WorkflowDailyError) > 128 || (s.WorkflowDaily != nil && (s.Foundation == nil || !s.Foundation.SupportsWorkflow() || s.WorkflowDaily.Validate() != nil)) {
+		return false
+	}
 	switch s.PreparePhase {
 	case "", "checking", "waiting_authorization", "waiting_lease", "migrating", "registering", "failed":
 	default:
@@ -144,17 +163,18 @@ func (s Status) Validate() bool {
 }
 
 type Item struct {
-	ActiveDatasetID         string     `json:"active_dataset_id,omitempty"`
-	RequiredProtocolVersion int        `json:"required_protocol_version,omitempty"`
-	Days                    []Day      `json:"days"`
-	SiteID                  string     `json:"site_id"`
-	Targets                 []Target   `json:"targets"`
-	InstanceID              string     `json:"instance_id"`
-	Name                    string     `json:"name"`
-	Enabled                 bool       `json:"enabled"`
-	Config                  Config     `json:"config"`
-	Status                  Status     `json:"status"`
-	SeenAt                  *time.Time `json:"seen_at,omitempty"`
+	WorkflowDays            []archivecontract.WorkflowDay `json:"workflow_days,omitempty"`
+	ActiveDatasetID         string                        `json:"active_dataset_id,omitempty"`
+	RequiredProtocolVersion int                           `json:"required_protocol_version,omitempty"`
+	Days                    []Day                         `json:"days"`
+	SiteID                  string                        `json:"site_id"`
+	Targets                 []Target                      `json:"targets"`
+	InstanceID              string                        `json:"instance_id"`
+	Name                    string                        `json:"name"`
+	Enabled                 bool                          `json:"enabled"`
+	Config                  Config                        `json:"config"`
+	Status                  Status                        `json:"status"`
+	SeenAt                  *time.Time                    `json:"seen_at,omitempty"`
 }
 type Target struct {
 	InstanceID string    `json:"instance_id"`

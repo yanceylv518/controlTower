@@ -97,6 +97,7 @@ func initializeWorkflow(ctx context.Context, tx *sql.Tx) error {
 }
 
 func (w *Worker) WorkflowProgress(ctx context.Context) (*af.WorkflowStatus, error) {
+	reportOperation(ctx, "read_progress", "archive", "archive_workflow")
 	s, err := loadWorkflow(ctx, w.target)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -104,6 +105,7 @@ func (w *Worker) WorkflowProgress(ctx context.Context) (*af.WorkflowStatus, erro
 	if err != nil {
 		return nil, err
 	}
+	reportOperation(ctx, "read_progress", "archive", "archive_workflow_days")
 	if err = w.target.QueryRowContext(ctx, `SELECT COALESCE(SUM(w.state='sealed' AND w.revision=d.mutation_revision),0),COALESCE(SUM(w.state='blocked'),0) FROM archive_workflow_days w LEFT JOIN archive_days d ON d.log_date=w.log_date`).Scan(&s.CompletedDays, &s.BlockedDays); err != nil {
 		return nil, err
 	}
@@ -126,6 +128,7 @@ func (w *Worker) WorkflowProgress(ctx context.Context) (*af.WorkflowStatus, erro
 }
 
 func (w *Worker) commitWorkflow(ctx context.Context, g af.WriterGrant, s workflowState) error {
+	reportOperation(ctx, "save_workflow", "archive", "archive_workflow")
 	tx, err := w.target.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -150,13 +153,16 @@ func (w *Worker) commitWorkflow(ctx context.Context, g af.WriterGrant, s workflo
 // WorkflowPass performs one bounded unit of the single site-wide operation.
 // A caller must serialize it with other operations and renew the writer lease.
 func (w *Worker) WorkflowPass(ctx context.Context, g af.WriterGrant, remaining time.Duration, immutable bool) (*af.WorkflowStatus, error) {
+	ctx = workflowOperationContext(ctx, "acquire", "")
 	if err := w.acquireWriter(ctx, g, remaining, true); err != nil {
 		return nil, err
 	}
+	reportOperation(ctx, "advance_workflow", "archive", "archive_workflow")
 	s, err := loadWorkflow(ctx, w.target)
 	if err != nil {
 		return nil, err
 	}
+	ctx = workflowOperationContext(ctx, s.Phase, s.Date)
 	if s.ConfigVersion != g.ConfigVersion {
 		// Policy changes may retry blocked dates, but never replace a frozen build.
 		s.ConfigVersion = g.ConfigVersion
@@ -165,6 +171,7 @@ func (w *Worker) WorkflowPass(ctx context.Context, g af.WriterGrant, remaining t
 		}
 	}
 	s.ErrorCode = ""
+	reportOperation(ctx, "advance_workflow", "archive", "archive_workflow")
 	switch s.Phase {
 	case "reset_state", "reset_daily", "reset_monthly", "import_target":
 		err = w.importWorkflowPage(ctx, g, &s)
@@ -175,6 +182,7 @@ func (w *Worker) WorkflowPass(ctx context.Context, g af.WriterGrant, remaining t
 	case "live":
 		err = w.selectWorkflowDay(ctx, g, &s, immutable)
 	case "backfill":
+		reportOperation(ctx, "prepare_date_scan", "archive", "archive_scan_tasks")
 		if s.Scan == nil {
 			return nil, ErrWriterCheckpoint
 		}
@@ -228,6 +236,7 @@ func (w *Worker) WorkflowPass(ctx context.Context, g af.WriterGrant, remaining t
 			err = w.commitWorkflow(ctx, g, s)
 		}
 	case "verify":
+		reportOperation(ctx, "verify_archive", "archive", "")
 		if s.Verify == nil {
 			return nil, ErrWriterCheckpoint
 		}
@@ -264,6 +273,7 @@ func (w *Worker) WorkflowPass(ctx context.Context, g af.WriterGrant, remaining t
 			err = w.finishWorkflowDay(ctx, g, &s, code)
 		}
 	case "seal":
+		reportOperation(ctx, "build_sealed_version", "archive", "")
 		if s.Seal == nil {
 			return nil, ErrWriterCheckpoint
 		}
@@ -277,7 +287,11 @@ func (w *Worker) WorkflowPass(ctx context.Context, g af.WriterGrant, remaining t
 	default:
 		return nil, ErrWriterCheckpoint
 	}
-	status, readErr := w.WorkflowProgress(ctx)
+	progressCtx := ctx
+	if err != nil {
+		progressCtx = WithOperationObserver(ctx, nil)
+	}
+	status, readErr := w.WorkflowProgress(progressCtx)
 	if err != nil {
 		if status != nil {
 			status.ErrorCode = scanFailureCode(err)
@@ -288,11 +302,13 @@ func (w *Worker) WorkflowPass(ctx context.Context, g af.WriterGrant, remaining t
 }
 
 func (w *Worker) selectWorkflowDay(ctx context.Context, g af.WriterGrant, s *workflowState, immutable bool) error {
+	reportOperation(ctx, "check_source_index", "source", "logs")
 	if err := w.requireScanIndex(ctx); err != nil {
 		return err
 	}
 	// A chronological cursor cannot silently skip rows outside the date domain.
 	var invalidID int64
+	reportOperation(ctx, "select_source_date", "source", "logs")
 	invalidErr := w.source.QueryRowContext(ctx, `SELECT id FROM logs WHERE created_at IS NULL OR created_at<=0 ORDER BY created_at,id LIMIT 1`).Scan(&invalidID)
 	if invalidErr == nil {
 		return &scanError{code: "source_invalid_date"}
@@ -301,11 +317,13 @@ func (w *Worker) selectWorkflowDay(ctx context.Context, g af.WriterGrant, s *wor
 		return invalidErr
 	}
 	if s.FirstDate == "" {
+		reportOperation(ctx, "select_archive_date", "archive", "archive_days")
 		var first sql.NullString
 		if err := w.target.QueryRowContext(ctx, `SELECT DATE_FORMAT(MIN(log_date),'%Y-%m-%d') FROM archive_days`).Scan(&first); err != nil {
 			return err
 		}
 		var sourceFirst int64
+		reportOperation(ctx, "select_source_date", "source", "logs")
 		sourceErr := w.source.QueryRowContext(ctx, `SELECT created_at FROM logs WHERE created_at>0 ORDER BY created_at,id LIMIT 1`).Scan(&sourceFirst)
 		if sourceErr != nil && !errors.Is(sourceErr, sql.ErrNoRows) {
 			return sourceErr
@@ -332,6 +350,7 @@ func (w *Worker) selectWorkflowDay(ctx context.Context, g af.WriterGrant, s *wor
 		return w.commitWorkflow(ctx, g, *s)
 	}
 	date := s.NextDate
+	reportOperation(ctx, "select_archive_date", "archive", "archive_days")
 	if date >= cutoff {
 		err := w.target.QueryRowContext(ctx, `SELECT DATE_FORMAT(d.log_date,'%Y-%m-%d') FROM archive_days d LEFT JOIN archive_workflow_days w ON w.log_date=d.log_date WHERE d.log_date<? AND (w.log_date IS NULL OR w.revision<>d.mutation_revision OR (w.state='blocked' AND (w.config_version<>? OR (w.error_code='cohort_not_ended' AND w.updated_at<UTC_TIMESTAMP()-INTERVAL 6 HOUR)))) ORDER BY d.log_date LIMIT 1`, cutoff, g.ConfigVersion).Scan(&date)
 		if errors.Is(err, sql.ErrNoRows) {

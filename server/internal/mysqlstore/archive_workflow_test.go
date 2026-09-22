@@ -4,6 +4,7 @@ import (
 	"context"
 	af "controltower/internal/archivecontract"
 	"testing"
+	"time"
 )
 
 func TestArchiveWorkflowControlMySQL(t *testing.T) {
@@ -27,7 +28,10 @@ func TestArchiveWorkflowControlMySQL(t *testing.T) {
 		t.Fatalf("grant=%+v err=%v", out, err)
 	}
 	st.Foundation.WriterEpoch = out.WriterGrant.WriterEpoch
-	st.Workflow = &af.WorkflowStatus{Phase: "import_target", ImportedRows: 123}
+	now := time.Now().UTC()
+	st.Operation = &af.Operation{Phase: "import_target", Code: "rebuild_daily_statistics", Database: "archive", Table: "log_daily_stats", State: "failed", StartedAt: now, FinishedAt: &now}
+	st.Diagnostic = &af.Diagnostic{Code: "database_permission_denied", MySQLNumber: 1142, SQLState: "42000", Operation: st.Operation, OccurredAt: now}
+	st.Workflow = &af.WorkflowStatus{Phase: "import_target", ImportedRows: 123, Preparation: &af.WorkflowPreparationProgress{Phase: "import_target", Table: "logs_202609", ProcessedRows: 123, LastBatchRows: 23, CommittedBatches: 2, RecordedSince: now, LastCommittedAt: now, AfterID: 9007199254740993}}
 	out, err = s.PollLogArchive(ctx, r.SiteID, st)
 	if err != nil || !out.StatusAccepted || out.BackfillTask != nil || out.ReconcileTask != nil || out.SealTask != nil {
 		t.Fatalf("workflow competed with standalone queues: %+v %v", out, err)
@@ -35,6 +39,13 @@ func TestArchiveWorkflowControlMySQL(t *testing.T) {
 	items, err := s.ListLogArchives(ctx, r.SiteID)
 	if err != nil || len(items) != 1 || items[0].Status.Workflow == nil || items[0].Status.Workflow.ImportedRows != 123 {
 		t.Fatalf("progress not visible: %+v %v", items, err)
+	}
+	p := items[0].Status.Workflow.Preparation
+	if d := items[0].Status.Diagnostic; d == nil || d.MySQLNumber != 1142 || d.Operation.Table != "log_daily_stats" || items[0].Status.Operation.State != "failed" {
+		t.Fatalf("execution diagnostic lost: %+v", d)
+	}
+	if p == nil || p.ProcessedRows != 123 || p.LastBatchRows != 23 || p.AfterID != 9007199254740993 || !p.LastCommittedAt.Equal(now) {
+		t.Fatalf("preparation progress lost through control/report storage: %+v", p)
 	}
 	c.Running = false
 	if err = s.UpdateLogArchive(ctx, r.SiteID, c, "tester"); err != nil {

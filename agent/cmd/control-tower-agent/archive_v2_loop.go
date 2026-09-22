@@ -6,7 +6,10 @@ import (
 	"controltower/agent/internal/logarchive"
 	af "controltower/internal/archivecontract"
 	ac "controltower/internal/archivecontrol"
+	ap "controltower/internal/archivepipeline"
 	"errors"
+	"log"
+	"maps"
 	"time"
 )
 
@@ -23,6 +26,8 @@ type atomicArchiveWorker interface {
 }
 
 type archiveV2Runner struct {
+	publish             func(ac.Status)
+	dailyAfter          string
 	nextCheck, nextPass time.Time
 	claimed             *af.WriterGrant
 	failures            int
@@ -98,8 +103,41 @@ func (v *archiveV2Runner) step(ctx context.Context, w atomicArchiveWorker, cfg c
 			}
 		}
 		cancel()
+		if err == nil && out.Config.Pipeline != nil {
+			if reader, ok := w.(interface {
+				PipelineProgress(context.Context) (*ap.Status, error)
+			}); ok {
+				readCtx, readCancel := context.WithTimeout(ctx, 3*time.Second)
+				pipeline, readErr := reader.PipelineProgress(readCtx)
+				readCancel()
+				if readErr == nil {
+					st.Pipeline = pipeline
+				}
+			}
+		}
+		if err == nil && out.Config.FullHistory {
+			if reader, ok := w.(interface {
+				WorkflowDayPage(context.Context, string) (*af.WorkflowDayPage, error)
+			}); ok {
+				dailyCtx, dailyCancel := context.WithTimeout(ctx, 5*time.Second)
+				page, dailyErr := reader.WorkflowDayPage(dailyCtx, v.dailyAfter)
+				dailyCancel()
+				if dailyErr != nil {
+					d := logarchive.Diagnose(dailyErr)
+					st.WorkflowDailyError = d.Code
+					log.Printf("log archive: daily status read failed code=%s mysql=%d sqlstate=%s", d.Code, d.MySQLNumber, d.SQLState)
+				} else {
+					st.WorkflowDaily, st.WorkflowDailyError = page, ""
+					if page != nil {
+						v.dailyAfter = page.NextAfter
+					}
+				}
+			}
+		}
 		st.Configured = err == nil
 		if err != nil {
+			d := logarchive.Diagnose(err)
+			st.Diagnostic = &d
 			st.Error = "archive identity/schema/checkpoint preflight failed"
 			if errors.Is(err, logarchive.ErrWriterLegacyData) || errors.Is(err, logarchive.ErrWriterCheckpoint) || errors.Is(err, logarchive.ErrWriterReceipt) {
 				st.Error = archiveWriterError(err)
@@ -178,6 +216,64 @@ func archiveWriterError(err error) string {
 // Polling runs concurrently with the writer. Never share mutable status
 // pointers or slices across that boundary (including after publication).
 func cloneArchiveStatus(st ac.Status) ac.Status {
+	st.Operation = cloneArchiveOperation(st.Operation)
+	if st.Diagnostic != nil {
+		d := *st.Diagnostic
+		d.Operation = cloneArchiveOperation(d.Operation)
+		if d.RetryAt != nil {
+			t := *d.RetryAt
+			d.RetryAt = &t
+		}
+		st.Diagnostic = &d
+	}
+	if st.Pipeline != nil {
+		value := *st.Pipeline
+		value.Active = maps.Clone(value.Active)
+		value.Errors = maps.Clone(value.Errors)
+		value.Progress = maps.Clone(value.Progress)
+		for task, p := range value.Progress {
+			p.Operation = cloneArchiveOperation(p.Operation)
+			if p.Diagnostic != nil {
+				d := *p.Diagnostic
+				d.Operation = cloneArchiveOperation(d.Operation)
+				p.Diagnostic = &d
+			}
+			value.Progress[task] = p
+		}
+		st.Pipeline = &value
+	}
+	if st.WorkflowDaily != nil {
+		p := *st.WorkflowDaily
+		p.Days = append([]af.WorkflowDay(nil), p.Days...)
+		for i := range p.Days {
+			if p.Days[i].Diagnostic != nil {
+				d := *p.Days[i].Diagnostic
+				d.Operation = cloneArchiveOperation(d.Operation)
+				p.Days[i].Diagnostic = &d
+			}
+			if p.Days[i].Raw != nil {
+				raw := *p.Days[i].Raw
+				if raw.Rows != nil {
+					value := *raw.Rows
+					raw.Rows = &value
+				}
+				if raw.ObservedAt != nil {
+					value := *raw.ObservedAt
+					raw.ObservedAt = &value
+				}
+				p.Days[i].Raw = &raw
+			}
+			if p.Days[i].Counts != nil {
+				counts := *p.Days[i].Counts
+				p.Days[i].Counts = &counts
+			}
+			if p.Days[i].UpdatedAt != nil {
+				updated := *p.Days[i].UpdatedAt
+				p.Days[i].UpdatedAt = &updated
+			}
+		}
+		st.WorkflowDaily = &p
+	}
 	if st.PrepareIdentity != nil {
 		value := *st.PrepareIdentity
 		st.PrepareIdentity = &value
@@ -189,6 +285,10 @@ func cloneArchiveStatus(st ac.Status) ac.Status {
 	if st.Workflow != nil {
 		value := *st.Workflow
 		value.Issues = append([]af.WorkflowIssue(nil), st.Workflow.Issues...)
+		if value.Preparation != nil {
+			progress := *value.Preparation
+			value.Preparation = &progress
+		}
 		st.Workflow = &value
 	}
 	if st.Reconcile != nil {
@@ -223,4 +323,16 @@ func cloneArchiveStatus(st ac.Status) ac.Status {
 	}
 	st.Days = append([]ac.Day(nil), st.Days...)
 	return st
+}
+
+func cloneArchiveOperation(o *af.Operation) *af.Operation {
+	if o == nil {
+		return nil
+	}
+	v := *o
+	if v.FinishedAt != nil {
+		t := *v.FinishedAt
+		v.FinishedAt = &t
+	}
+	return &v
 }

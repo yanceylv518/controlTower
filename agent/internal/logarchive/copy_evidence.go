@@ -159,5 +159,6 @@ func (w *Worker) reconcileCopiedDate(ctx context.Context, g af.WriterGrant, t af
 	if err != nil {
 		return r.status(), err
 	}
+	reportOperation(ctx, "save_verification", "archive", "archive_reconcile_runs")
 	return w.commitReconcilePage(ctx, g, t, r, hashes, n, uint64(time.Since(started).Milliseconds()))
 }

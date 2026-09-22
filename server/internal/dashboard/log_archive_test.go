@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"context"
+	af "controltower/internal/archivecontract"
 	ac "controltower/internal/archivecontrol"
 	"controltower/server/internal/auth"
 	"controltower/server/internal/ingest"
@@ -19,6 +20,27 @@ type archiveMonthStore struct {
 	lookups         int
 	activeDataset   string
 	site            string
+}
+
+type workflowMonthStore struct {
+	archiveMonthStore
+	dailyMonth string
+}
+
+func (s *workflowMonthStore) ListArchiveWorkflowDays(_ context.Context, site, month string) ([]af.WorkflowDay, error) {
+	s.dailyMonth = month
+	return []af.WorkflowDay{{Date: month + "-01", State: "rebuilding", Counts: &af.WorkflowDayCounts{LogRows: "9007199254740993", RequestRows: "1", ErrorRows: "0"}}}, nil
+}
+func TestArchiveWorkflowDailyMonth(t *testing.T) {
+	s := &workflowMonthStore{archiveMonthStore: archiveMonthStore{activeDataset: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}
+	h, cookie := foundationSession(t, LogArchiveHandler{Store: s}, "admin", []string{"archive.manage"})
+	w := foundationRequest(h, cookie, http.MethodGet, "/api/dashboard/log-archives?site_id=site&month=2026-06", "", "")
+	var out struct {
+		Items []ac.Item `json:"items"`
+	}
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &out) != nil || s.dailyMonth != "2026-06" || len(out.Items) != 1 || len(out.Items[0].WorkflowDays) != 1 || out.Items[0].WorkflowDays[0].Counts.LogRows != "9007199254740993" {
+		t.Fatalf("daily month failed: %d %s", w.Code, w.Body.String())
+	}
 }
 
 func (s *archiveMonthStore) ListLogArchives(context.Context, string) ([]ac.Item, error) {

@@ -54,7 +54,7 @@ func (a *archiveAutoRunner) step(ctx context.Context, w automaticArchiveWorker, 
 	}
 	if out.PreparedAccepted && st.Prepared != nil && st.Prepared.SiteID == out.SiteID {
 		cfg.LogArchiveIdentity = st.Prepared.Identity
-		st.Foundation = &af.FoundationStatus{Identity: cfg.LogArchiveIdentity, ProtocolVersion: af.ProtocolVersion, FormatVersion: af.FormatVersion, Capabilities: []string{af.CapabilityFoundation, af.CapabilityAtomicWriter, af.CapabilityBackfill, af.CapabilityReconcile, af.CapabilitySeal, af.CapabilityWorkflow}}
+		st.Foundation = &af.FoundationStatus{Identity: cfg.LogArchiveIdentity, ProtocolVersion: af.ProtocolVersion, FormatVersion: af.FormatVersion, Capabilities: []string{af.CapabilityFoundation, af.CapabilityAtomicWriter, af.CapabilityBackfill, af.CapabilityReconcile, af.CapabilitySeal, af.CapabilityWorkflow, af.CapabilityPipeline}}
 		st.Prepared = nil
 		st.PreparedToken = ""
 		st.PrepareIdentity = nil
@@ -193,7 +193,11 @@ func startAutomaticManagedArchiveWithPollInterval(parent context.Context, cfg co
 		defer func() { cancel(); <-pollDone }()
 		var w *logarchive.Worker
 		var nextOpen time.Time
-		v2 := &archiveV2Runner{}
+		v2 := &archiveV2Runner{publish: func(snapshot ac.Status) {
+			shared.Lock()
+			shared.status = cloneArchiveStatus(snapshot)
+			shared.Unlock()
+		}}
 		auto := &archiveAutoRunner{}
 		ready := false
 		defer func() {

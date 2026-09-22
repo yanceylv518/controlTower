@@ -85,6 +85,7 @@ type sealRawPage struct {
 func readSealRawPage(ctx context.Context, tx *sql.Tx, d *sealDay, budget af.ScanBudget, audit bool) (sealRawPage, error) {
 	p := sealRawPage{Done: true}
 	table := "logs_" + strings.ReplaceAll(d.Date[:7], "-", "")
+	reportOperation(ctx, "read_seal_logs", "archive", table)
 	exists, err := foundationTableExists(ctx, tx, table)
 	if err != nil {
 		return p, err
@@ -182,6 +183,7 @@ func readSealRawPage(ctx context.Context, tx *sql.Tx, d *sealDay, budget af.Scan
 }
 
 func sealDayPage(ctx context.Context, tx *sql.Tx, d *sealDay, budget af.ScanBudget, audit bool) (bool, error) {
+	ctx = workflowOperationContext(ctx, "seal", d.Date)
 	if _, err := tx.ExecContext(ctx, "SET SESSION sql_mode='STRICT_ALL_TABLES,NO_ENGINE_SUBSTITUTION'"); err != nil {
 		return false, err
 	}
@@ -250,6 +252,7 @@ func storeSealFact(ctx context.Context, tx *sql.Tx, d sealDay, f facts.Fact, e f
 	month := strings.ReplaceAll(d.Date[:7], "-", "")
 	eTable := "archive_billing_evidence_" + month
 	fTable := "billing_facts_" + month
+	reportOperation(ctx, "build_sealed_version", "archive", eTable)
 	if !audit {
 		_, err := tx.ExecContext(ctx, "INSERT INTO "+quote(eTable)+`(evidence_hash,codec_version,source_schema_hash,payload,payload_bytes,created_at) VALUES(?,?,?,?,?,UTC_TIMESTAMP(6)) ON DUPLICATE KEY UPDATE evidence_hash=evidence_hash`, e.Hash[:], e.CodecVersion, e.SourceSchemaHash[:], e.Payload, len(e.Payload))
 		if err != nil {
@@ -260,7 +263,7 @@ func storeSealFact(ctx context.Context, tx *sql.Tx, d sealDay, f facts.Fact, e f
 	var codec int
 	var size uint64
 	if err := tx.QueryRowContext(ctx, "SELECT codec_version,source_schema_hash,payload,payload_bytes FROM "+quote(eTable)+" WHERE evidence_hash=?", e.Hash[:]).Scan(&codec, &sourceHash, &payload, &size); err != nil {
-		return sealCode("fact_invalid")
+		return &scanError{code: "fact_evidence_read_failed", cause: err}
 	}
 	if codec != e.CodecVersion || !bytes.Equal(sourceHash, e.SourceSchemaHash[:]) || !bytes.Equal(payload, e.Payload) || size != uint64(len(e.Payload)) {
 		return sealCode("fact_invalid")
@@ -270,6 +273,7 @@ func storeSealFact(ctx context.Context, tx *sql.Tx, d sealDay, f facts.Fact, e f
 		names[i] = quote(c)
 	}
 	values := sealFactValues(d, f)
+	reportOperation(ctx, "build_sealed_version", "archive", fTable)
 	if !audit {
 		_, err := tx.ExecContext(ctx, "INSERT INTO "+quote(fTable)+" ("+strings.Join(names, ",")+") VALUES("+strings.TrimSuffix(strings.Repeat("?,", len(values)), ",")+") ON DUPLICATE KEY UPDATE source_log_id=source_log_id", values...)
 		if err != nil {

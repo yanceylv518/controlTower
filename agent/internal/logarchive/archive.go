@@ -22,12 +22,15 @@ import (
 )
 
 type Worker struct {
+	maintenance     *sql.DB
+	indexBuild      *pipelineIndexBuild
 	source, target  *sql.DB
 	path            string
 	batchSize       int
 	delay           time.Duration
 	budget          af.ScanBudget
 	foundationCache foundationCache
+	rawInventory    rawInventoryCache
 }
 
 func (w *Worker) WithDelay(delay time.Duration) *Worker { w.delay = delay; return w }
@@ -90,12 +93,33 @@ func Open(sourceDSN, targetDSN, instance, dataDir string, batchSize int) (*Worke
 		db.SetMaxIdleConns(1)
 		db.SetConnMaxLifetime(10 * time.Minute)
 	}
+	// Online index preparation uses a separate long-lived connection. Ordinary
+	// log batches retain their short network and context timeouts.
+	dst.ReadTimeout = 30 * time.Minute
+	maintenance, err := sql.Open("mysql", dst.FormatDSN())
+	if err != nil {
+		source.Close()
+		target.Close()
+		return nil, err
+	}
+	maintenance.SetMaxOpenConns(1)
+	maintenance.SetMaxIdleConns(0)
+	target.SetMaxOpenConns(3)
 	identity, _ := json.Marshal([]string{instance, src.Net, src.Addr, src.DBName, dst.Net, dst.Addr, dst.DBName})
 	hash := sha256.Sum256(identity)
-	return &Worker{source: source, target: target, path: filepath.Join(dataDir, fmt.Sprintf("log-archive-monthly-v1-%x.json", hash[:12])), batchSize: batchSize}, nil
+	return &Worker{maintenance: maintenance, source: source, target: target, path: filepath.Join(dataDir, fmt.Sprintf("log-archive-monthly-v1-%x.json", hash[:12])), batchSize: batchSize}, nil
 }
 
-func (w *Worker) Close() { w.source.Close(); w.target.Close() }
+func (w *Worker) Close() {
+	if w.indexBuild != nil {
+		w.indexBuild.cancel()
+	}
+	if w.maintenance != nil {
+		w.maintenance.Close()
+	}
+	w.source.Close()
+	w.target.Close()
+}
 
 // Check is read-only, including on the target. Provision logs before enabling.
 func (w *Worker) Check(ctx context.Context) error {
@@ -164,21 +188,24 @@ func schema(ctx context.Context, db *sql.DB, table ...string) (string, error) {
 	}
 	rows, err := db.QueryContext(ctx, "SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COALESCE(CHARACTER_SET_NAME,''), COALESCE(COLLATION_NAME,''), EXTRA FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? ORDER BY ORDINAL_POSITION", name)
 	if err != nil {
-		return "", errors.New("archive schema query failed")
+		return "", &scanError{code: "schema_check_failed", cause: err}
 	}
 	defer rows.Close()
 	var columns [][]string
 	for rows.Next() {
 		c := make([]string, 6)
-		if rows.Scan(&c[0], &c[1], &c[2], &c[3], &c[4], &c[5]) != nil {
-			return "", errors.New("archive schema read failed")
+		if err := rows.Scan(&c[0], &c[1], &c[2], &c[3], &c[4], &c[5]); err != nil {
+			return "", &scanError{code: "schema_check_failed", cause: err}
 		}
 		if strings.Contains(strings.ToUpper(c[5]), "GENERATED") {
 			return "", errors.New("archive does not support generated logs columns")
 		}
 		columns = append(columns, c)
 	}
-	if rows.Err() != nil || len(columns) == 0 {
+	if rows.Err() != nil {
+		return "", &scanError{code: "schema_check_failed", cause: rows.Err()}
+	}
+	if len(columns) == 0 {
 		return "", errors.New("archive logs schema unavailable")
 	}
 	b, _ := json.Marshal(columns)

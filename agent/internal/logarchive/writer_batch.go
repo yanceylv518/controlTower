@@ -19,6 +19,7 @@ import (
 )
 
 type writerBatch struct {
+	RawOnly                     bool
 	Capture                     bool
 	WorkflowID                  string
 	ID                          string
@@ -102,6 +103,9 @@ func writerPayloadHash(identity archivecontract.Identity, batch writerBatch) ([3
 		return result, 0, ErrWriterCheckpoint
 	}
 	h := sha256.New()
+	if batch.RawOnly {
+		writerHashField(h, []byte("raw-collection-v1"))
+	}
 	if batch.Capture {
 		if batch.Scan == nil {
 			return result, 0, ErrWriterCheckpoint
@@ -186,10 +190,13 @@ type writerState struct {
 }
 
 func writerReadStates(ctx context.Context, tx *sql.Tx, ids []any, lock bool) (map[int64]writerState, error) {
+	return writerReadLedger(ctx, tx, ids, lock, "archive_log_state")
+}
+func writerReadLedger(ctx context.Context, tx *sql.Tx, ids []any, lock bool, table string) (map[int64]writerState, error) {
 	if len(ids) == 0 {
 		return map[int64]writerState{}, nil
 	}
-	query := "SELECT id,contribution,raw_row_hash FROM archive_log_state WHERE id IN (" + strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",") + ") ORDER BY id"
+	query := "SELECT id,contribution,raw_row_hash FROM " + quote(table) + " WHERE id IN (" + strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",") + ") ORDER BY id"
 	if lock {
 		query += " FOR UPDATE"
 	}
@@ -328,7 +335,12 @@ func (w *Worker) commitWriterBatch(ctx context.Context, grant archivecontract.Wr
 	if afterID != batch.BeforeID {
 		return BatchResult{}, ErrWriterCheckpoint
 	}
-	old, err := writerReadStates(ctx, tx, ids, false)
+	var old map[int64]writerState
+	if batch.RawOnly {
+		old, err = w.writerRawStates(ctx, tx, batch, ids)
+	} else {
+		old, err = writerReadStates(ctx, tx, ids, false)
+	}
 	if err != nil {
 		return BatchResult{}, err
 	}
@@ -391,6 +403,10 @@ func (w *Worker) commitWriterBatch(ctx context.Context, grant archivecontract.Wr
 		}
 	}
 	locked, err := writerReadStates(ctx, tx, ids, true)
+	if batch.RawOnly {
+		locked = old
+		err = nil
+	} // dataset fence protects the raw ledger
 	if err != nil {
 		return BatchResult{}, err
 	}
@@ -433,6 +449,9 @@ func (w *Worker) commitWriterBatch(ctx context.Context, grant archivecontract.Wr
 			return BatchResult{}, err
 		}
 		if next.Blocking {
+			if batch.RawOnly {
+				return BatchResult{}, &scanError{code: "invalid_source_row", sourceID: id}
+			}
 			code := "unknown_charged_type"
 			date := next.Day
 			if date == "undated" {
@@ -452,6 +471,15 @@ func (w *Worker) commitWriterBatch(ctx context.Context, grant archivecontract.Wr
 			}
 		}
 		mutated = true
+		if batch.RawOnly {
+			for _, date := range []string{next.Day, old[id].Day} {
+				if date != "" && date != "undated" {
+					if _, err := tx.ExecContext(ctx, `INSERT IGNORE INTO archive_pending_statistics(log_date,source_id) VALUES(?,?)`, date, id); err != nil {
+						return BatchResult{}, err
+					}
+				}
+			}
+		}
 		if prev, ok := old[id]; ok {
 			daily.add(prev.Day, prev.contribution, -1)
 			monthly.add(prev.month(), prev.contribution, -1)
@@ -492,18 +520,41 @@ func (w *Worker) commitWriterBatch(ctx context.Context, grant archivecontract.Wr
 		ledger = append(ledger, []any{id, string(raw), hash[:], batchID})
 	}
 	for _, month := range months {
+		code := "write_archive_logs"
+		if batch.RawOnly {
+			code = "write_raw_logs"
+		}
+		reportOperation(ctx, code, "archive", "logs_"+month)
 		if err := insertRows(ctx, tx, "logs_"+month, batch.Columns, grouped[month]); err != nil {
 			return BatchResult{}, err
 		}
 	}
-	if err := insertRows(ctx, tx, "archive_log_state", []string{"id", "contribution", "raw_row_hash", "last_batch_id"}, ledger); err != nil {
+	ledgerTable := "archive_log_state"
+	if batch.RawOnly {
+		ledgerTable = "archive_raw_state"
+		reportOperation(ctx, "save_raw_ledger", "archive", ledgerTable)
+	} else {
+		reportOperation(ctx, "rebuild_contributions", "archive", ledgerTable)
+	}
+	if err := insertRows(ctx, tx, ledgerTable, []string{"id", "contribution", "raw_row_hash", "last_batch_id"}, ledger); err != nil {
 		return BatchResult{}, err
 	}
-	if err := writeDeltas(ctx, tx, "log_daily_stats", daily); err != nil {
-		return BatchResult{}, err
+	if !batch.RawOnly {
+		if err := insertRows(ctx, tx, "archive_raw_state", []string{"id", "contribution", "raw_row_hash", "last_batch_id"}, ledger); err != nil {
+			return BatchResult{}, err
+		}
 	}
-	if err := writeDeltas(ctx, tx, "log_monthly_stats", monthly); err != nil {
-		return BatchResult{}, err
+	if !batch.RawOnly {
+		reportOperation(ctx, "rebuild_daily_statistics", "archive", "log_daily_stats")
+		if err := writeDeltas(ctx, tx, "log_daily_stats", daily); err != nil {
+			return BatchResult{}, err
+		}
+		reportOperation(ctx, "rebuild_monthly_statistics", "archive", "log_monthly_stats")
+		if err := writeDeltas(ctx, tx, "log_monthly_stats", monthly); err != nil {
+			return BatchResult{}, err
+		}
+	} else {
+		unscopedDelta = 0
 	}
 	// Verify every incoming row, including hash-identical rows, against the
 	// target transaction. Out-of-band changes cannot silently pass a replay.
@@ -547,6 +598,9 @@ func (w *Worker) commitWriterBatch(ctx context.Context, grant archivecontract.Wr
 			return BatchResult{}, errors.New("archive catalog update failed")
 		}
 	}
+	if err := syncPipelineMutation(ctx, tx, dates, mutatedDates, !batch.RawOnly, len(batch.Rows), batch.AfterID); err != nil {
+		return BatchResult{}, err
+	}
 	if batch.Capture {
 		if err := writeCopyEvidence(ctx, tx, batch); err != nil {
 			return BatchResult{}, err
@@ -574,7 +628,7 @@ func (w *Worker) commitWriterBatch(ctx context.Context, grant archivecontract.Wr
 	}
 	cohortJSON, _ := json.Marshal(cohortDates)
 	if _, err := tx.ExecContext(ctx, `INSERT INTO archive_batch_receipts(batch_id,stream_key,payload_hash,writer_epoch,cursor_before_json,cursor_after_json,row_count,byte_count,affected_dates_json,cohort_dates_json,committed_at) VALUES(?,?,?,?,?,?,?,?,?,?,UTC_TIMESTAMP(6))`, batchID, batch.stream(), payloadHash[:], grant.WriterEpoch, string(beforeJSON), string(afterJSON), len(batch.Rows), byteCount, string(affectedJSON), string(cohortJSON)); err != nil {
-		return BatchResult{}, errors.New("archive batch receipt write failed")
+		return BatchResult{}, &scanError{code: "receipt_write_failed", cause: err}
 	}
 	var taskID any
 	var from, to, created any
@@ -584,7 +638,7 @@ func (w *Worker) commitWriterBatch(ctx context.Context, grant archivecontract.Wr
 		created = batch.AfterCreated
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO archive_checkpoints(stream_key,stream_type,task_id,from_unix,to_unix,after_created_unix,after_id,cursor_version,last_batch_id,updated_at) VALUES(?,?,?,?,?,?,?,1,?,UTC_TIMESTAMP(6)) ON DUPLICATE KEY UPDATE after_created_unix=VALUES(after_created_unix),after_id=VALUES(after_id),last_batch_id=VALUES(last_batch_id),updated_at=VALUES(updated_at)`, batch.stream(), batch.streamType(), taskID, from, to, created, batch.AfterID, batchID); err != nil {
-		return BatchResult{}, errors.New("archive target checkpoint update failed")
+		return BatchResult{}, &scanError{code: "checkpoint_write_failed", cause: err}
 	}
 	result, found, err := writerReceipt(ctx, tx, batch, payloadHash)
 	if err != nil || !found {
@@ -599,6 +653,7 @@ func (w *Worker) commitWriterBatch(ctx context.Context, grant archivecontract.Wr
 	if err := writerGuardBeforeCommit(ctx, tx, grant); err != nil {
 		return BatchResult{}, err
 	}
+	reportOperation(ctx, "commit_archive_batch", "archive", "")
 	commitErr := tx.Commit()
 	if commitErr == nil && hooks.AfterCommit != nil {
 		commitErr = hooks.AfterCommit()
@@ -613,5 +668,5 @@ func (w *Worker) commitWriterBatch(ctx context.Context, grant archivecontract.Wr
 	if recovered, found, err := writerReceipt(recoveryCtx, w.target, batch, payloadHash); err == nil && found {
 		return recovered, nil
 	}
-	return BatchResult{}, errors.New("archive target commit outcome unknown; retry from target checkpoint")
+	return BatchResult{}, &scanError{code: "writer_commit_uncertain", cause: commitErr}
 }

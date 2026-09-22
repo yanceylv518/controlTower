@@ -34,6 +34,22 @@ async function loadInitial(ctx) {
   await task
 }
 
+test('viewing the processing month reads daily data without changing archive policy',async t=>{
+  const ctx=setup(t);await loadInitial(ctx)
+  value(ctx,'item').value.status.workflow={phase:'import_target',preparation:{table:'logs_202606'}}
+  value(ctx,'item').value.workflow_days=[{date:'2026-09-01'}]
+  const before=ctx.requests.length
+  value(ctx,'showProcessingMonth')()
+  assert.equal(value(ctx,'tab').value,'daily')
+  assert.equal(value(ctx,'month').value,'2026-06')
+  assert.deepEqual(value(ctx,'item').value.workflow_days,[])
+  const request=ctx.requests.at(-1)
+  assert.equal(ctx.requests.length,before+1)
+  assert.equal(request.options?.method,undefined)
+  assert.match(request.url,/month=2026-06/)
+  request.resolve(response(request,'A'));await vue.nextTick()
+})
+
 test('full history starts without a date and preserves the operator declaration', async t => {
   const ctx=setup(t)
   const loading=value(ctx,'load')()
@@ -117,4 +133,18 @@ test('failed refresh retains visible data but prevents mutation using stale stat
   const before=ctx.requests.length
   await ctx.view.get('save')({...value(ctx,'item').value.config,running:true},'A')
   assert.equal(ctx.requests.length,before)
+})
+
+test('independent controls preserve other tasks and selected collection range',async t=>{
+ const ctx=setup(t);await loadInitial(ctx)
+ const config=value(ctx,'item').value.config
+ config.pipeline={migration:true,organization:true,verification:true,collection:true,collection_from:'2026-09-01',collection_through:'2026-09-20',collection_newest_first:true}
+ config.history_immutable=true
+ value(ctx,'savePipeline')({...config.pipeline,collection:false})
+ const request=ctx.requests.at(-1), sent=JSON.parse(request.options.body)
+ assert.equal(request.options.method,'PUT');assert.equal(sent.pipeline.collection,false)
+ assert.equal(sent.pipeline.organization,true);assert.equal(sent.pipeline.verification,true)
+ assert.equal(sent.pipeline.collection_from,'2026-09-01');assert.equal(sent.pipeline.collection_newest_first,true)
+ assert.equal(sent.history_immutable,true);assert.equal(sent.full_history,true);assert.equal(sent.version,1)
+ request.reject(new ApiError(409));await new Promise(resolve=>setImmediate(resolve))
 })
