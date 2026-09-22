@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Hide, RefreshLeft, Search, View } from '@element-plus/icons-vue'
+import { ArrowDown, ArrowUp, Hide, RefreshLeft, Search, View } from '@element-plus/icons-vue'
 import { useRoute } from 'vue-router'
 import type { ReadonlyLog } from '@ct/shared'
 import { resolveModelProvider } from '../utils/modelProvider'
@@ -42,6 +42,8 @@ type LogColumnKey = 'channel' | 'user' | 'token' | 'model' | 'stream' | 'tokens'
 // new-api rc35 的耗时等级，neutral 仅用于缺失首字时间的流式记录。
 type TimingVariant = 'success' | 'warning' | 'danger' | 'neutral'
 type LogStatusTone = 'topup' | 'consume' | 'manage' | 'system' | 'error' | 'refund' | 'login' | 'unknown'
+type RetryStepTone = 'plain' | 'failed' | 'success' | 'current'
+type RetryChainStepView = { channel: string; position: number; current: boolean; tone: RetryStepTone }
 
 // 列表只消费预计算的原始值和展示值，避免模板在每次响应式更新时重复解析同一条日志。
 type LogRowView = {
@@ -66,6 +68,7 @@ type LogRowView = {
   retryUnknown: boolean
   fallbackChannels: string[]
   retryChain: string
+  retrySteps: RetryChainStepView[]
   channelAffinity?: ChannelAffinityInfo
   username: string
   usernameCopy: string
@@ -134,6 +137,10 @@ const username = ref(''), tokenName = ref(''), modelName = ref(''), group = ref(
 // 选中下拉用户后按 ID 精确筛选；继续手动输入时由组件清除该精确条件。
 const selectedUserID = ref<number | undefined>(undefined)
 const channelID = ref('')
+const statusCode = ref('')
+const emptyOutput = ref(false)
+const secondaryFiltersOpen = ref(false)
+const secondaryFilterCount = computed(() => [group.value, tokenName.value, statusCode.value].filter(value => value.trim() !== '').length)
 const requestScope = ref<{ request: string; user: string } | null>(null)
 const scopedUserIDs = computed(() => requestScope.value?.request === requestID.value ? requestScope.value.user : undefined)
 const logType = ref(0), offset = ref(0), limit = ref(100)
@@ -204,7 +211,11 @@ const parsedChannelID = computed(() => {
   const value = Number(channelID.value)
   return channelID.value.trim() !== '' && Number.isSafeInteger(value) && value >= 0 ? value : undefined
 })
-const params = computed(() => ({ site: filters.site_id, user_ids: selectedUserID.value !== undefined ? String(selectedUserID.value) : scopedUserIDs.value, username: selectedUserID.value !== undefined ? undefined : username.value, start_time: timeRange.value[0].toISOString(), end_time: timeRange.value[1].toISOString(), token_name: tokenName.value, model_name: modelName.value, group: group.value, request_id: requestID.value, upstream_request_id: upstreamRequestID.value, channel_id: parsedChannelID.value, log_type: logType.value || undefined, limit: limit.value, offset: offset.value }))
+const parsedStatusCode = computed(() => {
+  const value = statusCode.value.trim()
+  return /^\d{3}$/.test(value) ? Number(value) : undefined
+})
+const params = computed(() => ({ site: filters.site_id, user_ids: selectedUserID.value !== undefined ? String(selectedUserID.value) : scopedUserIDs.value, username: selectedUserID.value !== undefined ? undefined : username.value, start_time: timeRange.value[0].toISOString(), end_time: timeRange.value[1].toISOString(), token_name: tokenName.value, model_name: modelName.value, group: group.value, request_id: requestID.value, upstream_request_id: upstreamRequestID.value, channel_id: parsedChannelID.value, status_code: parsedStatusCode.value, empty_output: emptyOutput.value ? 1 : undefined, log_type: logType.value || undefined, limit: limit.value, offset: offset.value }))
 // 输入框为草稿；翻页与附属查询只消费点击查询时保存的快照。
 const submitted = shallowRef({ ...params.value })
 const queryRevision = ref(0)
@@ -238,7 +249,7 @@ const backgroundRefreshing = ref(false)
 const mobileFeed = useAppendPages(() => state.data.value, () => state.loading.value || backgroundRefreshing.value || !listIsCurrent.value,
   (base, offset, signal) => passthrough.logs({ ...base.feedQuery, offset }, signal),
   (row: ReadonlyLog) => row.id, base => base.feedQuery.offset)
-const mobileFilters = computed<MobileLogFilterValues>(() => ({ logType:logType.value, modelName:modelName.value, group:group.value, tokenName:tokenName.value, requestID:requestID.value, upstreamRequestID:upstreamRequestID.value, channelID:channelID.value }))
+const mobileFilters = computed<MobileLogFilterValues>(() => ({ logType:logType.value, modelName:modelName.value, group:group.value, tokenName:tokenName.value, requestID:requestID.value, upstreamRequestID:upstreamRequestID.value, channelID:channelID.value, statusCode:statusCode.value, emptyOutput:emptyOutput.value }))
 function applyMobileFilters(value: MobileLogFilterValues) {
   logType.value = value.logType
   modelName.value = value.modelName
@@ -247,6 +258,8 @@ function applyMobileFilters(value: MobileLogFilterValues) {
   requestID.value = value.requestID
   upstreamRequestID.value = value.upstreamRequestID
   channelID.value = value.channelID
+  statusCode.value = value.statusCode
+  emptyOutput.value = value.emptyOutput
   search()
 }
 function handleUserSelect(option: UserPickerOption | null) {
@@ -296,6 +309,10 @@ function textValue(row: ReadonlyLog, ...keys: string[]) {
 function commitQuery() {
   if (channelID.value.trim() && (!/^\d+$/.test(channelID.value.trim()) || parsedChannelID.value === undefined)) {
     ElMessage.warning('渠道 ID 必须是非负整数')
+    return false
+  }
+  if (statusCode.value.trim() && (parsedStatusCode.value === undefined || parsedStatusCode.value < 100 || parsedStatusCode.value > 599)) {
+    ElMessage.warning('错误码必须是 100-599 的三位数字')
     return false
   }
   statState.cancel()
@@ -534,6 +551,8 @@ const reset = () => {
   requestID.value = ''
   upstreamRequestID.value = ''
   channelID.value = ''
+  statusCode.value = ''
+  emptyOutput.value = false
   logType.value = 0
   timeRange.value = defaultTimeRange()
   resetRange.value = [timeRange.value[0].getTime(), timeRange.value[1].getTime()]
@@ -584,7 +603,7 @@ function handleDetailKeydown(event: KeyboardEvent) {
 const expandedRetryID = ref<number | null>(null)
 const visibleColumnCount = computed(() => 1 + logColumnOptions.filter(column => isColumnVisible(column.key)).length)
 // 记录渠道单元格与浮层位置，滚动表格时可重新定位而不会撑开列表布局。
-type RetryHoverState = { id: number; chain: string; retryCount: number; hasRetry: boolean; affinity?: ChannelAffinityInfo; left: number; top: number }
+type RetryHoverState = { id: number; chain: string; retryCount: number; firstAttempt: boolean; hasRetry: boolean; steps: RetryChainStepView[]; affinity?: ChannelAffinityInfo; left: number; top: number }
 const retryHover = ref<RetryHoverState | null>(null)
 const retryHoverTrigger = ref<HTMLElement | null>(null)
 const retryHoverElement = ref<HTMLElement | null>(null)
@@ -617,13 +636,14 @@ function positionRetryHover() {
   retryHover.value = { ...state, left, top }
 }
 function openRetryHover(view: LogRowView, event: MouseEvent | FocusEvent) {
-  const hasRetry = Boolean(view.retryChain || view.fallback || view.retryUnknown)
+  const hasRetry = Boolean(view.retrySteps.length || view.retryChain || view.fallback || view.retryUnknown)
   if (!isAdmin.value || !(view.hasChannel || view.retryUnknown) || (!hasRetry && !view.channelAffinity)) return
   const trigger = event.currentTarget
   if (!(trigger instanceof HTMLElement)) return
   retryHoverTrigger.value = trigger
-  const retryCount = Math.max(1, retryChannelsFor(view.source).length - 1)
-  retryHover.value = { id: view.id, chain: view.retryUnknown ? '重试状态未确认，点击查看请求记录' : view.retryChain || '未记录完整重试链路', retryCount: view.retryChain ? retryCount : 0, hasRetry, affinity: view.channelAffinity, left: 0, top: 0 }
+  const channels = retryChannelsFor(view.source)
+  const attempt = retryAttemptMeta(view.source, channels)
+  retryHover.value = { id: view.id, chain: view.retryUnknown ? '重试状态未确认，点击查看请求记录' : view.retryChain || '未记录完整重试链路', retryCount: view.retryChain ? attempt.retryCount : 0, firstAttempt: Boolean(view.retryChain) && attempt.firstAttempt, hasRetry, steps: view.retrySteps, affinity: view.channelAffinity, left: 0, top: 0 }
   void nextTick(positionRetryHover)
 }
 function handleRetryHoverViewportChange() {
@@ -637,7 +657,7 @@ function requestChainTitle(row: ReadonlyLog) {
   if (retryLookupUnknown(row)) return '重试状态未确认，点击查看请求记录'
   const sequence = retryChannelsFor(row)
   return sequence.length > 1
-    ? `重试${sequence.length - 1}次：${sequence.join(' → ')}`
+    ? retryAttemptLabel(row, sequence) + sequence.join(' → ')
     : 'Fallback 请求（未记录完整重试链路）'
 }
 function toggleRetryChain(view: LogRowView) {
@@ -649,7 +669,7 @@ async function filterRequestChain(query: ChainQuery) {
   if (query.site !== filters.site_id || backgroundRefreshing.value) return
   selectedUserID.value = undefined
   username.value = ''; tokenName.value = ''; modelName.value = ''; group.value = ''
-  channelID.value = ''; upstreamRequestID.value = ''; logType.value = 0
+  channelID.value = ''; statusCode.value = ''; emptyOutput.value = false; upstreamRequestID.value = ''; logType.value = 0
   requestID.value = query.request_id
   requestScope.value = { request: query.request_id, user: query.user_ids }
   timeRange.value = [new Date(query.start_time), new Date(query.end_time)]
@@ -857,13 +877,48 @@ function fallbackChannelsFor(row: ReadonlyLog): string[] {
   }
   return []
 }
-// 优先保留原始 use_channel 的重复尝试顺序；旧日志只有归一化链路时再回退到兼容字段。
+// 新服务端会为每条日志返回完整链路；只有确认总数匹配时才优先使用它，避免把局部旧字段误当成完整链路。
+function completeFallbackChannelsFor(row: ReadonlyLog): string[] {
+  const total = Number(row.fallback_total)
+  if (!Number.isInteger(total) || total <= 1 || !Array.isArray(row.fallback_channels) || row.fallback_channels.length !== total) return []
+  return row.fallback_channels.map(value => String(value).trim()).filter(value => /^\d+$/.test(value))
+}
+// 优先使用服务端完整路径，再保留原始 use_channel 的重复尝试顺序。
 function retryChannelsFor(row: ReadonlyLog): string[] {
+  const complete = completeFallbackChannelsFor(row)
+  if (complete.length > 1) return complete
   const recorded = attemptChannels(row)
   if (recorded.length > 1) return recorded
   return fallbackChannelsFor(row)
 }
+function retryPositionFor(row: ReadonlyLog, channels: string[]): number {
+  const recorded = Number(row.fallback_index)
+  if (Number.isInteger(recorded) && recorded >= 1 && recorded <= channels.length) return recorded
+  const attempt = attemptChannels(row)
+  if (attempt.length > 0 && attempt.length <= channels.length && attempt.every((value, index) => value === channels[index])) return attempt.length
+  const channel = String(row.channel_id || row.channel || '')
+  const matches = channels.map((value, index) => value === channel ? index + 1 : 0).filter(Boolean)
+  return matches.length === 1 ? matches[0] : 0
+}
+function retryChainStepsFor(row: ReadonlyLog, channels = retryChannelsFor(row)): RetryChainStepView[] {
+  if (channels.length <= 1) return []
+  const position = retryPositionFor(row, channels)
+  const currentTone: RetryStepTone = row.type === 5 ? 'failed' : row.type === 2 && position === channels.length ? 'success' : position > 0 ? 'current' : 'plain'
+  return channels.map((channel, index) => ({ channel, position: index + 1, current: index + 1 === position, tone: index + 1 === position ? currentTone : 'plain' }))
+}
+function retryAttemptMeta(row: ReadonlyLog, channels = retryChannelsFor(row)) {
+  const position = retryPositionFor(row, channels)
+  if (position === 1) return { firstAttempt: true, retryCount: 0 }
+  if (position > 1) return { firstAttempt: false, retryCount: position - 1 }
+  return { firstAttempt: false, retryCount: channels.length > 1 ? channels.length - 1 : 0 }
+}
+function retryAttemptLabel(row: ReadonlyLog, channels = retryChannelsFor(row)) {
+  const attempt = retryAttemptMeta(row, channels)
+  if (attempt.firstAttempt) return '首次尝试：'
+  return attempt.retryCount > 0 ? `重试${attempt.retryCount}次：` : 'Fallback 请求（未记录完整重试链路）'
+}
 function isFallback(row: ReadonlyLog): boolean {
+  if (!isAdmin.value) return false
   if (row.fallback === true) return true
   const explicit = first(row, 'fallback', 'is_fallback', 'fallback_flag')
   if (explicit === true || explicit === 1 || (typeof explicit === 'string' && ['1', 'true', 'yes'].includes(explicit.toLowerCase()))) return true
@@ -875,6 +930,7 @@ function retryChain(row: ReadonlyLog) {
   return channels.length > 1 ? channels.join(' → ') : ''
 }
 function fallbackChain(row: ReadonlyLog) {
+  if (!isAdmin.value) return ''
   const channels = retryChannelsFor(row)
   return channels.length > 1 ? channels.join(' → ') : ''
 }
@@ -950,6 +1006,7 @@ function logRowMemoKey(row: ReadonlyLog, visible: boolean, admin: boolean) {
     row.upstream_request_id, row.content, row.content_summary, row.group, row.ip,
     row.is_stream, row.other, visible ? 1 : 0, admin ? 1 : 0,
     row.fallback ? 1 : 0, row.fallback_checked, (row.fallback_channels || []).join(','),
+    row.fallback_index, row.fallback_total,
     // 列偏好也属于行模板的输入，签名变化可让 v-memo 正确重建可选单元格。
     logColumnOptions.map(option => columnVisibility.value[option.key] ? 1 : 0).join(''),
     prefs.quotaPerUnit, prefs.currencySymbol, prefs.priceMultiplier,
@@ -974,8 +1031,8 @@ const logRows = computed<LogRowView[]>(() => {
     const timing = isTimingLog(row)
     const stream = streamFlag(row)
     const fallback = isFallback(row)
-    const fallbackChannels = fallbackChannelsFor(row)
-    const retryChannels = retryChannelsFor(row)
+    const fallbackChannels = admin ? fallbackChannelsFor(row) : []
+    const retryChannels = admin ? retryChannelsFor(row) : []
     const firstSeconds = timing && stream === true ? firstResponse(row) : undefined
     const firstVariant = firstResponseVariant(firstSeconds)
     const durationTone = durationVariant(row)
@@ -1009,6 +1066,7 @@ const logRows = computed<LogRowView[]>(() => {
       fallbackChannels,
       retryUnknown: admin && retryLookupUnknown(row),
       retryChain: admin && retryChannels.length > 1 ? retryChannels.join(' → ') : '',
+      retrySteps: retryChainStepsFor(row, retryChannels),
       channelAffinity: channelAffinityFor(row),
       username: visible ? row.username || '用户 ' + row.user_id : '••••',
       usernameCopy: visible ? String(row.username || row.user_id || '') : '',
@@ -1632,19 +1690,29 @@ watch(() => filters.site_id, (site, previous) => {
       <el-alert v-if="countState.error.value" title="总数加载失败，当前显示已加载的位置" type="warning" :closable="false"><el-button link type="primary" @click="countState.reload">重新加载总数</el-button></el-alert>
       <el-alert v-if="state.data.value && !listIsCurrent && !backgroundRefreshing && !state.loading.value" title="本次查询未成功，以下是上一次查询结果，请重新查询后翻页" type="warning" :closable="false" />
 
-      <!-- rc35 的工具栏按“筛选器 → 统计与操作”分两行排列，所有筛选字段始终可见。 -->
+      <!-- rc35 的工具栏将低频筛选条件收进可展开的第二行，首行始终填满可用宽度。 -->
       <section class="logs-toolbar">
         <MobileLogFilters v-if="mobileViewport" v-model:username="username" v-model:time-range="timeRange" :site="filters.site_id" :filters="mobileFilters" :busy="state.loading.value || backgroundRefreshing" :admin="isAdmin" :sensitive="sensitiveVisible" @select-user="handleUserSelect" @apply="applyMobileFilters" @search="search" @reset="reset" @privacy="sensitiveVisible = !sensitiveVisible" />
         <div v-else class="toolbar-primary">
           <div class="primary-filters">
-            <CompactDateTimeRangePicker v-model="timeRange" :reset-enabled="timeRangeChanged && !backgroundRefreshing" class="filter-time" @reset="resetTime" />
-            <UserNamePicker v-model="username" :site="filters.site_id" class="filter-username" placeholder="用户名称" aria-label="用户名称" @select="handleUserSelect" @submit="search" />
-            <el-input v-model="channelID" clearable placeholder="渠道 ID" @keyup.enter="search" class="filter-channel" />
-            <el-input v-model="requestID" clearable placeholder="请求ID" @keyup.enter="search" class="filter-request" />
-            <el-input v-model="modelName" clearable placeholder="模型名称" @keyup.enter="search" class="filter-model" />
-            <el-input v-model="group" clearable placeholder="分组" @keyup.enter="search" class="filter-group" />
-            <el-input v-model="tokenName" clearable placeholder="令牌名称" @keyup.enter="search" class="filter-token" />
-            <el-input v-model="upstreamRequestID" clearable placeholder="上游请求ID" @keyup.enter="search" class="filter-upstream" />
+            <div class="filter-row filter-row-primary">
+              <CompactDateTimeRangePicker v-model="timeRange" :reset-enabled="timeRangeChanged && !backgroundRefreshing" class="filter-time" @reset="resetTime" />
+              <UserNamePicker v-model="username" :site="filters.site_id" class="filter-username" placeholder="用户名称" aria-label="用户名称" @select="handleUserSelect" @submit="search" />
+              <el-input v-model="channelID" clearable placeholder="渠道 ID" @keyup.enter="search" class="filter-channel" />
+              <el-input v-model="requestID" clearable placeholder="请求ID" @keyup.enter="search" class="filter-request" />
+              <el-input v-model="modelName" clearable placeholder="模型名称" @keyup.enter="search" class="filter-model" />
+              <el-input v-model="upstreamRequestID" clearable placeholder="上游请求ID" @keyup.enter="search" class="filter-upstream" />
+              <button type="button" class="filter-expand-action" :aria-expanded="secondaryFiltersOpen" aria-controls="readonly-log-secondary-filters" :title="secondaryFiltersOpen ? '收起更多筛选' : '展开更多筛选'" @click="secondaryFiltersOpen = !secondaryFiltersOpen">
+                <el-icon aria-hidden="true"><ArrowUp v-if="secondaryFiltersOpen" /><ArrowDown v-else /></el-icon>
+                <span>{{ secondaryFiltersOpen ? '收起' : '展开' }}</span>
+                <span v-if="secondaryFilterCount" class="filter-count">{{ secondaryFilterCount }}</span>
+              </button>
+            </div>
+            <div v-show="secondaryFiltersOpen" id="readonly-log-secondary-filters" class="filter-row filter-row-secondary">
+              <el-input v-model="group" clearable placeholder="分组" @keyup.enter="search" class="filter-group" />
+              <el-input v-model="tokenName" clearable placeholder="令牌名称" @keyup.enter="search" class="filter-token" />
+              <el-input v-model="statusCode" clearable placeholder="错误码" aria-label="错误码" inputmode="numeric" @keyup.enter="search" class="filter-status-code" />
+            </div>
           </div>
         </div>
         <div class="toolbar-meta">
@@ -1655,6 +1723,7 @@ watch(() => filters.site_id, (site, previous) => {
           </div>
           <div v-if="!mobileViewport" class="toolbar-actions">
             <el-select v-model="logType" placeholder="全部类型" class="filter-type action-type"><el-option label="全部类型" :value="0" /><el-option label="消费" :value="2" /><el-option label="错误" :value="5" /><el-option label="充值" :value="1" /><el-option label="管理" :value="3" /><el-option label="系统" :value="4" /><el-option label="退款" :value="6" /><el-option label="登录" :value="7" /></el-select>
+            <label class="empty-output-toggle"><input v-model="emptyOutput" type="checkbox" :disabled="backgroundRefreshing" /><span>空输出</span></label>
             <button type="button" class="icon-action" :title="sensitiveVisible ? '隐藏敏感字段' : '显示敏感字段'" :aria-label="sensitiveVisible ? '隐藏敏感字段' : '显示敏感字段'" @click="sensitiveVisible = !sensitiveVisible"><el-icon><component :is="sensitiveVisible ? View : Hide" /></el-icon></button>
             <button type="button" class="secondary-action" :disabled="backgroundRefreshing" @click="reset"><el-icon><RefreshLeft /></el-icon><span>{{ backgroundRefreshing ? '更新中' : '重置' }}</span></button>
             <button type="button" class="primary-action" :disabled="state.loading.value || backgroundRefreshing" @click="search"><el-icon><Search /></el-icon><span>{{ state.loading.value ? '查询中' : backgroundRefreshing ? '更新中' : '查询' }}</span></button>
@@ -2105,7 +2174,7 @@ watch(() => filters.site_id, (site, previous) => {
       <!-- 重试提示独立于表格滚动层，鼠标进入整个渠道单元格即可查看。 -->
       <Teleport to="body">
         <div v-if="retryHover" ref="retryHoverElement" class="retry-hover-card" :class="{ 'has-affinity': retryHover.affinity }" role="tooltip" :style="retryHoverStyle">
-          <div v-if="retryHover.hasRetry" class="retry-hover-line"><strong v-if="retryHover.retryCount">重试{{ retryHover.retryCount }}次：</strong><strong v-else>Fallback：</strong><span>{{ retryHover.chain }}</span></div>
+          <div v-if="retryHover.hasRetry" class="retry-hover-line"><strong v-if="retryHover.firstAttempt">首次尝试：</strong><strong v-else-if="retryHover.retryCount">重试{{ retryHover.retryCount }}次：</strong><strong v-else>Fallback：</strong><span v-if="retryHover.steps.length" class="retry-hover-chain"><template v-for="step in retryHover.steps" :key="step.position"><i v-if="step.position > 1" class="retry-hover-separator" aria-hidden="true">→</i><b class="retry-hover-step" :class="step.current ? `is-${step.tone}` : ''">{{ step.channel }}</b></template></span><span v-else>{{ retryHover.chain }}</span></div>
           <div v-if="retryHover.affinity" class="retry-hover-affinity">
             <strong>渠道亲和性命中</strong>
             <span v-if="retryHover.affinity.ruleName">规则：{{ retryHover.affinity.ruleName }}</span>
@@ -2184,7 +2253,7 @@ watch(() => filters.site_id, (site, previous) => {
   background: var(--rc35-surface);
 }
 
-/* 工具栏按 rc35 的“主筛选、统计与操作”两层组织；主筛选保持单行，窄桌面在行内横向查看。 */
+/* 工具栏按 rc35 的“主筛选、统计与操作”两层组织；低频筛选器可展开查看。 */
 .logs-toolbar {
   flex: none;
   padding: 12px 14px 10px;
@@ -2195,6 +2264,11 @@ watch(() => filters.site_id, (site, previous) => {
 }
 .toolbar-primary { display: block; }
 .primary-filters {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+}
+.filter-row {
   display: flex;
   min-width: 0;
   flex-wrap: nowrap;
@@ -2223,6 +2297,46 @@ watch(() => filters.site_id, (site, previous) => {
 .filter-request { width: 165px; min-width: 145px; flex: 0 1 165px; }
 .filter-model, .filter-group { width: 150px; min-width: 132px; flex: 0 1 150px; }
 .filter-token, .filter-upstream { width: 184px; min-width: 156px; flex: 0 1 184px; }
+.filter-status-code { width: 112px; min-width: 100px; flex: 0 1 112px; }
+.filter-row-primary .filter-username { width: auto; flex: 1 1 145px; }
+.filter-row-primary .filter-channel { width: auto; flex: 1 1 125px; }
+.filter-row-primary .filter-request { width: auto; flex: 1 1 165px; }
+.filter-row-primary .filter-model { width: auto; flex: 1 1 150px; }
+.filter-row-primary .filter-upstream { width: auto; flex: 1 1 184px; }
+.filter-expand-action {
+  display: inline-flex;
+  height: 34px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  border: 1px solid var(--rc35-line-strong);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--rc35-ink-2);
+  cursor: pointer;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.filter-expand-action:hover,
+.filter-expand-action:focus-visible {
+  border-color: var(--rc35-blue);
+  background: var(--rc35-surface-2);
+  color: var(--rc35-ink);
+  outline: none;
+}
+.filter-expand-action .el-icon { font-size: 14px; }
+.filter-count {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--rc35-accent-weak);
+  color: var(--rc35-blue);
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+}
 .logs-toolbar :deep(.el-input__wrapper),
 .logs-toolbar :deep(.el-select__wrapper) {
   min-height: 34px;
@@ -2287,6 +2401,22 @@ watch(() => filters.site_id, (site, previous) => {
   margin-left: auto;
 }
 .action-type { width: 122px; flex: 0 0 122px; }
+.empty-output-toggle {
+  display: inline-flex;
+  height: 32px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 7px;
+  border: 1px solid var(--rc35-line-strong);
+  border-radius: 6px;
+  color: var(--rc35-ink-2);
+  cursor: pointer;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.empty-output-toggle:hover { background: var(--rc35-surface-2); color: var(--rc35-ink); }
+.empty-output-toggle input { width: 14px; height: 14px; margin: 0; accent-color: var(--rc35-blue); }
+.empty-output-toggle:has(input:disabled) { cursor: not-allowed; opacity: .55; }
 .icon-action, .secondary-action, .primary-action {
   display: inline-flex;
   height: 32px;
@@ -2548,6 +2678,12 @@ watch(() => filters.site_id, (site, previous) => {
   color: var(--rc35-ink-2);
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
 }
+.retry-hover-chain { display: inline-flex; min-width: 0; align-items: baseline; flex-wrap: wrap; gap: 0; }
+.retry-hover-step { color: var(--rc35-ink-2); font: inherit; font-weight: 400; }
+.retry-hover-step.is-current { color: var(--ct-warn); font-weight: 700; }
+.retry-hover-step.is-failed { color: var(--ct-crit); font-weight: 700; }
+.retry-hover-step.is-success { color: var(--ct-ok); font-weight: 700; }
+.retry-hover-separator { margin: 0 4px; color: var(--rc35-ink-3); font-style: normal; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 .retry-hover-affinity { display: flex; min-width: 0; flex-direction: column; gap: 2px; padding-top: 6px; border-top: 1px solid #e5e7eb; }
 .retry-hover-affinity strong { color: #f59e0b; }
 .retry-hover-affinity span { color: var(--rc35-ink-2); font-family: inherit; }
@@ -3579,7 +3715,9 @@ watch(() => filters.site_id, (site, previous) => {
   /* 外壳尺寸、侧栏隐藏和底部导航留白由共享手机布局统一管理。 */
   .logs-page { height: auto; min-height: 0; margin: -10px -8px -18px; overflow: visible; padding: 14px 8px 18px; }
   .logs-toolbar { padding: 12px; }
-  .primary-filters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .primary-filters { display: grid; grid-template-columns: minmax(0, 1fr); }
+  .filter-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); overflow: visible; }
+  .filter-expand-action { grid-column: 1 / -1; justify-content: center; }
   .filter-time {
     width: 100% !important;
     max-width: none;

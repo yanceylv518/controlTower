@@ -253,11 +253,57 @@ func TestReadonlyLogFiltersSupportRC35Aliases(t *testing.T) {
 	assert.Equal(t, 50, offset)
 }
 
+func TestReadonlyLogFiltersSupportStatusCodeAndEmptyOutput(t *testing.T) {
+	r := httptest.NewRequest("GET", "/?status_code=429&empty_output=1", nil)
+	filters, err := parseReadonlyLogFilters(r.URL.Query(), nil, false)
+	require.NoError(t, err)
+	assert.NotNil(t, filters.statusCode)
+	assert.Equal(t, 429, *filters.statusCode)
+	assert.True(t, filters.emptyOutput)
+	assert.True(t, filters.hasRawFilter)
+	assert.NotNil(t, filters.logType)
+	assert.Equal(t, 5, *filters.logType)
+	assert.Contains(t, filters.where, "l.content REGEXP ?")
+	assert.Contains(t, filters.where, "l.other REGEXP ?")
+	assert.Contains(t, filters.where, "COALESCE(l.completion_tokens,0) = 0")
+	foundStatusPattern := false
+	for _, value := range filters.args {
+		if pattern, ok := value.(string); ok && strings.Contains(pattern, "429") {
+			foundStatusPattern = true
+			break
+		}
+	}
+	assert.True(t, foundStatusPattern)
+}
+
+func TestReadonlyLogFiltersDefaultsEmptyOutputToConsumption(t *testing.T) {
+	filters, err := parseReadonlyLogFilters(httptest.NewRequest("GET", "/?empty_output=true", nil).URL.Query(), nil, false)
+	require.NoError(t, err)
+	assert.True(t, filters.emptyOutput)
+	assert.NotNil(t, filters.logType)
+	assert.Equal(t, 2, *filters.logType)
+	assert.Contains(t, filters.where, "COALESCE(l.completion_tokens,0) = 0")
+}
+
+func TestReadonlyLogFiltersRejectInvalidStatusCodeAndTypeCombination(t *testing.T) {
+	for _, value := range []string{"99", "600", "abc"} {
+		_, err := parseReadonlyLogFilters(httptest.NewRequest("GET", "/?status_code="+value, nil).URL.Query(), nil, false)
+		assert.EqualError(t, err, "invalid_status_code")
+	}
+	_, err := parseReadonlyLogFilters(httptest.NewRequest("GET", "/?status_code=429&type=2", nil).URL.Query(), nil, false)
+	assert.EqualError(t, err, "invalid_filter_combination")
+	_, err = parseReadonlyLogFilters(httptest.NewRequest("GET", "/?empty_output=maybe", nil).URL.Query(), nil, false)
+	assert.EqualError(t, err, "invalid_empty_output")
+}
+
 func TestReadonlyLogFiltersViewerKeepsFinalRequestOnly(t *testing.T) {
 	r := httptest.NewRequest("GET", "/?request_id=req-1", nil)
 	filters, err := parseReadonlyLogFilters(r.URL.Query(), []int64{7}, true)
 	require.NoError(t, err)
 	assert.Contains(t, filters.where, "NOT EXISTS")
+	assert.Contains(t, filters.where, "newer_logs.created_at > l.created_at")
+	assert.Contains(t, filters.where, "newer_logs.created_at = l.created_at")
+	assert.Contains(t, filters.where, "newer_logs.id > l.id")
 	assert.True(t, filters.hasRequestFilter)
 	assert.False(t, filters.hasLike)
 }
@@ -270,12 +316,14 @@ func TestReadonlyLogFiltersRejectUnsafeFuzzyPatterns(t *testing.T) {
 }
 
 func TestProjectReadonlyLogOtherSeparatesRoles(t *testing.T) {
-	raw := `{"public_id":9007199254740993,"reject_reason":"blocked","admin_info":{"admin_id":9},"root_info":{"generation":42}}`
+	raw := `{"public_id":9007199254740993,"reject_reason":"blocked","use_channel":["141","148"],"fallback_channels":["141","148"],"admin_info":{"admin_id":9},"root_info":{"generation":42}}`
 	viewer := projectReadonlyLogOther(raw, true)
 	assert.Contains(t, viewer, `"public_id":9007199254740993`)
 	assert.NotContains(t, viewer, "admin_info")
 	assert.NotContains(t, viewer, "root_info")
 	assert.NotContains(t, viewer, "reject_reason")
+	assert.NotContains(t, viewer, "use_channel")
+	assert.NotContains(t, viewer, "fallback_channels")
 
 	admin := projectReadonlyLogOther(raw, false)
 	assert.Contains(t, admin, `"public_id":9007199254740993`)
@@ -311,18 +359,44 @@ func TestReadonlyLogFallbackInfoSupportsLegacyAndScopedFields(t *testing.T) {
 
 // fallback 字段是只读 API 的稳定布尔合同，渠道链为空时不应序列化成误导性的空数组。
 func TestPassthroughLogFallbackJSONContract(t *testing.T) {
-	value, err := json.Marshal(PassthroughLog{Fallback: true, FallbackChannels: []string{"26", "78"}})
+	value, err := json.Marshal(PassthroughLog{Fallback: true, FallbackChannels: []string{"26", "78"}, FallbackIndex: 1, FallbackTotal: 2})
 	require.NoError(t, err)
 	var encoded map[string]any
 	require.NoError(t, json.Unmarshal(value, &encoded))
 	assert.Equal(t, true, encoded["fallback"])
 	assert.Equal(t, []any{"26", "78"}, encoded["fallback_channels"])
+	assert.Equal(t, float64(1), encoded["fallback_index"])
+	assert.Equal(t, float64(2), encoded["fallback_total"])
 	empty, err := json.Marshal(PassthroughLog{})
 	require.NoError(t, err)
 	var emptyEncoded map[string]any
 	require.NoError(t, json.Unmarshal(empty, &emptyEncoded))
 	assert.Equal(t, false, emptyEncoded["fallback"])
 	assert.NotContains(t, emptyEncoded, "fallback_channels")
+	assert.NotContains(t, emptyEncoded, "fallback_index")
+	assert.NotContains(t, emptyEncoded, "fallback_total")
+}
+
+func TestReadonlyFallbackChainPropagatesCompletePathAndCurrentAttempt(t *testing.T) {
+	records := []readonlyFallbackRecord{
+		{id: 3, requestID: "request-a", userID: 7, typeID: 2, channelID: 148, createdAt: 30, other: `{"admin_info":{"use_channel":["141","191","148"]}}`},
+		{id: 1, requestID: "request-a", userID: 7, typeID: 5, channelID: 141, createdAt: 10, other: `{"admin_info":{"use_channel":["141"]}}`},
+		{id: 2, requestID: "request-a", userID: 7, typeID: 5, channelID: 191, createdAt: 20, other: `{"admin_info":{"use_channel":["141","191"]}}`},
+	}
+	chain := readonlyFallbackChainFor(records)
+	assert.Equal(t, []string{"141", "191", "148"}, chain.channels)
+	assert.Equal(t, map[int64]int{1: 1, 2: 2, 3: 3}, chain.indexByID)
+}
+
+func TestReadonlyFallbackChainPreservesRepeatedChannelAttempts(t *testing.T) {
+	records := []readonlyFallbackRecord{
+		{id: 1, requestID: "request-b", userID: 9, typeID: 5, channelID: 141, createdAt: 10, other: `{"use_channel":["141"]}`},
+		{id: 2, requestID: "request-b", userID: 9, typeID: 5, channelID: 141, createdAt: 20, other: `{"use_channel":["141","141"]}`},
+		{id: 3, requestID: "request-b", userID: 9, typeID: 2, channelID: 148, createdAt: 30, other: `{"use_channel":["141","141","148"]}`},
+	}
+	chain := readonlyFallbackChainFor(records)
+	assert.Equal(t, []string{"141", "141", "148"}, chain.channels)
+	assert.Equal(t, map[int64]int{1: 1, 2: 2, 3: 3}, chain.indexByID)
 }
 
 // 使用真实隔离 MySQL 只执行日志查询，验证 rc35 投影在目标方言上可解析。

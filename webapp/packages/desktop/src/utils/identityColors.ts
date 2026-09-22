@@ -35,7 +35,7 @@ function hashString(value: string): number {
 
 /**
  * 生成与 New API `getUserAvatarStyle` 相同的头像样式。
- * 完整字符串参与哈希，避免只按首字母取色导致大量用户落在同一颜色。
+ * 完整字符串参与哈希，避免只按首字母取色导致大量用户落在同一颜色；头像首字母统一使用白色。
  */
 export function getUserAvatarStyle(name: string): UserAvatarStyle {
   const hash = hashString(name)
@@ -43,19 +43,9 @@ export function getUserAvatarStyle(name: string): UserAvatarStyle {
   const saturation = 54 + (hash % 8)
   const lightness = 52 + ((hash >> 4) % 8)
 
-  // Keep the identity hue stable, but don't put white initials on a pale yellow/green.
-  const l = lightness / 100, s = saturation / 100
-  const a = s * Math.min(l, 1 - l)
-  const rgb = [0, 8, 4].map(n => {
-    const k = (n + hue / 30) % 12
-    const value = l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1))
-    return value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4
-  })
-  const luminance = .2126 * rgb[0] + .7152 * rgb[1] + .0722 * rgb[2]
-
   return {
     backgroundColor: `hsl(${hue} ${saturation}% ${lightness}%)`,
-    color: 1.05 / (luminance + .05) >= 4.6 ? '#ffffff' : '#000000',
+    color: '#ffffff',
   }
 }
 

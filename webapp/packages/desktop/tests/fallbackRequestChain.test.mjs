@@ -97,7 +97,8 @@ test('only-this-request clears conflicting filters and refuses a stale site', as
   const functionSource = view.match(/async function filterRequestChain\([^]*?\n\}/)[0]
   const compiled = ts.transpileModule(functionSource, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
   const context = { filters: { site_id: 'site-a' }, backgroundRefreshing: { value: false } }
-  for (const key of ['username', 'tokenName', 'modelName', 'group', 'channelID', 'upstreamRequestID', 'logType', 'requestID', 'requestScope', 'timeRange']) context[key] = { value: 'old-filter' }
+  for (const key of ['username', 'tokenName', 'modelName', 'group', 'channelID', 'statusCode', 'upstreamRequestID', 'logType', 'requestID', 'requestScope', 'timeRange', 'selectedUserID']) context[key] = { value: 'old-filter' }
+  context.emptyOutput = { value: true }
   let refreshed = 0
   context.refreshSearch = async () => { refreshed++ }
   const filter = new Function(...Object.keys(context), `${compiled}; return filterRequestChain`)(...Object.values(context))
@@ -106,7 +107,8 @@ test('only-this-request clears conflicting filters and refuses a stale site', as
   const query = chainQuery('site-a', final)
   await filter(query)
   assert.equal(refreshed, 1)
-  for (const key of ['username', 'tokenName', 'modelName', 'group', 'channelID', 'upstreamRequestID']) assert.equal(context[key].value, '')
+  for (const key of ['username', 'tokenName', 'modelName', 'group', 'channelID', 'statusCode', 'upstreamRequestID']) assert.equal(context[key].value, '')
+  assert.equal(context.emptyOutput.value, false)
   assert.equal(context.logType.value, 0)
   assert.equal(context.requestID.value, 'request-a')
   assert.deepEqual(context.requestScope.value, { request: 'request-a', user: '7' })

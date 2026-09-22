@@ -179,6 +179,16 @@ func TestReadonlyFallbackLookupDistinguishesUnknownFromNone(t *testing.T) {
 					<-ctx.Done()
 					return nil, ctx.Err()
 				}
+				if strings.Contains(q, "SELECT id,COALESCE(request_id") {
+					rows := &reviewRows{columns: []string{"id", "request_id", "user_id", "type", "channel_id", "created_at", "other"}, values: [][]driver.Value{
+						{int64(21), "retry", int64(7), int64(5), int64(141), int64(10), `{"admin_info":{"use_channel":["141"]}}`},
+						{int64(22), "retry", int64(7), int64(2), int64(148), int64(20), `{"admin_info":{"use_channel":["141","148"]}}`},
+					}}
+					if mode == "partial" {
+						rows.failure = errors.New("read interrupted")
+					}
+					return rows, nil
+				}
 				rows := &reviewRows{columns: []string{"request_id", "user_id", "count"}, values: [][]driver.Value{{"one", int64(7), int64(1)}, {"retry", int64(7), int64(2)}}}
 				if mode == "partial" {
 					rows.failure = errors.New("read interrupted")
@@ -189,7 +199,7 @@ func TestReadonlyFallbackLookupDistinguishesUnknownFromNone(t *testing.T) {
 			tx, err := db.Begin()
 			require.NoError(t, err)
 			defer tx.Rollback()
-			items := []PassthroughLog{{RequestID: "one", UserID: 7}, {RequestID: "retry", UserID: 7}, {RequestID: "known", UserID: 7, Fallback: true, FallbackChecked: true}}
+			items := []PassthroughLog{{ID: 11, RequestID: "one", UserID: 7}, {ID: 22, RequestID: "retry", UserID: 7}, {ID: 31, RequestID: "known", UserID: 7, Fallback: true, FallbackChecked: true}}
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 			defer cancel()
 			markReadonlyFallbackRequests(ctx, tx, items)
@@ -197,6 +207,11 @@ func TestReadonlyFallbackLookupDistinguishesUnknownFromNone(t *testing.T) {
 			require.False(t, items[0].Fallback)
 			require.Equal(t, mode == "complete", items[1].FallbackChecked)
 			require.Equal(t, mode == "complete", items[1].Fallback)
+			if mode == "complete" {
+				require.Equal(t, []string{"141", "148"}, items[1].FallbackChannels)
+				require.Equal(t, 2, items[1].FallbackIndex)
+				require.Equal(t, 2, items[1].FallbackTotal)
+			}
 			require.True(t, items[2].Fallback)
 			require.True(t, items[2].FallbackChecked)
 		})

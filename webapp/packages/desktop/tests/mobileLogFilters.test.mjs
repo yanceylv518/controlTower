@@ -8,7 +8,7 @@ const source = readFileSync(new URL('../src/components/MobileLogFilters.vue', im
 const script = source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1].replace(/^import .*$/gm, '')
 const compiled = ts.transpileModule(script, { compilerOptions: { target:ts.ScriptTarget.ES2022, module:ts.ModuleKind.ES2022 } }).outputText
 const factory = new Function('defineProps', 'defineEmits', 'computed', 'reactive', 'ref', compiled + '\nreturn { draft, sheetOpen, openFilters, applyFilters, filterCount, emptyFilters };')
-const initial = () => ({logType:2,modelName:'gpt-4.1',group:'default',tokenName:'',requestID:'',upstreamRequestID:'',channelID:''})
+const initial = () => ({logType:2,modelName:'gpt-4.1',group:'default',tokenName:'',requestID:'',upstreamRequestID:'',channelID:'',statusCode:'',emptyOutput:false})
 function setup(extra = {}) {
   const props = reactive({filters:initial(),admin:false,busy:false,...extra}), events=[]
   const panel = factory(()=>props,()=>((...args)=>events.push(args)),computed,reactive,ref)
@@ -38,7 +38,7 @@ test('viewer cannot submit hidden channel filter; admin preserves channel input'
 test('all mobile filter values reach the shared query before search',()=>{
   const page=readFileSync(new URL('../src/views/ReadonlyLogsView.vue',import.meta.url),'utf8')
   const fn=page.match(/function applyMobileFilters\(value: MobileLogFilterValues\) \{([\s\S]*?)\n\}/)[1]
-  const values={...initial(),tokenName:'key',requestID:'request',upstreamRequestID:'upstream',channelID:'9'}
+  const values={...initial(),tokenName:'key',requestID:'request',upstreamRequestID:'upstream',channelID:'9',statusCode:'429',emptyOutput:true}
   const keys=Object.keys(values),refs=keys.map(()=>ref('old'));let calls=0
   const run=new Function(...keys,'search','value',fn)
   run(...refs,()=>{calls++;assert.deepEqual(Object.fromEntries(keys.map((k,i)=>[k,refs[i].value])),values)},values)

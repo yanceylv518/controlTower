@@ -167,18 +167,12 @@ test('charts keep data/formatters, update axes and tooltip, and ensure series co
   }
 })
 
-test('hashed avatars retain identity backgrounds with readable initials', () => {
+test('hashed avatars retain identity backgrounds with white initials', () => {
   const api = compile('../src/utils/identityColors.ts')
   for (let i = 0; i < 1000; i++) {
     const name = `客户-${i}`, style = api.getUserAvatarStyle(name)
     assert.deepEqual(style, api.getUserAvatarStyle(name))
-    const [h, s, l] = style.backgroundColor.match(/[\d.]+/g).map(Number)
-    const a = s / 100 * Math.min(l / 100, 1 - l / 100)
-    const channels = [0, 8, 4].map(n => {
-      const k = (n + h / 30) % 12
-      return Math.round(255 * (l / 100 - a * Math.max(-1, Math.min(k - 3, 9 - k, 1))))
-    })
-    const hex = '#' + channels.map(v => v.toString(16).padStart(2, '0')).join('')
-    assert.ok(contrast(style.color, hex) >= 4.5, name)
+    assert.equal(style.color, '#ffffff')
+    assert.match(style.backgroundColor, /^hsl\(\d+ \d+% \d+%\)$/)
   }
 })

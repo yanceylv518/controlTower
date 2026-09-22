@@ -834,7 +834,10 @@ type PassthroughLog struct {
 	FallbackChecked  bool     `json:"fallback_checked"`
 	Fallback         bool     `json:"fallback"`
 	FallbackChannels []string `json:"fallback_channels,omitempty"`
-	Other            string   `json:"other"`
+	// FallbackIndex/Total 标识当前日志在完整链路中的尝试序号；viewer 只接收布尔事实。
+	FallbackIndex int    `json:"fallback_index,omitempty"`
+	FallbackTotal int    `json:"fallback_total,omitempty"`
+	Other         string `json:"other"`
 }
 
 // readonlyRequestKey 用请求 ID 和用户 ID 组成批量标记的稳定键，避免不同用户复用
@@ -892,6 +895,74 @@ func readonlyStringList(raw json.RawMessage) []string {
 	return channels
 }
 
+// readonlyStringSequence 保留 use_channel 中的重复渠道。相同渠道的连续重试
+// 仍是不同尝试，不能像对外展示的去重列表一样合并。
+func readonlyStringSequence(raw json.RawMessage) []string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	var values []json.RawMessage
+	if err := json.Unmarshal(raw, &values); err == nil {
+		sequence := make([]string, 0, len(values))
+		for _, item := range values {
+			var text string
+			if json.Unmarshal(item, &text) == nil {
+				sequence = appendReadonlySequenceValue(sequence, text)
+				continue
+			}
+			var number json.Number
+			if json.Unmarshal(item, &number) == nil {
+				sequence = appendReadonlySequenceValue(sequence, number.String())
+			}
+		}
+		return sequence
+	}
+	var text string
+	if json.Unmarshal(raw, &text) != nil {
+		return nil
+	}
+	text = strings.NewReplacer("->", " ", "→", " ", ",", " ").Replace(text)
+	parts := strings.Fields(text)
+	sequence := make([]string, 0, len(parts))
+	for _, part := range parts {
+		sequence = appendReadonlySequenceValue(sequence, part)
+	}
+	return sequence
+}
+
+func appendReadonlySequenceValue(sequence []string, value string) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return sequence
+	}
+	return append(sequence, value)
+}
+
+// readonlyLogAttemptChannels 提取原始 use_channel 顺序；旧日志没有该字段时回退到 fallback_channels。
+func readonlyLogAttemptChannels(value string) []string {
+	var values map[string]json.RawMessage
+	if value == "" || json.Unmarshal([]byte(value), &values) != nil || values == nil {
+		return nil
+	}
+	keys := []string{"use_channel", "fallback_channels"}
+	for _, key := range keys {
+		if sequence := readonlyStringSequence(values[key]); len(sequence) > 0 {
+			return sequence
+		}
+	}
+	if adminRaw, ok := values["admin_info"]; ok {
+		var adminInfo map[string]json.RawMessage
+		if json.Unmarshal(adminRaw, &adminInfo) == nil && adminInfo != nil {
+			for _, key := range keys {
+				if sequence := readonlyStringSequence(adminInfo[key]); len(sequence) > 0 {
+					return sequence
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func readonlyBool(raw json.RawMessage) bool {
 	var value bool
 	if json.Unmarshal(raw, &value) == nil {
@@ -942,17 +1013,111 @@ func readonlyLogFallbackInfo(value string) (bool, []string) {
 	return len(channels) > 1, channels
 }
 
-// markReadonlyFallbackRequests 批量检查当前页请求 ID 是否存在其它尝试记录。
-// 这样即使错误日志本身只保存了第一次渠道，也能和最终成功记录共享 fallback 标志；
-// 查询只涉及当前页最多 100 个 ID，并复用 request_id 索引，不改变主列表排序。
+type readonlyFallbackRecord struct {
+	id        int64
+	requestID string
+	userID    int64
+	typeID    int
+	channelID int64
+	createdAt int64
+	other     string
+}
+
+type readonlyFallbackChain struct {
+	channels  []string
+	indexByID map[int64]int
+}
+
+func readonlySequencePrefix(prefix, full []string) bool {
+	if len(prefix) > len(full) {
+		return false
+	}
+	for index, value := range prefix {
+		if value != full[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func readonlyFallbackChainFor(records []readonlyFallbackRecord) readonlyFallbackChain {
+	sort.SliceStable(records, func(i, j int) bool {
+		if records[i].createdAt != records[j].createdAt {
+			return records[i].createdAt < records[j].createdAt
+		}
+		return records[i].id < records[j].id
+	})
+	paths := make([][]string, 0, len(records))
+	for _, record := range records {
+		if path := readonlyLogAttemptChannels(record.other); len(path) > 0 {
+			paths = append(paths, path)
+		}
+	}
+	if len(paths) == 0 {
+		return readonlyFallbackChain{}
+	}
+	path := append([]string(nil), paths[0]...)
+	for _, candidate := range paths[1:] {
+		if len(candidate) > len(path) {
+			path = append([]string(nil), candidate...)
+		}
+	}
+	for _, candidate := range paths {
+		if !readonlySequencePrefix(candidate, path) {
+			return readonlyFallbackChain{}
+		}
+	}
+	if len(path) <= 1 {
+		return readonlyFallbackChain{}
+	}
+
+	indexByID := make(map[int64]int, len(records))
+	used := make([]bool, len(path))
+	for _, record := range records {
+		sequence := readonlyLogAttemptChannels(record.other)
+		index := -1
+		if len(sequence) > 0 && readonlySequencePrefix(sequence, path) && path[len(sequence)-1] == strconv.FormatInt(record.channelID, 10) {
+			index = len(sequence) - 1
+		}
+		if index < 0 {
+			matches := make([]int, 0, 1)
+			channel := strconv.FormatInt(record.channelID, 10)
+			for position, value := range path {
+				if value == channel {
+					matches = append(matches, position)
+				}
+			}
+			if len(matches) == 1 {
+				index = matches[0]
+			}
+		}
+		if index < 0 || index >= len(path) || used[index] {
+			channel := strconv.FormatInt(record.channelID, 10)
+			for position, value := range path {
+				if !used[position] && value == channel {
+					index = position
+					break
+				}
+			}
+		}
+		if index >= 0 && index < len(path) && !used[index] {
+			used[index] = true
+			indexByID[record.id] = index + 1
+		}
+	}
+	return readonlyFallbackChain{channels: path, indexByID: indexByID}
+}
+
+// markReadonlyFallbackRequests 批量检查当前页请求 ID 是否存在其它尝试记录，并把
+// 同一链路的完整渠道序列和当前尝试序号回写给每一条当前页记录。
+// 计数查询只覆盖当前页最多 100 个请求；只有确认存在重试时才读取少量链路元数据。
 func markReadonlyFallbackRequests(ctx context.Context, tx *sql.Tx, items []PassthroughLog) {
 	requestIDs := make([]string, 0, len(items))
 	seen := make(map[string]struct{}, len(items))
 	for _, item := range items {
-		if item.Fallback || item.RequestID == "" {
+		if item.RequestID == "" {
 			continue
 		}
-		// SQL 按 request_id、user_id 分组，因此参数只需对请求 ID 去重；同名请求由不同用户的结果在回写时再区分。
 		if _, ok := seen[item.RequestID]; ok {
 			continue
 		}
@@ -988,12 +1153,68 @@ func markReadonlyFallbackRequests(ctx context.Context, tx *sql.Tx, items []Passt
 		return
 	}
 	for i := range items {
+		if _, ok := fallbackKeys[readonlyRequestKey(items[i].RequestID, items[i].UserID)]; ok {
+			items[i].Fallback = true
+			// 计数只证明存在多条日志；完整链路查询成功后才宣布检查完成。
+			items[i].FallbackChecked = false
+		} else if items[i].RequestID != "" {
+			items[i].FallbackChecked = true
+		}
+	}
+	if len(fallbackKeys) == 0 {
+		return
+	}
+
+	// 只对确认存在多条日志的请求读取渠道路径，避免普通日志页额外扫描内容字段。
+	detailIDs := make([]string, 0, len(fallbackKeys))
+	seenDetailID := make(map[string]struct{}, len(fallbackKeys))
+	for key := range fallbackKeys {
+		requestID := strings.SplitN(key, "\x00", 2)[0]
+		if _, ok := seenDetailID[requestID]; ok {
+			continue
+		}
+		seenDetailID[requestID] = struct{}{}
+		detailIDs = append(detailIDs, requestID)
+	}
+	detailArgs := make([]any, len(detailIDs))
+	for index, requestID := range detailIDs {
+		detailArgs[index] = requestID
+	}
+	detailRows, err := tx.QueryContext(ctx, `SELECT id,COALESCE(request_id,''),COALESCE(user_id,0),COALESCE(type,0),COALESCE(channel_id,0),COALESCE(created_at,0),COALESCE(other,'') FROM logs WHERE request_id IN (`+placeholders(len(detailIDs))+`) ORDER BY request_id,user_id,created_at,id`, detailArgs...)
+	if err != nil {
+		return
+	}
+	defer detailRows.Close()
+	grouped := make(map[string][]readonlyFallbackRecord)
+	for detailRows.Next() {
+		var record readonlyFallbackRecord
+		if err := detailRows.Scan(&record.id, &record.requestID, &record.userID, &record.typeID, &record.channelID, &record.createdAt, &record.other); err != nil {
+			return
+		}
+		key := readonlyRequestKey(record.requestID, record.userID)
+		if _, ok := fallbackKeys[key]; ok {
+			grouped[key] = append(grouped[key], record)
+		}
+	}
+	if detailRows.Err() != nil {
+		return
+	}
+	chains := make(map[string]readonlyFallbackChain, len(grouped))
+	for key, records := range grouped {
+		chains[key] = readonlyFallbackChainFor(records)
+	}
+	for i := range items {
 		if items[i].RequestID != "" {
 			items[i].FallbackChecked = true
 		}
-		if _, ok := fallbackKeys[readonlyRequestKey(items[i].RequestID, items[i].UserID)]; ok {
-			items[i].Fallback = true
+		chain, ok := chains[readonlyRequestKey(items[i].RequestID, items[i].UserID)]
+		if !ok || len(chain.channels) <= 1 {
+			continue
 		}
+		items[i].Fallback = true
+		items[i].FallbackChannels = append([]string(nil), chain.channels...)
+		items[i].FallbackTotal = len(chain.channels)
+		items[i].FallbackIndex = chain.indexByID[items[i].ID]
 	}
 }
 
@@ -1008,8 +1229,11 @@ type readonlyLogFilters struct {
 	upstreamRequestID string
 	logType           *int
 	channelID         *int64
+	statusCode        *int
+	emptyOutput       bool
 	hasLike           bool
 	hasRequestFilter  bool
+	hasRawFilter      bool
 }
 type PassthroughLogSummary struct {
 	Quota int64 `json:"quota"`
@@ -1109,6 +1333,55 @@ func readonlyLikePattern(value, param string) (string, error) {
 	return strings.ReplaceAll(value, "_", "!_"), nil
 }
 
+// statusCodeQueryPatterns 覆盖 NewAPI 常见错误详情格式；SQL 条件只用于缩小远端日志扫描范围。
+func statusCodeQueryPatterns(code int) []string {
+	value := strconv.Itoa(code)
+	boundary := "([^[:digit:]]|$)"
+	prefix := "(^|[^[:alnum:]_])"
+	return []string{
+		prefix + "status_code[[:space:]]*[:=][[:space:]]*[\"']?" + value + boundary,
+		prefix + "statusCode[[:space:]]*[:=][[:space:]]*[\"']?" + value + boundary,
+		prefix + "status[[:space:]]+code[[:space:]]*[:=][[:space:]]*[\"']?" + value + boundary,
+		prefix + "error_code[[:space:]]*[:=][[:space:]]*[\"']?" + value + boundary,
+		prefix + "[\"']code[\"'][[:space:]]*[:=][[:space:]]*[\"']?" + value + boundary,
+		prefix + "HTTP[[:space:]]+" + value + boundary,
+	}
+}
+
+func appendStatusCodeFilter(filters *readonlyLogFilters, code int) {
+	patterns := statusCodeQueryPatterns(code)
+	conditions := make([]string, 0, len(patterns))
+	for _, pattern := range patterns {
+		conditions = append(conditions, "(l.content REGEXP ? OR l.other REGEXP ?)")
+		filters.args = append(filters.args, pattern, pattern)
+	}
+	filters.where += " AND (" + strings.Join(conditions, " OR ") + ")"
+}
+
+func forceReadonlyLogType(filters *readonlyLogFilters, logType int) error {
+	if filters.logType != nil {
+		if *filters.logType != logType {
+			return fmt.Errorf("invalid_filter_combination")
+		}
+		return nil
+	}
+	filters.where += " AND l.type = ?"
+	filters.args = append(filters.args, logType)
+	filters.logType = &logType
+	return nil
+}
+
+func parseReadonlyBoolean(value string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "0", "false", "off", "no":
+		return false, nil
+	case "1", "true", "on", "yes":
+		return true, nil
+	default:
+		return false, fmt.Errorf("invalid_empty_output")
+	}
+}
+
 // parseReadonlyLogFilters 构造三类读取接口共用的 WHERE 条件，确保列表、COUNT 和统计不会出现筛选分叉。
 func parseReadonlyLogFilters(values url.Values, userIDs []int64, viewer bool) (readonlyLogFilters, error) {
 	filters := readonlyLogFilters{}
@@ -1190,14 +1463,47 @@ func parseReadonlyLogFilters(values url.Values, userIDs []int64, viewer bool) (r
 		}
 	}
 
+	statusCodeValue := firstQueryValue(values, "status_code")
+	if statusCodeValue != "" {
+		statusCode, parseErr := strconv.Atoi(statusCodeValue)
+		if parseErr != nil || statusCode < 100 || statusCode > 599 {
+			return filters, fmt.Errorf("invalid_status_code")
+		}
+		if err := forceReadonlyLogType(&filters, 5); err != nil {
+			return filters, err
+		}
+		filters.statusCode = &statusCode
+		appendStatusCodeFilter(&filters, statusCode)
+		filters.hasRawFilter = true
+	}
+
+	emptyOutput, parseErr := parseReadonlyBoolean(values.Get("empty_output"))
+	if parseErr != nil {
+		return filters, parseErr
+	}
+	if emptyOutput {
+		filters.emptyOutput = true
+		// 未指定类型时，空输出按消费请求处理；显式指定错误类型时保留组合筛选能力。
+		if filters.logType == nil {
+			if err := forceReadonlyLogType(&filters, 2); err != nil {
+				return filters, err
+			}
+		}
+		filters.where += " AND COALESCE(l.completion_tokens,0) = 0"
+		filters.hasRawFilter = true
+	}
+
 	filters.hasRequestFilter = filters.requestID != "" || filters.upstreamRequestID != ""
 	if viewer {
-		// 与 rc35 自助日志一致：只隐藏同一用户同一请求的中间结果，空请求 ID 逐条保留。
+		// 与 rc35 自助日志一致：只保留同一用户同一请求按日志时间排序的最后一次尝试。
+		// created_at 可能因异步写入与自增 ID 顺序不一致，因此用时间和 ID 做稳定的
+		// 字典序比较；空请求 ID 没有可靠的链路键，仍逐条保留。
 		filters.where += ` AND (l.request_id IS NULL OR l.request_id = '' OR NOT EXISTS (
 			SELECT 1 FROM logs AS newer_logs
 			WHERE newer_logs.request_id = l.request_id
 			  AND newer_logs.user_id = l.user_id
-			  AND newer_logs.id > l.id
+			  AND (newer_logs.created_at > l.created_at OR
+				(newer_logs.created_at = l.created_at AND newer_logs.id > l.id))
 		))`
 	}
 	return filters, nil
@@ -1217,7 +1523,7 @@ func projectReadonlyLogOther(value string, viewer bool) string {
 	}
 	changed := false
 	if viewer {
-		for _, key := range []string{"admin_info", "root_info", "audit_info", "channel_id", "channel_name", "channel_type", "reject_reason"} {
+		for _, key := range []string{"admin_info", "root_info", "audit_info", "channel_id", "channel_name", "channel_type", "reject_reason", "use_channel", "fallback_channels"} {
 			if _, ok := values[key]; ok {
 				delete(values, key)
 				changed = true
@@ -1556,6 +1862,8 @@ func (h *PassthroughHandler) Logs(w http.ResponseWriter, r *http.Request) {
 		for i := range items {
 			// viewer 只收到事实标志，不暴露其它尝试渠道的运营链路。
 			items[i].FallbackChannels = nil
+			items[i].FallbackIndex = 0
+			items[i].FallbackTotal = 0
 		}
 	}
 	hasMore := len(items) > limit
@@ -1625,7 +1933,7 @@ func (h *PassthroughHandler) logStat(w http.ResponseWriter, r *http.Request) {
 		quotaWhere += " AND l.type=2"
 	}
 	quotaFrom, quotaTo, useRollup := completeHourWindow(start, end)
-	if useRollup && !filters.hasRequestFilter && !filters.hasLike && h.readonlyRollupReady(ctx, site, quotaFrom) {
+	if useRollup && !filters.hasRequestFilter && !filters.hasLike && !filters.hasRawFilter && h.readonlyRollupReady(ctx, site, quotaFrom) {
 		logType := filters.logType
 		if logType == nil {
 			consumeType := 2
@@ -1714,7 +2022,7 @@ func (h *PassthroughHandler) logCount(w http.ResponseWriter, r *http.Request) {
 	defer release()
 	var total int64
 	rollupFrom, rollupTo, useRollup := completeHourWindow(start, end)
-	if useRollup && !viewer && !filters.hasRequestFilter && !filters.hasLike && h.readonlyRollupReady(ctx, site, rollupFrom) {
+	if useRollup && !viewer && !filters.hasRequestFilter && !filters.hasLike && !filters.hasRawFilter && h.readonlyRollupReady(ctx, site, rollupFrom) {
 		queryValues := map[string]string{"username": filters.username, "model_name": filters.modelName, "token_name": filters.tokenName, "group": filters.group}
 		local, localErr := h.Rollups.QueryReadonlyLogRollup(ctx, readonlyRollupFilter(site, ids, rollupFrom, rollupTo, queryValues, filters.logType, filters.channelID))
 		if localErr != nil {

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
+import ts from 'typescript'
 
 const source = readFileSync(
   new URL('../src/views/ReadonlyLogsView.vue', import.meta.url),
@@ -36,15 +37,16 @@ test('readonly logs defaults to the current day', () => {
   assert.match(source, /:reset-enabled="timeRangeChanged && !backgroundRefreshing"/)
 })
 
-// 回归保护：首行字段顺序必须与 rc35 参考布局一致，模型和分组不能重新占满整行。
+// 回归保护：首行字段顺序必须与 rc35 参考布局一致，低频条件固定放在第二行。
 test('readonly logs keeps identity filters before compact model filters', () => {
-  const primary = source.match(/<div class="primary-filters"[^>]*>([\s\S]*?)<\/div>/)?.[1] || ''
-  for (const className of ['filter-username', 'filter-channel', 'filter-request', 'filter-model', 'filter-group']) {
+  const primary = source.match(/<div class="filter-row filter-row-primary"[^>]*>([\s\S]*?)<\/div>/)?.[1] || ''
+  for (const className of ['filter-username', 'filter-channel', 'filter-request', 'filter-model', 'filter-upstream']) {
     assert.ok(primary.includes(className), `missing ${className} in primary filters`)
   }
-  const order = ['filter-username', 'filter-channel', 'filter-request', 'filter-model', 'filter-group']
+  const order = ['filter-username', 'filter-channel', 'filter-request', 'filter-model', 'filter-upstream']
     .map((className) => primary.indexOf(className))
   assert.deepEqual(order, [...order].sort((a, b) => a - b))
+  assert.doesNotMatch(primary, /filter-group|filter-token|filter-status-code/)
   assert.match(source, /\.filter-model, \.filter-group \{ width: 150px; min-width: 132px; flex: 0 1 150px; \}/)
 })
 
@@ -59,18 +61,28 @@ test('readonly logs exposes username and channel filters to viewer accounts', ()
   assert.doesNotMatch(source, /<el-input v-if="isAdmin"[^>]+placeholder="渠道 ID"/)
 })
 
-// 回归保护：所有筛选项始终位于同一组主筛选结构中，不再存在折叠状态。
-test('readonly logs keeps all filters visible in the primary row', () => {
-  const primary = source.match(/<div class="primary-filters"[^>]*>([\s\S]*?)<\/div>/)?.[1] || ''
-  for (const className of ['filter-token', 'filter-upstream']) {
-    assert.ok(primary.includes(className))
+// 回归保护：低频筛选条件固定在可展开的第二行，首行字段负责填满剩余宽度。
+test('readonly logs keeps secondary filters expandable', () => {
+  const primary = source.match(/<div class="filter-row filter-row-primary"[^>]*>([\s\S]*?)<\/div>/)?.[1] || ''
+  const secondary = source.match(/<div[^>]*class="filter-row filter-row-secondary"[^>]*>([\s\S]*?)<\/div>/)?.[1] || ''
+  assert.ok(primary.includes('filter-upstream'))
+  for (const className of ['filter-group', 'filter-token', 'filter-status-code']) {
+    assert.ok(secondary.includes(className), `missing ${className} in secondary filters`)
+    assert.doesNotMatch(primary, new RegExp(className))
   }
-  const order = ['filter-group', 'filter-token', 'filter-upstream']
-    .map((className) => primary.indexOf(className))
+  const order = ['filter-group', 'filter-token', 'filter-status-code']
+    .map((className) => secondary.indexOf(className))
   assert.deepEqual(order, [...order].sort((a, b) => a - b))
-  assert.doesNotMatch(source, /advancedOpen|advancedFilterCount|filter-toggle|has-advanced|advanced-filters/)
+  assert.match(source, /const secondaryFiltersOpen = ref\(false\)/)
+  assert.match(source, /const secondaryFilterCount = computed\(/)
+  assert.match(source, /:aria-expanded="secondaryFiltersOpen"/)
+  assert.match(source, /v-show="secondaryFiltersOpen" id="readonly-log-secondary-filters"/)
   assert.match(source, /\.filter-token, \.filter-upstream \{ width: 184px; min-width: 156px; flex: 0 1 184px; \}/)
-  assert.match(source, /\.primary-filters \{[\s\S]*flex-wrap: nowrap;[\s\S]*overflow-x: auto;/)
+  assert.match(source, /\.primary-filters \{[\s\S]*display: grid;[\s\S]*gap: 8px;/)
+  assert.match(source, /\.filter-row \{[\s\S]*flex-wrap: nowrap;[\s\S]*overflow-x: auto;/)
+  for (const className of ['filter-username', 'filter-channel', 'filter-request', 'filter-model', 'filter-upstream']) {
+    assert.match(source, new RegExp(`\\.filter-row-primary \\.${className} \\{[\\s\\S]*flex: 1 1`))
+  }
 })
 
 // 回归保护：日志类型位于敏感字段切换之前，避免把操作控件挤回主筛选行。
@@ -222,21 +234,35 @@ test('readonly logs exposes fallback requests and channel chains', () => {
   assert.match(passthroughApiSource, /fallback\?: boolean/)
   assert.match(passthroughApiSource, /fallback_channels\?: string\[\]/)
   assert.match(source, /function fallbackChannelsFor\(row: ReadonlyLog\)/)
+  assert.match(source, /function completeFallbackChannelsFor\(row: ReadonlyLog\)/)
   assert.match(source, /function retryChannelsFor\(row: ReadonlyLog\)/)
+  assert.match(source, /function retryPositionFor\(row: ReadonlyLog, channels: string\[\]\)/)
+  assert.match(source, /function retryChainStepsFor\(row: ReadonlyLog/)
+  assert.match(source, /fallback_index/)
+  assert.match(source, /retrySteps: retryChainStepsFor\(row, retryChannels\)/)
   assert.match(source, /function isFallback\(row: ReadonlyLog\)/)
+  assert.match(source, /function isFallback\(row: ReadonlyLog\): boolean \{\n  if \(!isAdmin\.value\) return false/)
   assert.match(source, /const fallback = isFallback\(row\)/)
+  assert.match(source, /const fallbackChannels = admin \? fallbackChannelsFor\(row\) : \[\]/)
+  assert.match(source, /function fallbackChain\(row: ReadonlyLog\) \{\n  if \(!isAdmin\.value\) return ''/)
   assert.match(source, /fallback,\n\s+fallbackChannels,/)
-  assert.match(source, /const retryChannels = retryChannelsFor\(row\)/)
+  assert.match(source, /const retryChannels = admin \? retryChannelsFor\(row\) : \[\]/)
   assert.match(source, /retryChain: admin && retryChannels\.length > 1 \? retryChannels\.join\(' → '\) : ''/)
   assert.match(source, /class="retry-chain-trigger"/)
   assert.match(source, /v-if="isAdmin && \(view\.fallback \|\| view\.retryChain \|\| view\.retryUnknown\)"/)
   assert.match(source, /function openRetryHover\(view: LogRowView, event: MouseEvent \| FocusEvent\)/)
-  assert.match(source, /const retryCount = Math\.max\(1, retryChannelsFor\(view\.source\)\.length - 1\)/)
+  assert.match(source, /const channels = retryChannelsFor\(view\.source\)/)
+  assert.match(source, /firstAttempt: Boolean\(view\.retryChain\) && attempt\.firstAttempt/)
   assert.match(source, /class="retry-hover-card"/)
   assert.match(source, /class="channel-cell" :aria-label="isAdmin && view\.retryChain \? requestChainTitle\(view\.source\) : undefined"/)
   assert.doesNotMatch(source, /class="channel-cell"[^>]*:title=/)
   assert.match(source, /@mouseenter="openRetryHover\(view, \$event\)" @mouseleave="closeRetryHover"/)
   assert.match(source, /重试\{\{ retryHover\.retryCount \}\}次：/)
+  assert.match(source, /首次尝试：/)
+  assert.match(source, /class="retry-hover-step"/)
+  assert.match(source, /step\.current \? `is-\$\{step\.tone\}`/)
+  assert.match(source, /\.retry-hover-step\.is-failed \{ color: var\(--ct-crit\)/)
+  assert.match(source, /\.retry-hover-step\.is-success \{ color: var\(--ct-ok\)/)
   assert.doesNotMatch(source, /fallback-label/)
   assert.match(source, /const expandedRetryID = ref<number \| null>\(null\)/)
   assert.match(source, /<FallbackRequestChain/)
@@ -247,6 +273,24 @@ test('readonly logs exposes fallback requests and channel chains', () => {
   assert.match(source, /<span class="detail-label">Fallback<\/span>/)
   assert.match(source, /admin_info/)
   assert.match(source, /row\.fallback_channels\?\.length/)
+})
+
+test('fallback hover marks failed and final successful attempts', () => {
+  const helpers = source.match(/function completeFallbackChannelsFor\(row: ReadonlyLog\): string\[\] \{[\s\S]*?\nfunction isFallback/)?.[0]
+  assert.ok(helpers)
+  const compiled = ts.transpileModule(helpers.replace(/\nfunction isFallback[\s\S]*$/, ''), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
+  const { retryChainStepsFor, retryAttemptMeta } = new Function('attemptChannels', 'fallbackChannelsFor', `${compiled}; return { retryChainStepsFor, retryAttemptMeta }`)(
+    row => row.attempt_channels || [],
+    row => row.fallback_channels || [],
+  )
+  const failed = retryChainStepsFor({ type: 5, fallback_index: 1, fallback_channels: ['1', '2'] })
+  const finalSuccess = retryChainStepsFor({ type: 2, fallback_index: 2, fallback_channels: ['1', '2'] })
+  const middle = retryChainStepsFor({ type: 5, fallback_index: 2, fallback_total: 3, fallback_channels: ['1', '2', '3'], attempt_channels: ['1', '2'] })
+  assert.deepEqual(failed.map(step => [step.channel, step.current, step.tone]), [['1', true, 'failed'], ['2', false, 'plain']])
+  assert.deepEqual(finalSuccess.map(step => [step.channel, step.current, step.tone]), [['1', false, 'plain'], ['2', true, 'success']])
+  assert.deepEqual(middle.map(step => [step.channel, step.current, step.tone]), [['1', false, 'plain'], ['2', true, 'failed'], ['3', false, 'plain']])
+  assert.deepEqual(retryAttemptMeta({ type: 5, fallback_index: 1, fallback_total: 3, fallback_channels: ['1', '2', '3'] }), { firstAttempt: true, retryCount: 0 })
+  assert.deepEqual(retryAttemptMeta({ type: 5, fallback_index: 2, fallback_total: 3, fallback_channels: ['1', '2', '3'] }), { firstAttempt: false, retryCount: 1 })
 })
 
 // 回归保护：管理员日志中的渠道亲和性命中必须像 New API 一样在渠道 ID 角标显示，并能进入快照详情。

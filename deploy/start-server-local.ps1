@@ -51,7 +51,12 @@ try {
     Write-Host "Agent token: $AgentToken"
     Write-Host "MySQL DSN is set in-process and password is not printed."
     Write-Host "API-only mode: $APIOnly"
-    & "C:\Program Files\Go\bin\go.exe" run ./server/cmd/control-tower-server
+    # 使用 PATH 中的 Go，避免固定安装目录导致本地启动失败。
+    $go = Get-Command go.exe -ErrorAction SilentlyContinue
+    if ($null -eq $go) {
+        throw "Go executable not found on PATH"
+    }
+    & $go.Source run ./server/cmd/control-tower-server
     if ($LASTEXITCODE -ne 0) {
         throw "go run exited with code $LASTEXITCODE"
     }
