@@ -261,9 +261,12 @@ func (w *Worker) readReconcilePage(ctx context.Context, r *ReconcileEvidence, b 
 		return nil, 0, ErrWriterCheckpoint
 	}
 	db, table := w.source, "logs"
+	database := "source"
 	if phase%2 == 1 {
+		database = "archive"
 		db = w.target
 		table = "logs_" + strings.ReplaceAll(r.Date[:7], "-", "")
+		reportOperation(ctx, "verify_archive_page", database, table)
 		exists, err := foundationTableExists(ctx, db, table)
 		if err != nil {
 			return nil, 0, err
@@ -273,6 +276,7 @@ func (w *Worker) readReconcilePage(ctx context.Context, r *ReconcileEvidence, b 
 			return nil, 0, nil
 		}
 	}
+	reportOperation(ctx, "verify_archive_page", database, table)
 	definition, err := schema(ctx, db, table)
 	if err != nil {
 		return nil, 0, err
@@ -285,7 +289,7 @@ func (w *Worker) readReconcilePage(ctx context.Context, r *ReconcileEvidence, b 
 	from, to, _ := af.DateBounds(r.Date)
 	rows, err := db.QueryContext(ctx, "SELECT * FROM "+quote(table)+` WHERE created_at>=? AND created_at<? AND (created_at>? OR (created_at=? AND id>?)) ORDER BY created_at,id LIMIT ?`, from, to, s.AfterCreated, s.AfterCreated, s.AfterID, b.MaxRows+1)
 	if err != nil {
-		return nil, 0, &scanError{code: "source_query_failed"}
+		return nil, 0, &scanError{code: "source_query_failed", cause: err}
 	}
 	defer rows.Close()
 	columns, err := rows.Columns()
@@ -305,8 +309,8 @@ func (w *Worker) readReconcilePage(ctx context.Context, r *ReconcileEvidence, b 
 		for i := range raw {
 			dest[i] = &raw[i]
 		}
-		if rows.Scan(dest...) != nil {
-			return nil, 0, &scanError{code: "source_query_failed"}
+		if err := rows.Scan(dest...); err != nil {
+			return nil, 0, &scanError{code: "source_query_failed", cause: err}
 		}
 		var size uint64
 		row := make([]any, len(raw))

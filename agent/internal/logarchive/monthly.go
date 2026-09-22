@@ -149,8 +149,13 @@ func ensureMonthlyTables(ctx context.Context, db *sql.DB, months []string) error
 		ddl = append(ddl, "CREATE TABLE IF NOT EXISTS "+quote("logs_"+month)+" LIKE logs")
 	}
 	for _, q := range ddl {
+		// DDL is built above from internal table names only.
+		parts := strings.Fields(q)
+		if len(parts) > 5 {
+			reportOperation(ctx, "ensure_archive_table", "archive", strings.Trim(parts[5], "`"))
+		}
 		if _, err := db.ExecContext(ctx, q); err != nil {
-			return errors.New("archive monthly table provisioning failed; check target CREATE privilege and template")
+			return &scanError{code: "schema_provision_failed", cause: err}
 		}
 	}
 	// Existing tables may predate this worker: CREATE IF NOT EXISTS alone
@@ -164,17 +169,24 @@ func ensureMonthlyTables(ctx context.Context, db *sql.DB, months []string) error
 		name := "logs_" + month
 		names = append(names, name)
 		actual, err := schema(ctx, db, name)
-		if err != nil || actual != template {
-			return errors.New("archive monthly table schema differs from template")
+		if err != nil {
+			return err
+		}
+		if actual != template {
+			return ErrFoundationSchema
 		}
 		rows, err := db.QueryContext(ctx, "SELECT INDEX_NAME, COLUMN_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND NON_UNIQUE=0", name)
 		if err != nil {
-			return errors.New("archive monthly index check failed")
+			return &scanError{code: "schema_check_failed", cause: err}
 		}
 		n := 0
 		for rows.Next() {
 			var index, col string
-			if rows.Scan(&index, &col) != nil || index != "PRIMARY" || col != "id" {
+			if err := rows.Scan(&index, &col); err != nil {
+				rows.Close()
+				return &scanError{code: "schema_check_failed", cause: err}
+			}
+			if index != "PRIMARY" || col != "id" {
 				rows.Close()
 				return errors.New("archive monthly table requires only PRIMARY KEY(id) as a unique constraint")
 			}
@@ -182,14 +194,21 @@ func ensureMonthlyTables(ctx context.Context, db *sql.DB, months []string) error
 		}
 		err = rows.Err()
 		rows.Close()
-		if err != nil || n != 1 {
-			return errors.New("archive monthly index check failed")
+		if err != nil {
+			return &scanError{code: "schema_check_failed", cause: err}
+		}
+		if n != 1 {
+			return ErrFoundationSchema
 		}
 	}
 	for _, name := range names {
+		reportOperation(ctx, "check_month_table", "archive", name)
 		var engine string
-		if db.QueryRowContext(ctx, "SELECT ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=?", name).Scan(&engine) != nil || !strings.EqualFold(engine, "InnoDB") {
-			return errors.New("archive monthly and statistics tables must use InnoDB")
+		if err := db.QueryRowContext(ctx, "SELECT ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=?", name).Scan(&engine); err != nil {
+			return &scanError{code: "schema_check_failed", cause: err}
+		}
+		if !strings.EqualFold(engine, "InnoDB") {
+			return ErrFoundationSchema
 		}
 	}
 	return nil
@@ -367,7 +386,7 @@ func insertRows(ctx context.Context, tx *sql.Tx, table string, columns []string,
 			args = append(args, row...)
 		}
 		if _, err := tx.ExecContext(ctx, q, args...); err != nil {
-			return errors.New("archive target write failed; checkpoint unchanged")
+			return &scanError{code: "archive_write_failed", cause: err}
 		}
 		rows = rows[n:]
 	}
@@ -396,7 +415,7 @@ func writeDeltas(ctx context.Context, tx *sql.Tx, table string, values deltas) e
 		}
 		q := "INSERT INTO " + quote(table) + " (" + strings.Join(names, ",") + ") VALUES (" + strings.TrimSuffix(strings.Repeat("?,", len(args)), ",") + ") ON DUPLICATE KEY UPDATE " + strings.Join(updates, ",")
 		if _, err := tx.ExecContext(ctx, q, args...); err != nil {
-			return errors.New("archive statistics update failed; checkpoint unchanged")
+			return &scanError{code: "statistics_write_failed", cause: err}
 		}
 	}
 	return nil

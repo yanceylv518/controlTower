@@ -7,7 +7,7 @@ const source = readFileSync(new URL('../src/utils/logArchive.ts', import.meta.ur
 const compiled = ts.transpileModule(source, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 },
 }).outputText
-const { beijingDate, buildArchiveDays, formatArchiveCount, canCheckArchiveDay, archiveExecution } = await import(
+const { beijingDate, buildArchiveDays, buildWorkflowDays, formatArchiveCount, canCheckArchiveDay, archiveExecution, archivePreparationActivity, archiveWorkflowOperation, archiveWorkflowSteps, archiveOperationActivity, archiveDiagnosticReason } = await import(
   `data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`
 )
 
@@ -20,11 +20,85 @@ const comparison = (date, state = 'matched') => ({
 })
 const byDate = (rows, date) => rows.find(row => row.date === date)
 
+test('remote without daily reports means missing status, not missing raw logs', () => {
+  const item = {days:[report('2026-09-01','999999')],status:{workflow:{phase:'import_target',imported_rows:'5951524'}}}
+  const days = buildWorkflowDays('2026-09',item,'2026-09-22')
+  const day = byDate(days,'2026-09-01')
+  assert.equal(day.label,'处理状态待上报')
+  assert.match(day.reason,/归档月表可能已经有日志/)
+  assert.match(day.reason,/不代表无数据/)
+  assert.equal(day.counts,undefined)
+  assert.equal(byDate(days,'2026-09-22').label,'今日 · 状态待上报')
+  assert.equal(byDate(days,'2026-09-23').kind,'future')
+})
+
+test('workflow daily view preserves partial counts and does not reuse legacy receipts', () => {
+  const item = {days:[report('2026-09-01','999999')], workflow_days:[{date:'2026-09-02',state:'rebuilding',counts:{log_rows:'9007199254740993',request_rows:'1',error_rows:'0'},observed_at:'2026-09-21T12:00:00Z'}],status:{workflow:{phase:'import_target'}}}
+  let days=buildWorkflowDays('2026-09',item,'2026-09-21')
+  assert.equal(days.length,30)
+  assert.equal(byDate(days,'2026-09-01').counts,undefined)
+  assert.equal(byDate(days,'2026-09-01').kind,'unknown')
+  assert.equal(byDate(days,'2026-09-02').counts.log_rows,'9007199254740993')
+  assert.match(byDate(days,'2026-09-02').reason,/已重建部分/)
+  assert.equal(byDate(days,'2026-09-22').kind,'future')
+  item.status.workflow.phase='reset_state'
+  days=buildWorkflowDays('2026-09',item,'2026-09-21')
+  assert.equal(byDate(days,'2026-09-02').counts,undefined)
+  assert.equal(byDate(days,'2026-09-02').kind,'preparing')
+})
+
+test('workflow daily view displays active empty date, blocked reason and completed seals', () => {
+  const item={workflow_days:[{date:'2026-09-01',state:'sealed',counts:{log_rows:'0',request_rows:'0',error_rows:'0'}}],status:{workflow:{phase:'verify',date:'2026-09-03',issues:[{date:'2026-09-02',code:'source_history_unconfirmed'}]}}}
+  const days=buildWorkflowDays('2026-09',item,'2026-09-21')
+  assert.equal(byDate(days,'2026-09-01').kind,'sealed')
+  assert.equal(byDate(days,'2026-09-01').counts.log_rows,'0')
+  assert.equal(byDate(days,'2026-09-02').kind,'blocked')
+  assert.match(byDate(days,'2026-09-02').reason,/确认源历史/)
+  assert.equal(byDate(days,'2026-09-03').kind,'verify')
+  assert.equal(byDate(days,'2026-09-03').counts,undefined)
+  assert.equal(byDate(buildWorkflowDays('2026-08',item,'2026-09-21'),'2026-08-01').counts,undefined)
+})
+
 const executionNow = Date.parse('2026-09-21T01:00:00Z')
 const executionItem = () => ({
   enabled: true, seen_at: new Date(executionNow - 1000).toISOString(),
   config: {agent_id: 'agent-a', version: 2, running: true},
   status: {configured: true, applied_version: 2, state: 'running', error: '', last_id: '9007199254740993'},
+})
+
+test('daily workflow loop never implies all dates have passed earlier daily steps', () => {
+  const item=executionItem();item.status.workflow={phase:'seal'}
+  let steps=archiveWorkflowSteps(item)
+  assert.equal(steps[5].current,true)
+  assert.equal(steps[3].passed,false)
+  assert.equal(steps[4].passed,false)
+  item.status.workflow.phase='live'
+  steps=archiveWorkflowSteps(item)
+  assert.equal(steps[3].current,true)
+  assert.equal(steps[5].passed,false)
+  item.status.workflow.phase='new_unknown_phase'
+  assert.equal(archiveWorkflowSteps(item).some(step=>step.current||step.passed),false)
+})
+
+test('operation snapshots cannot override pause, stale heartbeat, config change or failure', () => {
+  const item=executionItem();item.status.operation={phase:'import_target',state:'executing',code:'read_existing_logs'}
+  assert.match(archiveOperationActivity(item,executionNow),/正在执行/)
+  item.config.running=false;item.status.state='paused'
+  assert.match(archiveOperationActivity(item,executionNow),/已暂停/)
+  assert.match(archiveOperationActivity(item,executionNow,true),/过期/)
+  item.config.running=true;item.status.state='running';item.config.version++
+  assert.match(archiveOperationActivity(item,executionNow),/等待配置/)
+  item.status.applied_version++;item.status.error='database_permission_denied'
+  assert.match(archiveOperationActivity(item,executionNow),/执行异常/)
+})
+
+test('diagnostics distinguish permission, duplicate, locks and unknown causes', () => {
+  assert.match(archiveDiagnosticReason('database_permission_denied').reason,/拒绝/)
+  assert.match(archiveDiagnosticReason('database_duplicate_key').action,/同一日志 ID/)
+  assert.match(archiveDiagnosticReason('database_lock_timeout').action,/长事务/)
+  assert.match(archiveDiagnosticReason('new_unknown_code').reason,/无法据此断定/)
+  const item=executionItem();item.status.error='batch failed';item.status.diagnostic={code:'database_permission_denied'}
+  assert.match(archiveExecution(item,true,executionNow).detail,/拒绝/)
 })
 
 test('legacy running status does not claim an active batch or caught-up position', () => {
@@ -64,7 +138,7 @@ test('configuration mismatch, target errors, pause and authorization waits remai
   item.config.version = 3
   assert.equal(archiveExecution(item, false, executionNow).title, '等待 Agent 应用配置')
   item.status.applied_version = 3; item.status.configured = false; item.status.error = 'archive identity/schema/checkpoint preflight failed'
-  assert.equal(archiveExecution(item, false, executionNow).detail, item.status.error)
+  assert.match(archiveExecution(item, false, executionNow).detail, /尚未归类/)
   item.status.error = ''
   assert.equal(archiveExecution(item, false, executionNow).title, '归档目标尚未就绪')
   item.status.configured = true; item.config.running = false; item.status.state = 'paused'
@@ -83,6 +157,77 @@ test('reported workflow distinguishes verification from copying and preserves bl
   item.status.workflow.phase = 'future_phase'
   result = archiveExecution(item, true, executionNow)
   assert.match(result.title, /未知阶段.*future_phase/)
+})
+
+const preparationItem = () => {
+  const item = executionItem()
+  item.config.full_history = true
+  item.config.interval_seconds = 2
+  item.status.workflow = { phase: 'reset_state', imported_rows: '0', completed_days: '0', blocked_days: '0', preparation: {
+    phase: 'reset_state', table: 'archive_log_state', after_id: '0', processed_rows: '9007199254740993', last_batch_rows: '1000', committed_batches: '9',
+    recorded_since: new Date(executionNow - 60000).toISOString(), last_committed_at: new Date(executionNow - 2000).toISOString(),
+  } }
+  return item
+}
+
+test('preparation explains actual cleanup and shows recorded counters without inferring a total', () => {
+  const item = preparationItem()
+  const result = archivePreparationActivity(item, executionNow)
+  assert.equal(result.attention, false)
+  assert.match(result.message, /近期有批次提交/)
+  assert.equal(result.progress.processed_rows, '9007199254740993')
+  const execution = archiveExecution(item, true, executionNow)
+  assert.equal(execution.title, '清理旧贡献记录')
+  assert.match(execution.detail, /原始日志月表保留/)
+  assert.match(archiveWorkflowOperation('reset_state').target, /archive_log_state/)
+  assert.match(archiveWorkflowOperation('import_target').detail, /不读取源库历史/)
+})
+
+test('legacy Agent missing detailed progress is unknown rather than zero', () => {
+  const item = preparationItem(); delete item.status.workflow.preparation
+  const result = archivePreparationActivity(item, executionNow)
+  assert.equal(result.progress, undefined)
+  assert.match(result.message, /尚未上报批次明细/)
+  assert.equal(formatArchiveCount(result.progress?.processed_rows), '—')
+})
+
+test('fresh heartbeat cannot make old preparation commits appear to be advancing', () => {
+  const item = preparationItem()
+  item.status.workflow.preparation.last_committed_at = new Date(executionNow - 120000).toISOString()
+  let result = archivePreparationActivity(item, executionNow)
+  assert.equal(result.attention, true)
+  assert.match(result.message, /未收到新的批次提交/)
+  assert.doesNotMatch(result.message, /卡死|已停止/)
+  item.config.interval_seconds = 300
+  result = archivePreparationActivity(item, executionNow)
+  assert.equal(result.attention, false, 'respect long configured batch intervals')
+})
+
+test('pause, error, offline, config change and read failure override recent commit evidence', () => {
+  const item = preparationItem()
+  assert.match(archivePreparationActivity(item, executionNow, true).message, /状态读取失败/)
+  item.config.running = false
+  assert.match(archivePreparationActivity(item, executionNow).message, /暂停/)
+  item.config.running = true; item.status.error = 'timeout'
+  assert.match(archivePreparationActivity(item, executionNow).message, /执行异常/)
+  item.status.error = ''; item.config.version++
+  assert.match(archivePreparationActivity(item, executionNow).message, /等待 Agent 确认/)
+  item.seen_at = new Date(executionNow - 90000).toISOString()
+  assert.match(archivePreparationActivity(item, executionNow).message, /上报中断/)
+})
+
+test('phase transitions label previous counters and finished preparation does not masquerade as live progress', () => {
+  const item = preparationItem(); item.status.workflow.phase = 'reset_daily'
+  assert.match(archivePreparationActivity(item, executionNow).message, /上一阶段最后记录/)
+  item.status.workflow.phase = 'backfill'
+  assert.equal(archivePreparationActivity(item, executionNow), undefined)
+})
+
+test('unusable or future commit timestamp cannot prove recent activity', () => {
+  for (const date of ['', 'invalid', new Date(executionNow + 60000).toISOString()]) {
+    const item = preparationItem(); item.status.workflow.preparation.last_committed_at = date
+    assert.equal(archivePreparationActivity(item, executionNow).attention, true)
+  }
 })
 
 test('archive business date changes at Beijing midnight, including the year boundary', () => {
@@ -239,3 +384,13 @@ test('invalid dates, delay values and clocks cannot enable a check', () => {
   assert.equal(canCheckArchiveDay('2026-09-19', 'invalid', 300, now), false)
   assert.equal(canCheckArchiveDay('2026-09-19', '2026-09-20', 300, NaN), false)
 })
+
+ test('raw monthly counts stay independent of partial statistics and pipeline overrides',()=>{
+ const observed='2026-09-22T01:00:00Z'
+ const item={config:{pipeline:{}},status:{workflow:{phase:'reset_state'}},workflow_days:[{date:'2026-09-01',state:'changed',counts:{log_rows:'5',request_rows:'4',error_rows:'1'},raw:{rows:'9007199254740993',observed_at:observed,error_code:'operation_timeout'},observed_at:observed}]}
+ const day=byDate(buildWorkflowDays('2026-09',item,'2026-09-22'),'2026-09-01')
+ assert.equal(day.kind,'changed');assert.equal(day.raw.rows,'9007199254740993');assert.equal(day.counts.log_rows,'5')
+ assert.equal(day.raw.error_code,'operation_timeout');assert.equal(day.raw.observed_at,observed)
+ item.workflow_days[0].raw={error_code:'archive_count_index_missing'}
+ assert.equal(byDate(buildWorkflowDays('2026-09',item,'2026-09-22'),'2026-09-01').raw.rows,undefined)
+ })

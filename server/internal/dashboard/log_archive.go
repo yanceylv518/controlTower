@@ -1,6 +1,8 @@
 package dashboard
 
 import (
+	"context"
+	af "controltower/internal/archivecontract"
 	ac "controltower/internal/archivecontrol"
 	"controltower/server/internal/auth"
 	"encoding/json"
@@ -10,6 +12,10 @@ import (
 )
 
 type LogArchiveHandler struct{ Store ac.Store }
+
+type archiveWorkflowDaysStore interface {
+	ListArchiveWorkflowDays(context.Context, string, string) ([]af.WorkflowDay, error)
+}
 
 func (h LogArchiveHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	u, ok := auth.CurrentUser(r)
@@ -51,6 +57,13 @@ func (h LogArchiveHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				writeDashboardError(w, 500, "archive_days_unavailable")
 				return
 			}
+			if store, ok := h.Store.(archiveWorkflowDaysStore); ok && items[0].ActiveDatasetID != "" {
+				items[0].WorkflowDays, err = store.ListArchiveWorkflowDays(r.Context(), site, month)
+				if err != nil {
+					writeDashboardError(w, 500, "archive_days_unavailable")
+					return
+				}
+			}
 		}
 		// Legacy receipts and a matched daily reconciliation do not establish
 		// versioned coverage or eligibility to generate bills from the archive.
@@ -60,7 +73,8 @@ func (h LogArchiveHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"items": items,
 			"month": month,
 			"capabilities": map[string]bool{
-				"full_history": workflow,
+				"full_history":     workflow,
+				"four_tasks":       workflow && items[0].Status.Foundation.SupportsPipeline(),
 				"day_versions":     false,
 				"archive_billing":  false,
 				"date_backfill":    backfill,

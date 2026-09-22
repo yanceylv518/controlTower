@@ -36,10 +36,13 @@ func archiveWriterTarget(ctx context.Context, tx *sql.Tx, site string, active []
 	}
 	// Starting a freshly restarted automatic Agent authorizes preparation;
 	// actual writes still require a verified Foundation and writer grant.
-	if automatic && len(raw) == 0 {
+	if automatic && len(raw) == 0 && config.Pipeline == nil {
 		return nil
 	}
 	var foundation af.FoundationStatus
+	if config.Pipeline != nil && (json.Unmarshal(raw, &foundation) != nil || !foundation.SupportsPipeline()) {
+		return ac.ErrConflict
+	}
 	if config.FullHistory && (json.Unmarshal(raw, &foundation) != nil || !foundation.SupportsWorkflow()) {
 		return ac.ErrConflict
 	}
@@ -79,6 +82,9 @@ func archiveWriterPoll(ctx context.Context, tx *sql.Tx, out ac.Response, st, obs
 		}
 	}
 	grant := atomic && enabled && out.Config.Running && out.Config.ReconcileID == "" && st.Configured && st.AppliedVersion == out.Config.Version
+	if out.Config.Pipeline != nil && !st.Foundation.SupportsPipeline() {
+		grant = false
+	}
 	if out.Config.FullHistory && !st.Foundation.SupportsWorkflow() {
 		grant = false
 	}
@@ -118,6 +124,15 @@ func archiveWriterPoll(ctx context.Context, tx *sql.Tx, out ac.Response, st, obs
 		st.Seal = observed.Seal
 	}
 	if accept {
+		if err := saveWorkflowDayPage(ctx, tx, st); err != nil {
+			return out, err
+		}
+		if st.WorkflowDaily != nil {
+			page := *st.WorkflowDaily
+			page.Days = nil
+			page.NextAfter = ""
+			st.WorkflowDaily = &page
+		}
 		// A new session's initial target state must not move the displayed
 		// committed cursor backwards. The archive remains the authority.
 		if st.LastID < observed.LastID {

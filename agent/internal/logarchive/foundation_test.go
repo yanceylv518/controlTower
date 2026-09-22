@@ -104,6 +104,10 @@ func TestFoundationMigrationManifest(t *testing.T) {
 	counts := []int{13, 10, 10, 22, 13, 2, 0, 0, 19, 8, 25, 8, 13, 6, 35, 5, 7, 0, 12}
 	names = append(names, "archive_workflow", "archive_workflow_days", "archive_scan_evidence")
 	counts = append(counts, 3, 6, 7)
+	names = append(names, "archive_raw_state", "archive_pipeline")
+	counts = append(counts, 4, 4)
+	names = append(names, "archive_pending_statistics")
+	counts = append(counts, 2)
 	if len(migrations) != len(names) {
 		t.Fatal("unexpected migration count")
 	}

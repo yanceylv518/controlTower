@@ -32,7 +32,7 @@ func TestAutomaticFoundationDiscoveryAndLegacyPreservationMySQL(t *testing.T) {
 		t.Fatal("preparation changed legacy rows")
 	}
 	var count, latest int
-	if err := w.target.QueryRowContext(ctx, `SELECT COUNT(*),MAX(version) FROM archive_schema_migrations`).Scan(&count, &latest); err != nil || count != 22 || latest != 22 {
+	if err := w.target.QueryRowContext(ctx, `SELECT COUNT(*),MAX(version) FROM archive_schema_migrations`).Scan(&count, &latest); err != nil || count != 25 || latest != 25 {
 		t.Fatalf("migration ledger %d/%d: %v", count, latest, err)
 	}
 	i.SiteID = "wrong-site"

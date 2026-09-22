@@ -11,12 +11,14 @@ import (
 )
 
 type scanError struct {
+	cause    error
 	code     string
 	sourceID int64
 	bytes    uint64
 }
 
 func (e *scanError) Error() string { return "archive: " + e.code }
+func (e *scanError) Unwrap() error { return e.cause }
 
 func (w *Worker) SetScanBudget(b af.ScanBudget) { w.budget = b }
 func (w *Worker) readBudget() af.ScanBudget {
@@ -76,7 +78,7 @@ func readWriterPage(ctx context.Context, rows *sql.Rows, batch *writerBatch, b a
 	defer rows.Close()
 	columns, err := rows.Columns()
 	if err != nil {
-		return 0, false, &scanError{code: "source_query_failed"}
+		return 0, false, &scanError{code: "source_query_failed", cause: err}
 	}
 	batch.Columns = columns
 	idIndex, createdIndex := -1, -1
@@ -105,7 +107,7 @@ func readWriterPage(ctx context.Context, rows *sql.Rows, batch *writerBatch, b a
 			dest[i] = &raw[i]
 		}
 		if err := rows.Scan(dest...); err != nil {
-			return readBytes, false, &scanError{code: "source_query_failed"}
+			return readBytes, false, &scanError{code: "source_query_failed", cause: err}
 		}
 		id, err := strconv.ParseInt(string(raw[idIndex]), 10, 64)
 		if err != nil || id <= 0 {
@@ -153,7 +155,7 @@ func readWriterPage(ctx context.Context, rows *sql.Rows, batch *writerBatch, b a
 		readBytes += size
 	}
 	if rows.Err() != nil {
-		return readBytes, false, &scanError{code: "source_query_failed"}
+		return readBytes, false, &scanError{code: "source_query_failed", cause: rows.Err()}
 	}
 	return readBytes, exhausted, nil
 }

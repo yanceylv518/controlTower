@@ -4,13 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
+	"strconv"
 	"strings"
 )
 
 // verifyRows reads only the just-written IDs from the target transaction.
 // It streams comparison against the existing source batch, not a second source query.
 func verifyRows(ctx context.Context, tx *sql.Tx, table string, columns []string, batch [][]any) error {
+	reportOperation(ctx, "compare_imported_logs", "archive", table)
 	idIndex := -1
 	names := make([]string, len(columns))
 	for i, name := range columns {
@@ -41,7 +42,7 @@ func verifyRows(ctx context.Context, tx *sql.Tx, table string, columns []string,
 	q := "SELECT " + strings.Join(names, ",") + " FROM " + quote(table) + " WHERE `id` IN (" + strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",") + ")"
 	rows, err := tx.QueryContext(ctx, q, ids...)
 	if err != nil {
-		return errors.New("archive verification target query failed; checkpoint unchanged")
+		return &scanError{code: "verification_read_failed", cause: err}
 	}
 	defer rows.Close()
 	for rows.Next() {
@@ -50,13 +51,13 @@ func verifyRows(ctx context.Context, tx *sql.Tx, table string, columns []string,
 		for i := range raw {
 			dest[i] = &raw[i]
 		}
-		if rows.Scan(dest...) != nil {
-			return errors.New("archive verification target scan failed")
+		if err := rows.Scan(dest...); err != nil {
+			return &scanError{code: "verification_read_failed", cause: err}
 		}
 		id := string(raw[idIndex])
 		want, ok := expected[id]
 		if !ok {
-			return errors.New("archive verification unexpected or duplicate target id")
+			return &scanError{code: "verification_unexpected_row"}
 		}
 		for i, got := range raw {
 			if want[i] == nil && got == nil {
@@ -65,16 +66,17 @@ func verifyRows(ctx context.Context, tx *sql.Tx, table string, columns []string,
 			s, ok := want[i].(string)
 			if !ok || got == nil || string(got) != s {
 				// Never include values (which may contain secrets) in errors.
-				return fmt.Errorf("archive verification field mismatch at column %d; checkpoint unchanged", i+1)
+				rowID, _ := strconv.ParseInt(id, 10, 64)
+				return &scanError{code: "verification_field_mismatch", sourceID: rowID}
 			}
 		}
 		delete(expected, id)
 	}
 	if rows.Err() != nil {
-		return errors.New("archive verification target read failed")
+		return &scanError{code: "verification_read_failed", cause: rows.Err()}
 	}
 	if len(expected) > 0 {
-		return errors.New("archive verification missing target rows; checkpoint unchanged")
+		return &scanError{code: "verification_missing_rows"}
 	}
 	return nil
 }
