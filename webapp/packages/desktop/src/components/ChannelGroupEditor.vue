@@ -7,7 +7,7 @@ import { normalizeChannelGroups, splitChannelGroups } from '../utils/channelGrou
 type Preset = { id: string; name: string; groups: string[] };
 const props = defineProps<{ site: string; current: string; options: string[]; saving: boolean; manageOnly?: boolean }>();
 const emit = defineEmits<{ save: [groups: string[]]; cancel: [] }>();
-const tab = ref('adjust'), groups = ref<string[]>([]), selected = ref<string[]>([]), modified = ref(false), confirmed = ref(false);
+const tab = ref('adjust'), groups = ref<string[]>([]), selected = ref<string[]>([]), modified = ref(false);
 const presets = ref<Preset[]>([]), revision = ref(0), loading = ref(false), storing = ref(false), loadError = ref('');
 const editorOpen = ref(false), editorID = ref(''), editorName = ref(''), editorGroups = ref<string[]>([]);
 let generation = 0;
@@ -33,10 +33,9 @@ async function load() {
   } finally { if (ticket === generation) loading.value = false; }
 }
 watch(() => props.site, () => {
-  groups.value = [...current.value]; selected.value = []; confirmed.value = false; modified.value = false;
+  groups.value = [...current.value]; selected.value = []; modified.value = false;
   editorOpen.value = false; tab.value = props.manageOnly ? 'manage' : 'adjust'; void load();
 }, { immediate: true });
-watch(groups, () => { confirmed.value = false; }, { deep: true });
 function usePresets() {
   groups.value = [...new Set(presets.value.filter(p => selected.value.includes(p.id)).flatMap(p => p.groups))];
   modified.value = false;
@@ -91,7 +90,7 @@ async function removePreset(preset: Preset) {
 }
 function applyPreset(preset: Preset) { selected.value = [preset.id]; usePresets(); tab.value = 'adjust'; }
 function saveChannel() {
-  if (!confirmed.value || props.saving || !changed.value || !groups.value.length) return;
+  if (props.saving || !changed.value || !groups.value.length) return;
   try { emit('save', splitChannelGroups(normalizeChannelGroups(groups.value))); }
   catch (error) { ElMessage.warning((error as Error).message); }
 }
@@ -114,7 +113,6 @@ function saveChannel() {
         <el-select v-model="groups" multiple filterable default-first-option :disabled="saving" placeholder="选择分组（可多选）" class="full-width" @change="modified = true"><el-option v-for="g in allOptions" :key="g" :value="g" :label="g" /></el-select>
         <p class="helper">{{ modified ? '已自行调整，原组合保持不变' : selected.length ? '已载入所选组合，可继续增删分组' : '可直接选择多个分组，或从组合库快速填充' }}</p>
         <div class="change-preview"><div class="preview-heading"><b>变更预览</b><small>{{ changed ? '核对后保存到渠道' : '与当前分组一致' }}</small></div><div class="preview-line"><span>新增</span><div class="preview-tags"><span v-for="g in added" :key="g" class="diff-tag added">＋ {{ g }}</span><span v-if="!added.length" class="no-change">无</span></div></div><div class="preview-line"><span>移除</span><div class="preview-tags"><span v-for="g in removed" :key="g" class="diff-tag removed">− {{ g }}</span><span v-if="!removed.length" class="no-change">无</span></div></div><div class="preview-line preview-result"><span>保存后</span><strong>{{ groups.join(' / ') || '尚未选择' }}</strong></div></div>
-        <el-checkbox v-model="confirmed" :disabled="saving || !changed || !groups.length" class="confirm-change">确认将渠道分组替换为上述目标分组</el-checkbox>
       </el-tab-pane>
       <el-tab-pane label="分组组合管理" name="manage">
         <div class="section-title"><span>已保存组合 <small>{{ presets.length }} 个</small></span><el-button type="primary" :disabled="!writable" @click="openEditor()">新建组合</el-button></div>
@@ -125,7 +123,7 @@ function saveChannel() {
     </el-tabs>
     <el-form v-if="editorOpen" label-position="top" class="preset-form" @submit.prevent="savePreset"><b>{{ editorID ? '编辑组合' : '保存新组合' }}</b><el-form-item label="组合名称"><el-input v-model="editorName" maxlength="64" show-word-limit placeholder="例如：K3 主力客户" :disabled="storing" /></el-form-item><el-form-item label="包含分组"><el-select v-model="editorGroups" multiple filterable default-first-option class="full-width" placeholder="选择分组（可多选）" :disabled="storing"><el-option v-for="g in allOptions" :key="g" :value="g" :label="g" /></el-select></el-form-item><div class="editor-actions"><el-button type="primary" :loading="storing" :disabled="!writable" @click="savePreset">保存组合</el-button><el-button :disabled="storing" @click="editorOpen = false">取消</el-button></div></el-form>
     </div>
-    <div class="dialog-actions"><el-button :disabled="saving || storing" @click="emit('cancel')">关闭</el-button><template v-if="tab === 'adjust'"><el-button :disabled="saving" @click="restore">恢复当前</el-button><el-button type="primary" :loading="saving" :disabled="!confirmed || !changed || !groups.length || storing" @click="saveChannel">保存渠道分组</el-button></template></div>
+    <div class="dialog-actions"><el-button :disabled="saving || storing" @click="emit('cancel')">关闭</el-button><template v-if="tab === 'adjust'"><el-button :disabled="saving" @click="restore">恢复当前</el-button><el-button type="primary" :loading="saving" :disabled="!changed || !groups.length || storing" @click="saveChannel">保存渠道分组</el-button></template></div>
   </div>
 </template>
 
@@ -164,7 +162,6 @@ function saveChannel() {
 .preview-tags{display:flex;flex-wrap:wrap;gap:6px}.diff-tag{display:inline-flex;padding:2px 8px;border-radius:4px;font-size:12px;line-height:20px}
 .added{color:var(--ct-ok);background:var(--ct-ok-weak)}.removed{color:var(--ct-ink-2);background:var(--ct-line);text-decoration:line-through}
 .no-change{color:var(--ct-ink-3);font-size:12px;line-height:24px}.preview-result{border-top:1px solid var(--ct-line);padding-top:8px;margin-top:8px}.preview-result strong{font-weight:400;font-size:12px;line-height:24px}
-.confirm-change{height:auto;white-space:normal;padding:4px 0}.confirm-change :deep(.el-checkbox__label){white-space:normal;font-size:12px;line-height:1.7;color:var(--ct-ink-2)}
 .saved-list{border-top:1px solid var(--ct-line)}.saved-row{padding:12px 0;border-bottom:1px solid var(--ct-line);display:flex;align-items:center;justify-content:space-between;gap:20px}.saved-content{min-width:0}.saved-content>b{font-size:14px;font-weight:500;overflow-wrap:anywhere}
 .group-tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}.group-tags :deep(.el-tag){max-width:100%;height:auto;min-height:22px;white-space:normal;overflow-wrap:anywhere;background:var(--ct-surface-2);border:1px solid var(--ct-line);color:var(--ct-ink-2);border-radius:4px}
 .row-actions{display:flex;flex-shrink:0;gap:16px}.row-actions .el-button+.el-button{margin-left:0}

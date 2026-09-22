@@ -3,8 +3,8 @@ import { computed, nextTick, ref } from 'vue';
 import { EditPen } from '@element-plus/icons-vue';
 import { compactCapacity, capacityInWan, parseCapacityWan } from '../utils/tuningCapacity';
 
-const props = defineProps<{ modelValue: number; current?: number; metric: 'TPM' | 'RPM'; channel: string; modified?: boolean }>();
-const emit = defineEmits<{ 'update:modelValue': [number]; change: [number] }>();
+const props = defineProps<{ modelValue: number; current?: number; metric: 'TPM' | 'RPM'; channel: string; modified?: boolean; disabled?: boolean; persist: (value: number) => Promise<void> }>();
+const submitting = ref(false);
 const open = ref(false), draft = ref(''), error = ref('');
 const input = ref<{ focus: () => void; select: () => void }>();
 const exceeded = computed(() => props.modelValue > 0 && props.current != null && props.current >= props.modelValue);
@@ -16,9 +16,16 @@ async function start() {
   input.value?.focus();
   input.value?.select();
 }
-function apply(value: number) {
-  if (value !== props.modelValue) { emit('update:modelValue', value); emit('change', value); }
-  open.value = false;
+async function apply(value: number) {
+  if (submitting.value || props.disabled) return;
+  submitting.value = true;
+  error.value = '';
+  try {
+    await props.persist(value);
+    open.value = false;
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : '保存失败，请重试';
+  } finally { submitting.value = false; }
 }
 function confirm() {
   const value = parseCapacityWan(draft.value);
@@ -28,18 +35,18 @@ function confirm() {
 </script>
 
 <template>
-  <el-popover v-model:visible="open" trigger="click" placement="bottom-start" :width="270" @show="start">
+  <el-popover v-model:visible="open" trigger="click" :disabled="disabled || submitting" placement="bottom-start" :width="270" @show="start">
     <template #reference>
-      <button type="button" class="capacity-metric" :class="{ exceeded, modified }" :title="exact" :aria-label="`${channel} ${metric}，编辑上限`" :aria-expanded="open" @keydown.esc="open = false">
+      <button type="button" class="capacity-metric" :disabled="disabled || submitting" :class="{ exceeded, modified }" :title="exact" :aria-label="`${channel} ${metric}，编辑上限`" :aria-expanded="open" @keydown.esc="open = false">
         <span>{{ metric }}</span> <span>{{ compactCapacity(current) }}</span><template v-if="modelValue > 0"><span class="slash">/</span><span>{{ compactCapacity(modelValue) }}</span></template><el-icon class="edit-icon"><EditPen /></el-icon>
       </button>
     </template>
     <div class="capacity-editor" @keydown.esc.stop="open = false">
       <b>{{ metric }} 上限（万）</b>
-      <el-input ref="input" v-model="draft" :aria-label="`${channel} ${metric}上限`" placeholder="例如 20 表示 20 万" :maxlength="32" @input="error = ''" @keydown.enter.prevent="confirm"><template #append>万</template></el-input>
+      <el-input ref="input" v-model="draft" :disabled="disabled || submitting" :aria-label="`${channel} ${metric}上限`" placeholder="例如 20 表示 20 万" :maxlength="32" @input="error = ''" @keydown.enter.prevent="confirm"><template #append>万</template></el-input>
       <small v-if="error" class="error" role="alert">{{ error }}</small>
-      <small v-else>留空或填 0 可清除。确认后统一点击页面“保存更改”生效。</small>
-      <div class="editor-actions"><el-button text :disabled="!modelValue" @click="apply(0)">清除上限</el-button><el-button type="primary" @click="confirm">确认</el-button></div>
+      <small v-else>留空或填 0 可清除。点击确认直接保存生效。</small>
+      <div class="editor-actions"><el-button text :disabled="!modelValue || disabled || submitting" @click="apply(0)">清除上限</el-button><el-button type="primary" :loading="submitting" :disabled="disabled" @click="confirm">确认</el-button></div>
     </div>
   </el-popover>
 </template>

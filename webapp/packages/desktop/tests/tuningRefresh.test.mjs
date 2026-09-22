@@ -22,9 +22,9 @@ function page() {
     tuningContinuousStates: async () => ({ items: [state(42)] }),
   }
   const names = ['computed', 'reactive', 'ref', 'watch', 'onMounted', 'onBeforeUnmount', 'useFiltersStore', 'dashboard', 'formatTime', 'ApiError', 'ElMessage', 'ElMessageBox', 'useMobileViewport', 'splitChannelGroups']
-  const create = new Function(...names, `${compiled}\nreturn { mobileEditRow, stageMobileEdit, mobileChanges, mobilePriorityChanges, mobileRuleChanges, mobileSaveOpen, load, refreshRuntime, loadChannelDirectory, applyGroupLocally, acceptStates, stateFor, sampleText, evaluationText, states, refreshError, bases, channels, policy, channelQuery, groupQuery, channelStatusFilter, displayedRows, activeModel, dirty, selectModel, fieldChanged, savedBases, originalBase, calculatedWeight, displayedSpeedFactor, coefficientCell, overallEvaluationStatus, coefficientEmptyText, coefficientSpan, displayedPriority, editPriority, priorityLocked, cancelChanges, limitReason, currentRates, ratesReady, rowStatus, eventResult, eventResultClass, events, filteredEvents, eventDateRange };`)
+  const create = new Function(...names, `${compiled}\nreturn { saveCapacity, saving, mobileEditRow, stageMobileEdit, mobileChanges, mobilePriorityChanges, mobileRuleChanges, mobileSaveOpen, load, refreshRuntime, loadChannelDirectory, applyGroupLocally, acceptStates, stateFor, sampleText, evaluationText, states, refreshError, bases, channels, policy, channelQuery, groupQuery, channelStatusFilter, displayedRows, activeModel, dirty, selectModel, fieldChanged, savedBases, originalBase, calculatedWeight, displayedSpeedFactor, coefficientCell, overallEvaluationStatus, coefficientEmptyText, coefficientSpan, displayedPriority, editPriority, priorityLocked, cancelChanges, limitReason, currentRates, ratesReady, rowStatus, eventResult, eventResultClass, events, filteredEvents, eventDateRange };`)
   const splitChannelGroups = value => String(value ?? '').split(',').map(item => item.trim()).filter(Boolean)
-  const view = create(computed, reactive, ref, () => {}, () => {}, () => {}, () => filters, dashboard, String, class extends Error {}, {info() {}}, {}, () => ref(false), splitChannelGroups)
+  const view = create(computed, reactive, ref, () => {}, () => {}, () => {}, () => filters, dashboard, String, class extends Error {}, {info() {}, success() {}}, {}, () => ref(false), splitChannelGroups)
   return { ...view, filters, dashboard }
 }
 
@@ -399,4 +399,42 @@ test('mobile staging edits saved base priority during circuit and lists changed 
  assert.equal(p.bases.value[0].base_priority,7);
  p.policy.continuous.min_samples=50;
  assert.deepEqual(p.mobileRuleChanges.value.find(change=>change.key==='min_samples'),{key:'min_samples',label:'每渠道最少请求数',before:20,after:50});
+});
+
+
+test('capacity confirmation saves only the selected field and preserves other drafts', async () => {
+  const p = page(); await p.load();
+  p.bases.value[0].base_weight = 999; p.dirty.value = true;
+  const latest = { ...row, max_tpm: 10, max_rpm: 20 };
+  p.dashboard.tuningBaseValues = async () => ({ items: [latest] });
+  let submitted;
+  p.dashboard.saveTuningBaseValues = async (site, items) => {
+    assert.equal(site, 'a'); submitted = items; return { items };
+  };
+  await p.saveCapacity(p.bases.value[0], 'max_tpm', 300);
+  assert.deepEqual(submitted, [{ ...latest, max_tpm: 300 }]);
+  assert.equal(p.bases.value[0].base_weight, 999);
+  assert.equal(p.bases.value[0].max_tpm, 300);
+  assert.equal(p.savedBases.value[0].max_tpm, 300);
+  assert.equal(p.dirty.value, true);
+  p.cancelChanges(false); assert.equal(p.bases.value[0].max_tpm, 300);
+});
+
+test('capacity save failure preserves the original value and allows retry', async () => {
+  const p = page(); await p.load();
+  p.bases.value[0].max_rpm = 20;
+  p.dashboard.saveTuningBaseValues = async () => { throw new Error('network down'); };
+  await assert.rejects(p.saveCapacity(p.bases.value[0], 'max_rpm', 0), /network down/);
+  assert.equal(p.bases.value[0].max_rpm, 20);
+  assert.equal(p.saving.value, false);
+  assert.equal(p.dirty.value, false);
+});
+
+test('capacity save ignores a result after switching sites', async () => {
+  const p = page(); await p.load(); const pending = deferred();
+  p.dashboard.saveTuningBaseValues = () => pending.promise;
+  const request = p.saveCapacity(p.bases.value[0], 'max_tpm', 500);
+  await Promise.resolve(); p.filters.site_id = 'b';
+  pending.resolve({ items: [{ ...row, max_tpm: 500 }] }); await request;
+  assert.notEqual(p.bases.value[0].max_tpm, 500);
 });

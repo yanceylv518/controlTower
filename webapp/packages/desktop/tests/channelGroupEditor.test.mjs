@@ -9,7 +9,7 @@ const utility = readFileSync(new URL('../src/utils/channelGroup.ts', import.meta
 const compile = text => ts.transpileModule(text, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 } }).outputText;
 const { normalizeChannelGroups, splitChannelGroups } = await import('data:text/javascript;base64,' + Buffer.from(compile(utility)).toString('base64'));
 const script = compile(source.match(/<script setup lang="ts">([^]*?)<\/script>/)[1].replace(/^import .*;\r?\n/gm, ''));
-const factory = new Function('computed','ref','watch','defineProps','defineEmits','dashboard','ElMessage','ElMessageBox','normalizeChannelGroups','splitChannelGroups', script + '\nreturn { groups, selected, presets, revision, modified, confirmed, editorGroups, editorName, editorOpen, loadError, storing, usePresets, openEditor, savePreset, removePreset, saveChannel, restore };');
+const factory = new Function('computed','ref','watch','defineProps','defineEmits','dashboard','ElMessage','ElMessageBox','normalizeChannelGroups','splitChannelGroups', script + '\nreturn { groups, selected, presets, revision, modified, editorGroups, editorName, editorOpen, loadError, storing, usePresets, openEditor, savePreset, removePreset, saveChannel, restore };');
 const flush = async () => { await nextTick(); await new Promise(resolve => setImmediate(resolve)); await nextTick(); };
 function setup(api = {}) {
   const props = reactive({ site:'a', current:'old,vip', options:['old','vip'], saving:false });
@@ -28,8 +28,7 @@ test('multiple presets merge without duplicates; manual changes do not mutate st
   assert.deepEqual(s.editor.groups.value,['vip','new','test']);
   s.editor.groups.value.push('custom');
   assert.deepEqual(s.editor.presets.value[0].groups,['vip','new']);
-  s.editor.confirmed.value=true; await flush(); assert.equal(s.editor.confirmed.value,false);
-  s.editor.confirmed.value=true;s.editor.saveChannel();assert.deepEqual(s.events,[['save',['vip','new','test','custom']]]);s.stop();
+  s.editor.saveChannel();assert.deepEqual(s.events,[['save',['vip','new','test','custom']]]);s.stop();
 });
 test('saving and editing templates persists to the site without applying channel changes', async () => {
   const s=setup();await flush();s.editor.openEditor();s.editor.editorName.value='新组合';s.editor.editorGroups.value=['a','a','b'];
