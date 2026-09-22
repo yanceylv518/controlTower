@@ -16,6 +16,8 @@ import { usePrefsStore } from "../stores/prefs";
 import CustomerCompareChart from "../components/CustomerCompareChart.vue";
 import CustomerTokenChart from "../components/CustomerTokenChart.vue";
 import MiniSparkline from "../components/MiniSparkline.vue";
+import MonitorCopyButton from "../components/MonitorCopyButton.vue";
+import { closedMonitorBuckets } from "../utils/monitorBuckets";
 
 const props = defineProps<{ kind: "channels" | "models" }>();
 const filters = useFiltersStore();
@@ -26,7 +28,7 @@ const router = useRouter();
 const search = ref("");
 const hours = ref(1);
 const activeTab = ref<"charts" | "ranking">("charts");
-const activeMetric = ref<"ttft" | "tpm" | "otps">("ttft");
+const activeMetric = ref<"ttft" | "tpm" | "otps">("tpm");
 const ttftThresholds = computed(() => [
   { name: "P50", value: prefs.ttftP50Threshold, color: "#2f6fed" },
   { name: "P90", value: prefs.ttftP90Threshold, color: "#16a6b6" },
@@ -34,6 +36,11 @@ const ttftThresholds = computed(() => [
 ]);
 const selectedKeys = ref<string[]>([]);
 const history = ref<MetricItem[]>([]);
+const asOf = ref(Date.now());
+const chartTimeRange = computed<[number, number]>(() => {
+  const end = Math.floor(asOf.value / 60_000) * 60_000;
+  return [end - hours.value * 3_600_000, end];
+});
 const activeKinds = ref<string[]>([]);
 const snapshots = ref<ChannelSnapshot[]>([]);
 const dimensionType = computed(() =>
@@ -60,6 +67,7 @@ const state = useAsyncData(async () => {
     .filter((item) => item.enabled && siteOf(item) === filters.site_id)
     .map((item) => item.instance_id);
   const window = hours.value === 24 ? "5m" : "1m";
+  const requestedAt = Date.now();
   const prefix = (instanceID: string) => `${instanceID}:${props.kind === "channels" ? "channel" : "model"}:`;
   const metricResponses = await Promise.all(instanceIDs.flatMap((instanceID) => [
     dashboard.metricHistory({ instance_id: instanceID, window, dimension_type: dimensionType.value, dimension_key_prefix: prefix(instanceID), hours: hours.value, aggregate: true }),
@@ -69,6 +77,7 @@ const state = useAsyncData(async () => {
   const points: MetricItem[] = [];
   metricResponses.forEach((response, index) => index % 2 === 0 ? summaries.push(...response.items) : points.push(...response.items));
   history.value = points;
+  asOf.value = requestedAt;
   const channelData = await (
     props.kind === "channels"
       ? Promise.all(instanceIDs.map((instanceID) => dashboard.channelSnapshots({
@@ -230,7 +239,7 @@ const bucketMinutes = computed(() => hours.value === 24 ? 5 : 1);
 // 按 dimension_key 预分组并排好时间序，避免表格每行渲染都全量扫描 history。
 const historyByKey = computed(() => {
   const map = new Map<string, MetricItem[]>();
-  history.value.forEach((item) => {
+  closedMonitorBuckets(history.value, bucketMinutes.value, asOf.value).forEach((item) => {
     const list = map.get(item.dimension_key);
     if (list) list.push(item);
     else map.set(item.dimension_key, [item]);
@@ -248,13 +257,27 @@ function dimensionSeries(key: string, field: "ttft_p50_ms" | "ttft_p90_ms" | "tt
 function peakDimTPM(key: string) {
   return Math.max(...(historyByKey.value.get(key) || []).map((item) => item.tpm / bucketMinutes.value), 0);
 }
-const selectedTrendGroups = computed(() => selectedKeys.value.map((key) => {
+function metricHeadline(key: string, row?: DimRow) {
+  if (activeMetric.value === "ttft") return { label: "时段 P95", value: msFmt(row?.ttft_p95_ms), detail: "所选时段首字响应 P95" };
+  if (activeMetric.value === "otps") return { label: "时段 OTPS", value: row?.otps == null ? "—" : `${row.otps.toFixed(2)} token/s`, detail: "所选时段有效输出 Token ÷ 总耗时（含非流式）" };
+  const point = [...(historyByKey.value.get(key) || [])].reverse().find(item => Date.parse(item.bucket_time) + bucketMinutes.value * 60_000 <= asOf.value);
+  const time = point ? Date.parse(point.bucket_time) : 0;
+  const stale = point && asOf.value - time - bucketMinutes.value * 60_000 > 120_000;
+  const range = point ? `${new Date(time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}–${new Date(time + bucketMinutes.value * 60_000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "等待采集";
+  return { label: bucketMinutes.value === 5 ? "TPM · 5分钟均值" : "TPM", value: point ? formatTokens(point.tpm / bucketMinutes.value) : "—", detail: `${range}${stale ? " · 数据滞后" : ""}` };
+}
+// TPM 展示当前筛选下的全部项；TTFT、OTPS 沿用最多 8 项的图表选择。
+const chartKeys = computed(() => activeMetric.value === "tpm"
+  ? visibleRows.value.map((item) => item.dimension_key)
+  : selectedKeys.value);
+const chartTrendGroups = computed(() => chartKeys.value.map((key) => {
   const row = rows.value.find((item) => item.dimension_key === key);
   return {
     key,
     name: row?.display_name || row?.display_key || key,
     id: key.split(":").pop() || key,
     row,
+    headline: metricHeadline(key, row),
     tpm: dimensionSeries(key, "tpm", bucketMinutes.value, "TPM"),
     otps: dimensionSeries(key, "otps", 1, "OTPS"),
     ttft: [
@@ -336,15 +359,22 @@ function rowClass({ row }: { row: DimRow }) {
           <span class="dimension-toolbar-divider" aria-hidden="true" />
           <el-segmented v-model="activeMetric" class="dimension-metric-switch" :options="[{ label: 'TTFT', value: 'ttft' }, { label: 'TPM', value: 'tpm' }, { label: 'OTPS', value: 'otps' }]" size="small" aria-label="监控指标" />
         </template>
-        <span class="dimension-toolbar-count">{{ visibleRows.length }} 个{{ kind === 'channels' ? '渠道' : '模型' }}</span>
+        <span class="dimension-toolbar-count">按总 Token 排序 · {{ visibleRows.length }} 个{{ kind === 'channels' ? '渠道' : '模型' }}</span>
       </div>
       <section v-show="activeTab === 'charts'" class="dimension-metric-view">
         <div class="dimension-chart-grid">
-          <article v-for="group in selectedTrendGroups" :key="group.key" class="dimension-chart-card">
-            <header><div><h2>{{ group.name }}</h2><p>{{ kind === 'channels' ? '渠道' : '模型' }} ID {{ group.id }} · 按 Token 排名</p></div><el-button v-if="group.row" link type="primary" @click="openDetail(group.row)">详情</el-button></header>
-            <section v-if="activeMetric === 'ttft'" class="dimension-chart"><h3>TTFT</h3><p>P50 / P90 / P95</p><CustomerCompareChart :series="group.ttft" unit="s" :thresholds="ttftThresholds" /></section>
-            <section v-else-if="activeMetric === 'tpm'" class="dimension-chart"><h3>TPM</h3><p>每分钟 Token</p><CustomerCompareChart :series="group.tpm" compact /></section>
-            <section v-else class="dimension-chart"><h3>OTPS</h3><p>平均输出 Token 速度 · 输出 Token ÷ 请求总耗时（含非流式）</p><CustomerCompareChart :series="group.otps" unit=" token/s" /></section>
+          <article v-for="group in chartTrendGroups" :key="group.key" class="dimension-chart-card">
+            <header>
+              <div class="dimension-heading">
+                <div class="dimension-name"><h2 :title="group.name">{{ group.name }}</h2><MonitorCopyButton :value="kind === 'channels' ? group.id : group.name" :label="kind === 'channels' ? '复制渠道 ID' : '复制模型名称'" /></div>
+                <span v-if="kind === 'channels'" class="dimension-id">ID {{ group.id }}</span>
+              </div>
+              <div class="dimension-headline" :title="group.headline.detail"><span>{{ group.headline.label }}</span><strong>{{ group.headline.value }}</strong><small v-if="activeMetric === 'tpm'">{{ group.headline.detail }}</small></div>
+              <el-button v-if="group.row" link type="primary" @click="openDetail(group.row)">详情</el-button>
+            </header>
+            <section v-if="activeMetric === 'ttft'" class="dimension-chart"><CustomerCompareChart :series="group.ttft" :time-range="chartTimeRange" unit="s" :thresholds="ttftThresholds" /></section>
+            <section v-else-if="activeMetric === 'tpm'" class="dimension-chart"><CustomerCompareChart :series="group.tpm" :time-range="chartTimeRange" compact /></section>
+            <section v-else class="dimension-chart"><CustomerCompareChart :series="group.otps" :time-range="chartTimeRange" unit=" token/s" /></section>
           </article>
         </div>
       </section>
@@ -374,7 +404,7 @@ function rowClass({ row }: { row: DimRow }) {
             <template #default="{ row }">
               <span class="dim-name">
                 <i :class="['dim-dot', rowKind(row)]" />
-                <b>{{ row.display_name || row.display_key }}</b>
+                <b>{{ row.display_name || row.display_key || row.dimension_key }}</b><MonitorCopyButton :value="kind === 'channels' ? row.dimension_key.split(':').pop() || '' : row.display_name || row.display_key || row.dimension_key" :label="kind === 'channels' ? '复制渠道 ID' : '复制模型名称'" />
                 <el-tooltip :content="row.dimension_key" placement="top">
                   <i class="dim-id">{{ row.dimension_key.split(":").pop() }}</i>
                 </el-tooltip>
@@ -512,12 +542,19 @@ function rowClass({ row }: { row: DimRow }) {
   .dimension-metric-switch :deep(.el-segmented__item) { padding: 0 9px; }
 }
 .dimension-chart-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; padding-bottom: 12px; }
-.dimension-chart-card { min-width: 0; padding: 13px 15px; border: 1px solid var(--ct-line); border-radius: var(--ct-r-card); background: var(--ct-surface); box-shadow: var(--ct-shadow); }
-.dimension-chart-card > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
-.dimension-chart-card h2,.dimension-chart h3 { margin: 0; font-size: 14px; }
-.dimension-chart-card header p,.dimension-chart > p { margin: 2px 0; color: var(--ct-ink-3); font-size: 10px; }
-.dimension-chart { min-width: 0; padding: 10px 11px 4px; border: 1px solid var(--ct-line); border-radius: 8px; background: var(--ct-surface-2); }
-.dimension-chart :deep(.customer-chart-canvas) { height: 190px; }
+.dimension-chart-card { min-width: 0; padding: 12px 14px 8px; border: 1px solid var(--ct-line); border-radius: 8px; background: var(--ct-surface); }
+.dimension-chart-card > header { display: flex; align-items: center; gap: 12px; min-height: 42px; margin-bottom: 8px; }
+.dimension-heading { flex: 1; min-width: 0; }
+.dimension-name { display: flex; align-items: center; min-width: 0; gap: 3px; }
+.dimension-name h2 { margin: 0; font-size: 13px; font-weight: 600; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.dimension-id { color: var(--ct-ink-3); font-size: 11px; }
+.dimension-headline { text-align: right; flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.dimension-headline > span { color: var(--ct-ink-3); font-size: 11px; margin-right: 6px; }
+.dimension-headline strong { font-size: 15px; font-weight: 500; }
+.dimension-headline small { display: block; color: var(--ct-ink-3); font-size: 10px; margin-top: 3px; }
+.dimension-chart { min-width: 0; }
+.dimension-chart :deep(.customer-chart-canvas) { height: 230px; }
+@media (max-width: 480px) { .dimension-chart-card > header { flex-wrap: wrap; gap: 6px; }.dimension-heading { flex-basis: 55%; }.dimension-headline strong { font-size: 13px; } }
 .dimension-kpis { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
 .dimension-kpi { position: relative; overflow: hidden; min-height: 92px; padding: 13px 15px; border: 1px solid var(--ct-line); border-radius: var(--ct-r-card); background: var(--ct-surface); box-shadow: var(--ct-shadow); display: flex; flex-direction: column; }
 .dimension-kpi::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 3px; background: var(--ct-primary-solid); }

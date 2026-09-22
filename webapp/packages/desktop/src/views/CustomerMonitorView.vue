@@ -9,6 +9,7 @@ import AsyncPanel from "../components/AsyncPanel.vue";
 import CustomerTokenChart from "../components/CustomerTokenChart.vue";
 import CustomerCompareChart from "../components/CustomerCompareChart.vue";
 import CustomerTrafficCard from "../components/CustomerTrafficCard.vue";
+import MonitorCopyButton from "../components/MonitorCopyButton.vue";
 import MiniSparkline from "../components/MiniSparkline.vue";
 import { latestCustomerMinute, verifiedCustomerBuckets } from "../utils/customerTraffic";
 import { useAutoRefresh } from "../composables/useAutoRefresh";
@@ -285,7 +286,7 @@ function openDetail(row: MetricItem) {
         </template>
         <div v-else-if="activeMetric !== 'tpm'" class="customer-trend-groups">
           <article v-for="group in selectedTrendGroups" :key="group.key" class="customer-trend-group">
-            <header><div><h2>{{ group.name }}</h2><p>客户 ID {{ group.id }} · 按 Token 排名</p></div><el-button link type="primary" @click="openDetail(allRows.find(item => item.dimension_key === group.key)!)">详情</el-button></header>
+            <header><div><div class="customer-name-line"><h2 :title="group.name">{{ group.name }}</h2><MonitorCopyButton :value="group.name" label="复制客户名称" /></div><p>客户 ID {{ group.id }} · 按 Token 排名</p></div><el-button link type="primary" @click="openDetail(allRows.find(item => item.dimension_key === group.key)!)">详情</el-button></header>
             <section v-if="activeMetric === 'ttft'" class="customer-metric-card"><h3>TTFT</h3><p>P50 / P90 / P95 首字响应分位数</p><CustomerCompareChart :series="group.ttft" unit="s" :thresholds="ttftThresholds" /></section>
             <section v-else class="customer-metric-card"><h3>OTPS</h3><p>平均输出 Token 速度 · 输出 Token ÷ 请求总耗时（含非流式）</p><CustomerCompareChart :series="group.otps" unit=" token/s" /></section>
           </article>
@@ -300,7 +301,7 @@ function openDetail(row: MetricItem) {
         <div class="mobile-customer-list">
           <el-empty v-if="!pagedRows.length" description="没有匹配的客户" />
           <article v-for="row in mobileRows" :key="row.dimension_key" class="mobile-customer-card">
-            <header><div class="customer-name"><b>{{ customerName(row) }}</b><span>ID {{ customerID(row) }} · {{ row.instance_name }}</span></div><span :class="['status-label', ttftStatus(row.ttft_p95_ms).key]">{{ ttftStatus(row.ttft_p95_ms).label }}</span></header>
+            <header><div class="customer-name"><div class="customer-name-line"><b :title="customerName(row)">{{ customerName(row) }}</b><MonitorCopyButton :value="customerName(row)" label="复制客户名称" /></div><span>ID {{ customerID(row) }} · {{ row.instance_name }}</span></div><span :class="['status-label', ttftStatus(row.ttft_p95_ms).key]">{{ ttftStatus(row.ttft_p95_ms).label }}</span></header>
             <dl><div><dt>总 Token</dt><dd>{{ formatTokens(totalTokens(row)) }}</dd></div><div><dt>峰值 TPM</dt><dd>{{ formatTokens(peakCustomerTPM(row.dimension_key)) }}</dd></div><div><dt>Token In / Out</dt><dd>{{ formatTokens(row.prompt_tokens) }} / {{ formatTokens(row.completion_tokens) }}</dd></div><div><dt>TTFT P95</dt><dd>{{ ms(row.ttft_p95_ms) }}</dd></div><div><dt>请求数</dt><dd>{{ row.request_count.toLocaleString() }}</dd></div><div><dt>流量占比</dt><dd>{{ grandTotal ? `${(totalTokens(row) / grandTotal * 100).toFixed(1)}%` : '—' }}</dd></div></dl>
             <footer><el-checkbox :model-value="selectedKeys.includes(row.dimension_key)" :disabled="!selectedKeys.includes(row.dimension_key) && selectedKeys.length >= 8" @change="toggleCompare(row.dimension_key, Boolean($event))">加入趋势图</el-checkbox><el-button text type="primary" @click="openDetail(row)">查看详情</el-button></footer>
           </article>
@@ -313,7 +314,7 @@ function openDetail(row: MetricItem) {
             </template>
           </el-table-column>
           <el-table-column label="客户" min-width="190" fixed="left">
-            <template #default="{ row }"><div class="customer-name"><b>{{ customerName(row) }}</b><span>ID {{ customerID(row) }} · {{ row.instance_name }}</span></div></template>
+            <template #default="{ row }"><div class="customer-name"><div class="customer-name-line"><b :title="customerName(row)">{{ customerName(row) }}</b><MonitorCopyButton :value="customerName(row)" label="复制客户名称" /></div><span>ID {{ customerID(row) }} · {{ row.instance_name }}</span></div></template>
           </el-table-column>
           <el-table-column label="总 Token" width="110" align="right" sortable :sort-method="(a: MetricItem, b: MetricItem) => totalTokens(a) - totalTokens(b)">
             <template #default="{ row }"><b class="token-total">{{ formatTokens(totalTokens(row)) }}</b></template>
@@ -389,6 +390,9 @@ function openDetail(row: MetricItem) {
 .customer-metric-card h3 { margin: 0; font-size: 12px; }.customer-metric-card > p { margin: 1px 0 2px; color: var(--ct-ink-3); font-size: 10px; }.customer-metric-card :deep(.customer-chart-canvas) { height: 190px; }
 .customer-table-panel { padding: 0; overflow: hidden; }.customer-table-panel > header { padding: 12px 14px 8px; margin: 0; }.customer-count { color: var(--ct-ink-3); font-size: 12px; }
 .customer-table { --el-table-header-bg-color: var(--ct-surface-2); --el-table-row-hover-bg-color: var(--ct-accent-weak); font-size: 12px; }.customer-table :deep(.el-table__row) { cursor: pointer; }.customer-table :deep(th.el-table__cell) { padding: 7px 0; color: var(--ct-ink-3); font-size: 11px; }.customer-table :deep(td.el-table__cell) { padding: 7px 0; }.customer-table :deep(.token-out-head) { color: var(--ct-warn); }.customer-table :deep(.token-out-cell) { color: var(--ct-warn); font-weight: 600; }
+.customer-name-line { display: flex; align-items: center; min-width: 0; gap: 3px; }
+.customer-name-line > h2, .customer-name-line > b { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.customer-trend-group > header > div { min-width: 0; }
 .customer-name { display: flex; flex-direction: column; min-width: 0; }.customer-name b { overflow: hidden; text-overflow: ellipsis; }.customer-name span { color: var(--ct-ink-3); font-size: 10px; overflow: hidden; text-overflow: ellipsis; }.token-total { color: var(--ct-ink); }
 .share-cell { display: flex; align-items: center; gap: 7px; }.share-cell span { width: 38px; text-align: right; font-variant-numeric: tabular-nums; }.share-cell i { width: 46px; height: 5px; overflow: hidden; border-radius: 3px; background: var(--ct-surface-2); }.share-cell i b { display: block; height: 100%; border-radius: inherit; background: var(--ct-primary-solid); }
 .ttft-pill,.status-label { display: inline-flex; align-items: center; justify-content: center; border-radius: 999px; padding: 2px 7px; white-space: nowrap; }.ttft-pill.ok,.status-label.ok { color: var(--ct-ok); background: var(--ct-ok-weak); }.ttft-pill.warn,.status-label.warn { color: var(--ct-warn); background: var(--ct-warn-weak); }.ttft-pill.crit,.status-label.crit { color: var(--ct-crit); background: var(--ct-crit-weak); }.ttft-pill.empty,.status-label.empty { color: var(--ct-ink-3); background: var(--ct-surface-2); }
