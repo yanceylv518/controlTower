@@ -61,6 +61,19 @@ test('readonly logs exposes username and channel filters to viewer accounts', ()
   assert.doesNotMatch(source, /<el-input v-if="isAdmin"[^>]+placeholder="渠道 ID"/)
 })
 
+test('viewer logs hide model mapping names while admins can opt into final fallback rows', () => {
+  assert.match(source, /modelMapping: admin \? textValue\(row, 'upstream_model_name'\) : ''/)
+  assert.match(source, /const modelMapping = \(row: ReadonlyLog\) => isAdmin\.value \? textValue\(row, 'upstream_model_name'\) : ''/)
+  assert.match(source, /const fallbackFinalOnly = ref\(false\)/)
+  assert.match(source, /fallback_final_only: auth\.user\?\.role === 'admin' && fallbackFinalOnly\.value \? 1 : undefined/)
+  assert.match(source, /<label v-if="isAdmin" class="empty-output-toggle fallback-final-toggle"/)
+  assert.match(source, /Fallback 仅最后一条/)
+  assert.match(source, /fallbackFinalOnly:fallbackFinalOnly\.value/)
+  assert.match(source, /fallbackFinalOnly\.value = value\.fallbackFinalOnly/)
+  assert.match(passthroughApiSource, /fallback_final_only\?: number/)
+  assert.match(source, /v-if="isAdmin && \(view\.fallback \|\| view\.retryChain \|\| view\.retryUnknown\)"/)
+})
+
 // 回归保护：低频筛选条件固定在可展开的第二行，首行字段负责填满剩余宽度。
 test('readonly logs keeps secondary filters expandable', () => {
   const primary = source.match(/<div class="filter-row filter-row-primary"[^>]*>([\s\S]*?)<\/div>/)?.[1] || ''

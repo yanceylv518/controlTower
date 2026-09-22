@@ -15,9 +15,10 @@ const deferred = () => {let resolve,reject;const promise=new Promise((a,b)=>{res
 function setup() {
   const calls={logs:[],logStat:[],logCount:[]}, messages=[]
   const passthrough=Object.fromEntries(Object.keys(calls).map(name=>[name,(params,signal)=>{const d=deferred();calls[name].push({...d,params,signal});return d.promise}]))
-  const deps={ref,shallowRef,computed,useAsyncData,useAppendPages:()=>({}),passthrough,filters:{site_id:'a'},scopedUserIDs:ref(undefined),selectedUserID:ref(undefined),timeRange:ref([new Date('2026-09-01'),new Date('2026-09-02')]),logType:ref(0),limit:ref(100),offset:ref(0),closeRequestChain(){},ElMessage:{warning:m=>messages.push(m)},pageSizeOptions:[10,20,50,100]}
+  const deps={ref,shallowRef,computed,useAsyncData,useAppendPages:()=>({}),passthrough,filters:{site_id:'a'},auth:{user:{role:'admin'}},scopedUserIDs:ref(undefined),selectedUserID:ref(undefined),timeRange:ref([new Date('2026-09-01'),new Date('2026-09-02')]),logType:ref(0),limit:ref(100),offset:ref(0),closeRequestChain(){},ElMessage:{warning:m=>messages.push(m)},pageSizeOptions:[10,20,50,100]}
   for(const key of ['channelID','username','tokenName','modelName','group','requestID','upstreamRequestID','statusCode'])deps[key]=ref('')
   deps.emptyOutput=ref(false)
+  deps.fallbackFinalOnly=ref(false)
   const state=new Function(...Object.keys(deps),compile(code)+';return {state,statState,countState,refreshSearch,reloadPage,changePage,changePageSize,submitted,listIsCurrent,countIsCurrent,backgroundRefreshing,tableScroll} ')(...Object.values(deps))
   return {...deps,...state,calls,messages}
 }
@@ -60,6 +61,14 @@ test('status code and empty output filters are submitted with every query batch'
   assert.equal(h.calls.logStat[0].params.empty_output,1)
   assert.equal(h.calls.logCount[0].params.status_code,429)
   assert.equal(h.calls.logCount[0].params.empty_output,1)
+})
+
+test('admin fallback final-only filter is submitted with every query batch',async()=>{
+  const h=setup();h.fallbackFinalOnly.value=true;const job=h.refreshSearch()
+  assert.equal(h.calls.logs[0].params.fallback_final_only,1)
+  h.calls.logs[0].resolve(response);await job
+  assert.equal(h.calls.logStat[0].params.fallback_final_only,1)
+  assert.equal(h.calls.logCount[0].params.fallback_final_only,1)
 })
 
 test('failed searches preserve labelled old rows and prevent pagination under new conditions',async()=>{

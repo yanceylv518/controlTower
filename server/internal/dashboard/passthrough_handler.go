@@ -1231,6 +1231,7 @@ type readonlyLogFilters struct {
 	channelID         *int64
 	statusCode        *int
 	emptyOutput       bool
+	fallbackFinalOnly bool
 	hasLike           bool
 	hasRequestFilter  bool
 	hasRawFilter      bool
@@ -1494,10 +1495,16 @@ func parseReadonlyLogFilters(values url.Values, userIDs []int64, viewer bool) (r
 	}
 
 	filters.hasRequestFilter = filters.requestID != "" || filters.upstreamRequestID != ""
-	if viewer {
+	fallbackFinalOnly, parseErr := parseReadonlyBoolean(values.Get("fallback_final_only"))
+	if parseErr != nil {
+		return filters, parseErr
+	}
+	filters.fallbackFinalOnly = viewer || fallbackFinalOnly
+	if filters.fallbackFinalOnly {
 		// 与 rc35 自助日志一致：只保留同一用户同一请求按日志时间排序的最后一次尝试。
 		// created_at 可能因异步写入与自增 ID 顺序不一致，因此用时间和 ID 做稳定的
-		// 字典序比较；空请求 ID 没有可靠的链路键，仍逐条保留。
+		// 字典序比较；空请求 ID 没有可靠的链路键，仍逐条保留。该条件必须走原始
+		// 日志查询，不能复用不包含链路关系的聚合表。
 		filters.where += ` AND (l.request_id IS NULL OR l.request_id = '' OR NOT EXISTS (
 			SELECT 1 FROM logs AS newer_logs
 			WHERE newer_logs.request_id = l.request_id
@@ -1505,6 +1512,7 @@ func parseReadonlyLogFilters(values url.Values, userIDs []int64, viewer bool) (r
 			  AND (newer_logs.created_at > l.created_at OR
 				(newer_logs.created_at = l.created_at AND newer_logs.id > l.id))
 		))`
+		filters.hasRawFilter = true
 	}
 	return filters, nil
 }
@@ -1523,7 +1531,7 @@ func projectReadonlyLogOther(value string, viewer bool) string {
 	}
 	changed := false
 	if viewer {
-		for _, key := range []string{"admin_info", "root_info", "audit_info", "channel_id", "channel_name", "channel_type", "reject_reason", "use_channel", "fallback_channels"} {
+		for _, key := range []string{"admin_info", "root_info", "audit_info", "channel_id", "channel_name", "channel_type", "reject_reason", "use_channel", "fallback_channels", "upstream_model_name", "is_model_mapped"} {
 			if _, ok := values[key]; ok {
 				delete(values, key)
 				changed = true
@@ -1912,7 +1920,7 @@ func (h *PassthroughHandler) logStat(w http.ResponseWriter, r *http.Request) {
 		writeDashboardJSON(w, 200, map[string]any{"configured": false, "summary": PassthroughLogSummary{}})
 		return
 	}
-	filters, err := parseReadonlyLogFilters(r.URL.Query(), ids, false)
+	filters, err := parseReadonlyLogFilters(r.URL.Query(), ids, readonlyViewer(r))
 	if err != nil {
 		writeDashboardError(w, 400, err.Error())
 		return

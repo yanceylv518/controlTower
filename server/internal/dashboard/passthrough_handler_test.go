@@ -308,6 +308,26 @@ func TestReadonlyLogFiltersViewerKeepsFinalRequestOnly(t *testing.T) {
 	assert.False(t, filters.hasLike)
 }
 
+func TestReadonlyLogFiltersAdminFallbackFinalOnly(t *testing.T) {
+	r := httptest.NewRequest("GET", "/?fallback_final_only=1", nil)
+	filters, err := parseReadonlyLogFilters(r.URL.Query(), nil, false)
+	require.NoError(t, err)
+	assert.True(t, filters.fallbackFinalOnly)
+	assert.True(t, filters.hasRawFilter)
+	assert.Contains(t, filters.where, "NOT EXISTS")
+	assert.Contains(t, filters.where, "newer_logs.user_id = l.user_id")
+
+	viewer, err := parseReadonlyLogFilters(httptest.NewRequest("GET", "/", nil).URL.Query(), nil, true)
+	require.NoError(t, err)
+	assert.True(t, viewer.fallbackFinalOnly)
+	assert.True(t, viewer.hasRawFilter)
+
+	disabled, err := parseReadonlyLogFilters(httptest.NewRequest("GET", "/?fallback_final_only=0", nil).URL.Query(), nil, false)
+	require.NoError(t, err)
+	assert.False(t, disabled.fallbackFinalOnly)
+	assert.NotContains(t, disabled.where, "newer_logs")
+}
+
 func TestReadonlyLogFiltersRejectUnsafeFuzzyPatterns(t *testing.T) {
 	_, err := parseReadonlyLogFilters(httptest.NewRequest("GET", "/?model_name=%25a", nil).URL.Query(), nil, false)
 	require.EqualError(t, err, "invalid_model_name_filter")
@@ -316,7 +336,7 @@ func TestReadonlyLogFiltersRejectUnsafeFuzzyPatterns(t *testing.T) {
 }
 
 func TestProjectReadonlyLogOtherSeparatesRoles(t *testing.T) {
-	raw := `{"public_id":9007199254740993,"reject_reason":"blocked","use_channel":["141","148"],"fallback_channels":["141","148"],"admin_info":{"admin_id":9},"root_info":{"generation":42}}`
+	raw := `{"public_id":9007199254740993,"reject_reason":"blocked","use_channel":["141","148"],"fallback_channels":["141","148"],"upstream_model_name":"deepseek-v4-flash-0731","is_model_mapped":true,"admin_info":{"admin_id":9},"root_info":{"generation":42}}`
 	viewer := projectReadonlyLogOther(raw, true)
 	assert.Contains(t, viewer, `"public_id":9007199254740993`)
 	assert.NotContains(t, viewer, "admin_info")
@@ -324,11 +344,14 @@ func TestProjectReadonlyLogOtherSeparatesRoles(t *testing.T) {
 	assert.NotContains(t, viewer, "reject_reason")
 	assert.NotContains(t, viewer, "use_channel")
 	assert.NotContains(t, viewer, "fallback_channels")
+	assert.NotContains(t, viewer, "upstream_model_name")
+	assert.NotContains(t, viewer, "is_model_mapped")
 
 	admin := projectReadonlyLogOther(raw, false)
 	assert.Contains(t, admin, `"public_id":9007199254740993`)
 	assert.Contains(t, admin, "admin_info")
 	assert.Contains(t, admin, "reject_reason")
+	assert.Contains(t, admin, "upstream_model_name")
 	assert.NotContains(t, admin, "root_info")
 	assert.Equal(t, "{}", projectReadonlyLogOther("null", true))
 	assert.Equal(t, "{}", projectReadonlyLogOther("not-json", false))
