@@ -11,7 +11,7 @@ import { cancelChartRender, scheduleChartRender } from "../utils/chartRenderQueu
 
 export interface CustomerCompareSeries { name: string; data: Array<[string, number | null]> }
 export interface CustomerCompareThreshold { name: string; value: number; color: string }
-const props = withDefaults(defineProps<{ series: CustomerCompareSeries[]; unit?: string; thresholds?: CustomerCompareThreshold[]; compact?: boolean }>(), { unit: "", compact: false, thresholds: () => [] });
+const props = withDefaults(defineProps<{ series: CustomerCompareSeries[]; unit?: string; thresholds?: CustomerCompareThreshold[]; compact?: boolean; timeRange?: [number, number] }>(), { unit: "", compact: false, thresholds: () => [] });
 const chartEl = ref<HTMLDivElement>();
 let chart: echarts.ECharts | undefined;
 let observer: ResizeObserver | undefined;
@@ -91,10 +91,10 @@ function renderNow() {
         return [title, ...rows].join("<br/>");
       },
     },
-    legend: { top: 0, left: 0, right: 0, type: "scroll", data: props.series.map(item => item.name) },
-    grid: { left: 56, right: 18, top: 40, bottom: 28 },
+    legend: { show: props.series.length > 1, top: 0, left: 0, right: 0, type: "scroll", data: props.series.map(item => item.name) },
+    grid: { left: 56, right: 18, top: props.series.length > 1 ? 36 : 16, bottom: 28 },
     dataZoom: [{ type: "inside", xAxisIndex: 0, filterMode: "none" }],
-    xAxis: { type: "time", axisLabel: { hideOverlap: true }, axisLine: { lineStyle: { color: "#dfe4ec" } } },
+    xAxis: { type: "time", min: props.timeRange?.[0], max: props.timeRange?.[1], splitNumber: 4, axisLabel: { hideOverlap: true }, axisLine: { lineStyle: { color: "#dfe4ec" } } },
     yAxis: {
       type: "value",
       min: 0,
@@ -108,7 +108,7 @@ function renderNow() {
         const capped = hardCap != null && actualCap === hardCap;
         return actualValue == null ? "" : `${actualValue}${props.unit}${capped && value >= yMax! ? "+" : ""}`;
       } },
-      splitLine: { lineStyle: { color: "#edf0f5" } },
+      splitLine: { lineStyle: { color: "#edf0f5", type: "dashed", opacity: .6 } },
     },
     series: displaySeries.map((item, index) => ({
       name: item.name,
@@ -134,7 +134,7 @@ function renderNow() {
   }), true);
 }
 
-watch(() => [props.series, props.unit, props.thresholds, props.compact], () => void render(), { deep: true, immediate: true });
+watch(() => [props.series, props.unit, props.thresholds, props.compact, props.timeRange], () => void render(), { deep: true, immediate: true });
 watch(chartEl, element => { observer?.disconnect(); if (element) { observer = new ResizeObserver(() => chart?.resize()); observer.observe(element); void render(); } });
 onBeforeUnmount(() => {
   cancelChartRender(renderToken);

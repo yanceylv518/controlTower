@@ -5,6 +5,7 @@ import type { MetricItem } from "@ct/shared";
 import { dashboard } from "../api";
 import { buildCustomerTraffic, formatTrafficTPM as formatTokens, type TrafficDimension } from "../utils/customerTraffic";
 import CustomerTrafficPanel from "./CustomerTrafficPanel.vue";
+import MonitorCopyButton from "./MonitorCopyButton.vue";
 
 const props = defineProps<{
   customer: MetricItem;
@@ -111,7 +112,13 @@ const panelProps = computed(() => ({
 <template>
   <article ref="cardElement" class="traffic-card">
     <header>
-      <button class="customer-link" type="button" :title="`${name} · ${customer.instance_name} · ID ${id}`" @click="emit('detail')">{{ name }}<span>#{{ id }}</span></button>
+      <div class="customer-heading">
+        <div class="customer-name-line">
+          <button class="customer-link" type="button" :title="`${name} · ${customer.instance_name} · ID ${id}`" @click="emit('detail')">{{ name }}</button>
+          <MonitorCopyButton :value="name" label="复制客户名称" />
+        </div>
+        <span class="customer-id">ID {{ id }}</span>
+      </div>
       <div class="compact-rate" :class="{ stale: minuteStatus }" title="最近结束的 1 分钟已收到的 Token；每 30 秒刷新，后续上报可能补齐。数据更新中表示拆分正在加载或与该分钟总量尚未对齐；对齐也不代表采集已全部结束。">
         <div><strong>{{ minute ? formatTokens(minute.tpm) : '—' }}</strong><span>TPM</span></div>
         <small>{{ minuteTime }}<span v-if="minuteStatus" class="rate-status"> · {{ minuteStatus }}</span></small>
@@ -132,8 +139,10 @@ const panelProps = computed(() => ({
 <style scoped>
 .traffic-card { min-width: 0; padding: 14px 14px 9px; border: 1px solid var(--ct-line); border-radius: 12px; background: var(--ct-surface); box-shadow: 0 2px 4px #25436d04, 0 5px 17px #25436d08; }
 .traffic-card > header { display: flex; align-items: center; gap: 7px; min-height: 36px; margin-bottom: 10px; }
-.customer-link { flex: 1; min-width: 0; text-align: left; border: 0; padding: 0; background: none; color: var(--ct-ink); cursor: pointer; font: inherit; font-size: 13px; font-weight: 600; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.customer-link span { margin-left: 6px; color: var(--ct-ink-3); font-size: 11px; font-weight: 400; }
+.customer-heading { flex: 1; min-width: 0; }
+.customer-name-line { display: flex; align-items: center; min-width: 0; gap: 3px; }
+.customer-link { min-width: 0; text-align: left; border: 0; padding: 0; background: none; color: var(--ct-ink); cursor: pointer; font: inherit; font-size: 13px; font-weight: 600; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.customer-id { color: var(--ct-ink-3); font-size: 11px; }
 .compact-rate { flex-shrink: 0; text-align: right; font-variant-numeric: tabular-nums; }
 .compact-rate strong { font-size: 19px; font-weight: 500; letter-spacing: -.5px; line-height: 1.2; }
 .compact-rate span { color: var(--ct-ink-3); font-size: 11px; margin-left: 4px; }
@@ -156,7 +165,7 @@ const panelProps = computed(() => ({
 <style scoped>
 @media(max-width:900px) {
   .traffic-card>header { flex-wrap:wrap; }
-  .customer-link { min-height:36px;white-space:normal;overflow-wrap:anywhere; }
+  .customer-link { min-height:36px; }
   .expand-button { width:36px;min-height:36px; }
   .compact-rate { max-width:100%; }
 }
