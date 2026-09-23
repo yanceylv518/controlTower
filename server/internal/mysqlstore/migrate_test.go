@@ -3,6 +3,7 @@ package mysqlstore
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -35,6 +36,42 @@ func TestSplitSQLStatements(t *testing.T) {
 	}
 	if statements[1] != "CREATE INDEX idx_a_id ON a (id)" {
 		t.Fatalf("second statement = %q", statements[1])
+	}
+}
+
+func TestMigrationLineCommentsDoNotSplitStatements(t *testing.T) {
+	paths, err := filepath.Glob("../../migrations/*.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) == 0 {
+		t.Fatal("no server migrations found")
+	}
+	for _, path := range paths {
+		t.Run(filepath.Base(path), func(t *testing.T) {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// The runner splits on every semicolon, including inside comments.
+			// A comment fragment sent as SQL aborts startup before HTTP listens.
+			for i, line := range strings.Split(string(data), "\n") {
+				if strings.HasPrefix(strings.TrimSpace(line), "--") && strings.Contains(line, ";") {
+					t.Errorf("line %d: migration line comment contains a statement delimiter", i+1)
+				}
+			}
+		})
+	}
+}
+
+func TestLogArchiveJobControlMigrationIsSingleStatement(t *testing.T) {
+	data, err := os.ReadFile("../../migrations/092_log_archive_job_control.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	statements := splitSQLStatements(string(data))
+	if len(statements) != 1 {
+		t.Fatalf("archive job control migration must execute as one CREATE TABLE, got %d statements: %q", len(statements), statements)
 	}
 }
 

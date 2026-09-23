@@ -1,5 +1,5 @@
 -- Independent two-task control. Migration 071 already owns log_archive_control
--- with an instance_id key; leave that legacy table and its data untouched.
+-- with an instance_id key. Leave that legacy table and its data untouched.
 CREATE TABLE IF NOT EXISTS log_archive_job_control (
  site_id VARCHAR(64) NOT NULL PRIMARY KEY,
  config_json JSON NOT NULL,
