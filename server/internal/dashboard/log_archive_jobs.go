@@ -7,6 +7,7 @@ import (
 	"controltower/server/internal/auth"
 	"encoding/json"
 	"errors"
+	"github.com/go-sql-driver/mysql"
 	"net/http"
 	"time"
 )
@@ -29,7 +30,7 @@ func (h ArchiveJobsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		items, err := h.Store.ListLogArchives(r.Context(), site)
 		if err != nil {
-			writeDashboardError(w, 500, "archive_unavailable")
+			writeDashboardError(w, 500, archiveJobsErrorCode(err, "archive_unavailable"))
 			return
 		}
 		month := r.URL.Query().Get("month")
@@ -46,7 +47,7 @@ func (h ArchiveJobsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}); ok {
 			days, err = store.ListJobDays(r.Context(), site, month)
 			if err != nil {
-				writeDashboardError(w, 500, "archive_days_unavailable")
+				writeDashboardError(w, 500, archiveJobsErrorCode(err, "archive_days_unavailable"))
 				return
 			}
 		}
@@ -71,4 +72,20 @@ func (h ArchiveJobsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = json.NewEncoder(w).Encode(map[string]bool{"saved": true})
+}
+
+// Return actionable schema diagnostics without exposing SQL, credentials or log data.
+func archiveJobsErrorCode(err error, fallback string) string {
+	var dbErr *mysql.MySQLError
+	if errors.As(err, &dbErr) {
+		switch dbErr.Number {
+		case 1146:
+			return "archive_schema_missing"
+		case 1054:
+			return "archive_schema_mismatch"
+		case 1044, 1045, 1142:
+			return "archive_database_permission_denied"
+		}
+	}
+	return fallback
 }

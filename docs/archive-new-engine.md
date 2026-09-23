@@ -21,7 +21,7 @@
 | log_archive_day_versions | version_id、log_date、revision、row_count、content_hash、parser_version、sealed_at；校验通过后发布版本 |
 | log_archive_issues | issue_id、log_date、step、error_code、created_at；失败原因保留 |
 
-Server 通过迁移 `091_log_archive_jobs.sql` 建立 `log_archive_control`、`log_archive_executors`、`log_archive_day_reports`，只保存控制与上报，不直接扫描源库。归档库的新表由新执行器初始化。
+Server 通过迁移 `091_log_archive_jobs.sql` 建立 `log_archive_job_control`、`log_archive_executors`、`log_archive_day_reports`，只保存控制与上报，不直接扫描源库。归档库的新表由新执行器初始化。
 
 ## 推进与恢复
 

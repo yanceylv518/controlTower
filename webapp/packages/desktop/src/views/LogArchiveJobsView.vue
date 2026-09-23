@@ -19,7 +19,7 @@ const filters=useFiltersStore(),auth=useAuthStore(),tab=ref('overview'),mode=ref
 const item=ref<Item>(),reports=ref<Day[]>([]),loading=ref(false),saving=ref(false),error=ref(''),selected=ref<Day>(),initialized=ref(false)
 const form=ref<Config>(),now=ref(Date.now());let sequence=0,disposed=false,timer:ReturnType<typeof setInterval>|undefined
 const unavailable=ref(false)
-const emptyTitle=computed(()=>loading.value?'正在读取归档状态':unavailable.value?'新版归档接口尚未就绪':error.value?'暂时无法读取归档数据':'等待归档数据')
+const emptyTitle=computed(()=>loading.value?'正在读取归档状态':unavailable.value?'新版归档接口尚未就绪':error.value?error.value:'等待归档数据')
 const emptyDescription=computed(()=>unavailable.value?'当前 Server 未提供新版归档接口，请部署新版 Server，并确认 Agent 已升级。连接成功后会显示真实进度。':error.value?'请检查服务连接后刷新重试。未读取到数据不代表没有日志，也不代表任务已停止。':'等待 Server 提供任务配置及 Agent 上报，日志数量和处理进度暂不可用。')
 const engine=computed(()=>item.value?.status.engine)
 const online=computed(()=>!!item.value?.seen_at&&now.value-Date.parse(item.value.seen_at)<90000)
@@ -27,6 +27,8 @@ const writable=computed(()=>can(auth.user,'archive.manage')&&!loading.value&&!sa
 const labels:Record<string,string>={collecting:'采集中',pending:'待处理',processing:'处理中',sealed:'已封存',failed:'处理失败',unknown:'状态待上报',future:'未来日期'}
 const steps:Record<string,string>={idle:'等待采集',collect:'采集源日志',verify_source:'校验并补齐源日志',verify_archive:'核对归档完整性',summarize:'整理多维日统计',seal:'发布封存结果',sealed:'当日处理完成',failed:'当日处理失败'}
 const reasons:Record<string,string>={created_at_index_required:'日志时间字段缺少索引，无法安全读取日期边界',source_archive_content_mismatch:'源库与归档库的日志数量或内容不一致',source_history_retention_unconfirmed:'尚未确认源库历史日志完整保留且稳定，不能封存',invalid_billing_other_json:'日志 other 字段不是有效 JSON，无法整理计费数据',invalid_billing_integer:'计费用量或额度不是有效的非负整数',archive_identity_or_schema_mismatch:'新归档数据集身份或结构版本不匹配',database_timeout:'数据库查询超时，批次未完成',archive_writer_busy:'另一个归档执行器持有写入锁'}
+const apiReasons:Record<string,string>={archive_schema_missing:'归档控制表缺失，请检查 Server 数据库迁移是否完成',archive_schema_mismatch:'归档控制表结构不匹配，请更新 Server 并完成数据库迁移',archive_database_permission_denied:'Server 数据库账号无权读取归档控制数据',archive_unavailable:'Server 读取归档任务配置或状态失败',archive_days_unavailable:'Server 读取每日归档状态失败'}
+function apiFailure(e:unknown){if(e instanceof ApiError){return `${apiReasons[e.code]||(e.status===403?'当前账号没有查看归档数据的权限':'归档接口请求失败')}（HTTP ${e.status} · ${e.code}）`}return '无法连接归档接口，请检查服务和网络后重试'}
 function reason(code?:string){return code?(reasons[code]||`执行失败：${code}`):''}
 function time(value?:string){return value&&!value.startsWith('0001-')?new Date(value).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false}):'尚未上报'}
 const days=computed(()=>{
@@ -43,7 +45,7 @@ async function load(){
  if(res.protocol!==1)throw new ApiError(404,'archive_protocol_unavailable')
  item.value=res.items[0];reports.value=res.days;error.value='';unavailable.value=false
  if(!initialized.value&&engine.value?.first_date){initialized.value=true;const first=engine.value.first_date.slice(0,7);if(first!==month.value){month.value=first;void load()}}
- }catch(e){if(!disposed&&ticket===sequence&&site===filters.site_id){unavailable.value=e instanceof ApiError&&(e.status===404||e.status===410);error.value=unavailable.value?'新版归档接口尚未就绪':e instanceof ApiError&&e.status===403?'当前账号没有查看归档数据的权限':'归档数据读取失败，请刷新重试'}}finally{if(ticket===sequence)loading.value=false}
+ }catch(e){if(!disposed&&ticket===sequence&&site===filters.site_id){unavailable.value=e instanceof ApiError&&(e.status===404||e.status===410);error.value=unavailable.value?'新版归档接口尚未就绪':apiFailure(e)}}finally{if(ticket===sequence)loading.value=false}
 }
 async function save(config:Config){const site=filters.site_id;saving.value=true
  try{await client.request(`/api/dashboard/log-archive-jobs/${encodeURIComponent(site)}`,{method:'PUT',body:JSON.stringify(config)});if(site!==filters.site_id)return;form.value=undefined;ElMessage.success('已提交，等待 Agent 应用');await load()}catch(e){ElMessage.error(e instanceof Error?e.message:'保存失败')}finally{saving.value=false}}

@@ -31,7 +31,7 @@ func (s archiveJobsStore) ListLogArchives(ctx context.Context, site string) ([]a
 	}
 	var config, status []byte
 	var seen sql.NullTime
-	err := s.db.QueryRowContext(ctx, "SELECT config_json,status_json,seen_at FROM log_archive_control WHERE site_id=?", site).Scan(&config, &status, &seen)
+	err := s.db.QueryRowContext(ctx, "SELECT config_json,status_json,seen_at FROM log_archive_job_control WHERE site_id=?", site).Scan(&config, &status, &seen)
 	if err == nil {
 		if json.Unmarshal(config, &v.Config) != nil || json.Unmarshal(status, &v.Status) != nil {
 			return nil, errors.New("invalid_new_archive_control")
@@ -73,7 +73,7 @@ func (s archiveJobsStore) UpdateLogArchive(ctx context.Context, site string, c a
 	var raw []byte
 	var session string
 	var live bool
-	if err = tx.QueryRowContext(ctx, "SELECT config_json,session_id,COALESCE(lease_until>UTC_TIMESTAMP(6),0) FROM log_archive_control WHERE site_id=? FOR UPDATE", site).Scan(&raw, &session, &live); err != nil {
+	if err = tx.QueryRowContext(ctx, "SELECT config_json,session_id,COALESCE(lease_until>UTC_TIMESTAMP(6),0) FROM log_archive_job_control WHERE site_id=? FOR UPDATE", site).Scan(&raw, &session, &live); err != nil {
 		return err
 	}
 	var old ac.Config
@@ -94,7 +94,7 @@ func (s archiveJobsStore) UpdateLogArchive(ctx context.Context, site string, c a
 	}
 	c.Version++
 	b, _ := json.Marshal(c)
-	if _, err = tx.ExecContext(ctx, "UPDATE log_archive_control SET config_json=? WHERE site_id=?", string(b), site); err != nil {
+	if _, err = tx.ExecContext(ctx, "UPDATE log_archive_job_control SET config_json=? WHERE site_id=?", string(b), site); err != nil {
 		return err
 	}
 	// Keep normal server audit records; these are not archive execution state.
@@ -123,13 +123,13 @@ func (s archiveJobsStore) PollLogArchive(ctx context.Context, instance string, s
 	initial.InstanceID = instance
 	initial.Tasks = &aj.Settings{}
 	b, _ := json.Marshal(initial)
-	if _, err = tx.ExecContext(ctx, "INSERT IGNORE INTO log_archive_control(site_id,config_json,status_json) VALUES(?,?,'{}')", out.SiteID, string(b)); err != nil {
+	if _, err = tx.ExecContext(ctx, "INSERT IGNORE INTO log_archive_job_control(site_id,config_json,status_json) VALUES(?,?,'{}')", out.SiteID, string(b)); err != nil {
 		return out, err
 	}
 	var raw []byte
 	var session string
 	var live bool
-	if err = tx.QueryRowContext(ctx, "SELECT config_json,session_id,COALESCE(lease_until>UTC_TIMESTAMP(6),0) FROM log_archive_control WHERE site_id=? FOR UPDATE", out.SiteID).Scan(&raw, &session, &live); err != nil {
+	if err = tx.QueryRowContext(ctx, "SELECT config_json,session_id,COALESCE(lease_until>UTC_TIMESTAMP(6),0) FROM log_archive_job_control WHERE site_id=? FOR UPDATE", out.SiteID).Scan(&raw, &session, &live); err != nil {
 		return out, err
 	}
 	if json.Unmarshal(raw, &out.Config) != nil || out.Config.Tasks == nil {
@@ -143,7 +143,7 @@ func (s archiveJobsStore) PollLogArchive(ctx context.Context, instance string, s
 		st.SiteID = out.SiteID
 		b, _ = json.Marshal(st)
 		out.Granted = out.Config.Running && st.Configured
-		if _, err = tx.ExecContext(ctx, "UPDATE log_archive_control SET status_json=?,seen_at=UTC_TIMESTAMP(6),session_id=?,lease_until=DATE_ADD(UTC_TIMESTAMP(6),INTERVAL 30 SECOND) WHERE site_id=?", string(b), st.Session, out.SiteID); err != nil {
+		if _, err = tx.ExecContext(ctx, "UPDATE log_archive_job_control SET status_json=?,seen_at=UTC_TIMESTAMP(6),session_id=?,lease_until=DATE_ADD(UTC_TIMESTAMP(6),INTERVAL 30 SECOND) WHERE site_id=?", string(b), st.Session, out.SiteID); err != nil {
 			return out, err
 		}
 		for _, d := range st.Engine.Days {
