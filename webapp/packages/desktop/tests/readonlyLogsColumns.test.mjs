@@ -29,11 +29,18 @@ test('readonly logs exposes a persistent rc35 column menu', () => {
   }
 })
 
-// 默认窗口为当前时刻往前两小时，首次进入与重置共用该范围。
-test('readonly logs defaults to the last two hours', () => {
-  assert.match(source, /return \[new Date\(now\.getTime\(\) - 2 \* 60 \* 60 \* 1000\), now\]/)
-  assert.match(source, /timeRangeChanged = computed\(/)
-  assert.match(source, /:reset-enabled="timeRangeChanged && !backgroundRefreshing"/)
+// 首次进入与重置共用默认范围：向前两小时，截止时间向后一小时。
+test('readonly logs defaults to two hours back with a one-hour future end', () => {
+  const body = source.match(/const defaultTimeRange = \(\): \[Date, Date\] => \{([\s\S]*?)\n\}/)?.[1]
+  assert.ok(body)
+  for (const timestamp of ['2026-09-23T15:00:00+08:00', '2026-09-23T23:30:00+08:00']) {
+    const now = Date.parse(timestamp)
+    class FixedDate extends Date { constructor(value = now) { super(value) } }
+    const [start, end] = new Function('Date', body)(FixedDate)
+    assert.equal(start.getTime(), now - 2 * 60 * 60 * 1000)
+    assert.equal(end.getTime(), now + 60 * 60 * 1000)
+  }
+  assert.match(source, /<CompactDateTimeRangePicker v-model="timeRange" reset-enabled/)
 })
 
 // 回归保护：首行字段顺序必须与 rc35 参考布局一致，低频条件固定放在第二行。
@@ -110,7 +117,7 @@ test('readonly logs time reset only restores the draft range', () => {
   const reset = source.match(/const resetTime = \(\) => \{([\s\S]*?)\n\}/)?.[1] || ''
   assert.match(source, /const resetTime = \(\) =>/)
   assert.match(reset, /timeRange\.value = defaultTimeRange\(\)/)
-  assert.match(reset, /resetRange\.value = \[/)
+  assert.doesNotMatch(reset, /backgroundRefreshing|timeRangeChanged/)
   assert.doesNotMatch(reset, /refreshSearch\(\)/)
   for (const field of ['username', 'tokenName', 'modelName', 'group', 'requestID', 'upstreamRequestID', 'channelID', 'logType']) {
     assert.doesNotMatch(reset, new RegExp(`${field}\\.value\\s*=`))
@@ -133,11 +140,11 @@ test('readonly logs query and full reset use a non-blocking refresh', () => {
   assert.match(source, /const backgroundRefreshing = ref\(false\)/)
   assert.match(source, /const refreshSearch = async \(\) =>/)
   assert.match(source, /state\.refresh\(\)/)
-  assert.match(source, /:reset-enabled="timeRangeChanged && !backgroundRefreshing"/)
   assert.match(source, /void reloadSummary\(statState\)/)
   assert.match(source, /void reloadSummary\(countState\)/)
   assert.match(source, /ElMessage\.error\('查询失败，请重试'\)/)
   assert.doesNotMatch(source, /<el-alert[^>]*(?:v-if="(?:statState|countState|state)\.error|!listIsCurrent)/)
+  assert.match(source, /<CompactDateTimeRangePicker v-model="timeRange" reset-enabled/)
   assert.match(source, /:class="\{ 'is-background-refreshing': backgroundRefreshing \}"/)
   assert.match(source, /:aria-busy="backgroundRefreshing"/)
   assert.match(source, /if \(backgroundRefreshing\.value\) return/)
@@ -189,7 +196,7 @@ test('readonly logs keeps rc35 geometry and theme-aware poppers', () => {
   assert.doesNotMatch(source, /logs-table th:nth-child|logs-table td:nth-child/)
   assert.match(source, /--rc35-surface: var\(--ct-surface\)/)
   assert.match(source, /--rc35-ink: var\(--ct-ink\)/)
-  assert.match(source, /<CompactDateTimeRangePicker v-model="timeRange" :reset-enabled="timeRangeChanged && !backgroundRefreshing" class="filter-time" @reset="resetTime" \/>/)
+  assert.match(source, /<CompactDateTimeRangePicker v-model="timeRange" reset-enabled class="filter-time" @reset="resetTime" \/>/)
   assert.doesNotMatch(source, /<el-date-picker[^>]+v-model="timeRange"/)
   assert.match(source, /CompactDateTimeRangePicker from '\.\.\/components\/CompactDateTimeRangePicker\.vue'/)
   assert.match(source, /\.logs-toolbar :deep\(\.filter-time\.compact-date-range\)/)
@@ -218,7 +225,7 @@ test('compact date picker follows the rc35 interaction contract', () => {
   assert.match(datePickerSource, /emit\('update:modelValue', range\)/)
   assert.match(datePickerSource, /reset:\s*\[\]/)
   assert.match(datePickerSource, /class="compact-date-reset"/)
-  assert.match(source, /:reset-enabled="timeRangeChanged && !backgroundRefreshing" class="filter-time" @reset="resetTime"/)
+  assert.match(source, /reset-enabled class="filter-time" @reset="resetTime"/)
   assert.match(datePickerSource, /结束时间必须晚于开始时间/)
   assert.match(datePickerSource, /document\.addEventListener\('pointerdown'/)
 })

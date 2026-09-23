@@ -199,13 +199,10 @@ const affinityOpen = ref(false)
 const affinityCloseButton = ref<HTMLButtonElement | null>(null)
 const defaultTimeRange = (): [Date, Date] => {
   const now = new Date()
-  // 默认仅查询最近两小时；首次进入和重置均以操作时刻为结束时间。
-  return [new Date(now.getTime() - 2 * 60 * 60 * 1000), now]
+  // 默认从当前时刻往前两小时开始，截止时间保留当前时刻后一小时的余量。
+  return [new Date(now.getTime() - 2 * 60 * 60 * 1000), new Date(now.getTime() + 60 * 60 * 1000)]
 }
 const timeRange = ref<[Date, Date]>(defaultTimeRange())
-// 记录路由初始化后的范围，只有用户实际调整时间后才启用重置按钮。
-const resetRange = ref<[number, number]>([timeRange.value[0].getTime(), timeRange.value[1].getTime()])
-const timeRangeChanged = computed(() => timeRange.value[0].getTime() !== resetRange.value[0] || timeRange.value[1].getTime() !== resetRange.value[1])
 const parsedChannelID = computed(() => {
   const value = Number(channelID.value)
   return channelID.value.trim() !== '' && Number.isSafeInteger(value) && value >= 0 ? value : undefined
@@ -547,11 +544,9 @@ const jumpToPage = () => {
   const page = Math.min(requested, totalPages.value)
   changePage(page)
 }
-// 日期控件内的独立入口只恢复默认时间草稿，点击“查询”后再更新结果。
+// 始终可恢复默认时间草稿，包括查询进行中；已提交的查询快照不受影响。
 const resetTime = () => {
-  if (backgroundRefreshing.value) return
   timeRange.value = defaultTimeRange()
-  resetRange.value = [timeRange.value[0].getTime(), timeRange.value[1].getTime()]
 }
 
 // 查询区的“重置”恢复整组筛选条件，和日期控件内的“重置时间”明确区分。
@@ -571,7 +566,6 @@ const reset = () => {
   fallbackFinalOnly.value = false
   logType.value = 0
   timeRange.value = defaultTimeRange()
-  resetRange.value = [timeRange.value[0].getTime(), timeRange.value[1].getTime()]
   void refreshSearch()
 }
 
@@ -1657,7 +1651,6 @@ onMounted(() => {
     nextMonth.setMonth(start.getMonth() + 1)
     timeRange.value = [start, nextMonth < cap ? nextMonth : cap]
   }
-  resetRange.value = [timeRange.value[0].getTime(), timeRange.value[1].getTime()]
   void load()
 })
 onUnmounted(() => {
@@ -1709,7 +1702,7 @@ watch(() => filters.site_id, (site, previous) => {
         <div v-else class="toolbar-primary">
           <div class="primary-filters">
             <div class="filter-row filter-row-primary">
-              <CompactDateTimeRangePicker v-model="timeRange" :reset-enabled="timeRangeChanged && !backgroundRefreshing" class="filter-time" @reset="resetTime" />
+              <CompactDateTimeRangePicker v-model="timeRange" reset-enabled class="filter-time" @reset="resetTime" />
               <UserNamePicker v-model="username" :site="filters.site_id" class="filter-username" placeholder="用户名称" aria-label="用户名称" @select="handleUserSelect" @submit="search" />
               <el-input v-model="channelID" clearable placeholder="渠道 ID" @keyup.enter="search" class="filter-channel" />
               <el-input v-model="requestID" clearable placeholder="请求ID" @keyup.enter="search" class="filter-request" />
