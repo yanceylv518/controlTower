@@ -90,13 +90,20 @@ func NewMux(options Options) *http.ServeMux {
 	a := ctauth.Handlers{M: options.AuthManager, Limiter: ctauth.NewIPLimiter(), Audit: options.Store}
 	controlSections := map[string]http.HandlerFunc{}
 	mux.HandleFunc("POST /api/agent/control/poll", agentHandler.Control(controlSections))
-	if archiveStore, ok := any(options.Store).(ac.Store); ok {
-		h := dashboard.LogArchiveHandler{Store: archiveStore}
-		mux.Handle("GET /api/dashboard/log-archives", protect(h))
-		mux.Handle("PUT /api/dashboard/log-archives/{id}", protect(h))
-		controlSections["archive"] = agentHandler.LogArchive(archiveStore)
-		mux.HandleFunc("POST /api/agent/log-archive/poll", controlSections["archive"])
+	if provider, ok := any(options.Store).(interface{ NewArchiveStore() ac.Store }); ok {
+		store := provider.NewArchiveStore()
+		h := dashboard.ArchiveJobsHandler{Store: store}
+		mux.Handle("GET /api/dashboard/log-archive-jobs", protect(h))
+		mux.Handle("PUT /api/dashboard/log-archive-jobs/{id}", protect(h))
+		mux.HandleFunc("POST /api/agent/log-archive-jobs/poll", agentHandler.LogArchive(store))
+		retired := func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "legacy_archive_executor_retired", http.StatusGone)
+		}
+		mux.HandleFunc("POST /api/agent/log-archive/poll", retired)
+		mux.HandleFunc("PUT /api/dashboard/log-archives/{id}", retired)
+		controlSections["archive"] = retired
 	}
+
 	if archiveStore, ok := any(options.Store).(dashboard.ArchiveFoundationStore); ok {
 		h := dashboard.ArchiveFoundationHandler{Store: archiveStore, Reader: options.ArchiveReader}
 		mux.Handle("POST /api/dashboard/archive-datasets", protect(h))

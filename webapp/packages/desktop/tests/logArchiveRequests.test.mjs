@@ -148,3 +148,47 @@ test('independent controls preserve other tasks and selected collection range',a
  assert.equal(sent.history_immutable,true);assert.equal(sent.full_history,true);assert.equal(sent.version,1)
  request.reject(new ApiError(409));await new Promise(resolve=>setImmediate(resolve))
 })
+
+test('group controls require confirmed online configuration and preserve collection when pausing history',async t=>{
+ const ctx=setup(t);await loadInitial(ctx)
+ const current=value(ctx,'item').value
+ current.config.running=true
+ current.config.pipeline={migration:true,organization:true,verification:true,collection:true}
+ current.status.applied_version=0
+ const count=ctx.requests.length
+ value(ctx,'toggleGroup')('history')
+ assert.equal(ctx.requests.length,count)
+ current.status.applied_version=current.config.version
+ value(ctx,'toggleGroup')('history')
+ const request=ctx.requests.at(-1),sent=JSON.parse(request.options.body)
+ assert.equal(sent.pipeline.organization,false)
+ assert.equal(sent.pipeline.verification,false)
+ assert.equal(sent.pipeline.collection,true)
+ request.reject(new ApiError(409));await new Promise(resolve=>setImmediate(resolve))
+})
+
+
+test('calendar starts at observed first log and keeps user month on refresh',async t=>{
+ const ctx=setup(t),loading=value(ctx,'load')(),req=ctx.requests.at(-1),body=response(req,'A')
+ const origin={date:'2026-06-15',source:'archive',observed_at:new Date().toISOString()}
+ body.items[0].status.calendar_origin=origin
+ req.resolve(body);await loading
+ assert.equal(value(ctx,'month').value,'2026-06')
+ const first=ctx.requests.at(-1),firstBody=response(first,'A');firstBody.items[0].status.calendar_origin=origin
+ first.resolve(firstBody);await new Promise(resolve=>setImmediate(resolve))
+ assert.equal(value(ctx,'days').value[0].date,'2026-06-15')
+ assert.equal(value(ctx,'calendarOffset').value,0)
+ assert.equal(value(ctx,'disabledArchiveMonth')(new Date(2026,4,1)),true)
+ value(ctx,'month').value='2026-08';value(ctx,'changeMonth')()
+ const next=ctx.requests.at(-1),nextBody=response(next,'A');nextBody.items[0].status.calendar_origin=origin
+ next.resolve(nextBody);await new Promise(resolve=>setImmediate(resolve))
+ assert.equal(value(ctx,'month').value,'2026-08')
+ assert.equal(value(ctx,'days').value[0].date,'2026-08-01')
+})
+
+test('empty source and archive show no artificial pending calendar days',async t=>{
+ const ctx=setup(t);await loadInitial(ctx)
+ value(ctx,'item').value.status.calendar_origin={date:'',source:'empty',observed_at:new Date().toISOString()}
+ assert.deepEqual(value(ctx,'days').value,[])
+ assert.equal(value(ctx,'missingDays').value.length,0)
+})

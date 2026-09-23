@@ -1,4 +1,33 @@
 export type ArchiveTask = 'migration' | 'organization' | 'verification' | 'collection'
+export type ArchiveTaskGroup = 'collection' | 'history'
+
+// Preserve the other task when pausing. Resuming a single task from a global
+// pause must not unexpectedly resume the other task's retained enabled flags.
+export function toggleArchiveGroup(config: ArchiveConfig, group: ArchiveTaskGroup): ArchiveConfig {
+  if (!config.pipeline) return config
+  const pipeline = { ...config.pipeline }
+  const enabled = group === 'collection' ? pipeline.collection : pipeline.organization || pipeline.verification
+  const start = !config.running || !enabled
+  if (!config.running) {
+    pipeline.collection = false
+    pipeline.organization = false
+    pipeline.verification = false
+  }
+  if (group === 'collection') pipeline.collection = start
+  else { pipeline.organization = start; pipeline.verification = start }
+  return { ...config, pipeline, running: config.running || start }
+}
+
+export function archiveDataLabel(kind: string): string {
+  if (kind === 'sealed') return '已封存'
+  if (['blocked', 'failed', 'mismatched'].includes(kind)) return '处理失败'
+  if (['preparing','rebuilding','organization','verification','backfill','verify','seal','checking'].includes(kind)) return '处理中'
+  if (['pending','collected','organized','changed','waiting_migration'].includes(kind)) return '待处理'
+  if (kind === 'collecting') return '采集中'
+  // Missing evidence is not a sixth lifecycle state and must not imply ready.
+  if (kind === 'future') return '未来日期'
+  return '状态待确认'
+}
 export type ArchivePipelineSettings = Record<ArchiveTask, boolean> & { collection_from?: string; collection_through?: string; collection_newest_first?: boolean; retry_token?: string }
 export interface ArchivePipelineStatus {
  collection_done?: boolean; collection_date?: string; migration_done: boolean; cutoff: string; settings: ArchivePipelineSettings
@@ -70,6 +99,10 @@ export interface ArchiveItem {
   workflow_days?: ArchiveWorkflowDay[]
   seen_at?: string
   status: {
+    calendar_origin?: {date: string; source: 'archive' | 'source' | 'empty'; observed_at: string}
+    calendar_origin_error?: string
+    raw_position?: { table: string; id: string; log_time?: string; observed_at: string }
+    raw_position_error?: string
     pipeline?: ArchivePipelineStatus
     operation?: ArchiveOperation
     diagnostic?: ArchiveDiagnostic

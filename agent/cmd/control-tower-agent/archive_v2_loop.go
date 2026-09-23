@@ -103,7 +103,36 @@ func (v *archiveV2Runner) step(ctx context.Context, w atomicArchiveWorker, cfg c
 			}
 		}
 		cancel()
+		if err == nil {
+			if reader, ok := w.(interface {
+				LatestRawPosition(context.Context) (*af.RawPosition, error)
+			}); ok {
+				readCtx, readCancel := context.WithTimeout(ctx, 3*time.Second)
+				position, readErr := reader.LatestRawPosition(readCtx)
+				readCancel()
+				if readErr == nil {
+					st.RawPosition, st.RawPositionError = position, ""
+				} else {
+					st.RawPositionError = "archive_raw_position_read_failed"
+				}
+			}
+		}
 		if err == nil && out.Config.Pipeline != nil {
+			if reader, ok := w.(interface {
+				CalendarOrigin(context.Context) (*af.CalendarOrigin, error)
+			}); ok {
+				readCtx, readCancel := context.WithTimeout(ctx, 3*time.Second)
+				origin, readErr := reader.CalendarOrigin(readCtx)
+				readCancel()
+				if readErr == nil {
+					st.CalendarOrigin, st.CalendarOriginError = origin, ""
+				} else {
+					st.CalendarOriginError = "calendar_origin_read_failed"
+					if readErr.Error() == "calendar_origin_timestamp_index_missing" {
+						st.CalendarOriginError = readErr.Error()
+					}
+				}
+			}
 			if reader, ok := w.(interface {
 				PipelineProgress(context.Context) (*ap.Status, error)
 			}); ok {

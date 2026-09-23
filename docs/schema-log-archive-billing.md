@@ -1,5 +1,7 @@
 # 归档日志与用户账单数据库结构
 
+> 2026-09-22：后续结构规划见[两任务归档与多维日统计方案](archive-two-task-daily-rollup-design.md)，采用多维日汇总而非全量新增逐条事实作为必经流程。本文既有结构仍用于理解现行实现，不授权直接删除生产表。
+
 **2026-09-21 追加式校验最新调整**：继续只读源表；默认流程改为源读取时捕获摘要、目标事务内逐批回读比较、归档库日终核对后封存，不再默认四轮核验或周期复扫最近7天。已结束历史通常读源一次；曾实时采集的日期结束后额外收尾补齐一次以覆盖迟到插入。新增归档库022 `archive_scan_evidence`，源逐行hash复用既有核验明细表；依赖仅追加、迟到有界和未归档不清理的声明，不声称源快照一致性。覆盖下文旧实现说明，详见[最新操作说明](archive-workflow-operations.md)。
 
 **2026-09-21 最新补充**：归档库新增 Agent 020 `archive_workflow`（singleton_id、state_json、updated_at）和 021 `archive_workflow_days`（log_date、state、revision、config_version、error_code、updated_at）。前者保存统一任务和恢复游标，后者保存每日结果和重试依据。CT 复用既有站点配置/状态 JSON，无新增迁移，最新仍为 088。旧原始月表复用，派生台账统计可由统一接入重建，详细约束见[统一任务说明](archive-workflow-operations.md)。以下早期阶段描述按对应阶段阅读。

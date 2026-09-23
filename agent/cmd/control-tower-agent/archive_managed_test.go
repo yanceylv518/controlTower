@@ -14,7 +14,7 @@ import (
 func TestManagedArchiveAdvertisesWithoutReadingSource(t *testing.T) {
 	received := make(chan ac.Status, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/agent/log-archive/poll" || r.Header.Get("Authorization") != "Bearer instance-token" {
+		if r.URL.Path != "/api/agent/log-archive-jobs/poll" || r.Header.Get("Authorization") != "Bearer instance-token" {
 			t.Errorf("wrong request")
 		}
 		var p ac.Status

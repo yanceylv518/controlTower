@@ -3,6 +3,7 @@ package archivecontrol
 import (
 	"context"
 	"controltower/internal/archivecontract"
+	aj "controltower/internal/archivejob"
 	ap "controltower/internal/archivepipeline"
 	"errors"
 	"regexp"
@@ -12,6 +13,7 @@ import (
 var ErrConflict = errors.New("archive_config_conflict")
 
 type Config struct {
+	Tasks            *aj.Settings `json:"tasks,omitempty"`
 	Pipeline         *ap.Settings `json:"pipeline,omitempty"`
 	FullHistory      bool         `json:"full_history,omitempty"`
 	HistoryImmutable bool         `json:"history_immutable,omitempty"`
@@ -28,6 +30,9 @@ type Config struct {
 
 func Default() Config { return Config{BatchSize: 500, IntervalSeconds: 30, DelaySeconds: 300} }
 func (c Config) Validate() bool {
+	if c.Tasks != nil && (c.Pipeline != nil || c.FullHistory || c.ReconcileID != "" || c.ReconcileDate != "" || len(c.Tasks.RetryToken) > 64) {
+		return false
+	}
 	if c.Pipeline != nil && (!c.FullHistory || !c.Pipeline.Validate()) {
 		return false
 	}
@@ -54,41 +59,55 @@ type Reconciliation struct {
 }
 
 type Status struct {
-	Pipeline           *ap.Status                        `json:"pipeline,omitempty"`
-	Operation          *archivecontract.Operation        `json:"operation,omitempty"`
-	Diagnostic         *archivecontract.Diagnostic       `json:"diagnostic,omitempty"`
-	WorkflowDaily      *archivecontract.WorkflowDayPage  `json:"workflow_daily,omitempty"`
-	WorkflowDailyError string                            `json:"workflow_daily_error,omitempty"`
-	PreparedToken      string                            `json:"prepared_token,omitempty"`
-	PreparePhase       string                            `json:"prepare_phase,omitempty"`
-	AutoPrepare        bool                              `json:"auto_prepare,omitempty"`
-	PrepareDiscovered  bool                              `json:"prepare_discovered,omitempty"`
-	PrepareIdentity    *archivecontract.Identity         `json:"prepare_identity,omitempty"`
-	Prepared           *archivecontract.Registration     `json:"prepared,omitempty"`
-	Workflow           *archivecontract.WorkflowStatus   `json:"workflow,omitempty"`
-	Reconcile          *archivecontract.ReconcileStatus  `json:"reconcile,omitempty"`
-	Seal               *archivecontract.SealStatus       `json:"seal,omitempty"`
-	Backfill           *archivecontract.BackfillStatus   `json:"backfill,omitempty"`
-	Metrics            *archivecontract.ArchiveMetrics   `json:"metrics,omitempty"`
-	Foundation         *archivecontract.FoundationStatus `json:"foundation,omitempty"`
-	SupportsDailyCheck bool                              `json:"supports_daily_check,omitempty"`
-	Reconciliation     *Reconciliation                   `json:"reconciliation,omitempty"`
-	Days               []Day                             `json:"days,omitempty"`
-	SiteID             string                            `json:"site_id,omitempty"`
-	AgentID            string                            `json:"agent_id"`
-	Session            string                            `json:"session"`
-	Configured         bool                              `json:"configured"`
-	AppliedVersion     int64                             `json:"applied_version"`
-	State              string                            `json:"state"`
-	LastID             int64                             `json:"last_id,string"`
-	LastSuccess        *time.Time                        `json:"last_success,omitempty"`
-	VerifiedAt         *time.Time                        `json:"verified_at,omitempty"`
-	VerifiedRows       int                               `json:"verified_rows"`
-	LastBatchRows      int                               `json:"last_batch_rows"`
-	Error              string                            `json:"error"`
+	Engine              *aj.Status                        `json:"engine,omitempty"`
+	CalendarOrigin      *archivecontract.CalendarOrigin   `json:"calendar_origin,omitempty"`
+	CalendarOriginError string                            `json:"calendar_origin_error,omitempty"`
+	RawPosition         *archivecontract.RawPosition      `json:"raw_position,omitempty"`
+	RawPositionError    string                            `json:"raw_position_error,omitempty"`
+	Pipeline            *ap.Status                        `json:"pipeline,omitempty"`
+	Operation           *archivecontract.Operation        `json:"operation,omitempty"`
+	Diagnostic          *archivecontract.Diagnostic       `json:"diagnostic,omitempty"`
+	WorkflowDaily       *archivecontract.WorkflowDayPage  `json:"workflow_daily,omitempty"`
+	WorkflowDailyError  string                            `json:"workflow_daily_error,omitempty"`
+	PreparedToken       string                            `json:"prepared_token,omitempty"`
+	PreparePhase        string                            `json:"prepare_phase,omitempty"`
+	AutoPrepare         bool                              `json:"auto_prepare,omitempty"`
+	PrepareDiscovered   bool                              `json:"prepare_discovered,omitempty"`
+	PrepareIdentity     *archivecontract.Identity         `json:"prepare_identity,omitempty"`
+	Prepared            *archivecontract.Registration     `json:"prepared,omitempty"`
+	Workflow            *archivecontract.WorkflowStatus   `json:"workflow,omitempty"`
+	Reconcile           *archivecontract.ReconcileStatus  `json:"reconcile,omitempty"`
+	Seal                *archivecontract.SealStatus       `json:"seal,omitempty"`
+	Backfill            *archivecontract.BackfillStatus   `json:"backfill,omitempty"`
+	Metrics             *archivecontract.ArchiveMetrics   `json:"metrics,omitempty"`
+	Foundation          *archivecontract.FoundationStatus `json:"foundation,omitempty"`
+	SupportsDailyCheck  bool                              `json:"supports_daily_check,omitempty"`
+	Reconciliation      *Reconciliation                   `json:"reconciliation,omitempty"`
+	Days                []Day                             `json:"days,omitempty"`
+	SiteID              string                            `json:"site_id,omitempty"`
+	AgentID             string                            `json:"agent_id"`
+	Session             string                            `json:"session"`
+	Configured          bool                              `json:"configured"`
+	AppliedVersion      int64                             `json:"applied_version"`
+	State               string                            `json:"state"`
+	LastID              int64                             `json:"last_id,string"`
+	LastSuccess         *time.Time                        `json:"last_success,omitempty"`
+	VerifiedAt          *time.Time                        `json:"verified_at,omitempty"`
+	VerifiedRows        int                               `json:"verified_rows"`
+	LastBatchRows       int                               `json:"last_batch_rows"`
+	Error               string                            `json:"error"`
 }
 
 func (s Status) Validate() bool {
+	if s.Engine != nil && (!s.Engine.Valid() || s.Pipeline != nil || s.Foundation != nil || s.Workflow != nil) {
+		return false
+	}
+	if len(s.CalendarOriginError) > 128 || (s.CalendarOrigin != nil && !s.CalendarOrigin.Valid()) {
+		return false
+	}
+	if len(s.RawPositionError) > 128 || (s.RawPosition != nil && !s.RawPosition.Valid()) {
+		return false
+	}
 	if s.Pipeline != nil && (s.Foundation == nil || !s.Foundation.SupportsPipeline() || s.Pipeline.Validate() != nil) {
 		return false
 	}

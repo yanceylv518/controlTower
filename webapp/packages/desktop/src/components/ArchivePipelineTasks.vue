@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed } from 'vue'
 import { archiveDiagnosticReason, archiveOperationNames, formatArchiveCount, type ArchiveItem, type ArchiveTask, type ArchivePipelineSettings } from '../utils/logArchive'
 const props = defineProps<{item: ArchiveItem; supported: boolean; writable: boolean; stale: boolean; mode?: 'overview' | 'manage'}>()
 const emit = defineEmits<{save: [ArchivePipelineSettings]; 'master-toggle': []}>()
@@ -13,9 +13,7 @@ const managing = computed(() => props.mode !== 'overview')
 const status = computed(()=>props.item.status.pipeline)
 const settings = computed(()=>props.item.config.pipeline)
 const activationReason = computed(()=> !props.supported ? '需先升级 Server 和 Agent，才能使用新的归档流程。' : props.item.config.running || props.item.status.state!=='paused' ? '请先暂停归档并等待 Agent 确认，再升级归档流程。' : ['backfill','verify','seal'].includes(props.item.status.workflow?.phase || '') ? '当前日期正在补齐、校验或封存；请先让当前日期处理结束，再暂停并升级归档流程。' : '')
-const range=ref<string[]>([]), newest=ref(false)
-watch(()=>props.item.config.pipeline, value=> {range.value=value?.collection_from ? [value.collection_from,value.collection_through || ''] : [];newest.value=!!value?.collection_newest_first},{immediate:true})
-function changeRange() {if(settings.value) emit('save',{...settings.value, collection_from:range.value?.[0] || '',collection_through:range.value?.[1] || '',collection_newest_first:!!range.value?.length && newest.value})}
+function useContinuousCollection() {if(settings.value) emit('save',{...settings.value, collection:true, collection_from:'',collection_through:'',collection_newest_first:false})}
 function retryFailed() {if(settings.value) emit('save',{...settings.value,retry_token:crypto.randomUUID().replaceAll('-','')})}
 function toggle(task: ArchiveTask) { if (settings.value) emit('save',{...settings.value,[task]:!settings.value[task]}) }
 function label(task: ArchiveTask) {
@@ -41,11 +39,12 @@ function display(value?:string) {return value ? new Date(value).toLocaleString('
 
 <template>
   <section class="pipeline-panel" :class="{ managing }" aria-label="日志归档任务">
-    <header><div><h3>{{ managing ? '任务控制' : '任务运行情况' }}</h3><p>采集独立推进；历史整理与校验按天衔接。本轮历史截止：{{ status?.cutoff || '启动时确定为昨天' }}。</p></div><el-button v-if="settings && managing" :disabled="!writable" @click="emit('master-toggle')">{{ item.config.running ? '整体暂停' : '继续已启用任务' }}</el-button></header>
+    <header><div><h3>{{ managing ? '任务设置' : '任务运行情况' }}</h3><p>任务启停在运行总览管理。本轮历史截止：{{ status?.cutoff || '启动时确定为昨天' }}。</p></div><el-button v-if="settings && managing" :disabled="!writable" @click="emit('master-toggle')">{{ item.config.running ? '整体暂停' : '继续已启用任务' }}</el-button></header>
     <div v-if="!managing && item.status.diagnostic" class="task-error"><b>{{ archiveDiagnosticReason(item.status.diagnostic.code).reason }}</b><p>{{ archiveDiagnosticReason(item.status.diagnostic.code).action }}</p><code>{{ item.status.diagnostic.code }} · {{ item.status.diagnostic.operation?.table || '无表信息' }} · MySQL {{ item.status.diagnostic.mysql_number || '—' }} / {{ item.status.diagnostic.sql_state || '—' }}</code><p v-if="item.status.diagnostic.retry_at">计划重试：{{ display(item.status.diagnostic.retry_at) }}</p></div>
     <template v-if="!settings && managing"><p>{{ activationReason || '升级后保留已提交进度和原始日志，可分别管理版本迁移、历史整理、校验与封存、日志采集。' }}</p><el-button type="primary" :disabled="!writable || !!activationReason" @click="emit('save',{migration:true,organization:true,verification:true,collection:true})">升级归档流程</el-button></template>
     <div v-else-if="settings">
-      <div v-if="managing" class="range-controls"><b>采集范围</b><p>不选择日期时，按独立 ID 游标持续采集全部日志。指定范围使用单独进度，不改变持续采集的游标；更改范围需先整体暂停并等待确认。</p><el-date-picker v-model="range" type="daterange" value-format="YYYY-MM-DD" start-placeholder="开始日期" end-placeholder="结束日期" :disabled="!writable || item.config.running" /><el-checkbox v-model="newest" :disabled="!writable || item.config.running || !range?.length">范围内先采集较新日期</el-checkbox><el-button :disabled="!writable || item.config.running" @click="changeRange">保存范围并启动</el-button><p v-if="status?.collection_date">采集当前日期：{{ status.collection_date }}</p><el-button :disabled="!writable" @click="retryFailed">重新排队受阻日期</el-button></div>
+      <div v-if="managing" class="range-controls"><b>持续采集</b><p>从已保存的采集游标继续读取源日志，写入归档月表，持续追赶新增数据，无需设置日期范围。</p><template v-if="settings.collection_from"><p>当前仍保留旧版范围配置：{{ settings.collection_from }} 至 {{ settings.collection_through }}。请先整体暂停并等待确认，再切回持续采集；沿用持续采集原有游标。</p><el-button :disabled="!writable || item.config.running || item.status.state !== 'paused' || item.config.version !== item.status.applied_version" @click="useContinuousCollection">切回持续采集</el-button></template><el-button :disabled="!writable" @click="retryFailed">重试历史处理失败日期</el-button></div>
+      <details v-if="managing" class="internal-controls"><summary>内部阶段开关（兼容当前执行器）</summary><p>通常使用运行总览中的两个任务开关；只有排查或兼容旧配置时才单独调整内部阶段。</p>
       <div class="task-grid">
       <article v-for="task in tasks" :key="task.key">
         <div class="task-heading"><h4>{{ task.title }}</h4><el-button v-if="managing" size="small" :disabled="!writable || task.key==='migration' && status?.migration_done" @click="toggle(task.key)">{{ settings[task.key] ? '停用' : '启用' }}</el-button></div>
@@ -61,11 +60,12 @@ function display(value?:string) {return value ? new Date(value).toLocaleString('
         </template>
       </article>
     </div>
+      </details>
     </div>
     <p v-if="settings && managing" class="footnote">开关在当前批次结束后生效；已发起的在线建索引可能继续完成，但不会因此启动日志数据批次。“处理中”表示任务持有处理位置，不表示这一刻正在执行 SQL。已有月表数量显示在日历中，与整理中的统计分开。封存需要源历史保留声明，迟到日志会触发新一轮处理。</p>
   </section>
 </template>
 
 <style scoped>
-.managing .task-grid{grid-template-columns:minmax(0,1fr)}.managing .task-grid article{padding:14px 16px}.managing .task-state{margin-top:6px}.pipeline-panel{padding:20px;background:var(--el-bg-color);border:1px solid var(--el-border-color-light);border-radius:12px;margin-bottom:16px}header{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}h3,h4{margin:0}p{font-size:13px;color:var(--el-text-color-secondary);line-height:1.7;margin:9px 0}.task-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:16px}.task-grid article{padding:16px;border:1px solid var(--el-border-color-light);border-radius:8px;min-width:0;overflow-wrap:anywhere}.task-heading{display:flex;justify-content:space-between;align-items:center;gap:12px}.task-state{display:block;margin-top:12px;font-size:13px;color:var(--el-color-primary)}.task-error{background:var(--el-color-danger-light-9);padding:12px;border-radius:6px;font-size:12px;color:var(--el-color-danger)}.range-controls{margin-top:14px;padding:14px;background:var(--el-fill-color-lighter);border-radius:8px}.range-controls :deep(.el-date-editor){max-width:100%}.footnote{margin-bottom:0}@media(max-width:700px){.task-grid{grid-template-columns:minmax(0,1fr)}.pipeline-panel{padding:14px}}
+.internal-controls{margin-top:14px}.internal-controls summary{cursor:pointer;font-size:13px;color:var(--el-color-primary)}.managing .task-grid{grid-template-columns:minmax(0,1fr)}.managing .task-grid article{padding:14px 16px}.managing .task-state{margin-top:6px}.pipeline-panel{padding:20px;background:var(--el-bg-color);border:1px solid var(--el-border-color-light);border-radius:12px;margin-bottom:16px}header{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}h3,h4{margin:0}p{font-size:13px;color:var(--el-text-color-secondary);line-height:1.7;margin:9px 0}.task-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:16px}.task-grid article{padding:16px;border:1px solid var(--el-border-color-light);border-radius:8px;min-width:0;overflow-wrap:anywhere}.task-heading{display:flex;justify-content:space-between;align-items:center;gap:12px}.task-state{display:block;margin-top:12px;font-size:13px;color:var(--el-color-primary)}.task-error{background:var(--el-color-danger-light-9);padding:12px;border-radius:6px;font-size:12px;color:var(--el-color-danger)}.range-controls{margin-top:14px;padding:14px;background:var(--el-fill-color-lighter);border-radius:8px}.range-controls :deep(.el-date-editor){max-width:100%}.footnote{margin-bottom:0}@media(max-width:700px){.task-grid{grid-template-columns:minmax(0,1fr)}.pipeline-panel{padding:14px}}
 </style>

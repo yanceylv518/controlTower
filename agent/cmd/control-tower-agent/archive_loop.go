@@ -47,5 +47,5 @@ func (s *archiveControlState) poll(ctx context.Context, cfg config.Config) {
 }
 
 func startManagedArchive(parent context.Context, cfg config.Config) func() {
-	return startAutomaticManagedArchive(parent, cfg)
+	return startArchiveJobs(parent, cfg)
 }
