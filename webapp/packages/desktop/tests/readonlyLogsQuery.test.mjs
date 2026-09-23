@@ -15,11 +15,11 @@ const deferred = () => {let resolve,reject;const promise=new Promise((a,b)=>{res
 function setup() {
   const calls={logs:[],logStat:[],logCount:[]}, messages=[]
   const passthrough=Object.fromEntries(Object.keys(calls).map(name=>[name,(params,signal)=>{const d=deferred();calls[name].push({...d,params,signal});return d.promise}]))
-  const deps={ref,shallowRef,computed,useAsyncData,useAppendPages:()=>({}),passthrough,filters:{site_id:'a'},auth:{user:{role:'admin'}},scopedUserIDs:ref(undefined),selectedUserID:ref(undefined),timeRange:ref([new Date('2026-09-01'),new Date('2026-09-02')]),logType:ref(0),limit:ref(100),offset:ref(0),closeRequestChain(){},ElMessage:{warning:m=>messages.push(m)},pageSizeOptions:[10,20,50,100]}
+  const deps={ref,shallowRef,computed,useAsyncData,useAppendPages:()=>({}),passthrough,filters:{site_id:'a'},auth:{user:{role:'admin'}},scopedUserIDs:ref(undefined),selectedUserID:ref(undefined),timeRange:ref([new Date('2026-09-01'),new Date('2026-09-02')]),logType:ref(0),limit:ref(100),offset:ref(0),closeRequestChain(){},ElMessage:{warning:m=>messages.push(m),error:m=>messages.push(m)},pageSizeOptions:[10,20,50,100]}
   for(const key of ['channelID','username','tokenName','modelName','group','requestID','upstreamRequestID','statusCode'])deps[key]=ref('')
   deps.emptyOutput=ref(false)
   deps.fallbackFinalOnly=ref(false)
-  const state=new Function(...Object.keys(deps),compile(code)+';return {state,statState,countState,refreshSearch,reloadPage,changePage,changePageSize,submitted,listIsCurrent,countIsCurrent,backgroundRefreshing,tableScroll} ')(...Object.values(deps))
+  const state=new Function(...Object.keys(deps),compile(code)+';return {state,statState,countState,reloadAll,refreshSearch,reloadPage,changePage,changePageSize,submitted,listIsCurrent,countIsCurrent,backgroundRefreshing,tableScroll} ')(...Object.values(deps))
   return {...deps,...state,calls,messages}
 }
 const response={items:[{id:1}],configured:true,total:1000,has_more:true}
@@ -129,7 +129,7 @@ test('failed cursor navigation restores the complete request used by the display
   retry=h.reloadPage()
   assert.equal(h.calls.logs[7].params.offset,100);assert.equal(h.calls.logs[7].params.limit,100);assert.equal(h.calls.logs[7].params.cursor,'next-1')
   h.calls.logs[7].resolve(response);await retry
-  assert.match(source, /@click="reloadPage">重新加载/)
+  assert.doesNotMatch(source, /@click="reloadPage">重新加载/)
 })
 
 test('pagination cancels pending summaries and resumes only after the list completes',async()=>{
@@ -151,4 +151,40 @@ test('stale pagination cannot resume statistics or roll back a new search',async
   h.calls.logs[2].resolve(response);await next
   assert.equal(h.calls.logStat.length,2);assert.equal(h.calls.logStat[1].params.model_name,'new')
   assert.equal(h.offset.value,0)
+})
+
+test('query failures show one floating message per attempt, including initial load and retries', async () => {
+  const h = setup()
+  let job = h.reloadAll()
+  h.calls.logs[0].reject(new Error('list failed')); await job
+  h.calls.logStat[0].reject(new Error('stat failed'))
+  h.calls.logCount[0].reject(new Error('count failed'))
+  await new Promise(setImmediate)
+  assert.deepEqual(h.messages, ['查询失败，请重试'])
+  job = h.refreshSearch()
+  h.calls.logs[1].resolve(response); await job
+  h.calls.logStat[1].reject(new Error('stat failed again'))
+  h.calls.logCount[1].reject(new Error('count failed again'))
+  await new Promise(setImmediate)
+  assert.deepEqual(h.messages, ['查询失败，请重试', '查询失败，请重试'])
+  assert.equal(h.state.data.value.items[0].id, 1)
+  h.changePage(2)
+  h.calls.logs[2].reject(new Error('page failed'))
+  await new Promise(setImmediate)
+  assert.equal(h.messages.length, 3)
+  assert.equal(h.offset.value, 0)
+})
+
+test('superseded summary failures do not produce error messages for a new query', async () => {
+  const h = setup()
+  let job = h.refreshSearch()
+  h.calls.logs[0].resolve(response); await job
+  job = h.refreshSearch()
+  h.calls.logStat[0].reject(new Error('obsolete stat'))
+  h.calls.logCount[0].reject(new Error('obsolete count'))
+  h.calls.logs[1].resolve(response); await job
+  h.calls.logStat[1].resolve({summary:{quota:0}})
+  h.calls.logCount[1].resolve({total:1})
+  await new Promise(setImmediate)
+  assert.deepEqual(h.messages, [])
 })

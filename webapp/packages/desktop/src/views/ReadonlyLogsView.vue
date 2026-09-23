@@ -265,6 +265,18 @@ function applyMobileFilters(value: MobileLogFilterValues) {
 function handleUserSelect(option: UserPickerOption | null) {
   selectedUserID.value = option?.id
 }
+// 列表、统计、总数共用一条浮动错误消息，不插入占位横幅或连续弹出多条。
+let queryFailureNotified = false
+function notifyQueryFailure(revision: number) {
+  if (revision !== queryRevision.value || queryFailureNotified) return
+  queryFailureNotified = true
+  ElMessage.error('查询失败，请重试')
+}
+async function reloadSummary(target: typeof statState | typeof countState) {
+  const revision = queryRevision.value
+  await target.reload()
+  if (target.error.value) notifyQueryFailure(revision)
+}
 function filterMobileUser(value: string, userID?: number) {
   if (!sensitiveVisible.value || backgroundRefreshing.value) return
   username.value = value
@@ -320,6 +332,7 @@ function commitQuery() {
   pageCursor.value = undefined
   submitted.value = { ...params.value }
   queryRevision.value += 1
+  queryFailureNotified = false
   return true
 }
 const reloadAll = async () => {
@@ -327,8 +340,9 @@ const reloadAll = async () => {
   const revision = queryRevision.value
   await state.reload()
   if (revision !== queryRevision.value) return
-  void statState.reload()
-  void countState.reload()
+  if (state.lastRefreshError.value) notifyQueryFailure(revision)
+  void reloadSummary(statState)
+  void reloadSummary(countState)
 }
 // 查询和重置属于高频操作，保留现有列表并在后台更新，避免 v-loading 阻塞整张表。
 const refreshSearch = async () => {
@@ -342,9 +356,9 @@ const refreshSearch = async () => {
     // 统计与总数独立加载；列表返回即可继续操作，后续查询由各自的取消机制接管。
     await state.refresh()
     if (revision !== queryRevision.value) return
-    void statState.reload()
-    void countState.reload()
-    if (state.lastRefreshError.value) ElMessage.warning('日志查询失败，当前保留上一次列表，请重新查询')
+    void reloadSummary(statState)
+    void reloadSummary(countState)
+    if (state.lastRefreshError.value) notifyQueryFailure(revision)
     else {
       state.error.value = ''
       if (tableScroll.value) tableScroll.value.scrollTop = 0
@@ -399,18 +413,20 @@ const changePage = (page: number) => {
 // 翻页失败恢复已显示页码；成功只重置纵向位置，保留正在查看的横向列。
 async function reloadPage() {
   const revision = queryRevision.value
+  queryFailureNotified = false
   const resumeStat = statState.loading.value, resumeCount = countState.loading.value
   if (resumeStat) statState.cancel()
   if (resumeCount) countState.cancel()
   await state.reload()
   if (revision !== queryRevision.value) return
+  if (state.lastRefreshError.value) notifyQueryFailure(revision)
   if (state.error.value && state.data.value?.revision === revision) {
     offset.value = state.data.value.pageOffset
     limit.value = state.data.value.pageLimit
     pageCursor.value = state.data.value.requestCursor
   } else if (tableScroll.value) tableScroll.value.scrollTop = 0
-  if (resumeStat) void statState.reload()
-  if (resumeCount) void countState.reload()
+  if (resumeStat) void reloadSummary(statState)
+  if (resumeCount) void reloadSummary(countState)
 }
 const changePageSize = (size: number) => {
   if (backgroundRefreshing.value || state.loading.value || !listIsCurrent.value) return
@@ -1686,9 +1702,6 @@ watch(() => filters.site_id, (site, previous) => {
 <template>
   <AppShell title="使用日志">
     <div class="logs-page">
-      <el-alert v-if="statState.error.value" title="统计数据加载失败，日志列表仍可正常查询" type="warning" show-icon :closable="false"><el-button link type="primary" @click="statState.reload">重新加载统计</el-button></el-alert>
-      <el-alert v-if="countState.error.value" title="总数加载失败，当前显示已加载的位置" type="warning" :closable="false"><el-button link type="primary" @click="countState.reload">重新加载总数</el-button></el-alert>
-      <el-alert v-if="state.data.value && !listIsCurrent && !backgroundRefreshing && !state.loading.value" title="本次查询未成功，以下是上一次查询结果，请重新查询后翻页" type="warning" :closable="false" />
 
       <!-- rc35 的工具栏将低频筛选条件收进可展开的第二行，首行始终填满可用宽度。 -->
       <section class="logs-toolbar">
@@ -1741,8 +1754,7 @@ watch(() => filters.site_id, (site, previous) => {
       </section>
 
       <div v-if="scopedUserIDs" class="request-scope-banner"><span>请求关联筛选 · 同一用户 ID {{ sensitiveVisible ? scopedUserIDs : '••••' }}</span><button type="button" class="secondary-action" :disabled="backgroundRefreshing" @click="reset">清除关联筛选</button></div>
-      <el-alert v-if="state.error.value" :title="state.error.value" type="error" show-icon :closable="false"><el-button link type="primary" @click="reloadPage">重新加载</el-button></el-alert>
-      <el-alert v-else-if="!state.loading.value && state.data.value && !state.data.value.configured" title="只读数据库尚未配置，当前暂无数据。配置后可直接在此查询。" type="info" show-icon :closable="false" />
+      <el-alert v-if="!state.error.value && !state.loading.value && state.data.value && !state.data.value.configured" title="只读数据库尚未配置，当前暂无数据。配置后可直接在此查询。" type="info" show-icon :closable="false" />
 
       <div v-if="mobileViewport" class="mobile-result-count" aria-live="polite">{{ state.loading.value ? '正在加载日志…' : backgroundRefreshing ? '正在更新…' : `共 ${formatNumber(effectiveTotal)} 条记录` }}</div>
       <section class="logs-table-shell" :class="{ 'is-background-refreshing': backgroundRefreshing }" :aria-busy="backgroundRefreshing">
