@@ -5,6 +5,7 @@ import type { MetricItem } from "@ct/shared";
 import { dashboard } from "../api";
 import { buildCustomerTraffic, formatTrafficTPM as formatTokens, type TrafficDimension } from "../utils/customerTraffic";
 import CustomerTrafficPanel from "./CustomerTrafficPanel.vue";
+import MonitorNameButton from "./MonitorNameButton.vue";
 import MonitorCopyButton from "./MonitorCopyButton.vue";
 
 const props = defineProps<{
@@ -114,7 +115,7 @@ const panelProps = computed(() => ({
     <header>
       <div class="customer-heading">
         <div class="customer-name-line">
-          <button class="customer-link" type="button" :title="`${name} · ${customer.instance_name} · ID ${id}`" @click="emit('detail')">{{ name }}</button>
+          <MonitorNameButton :name="name" :title="`${name} · ${customer.instance_name} · ID ${id}`" @detail="emit('detail')" />
           <MonitorCopyButton :value="name" label="复制客户名称" />
         </div>
         <span class="customer-id">ID {{ id }}</span>
@@ -141,7 +142,6 @@ const panelProps = computed(() => ({
 .traffic-card > header { display: flex; align-items: center; gap: 7px; min-height: 36px; margin-bottom: 10px; }
 .customer-heading { flex: 1; min-width: 0; }
 .customer-name-line { display: flex; align-items: center; min-width: 0; gap: 3px; }
-.customer-link { min-width: 0; text-align: left; border: 0; padding: 0; background: none; color: var(--ct-ink); cursor: pointer; font: inherit; font-size: 13px; font-weight: 600; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .customer-id { color: var(--ct-ink-3); font-size: 11px; }
 .compact-rate { flex-shrink: 0; text-align: right; font-variant-numeric: tabular-nums; }
 .compact-rate strong { font-size: 19px; font-weight: 500; letter-spacing: -.5px; line-height: 1.2; }
@@ -165,7 +165,6 @@ const panelProps = computed(() => ({
 <style scoped>
 @media(max-width:900px) {
   .traffic-card>header { flex-wrap:wrap; }
-  .customer-link { min-height:36px; }
   .expand-button { width:36px;min-height:36px; }
   .compact-rate { max-width:100%; }
 }

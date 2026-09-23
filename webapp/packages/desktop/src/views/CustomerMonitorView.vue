@@ -9,6 +9,7 @@ import AsyncPanel from "../components/AsyncPanel.vue";
 import CustomerTokenChart from "../components/CustomerTokenChart.vue";
 import CustomerCompareChart from "../components/CustomerCompareChart.vue";
 import CustomerTrafficCard from "../components/CustomerTrafficCard.vue";
+import MonitorNameButton from "../components/MonitorNameButton.vue";
 import MonitorCopyButton from "../components/MonitorCopyButton.vue";
 import MiniSparkline from "../components/MiniSparkline.vue";
 import { latestCustomerMinute, verifiedCustomerBuckets } from "../utils/customerTraffic";
@@ -286,7 +287,7 @@ function openDetail(row: MetricItem) {
         </template>
         <div v-else-if="activeMetric !== 'tpm'" class="customer-trend-groups">
           <article v-for="group in selectedTrendGroups" :key="group.key" class="customer-trend-group">
-            <header><div><div class="customer-name-line"><h2 :title="group.name">{{ group.name }}</h2><MonitorCopyButton :value="group.name" label="复制客户名称" /></div><p>客户 ID {{ group.id }} · 按 Token 排名</p></div><el-button link type="primary" @click="openDetail(allRows.find(item => item.dimension_key === group.key)!)">详情</el-button></header>
+            <header><div><div class="customer-name-line"><MonitorNameButton :name="group.name" @detail="router.push(`/customers/${encodeURIComponent(group.key)}`)" /><MonitorCopyButton :value="group.name" label="复制客户名称" /></div><p>客户 ID {{ group.id }} · 按 Token 排名</p></div></header>
             <section v-if="activeMetric === 'ttft'" class="customer-metric-card"><h3>TTFT</h3><p>P50 / P90 / P95 首字响应分位数</p><CustomerCompareChart :series="group.ttft" unit="s" :thresholds="ttftThresholds" /></section>
             <section v-else class="customer-metric-card"><h3>OTPS</h3><p>平均输出 Token 速度 · 输出 Token ÷ 请求总耗时（含非流式）</p><CustomerCompareChart :series="group.otps" unit=" token/s" /></section>
           </article>
@@ -301,20 +302,20 @@ function openDetail(row: MetricItem) {
         <div class="mobile-customer-list">
           <el-empty v-if="!pagedRows.length" description="没有匹配的客户" />
           <article v-for="row in mobileRows" :key="row.dimension_key" class="mobile-customer-card">
-            <header><div class="customer-name"><div class="customer-name-line"><b :title="customerName(row)">{{ customerName(row) }}</b><MonitorCopyButton :value="customerName(row)" label="复制客户名称" /></div><span>ID {{ customerID(row) }} · {{ row.instance_name }}</span></div><span :class="['status-label', ttftStatus(row.ttft_p95_ms).key]">{{ ttftStatus(row.ttft_p95_ms).label }}</span></header>
+            <header><div class="customer-name"><div class="customer-name-line"><MonitorNameButton :name="customerName(row)" @detail="openDetail(row)" /><MonitorCopyButton :value="customerName(row)" label="复制客户名称" /></div><span>ID {{ customerID(row) }} · {{ row.instance_name }}</span></div><span :class="['status-label', ttftStatus(row.ttft_p95_ms).key]">{{ ttftStatus(row.ttft_p95_ms).label }}</span></header>
             <dl><div><dt>总 Token</dt><dd>{{ formatTokens(totalTokens(row)) }}</dd></div><div><dt>峰值 TPM</dt><dd>{{ formatTokens(peakCustomerTPM(row.dimension_key)) }}</dd></div><div><dt>Token In / Out</dt><dd>{{ formatTokens(row.prompt_tokens) }} / {{ formatTokens(row.completion_tokens) }}</dd></div><div><dt>TTFT P95</dt><dd>{{ ms(row.ttft_p95_ms) }}</dd></div><div><dt>请求数</dt><dd>{{ row.request_count.toLocaleString() }}</dd></div><div><dt>流量占比</dt><dd>{{ grandTotal ? `${(totalTokens(row) / grandTotal * 100).toFixed(1)}%` : '—' }}</dd></div></dl>
-            <footer><el-checkbox :model-value="selectedKeys.includes(row.dimension_key)" :disabled="!selectedKeys.includes(row.dimension_key) && selectedKeys.length >= 8" @change="toggleCompare(row.dimension_key, Boolean($event))">加入趋势图</el-checkbox><el-button text type="primary" @click="openDetail(row)">查看详情</el-button></footer>
+            <footer><el-checkbox :model-value="selectedKeys.includes(row.dimension_key)" :disabled="!selectedKeys.includes(row.dimension_key) && selectedKeys.length >= 8" @change="toggleCompare(row.dimension_key, Boolean($event))">加入趋势图</el-checkbox></footer>
           </article>
           <ScrollLoadMore :loading="false" :disabled="activeTab !== 'ranking'" :has-more="mobileCount < filteredRows.length" @load="mobileCount += 20" />
         </div>
-        <el-table :data="pagedRows" class="customer-table" @row-click="openDetail">
+        <el-table :data="pagedRows" class="customer-table">
           <el-table-column width="46" align="center">
             <template #default="{ row }">
               <el-checkbox :model-value="selectedKeys.includes(row.dimension_key)" :disabled="!selectedKeys.includes(row.dimension_key) && selectedKeys.length >= 8" @click.stop @change="toggleCompare(row.dimension_key, Boolean($event))" />
             </template>
           </el-table-column>
           <el-table-column label="客户" min-width="190" fixed="left">
-            <template #default="{ row }"><div class="customer-name"><div class="customer-name-line"><b :title="customerName(row)">{{ customerName(row) }}</b><MonitorCopyButton :value="customerName(row)" label="复制客户名称" /></div><span>ID {{ customerID(row) }} · {{ row.instance_name }}</span></div></template>
+            <template #default="{ row }"><div class="customer-name"><div class="customer-name-line"><MonitorNameButton :name="customerName(row)" @detail="openDetail(row)" /><MonitorCopyButton :value="customerName(row)" label="复制客户名称" /></div><span>ID {{ customerID(row) }} · {{ row.instance_name }}</span></div></template>
           </el-table-column>
           <el-table-column label="总 Token" width="110" align="right" sortable :sort-method="(a: MetricItem, b: MetricItem) => totalTokens(a) - totalTokens(b)">
             <template #default="{ row }"><b class="token-total">{{ formatTokens(totalTokens(row)) }}</b></template>
@@ -333,7 +334,6 @@ function openDetail(row: MetricItem) {
           <el-table-column label="TTFT 趋势" width="120"><template #default="{ row }"><MiniSparkline :values="pointsFor(row.dimension_key, 'ttft_p95_ms')" color="#16a6b6" /></template></el-table-column>
           <el-table-column label="请求数" width="100" align="right"><template #default="{ row }">{{ row.request_count.toLocaleString() }}</template></el-table-column>
           <el-table-column label="状态" width="92"><template #default="{ row }"><span :class="['status-label', ttftStatus(row.ttft_p95_ms).key]">{{ ttftStatus(row.ttft_p95_ms).label }}</span></template></el-table-column>
-          <el-table-column label="操作" width="70" fixed="right"><template #default="{ row }"><el-button link type="primary" @click.stop="openDetail(row)">详情</el-button></template></el-table-column>
         </el-table>
         <footer class="customer-pagination">
           <span>共 {{ filteredRows.length }} 个客户</span>

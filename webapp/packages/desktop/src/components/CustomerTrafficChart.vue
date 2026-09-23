@@ -26,6 +26,11 @@ function focusTooltip(key?: string) {
   highlightCustomerTooltip(tooltipElement, activeKey);
 }
 
+function resetHighlight() {
+  focusTooltip();
+  chart?.dispatchAction({ type: "downplay" });
+}
+
 function renderNow() {
   if (!element.value) return;
   if (!chart) {
@@ -33,10 +38,11 @@ function renderNow() {
     const onSeries = (event: any) => focusTooltip(event.componentType === "series" ? props.series[event.seriesIndex]?.key : undefined);
     chart.on("mouseover", onSeries);
     chart.on("mousemove", onSeries);
-    chart.on("mouseout", () => focusTooltip());
-    chart.on("globalout", () => focusTooltip());
+    chart.on("mouseout", resetHighlight);
+    chart.on("globalout", resetHighlight);
   }
-  activeKey = undefined;
+  // Clear programmatic legend emphasis before replacing series on refresh.
+  resetHighlight();
   const css = getComputedStyle(element.value);
   const muted = css.getPropertyValue("--ct-ink-3").trim() || "#8390a5";
   const line = css.getPropertyValue("--ct-line").trim() || "#e9edf5";
@@ -82,9 +88,12 @@ function renderNow() {
       showSymbol: item.data.filter(([, value]) => value != null).length < 3, symbolSize: 4,
       itemStyle: { color: item.color }, lineStyle: { width: .8, color: trafficRGBA(item.color, .62) },
       areaStyle: { opacity: 1, color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: trafficRGBA(item.color, .16) }, { offset: 1, color: trafficRGBA(item.color, .40) }]) },
-      emphasis: { focus: "series", lineStyle: { width: 1.4 } },
+      // Keep every layer visible even when ECharts retains a hover state
+      // across an SVG redraw. Emphasis only strengthens the active outline.
+      emphasis: { focus: "none", lineStyle: { width: 1.4 } },
     })),
   }), true);
+  resetHighlight();
 }
 function highlight(key?: string) {
   focusTooltip(key);
@@ -101,7 +110,7 @@ onBeforeUnmount(() => { cancelChartRender(token); observer?.disconnect(); chart?
 watch(themeSignature, () => { scheduleChartRender(token, renderNow); }, { flush: "post" });
 </script>
 
-<template><div ref="element" class="traffic-chart" :class="{ expanded }" role="img" aria-label="该客户按固定顺序叠加的 TPM 流量趋势" /></template>
+<template><div ref="element" class="traffic-chart" :class="{ expanded }" role="img" aria-label="按固定顺序叠加的 TPM 流量趋势" @mouseleave="resetHighlight" /></template>
 <style scoped>
 .traffic-chart { width: 100%; height: 190px; }
 .traffic-chart.expanded { height: 320px; }

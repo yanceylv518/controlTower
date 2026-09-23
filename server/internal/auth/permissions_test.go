@@ -38,6 +38,8 @@ func TestRestrictedAdminEndpointMatrix(t *testing.T) {
 		{"monitor.customers", "GET", "metric-history?dimension_type=instance_user_model", true},
 		{"monitor.customers", "GET", "metric-history?dimension_type=instance_user_channel", true},
 		{"monitor.channels", "GET", "metric-history?dimension_type=instance_user_channel", false},
+		{"monitor.channels", "GET", "metric-history?dimension_type=instance_channel_user", true},
+		{"monitor.models", "GET", "metric-history?dimension_type=instance_channel_user", false},
 		{"monitor.customers", "GET", "metrics?dimension_type=instance_channel", false},
 		{"monitor.customers", "GET", "metrics?dimension_type=instance_model", false},
 		{"monitor.customers", "GET", "metrics", false},

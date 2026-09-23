@@ -232,7 +232,7 @@ func allowAdminRequest(u storage.User, r *http.Request) bool {
 			return any("overview.read")
 		case "instance_user", "instance_user_model", "instance_user_channel":
 			return any("monitor.customers")
-		case "instance_channel", "instance_channel_model":
+		case "instance_channel", "instance_channel_model", "instance_channel_user":
 			return any("monitor.channels")
 		case "instance_model", "instance_model_user":
 			return any("monitor.models")

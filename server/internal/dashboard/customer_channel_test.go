@@ -77,3 +77,29 @@ func TestCustomerChannelViewerCannotReadOtherUsersOrSites(t *testing.T) {
 		t.Fatalf("scope leaked: instances=%v status=%d body=%s", source.instances, rr.Code, rr.Body.String())
 	}
 }
+
+func TestChannelCustomerHistory(t *testing.T) {
+	source := &scopedCustomerChannelSource{metricSourceStub: metricSourceStub{metrics: []aggregator.Metric{
+		{InstanceID: "inst", BucketTime: time.Now(), DimensionType: "instance_user_channel", DimensionKey: "inst:user:12:channel:5", TPM: 1234},
+		{InstanceID: "other", BucketTime: time.Now(), DimensionType: "instance_user_channel", DimensionKey: "other:user:12:channel:5", TPM: 999},
+	}}}
+	h := NewHandler(nil).WithMetricSource(source).WithNameSource(&nameSourceFake{calls: map[string]int{}})
+	for _, window := range []string{"1m", "5m"} {
+		rr := httptest.NewRecorder()
+		h.HandleMetricHistory(rr, httptest.NewRequest("GET", "/api/dashboard/metric-history?dimension_type=instance_channel_user&instance_id=inst&dimension_key_prefix=inst:channel:&window="+window, nil))
+		if rr.Code != 200 || !strings.Contains(rr.Body.String(), `"dimension_key":"inst:channel:5:user:12"`) || !strings.Contains(rr.Body.String(), `"tpm":1234`) || strings.Contains(rr.Body.String(), "other:channel") {
+			t.Fatalf("%d %s", rr.Code, rr.Body.String())
+		}
+	}
+	rr := httptest.NewRecorder()
+	h.HandleMetricHistory(rr, httptest.NewRequest("GET", "/api/dashboard/metric-history?dimension_type=instance_channel_user&instance_id=inst&dimension_key_prefix=other:channel:", nil))
+	if rr.Code != 400 {
+		t.Fatalf("invalid scope accepted: %d", rr.Code)
+	}
+	if got := h.displayDimensionName("instance_channel_user", "inst:channel:5:user:999"); got != "用户 999" {
+		t.Fatalf("name=%q", got)
+	}
+	if id, ok := metricUserID("inst:channel:5:user:12"); !ok || id != 12 {
+		t.Fatalf("scope=%d %v", id, ok)
+	}
+}

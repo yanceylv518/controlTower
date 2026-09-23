@@ -159,6 +159,15 @@ func (h Handler) HandleMetricHistory(w http.ResponseWriter, r *http.Request) {
 		writeDashboardError(w, http.StatusBadRequest, "invalid_query")
 		return
 	}
+	queryType, queryPrefix := dimensionType, dimensionKeyPrefix
+	if dimensionType == "instance_channel_user" {
+		instance := query.Get("instance_id")
+		if instance == "" || dimensionKey != "" || dimensionKeyPrefix != instance+":channel:" {
+			writeDashboardError(w, http.StatusBadRequest, "invalid_query")
+			return
+		}
+		queryType, queryPrefix = "instance_user_channel", instance+":user:"
+	}
 	since := time.Now().UTC().Add(-time.Duration(hours) * time.Hour)
 	var metrics []aggregator.Metric
 	var err error
@@ -169,9 +178,9 @@ func (h Handler) HandleMetricHistory(w http.ResponseWriter, r *http.Request) {
 				writeDashboardError(w, http.StatusInternalServerError, "metric_prefix_source_not_configured")
 				return
 			}
-			metrics, err = source.QueryMetricHistoryPrefixForInstances(window, dimensionType, dimensionKeyPrefix, instanceIDs, since)
+			metrics, err = source.QueryMetricHistoryPrefixForInstances(window, queryType, queryPrefix, instanceIDs, since)
 		} else if source, ok := h.metricSource.(metricPrefixSource); ok {
-			metrics, err = source.QueryMetricHistoryPrefix(window, dimensionType, dimensionKeyPrefix, "", since)
+			metrics, err = source.QueryMetricHistoryPrefix(window, queryType, queryPrefix, "", since)
 		} else {
 			writeDashboardError(w, http.StatusInternalServerError, "metric_prefix_source_not_configured")
 			return
@@ -192,6 +201,9 @@ func (h Handler) HandleMetricHistory(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		metrics = filtered
+	}
+	if dimensionType == "instance_channel_user" {
+		metrics = channelCustomerMetrics(metrics, query.Get("instance_id"))
 	}
 	if query.Get("aggregate") == "true" {
 		if len(metrics) == 0 {
@@ -407,6 +419,13 @@ func displayDimensionKey(dimensionType string, dimensionKey string) string {
 // displayDimensionName is presentation-only. DisplayKey remains backward
 // compatible because alert links and older clients still consume it.
 func (h Handler) displayDimensionName(dimensionType string, dimensionKey string) string {
+	if dimensionType == "instance_channel_user" {
+		channelMarker, userMarker := strings.LastIndex(dimensionKey, ":channel:"), strings.LastIndex(dimensionKey, ":user:")
+		if channelMarker < 1 || userMarker <= channelMarker {
+			return dimensionKey
+		}
+		return h.displayDimensionName("instance_user", dimensionKey[:channelMarker]+dimensionKey[userMarker:])
+	}
 	if dimensionType == "instance_model_user" {
 		instanceID, tail, ok := strings.Cut(dimensionKey, ":model:")
 		marker := strings.LastIndex(tail, ":user:")

@@ -20,13 +20,13 @@ const emit = defineEmits<{ dimension: [value: TrafficDimension]; retry: [] }>();
 const chart = ref<InstanceType<typeof CustomerTrafficChart>>();
 const moreVisible = ref(false);
 const hasPlot = computed(() => props.traffic.series.length > 0 && props.traffic.coveredMinutes > 0);
-const dimensionLabel = computed(() => props.dimension === "model" ? "模型" : "渠道");
+const dimensionLabel = computed(() => props.dimension === "model" ? "模型" : props.dimension === "user" ? "客户" : "渠道");
 watch(() => [props.dimension, props.active], () => { moreVisible.value = false; });
 </script>
 
 <template>
   <div class="traffic-panel">
-    <div class="traffic-mode"><span>流量构成</span><el-segmented :model-value="dimension" @update:model-value="emit('dimension', $event as TrafficDimension)" :options="[{ label: '按模型', value: 'model' }, { label: '按渠道', value: 'channel' }]" size="small" /></div>
+    <div class="traffic-mode"><span>流量构成</span><span v-if="dimension === 'user'">按客户 · TPM</span><el-segmented v-else :model-value="dimension" @update:model-value="emit('dimension', $event as TrafficDimension)" :options="[{ label: '按模型', value: 'model' }, { label: '按渠道', value: 'channel' }]" size="small" /></div>
     <div v-if="hasPlot" class="traffic-legend" :aria-label="`按流量排序的${dimensionLabel}图例`">
       <button v-for="item in traffic.ranked.slice(0, 2)" :key="item.key" type="button" :title="item.name" @mouseenter="chart?.highlight(item.key)" @mouseleave="chart?.highlight()" @focus="chart?.highlight(item.key)" @blur="chart?.highlight()"><i :style="{ background: item.color }" /><span>{{ item.name }}</span></button>
       <el-popover v-if="traffic.ranked.length > 2" v-model:visible="moreVisible" trigger="click" placement="bottom-end" :width="360" popper-class="customer-traffic-popover">
@@ -50,7 +50,7 @@ watch(() => [props.dimension, props.active], () => { moreVisible.value = false; 
     </div>
     <div class="traffic-caption">
       <span title="最近结束的时段会随采集上报继续补齐">近 {{ hours }} 小时 · {{ bucketMinutes }}分钟粒度</span>
-      <span v-if="lastPlotTime" title="最后一段总量与拆分对齐、实际绘制的时间区间；可能早于顶部最近一分钟。24 小时视图的曲线为 5 分钟均值，顶部仍为 1 分钟 TPM。">曲线最后有效：{{ lastPlotTime }}</span>
+      <span v-if="lastPlotTime" title="最后一段总量与拆分对齐、实际绘制的时间区间；可能早于顶部最近一分钟。24 小时视图的曲线为 5 分钟均值。">曲线最后有效：{{ lastPlotTime }}</span>
       <span v-if="hasPlot && traffic.incompleteBuckets" title="总量与拆分未对齐的时段留空；不将缺失流量填成零">部分时段拆分未齐</span>
     </div>
   </div>

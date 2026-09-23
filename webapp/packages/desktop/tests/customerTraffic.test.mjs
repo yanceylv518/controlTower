@@ -133,3 +133,40 @@ test('5m idle coverage stays zero while known traffic retains correct TPM scale'
   assert.equal(result.series[0].data.find(([t]) => t === Date.parse(time))[1], 100);
   assert.equal(result.totalTokens, 500);
 });
+
+test('channel customer layers reconcile totals, retain customer identity and exclude open buckets', () => {
+ const opts = { customerKey: 'inst:channel:5', instanceID: 'inst', dimension: 'user', bucketMinutes: 1, hours: 1, now }
+ const point = (user, tokens, time = '2026-09-14T10:05:00Z') => ({ ...row(`inst:channel:5:user:${user}`, tokens, time, 'instance_channel_user'), display_name: `Customer ${user}` })
+ const totals = [row('inst:channel:5', 30, '2026-09-14T10:05:00Z', 'instance_channel')]
+ const result = build({ ...opts, totals, points: [point(7, 10), point(8, 20), point(7, 1, '2026-09-14T10:10:00Z'), row('other:channel:5:user:9', 100, undefined, 'instance_channel_user', 'other')] })
+ assert.equal(result.series.length, 2)
+ assert.equal(result.totalTokens, 30)
+ assert.equal(result.ranked[0].name, 'Customer 8 · #8')
+ assert.equal(result.coveredMinutes, 1)
+ const incomplete = build({ ...opts, totals, points: [point(7, 10)] })
+ assert.equal(incomplete.coveredMinutes, 0)
+ assert.ok(incomplete.series[0].data.every(([, value]) => value === null))
+ const five = build({ ...opts, bucketMinutes: 5, totals, points: [point(7, 10), point(8, 20)] })
+ assert.equal(five.series[0].data.find(([time]) => time === Date.parse('2026-09-14T10:05:00Z'))[1], 2)
+})
+
+test('model customer layers preserve colon model names, isolate dimensions and exclude partial buckets', () => {
+ const key = 'inst:model:provider:user:inner:kimi'
+ const opts = { customerKey: key, instanceID: 'inst', dimension: 'user', customerParent: 'model', bucketMinutes: 1, hours: 1, now }
+ const point = (id, tokens, time = '2026-09-14T10:05:00Z') => ({ ...row(`${key}:user:${id}`, tokens, time, 'instance_model_user'), display_name: `Customer ${id}` })
+ const totals = [row(key, 30, '2026-09-14T10:05:00Z', 'instance_model')]
+ const points = [point(7, 10), point(8, 20), point(7, 2, '2026-09-14T10:10:00Z'), point('9:user:10', 999), { ...point(9, 99), instance_id: 'other' }, { ...point(9, 99), dimension_type: 'instance_channel_user' }]
+ const result = build({ ...opts, totals, points })
+ assert.deepEqual(result.series.map(s => s.key), ['7', '8'])
+ assert.equal(result.totalTokens, 30)
+ assert.equal(result.ranked[0].name, 'Customer 8 · #8')
+ assert.equal(result.coveredMinutes, 1)
+ assert.equal(result.lastCompleteTime, Date.parse('2026-09-14T10:05:00Z'))
+ const five = build({ ...opts, bucketMinutes: 5, totals, points })
+ assert.equal(five.series[0].data.find(([time]) => time === Date.parse('2026-09-14T10:05:00Z'))[1], 2)
+ const missing = build({ ...opts, totals, points: [point(7, 10)] })
+ assert.equal(missing.coveredMinutes, 0)
+ assert.ok(missing.series[0].data.every(([, value]) => value === null))
+ const channel = build({ ...opts, customerKey: 'inst:channel:5', customerParent: 'channel', totals: [row('inst:channel:5', 10, '2026-09-14T10:05:00Z', 'instance_channel')], points: [{ ...point(7, 10), dimension_type: 'instance_channel_user', dimension_key: 'inst:channel:5:user:7' }] })
+ assert.equal(channel.series[0].color, result.series[0].color)
+})

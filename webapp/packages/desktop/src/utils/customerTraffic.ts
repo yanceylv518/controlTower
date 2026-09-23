@@ -1,6 +1,6 @@
 import type { MetricItem } from "@ct/shared";
 
-export type TrafficDimension = "model" | "channel";
+export type TrafficDimension = "model" | "channel" | "user";
 export interface TrafficSeries {
   key: string;
   name: string;
@@ -76,6 +76,7 @@ export function buildCustomerTraffic(options: {
   customerKey: string;
   instanceID: string;
   dimension: TrafficDimension;
+  customerParent?: "channel" | "model";
   points: MetricItem[];
   totals: MetricItem[];
   bucketMinutes: number;
@@ -84,6 +85,7 @@ export function buildCustomerTraffic(options: {
   verifiedBuckets?: number[];
 }) {
   const { customerKey, instanceID, dimension, points, totals, bucketMinutes, hours, now } = options;
+  const parentType = dimension === "user" ? `instance_${options.customerParent || "channel"}` : "instance_user";
   const bucketMs = bucketMinutes * 60_000;
   const start = Math.ceil((now - hours * 3_600_000) / bucketMs) * bucketMs;
   const end = Math.floor(now / bucketMs) * bucketMs;
@@ -91,7 +93,7 @@ export function buildCustomerTraffic(options: {
   const verified = new Set(options.verifiedBuckets || []);
   const totalByTime = new Map<number, number>();
   for (const point of totals) {
-    if (point.instance_id === instanceID && point.dimension_type === "instance_user" && point.dimension_key === customerKey) {
+    if (point.instance_id === instanceID && point.dimension_type === parentType && point.dimension_key === customerKey) {
       totalByTime.set(Date.parse(point.bucket_time), point.tpm);
     }
   }
@@ -99,12 +101,12 @@ export function buildCustomerTraffic(options: {
   const sumByTime = new Map<number, number>();
   for (const point of points) {
     const time = Date.parse(point.bucket_time);
-    if (point.instance_id !== instanceID || point.dimension_type !== `instance_user_${dimension}` || !point.dimension_key.startsWith(prefix) || time < start || time >= end) continue;
+    if (point.instance_id !== instanceID || point.dimension_type !== `${parentType}_${dimension}` || !point.dimension_key.startsWith(prefix) || time < start || time >= end) continue;
     const id = point.dimension_key.slice(prefix.length);
-    if (!id) continue;
+    if (!id || (dimension === "user" && !/^[1-9]\d*$/.test(id))) continue;
     let series = catalog.get(id);
     if (!series) {
-      const label = point.display_name && point.display_name !== point.dimension_key ? point.display_name : `渠道 ${id}`;
+      const label = point.display_name && point.display_name !== point.dimension_key ? point.display_name : `${dimension === "user" ? "客户" : "渠道"} ${id}`;
       series = { name: dimension === "model" ? id : `${label} · #${id}`, values: new Map() };
       catalog.set(id, series);
     }
@@ -124,7 +126,7 @@ export function buildCustomerTraffic(options: {
     .sort(([a], [b]) => dimension === "channel" ? Number(a) - Number(b) || compareKey(a, b) : compareKey(a, b))
     .map(([key, item]) => ({
       key, name: item.name,
-      color: trafficColor(dimension === "model" ? `model:${key}` : `${instanceID}:channel:${key}`),
+      color: trafficColor(dimension === "model" ? `model:${key}` : `${instanceID}:${dimension}:${key}`),
       tokens: times.reduce((sum, time) => sum + (complete.has(time) ? item.values.get(time) || 0 : 0), 0),
       data: times.map(time => [time, complete.has(time) ? (item.values.get(time) || 0) / bucketMinutes : null]),
     }));

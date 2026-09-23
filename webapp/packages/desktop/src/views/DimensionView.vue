@@ -2,7 +2,7 @@
 import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { siteOf, type ChannelSnapshot, type MetricItem } from "@ct/shared";
-import { Refresh, Search } from "@element-plus/icons-vue";
+import { FullScreen, Refresh, Search } from "@element-plus/icons-vue";
 import { dashboard } from "../api";
 import { useFiltersStore } from "../stores/filters";
 import { useAsyncData } from "../composables/useAsyncData";
@@ -13,9 +13,12 @@ import StatusTag from "../components/StatusTag.vue";
 import ChannelOperations from "../components/ChannelOperations.vue";
 import { formatTokens } from "../utils/format";
 import { usePrefsStore } from "../stores/prefs";
+import CustomerTrafficPanel from "../components/CustomerTrafficPanel.vue";
+import { buildCustomerTraffic } from "../utils/customerTraffic";
 import CustomerCompareChart from "../components/CustomerCompareChart.vue";
 import CustomerTokenChart from "../components/CustomerTokenChart.vue";
 import MiniSparkline from "../components/MiniSparkline.vue";
+import MonitorNameButton from "../components/MonitorNameButton.vue";
 import MonitorCopyButton from "../components/MonitorCopyButton.vue";
 import { closedMonitorBuckets } from "../utils/monitorBuckets";
 
@@ -35,7 +38,11 @@ const ttftThresholds = computed(() => [
   { name: "P95", value: prefs.ttftP95Threshold, color: "#7357d8" },
 ]);
 const selectedKeys = ref<string[]>([]);
+const expandedKey = ref("");
+watch(() => [props.kind, filters.site_id, hours.value, activeMetric.value, activeTab.value], () => { expandedKey.value = ""; });
 const history = ref<MetricItem[]>([]);
+const customerPoints = ref<MetricItem[]>([]);
+const customerError = ref("");
 const asOf = ref(Date.now());
 const chartTimeRange = computed<[number, number]>(() => {
   const end = Math.floor(asOf.value / 60_000) * 60_000;
@@ -87,6 +94,14 @@ const state = useAsyncData(async () => {
         }))).then((responses) => ({ items: responses.flatMap((response) => response.items) }))
       : Promise.resolve({ items: [] as ChannelSnapshot[] })
   );
+  customerError.value = "";
+  customerPoints.value = [];
+  {
+    try {
+      const responses = await Promise.all(instanceIDs.map(instanceID => dashboard.metricHistory({ instance_id: instanceID, window, dimension_type: `${dimensionType.value}_user`, dimension_key_prefix: prefix(instanceID), hours: hours.value })));
+      customerPoints.value = responses.flatMap(response => response.items);
+    } catch { customerError.value = "客户流量拆分加载失败，请重试"; }
+  }
   snapshots.value = channelData.items;
   initialized = true;
   return summaries.sort((a, b) => totalTokens(b) - totalTokens(a));
@@ -270,6 +285,25 @@ function metricHeadline(key: string, row?: DimRow) {
 const chartKeys = computed(() => activeMetric.value === "tpm"
   ? visibleRows.value.map((item) => item.dimension_key)
   : selectedKeys.value);
+const customerPointsByDimension = computed(() => {
+  const groups = new Map<string, MetricItem[]>();
+  for (const point of customerPoints.value) {
+    const marker = point.dimension_key.lastIndexOf(":user:");
+    if (marker < 0) continue;
+    const key = point.dimension_key.slice(0, marker);
+    const items = groups.get(key) || [];
+    items.push(point); groups.set(key, items);
+  }
+  return groups;
+});
+function customerTraffic(key: string, row?: DimRow) {
+  return buildCustomerTraffic({ customerKey: key, instanceID: row?.instance_id || "", dimension: "user", customerParent: props.kind === "channels" ? "channel" : "model", points: customerPointsByDimension.value.get(key) || [], totals: historyByKey.value.get(key) || [], bucketMinutes: bucketMinutes.value, hours: hours.value, now: asOf.value });
+}
+function trafficTime(time: number | null) {
+  if (time === null) return "";
+  const format = (value: number) => new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return `${format(time)}–${format(time + bucketMinutes.value * 60_000)}`;
+}
 const chartTrendGroups = computed(() => chartKeys.value.map((key) => {
   const row = rows.value.find((item) => item.dimension_key === key);
   return {
@@ -278,6 +312,7 @@ const chartTrendGroups = computed(() => chartKeys.value.map((key) => {
     id: key.split(":").pop() || key,
     row,
     headline: metricHeadline(key, row),
+    traffic: activeMetric.value === "tpm" ? customerTraffic(key, row) : null,
     tpm: dimensionSeries(key, "tpm", bucketMinutes.value, "TPM"),
     otps: dimensionSeries(key, "otps", 1, "OTPS"),
     ttft: [
@@ -291,6 +326,12 @@ function toggleChart(key: string, checked: boolean) {
   if (checked && selectedKeys.value.length < 8) selectedKeys.value = [...selectedKeys.value, key];
   if (!checked) selectedKeys.value = selectedKeys.value.filter((item) => item !== key);
 }
+const expandedGroup = computed(() => chartTrendGroups.value.find(group => group.key === expandedKey.value));
+const expanded = computed({
+  get: () => Boolean(expandedGroup.value?.traffic),
+  set: (value: boolean) => { if (!value) expandedKey.value = ""; },
+});
+watch(expandedGroup, group => { if (!group) expandedKey.value = ""; });
 function historyPoints(key: string, field: "ttft_p95_ms" | "otps" | "prompt_tokens") {
   return (historyByKey.value.get(key) || []).map((item) => item[field]);
 }
@@ -366,13 +407,14 @@ function rowClass({ row }: { row: DimRow }) {
           <article v-for="group in chartTrendGroups" :key="group.key" class="dimension-chart-card">
             <header>
               <div class="dimension-heading">
-                <div class="dimension-name"><h2 :title="group.name">{{ group.name }}</h2><MonitorCopyButton :value="kind === 'channels' ? group.id : group.name" :label="kind === 'channels' ? '复制渠道 ID' : '复制模型名称'" /></div>
+                <div class="dimension-name"><MonitorNameButton :name="group.name" @detail="group.row && openDetail(group.row)" /><MonitorCopyButton :value="kind === 'channels' ? group.id : group.name" :label="kind === 'channels' ? '复制渠道 ID' : '复制模型名称'" /></div>
                 <span v-if="kind === 'channels'" class="dimension-id">ID {{ group.id }}</span>
               </div>
               <div class="dimension-headline" :title="group.headline.detail"><span>{{ group.headline.label }}</span><strong>{{ group.headline.value }}</strong><small v-if="activeMetric === 'tpm'">{{ group.headline.detail }}</small></div>
-              <el-button v-if="group.row" link type="primary" @click="openDetail(group.row)">详情</el-button>
+              <el-button v-if="activeMetric === 'tpm'" class="dimension-expand" text :icon="FullScreen" aria-label="弹窗查看大图" title="弹窗查看大图" @click="expandedKey = group.key" />
             </header>
             <section v-if="activeMetric === 'ttft'" class="dimension-chart"><CustomerCompareChart :series="group.ttft" :time-range="chartTimeRange" unit="s" :thresholds="ttftThresholds" /></section>
+            <CustomerTrafficPanel v-else-if="activeMetric === 'tpm' && group.traffic" :traffic="group.traffic" dimension="user" :name="group.name" :loading="state.loading.value" :error="customerError" empty-text="暂无完整客户拆分数据" :hours="hours" :bucket-minutes="bucketMinutes" :last-plot-time="trafficTime(group.traffic.lastCompleteTime)" :active="activeTab === 'charts' && expandedKey !== group.key" @retry="state.reload" />
             <section v-else-if="activeMetric === 'tpm'" class="dimension-chart"><CustomerCompareChart :series="group.tpm" :time-range="chartTimeRange" compact /></section>
             <section v-else class="dimension-chart"><CustomerCompareChart :series="group.otps" :time-range="chartTimeRange" unit=" token/s" /></section>
           </article>
@@ -395,7 +437,6 @@ function rowClass({ row }: { row: DimRow }) {
           :data="visibleRows"
           :row-class-name="rowClass"
           :max-height="720"
-          @row-click="openDetail"
         >
           <el-table-column width="46" align="center">
             <template #default="{ row }"><el-checkbox :model-value="selectedKeys.includes(row.dimension_key)" :disabled="!selectedKeys.includes(row.dimension_key) && selectedKeys.length >= 8" @click.stop @change="toggleChart(row.dimension_key, Boolean($event))" /></template>
@@ -404,7 +445,7 @@ function rowClass({ row }: { row: DimRow }) {
             <template #default="{ row }">
               <span class="dim-name">
                 <i :class="['dim-dot', rowKind(row)]" />
-                <b>{{ row.display_name || row.display_key || row.dimension_key }}</b><MonitorCopyButton :value="kind === 'channels' ? row.dimension_key.split(':').pop() || '' : row.display_name || row.display_key || row.dimension_key" :label="kind === 'channels' ? '复制渠道 ID' : '复制模型名称'" />
+                <MonitorNameButton :name="row.display_name || row.display_key || row.dimension_key" @detail="openDetail(row)" /><MonitorCopyButton :value="kind === 'channels' ? row.dimension_key.split(':').pop() || '' : row.display_name || row.display_key || row.dimension_key" :label="kind === 'channels' ? '复制渠道 ID' : '复制模型名称'" />
                 <el-tooltip :content="row.dimension_key" placement="top">
                   <i class="dim-id">{{ row.dimension_key.split(":").pop() }}</i>
                 </el-tooltip>
@@ -492,7 +533,8 @@ function rowClass({ row }: { row: DimRow }) {
           <el-table-column label="OTPS 趋势" min-width="120"><template #default="{ row }"><MiniSparkline :values="historyPoints(row.dimension_key, 'otps')" color="#7a5af8" /></template></el-table-column>
           <el-table-column
             label=""
-            :width="kind === 'channels' ? 184 : 112"
+            v-if="kind === 'channels'"
+            :width="92"
             fixed="right"
             align="right"
           >
@@ -504,13 +546,21 @@ function rowClass({ row }: { row: DimRow }) {
                   @click.stop="openOps(row)"
                   >操作</el-button
                 >
-                <span class="rowlink">详情 ›</span>
               </span>
             </template>
           </el-table-column>
         </el-table>
       </div>
     </AsyncPanel>
+    <el-dialog v-model="expanded" :title="`${expandedGroup?.name || ''}${kind === 'channels' ? ` · #${expandedGroup?.id || ''}` : ''} · TPM 流量构成`" width="min(1100px, calc(100vw - 40px))" top="8vh" append-to-body destroy-on-close class="dimension-traffic-dialog">
+      <template v-if="expanded && expandedGroup?.traffic">
+        <div class="dimension-dialog-summary">
+          <span>{{ expandedGroup.headline.label }} <strong>{{ expandedGroup.headline.value }}</strong></span>
+          <span>{{ expandedGroup.headline.detail }}</span>
+        </div>
+        <CustomerTrafficPanel :traffic="expandedGroup.traffic" dimension="user" :name="expandedGroup.name" :loading="state.loading.value" :error="customerError" empty-text="暂无完整客户拆分数据" :hours="hours" :bucket-minutes="bucketMinutes" :last-plot-time="trafficTime(expandedGroup.traffic.lastCompleteTime)" active expanded @retry="state.reload" />
+      </template>
+    </el-dialog>
     <el-drawer
       :model-value="Boolean(opChannel)"
       :title="`渠道操作 · ${opChannel?.display_name || opChannel?.display_key || ''}`"
@@ -526,6 +576,9 @@ function rowClass({ row }: { row: DimRow }) {
 </template>
 
 <style scoped>
+.dimension-expand { flex-shrink: 0; width: 22px; padding: 0; margin-left: 0; color: var(--ct-ink-3); }
+.dimension-dialog-summary { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 14px; color: var(--ct-ink-3); font-size: 12px; }
+.dimension-dialog-summary strong { color: var(--ct-ink); font-size: 22px; font-weight: 500; margin: 0 4px; }
 .dimension-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 18px; min-height: 52px; padding: 8px 12px; margin-bottom: 14px; border: 1px solid var(--ct-line); border-radius: 8px; background: var(--ct-surface); }
 .dimension-view-switch { display: flex; align-items: center; gap: 16px; }
 .dimension-view-switch button { border: 0; border-radius: 3px; background: none; padding: 5px 0; font: inherit; font-size: 13px; color: var(--ct-ink-3); cursor: pointer; white-space: nowrap; }
@@ -567,4 +620,14 @@ function rowClass({ row }: { row: DimRow }) {
 @media (max-width: 1500px) { .dimension-chart-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 1380px) { .dimension-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 1000px) { .dimension-chart-grid { grid-template-columns: 1fr; } }
+</style>
+
+<style>
+.dimension-traffic-dialog { max-height: 84vh; overflow-y: auto; border-radius: 12px; }
+.dimension-traffic-dialog .traffic-chart.expanded { height: clamp(260px, 48vh, 520px); }
+@media (max-width: 900px) {
+  .dimension-traffic-dialog { width: 100% !important; height: 100dvh; max-height: 100dvh; margin: 0 !important; border-radius: 0; padding: 16px; padding-bottom: calc(16px + env(safe-area-inset-bottom)); }
+  .dimension-traffic-dialog .el-dialog__header { padding-right: 40px; overflow-wrap: anywhere; }
+  .dimension-traffic-dialog .el-dialog__headerbtn { width: 44px; height: 44px; }
+}
 </style>
