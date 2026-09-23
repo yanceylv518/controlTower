@@ -39,6 +39,44 @@ func archiveJobsPoll(ctx context.Context, client *http.Client, cfg config.Config
 	}
 	return out, nil
 }
+
+type archiveJobsReporter interface {
+	Refresh(context.Context) (aj.Status, error)
+}
+
+// Pausing tasks stops source collection and history, not archive count reports.
+// StatusAccepted identifies the current lease owner even when Granted is false.
+func refreshArchiveJobs(ctx context.Context, worker archiveJobsReporter, cfg config.Config, out ac.Response, started time.Time, st *ac.Status) {
+	if worker == nil || !st.Configured || !out.StatusAccepted || out.Config.AgentID != cfg.AgentID || out.Config.InstanceID != cfg.InstanceID || !out.Config.Validate() {
+		return
+	}
+	remaining := time.Duration(out.LeaseSeconds)*time.Second - time.Since(started) - 5*time.Second
+	if remaining > 10*time.Second {
+		remaining = 10 * time.Second
+	}
+	if remaining <= 0 {
+		return
+	}
+	reportCtx, cancel := context.WithTimeout(ctx, remaining)
+	defer cancel()
+	snapshot, err := worker.Refresh(reportCtx)
+	if err != nil && snapshot.FirstDate == "" && st.Engine != nil {
+		// A failed read must not erase the last known archive position.
+		st.Engine.CountsError = snapshot.CountsError
+		st.Engine.CountsDate = snapshot.CountsDate
+		return
+	}
+	if st.State == "error" && st.Engine != nil {
+		if snapshot.Collection.Error == "" {
+			snapshot.Collection.Error = st.Engine.Collection.Error
+		}
+		if snapshot.History.Error == "" {
+			snapshot.History.Error = st.Engine.History.Error
+		}
+	}
+	st.Engine = &snapshot
+}
+
 func startArchiveJobs(parent context.Context, cfg config.Config) func() {
 	ctx, cancel := context.WithCancel(parent)
 	done := make(chan struct{})
@@ -75,14 +113,19 @@ func startArchiveJobs(parent context.Context, cfg config.Config) func() {
 			} else {
 				st.SiteID = out.SiteID
 				st.AppliedVersion = out.Config.Version
+				var bindErr error
 				if worker != nil {
-					if bindErr := worker.BindSite(out.SiteID); bindErr != nil {
+					bindErr = worker.BindSite(out.SiteID)
+					if bindErr != nil {
 						st.State = "error"
 						st.Error = bindErr.Error()
 						out.Granted = false
+						out.StatusAccepted = false
 					}
 				}
-				if !out.Config.Running {
+				if bindErr != nil {
+					wait = 15 * time.Second
+				} else if !out.Config.Running {
 					st.State = "paused"
 					st.Error = ""
 					wait = 15 * time.Second
@@ -106,6 +149,9 @@ func startArchiveJobs(parent context.Context, cfg config.Config) func() {
 					wait = time.Duration(out.Config.IntervalSeconds) * time.Second
 				} else {
 					st.State = "waiting"
+				}
+				if worker != nil {
+					refreshArchiveJobs(ctx, worker, cfg, out, started, &st)
 				}
 			}
 			timer := time.NewTimer(wait)

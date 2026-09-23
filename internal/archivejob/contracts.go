@@ -32,6 +32,8 @@ type Day struct {
 }
 
 type Status struct {
+	CountsError     string    `json:"counts_error,omitempty"`
+	CountsDate      string    `json:"counts_date,omitempty"`
 	Latest          *Position `json:"latest,omitempty"`
 	Protocol        int       `json:"protocol"`
 	Collection      Progress  `json:"collection"`
@@ -55,7 +57,7 @@ func (s Status) Valid() bool {
 	if s.Protocol != Protocol || len(s.Days) > 100 || s.Collection.AfterID < 0 || s.History.AfterID < 0 {
 		return false
 	}
-	for _, date := range []string{s.FirstDate, s.Frontier, s.Cutoff, s.NextDay, s.History.Date} {
+	for _, date := range []string{s.FirstDate, s.Frontier, s.Cutoff, s.NextDay, s.History.Date, s.CountsDate} {
 		if date != "" {
 			if _, err := time.Parse("2006-01-02", date); err != nil {
 				return false
@@ -75,5 +77,5 @@ func (s Status) Valid() bool {
 			return false
 		}
 	}
-	return len(s.Collection.Error) <= 256 && len(s.History.Error) <= 256
+	return len(s.Collection.Error) <= 256 && len(s.History.Error) <= 256 && len(s.CountsError) <= 256
 }

@@ -32,6 +32,10 @@ type Engine struct {
 	template       string
 	ready          bool
 	pageAfter      string
+	counts         map[string]*dayCount
+	countAfter     string
+	countDate      string
+	countError     string
 }
 
 func (e *Engine) BindSite(site string) error {
@@ -373,7 +377,9 @@ func (e *Engine) Step(ctx context.Context, settings aj.Settings, batch, delay in
 		}
 		return err
 	})
-	st, readErr := e.Status(ctx)
+	// The polling loop reports Refresh's snapshot. Reading a task result must
+	// not advance the reporting cursor and skip every other page of days.
+	st, readErr := e.status(ctx, false)
 	if err != nil {
 		if st.Collection.Error == "" && st.History.Error == "" {
 			if historyTurn {
@@ -388,7 +394,11 @@ func (e *Engine) Step(ctx context.Context, settings aj.Settings, batch, delay in
 }
 
 func (e *Engine) Status(ctx context.Context) (aj.Status, error) {
-	st := aj.Status{Protocol: aj.Protocol, Days: []aj.Day{}}
+	return e.status(ctx, true)
+}
+
+func (e *Engine) status(ctx context.Context, advance bool) (aj.Status, error) {
+	st := aj.Status{Protocol: aj.Protocol, Days: []aj.Day{}, CountsDate: e.countDate, CountsError: e.countError}
 	if !e.ready {
 		return st, nil
 	}
@@ -419,7 +429,13 @@ func (e *Engine) Status(ctx context.Context) (aj.Status, error) {
 			st.Latest = &aj.Position{ID: n, Table: name, LogTime: time.Unix(created, 0).UTC(), ObservedAt: time.Now().UTC()}
 		}
 	}
-	rows, err := e.target.QueryContext(ctx, "SELECT CAST(log_date AS CHAR),state,revision,version_id,COALESCE(CAST(raw_rows AS CHAR),''),step,error_code FROM log_archive_days WHERE log_date>? ORDER BY log_date LIMIT 100", e.pageAfter)
+	query := "SELECT CAST(log_date AS CHAR),state,revision,version_id,COALESCE(CAST(raw_rows AS CHAR),''),step,error_code FROM log_archive_days"
+	var args []any
+	if e.pageAfter != "" {
+		query += " WHERE log_date>?"
+		args = append(args, e.pageAfter)
+	}
+	rows, err := e.target.QueryContext(ctx, query+" ORDER BY log_date LIMIT 100", args...)
 	if err != nil {
 		return st, err
 	}
@@ -435,42 +451,11 @@ func (e *Engine) Status(ctx context.Context) (aj.Status, error) {
 		return st, err
 	}
 	rows.Close()
-	// One bounded independent raw count per report. No unfinished rollup count
-	// is used as the total, and lack of a month table remains an explicit zero.
-	for i := range st.Days {
-		d := &st.Days[i]
-		if d.Rows != "" {
-			continue
-		}
-		name := table(d.Date)
-		exists := false
-		for _, n := range names {
-			if n == name {
-				exists = true
-				break
-			}
-		}
-		var count string = "0"
-		if exists {
-			from, to := dateBounds(d.Date)
-			if err = e.target.QueryRowContext(ctx, "SELECT /*+ MAX_EXECUTION_TIME(1500) */ COUNT(*) FROM "+q(name)+" WHERE created_at>=? AND created_at<?", from, to).Scan(&count); err != nil {
-				break
-			}
-		}
-		result, updateErr := e.target.ExecContext(ctx, "UPDATE log_archive_days SET raw_rows=? WHERE log_date=? AND revision=? AND raw_rows IS NULL", count, d.Date, d.Revision)
-		if updateErr == nil {
-			affected, _ := result.RowsAffected()
-			if affected == 1 {
-				d.Rows = count
-			}
-		}
-		break
-	}
 	if len(st.Days) == 100 {
-		e.pageAfter = st.Days[99].Date
-		st.NextDay = e.pageAfter
-	} else {
-		e.pageAfter = ""
+		st.NextDay = st.Days[99].Date
+	}
+	if advance {
+		e.pageAfter = st.NextDay
 	}
 	return st, rows.Err()
 }

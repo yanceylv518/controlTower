@@ -2,6 +2,7 @@ package archivejob
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -15,6 +16,21 @@ func TestProtocolRejectsOldStates(t *testing.T) {
 		if s.Valid() {
 			t.Fatal("legacy state accepted", state)
 		}
+	}
+}
+
+func TestCountReportValidation(t *testing.T) {
+	s := Status{Protocol: Protocol, CountsDate: "2026-09-17", CountsError: "database_timeout"}
+	if !s.Valid() {
+		t.Fatal("valid count diagnostic rejected")
+	}
+	s.CountsDate = "2026-09-99"
+	if s.Valid() {
+		t.Fatal("invalid count date accepted")
+	}
+	s.CountsDate, s.CountsError = "", strings.Repeat("x", 257)
+	if s.Valid() {
+		t.Fatal("oversized count diagnostic accepted")
 	}
 }
 func TestLargeCursorWirePrecision(t *testing.T) {
