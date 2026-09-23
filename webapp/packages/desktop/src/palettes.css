@@ -1,13 +1,11 @@
-/* Palette and brightness are independent. Status colors retain their meaning. */
+/* Palette and brightness are independent. Neutral text comes from theme.css;
+   palette color stays in surfaces, navigation and accents. */
 :root[data-palette="graphite"][data-theme="light"] {
   --ct-bg: #f4f4f5;
   --ct-surface: #ffffff;
   --ct-surface-2: #f7f7f8;
   --ct-line: #e0e0e3;
   --ct-line-strong: #b8b8c0;
-  --ct-ink: #27272a;
-  --ct-ink-2: #52525b;
-  --ct-ink-3: #696970;
   --ct-accent: #45454d;
   --ct-accent-weak: #eeeeF1;
   --ct-primary-solid: #45454d;
@@ -15,14 +13,11 @@
   --ct-chart-blue: #52525b;
 }
 :root[data-palette="graphite"][data-theme="dark"] {
-  --ct-bg: #101010;
-  --ct-surface: #191919;
-  --ct-surface-2: #242424;
-  --ct-line: #383838;
+  --ct-bg: #171717;
+  --ct-surface: #202020;
+  --ct-surface-2: #292929;
+  --ct-line: #393939;
   --ct-line-strong: #707078;
-  --ct-ink: #ededf0;
-  --ct-ink-2: #c4c4cc;
-  --ct-ink-3: #a6a6b0;
   --ct-accent: #d4d4dc;
   --ct-accent-weak: #333338;
   --ct-primary-solid: #52525b;
@@ -38,14 +33,11 @@
 }
 
 :root[data-palette="jade"][data-theme="light"] {
-  --ct-bg: #f1f5f4;
+  --ct-bg: #f3f6f4;
   --ct-surface: #ffffff;
   --ct-surface-2: #f4f8f6;
-  --ct-line: #dbe7e1;
+  --ct-line: #e0e6e2;
   --ct-line-strong: #afc5bc;
-  --ct-ink: #233c34;
-  --ct-ink-2: #49665b;
-  --ct-ink-3: #5d7369;
   --ct-accent: #126b59;
   --ct-accent-weak: #e4f3ec;
   --ct-primary-solid: #126b59;
@@ -53,14 +45,11 @@
   --ct-chart-blue: #167963;
 }
 :root[data-palette="jade"][data-theme="dark"] {
-  --ct-bg: #101b18;
-  --ct-surface: #172724;
-  --ct-surface-2: #20342e;
-  --ct-line: #334e44;
-  --ct-line-strong: #618675;
-  --ct-ink: #e1eee7;
-  --ct-ink-2: #bbd3c6;
-  --ct-ink-3: #9bb9aa;
+  --ct-bg: #151b19;
+  --ct-surface: #1d2522;
+  --ct-surface-2: #262f2b;
+  --ct-line: #343e39;
+  --ct-line-strong: #64756c;
   --ct-accent: #7cdbc0;
   --ct-accent-weak: #244638;
   --ct-primary-solid: #19725c;
@@ -76,14 +65,11 @@
 }
 
 :root[data-palette="violet"][data-theme="light"] {
-  --ct-bg: #f5f3f8;
+  --ct-bg: #f6f4f8;
   --ct-surface: #ffffff;
   --ct-surface-2: #f8f6fb;
-  --ct-line: #e4dfec;
+  --ct-line: #e5e1e9;
   --ct-line-strong: #c0b7d1;
-  --ct-ink: #312840;
-  --ct-ink-2: #635672;
-  --ct-ink-3: #736580;
   --ct-accent: #7045ac;
   --ct-accent-weak: #f0eafb;
   --ct-primary-solid: #7045ac;
@@ -91,14 +77,11 @@
   --ct-chart-blue: #7956bd;
 }
 :root[data-palette="violet"][data-theme="dark"] {
-  --ct-bg: #17131f;
-  --ct-surface: #231e30;
-  --ct-surface-2: #2d273e;
-  --ct-line: #473b5b;
-  --ct-line-strong: #827098;
-  --ct-ink: #eee7f8;
-  --ct-ink-2: #d1c2e2;
-  --ct-ink-3: #b5a3c9;
+  --ct-bg: #19171d;
+  --ct-surface: #232027;
+  --ct-surface-2: #2d2932;
+  --ct-line: #3d3743;
+  --ct-line-strong: #756b80;
   --ct-accent: #c8a7f5;
   --ct-accent-weak: #3e2f55;
   --ct-primary-solid: #7952b8;

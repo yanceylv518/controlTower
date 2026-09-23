@@ -17,6 +17,12 @@ for (const name of ['graphite', 'jade', 'violet']) {
     palettes[`${name}-${mode}`] = { ...palettes[mode], ...tokens(block), ...shared }
   }
 }
+const importedPresets = readFileSync(new URL('../src/newapi-palettes.css', import.meta.url), 'utf8')
+const presetNames = []
+for (const m of importedPresets.matchAll(/:root\[data-palette="([^"]+)"\]\[data-theme="(light|dark)"\]\s*\{([^}]+)\}/g)) {
+  palettes[`${m[1]}-${m[2]}`] = { ...palettes[m[2]], ...tokens(m[3]) }
+  if(m[2]==='light')presetNames.push(m[1])
+}
 function luminance(hex) {
   const a = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255).map(v => v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4)
   return a[0] * .2126 + a[1] * .7152 + a[2] * .0722
@@ -129,10 +135,10 @@ test('palette is independent, persisted, cross-tab synchronized and invalidation
   h.api.setPalette('invalid')
   assert.equal(h.root.dataset.palette, 'violet')
   h.events.storage({ key: 'ct.theme.palette', newValue: null })
-  assert.equal(state.themeSignature.value, 'light:blue:system')
+  assert.equal(state.themeSignature.value, 'light:default:system')
   h.events.storage({ key: null, newValue: null })
   assert.equal(state.preference.value, 'system')
-  assert.equal(state.palette.value, 'blue')
+  assert.equal(state.palette.value, 'default')
   const blocked = harness(null, true, true)
   blocked.api.initializeTheme(); blocked.api.setPalette('violet')
   assert.equal(blocked.root.dataset.palette, 'violet')
@@ -175,4 +181,21 @@ test('hashed avatars retain identity backgrounds with white initials', () => {
     assert.equal(style.color, '#ffffff')
     assert.match(style.backgroundColor, /^hsl\(\d+ \d+% \d+%\)$/)
   }
+})
+
+test('all ten presets persist and match first paint in both modes', () => {
+ assert.equal(presetNames.length,10)
+ const script=readFileSync(new URL('../public/theme-init.js',import.meta.url),'utf8')
+ for(const name of presetNames)for(const dark of [false,true]) {
+  const h=harness('system',dark,false,name)
+  const pre={dataset:{},style:{},classList:{toggle(){}}}
+  vm.runInNewContext(script,{document:{documentElement:pre},localStorage:h.localStorage,matchMedia:()=>({matches:dark})})
+  h.api.initializeTheme()
+  assert.equal(h.root.dataset.palette,name)
+  assert.equal(pre.dataset.palette,name)
+  assert.equal(pre.dataset.theme,h.root.dataset.theme)
+  assert.equal(pre.style.backgroundColor,palettes[`${name}-${dark?'dark':'light'}`].bg)
+  h.api.setPalette(name)
+  assert.equal(h.localStorage.getItem('ct.theme.palette'),name)
+ }
 })

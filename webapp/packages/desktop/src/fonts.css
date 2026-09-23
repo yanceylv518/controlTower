@@ -1,5 +1,5 @@
 :root {
-  --ct-font-system: -apple-system, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", "Segoe UI", sans-serif;
+  --ct-font-system: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif;
   --ct-font-yahei: "Microsoft YaHei", "Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC", sans-serif;
   --ct-font-dengxian: "DengXian", "等线", "Microsoft YaHei", "PingFang SC", sans-serif;
   --ct-font-simsun: "SimSun", "宋体", "Songti SC", "Noto Serif CJK SC", serif;

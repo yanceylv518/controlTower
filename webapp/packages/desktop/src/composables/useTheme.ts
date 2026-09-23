@@ -1,19 +1,81 @@
 import { computed, readonly, ref } from 'vue'
 
 export type ThemePreference = 'light' | 'dark' | 'system'
-export type ThemePalette = 'blue' | 'graphite' | 'jade' | 'violet'
+export const themePresets = [
+  {
+    "value": "default",
+    "label": "默认",
+    "color": "#3ea4ec",
+    "surface": "#ffffff"
+  },
+  {
+    "value": "anthropic",
+    "label": "Anthropic · 暖米白",
+    "color": "#e37756",
+    "surface": "#fafaf7"
+  },
+  {
+    "value": "simple-large",
+    "label": "简约大字",
+    "color": "#1b1b1b",
+    "surface": "#fcfcfc"
+  },
+  {
+    "value": "underground",
+    "label": "地下花园",
+    "color": "#49785b",
+    "surface": "#ffffff"
+  },
+  {
+    "value": "rose-garden",
+    "label": "玫瑰花园",
+    "color": "#e60053",
+    "surface": "#ffffff"
+  },
+  {
+    "value": "lake-view",
+    "label": "湖光",
+    "color": "#00d492",
+    "surface": "#ffffff"
+  },
+  {
+    "value": "sunset-glow",
+    "label": "落日余晖",
+    "color": "#cb3435",
+    "surface": "#ffffff"
+  },
+  {
+    "value": "forest-whisper",
+    "label": "森林低语",
+    "color": "#007f70",
+    "surface": "#ffffff"
+  },
+  {
+    "value": "ocean-breeze",
+    "label": "海洋微风",
+    "color": "#2563eb",
+    "surface": "#ffffff"
+  },
+  {
+    "value": "lavender-dream",
+    "label": "薰衣草之梦",
+    "color": "#9453c9",
+    "surface": "#ffffff"
+  }
+] as const
+export type ThemePalette = (typeof themePresets)[number]['value'] | 'blue' | 'graphite' | 'jade' | 'violet'
 export type ThemeFont = 'system' | 'yahei' | 'dengxian' | 'simsun'
 const fontKey = 'ct.theme.font'
 const font = ref<ThemeFont>('system')
 const key = 'ct.theme'
 const paletteKey = 'ct.theme.palette'
-const palette = ref<ThemePalette>('blue')
+const palette = ref<ThemePalette>('default')
 const preference = ref<ThemePreference>('system')
 const resolved = ref<'light' | 'dark'>('light')
 let media: MediaQueryList | undefined
 let initialized = false
 const valid = (value: unknown): value is ThemePreference => value === 'light' || value === 'dark' || value === 'system'
-const validPalette = (value: unknown): value is ThemePalette => ['blue', 'graphite', 'jade', 'violet'].includes(String(value))
+const validPalette = (value: unknown): value is ThemePalette => [...themePresets.map(p => p.value), 'blue', 'graphite', 'jade', 'violet'].includes(String(value))
 const validFont = (value: unknown): value is ThemeFont => ['system', 'yahei', 'dengxian', 'simsun'].includes(String(value))
 const signature = computed(() => `${resolved.value}:${palette.value}:${font.value}`)
 
@@ -44,7 +106,7 @@ export function initializeTheme() {
   window.addEventListener('storage', event => {
     if (event.key !== key && event.key !== paletteKey && event.key !== fontKey && event.key !== null) return
     if (event.key === key || event.key === null) preference.value = valid(event.newValue) ? event.newValue : 'system'
-    if (event.key === paletteKey || event.key === null) palette.value = validPalette(event.newValue) ? event.newValue : 'blue'
+    if (event.key === paletteKey || event.key === null) palette.value = validPalette(event.newValue) ? event.newValue : 'default'
     if (event.key === fontKey || event.key === null) font.value = validFont(event.newValue) ? event.newValue : 'system'
     apply()
   })

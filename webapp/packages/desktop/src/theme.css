@@ -1,13 +1,14 @@
 /* Semantic colors: text and solid controls deliberately use separate tokens. */
 :root {
-  --ct-bg: #f2f4f8;
+  --ct-bg: #f3f5f8;
   --ct-surface: #ffffff;
-  --ct-surface-2: #f6f8fb;
-  --ct-line: #dfe5ee;
+  --ct-surface-2: #f7f8fa;
+  --ct-line: #e2e5ea;
   --ct-line-strong: #b8c3d3;
-  --ct-ink: #202c3e;
-  --ct-ink-2: #4c5e75;
-  --ct-ink-3: #5c6d84;
+  /* All palettes share neutral text: color belongs to actions and status. */
+  --ct-ink: #22262e;
+  --ct-ink-2: #484f5b;
+  --ct-ink-3: #646c78;
   --ct-accent: #2859ca;
   --ct-primary: var(--ct-accent);
   --ct-accent-weak: #eaf0fd;
@@ -42,14 +43,14 @@
 }
 
 :root[data-theme="dark"] {
-  --ct-bg: #101722;
-  --ct-surface: #192332;
-  --ct-surface-2: #202d3f;
-  --ct-line: #324259;
-  --ct-line-strong: #627690;
-  --ct-ink: #e5ecf6;
-  --ct-ink-2: #bfccde;
-  --ct-ink-3: #9daec5;
+  --ct-bg: #14181f;
+  --ct-surface: #1c222b;
+  --ct-surface-2: #252c36;
+  --ct-line: #343c47;
+  --ct-line-strong: #657080;
+  --ct-ink: #eef0f3;
+  --ct-ink-2: #c8cbd1;
+  --ct-ink-3: #a1a6af;
   --ct-accent: #8db4ff;
   --ct-accent-weak: #243957;
   --ct-ok: #6ed7a6;

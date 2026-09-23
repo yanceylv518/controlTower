@@ -96,17 +96,17 @@ function applyFilters() {
 .mobile-filter-actions .compact-date-range { grid-column:1 / -1;min-width:0; }
 .mobile-filter-actions :deep(.compact-date-trigger) { height:36px;padding-right:8px;font-size:13px; }
 .mobile-filter-actions .el-button { margin:0;padding:8px; }
-.filter-count { display:inline-grid;place-items:center;min-width:18px;height:18px;margin-left:4px;border-radius:9px;background:#edf2ff;color:#315edb; }
+.filter-count { display:inline-grid;place-items:center;min-width:18px;height:18px;margin-left:4px;border-radius:9px;background:var(--ct-accent-weak);color:var(--ct-accent); }
 .mobile-sheet-footer { display:grid;grid-template-columns:1fr 2fr;gap:12px; }
 .mobile-sheet-footer .el-button { margin:0;min-height:36px; }
 </style>
 <style>
 .mobile-log-filter-sheet { max-height:calc(100dvh - 24px);border-radius:18px 18px 0 0; }
-.mobile-log-filter-sheet .el-drawer__header { margin:0;padding:20px;color:#202b3d;font-weight:600; }
+.mobile-log-filter-sheet .el-drawer__header { margin:0;padding:20px;color:var(--ct-ink);font-weight:600; }
 .mobile-log-filter-sheet .el-drawer__close-btn { min-width:44px;min-height:44px; }
 .mobile-log-filter-sheet .el-drawer__body { padding:0 20px;overflow-y:auto; }
 .mobile-log-filter-sheet .el-form-item { margin-bottom:16px; }
 .mobile-log-filter-sheet .el-input__wrapper,.mobile-log-filter-sheet .el-select__wrapper { min-height:36px; }
 .mobile-log-filter-sheet .el-input__inner { font-size:14px; }
-.mobile-log-filter-sheet .el-drawer__footer { border-top:1px solid #e5e9f0;padding:12px 20px calc(12px + env(safe-area-inset-bottom)); }
+.mobile-log-filter-sheet .el-drawer__footer { border-top:1px solid var(--ct-line);padding:12px 20px calc(12px + env(safe-area-inset-bottom)); }
 </style>

@@ -105,13 +105,13 @@ test('readonly logs places type selector before sensitive toggle', () => {
   assert.doesNotMatch(source.match(/<div class="primary-filters"[^>]*>([\s\S]*?)<\/div>/)?.[1] || '', /filter-type/)
 })
 
-// 回归保护：日期控件的独立重置只修改时间，不清空其他筛选条件。
-test('readonly logs keeps an isolated time reset action', () => {
+// 回归保护：日期控件的独立重置只修改时间草稿，不查询或清空其他筛选条件。
+test('readonly logs time reset only restores the draft range', () => {
   const reset = source.match(/const resetTime = \(\) => \{([\s\S]*?)\n\}/)?.[1] || ''
   assert.match(source, /const resetTime = \(\) =>/)
   assert.match(reset, /timeRange\.value = defaultTimeRange\(\)/)
   assert.match(reset, /resetRange\.value = \[/)
-  assert.match(reset, /refreshSearch\(\)/)
+  assert.doesNotMatch(reset, /refreshSearch\(\)/)
   for (const field of ['username', 'tokenName', 'modelName', 'group', 'requestID', 'upstreamRequestID', 'channelID', 'logType']) {
     assert.doesNotMatch(reset, new RegExp(`${field}\\.value\\s*=`))
   }
@@ -128,8 +128,8 @@ test('readonly logs keeps the full reset beside search', () => {
   assert.match(source, /'查询中' : backgroundRefreshing \? '更新中' : '查询'/)
 })
 
-// 回归保护：查询与两个重置入口必须复用后台刷新，避免旧列表被 v-loading 覆盖。
-test('readonly logs query and resets use a non-blocking refresh', () => {
+// 回归保护：查询与整组筛选重置复用后台刷新，避免旧列表被 v-loading 覆盖。
+test('readonly logs query and full reset use a non-blocking refresh', () => {
   assert.match(source, /const backgroundRefreshing = ref\(false\)/)
   assert.match(source, /const refreshSearch = async \(\) =>/)
   assert.match(source, /state\.refresh\(\)/)
