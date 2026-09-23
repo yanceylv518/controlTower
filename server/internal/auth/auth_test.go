@@ -1,10 +1,12 @@
 package auth
 
 import (
+	"controltower/server/internal/auditmeta"
 	"controltower/server/internal/ingest"
 	"controltower/server/internal/storage"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -129,6 +131,9 @@ func TestHandlerFlowsMeLogoutPasswordAndLock(t *testing.T) {
 	withCookie := func(method, path, body string) *http.Request {
 		r := httptest.NewRequest(method, path, strings.NewReader(body))
 		r.AddCookie(c)
+		if method != http.MethodGet {
+			r.Header.Set("X-Requested-With", "XMLHttpRequest")
+		}
 		return r
 	}
 	w := httptest.NewRecorder()
@@ -171,6 +176,133 @@ func TestHandlerFlowsMeLogoutPasswordAndLock(t *testing.T) {
 	}
 	if code := login("password2").Code; code != 429 {
 		t.Fatalf("locked login must return 429, got %d", code)
+	}
+}
+
+func TestPasswordChangeWritesNonSensitiveAudit(t *testing.T) {
+	m, store := setup(t)
+	_, session, err := m.Login("admin", "password1", time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := Handlers{M: m, Audit: store}
+	r := httptest.NewRequest(http.MethodPost, "/api/auth/password", strings.NewReader(`{"old_password":"password1","new_password":"password2"}`))
+	r.AddCookie(&http.Cookie{Name: "ct_session", Value: session.ID})
+	r.Header.Set("X-Requested-With", "XMLHttpRequest")
+	r = auditmeta.WithRequestMetadata(r, auditmeta.RequestMetadata{RequestID: "request-1", ActorType: "service_token", AuthMethod: "bearer"})
+	w := httptest.NewRecorder()
+	h.Password(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("password change failed: %d %s", w.Code, w.Body.String())
+	}
+
+	page, err := store.QueryOperationAudits(storage.OperationAuditQuery{Limit: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Total != 1 {
+		t.Fatalf("password change audit missing: %+v", page.Items)
+	}
+	item := page.Items[0]
+	if item.OperationType != "auth.password_change" || item.ActorID != "admin" || item.ActorType != "human" || item.ActorRole != "admin" {
+		t.Fatalf("password change audit context incomplete: %+v", item)
+	}
+	for _, secret := range []string{"password1", "password2"} {
+		if strings.Contains(item.BeforeSummary+item.AfterSummary, secret) {
+			t.Fatalf("password appeared in audit snapshot: %+v", item)
+		}
+	}
+}
+
+func TestLoginAttemptsAreBoundedAndExpire(t *testing.T) {
+	m, _ := setup(t)
+	now := time.Now().UTC()
+	for index := 0; index < maxTrackedLoginAttempts+1; index++ {
+		m.recordLoginFailure("tracked-"+strconv.Itoa(index), now)
+	}
+	if got := len(m.attempts); got > maxTrackedLoginAttempts {
+		t.Fatalf("login failure map exceeded limit: %d", got)
+	}
+	unknownManager, _ := setup(t)
+	if _, _, err := unknownManager.Login("unknown-user", "bad", now); err != ErrInvalid {
+		t.Fatalf("unknown user login: %v", err)
+	}
+	if len(unknownManager.attempts) != 0 {
+		t.Fatal("unknown usernames must not allocate login-attempt state")
+	}
+
+	lockedManager, _ := setup(t)
+	for index := 0; index < 5; index++ {
+		_, _, _ = lockedManager.Login("admin", "bad", now)
+	}
+	if _, _, err := lockedManager.Login("admin", "password1", now); err != ErrLocked {
+		t.Fatalf("expected locked login, got %v", err)
+	}
+	if _, _, err := lockedManager.Login("admin", "password1", now.Add(loginAttemptLockDuration)); err != nil {
+		t.Fatalf("login did not unlock after cooldown: %v", err)
+	}
+
+	// Stale failed names are removed on the next cleanup interval.
+	cleanupManager, _ := setup(t)
+	cleanupManager.recordLoginFailure("admin", now)
+	cleanupManager.mu.Lock()
+	cleanupManager.cleanupLoginAttemptsLocked(now.Add(loginAttemptRetention + loginAttemptCleanupEvery))
+	cleanupManager.mu.Unlock()
+	if _, exists := cleanupManager.attempts["admin"]; exists {
+		t.Fatal("expired username entry was retained")
+	}
+}
+
+func TestAuthHandlersRejectInvalidMethodCSRFAndOversizedBodies(t *testing.T) {
+	m, _ := setup(t)
+	h := Handlers{M: m}
+
+	methodResponse := httptest.NewRecorder()
+	h.Login(methodResponse, httptest.NewRequest(http.MethodGet, "/api/auth/login", nil))
+	if methodResponse.Code != http.StatusMethodNotAllowed || methodResponse.Header().Get("Allow") != http.MethodPost {
+		t.Fatalf("login method guard: status=%d allow=%q", methodResponse.Code, methodResponse.Header().Get("Allow"))
+	}
+
+	_, session, err := m.Login("admin", "password1", time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	passwordRequest := func(method, body string, csrf bool) *http.Request {
+		r := httptest.NewRequest(method, "/api/auth/password", strings.NewReader(body))
+		r.AddCookie(&http.Cookie{Name: "ct_session", Value: session.ID})
+		if csrf {
+			r.Header.Set("X-Requested-With", "XMLHttpRequest")
+		}
+		return r
+	}
+
+	response := httptest.NewRecorder()
+	h.Password(response, passwordRequest(http.MethodPost, `{"old_password":"password1","new_password":"password2"}`, false))
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("password change without CSRF marker: %d", response.Code)
+	}
+	response = httptest.NewRecorder()
+	h.Password(response, passwordRequest(http.MethodGet, "", true))
+	if response.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("password change with GET: %d", response.Code)
+	}
+	response = httptest.NewRecorder()
+	oversizedPasswordBody := `{"old_password":"password1","new_password":"password2"}` + strings.Repeat(" ", authRequestBodyLimit+1)
+	h.Password(response, passwordRequest(http.MethodPost, oversizedPasswordBody, true))
+	if response.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized password body: %d %s", response.Code, response.Body.String())
+	}
+
+	response = httptest.NewRecorder()
+	oversizedLoginBody := `{"username":"admin","password":"password1"}` + strings.Repeat(" ", authRequestBodyLimit+1)
+	h.Login(response, httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(oversizedLoginBody)))
+	if response.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized login body: %d %s", response.Code, response.Body.String())
+	}
+	response = httptest.NewRecorder()
+	h.Password(response, passwordRequest(http.MethodPost, `{"old_password":"password1","new_password":"password2"} {}`, true))
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("password body with trailing JSON: %d", response.Code)
 	}
 }
 
@@ -218,6 +350,7 @@ func TestViewerGateWhitelistMatrix(t *testing.T) {
 		{"GET", "/api/dashboard/metric-history?dimension_type=instance_user&instance_id=spoof", 200},
 		{"GET", "/api/dashboard/instances", 200},
 		{"GET", "/api/dashboard/menu-visibility", 200},
+		{"GET", "/api/dashboard/operation-audits", 403},
 		{"PUT", "/api/dashboard/menu-visibility", 403},
 		{"GET", "/api/dashboard/billing/summary?instance_id=spoof&month=2026-08", 403},
 		{"GET", "/api/dashboard/billing/detail?instance_id=spoof&user_id=7&month=2026-08", 403},
@@ -284,7 +417,7 @@ func TestViewerLoginWritesAudit(t *testing.T) {
 	if w.Code != 200 {
 		t.Fatalf("login failed: %d %s", w.Code, w.Body.String())
 	}
-	if len(rec.rows) != 1 || rec.rows[0].OperationType != "auth.viewer_login" || rec.rows[0].InstanceID != "site-a" {
+	if len(rec.rows) != 1 || rec.rows[0].OperationType != "auth.login" || rec.rows[0].InstanceID != "site-a" {
 		t.Fatalf("viewer login must be audited: %#v", rec.rows)
 	}
 }

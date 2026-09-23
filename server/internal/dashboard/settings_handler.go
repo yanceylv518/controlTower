@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"controltower/server/internal/auditmeta"
 	ctauth "controltower/server/internal/auth"
 	"controltower/server/internal/settings"
 	"controltower/server/internal/storage"
@@ -54,7 +55,7 @@ func (h SettingsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		h.Provider.Invalidate()
 		after, _ := h.Provider.Items()
-		if err := h.audit(actor, before, after); err != nil {
+		if err := h.audit(r, actor, before, after); err != nil {
 			writeDashboardError(w, 500, "audit_failed")
 			return
 		}
@@ -72,10 +73,16 @@ func (h SettingsHandler) respond(w http.ResponseWriter) {
 	}
 	writeDashboardJSON(w, 200, map[string]any{"items": items})
 }
-func (h SettingsHandler) audit(actor string, before, after map[string]settings.Item) error {
+func (h SettingsHandler) audit(r *http.Request, actor string, before, after map[string]settings.Item) error {
 	b, _ := json.Marshal(before)
 	a, _ := json.Marshal(after)
 	raw := make([]byte, 16)
 	_, _ = rand.Read(raw)
-	return h.Store.InsertOperationAudit(storage.OperationAudit{ID: hex.EncodeToString(raw), OperationType: "settings.update", TargetType: "system_settings", TargetID: "global", ActorID: actor, BeforeSummary: string(b), AfterSummary: string(a), Status: "succeeded", CreatedAt: time.Now().UTC()})
+	entry := storage.OperationAudit{ID: hex.EncodeToString(raw), OperationType: "settings.update", TargetType: "system_settings", TargetID: "global", ActorID: actor, BeforeSummary: string(b), AfterSummary: string(a), Status: "succeeded", CreatedAt: time.Now().UTC()}
+	auditmeta.Enrich(r, &entry)
+	if err := h.Store.InsertOperationAudit(entry); err != nil {
+		return err
+	}
+	auditmeta.MarkSemanticAudit(r)
+	return nil
 }

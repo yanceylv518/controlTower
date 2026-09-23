@@ -91,10 +91,10 @@ const nav = [
       ["/instances", "实例管理", Management],
       ["/log-archives", "日志归档", Document],
       ["/access-users", "账号管理", User],
+      ["/audits", "操作审计", Document],
       ["/models/manage", "模型广场", SetUp],
       ["/billing/upstreams", "上游管理", Connection],
       ["/settings", "系统设置", SetUp],
-      ["/audits", "操作审计", Document],
     ],
   },
 ] as const;

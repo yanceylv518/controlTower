@@ -18,6 +18,40 @@ import (
 	"controltower/server/internal/tuning"
 )
 
+func insertOperationAuditTx(tx *sql.Tx, value storage.OperationAudit) error {
+	value = storage.NormalizeOperationAudit(value)
+	if !storage.IsManualOperationAudit(value) {
+		return nil
+	}
+	_, err := tx.Exec(`INSERT INTO operation_audits
+(id,instance_id,operation_type,target_type,target_id,actor_id,actor_type,actor_role,source_component,trigger_type,request_id,correlation_id,client_ip,auth_method,http_method,route,http_status,error_summary,before_summary,after_summary,status,created_at,updated_at)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		value.ID, value.InstanceID, value.OperationType, value.TargetType, value.TargetID, value.ActorID,
+		value.ActorType, value.ActorRole, value.SourceComponent, value.TriggerType, value.RequestID,
+		value.CorrelationID, value.ClientIP, value.AuthMethod, value.HTTPMethod, value.Route,
+		value.HTTPStatus, value.ErrorSummary, value.BeforeSummary, value.AfterSummary, value.Status,
+		value.CreatedAt, value.UpdatedAt)
+	return err
+}
+
+func weightChangeAuditMetadata(rule, actor string, auditContext storage.OperationAudit) (string, string, string) {
+	verifiedHuman := auditContext.ActorType == "human" && auditContext.ActorRole == "admin" && (auditContext.AuthMethod == "session" || auditContext.AuthMethod == "web_session") && auditContext.TriggerType != "automatic"
+	if !verifiedHuman && (strings.HasPrefix(actor, "system:") || strings.HasPrefix(actor, "agent:")) {
+		return "tuning.auto_execute", "system", "automatic"
+	}
+	actorType := "human"
+	if !verifiedHuman && actor == "token" {
+		actorType = "service_token"
+	} else if actor == "" || actor == "unknown" || actor == "legacy-admin" {
+		actorType = "unknown"
+	}
+	operation := "tuning.manual_execute"
+	if rule == "base_priority_sync" {
+		operation = "tuning.base_priority_sync"
+	}
+	return operation, actorType, "manual"
+}
+
 func (s Store) GetPolicy(id string) (tuning.PolicyRecord, bool, error) {
 	var r tuning.PolicyRecord
 	var raw string
@@ -73,16 +107,32 @@ WHERE b.instance_id=? AND b.model_name<>'' AND LOWER(c.status) IN ('enabled','en
 }
 
 func (s Store) SaveChannelBaseValues(instanceID, actor string, values []tuning.ChannelBaseValue, now time.Time) error {
+	return s.SaveChannelBaseValuesWithAudit(instanceID, actor, values, now, storage.OperationAudit{})
+}
+
+func (s Store) SaveChannelBaseValuesWithAudit(instanceID, actor string, values []tuning.ChannelBaseValue, now time.Time, auditContext storage.OperationAudit) error {
 	tx, err := s.db.BeginTx(context.Background(), nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 	for _, v := range values {
+		var beforeModel sql.NullString
 		var beforeWeight, beforePriority, beforeMaxRPM, beforeMaxTPM sql.NullInt64
-		_ = tx.QueryRow(`SELECT base_weight,base_priority,max_rpm,max_tpm FROM channel_base_values WHERE instance_id=? AND channel_id=?`, instanceID, v.ChannelID).Scan(&beforeWeight, &beforePriority, &beforeMaxRPM, &beforeMaxTPM)
+		err = tx.QueryRow(`SELECT model_name,base_weight,base_priority,max_rpm,max_tpm FROM channel_base_values WHERE instance_id=? AND channel_id=? FOR UPDATE`, instanceID, v.ChannelID).Scan(&beforeModel, &beforeWeight, &beforePriority, &beforeMaxRPM, &beforeMaxTPM)
+		exists := err == nil
+		if err != nil && err != sql.ErrNoRows {
+			return err
+		}
+		if exists && beforeModel.String == v.ModelName && beforeWeight.Int64 == v.BaseWeight && beforePriority.Int64 == v.BasePriority && beforeMaxRPM.Int64 == v.MaxRPM && beforeMaxTPM.Int64 == v.MaxTPM {
+			continue
+		}
 		if _, err = tx.Exec(`INSERT INTO channel_base_values(instance_id,channel_id,model_name,base_weight,base_priority,max_rpm,max_tpm,updated_at,updated_by) VALUES(?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE model_name=VALUES(model_name),base_weight=VALUES(base_weight),base_priority=VALUES(base_priority),max_rpm=VALUES(max_rpm),max_tpm=VALUES(max_tpm),updated_at=VALUES(updated_at),updated_by=VALUES(updated_by)`, instanceID, v.ChannelID, v.ModelName, v.BaseWeight, v.BasePriority, v.MaxRPM, v.MaxTPM, now, actor); err != nil {
 			return err
+		}
+		var beforeModelValue any
+		if beforeModel.Valid {
+			beforeModelValue = beforeModel.String
 		}
 		var beforeWeightValue, beforePriorityValue any
 		if beforeWeight.Valid {
@@ -98,10 +148,22 @@ func (s Store) SaveChannelBaseValues(instanceID, actor string, values []tuning.C
 		if beforeMaxTPM.Valid {
 			beforeMaxTPMValue = beforeMaxTPM.Int64
 		}
-		before, _ := json.Marshal(map[string]any{"weight": beforeWeightValue, "priority": beforePriorityValue, "max_rpm": beforeMaxRPMValue, "max_tpm": beforeMaxTPMValue})
+		before, _ := json.Marshal(map[string]any{"model": beforeModelValue, "weight": beforeWeightValue, "priority": beforePriorityValue, "max_rpm": beforeMaxRPMValue, "max_tpm": beforeMaxTPMValue})
 		after, _ := json.Marshal(map[string]any{"weight": v.BaseWeight, "priority": v.BasePriority, "max_rpm": v.MaxRPM, "max_tpm": v.MaxTPM, "model": v.ModelName})
 		id := fmt.Sprintf("tbase-%d-%d", now.UnixNano(), v.ChannelID)
-		if _, err = tx.Exec(`INSERT INTO operation_audits(id,instance_id,operation_type,target_type,target_id,actor_id,before_summary,after_summary,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, id, instanceID, "tuning.base_update", "channel", fmt.Sprint(v.ChannelID), actor, string(before), string(after), "success", now); err != nil {
+		audit := auditContext
+		audit.ID = id
+		audit.InstanceID = instanceID
+		audit.OperationType = "tuning.base_update"
+		audit.TargetType = "channel"
+		audit.TargetID = fmt.Sprint(v.ChannelID)
+		audit.ActorID = actor
+		audit.BeforeSummary = string(before)
+		audit.AfterSummary = string(after)
+		audit.Status = "succeeded"
+		audit.CreatedAt = now
+		audit.UpdatedAt = now
+		if err = insertOperationAuditTx(tx, audit); err != nil {
 			return err
 		}
 	}
@@ -373,6 +435,10 @@ func (s Store) PutContinuousState(v tuning.ContinuousState) error {
 }
 
 func (s Store) CreateContinuousWeightChange(v tuning.Recommendation, actor string, now time.Time) (string, error) {
+	return s.CreateContinuousWeightChangeWithAudit(v, actor, now, storage.OperationAudit{})
+}
+
+func (s Store) CreateContinuousWeightChangeWithAudit(v tuning.Recommendation, actor string, now time.Time, auditContext storage.OperationAudit) (string, error) {
 	if err := s.CheckPrioritySync(v); err != nil {
 		return "", err
 	}
@@ -405,12 +471,29 @@ func (s Store) CreateContinuousWeightChange(v tuning.Recommendation, actor strin
 		return "", err
 	}
 	before := fmt.Sprintf(`{"weight":%d}`, v.CurrentWeight)
-	after := fmt.Sprintf(`{"weight":%d,"command_id":%q}`, v.ProposedWeight, commandID)
+	after := fmt.Sprintf(`{"weight":%d,"command_id":%q,"rule":%q,"evidence":%s}`, v.ProposedWeight, commandID, v.Rule, ev)
 	if v.Rule == "base_priority_sync" {
 		before = fmt.Sprintf(`{"priority":%d}`, *v.CurrentPriority)
-		after = fmt.Sprintf(`{"priority":%d,"command_id":%q}`, *v.ProposedPriority, commandID)
+		after = fmt.Sprintf(`{"priority":%d,"command_id":%q,"rule":%q,"evidence":%s}`, *v.ProposedPriority, commandID, v.Rule, ev)
 	}
-	if _, err = tx.Exec(`INSERT INTO operation_audits(id,instance_id,operation_type,target_type,target_id,actor_id,before_summary,after_summary,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, commandID, v.InstanceID, "tuning.auto_execute", "channel", fmt.Sprint(v.ChannelID), actor, before, after, "success", now); err != nil {
+	operation, actorType, trigger := weightChangeAuditMetadata(v.Rule, actor, auditContext)
+	audit := auditContext
+	audit.ID = commandID
+	audit.InstanceID = v.InstanceID
+	audit.OperationType = operation
+	audit.TargetType = "channel"
+	audit.TargetID = fmt.Sprint(v.ChannelID)
+	audit.ActorID = actor
+	audit.ActorType = actorType
+	audit.SourceComponent = "tuning"
+	audit.TriggerType = trigger
+	audit.CorrelationID = commandID
+	audit.BeforeSummary = before
+	audit.AfterSummary = after
+	audit.Status = "submitted"
+	audit.CreatedAt = now
+	audit.UpdatedAt = now
+	if err = insertOperationAuditTx(tx, audit); err != nil {
 		return "", err
 	}
 	return commandID, tx.Commit()
@@ -447,6 +530,10 @@ func (s Store) CreateContinuousProbe(v tuning.Recommendation, model string, coun
 // server already executed against new-api: the recommendation row, a terminal
 // channel_commands row (never delivered to an agent), and the audit entry.
 func (s Store) RecordDirectWeightChange(v tuning.Recommendation, actor string, now time.Time) (string, error) {
+	return s.RecordDirectWeightChangeWithAudit(v, actor, now, storage.OperationAudit{})
+}
+
+func (s Store) RecordDirectWeightChangeWithAudit(v tuning.Recommendation, actor string, now time.Time, auditContext storage.OperationAudit) (string, error) {
 	if v.Rule == "base_priority_sync" && (v.CurrentPriority == nil || v.ProposedPriority == nil) {
 		return "", fmt.Errorf("base priority sync requires current and proposed priority")
 	}
@@ -481,7 +568,24 @@ func (s Store) RecordDirectWeightChange(v tuning.Recommendation, actor string, n
 		before = fmt.Sprintf(`{"priority":%d}`, *v.CurrentPriority)
 		after = fmt.Sprintf(`{"priority":%d,"command_id":%q,"direct":true}`, *v.ProposedPriority, commandID)
 	}
-	if _, err = tx.Exec(`INSERT INTO operation_audits(id,instance_id,operation_type,target_type,target_id,actor_id,before_summary,after_summary,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, commandID, v.InstanceID, "tuning.auto_execute", "channel", fmt.Sprint(v.ChannelID), actor, before, after, "success", now); err != nil {
+	operation, actorType, trigger := weightChangeAuditMetadata(v.Rule, actor, auditContext)
+	audit := auditContext
+	audit.ID = commandID
+	audit.InstanceID = v.InstanceID
+	audit.OperationType = operation
+	audit.TargetType = "channel"
+	audit.TargetID = fmt.Sprint(v.ChannelID)
+	audit.ActorID = actor
+	audit.ActorType = actorType
+	audit.SourceComponent = "tuning"
+	audit.TriggerType = trigger
+	audit.CorrelationID = commandID
+	audit.BeforeSummary = before
+	audit.AfterSummary = after
+	audit.Status = "succeeded"
+	audit.CreatedAt = now
+	audit.UpdatedAt = now
+	if err = insertOperationAuditTx(tx, audit); err != nil {
 		return "", err
 	}
 	return commandID, tx.Commit()
@@ -506,7 +610,7 @@ func (s Store) RecordDirectChannelGroupChange(siteID string, channelID int64, ac
 	}
 	beforeSummary, _ := json.Marshal(map[string]string{"group": before})
 	afterSummary, _ := json.Marshal(map[string]any{"group": after, "direct": true})
-	if _, err = tx.Exec(`INSERT INTO operation_audits(id,instance_id,operation_type,target_type,target_id,actor_id,before_summary,after_summary,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, command.ID, siteID, "channel.update", "channel", fmt.Sprint(channelID), actor, string(beforeSummary), string(afterSummary), "success", now); err != nil {
+	if err = insertOperationAuditTx(tx, storage.OperationAudit{ID: command.ID, InstanceID: siteID, OperationType: "channel.update", TargetType: "channel", TargetID: fmt.Sprint(channelID), ActorID: actor, CorrelationID: command.ID, BeforeSummary: string(beforeSummary), AfterSummary: string(afterSummary), Status: "succeeded", CreatedAt: now, UpdatedAt: now}); err != nil {
 		return storage.ChannelCommand{}, err
 	}
 	if err = tx.Commit(); err != nil {

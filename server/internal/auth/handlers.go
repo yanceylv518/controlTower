@@ -2,9 +2,12 @@ package auth
 
 import (
 	"context"
+	"controltower/server/internal/auditmeta"
 	"controltower/server/internal/storage"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
+	"io"
 	"net"
 	"net/http"
 	"strconv"
@@ -15,6 +18,15 @@ import (
 
 type actorKey struct{}
 type userKey struct{}
+
+const (
+	authRequestBodyLimit    = 8 << 10
+	accountRequestBodyLimit = 64 << 10
+	maxLoginIPEntries       = 8192
+	maxLoginAttemptsPerIP   = 10
+	loginIPAttemptWindow    = time.Minute
+	loginIPCleanupInterval  = time.Minute
+)
 
 func Actor(r *http.Request) string { v, _ := r.Context().Value(actorKey{}).(string); return v }
 func withActor(r *http.Request, v string) *http.Request {
@@ -31,18 +43,16 @@ func withUser(r *http.Request, u storage.User) *http.Request {
 type Handlers struct {
 	M       *Manager
 	Limiter *IPLimiter
-	// Audit receives viewer login events. Viewer accounts exist to give
-	// outsiders a window into customer data, so their sign-ins are part of
-	// the operation record (B1 spec item, delivered with B2).
-	Audit interface {
+	Audit   interface {
 		InsertOperationAudit(storage.OperationAudit) error
 	}
 }
 
 type IPLimiter struct {
-	mu      sync.Mutex
-	entries map[string][]time.Time
-	now     func() time.Time
+	mu          sync.Mutex
+	entries     map[string][]time.Time
+	now         func() time.Time
+	nextCleanup time.Time
 }
 
 func NewIPLimiter() *IPLimiter { return &IPLimiter{entries: map[string][]time.Time{}, now: time.Now} }
@@ -53,26 +63,78 @@ func (l *IPLimiter) Allow(ip string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.now().UTC()
-	cutoff := now.Add(-time.Minute)
-	items := l.entries[ip][:0]
-	for _, t := range l.entries[ip] {
-		if t.After(cutoff) {
-			items = append(items, t)
+	cutoff := now.Add(-loginIPAttemptWindow)
+	if l.nextCleanup.IsZero() || !now.Before(l.nextCleanup) {
+		l.pruneExpired(cutoff)
+		l.nextCleanup = now.Add(loginIPCleanupInterval)
+	}
+	items, exists := l.entries[ip]
+	items = pruneLoginIPAttempts(items, cutoff)
+	if exists {
+		if len(items) == 0 {
+			delete(l.entries, ip)
+		} else {
+			l.entries[ip] = items
 		}
 	}
-	if len(items) >= 10 {
-		l.entries[ip] = items
+	if len(items) >= maxLoginAttemptsPerIP {
+		return false
+	}
+	if !exists && len(l.entries) >= maxLoginIPEntries {
+		// 表满时拒绝新来源，避免请求来源不断变化导致限流状态无上限增长。
 		return false
 	}
 	l.entries[ip] = append(items, now)
-	if len(l.entries) > 1000 {
-		for key, v := range l.entries {
-			if len(v) == 0 || !v[len(v)-1].After(cutoff) {
-				delete(l.entries, key)
-			}
+	return true
+}
+
+func (l *IPLimiter) pruneExpired(cutoff time.Time) {
+	for ip, attempts := range l.entries {
+		attempts = pruneLoginIPAttempts(attempts, cutoff)
+		if len(attempts) == 0 {
+			delete(l.entries, ip)
+		} else {
+			l.entries[ip] = attempts
 		}
 	}
-	return true
+}
+
+func pruneLoginIPAttempts(attempts []time.Time, cutoff time.Time) []time.Time {
+	kept := attempts[:0]
+	for _, timestamp := range attempts {
+		if timestamp.After(cutoff) {
+			kept = append(kept, timestamp)
+		}
+	}
+	return kept
+}
+
+func decodeAuthBody(w http.ResponseWriter, r *http.Request, value any, limit int64) error {
+	if r.Body == nil {
+		r.Body = http.NoBody
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
+	decoder := json.NewDecoder(r.Body)
+	if err := decoder.Decode(value); err != nil {
+		return err
+	}
+	var trailing json.RawMessage
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return errors.New("multiple JSON values")
+		}
+		return err
+	}
+	return nil
+}
+
+func writeAuthDecodeError(w http.ResponseWriter, err error) {
+	var maxBytesError *http.MaxBytesError
+	if errors.As(err, &maxBytesError) {
+		write(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "request_too_large"})
+		return
+	}
+	write(w, http.StatusBadRequest, map[string]string{"error": "invalid_request"})
 }
 func clientIP(r *http.Request) string {
 	host, _, e := net.SplitHostPort(r.RemoteAddr)
@@ -87,6 +149,12 @@ func write(w http.ResponseWriter, s int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 func (h Handlers) Login(w http.ResponseWriter, r *http.Request) {
+	auditmeta.SetActor(r, "unknown", "human", "", "session")
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		write(w, http.StatusMethodNotAllowed, map[string]string{"error": "method_not_allowed"})
+		return
+	}
 	if h.M == nil {
 		write(w, http.StatusServiceUnavailable, map[string]string{"error": "auth_unavailable"})
 		return
@@ -99,8 +167,8 @@ func (h Handlers) Login(w http.ResponseWriter, r *http.Request) {
 		Username string `json:"username"`
 		Password string `json:"password"`
 	}
-	if r.Method != http.MethodPost || json.NewDecoder(r.Body).Decode(&q) != nil {
-		write(w, 401, map[string]string{"error": "invalid_credentials"})
+	if err := decodeAuthBody(w, r, &q, authRequestBodyLimit); err != nil {
+		writeAuthDecodeError(w, err)
 		return
 	}
 	u, s, e := h.M.Login(q.Username, q.Password, time.Now().UTC())
@@ -112,25 +180,39 @@ func (h Handlers) Login(w http.ResponseWriter, r *http.Request) {
 		write(w, 401, map[string]string{"error": "invalid_credentials"})
 		return
 	}
-	if h.Audit != nil && u.Role == "viewer" {
-		summary, _ := json.Marshal(map[string]any{"role": u.Role, "scope_site": u.ScopeSite, "ip": clientIP(r)})
-		_ = h.Audit.InsertOperationAudit(storage.OperationAudit{
-			ID: "login-" + s.ID, InstanceID: u.ScopeSite, OperationType: "auth.viewer_login",
-			TargetType: "user", TargetID: u.Username, ActorID: u.Username,
-			AfterSummary: string(summary), Status: "success", CreatedAt: time.Now().UTC(),
-		})
+	auditmeta.SetActor(r, u.Username, "human", u.Role, "session")
+	if err := h.sessionAudit(r, u, "auth.login"); err != nil {
+		_ = h.M.Logout(s.ID)
+		write(w, http.StatusServiceUnavailable, map[string]string{"error": "audit_failed"})
+		return
 	}
 	// Secure is intentionally not set: TLS terminates at the reverse proxy.
 	http.SetCookie(w, &http.Cookie{Name: "ct_session", Value: s.ID, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: int(h.M.TTL().Seconds())})
 	write(w, 200, userResponse(u))
 }
 func (h Handlers) Logout(w http.ResponseWriter, r *http.Request) {
+	auditmeta.SetActor(r, "unknown", "human", "", "session")
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		write(w, http.StatusMethodNotAllowed, map[string]string{"error": "method_not_allowed"})
+		return
+	}
 	if h.M == nil {
 		write(w, http.StatusServiceUnavailable, map[string]string{"error": "auth_unavailable"})
 		return
 	}
-	if c, e := r.Cookie("ct_session"); e == nil {
-		_ = h.M.Logout(c.Value)
+	u, c, ok := h.current(r)
+	if c != nil {
+		if err := h.M.Logout(c.Value); err != nil {
+			write(w, http.StatusInternalServerError, map[string]string{"error": "logout_failed"})
+			return
+		}
+	}
+	if ok {
+		if err := h.sessionAudit(r, u, "auth.logout"); err != nil {
+			write(w, http.StatusServiceUnavailable, map[string]string{"error": "audit_failed"})
+			return
+		}
 	}
 	http.SetCookie(w, &http.Cookie{Name: "ct_session", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode})
 	write(w, 200, map[string]bool{"ok": true})
@@ -144,6 +226,9 @@ func (h Handlers) current(r *http.Request) (storage.User, *http.Cookie, bool) {
 		return storage.User{}, nil, false
 	}
 	u, ok := h.M.Validate(c.Value, time.Now().UTC())
+	if ok {
+		auditmeta.SetActor(r, u.Username, "human", u.Role, "session")
+	}
 	return u, c, ok
 }
 func (h Handlers) Me(w http.ResponseWriter, r *http.Request) {
@@ -167,12 +252,12 @@ type userResponseDTO struct {
 }
 
 func userResponse(u storage.User) userResponseDTO {
-	permissions := ExpandPermissions(u.Permissions)
-	if storage.IsFullAdmin(u) {
-		permissions = []string{"*"}
-	}
-	if permissions == nil {
-		permissions = []string{}
+	permissions := []string{}
+	if u.Role == "admin" {
+		permissions = ExpandPermissions(u.Permissions)
+		if storage.IsFullAdmin(u) {
+			permissions = []string{"*"}
+		}
 	}
 	return userResponseDTO{u.ID, u.Username, u.Role, u.ScopeSite, u.ScopeUserIDs, u.Enabled, u.DisplayName, permissions}
 }
@@ -206,8 +291,8 @@ func (h Handlers) Users(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var q AccountInput
-		if json.NewDecoder(r.Body).Decode(&q) != nil {
-			write(w, 400, map[string]string{"error": "invalid_user"})
+		if err := decodeAuthBody(w, r, &q, accountRequestBodyLimit); err != nil {
+			writeAuthDecodeError(w, err)
 			return
 		}
 		created, err := h.M.CreateAccount(u.ID, q, time.Now().UTC())
@@ -219,6 +304,7 @@ func (h Handlers) Users(w http.ResponseWriter, r *http.Request) {
 		write(w, 201, map[string]bool{"ok": true})
 		return
 	}
+	w.Header().Set("Allow", "GET, POST")
 	write(w, 405, map[string]string{"error": "method_not_allowed"})
 }
 func (h Handlers) User(w http.ResponseWriter, r *http.Request) {
@@ -231,6 +317,11 @@ func (h Handlers) User(w http.ResponseWriter, r *http.Request) {
 		write(w, 403, map[string]string{"error": "forbidden"})
 		return
 	}
+	if r.Method != http.MethodPut {
+		w.Header().Set("Allow", http.MethodPut)
+		write(w, http.StatusMethodNotAllowed, map[string]string{"error": "method_not_allowed"})
+		return
+	}
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil || id == u.ID {
 		write(w, 400, map[string]string{"error": "invalid_user"})
@@ -241,8 +332,8 @@ func (h Handlers) User(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var q AccountInput
-	if r.Method != http.MethodPut || json.NewDecoder(r.Body).Decode(&q) != nil {
-		write(w, 400, map[string]string{"error": "invalid_user"})
+	if err := decodeAuthBody(w, r, &q, accountRequestBodyLimit); err != nil {
+		writeAuthDecodeError(w, err)
 		return
 	}
 	before, after, err := h.M.UpdateAccount(u.ID, id, q, time.Now().UTC())
@@ -254,20 +345,38 @@ func (h Handlers) User(w http.ResponseWriter, r *http.Request) {
 	write(w, 200, map[string]bool{"ok": true})
 }
 func (h Handlers) Password(w http.ResponseWriter, r *http.Request) {
+	auditmeta.SetActor(r, "unknown", "human", "", "session")
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		write(w, http.StatusMethodNotAllowed, map[string]string{"error": "method_not_allowed"})
+		return
+	}
+	if h.M == nil {
+		write(w, http.StatusServiceUnavailable, map[string]string{"error": "auth_unavailable"})
+		return
+	}
 	u, c, ok := h.current(r)
 	if !ok {
 		write(w, 401, map[string]string{"error": "unauthorized"})
+		return
+	}
+	if r.Header.Get("X-Requested-With") != "XMLHttpRequest" {
+		write(w, http.StatusForbidden, map[string]string{"error": "csrf"})
 		return
 	}
 	var q struct {
 		Old string `json:"old_password"`
 		New string `json:"new_password"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&q)
+	if err := decodeAuthBody(w, r, &q, authRequestBodyLimit); err != nil {
+		writeAuthDecodeError(w, err)
+		return
+	}
 	if h.M.ChangePassword(u.ID, q.Old, q.New, time.Now().UTC()) != nil {
 		write(w, 401, map[string]string{"error": "invalid_credentials"})
 		return
 	}
+	h.passwordAudit(r, u)
 	_ = h.M.Logout(c.Value)
 	write(w, 200, map[string]bool{"ok": true})
 }

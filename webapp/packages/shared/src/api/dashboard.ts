@@ -274,14 +274,30 @@ export interface ChannelCommandItem {
   created_at: string;
 }
 export interface OperationAuditItem {
+  id: string;
   instance_id: string;
   instance_name: string;
   operation_type: string;
   target_type: string;
   target_id: string;
   actor_id: string;
+  actor_type: string;
+  actor_role: string;
+  source_component: string;
+  trigger_type: string;
+  request_id: string;
+  correlation_id: string;
+  client_ip: string;
+  auth_method: string;
+  http_method: string;
+  route: string;
+  http_status: number;
+  error_summary: string;
+  before_summary: string;
   after_summary: string;
+  status: string;
   created_at: string;
+  updated_at: string;
 }
 export interface NginxTimingBucket {
   bucket_at: string;
@@ -896,10 +912,12 @@ export const dashboardApi = (client: ApiClient) => ({
       `/api/dashboard/channel-commands${query(params)}`,
     ),
   operationAudits: (
-    params: { instance_id?: string; limit?: number; offset?: number } = {},
+    params: { actor_exact?: boolean; actor_options?: boolean; instance_id?: string; site_id?: string; operation_type?: string; actor?: string; status?: string; source?: string; trigger?: string; q?: string; request_id?: string; correlation_id?: string; from?: string; to?: string; limit?: number; offset?: number } = {},
+    signal?: AbortSignal,
   ) =>
-    client.request<ListResponse<OperationAuditItem>>(
+    client.request<ListResponse<OperationAuditItem> & { total: number; operation_types: string[]; actors: string[] }>(
       `/api/dashboard/operation-audits${query(params)}`,
+      { signal },
     ),
   tuningGroupPresets: (site_id: string) => client.request<ChannelGroupPresets>(`/api/dashboard/tuning/group-presets${query({ site_id })}`),
   saveTuningGroupPresets: (site_id: string, value: ChannelGroupPresets) => client.request<ChannelGroupPresets>(`/api/dashboard/tuning/group-presets${query({ site_id })}`, { method: "PUT", body: JSON.stringify(value) }),

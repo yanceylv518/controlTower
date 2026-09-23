@@ -823,8 +823,8 @@ async function sync(kind: "weight" | "priority") {
     ElMessage.success("基础值已从 new-api 更新并保存");
   } finally { saving.value = false; }
 }
-async function runAutoPreflight() {
-  const newlyAutoModels = Object.entries(policy.dispatch_modes)
+async function runAutoPreflight(targetPolicy: TuningPolicy = policy) {
+  const newlyAutoModels = Object.entries(targetPolicy.dispatch_modes)
     .filter(([model, nextMode]) => nextMode === "auto" && savedPolicy.value?.dispatch_modes?.[model] !== "auto")
     .map(([model]) => model);
   if (!newlyAutoModels.length) return "";
@@ -872,11 +872,37 @@ async function saveCapacity(row: ChannelBaseValue, key: 'max_tpm' | 'max_rpm', v
 }
 async function save() {
   if (saving.value) return;
+  const site = siteID.value;
+  const policyToSave = clone(policy);
+  const modeToSave = mode.value;
+  const savedBasesByKey = new Map(savedBases.value.map(row => [channelRowKey(row), row]));
+  const basesToSave = bases.value.filter(row => {
+    const saved = savedBasesByKey.get(channelRowKey(row));
+    return !saved || saved.model_name !== row.model_name || saved.base_weight !== row.base_weight ||
+      saved.base_priority !== row.base_priority || saved.max_rpm !== row.max_rpm || saved.max_tpm !== row.max_tpm;
+  }).map(clone);
+  const sortedModes = (value: TuningPolicy) => Object.entries(value.dispatch_modes ?? {}).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+  const hasPolicyChanges = !savedPolicy.value || modeToSave !== savedMode.value ||
+    JSON.stringify(policyToSave.scheduling) !== JSON.stringify(savedPolicy.value.scheduling) ||
+    JSON.stringify(policyToSave.continuous) !== JSON.stringify(savedPolicy.value.continuous) ||
+    JSON.stringify(sortedModes(policyToSave)) !== JSON.stringify(sortedModes(savedPolicy.value));
+  if (!hasPolicyChanges && basesToSave.length === 0) {
+    dirty.value = false;
+    captureSavedState();
+    ElMessage.info("没有需要保存的更改");
+    return;
+  }
   saving.value = true;
   try {
-    const preflightCommandID = await runAutoPreflight();
-    await dashboard.saveTuningPolicy(siteID.value, policy, mode.value, preflightCommandID || undefined);
-    bases.value = (await dashboard.saveTuningBaseValues(siteID.value, bases.value)).items ?? [];
+    const preflightCommandID = hasPolicyChanges ? await runAutoPreflight(policyToSave) : "";
+    if (hasPolicyChanges) {
+      await dashboard.saveTuningPolicy(site, policyToSave, modeToSave, preflightCommandID || undefined);
+      savedPolicy.value = clone(policyToSave);
+      savedMode.value = modeToSave;
+    }
+    if (basesToSave.length > 0) {
+      bases.value = (await dashboard.saveTuningBaseValues(site, basesToSave)).items ?? [];
+    }
     ElMessage.success(preflightCommandID ? "控制能力验证通过，自动模式已启用" : "设置已保存，执行结果将实时同步");
     await load();
   } catch (error) {

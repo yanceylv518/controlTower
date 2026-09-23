@@ -29,6 +29,9 @@ type Handler struct {
 	names                   *nameResolver
 	settings                *settings.Provider
 	instanceStore           InstanceStore
+	operationAuditStore     interface {
+		InsertOperationAudit(storage.OperationAudit) error
+	}
 	balanceSource           BalanceSource
 	balanceUsage            BalanceUsageSource
 	balanceCache            *balanceAlertCache
@@ -39,6 +42,12 @@ type Handler struct {
 func (h Handler) WithNotificationMaxAttempts(v int) Handler         { h.notificationMaxAttempts = v; return h }
 func (h Handler) WithSettingsProvider(v *settings.Provider) Handler { h.settings = v; return h }
 func (h Handler) WithInstanceStore(v InstanceStore) Handler         { h.instanceStore = v; return h }
+func (h Handler) WithOperationAuditStore(v interface {
+	InsertOperationAudit(storage.OperationAudit) error
+}) Handler {
+	h.operationAuditStore = v
+	return h
+}
 func (h Handler) WithBalanceAlerts(source BalanceSource, usage BalanceUsageSource) Handler {
 	h.balanceSource, h.balanceUsage = source, usage
 	h.balanceCache = &balanceAlertCache{}

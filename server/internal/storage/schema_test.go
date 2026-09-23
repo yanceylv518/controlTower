@@ -85,6 +85,42 @@ func TestInitialMigrationDoesNotUseUnsupportedMySQLFragments(t *testing.T) {
 	}
 }
 
+func TestOperationAuditContextMigrationIsAdditive(t *testing.T) {
+	data, err := os.ReadFile("../../migrations/091_operation_audit_context.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := strings.ToLower(string(data))
+	for _, required := range []string{"actor_type", "actor_role", "source_component", "trigger_type", "request_id", "correlation_id", "client_ip", "auth_method", "http_method", "route", "http_status", "error_summary", "updated_at", "idx_operation_audits_actor_created", "idx_operation_audits_correlation"} {
+		if !strings.Contains(sql, required) {
+			t.Fatalf("audit context migration missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{"drop table", "truncate table", "delete from operation_audits"} {
+		if strings.Contains(sql, forbidden) {
+			t.Fatalf("audit migration is destructive: %q", forbidden)
+		}
+	}
+}
+
+func TestOperationAuditTypeIndexMigrationIsAdditive(t *testing.T) {
+	data, err := os.ReadFile("../../migrations/092_operation_audit_type_index.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := strings.ToLower(string(data))
+	for _, required := range []string{"create index idx_operation_audits_type", "on operation_audits (operation_type)"} {
+		if !strings.Contains(sql, required) {
+			t.Fatalf("audit type index migration missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{"drop table", "truncate table", "delete from operation_audits"} {
+		if strings.Contains(sql, forbidden) {
+			t.Fatalf("audit type index migration is destructive: %q", forbidden)
+		}
+	}
+}
+
 func TestSystemSettingsMigrationIsAdditive(t *testing.T) {
 	data, err := os.ReadFile("../../migrations/011_system_settings.sql")
 	if err != nil {

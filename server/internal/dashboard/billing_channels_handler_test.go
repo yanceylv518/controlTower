@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"controltower/server/internal/billing"
+	"controltower/server/internal/storage"
 )
 
 type fakeBillingChannelReadStore struct {
@@ -18,6 +19,7 @@ type fakeBillingChannelReadStore struct {
 	queriedJobID  string
 	activeRows    []billing.AggregateRow
 	queriedActive bool
+	audits        []storage.OperationAudit
 }
 
 func (f *fakeBillingChannelReadStore) QueryBillingChannelAggregates(context.Context, string, time.Time, time.Time, int64) ([]billing.AggregateRow, error) {
@@ -32,6 +34,10 @@ func (f *fakeBillingChannelReadStore) ListBillingChannelSettings(context.Context
 	return map[int64]billing.ChannelSetting{}, nil
 }
 func (f *fakeBillingChannelReadStore) PutBillingChannelSetting(context.Context, billing.ChannelSetting) error {
+	return nil
+}
+func (f *fakeBillingChannelReadStore) InsertOperationAudit(value storage.OperationAudit) error {
+	f.audits = append(f.audits, value)
 	return nil
 }
 func (f *fakeBillingChannelReadStore) ListBillingPrices(context.Context, string) ([]billing.PriceRecord, error) {
@@ -132,5 +138,18 @@ func TestBillingChannelsUsesCurrentNewAPICurrency(t *testing.T) {
 	BillingChannelsHandler{Store: store, Source: source}.ServeHTTP(recorder, request)
 	if recorder.Code != 200 || !strings.Contains(recorder.Body.String(), `"currency":{"type":"CNY","symbol":"¥","exchange_rate":"7.2"}`) {
 		t.Fatalf("unexpected response: %d %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestBillingChannelSettingAuditCapturesChange(t *testing.T) {
+	store := &fakeBillingChannelReadStore{}
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("PUT", "/api/dashboard/billing/channels", strings.NewReader(`{"instance_id":"site-a","channel_id":7,"discount":"0.85"}`))
+	BillingChannelsHandler{Store: store}.ServeHTTP(w, r)
+	if w.Code != 200 || len(store.audits) != 1 {
+		t.Fatalf("status=%d body=%s audits=%+v", w.Code, w.Body.String(), store.audits)
+	}
+	if store.audits[0].OperationType != "billing.channel_setting.update" || !strings.Contains(store.audits[0].AfterSummary, `"discount":"0.85"`) {
+		t.Fatalf("channel setting audit missing change: %+v", store.audits[0])
 	}
 }

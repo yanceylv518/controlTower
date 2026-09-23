@@ -228,9 +228,11 @@ Instance tokens are stored only as `SHA-256(pepper + token)` hashes. A token may
 | --- | --- | --- |
 | `POST /api/dashboard/channels/{channelID}/commands` | JSON `instance_id,confirm,status?,weight?,priority?,group?`；`confirm` 必须为 `true`；提供 `group` 时只能使用该站点渠道快照中已有的分组 | `201 {"id":"...","instance_id":"inst-x","channel_id":7,"status":"pending","payload":{"status":2},"created_by":"admin","created_at":"..."}` |
 | `GET /api/dashboard/channel-commands` | Query `instance_id,status,limit,offset` | `{"items":[{"id":"...","status":"succeeded","payload":{"status":2}}]}` |
-| `GET /api/dashboard/operation-audits` | Query `instance_id,limit,offset` | `{"items":[{"operation_type":"channel.update","target_type":"channel","target_id":"7","actor_id":"admin","after_summary":"...","created_at":"..."}]}` |
+| `GET /api/dashboard/operation-audits` | Query `instance_id,site_id,actor,operation_type,status,q,from,to,limit,offset`；`from,to` 为 RFC3339，时间范围左闭右开；`actor_options=true` 时仅返回最多 100 个按 `actor` 模糊匹配的去重操作人；需管理员的 `audits.read` 权限 | `{"items":[],"total":0,"operation_types":["settings.update","auth.login","auth.logout"],"actors":null}`；操作类型由固定目录返回，不依赖当前记录；候选查询返回 `actors` 数组 |
 
 调权中心分组操作使用以下站点级接口：
+
+操作审计的 `actor_exact=true` 可与 `actor` 配合精确匹配账号；默认仍保持模糊匹配兼容。关键词 `q` 和操作人模糊匹配中的 `%`、`_` 不作为 SQL 通配符。
 
 | 方法与路径 | 参数 | 响应 |
 | --- | --- | --- |

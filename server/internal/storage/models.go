@@ -269,6 +269,10 @@ type ChannelCommand struct {
 
 type OperationAudit struct {
 	ID, InstanceID, OperationType, TargetType, TargetID, ActorID, Status string
+	ActorType, ActorRole, SourceComponent, TriggerType                   string
+	RequestID, CorrelationID, ClientIP, AuthMethod                       string
+	HTTPMethod, Route, ErrorSummary                                      string
 	BeforeSummary, AfterSummary                                          string
-	CreatedAt                                                            time.Time
+	HTTPStatus                                                           int
+	CreatedAt, UpdatedAt                                                 time.Time
 }

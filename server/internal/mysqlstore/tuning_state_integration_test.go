@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"testing"
 	"time"
 
+	"controltower/server/internal/storage"
 	"controltower/server/internal/tuning"
 
 	"github.com/stretchr/testify/require"
@@ -108,6 +110,72 @@ func TestContinuousStateRetryFieldsMySQLIntegration(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestSaveChannelBaseValuesAuditsOnlyChangedRowsMySQLIntegration(t *testing.T) {
+	dsn := os.Getenv("CT_MYSQL_TEST_DSN")
+	if dsn == "" {
+		t.Skip("set CT_MYSQL_TEST_DSN to run MySQL integration test")
+	}
+	db, err := Open(dsn)
+	require.NoError(t, err)
+	defer db.Close()
+	require.NoError(t, ApplyDir(context.Background(), db, "../../migrations"))
+
+	site := fmt.Sprintf("tuning-base-audit-%d", time.Now().UnixNano())
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	defer func() {
+		_, cleanupErr := db.Exec(`DELETE FROM operation_audits WHERE instance_id=? AND operation_type='tuning.base_update'`, site)
+		require.NoError(t, cleanupErr)
+		_, cleanupErr = db.Exec(`DELETE FROM channel_base_values WHERE instance_id=?`, site)
+		require.NoError(t, cleanupErr)
+	}()
+
+	values := make([]tuning.ChannelBaseValue, 14)
+	for i := range values {
+		values[i] = tuning.ChannelBaseValue{ChannelID: int64(40000000 + i), ModelName: "model", BaseWeight: int64(100 + i), BasePriority: 5, MaxRPM: 60, MaxTPM: 6000}
+		_, err = db.Exec(`INSERT INTO channel_base_values(instance_id,channel_id,model_name,base_weight,base_priority,max_rpm,max_tpm,updated_at,updated_by) VALUES(?,?,?,?,?,?,?,?,?)`, site, values[i].ChannelID, values[i].ModelName, values[i].BaseWeight, values[i].BasePriority, values[i].MaxRPM, values[i].MaxTPM, now, "seed")
+		require.NoError(t, err)
+	}
+	values[6].BaseWeight++
+	store := New(db)
+	requestID := "request-" + site
+	requestMetadata := storage.OperationAudit{
+		ActorID: "operator", ActorType: "human", ActorRole: "admin", SourceComponent: "tuning", TriggerType: "manual",
+		RequestID: requestID, CorrelationID: requestID, ClientIP: "203.0.113.8", AuthMethod: "session",
+		HTTPMethod: http.MethodPut, Route: "PUT /api/dashboard/tuning/base-values",
+	}
+	require.NoError(t, store.SaveChannelBaseValuesWithAudit(site, "operator", values, now.Add(time.Second), requestMetadata))
+	require.NoError(t, store.UpdateOperationAuditHTTPStatus(requestMetadata.RequestID, http.StatusOK))
+
+	var count int
+	var targetID, actorID, status string
+	err = db.QueryRow(`SELECT COUNT(*),COALESCE(MAX(target_id),''),COALESCE(MAX(actor_id),''),COALESCE(MAX(status),'') FROM operation_audits WHERE instance_id=? AND operation_type='tuning.base_update'`, site).Scan(&count, &targetID, &actorID, &status)
+	require.NoError(t, err)
+	require.Equal(t, 1, count, "one modified channel must produce one base-value audit")
+	require.Equal(t, fmt.Sprint(values[6].ChannelID), targetID)
+	require.Equal(t, "operator", actorID)
+	require.Equal(t, "succeeded", status)
+	var auditRequestID, correlationID, clientIP, authMethod, httpMethod, route string
+	var httpStatus int
+	err = db.QueryRow(`SELECT request_id,correlation_id,client_ip,auth_method,http_method,route,http_status FROM operation_audits WHERE instance_id=? AND operation_type='tuning.base_update'`, site).Scan(&auditRequestID, &correlationID, &clientIP, &authMethod, &httpMethod, &route, &httpStatus)
+	require.NoError(t, err)
+	require.Equal(t, requestMetadata.RequestID, auditRequestID)
+	require.Equal(t, requestMetadata.CorrelationID, correlationID)
+	require.Equal(t, requestMetadata.ClientIP, clientIP)
+	require.Equal(t, requestMetadata.AuthMethod, authMethod)
+	require.Equal(t, requestMetadata.HTTPMethod, httpMethod)
+	require.Equal(t, requestMetadata.Route, route)
+	require.Equal(t, http.StatusOK, httpStatus)
+
+	require.NoError(t, store.SaveChannelBaseValues(site, "retry-operator", values, now.Add(2*time.Second)))
+	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM operation_audits WHERE instance_id=? AND operation_type='tuning.base_update'`, site).Scan(&count))
+	require.Equal(t, 1, count, "repeating the saved values must not add another audit")
+
+	var updatedBy, updatedAt string
+	require.NoError(t, db.QueryRow(`SELECT updated_by,DATE_FORMAT(updated_at,'%Y-%m-%d %H:%i:%s.%f') FROM channel_base_values WHERE instance_id=? AND channel_id=?`, site, values[6].ChannelID).Scan(&updatedBy, &updatedAt))
+	require.Equal(t, "operator", updatedBy, "a no-op retry must not rewrite the editor")
+	require.Equal(t, now.Add(time.Second).Format("2006-01-02 15:04:05.000000"), updatedAt, "a no-op retry must not rewrite the update time")
 }
 
 func retryTestWeight(v int64) *int64 { return &v }

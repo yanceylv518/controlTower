@@ -245,7 +245,7 @@ const backgroundRefreshing = ref(false)
 const mobileFeed = useAppendPages(() => state.data.value, () => state.loading.value || backgroundRefreshing.value || !listIsCurrent.value,
   (base, offset, signal) => passthrough.logs({ ...base.feedQuery, offset }, signal),
   (row: ReadonlyLog) => row.id, base => base.feedQuery.offset)
-const mobileFilters = computed<MobileLogFilterValues>(() => ({ logType:logType.value, modelName:modelName.value, group:group.value, tokenName:tokenName.value, requestID:requestID.value, upstreamRequestID:upstreamRequestID.value, channelID:channelID.value, statusCode:statusCode.value, emptyOutput:emptyOutput.value, fallbackFinalOnly:fallbackFinalOnly.value }))
+const mobileFilters = computed<MobileLogFilterValues>(() => ({ logType:logType.value, modelName:modelName.value, group:group.value, tokenName:tokenName.value, requestID:requestID.value, upstreamRequestID:upstreamRequestID.value, channelID:channelID.value, statusCode:statusCode.value, emptyOutput:auth.user?.role === 'admin' && emptyOutput.value, fallbackFinalOnly:fallbackFinalOnly.value }))
 function applyMobileFilters(value: MobileLogFilterValues) {
   logType.value = value.logType
   modelName.value = value.modelName

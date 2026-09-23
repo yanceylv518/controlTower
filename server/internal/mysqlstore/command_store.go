@@ -58,6 +58,9 @@ FROM channel_commands WHERE instance_id=? AND status='pending' ORDER BY created_
 				if _, err = tx.ExecContext(ctx, `UPDATE channel_commands SET status='expired',error_summary='priority target or mode changed',updated_at=? WHERE id=?`, now, cmd.ID); err != nil {
 					return nil, err
 				}
+				if _, err = tx.ExecContext(ctx, `UPDATE operation_audits SET status='expired',error_summary='priority target or mode changed',updated_at=? WHERE id=? AND status='submitted'`, now, cmd.ID); err != nil {
+					return nil, err
+				}
 				if _, err = tx.ExecContext(ctx, `UPDATE tuning_recommendations SET status='expired',outcome_at=? WHERE command_id=?`, now, cmd.ID); err != nil {
 					return nil, err
 				}
@@ -129,12 +132,30 @@ func (s Store) CompleteChannelCommand(id, status, errorSummary string, now time.
 }
 
 func (s Store) ExpireStaleCommands(before time.Time) (int, error) {
-	r, e := s.db.ExecContext(context.Background(), "UPDATE channel_commands SET status='expired',updated_at=? WHERE status='pending' AND created_at < ?", time.Now().UTC(), before)
+	ctx := context.Background()
+	tx, e := s.db.BeginTx(ctx, nil)
+	if e != nil {
+		return 0, e
+	}
+	defer tx.Rollback()
+	now := time.Now().UTC()
+	if _, e = tx.ExecContext(ctx, `UPDATE operation_audits a JOIN channel_commands c ON c.id=a.id
+SET a.status='expired',a.error_summary='command expired before execution',a.updated_at=?
+WHERE c.status='pending' AND c.created_at<? AND a.status='submitted'`, now, before); e != nil {
+		return 0, e
+	}
+	r, e := tx.ExecContext(ctx, "UPDATE channel_commands SET status='expired',updated_at=? WHERE status='pending' AND created_at < ?", now, before)
 	if e != nil {
 		return 0, e
 	}
 	n, e := r.RowsAffected()
-	return int(n), e
+	if e != nil {
+		return 0, e
+	}
+	if e = tx.Commit(); e != nil {
+		return 0, e
+	}
+	return int(n), nil
 }
 
 func (s Store) QueryChannelCommands(q storage.ChannelCommandQuery) ([]storage.ChannelCommand, error) {
@@ -172,37 +193,156 @@ func (s Store) QueryChannelCommands(q storage.ChannelCommandQuery) ([]storage.Ch
 }
 
 func (s Store) InsertOperationAudit(v storage.OperationAudit) error {
-	if !storage.IsConfigurationAuditOperation(v.OperationType) {
+	v = storage.NormalizeOperationAudit(v)
+	if !storage.IsManualOperationAudit(v) {
 		return nil
 	}
-	_, e := s.db.ExecContext(context.Background(), `INSERT IGNORE INTO operation_audits(id,instance_id,operation_type,target_type,target_id,actor_id,before_summary,after_summary,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, v.ID, v.InstanceID, v.OperationType, v.TargetType, v.TargetID, v.ActorID, v.BeforeSummary, v.AfterSummary, v.Status, v.CreatedAt)
+	if storage.IsExcludedOperationAudit(v.OperationType) {
+		return nil
+	}
+	if !storage.IsSupportedOperationAudit(v.OperationType) {
+		return storage.ErrUnsupportedOperationAudit
+	}
+	_, e := s.db.ExecContext(context.Background(), `INSERT INTO operation_audits
+(id,instance_id,operation_type,target_type,target_id,actor_id,actor_type,actor_role,source_component,trigger_type,request_id,correlation_id,client_ip,auth_method,http_method,route,http_status,error_summary,before_summary,after_summary,status,created_at,updated_at)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+ON DUPLICATE KEY UPDATE
+after_summary=IF(status='submitted' AND VALUES(status)<>'submitted',VALUES(after_summary),after_summary),
+error_summary=IF(status='submitted' AND VALUES(status)<>'submitted',VALUES(error_summary),error_summary),
+http_status=IF(status='submitted' AND VALUES(status)<>'submitted',VALUES(http_status),http_status),
+updated_at=IF(status='submitted' AND VALUES(status)<>'submitted',VALUES(updated_at),updated_at),
+status=IF(status='submitted' AND VALUES(status)<>'submitted',VALUES(status),status)`,
+		v.ID, v.InstanceID, v.OperationType, v.TargetType, v.TargetID, v.ActorID, v.ActorType, v.ActorRole, v.SourceComponent, v.TriggerType, v.RequestID, v.CorrelationID, v.ClientIP, v.AuthMethod, v.HTTPMethod, v.Route, v.HTTPStatus, v.ErrorSummary, v.BeforeSummary, v.AfterSummary, v.Status, v.CreatedAt, v.UpdatedAt)
 	return e
 }
 
-func (s Store) QueryOperationAudits(q storage.OperationAuditQuery) ([]storage.OperationAudit, error) {
+func (s Store) UpdateOperationAuditHTTPStatus(requestID string, status int) error {
+	if requestID == "" {
+		return nil
+	}
+	_, err := s.db.ExecContext(context.Background(), `UPDATE operation_audits SET http_status=? WHERE request_id=?`, status, requestID)
+	return err
+}
+
+func (s Store) QueryOperationAudits(q storage.OperationAuditQuery) (storage.OperationAuditPage, error) {
 	limit, offset := storage.NormalizeCommandPagination(q.Limit, q.Offset)
-	sqlText := `SELECT id,instance_id,operation_type,target_type,target_id,actor_id,before_summary,after_summary,status,created_at FROM operation_audits`
+	where := []string{
+		"COALESCE(a.actor_type,'') <> 'system'",
+		"COALESCE(a.trigger_type,'') <> 'automatic'",
+		"COALESCE(a.operation_type,'') <> 'tuning.auto_execute'",
+		"((a.actor_type='human' AND a.actor_role IN ('admin','viewer') AND a.auth_method IN ('session','web_session')) OR (COALESCE(a.actor_id,'') NOT IN ('system','agent') AND COALESCE(a.actor_id,'') NOT LIKE 'system:%' AND COALESCE(a.actor_id,'') NOT LIKE 'agent:%'))",
+	}
 	args := []any{}
 	if q.InstanceID != "" {
-		sqlText += " WHERE instance_id=?"
+		where = append(where, "a.instance_id=?")
 		args = append(args, q.InstanceID)
 	}
-	sqlText += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+	if q.SiteID != "" {
+		where = append(where, "(a.instance_id=? OR COALESCE(NULLIF(i.site_id,''),i.id)=?)")
+		args = append(args, q.SiteID, q.SiteID)
+	}
+	if q.OperationType != "" {
+		if prefix, ok := storage.OperationAuditTypeFilterPrefix(q.OperationType); ok {
+			escapedPrefix := strings.NewReplacer("!", "!!", "%", "!%", "_", "!_").Replace(prefix)
+			where = append(where, "a.operation_type LIKE ? ESCAPE '!'")
+			args = append(args, escapedPrefix+"%")
+		} else {
+			where = append(where, "a.operation_type=?")
+			args = append(args, q.OperationType)
+		}
+	}
+	if q.Actor != "" && q.ActorExact {
+		where = append(where, "a.actor_id=?")
+		args = append(args, q.Actor)
+	} else if q.Actor != "" {
+		where = append(where, "a.actor_id LIKE ? ESCAPE '!'")
+		args = append(args, "%"+strings.NewReplacer("!", "!!", "%", "!%", "_", "!_").Replace(q.Actor)+"%")
+	}
+	if q.RequestID != "" {
+		where = append(where, "a.request_id=?")
+		args = append(args, q.RequestID)
+	}
+	if q.CorrelationID != "" {
+		where = append(where, "a.correlation_id=?")
+		args = append(args, q.CorrelationID)
+	}
+	if q.Status == "success" || q.Status == "succeeded" {
+		where = append(where, "a.status IN ('success','succeeded')")
+	} else if q.Status != "" {
+		where = append(where, "a.status=?")
+		args = append(args, q.Status)
+	}
+	if q.Source != "" {
+		where = append(where, "a.source_component=?")
+		args = append(args, q.Source)
+	}
+	if q.Trigger != "" {
+		where = append(where, "a.trigger_type=?")
+		args = append(args, q.Trigger)
+	}
+	if !q.From.IsZero() {
+		where = append(where, "a.created_at>=?")
+		args = append(args, q.From)
+	}
+	if !q.To.IsZero() {
+		where = append(where, "a.created_at<?")
+		args = append(args, q.To)
+	}
+	if q.Search != "" {
+		where = append(where, "(a.operation_type LIKE ? ESCAPE '!' OR a.target_type LIKE ? ESCAPE '!' OR a.target_id LIKE ? ESCAPE '!' OR a.actor_id LIKE ? ESCAPE '!' OR a.error_summary LIKE ? ESCAPE '!' OR a.request_id LIKE ? ESCAPE '!' OR a.correlation_id LIKE ? ESCAPE '!')")
+		pattern := "%" + strings.NewReplacer("!", "!!", "%", "!%", "_", "!_").Replace(q.Search) + "%"
+		args = append(args, pattern, pattern, pattern, pattern, pattern, pattern, pattern)
+	}
+	whereSQL := ""
+	if len(where) > 0 {
+		whereSQL = " WHERE " + strings.Join(where, " AND ")
+	}
+	var page storage.OperationAuditPage
+	page.OperationTypes = storage.OperationAuditFilterTypes()
+	fromSQL := " FROM operation_audits a LEFT JOIN instances i ON i.id=a.instance_id"
+	if q.ActorOptions {
+		page.Actors = []string{}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		rows, err := s.db.QueryContext(ctx, "SELECT DISTINCT a.actor_id"+fromSQL+whereSQL+" AND a.actor_id<>'' ORDER BY a.actor_id LIMIT 100", args...)
+		if err != nil {
+			return page, err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var actor string
+			if err := rows.Scan(&actor); err != nil {
+				return page, err
+			}
+			page.Actors = append(page.Actors, actor)
+		}
+		return page, rows.Err()
+	}
+	if e := s.db.QueryRowContext(context.Background(), "SELECT COUNT(*)"+fromSQL+whereSQL, args...).Scan(&page.Total); e != nil {
+		return page, e
+	}
+	if int64(offset) >= page.Total {
+		page.Items = []storage.OperationAudit{}
+		return page, nil
+	}
+	sqlText := `SELECT a.id,a.instance_id,a.operation_type,a.target_type,a.target_id,a.actor_id,a.actor_type,a.actor_role,a.source_component,a.trigger_type,a.request_id,a.correlation_id,a.client_ip,a.auth_method,a.http_method,a.route,a.http_status,a.error_summary,a.before_summary,a.after_summary,a.status,a.created_at,a.updated_at` + fromSQL + whereSQL + ` ORDER BY a.created_at DESC,a.id DESC LIMIT ? OFFSET ?`
 	args = append(args, limit, offset)
 	rows, e := s.db.QueryContext(context.Background(), sqlText, args...)
 	if e != nil {
-		return nil, e
+		return page, e
 	}
 	defer rows.Close()
-	var out []storage.OperationAudit
 	for rows.Next() {
 		var v storage.OperationAudit
-		if e = rows.Scan(&v.ID, &v.InstanceID, &v.OperationType, &v.TargetType, &v.TargetID, &v.ActorID, &v.BeforeSummary, &v.AfterSummary, &v.Status, &v.CreatedAt); e != nil {
-			return nil, e
+		if e = rows.Scan(&v.ID, &v.InstanceID, &v.OperationType, &v.TargetType, &v.TargetID, &v.ActorID, &v.ActorType, &v.ActorRole, &v.SourceComponent, &v.TriggerType, &v.RequestID, &v.CorrelationID, &v.ClientIP, &v.AuthMethod, &v.HTTPMethod, &v.Route, &v.HTTPStatus, &v.ErrorSummary, &v.BeforeSummary, &v.AfterSummary, &v.Status, &v.CreatedAt, &v.UpdatedAt); e != nil {
+			return page, e
 		}
-		out = append(out, v)
+		page.Items = append(page.Items, storage.NormalizeOperationAudit(v))
 	}
-	return out, rows.Err()
+	if page.Items == nil {
+		page.Items = []storage.OperationAudit{}
+	}
+	return page, rows.Err()
 }
 
 // pruneBatchSize bounds each retention DELETE so every statement finishes

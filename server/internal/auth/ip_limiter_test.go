@@ -46,3 +46,28 @@ func TestLoginIPLimiterIndependentAndWindow(t *testing.T) {
 		t.Fatalf("after window=%d", code)
 	}
 }
+
+func TestLoginIPLimiterBoundsDistinctAddressesAndCleansExpiredEntries(t *testing.T) {
+	limiter := NewIPLimiter()
+	clock := time.Now().UTC()
+	limiter.now = func() time.Time { return clock }
+	for index := 0; index < maxLoginIPEntries; index++ {
+		if !limiter.Allow("2001:db8::" + strconv.FormatInt(int64(index), 16)) {
+			t.Fatalf("address %d was rejected before the capacity limit", index)
+		}
+	}
+	if limiter.Allow("198.51.100.1") {
+		t.Fatal("new address was allowed after the limiter capacity was reached")
+	}
+	if got := len(limiter.entries); got > maxLoginIPEntries {
+		t.Fatalf("IP limiter map exceeded limit: %d", got)
+	}
+
+	clock = clock.Add(time.Minute + time.Second)
+	if !limiter.Allow("198.51.100.1") {
+		t.Fatal("expired IP entries were not cleaned")
+	}
+	if got := len(limiter.entries); got != 1 {
+		t.Fatalf("expected only the new address after cleanup, got %d", got)
+	}
+}

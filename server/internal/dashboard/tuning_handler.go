@@ -1,12 +1,16 @@
 package dashboard
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
 
+	"controltower/server/internal/auditmeta"
 	ctauth "controltower/server/internal/auth"
 	"controltower/server/internal/storage"
 	"controltower/server/internal/tuning"
@@ -15,7 +19,7 @@ import (
 type TuningStore interface{ tuning.Store }
 type ChannelBaseValueStore interface {
 	ListChannelBaseValues(string, string) ([]tuning.ChannelBaseValue, error)
-	SaveChannelBaseValues(string, string, []tuning.ChannelBaseValue, time.Time) error
+	SaveChannelBaseValuesWithAudit(string, string, []tuning.ChannelBaseValue, time.Time, storage.OperationAudit) error
 	SyncChannelBaseValues(string, []string) ([]tuning.ChannelBaseValue, error)
 }
 type TuningChannelDirectory interface {
@@ -27,7 +31,7 @@ type ContinuousStateStore interface {
 type BasePrioritySyncStore interface {
 	ChannelBaseValueStore
 	ContinuousStateStore
-	CreateContinuousWeightChange(tuning.Recommendation, string, time.Time) (string, error)
+	CreateContinuousWeightChangeWithAudit(tuning.Recommendation, string, time.Time, storage.OperationAudit) (string, error)
 }
 type TuningPreflightStore interface {
 	CreateTuningPreflight(string, int64, string, time.Time) (storage.ChannelCommand, error)
@@ -177,12 +181,19 @@ func (h Handler) HandleTuningBaseValues(w http.ResponseWriter, r *http.Request) 
 		}
 		now := time.Now().UTC()
 		actor := ctauth.Actor(r)
-		if err = store.SaveChannelBaseValues(id, actor, req.Items, now); err != nil {
+		audit := storage.OperationAudit{
+			OperationType: "tuning.base_update", TargetType: "channel", ActorID: actor,
+			SourceComponent: "tuning", TriggerType: "manual", Status: "succeeded",
+			CreatedAt: now, UpdatedAt: now,
+		}
+		auditmeta.Enrich(r, &audit)
+		if err = store.SaveChannelBaseValuesWithAudit(id, actor, req.Items, now, audit); err != nil {
 			writeDashboardError(w, 500, "save_failed")
 			return
 		}
+		auditmeta.MarkSemanticAudit(r)
 		if syncStore, supported := h.tuningStore.(BasePrioritySyncStore); supported {
-			if err = syncSavedBasePriorities(syncStore, id, actor, req.Items, before, now); err != nil {
+			if err = syncSavedBasePriorities(syncStore, id, actor, req.Items, before, now, audit); err != nil {
 				writeDashboardError(w, 500, "priority_sync_failed")
 				return
 			}
@@ -198,7 +209,7 @@ func (h Handler) HandleTuningBaseValues(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
-func syncSavedBasePriorities(store BasePrioritySyncStore, siteID, actor string, saved, before []tuning.ChannelBaseValue, now time.Time) error {
+func syncSavedBasePriorities(store BasePrioritySyncStore, siteID, actor string, saved, before []tuning.ChannelBaseValue, now time.Time, audit storage.OperationAudit) error {
 	current := make(map[int64]tuning.ChannelBaseValue, len(before))
 	for _, value := range before {
 		current[value.ChannelID] = value
@@ -208,7 +219,7 @@ func syncSavedBasePriorities(store BasePrioritySyncStore, siteID, actor string, 
 		if observed.ChannelID == 0 {
 			observed = value
 		}
-		if value.BasePriority == observed.CurrentPriority {
+		if value.BasePriority == observed.BasePriority || value.BasePriority == observed.CurrentPriority {
 			continue
 		}
 		currentPriority, proposedPriority := observed.CurrentPriority, value.BasePriority
@@ -219,7 +230,7 @@ func syncSavedBasePriorities(store BasePrioritySyncStore, siteID, actor string, 
 			CurrentWeight: observed.CurrentWeight, ProposedWeight: observed.CurrentWeight,
 			CurrentPriority: &currentPriority, ProposedPriority: &proposedPriority, ModeAtCreation: "manual", Status: "recorded",
 		}
-		if _, err := store.CreateContinuousWeightChange(rec, actor, now); err != nil {
+		if _, err := store.CreateContinuousWeightChangeWithAudit(rec, actor, now, audit); err != nil {
 			return err
 		}
 	}
@@ -356,14 +367,24 @@ func (h Handler) HandleTuningPolicy(w http.ResponseWriter, r *http.Request) {
 			writeDashboardJSON(w, 400, map[string]any{"error": "validation_failed", "fields": fields})
 			return
 		}
-		current, _, err := h.tuningStore.GetPolicy(id)
+		current, exists, err := h.tuningStore.GetPolicy(id)
 		if err != nil {
 			writeDashboardError(w, 500, "query_failed")
 			return
 		}
+		currentPolicy, currentMode := current.Policy, current.Mode
+		if !exists {
+			currentPolicy, currentMode = tuning.DefaultPolicy(), "observe"
+		}
+		if currentPolicy.DispatchModes == nil {
+			currentPolicy.DispatchModes = map[string]string{}
+		}
+		if req.Policy.DispatchModes == nil {
+			req.Policy.DispatchModes = map[string]string{}
+		}
 		newlyAuto := false
 		for model, nextMode := range req.Policy.DispatchModes {
-			if nextMode == "auto" && current.Policy.DispatchModes[model] != "auto" {
+			if nextMode == "auto" && currentPolicy.DispatchModes[model] != "auto" {
 				newlyAuto = true
 				break
 			}
@@ -379,11 +400,37 @@ func (h Handler) HandleTuningPolicy(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		if reflect.DeepEqual(currentPolicy, req.Policy) && currentMode == req.Mode {
+			auditmeta.MarkAuditHandledWithoutRecord(r)
+			response := PolicyResponse{InstanceID: id, SiteID: id, Policy: currentPolicy, Mode: currentMode, IsDefault: !exists}
+			if exists {
+				response.UpdatedAt = &current.UpdatedAt
+				response.UpdatedBy = current.UpdatedBy
+			}
+			writeDashboardJSON(w, 200, response)
+			return
+		}
 		now := time.Now().UTC()
 		rec := tuning.PolicyRecord{InstanceID: id, Policy: req.Policy, Mode: req.Mode, UpdatedAt: now, UpdatedBy: ctauth.Actor(r)}
 		if h.tuningStore.PutPolicy(rec) != nil {
 			writeDashboardError(w, 500, "query_failed")
 			return
+		}
+		if h.operationAuditStore != nil {
+			before, _ := json.Marshal(map[string]any{"policy": currentPolicy, "mode": currentMode})
+			after, _ := json.Marshal(map[string]any{"policy": req.Policy, "mode": req.Mode})
+			var raw [16]byte
+			if _, err := rand.Read(raw[:]); err != nil {
+				writeDashboardError(w, 500, "audit_failed")
+				return
+			}
+			audit := storage.OperationAudit{ID: "tuning-policy-" + hex.EncodeToString(raw[:]), InstanceID: id, OperationType: "tuning.policy_update", TargetType: "tuning_policy", TargetID: id, ActorID: ctauth.Actor(r), SourceComponent: "tuning", BeforeSummary: string(before), AfterSummary: string(after), Status: "succeeded", CreatedAt: now, UpdatedAt: now}
+			auditmeta.Enrich(r, &audit)
+			if err := h.operationAuditStore.InsertOperationAudit(audit); err != nil {
+				writeDashboardError(w, 500, "audit_failed")
+				return
+			}
+			auditmeta.MarkSemanticAudit(r)
 		}
 		writeDashboardJSON(w, 200, PolicyResponse{InstanceID: id, SiteID: id, Policy: req.Policy, Mode: req.Mode, UpdatedAt: &now, UpdatedBy: rec.UpdatedBy})
 	default:

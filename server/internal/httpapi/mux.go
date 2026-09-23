@@ -80,14 +80,22 @@ func NewMux(options Options) *http.ServeMux {
 	if tuningStore != nil {
 		dashboardHandler = dashboardHandler.WithTuningStore(tuningStore)
 	}
+	dashboardHandler = dashboardHandler.WithOperationAuditStore(options.Store)
 	protect := func(h http.Handler) http.Handler {
-		h = gzipJSON(h)
+		h = gzipJSON(auditMutations(h, options.Store))
 		if options.AuthManager != nil {
 			return ctauth.RequireSessionOrToken(options.AuthManager, options.DashboardToken, h)
 		}
 		return dashboard.RequireBearerToken(options.DashboardToken, h)
 	}
 	a := ctauth.Handlers{M: options.AuthManager, Limiter: ctauth.NewIPLimiter(), Audit: options.Store}
+	auditAuthMutation := func(h http.HandlerFunc) http.Handler {
+		return auditMutations(h, options.Store)
+	}
+	mux.Handle("/api/auth/password", auditAuthMutation(a.Password))
+	mux.Handle("/api/auth/users", auditAuthMutation(a.Users))
+	mux.Handle("PUT /api/auth/users/{id}", auditAuthMutation(a.User))
+	mux.Handle("POST /api/auth/users/{id}/password", auditAuthMutation(a.ResetPassword))
 	controlSections := map[string]http.HandlerFunc{}
 	mux.HandleFunc("POST /api/agent/control/poll", agentHandler.Control(controlSections))
 	if provider, ok := any(options.Store).(interface{ NewArchiveStore() ac.Store }); ok {
@@ -144,13 +152,9 @@ func NewMux(options Options) *http.ServeMux {
 		mux.Handle("/api/dashboard/trial-followup/identities", protect(options.TrialHandler))
 		mux.Handle("/api/dashboard/operations-people", protect(options.TrialHandler))
 	}
-	mux.HandleFunc("/api/auth/login", a.Login)
-	mux.HandleFunc("/api/auth/logout", a.Logout)
+	mux.Handle("/api/auth/login", auditAuthMutation(a.Login))
+	mux.Handle("/api/auth/logout", auditAuthMutation(a.Logout))
 	mux.HandleFunc("/api/auth/me", a.Me)
-	mux.HandleFunc("/api/auth/password", a.Password)
-	mux.HandleFunc("/api/auth/users", a.Users)
-	mux.HandleFunc("/api/auth/users/{id}", a.User)
-	mux.HandleFunc("POST /api/auth/users/{id}/password", a.ResetPassword)
 	if logStore, ok := any(options.Store).(dashboard.ContainerLogStore); ok {
 		logHandler := dashboard.ContainerLogHandler{Store: logStore}
 		mux.Handle("GET /api/dashboard/container-log-targets", protect(logHandler))
@@ -207,7 +211,7 @@ func NewMux(options Options) *http.ServeMux {
 		mux.Handle("GET /api/dashboard/tuning/recommendations", protect(http.HandlerFunc(dashboardHandler.HandleTuningRecommendations)))
 		mux.Handle("GET /api/dashboard/tuning/report", protect(http.HandlerFunc(dashboardHandler.HandleTuningReport)))
 	}
-	instances := dashboard.InstanceHandler{Store: options.Store, Runtime: options.Store, Pepper: options.AgentTokenPepper, Settings: options.SettingsProvider, SecretKey: options.SecretKey}
+	instances := dashboard.InstanceHandler{Store: options.Store, Audit: options.Store, Runtime: options.Store, Pepper: options.AgentTokenPepper, Settings: options.SettingsProvider, SecretKey: options.SecretKey}
 	if configStore, ok := any(options.Store).(dashboard.ReadonlyConfigStore); ok {
 		instances.ReadonlyConfig = configStore
 	}

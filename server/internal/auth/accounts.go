@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"controltower/server/internal/auditmeta"
 	"controltower/server/internal/storage"
 	"crypto/rand"
 	"encoding/hex"
@@ -42,9 +43,13 @@ func applyAccountInput(actor storage.User, target *storage.User, q AccountInput)
 		return ErrInvalid
 	}
 	if q.Role == "viewer" {
+		if len(q.Permissions) > 0 {
+			return ErrForbidden
+		}
 		if strings.TrimSpace(q.ScopeSite) == "" || len(q.ScopeUserIDs) == 0 {
 			return ErrInvalid
 		}
+		target.Permissions = []string{}
 		target.ScopeSite, target.ScopeUserIDs = strings.TrimSpace(q.ScopeSite), q.ScopeUserIDs
 		return nil
 	}
@@ -163,6 +168,11 @@ func accountError(w http.ResponseWriter, err error) {
 }
 
 func (h Handlers) ResetPassword(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		write(w, http.StatusMethodNotAllowed, map[string]string{"error": "method_not_allowed"})
+		return
+	}
 	u, _, ok := h.current(r)
 	if !ok {
 		write(w, 401, map[string]string{"error": "unauthorized"})
@@ -176,8 +186,12 @@ func (h Handlers) ResetPassword(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"`
 	}
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if r.Method != http.MethodPost || err != nil || json.NewDecoder(r.Body).Decode(&q) != nil {
+	if err != nil {
 		write(w, 400, map[string]string{"error": "invalid_user"})
+		return
+	}
+	if err := decodeAuthBody(w, r, &q, authRequestBodyLimit); err != nil {
+		writeAuthDecodeError(w, err)
 		return
 	}
 	target, err := h.M.ResetAccountPassword(u.ID, id, q.Password, time.Now().UTC())
@@ -199,5 +213,45 @@ func (h Handlers) accountAudit(r *http.Request, actor, before, after storage.Use
 		return
 	}
 	meta, _ := json.Marshal(map[string]any{"actor_user_id": actor.ID, "actor_username": actor.Username, "actor_name": actor.DisplayName, "ip": clientIP(r), "account": userResponse(after)})
-	_ = h.Audit.InsertOperationAudit(storage.OperationAudit{ID: "account-" + hex.EncodeToString(b), OperationType: operation, TargetType: "ct_user", TargetID: strconv.FormatInt(after.ID, 10), ActorID: actor.Username, BeforeSummary: snapshot(before), AfterSummary: string(meta), Status: "success", CreatedAt: time.Now().UTC()})
+	audit := storage.OperationAudit{ID: "account-" + hex.EncodeToString(b), OperationType: operation, TargetType: "ct_user", TargetID: strconv.FormatInt(after.ID, 10), ActorID: actor.Username, BeforeSummary: snapshot(before), AfterSummary: string(meta), Status: "succeeded", CreatedAt: time.Now().UTC()}
+	auditmeta.Enrich(r, &audit)
+	if err := h.Audit.InsertOperationAudit(audit); err == nil {
+		auditmeta.MarkSemanticAudit(r)
+	}
+}
+
+func (h Handlers) sessionAudit(r *http.Request, actor storage.User, operation string) error {
+	if h.Audit == nil {
+		return nil
+	}
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return err
+	}
+	summary, _ := json.Marshal(map[string]any{"username": actor.Username, "role": actor.Role})
+	audit := storage.OperationAudit{ID: "auth-" + hex.EncodeToString(b), InstanceID: actor.ScopeSite, OperationType: operation, TargetType: "ct_user", TargetID: strconv.FormatInt(actor.ID, 10), ActorID: actor.Username, ActorType: "human", ActorRole: actor.Role, AuthMethod: "session", SourceComponent: "identity", AfterSummary: string(summary), Status: "succeeded", CreatedAt: time.Now().UTC()}
+	auditmeta.Enrich(r, &audit)
+	if err := h.Audit.InsertOperationAudit(audit); err != nil {
+		return err
+	}
+	auditmeta.MarkSemanticAudit(r)
+	return nil
+}
+
+func (h Handlers) passwordAudit(r *http.Request, actor storage.User) {
+	if h.Audit == nil {
+		return
+	}
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return
+	}
+	before, _ := json.Marshal(map[string]bool{"password_updated": false})
+	after, _ := json.Marshal(map[string]bool{"password_updated": true})
+	now := time.Now().UTC()
+	audit := storage.OperationAudit{ID: "account-" + hex.EncodeToString(b), OperationType: "auth.password_change", TargetType: "ct_user", TargetID: strconv.FormatInt(actor.ID, 10), ActorID: actor.Username, BeforeSummary: string(before), AfterSummary: string(after), Status: "succeeded", CreatedAt: now, UpdatedAt: now}
+	auditmeta.Enrich(r, &audit)
+	if err := h.Audit.InsertOperationAudit(audit); err == nil {
+		auditmeta.MarkSemanticAudit(r)
+	}
 }

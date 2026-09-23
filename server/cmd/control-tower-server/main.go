@@ -144,6 +144,7 @@ func run() error {
 		Addr:              cfg.ListenAddr,
 		Handler:           httpapi.NewMux(muxOptions),
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       60 * time.Second,
 	}
 	log.Printf("control tower server listening on %s", cfg.ListenAddr)
 	serveErr := make(chan error, 1)

@@ -117,7 +117,7 @@ func archiveAutoPreparePoll(ctx context.Context, tx *sql.Tx, out *ac.Response, i
 				}
 				// A completion may only use its own still-live preparation lease.
 				if owns && live && st.PreparedToken == pending.Token {
-					if err = bindAutomaticArchive(ctx, tx, out, *st.Prepared, existing, instance, st.AgentID); err != nil {
+					if err = bindAutomaticArchive(ctx, tx, out, *st.Prepared, existing); err != nil {
 						if errors.Is(err, ac.ErrConflict) || errors.Is(err, af.ErrConflict) {
 							return rejectArchivePreparation(ctx, tx, out, st, now, "archive_prepare_registration_conflict")
 						}
@@ -172,7 +172,7 @@ func savePreparationStatus(ctx context.Context, tx *sql.Tx, site string, st ac.S
 
 // Authenticated Agent evidence binds collection only. The reserved storage
 // reference is not a readonly connection and cannot authorize billing/reading.
-func bindAutomaticArchive(ctx context.Context, tx *sql.Tx, out *ac.Response, r af.Registration, existing *af.Dataset, instance, agent string) error {
+func bindAutomaticArchive(ctx context.Context, tx *sql.Tx, out *ac.Response, r af.Registration, existing *af.Dataset) error {
 	if existing != nil {
 		if !existing.Identity.Equal(r.Identity) || existing.SchemaFingerprint != r.SchemaFingerprint || existing.SourceFingerprint != r.SourceFingerprint || existing.ArchiveFormatVersion != r.ArchiveFormatVersion {
 			return ac.ErrConflict
@@ -184,7 +184,6 @@ func bindAutomaticArchive(ctx context.Context, tx *sql.Tx, out *ac.Response, r a
 			return archiveConflictError(err)
 		}
 	}
-	before, _ := json.Marshal(out.Config)
 	if !out.Config.FullHistory || existing == nil || out.Config.ReconcileID != "" || out.Config.ReconcileDate != "" {
 		out.Config.Version++
 	}
@@ -197,10 +196,5 @@ func bindAutomaticArchive(ctx context.Context, tx *sql.Tx, out *ac.Response, r a
 	if err != nil {
 		return err
 	}
-	ids := make([]byte, 16)
-	if _, err = rand.Read(ids); err != nil {
-		return err
-	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO operation_audits(id,instance_id,operation_type,target_type,target_id,actor_id,before_summary,after_summary,status,created_at) VALUES(?,?,'archive.auto_prepare','archive_dataset',?,?,?,?,'success',UTC_TIMESTAMP(6))`, hex.EncodeToString(ids), instance, r.DatasetID, "agent:"+agent, string(before), string(after))
-	return err
+	return nil
 }

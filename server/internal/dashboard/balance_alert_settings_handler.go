@@ -1,11 +1,15 @@
 package dashboard
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
+	"controltower/server/internal/auditmeta"
 	ctauth "controltower/server/internal/auth"
 	"controltower/server/internal/storage"
 )
@@ -48,9 +52,37 @@ func (h BalanceAlertSettingsHandler) ServeHTTP(w http.ResponseWriter, r *http.Re
 			return
 		}
 		v := storage.BalanceAlertUserSetting{InstanceID: site, UserID: req.UserID, Enabled: req.Enabled, UpdatedAt: time.Now().UTC(), UpdatedBy: ctauth.Actor(r)}
+		current, err := h.Store.ListBalanceAlertUserSettings(r.Context(), site)
+		if err != nil {
+			writeDashboardError(w, 500, "query_failed")
+			return
+		}
+		before, existed := current[req.UserID]
 		if err := h.Store.PutBalanceAlertUserSetting(r.Context(), v); err != nil {
 			writeDashboardError(w, 500, "save_failed")
 			return
+		}
+		if auditStore, ok := any(h.Store).(interface {
+			InsertOperationAudit(storage.OperationAudit) error
+		}); ok {
+			beforeValue := any(map[string]any{})
+			if existed {
+				beforeValue = before
+			}
+			beforeJSON, _ := json.Marshal(beforeValue)
+			afterJSON, _ := json.Marshal(v)
+			var raw [16]byte
+			if _, err := rand.Read(raw[:]); err != nil {
+				writeDashboardError(w, 500, "audit_failed")
+				return
+			}
+			audit := storage.OperationAudit{ID: "balance-user-" + hex.EncodeToString(raw[:]), InstanceID: site, OperationType: "settings.balance_alert_user_update", TargetType: "balance_alert_user", TargetID: strconv.FormatInt(req.UserID, 10), ActorID: ctauth.Actor(r), SourceComponent: "system", BeforeSummary: string(beforeJSON), AfterSummary: string(afterJSON), Status: "succeeded", CreatedAt: v.UpdatedAt, UpdatedAt: v.UpdatedAt}
+			auditmeta.Enrich(r, &audit)
+			if err := auditStore.InsertOperationAudit(audit); err != nil {
+				writeDashboardError(w, 500, "audit_failed")
+				return
+			}
+			auditmeta.MarkSemanticAudit(r)
 		}
 		writeDashboardJSON(w, 200, v)
 	default:

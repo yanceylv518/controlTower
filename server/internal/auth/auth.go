@@ -18,6 +18,15 @@ import (
 
 const iterations = 600000
 
+const (
+	maxLoginPasswordBytes    = 1024
+	maxTrackedLoginAttempts  = 8192
+	loginFailureThreshold    = 5
+	loginAttemptLockDuration = 10 * time.Minute
+	loginAttemptRetention    = 10 * time.Minute
+	loginAttemptCleanupEvery = time.Minute
+)
+
 var ErrInvalid = errors.New("invalid credentials")
 var ErrLocked = errors.New("locked")
 
@@ -35,14 +44,16 @@ type Store interface {
 	DeleteExpiredSessions(time.Time) (int, error)
 }
 type attempt struct {
-	failures int
-	until    time.Time
+	failures    int
+	until       time.Time
+	lastFailure time.Time
 }
 type Manager struct {
-	store    Store
-	ttl      time.Duration
-	mu       sync.Mutex
-	attempts map[string]attempt
+	store              Store
+	ttl                time.Duration
+	mu                 sync.Mutex
+	attempts           map[string]attempt
+	nextAttemptCleanup time.Time
 }
 
 func NewManager(s Store, ttl time.Duration) *Manager {
@@ -80,26 +91,21 @@ func VerifyPassword(v, p string) bool {
 	return e == nil && subtle.ConstantTimeCompare(got, want) == 1
 }
 func (m *Manager) Login(name, p string, now time.Time) (storage.User, storage.Session, error) {
-	m.mu.Lock()
-	a := m.attempts[name]
-	if now.Before(a.until) {
-		m.mu.Unlock()
+	if strings.TrimSpace(name) == "" {
+		return storage.User{}, storage.Session{}, ErrInvalid
+	}
+	if m.loginLocked(name, now) {
 		return storage.User{}, storage.Session{}, ErrLocked
 	}
-	m.mu.Unlock()
 	u, ok, e := m.store.UserByUsername(name)
 	if e != nil {
 		return u, storage.Session{}, e
 	}
-	if !ok || !u.Enabled || !VerifyPassword(u.PasswordHash, p) {
-		m.mu.Lock()
-		a = m.attempts[name]
-		a.failures++
-		if a.failures >= 5 {
-			a.until = now.Add(10 * time.Minute)
-		}
-		m.attempts[name] = a
-		m.mu.Unlock()
+	if !ok || !u.Enabled {
+		return u, storage.Session{}, ErrInvalid
+	}
+	if !VerifyPassword(u.PasswordHash, p) {
+		m.recordLoginFailure(name, now)
 		return u, storage.Session{}, ErrInvalid
 	}
 	m.mu.Lock()
@@ -113,6 +119,55 @@ func (m *Manager) Login(name, p string, now time.Time) (storage.User, storage.Se
 	e = m.store.CreateSession(s)
 	return u, s, e
 }
+
+func (m *Manager) loginLocked(name string, now time.Time) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.cleanupLoginAttemptsLocked(now)
+	a, ok := m.attempts[name]
+	if !ok {
+		return false
+	}
+	if now.Before(a.until) {
+		return true
+	}
+	if !a.until.IsZero() || !now.Before(a.lastFailure.Add(loginAttemptRetention)) {
+		delete(m.attempts, name)
+	}
+	return false
+}
+
+func (m *Manager) recordLoginFailure(name string, now time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.cleanupLoginAttemptsLocked(now)
+	a, exists := m.attempts[name]
+	if !exists && len(m.attempts) >= maxTrackedLoginAttempts {
+		// 不为任意新用户名分配状态，避免未认证输入耗尽内存。
+		return
+	}
+	if !a.until.IsZero() || (!a.lastFailure.IsZero() && !now.Before(a.lastFailure.Add(loginAttemptRetention))) {
+		a = attempt{}
+	}
+	a.failures++
+	a.lastFailure = now
+	if a.failures >= loginFailureThreshold {
+		a.until = now.Add(loginAttemptLockDuration)
+	}
+	m.attempts[name] = a
+}
+
+func (m *Manager) cleanupLoginAttemptsLocked(now time.Time) {
+	if !m.nextAttemptCleanup.IsZero() && now.Before(m.nextAttemptCleanup) {
+		return
+	}
+	m.nextAttemptCleanup = now.Add(loginAttemptCleanupEvery)
+	for name, value := range m.attempts {
+		if !now.Before(value.lastFailure.Add(loginAttemptRetention)) {
+			delete(m.attempts, name)
+		}
+	}
+}
 func (m *Manager) Validate(id string, now time.Time) (storage.User, bool) {
 	s, ok, e := m.store.SessionByID(id)
 	if e != nil || !ok || !s.ExpiresAt.After(now) {
@@ -124,7 +179,7 @@ func (m *Manager) Validate(id string, now time.Time) (storage.User, bool) {
 
 func (m *Manager) ListUsers() ([]storage.User, error) { return m.store.ListUsers() }
 func (m *Manager) CreateScopedUser(username, password, role, site string, userIDs []int64, now time.Time) error {
-	if strings.TrimSpace(username) == "" || len(password) < 8 || (role != "admin" && role != "viewer") {
+	if strings.TrimSpace(username) == "" || len(password) < 8 || len(password) > maxLoginPasswordBytes || (role != "admin" && role != "viewer") {
 		return ErrInvalid
 	}
 	if role == "viewer" && (strings.TrimSpace(site) == "" || len(userIDs) == 0) {
@@ -152,7 +207,7 @@ func (m *Manager) UpdateScopedUser(id int64, role, site string, userIDs []int64,
 }
 func (m *Manager) Logout(id string) error { return m.store.DeleteSession(id) }
 func (m *Manager) ChangePassword(id int64, old, n string, now time.Time) error {
-	if len(n) < 8 {
+	if len(n) < 8 || len(n) > maxLoginPasswordBytes {
 		return ErrInvalid
 	}
 	u, ok, e := m.store.UserByID(id)
