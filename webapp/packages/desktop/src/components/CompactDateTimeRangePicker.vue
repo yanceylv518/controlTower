@@ -4,7 +4,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 type DateRange = [Date, Date]
 type PresetKey = 'today' | '7d' | 'week' | '30d' | 'month'
 
-const props = withDefaults(defineProps<{ modelValue: DateRange; resetEnabled?: boolean; compact?: boolean }>(), {
+const props = withDefaults(defineProps<{ modelValue: DateRange | null; resetEnabled?: boolean; compact?: boolean }>(), {
   resetEnabled: false,
 })
 const emit = defineEmits<{

@@ -3,15 +3,19 @@ package dashboard
 import (
 	"context"
 	"controltower/internal/channelcontrol"
+	"controltower/server/internal/auditmeta"
 	ctauth "controltower/server/internal/auth"
 	"controltower/server/internal/settings"
 	"controltower/server/internal/storage"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -26,7 +30,10 @@ type InstanceStore interface {
 	ExpireInstanceTokens(string, time.Time, time.Time) error
 }
 type InstanceHandler struct {
-	Store          InstanceStore
+	Store InstanceStore
+	Audit interface {
+		InsertOperationAudit(storage.OperationAudit) error
+	}
 	Runtime        RuntimeStore
 	Pepper         string
 	Settings       *settings.Provider
@@ -185,6 +192,10 @@ func (i InstanceHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeDashboardError(w, 500, "query_failed")
 		return
 	}
+	if err := i.recordMutation(r, "instance.create", q.ID, "{}", instanceSummary(v)); err != nil {
+		writeDashboardError(w, 500, "audit_failed")
+		return
+	}
 	writeDashboardJSON(w, 201, map[string]string{"instance_id": q.ID, "site_id": siteOf(v), "name": q.Name, "token": t})
 }
 func (i InstanceHandler) Update(w http.ResponseWriter, r *http.Request) {
@@ -192,6 +203,11 @@ func (i InstanceHandler) Update(w http.ResponseWriter, r *http.Request) {
 	v, ok, e := i.Store.InstanceByID(id)
 	if e != nil || !ok || v.Deleted {
 		writeDashboardError(w, 404, "instance_not_found")
+		return
+	}
+	before, e := i.instanceSnapshot(v)
+	if e != nil {
+		writeDashboardError(w, 500, "query_failed")
 		return
 	}
 	var q struct {
@@ -311,7 +327,84 @@ func (i InstanceHandler) Update(w http.ResponseWriter, r *http.Request) {
 		writeDashboardError(w, 500, "query_failed")
 		return
 	}
+	after, e := i.instanceSnapshot(v)
+	if e != nil {
+		writeDashboardError(w, 500, "query_failed")
+		return
+	}
+	if err := i.recordMutation(r, "instance.update", id, string(before), string(after)); err != nil {
+		writeDashboardError(w, 500, "audit_failed")
+		return
+	}
 	writeDashboardJSON(w, 200, item)
+}
+
+func instanceSummary(instance storage.Instance) string {
+	encoded, _ := json.Marshal(map[string]any{"instance_id": instance.ID, "site_id": siteOf(instance), "name": instance.Name, "enabled": instance.Enabled})
+	return string(encoded)
+}
+
+func (i InstanceHandler) instanceSnapshot(instance storage.Instance) ([]byte, error) {
+	summary := map[string]any{}
+	if err := json.Unmarshal([]byte(instanceSummary(instance)), &summary); err != nil {
+		return nil, err
+	}
+	if i.ReadonlyConfig != nil {
+		encrypted, err := i.ReadonlyConfig.ReadonlyDSNForSite(siteOf(instance))
+		if err != nil {
+			return nil, err
+		}
+		summary["logs_readonly_configured"] = encrypted != ""
+		if clear, err := decryptSecret(i.SecretKey, encrypted); err == nil && clear != "" {
+			summary["logs_readonly_dsn_fingerprint"] = auditSecretFingerprint(i.SecretKey, clear)
+		}
+	}
+	if i.ControlConfig != nil {
+		config, err := i.ControlConfig.ControlConfigForSite(siteOf(instance))
+		if err != nil {
+			return nil, err
+		}
+		summary["control_configured"] = config.EncryptedToken != ""
+		summary["control_api_endpoint"] = safeControlAPIEndpoint(config.APIURL)
+		summary["control_admin_user_id"] = config.AdminUserID
+		if clear, err := decryptSecret(i.SecretKey, config.EncryptedToken); err == nil && clear != "" {
+			summary["control_token_fingerprint"] = auditSecretFingerprint(i.SecretKey, clear)
+		}
+	}
+	return json.Marshal(summary)
+}
+
+func auditSecretFingerprint(key, value string) string {
+	mac := hmac.New(sha256.New, []byte(key))
+	_, _ = mac.Write([]byte(value))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+func safeControlAPIEndpoint(value string) string {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil {
+		return ""
+	}
+	parsed.User, parsed.RawQuery, parsed.Fragment = nil, "", ""
+	return parsed.String()
+}
+
+func (i InstanceHandler) recordMutation(r *http.Request, operation, target string, before, after string) error {
+	if i.Audit == nil {
+		return nil
+	}
+	var id [16]byte
+	if _, err := rand.Read(id[:]); err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	entry := storage.OperationAudit{ID: "instance-" + hex.EncodeToString(id[:]), InstanceID: target, OperationType: operation, TargetType: "instance", TargetID: target, ActorID: ctauth.Actor(r), SourceComponent: "system", BeforeSummary: before, AfterSummary: after, Status: "succeeded", CreatedAt: now, UpdatedAt: now}
+	auditmeta.Enrich(r, &entry)
+	if err := i.Audit.InsertOperationAudit(entry); err != nil {
+		return err
+	}
+	auditmeta.MarkSemanticAudit(r)
+	return nil
 }
 
 func defaultControlCheck(ctx context.Context, apiURL, accessToken string, adminUserID int64) error {
@@ -372,6 +465,10 @@ func (i InstanceHandler) Rotate(w http.ResponseWriter, r *http.Request) {
 		writeDashboardError(w, 500, "query_failed")
 		return
 	}
+	if err = i.recordMutation(r, "instance.token_rotate", id, `{"token_state":"previous"}`, fmt.Sprintf(`{"token_state":"rotated","grace_until":%q}`, g.Format(time.RFC3339Nano))); err != nil {
+		writeDashboardError(w, 500, "audit_failed")
+		return
+	}
 	writeDashboardJSON(w, 200, map[string]any{"token": t, "grace_until": g})
 }
 
@@ -386,6 +483,11 @@ func (i InstanceHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		writeDashboardError(w, 404, "instance_not_found")
 		return
 	}
+	before, e := i.instanceSnapshot(v)
+	if e != nil {
+		writeDashboardError(w, 500, "query_failed")
+		return
+	}
 	if v.Enabled {
 		writeDashboardError(w, 409, "disable_instance_first")
 		return
@@ -397,6 +499,10 @@ func (i InstanceHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := store.DeleteInstance(id, time.Now().UTC()); err != nil {
 		writeDashboardError(w, 409, "instance_delete_conflict")
+		return
+	}
+	if err := i.recordMutation(r, "instance.delete", id, string(before), `{"deleted":true}`); err != nil {
+		writeDashboardError(w, 500, "audit_failed")
 		return
 	}
 	writeDashboardJSON(w, 200, map[string]bool{"deleted": true})

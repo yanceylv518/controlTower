@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"controltower/server/internal/auditmeta"
 	"controltower/server/internal/storage"
 	"controltower/server/internal/tuning"
 )
@@ -17,21 +18,32 @@ type tuningStub struct {
 	report          tuning.Report
 	query           tuning.RecommendationQuery
 	saved           tuning.PolicyRecord
+	policy          tuning.PolicyRecord
+	policyExists    bool
+	putPolicyCalls  int
 	baseValues      []tuning.ChannelBaseValue
 	baseSaved       []tuning.ChannelBaseValue
+	baseAudit       storage.OperationAudit
 	syncModels      []string
 	preflight       storage.ChannelCommand
 	preflightStatus string
 	preflightError  string
 	states          []tuning.ContinuousState
 	priorityWrites  []tuning.Recommendation
+	priorityAudits  []storage.OperationAudit
 }
 
 func (s *tuningStub) GetPolicy(string) (tuning.PolicyRecord, bool, error) {
-	return tuning.PolicyRecord{}, false, nil
+	return s.policy, s.policyExists, nil
 }
-func (s *tuningStub) PutPolicy(value tuning.PolicyRecord) error { s.saved = value; return nil }
-func (s *tuningStub) ListEnabledSites() ([]string, error)       { return nil, nil }
+func (s *tuningStub) PutPolicy(value tuning.PolicyRecord) error {
+	s.saved = value
+	s.policy = value
+	s.policyExists = true
+	s.putPolicyCalls++
+	return nil
+}
+func (s *tuningStub) ListEnabledSites() ([]string, error) { return nil, nil }
 func (s *tuningStub) QueryMetrics(string, time.Time, time.Time) ([]tuning.ChannelMetric, error) {
 	return nil, nil
 }
@@ -49,9 +61,10 @@ func (s *tuningStub) RecommendationReport(tuning.RecommendationQuery) (tuning.Re
 func (s *tuningStub) ListChannelBaseValues(string, string) ([]tuning.ChannelBaseValue, error) {
 	return s.baseValues, nil
 }
-func (s *tuningStub) SaveChannelBaseValues(_ string, _ string, values []tuning.ChannelBaseValue, _ time.Time) error {
+func (s *tuningStub) SaveChannelBaseValuesWithAudit(_ string, _ string, values []tuning.ChannelBaseValue, _ time.Time, audit storage.OperationAudit) error {
 	s.baseSaved = append([]tuning.ChannelBaseValue(nil), values...)
 	s.baseValues = append([]tuning.ChannelBaseValue(nil), values...)
+	s.baseAudit = audit
 	return nil
 }
 func (s *tuningStub) ListContinuousStates(string) ([]tuning.ContinuousState, error) {
@@ -59,6 +72,11 @@ func (s *tuningStub) ListContinuousStates(string) ([]tuning.ContinuousState, err
 }
 func (s *tuningStub) CreateContinuousWeightChange(value tuning.Recommendation, _ string, _ time.Time) (string, error) {
 	s.priorityWrites = append(s.priorityWrites, value)
+	return "command-1", nil
+}
+func (s *tuningStub) CreateContinuousWeightChangeWithAudit(value tuning.Recommendation, _ string, _ time.Time, audit storage.OperationAudit) (string, error) {
+	s.priorityWrites = append(s.priorityWrites, value)
+	s.priorityAudits = append(s.priorityAudits, audit)
 	return "command-1", nil
 }
 func (s *tuningStub) SyncChannelBaseValues(_ string, models []string) ([]tuning.ChannelBaseValue, error) {
@@ -76,6 +94,56 @@ func (s *tuningStub) CreateTuningPreflight(_ string, channelID int64, actor stri
 func (s *tuningStub) GetTuningPreflight(_ string, commandID string) (storage.ChannelCommand, bool, error) {
 	return s.preflight, s.preflight.ID == commandID, nil
 }
+
+type tuningAuditRecorder struct{ entries []storage.OperationAudit }
+
+func (s *tuningAuditRecorder) InsertOperationAudit(value storage.OperationAudit) error {
+	s.entries = append(s.entries, value)
+	return nil
+}
+
+func TestTuningPolicyNoOpDoesNotPersistOrAudit(t *testing.T) {
+	s := &tuningStub{}
+	audits := &tuningAuditRecorder{}
+	h := NewHandler(nil).WithTuningStore(s).WithOperationAuditStore(audits)
+	body, err := json.Marshal(tuning.DefaultPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest(http.MethodPut, "/api/dashboard/tuning/policy?site_id=s", bytes.NewReader(append(append([]byte(`{"mode":"observe","policy":`), body...), []byte("}")...)))
+	r = auditmeta.WithRequestMetadata(r, auditmeta.RequestMetadata{ActorID: "operator"})
+	rr := httptest.NewRecorder()
+	h.HandleTuningPolicy(rr, r)
+	if rr.Code != http.StatusOK || s.putPolicyCalls != 0 || len(audits.entries) != 0 {
+		t.Fatalf("default policy no-op must not persist or audit: status=%d puts=%d audits=%#v body=%s", rr.Code, s.putPolicyCalls, audits.entries, rr.Body.String())
+	}
+	if !auditmeta.AuditHandledWithoutRecord(r) || auditmeta.SemanticAuditRecorded(r) {
+		t.Fatal("successful no-op must suppress generic HTTP audit")
+	}
+}
+
+func TestTuningPolicyChangeIsPersistedAndAuditedOnce(t *testing.T) {
+	policy := tuning.DefaultPolicy()
+	policy.Continuous.Sensitivity = 1.5
+	policyJSON, err := json.Marshal(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &tuningStub{policy: tuning.PolicyRecord{InstanceID: "s", Policy: tuning.DefaultPolicy(), Mode: "observe"}, policyExists: true}
+	audits := &tuningAuditRecorder{}
+	h := NewHandler(nil).WithTuningStore(s).WithOperationAuditStore(audits)
+	r := httptest.NewRequest(http.MethodPut, "/api/dashboard/tuning/policy?site_id=s", bytes.NewReader(append(append([]byte(`{"mode":"observe","policy":`), policyJSON...), []byte("}")...)))
+	r = auditmeta.WithRequestMetadata(r, auditmeta.RequestMetadata{ActorID: "operator"})
+	rr := httptest.NewRecorder()
+	h.HandleTuningPolicy(rr, r)
+	if rr.Code != http.StatusOK || s.putPolicyCalls != 1 || len(audits.entries) != 1 {
+		t.Fatalf("changed policy must be persisted and audited once: status=%d puts=%d audits=%#v body=%s", rr.Code, s.putPolicyCalls, audits.entries, rr.Body.String())
+	}
+	if audits.entries[0].OperationType != "tuning.policy_update" || !auditmeta.SemanticAuditRecorded(r) {
+		t.Fatalf("unexpected semantic audit: %#v", audits.entries[0])
+	}
+}
+
 func TestTuningPolicyDefaultValidationAndMode(t *testing.T) {
 	s := &tuningStub{}
 	h := NewHandler(nil).WithTuningStore(s)
@@ -165,10 +233,17 @@ func TestTuningBaseValuesSyncDoesNotPersistAndPutValidates(t *testing.T) {
 		t.Fatalf("invalid values must not persist: %d %s", rr.Code, rr.Body.String())
 	}
 
+	r := httptest.NewRequest(http.MethodPut, "/api/dashboard/tuning/base-values?instance_id=i", bytes.NewBufferString(`{"items":[{"channel_id":7,"model_name":"m","base_weight":10,"base_priority":3}]}`))
+	r.RemoteAddr = "203.0.113.8:4321"
+	r.Pattern = "PUT /api/dashboard/tuning/base-values"
+	r = auditmeta.WithRequestMetadata(r, auditmeta.RequestMetadata{RequestID: "request-base-1", ActorID: "operator", ActorType: "human", ActorRole: "admin", AuthMethod: "session"})
 	rr = httptest.NewRecorder()
-	h.HandleTuningBaseValues(rr, httptest.NewRequest(http.MethodPut, "/api/dashboard/tuning/base-values?instance_id=i", bytes.NewBufferString(`{"items":[{"channel_id":7,"model_name":"m","base_weight":10,"base_priority":3}]}`)))
+	h.HandleTuningBaseValues(rr, r)
 	if rr.Code != http.StatusOK || len(s.baseSaved) != 1 {
 		t.Fatalf("valid values must persist: %d %s", rr.Code, rr.Body.String())
+	}
+	if s.baseAudit.RequestID != "request-base-1" || s.baseAudit.CorrelationID != "request-base-1" || s.baseAudit.ClientIP != "203.0.113.8" || s.baseAudit.AuthMethod != "session" || s.baseAudit.HTTPMethod != http.MethodPut || s.baseAudit.Route != r.Pattern || s.baseAudit.ActorRole != "admin" {
+		t.Fatalf("base-value audit metadata was not forwarded: %+v", s.baseAudit)
 	}
 }
 
@@ -181,8 +256,10 @@ func TestSavingBasePrioritySyncsOnlineIncludingCircuitChannels(t *testing.T) {
 	s := &tuningStub{baseValues: before, states: []tuning.ContinuousState{{ChannelID: 8, Phase: "circuit"}}}
 	h := NewHandler(nil).WithTuningStore(s)
 	body := `{"items":[{"channel_id":7,"channel_name":"normal","model_name":"m","base_weight":10,"base_priority":3},{"channel_id":8,"channel_name":"circuit","model_name":"m","base_weight":10,"base_priority":4}]}`
+	r := httptest.NewRequest(http.MethodPut, "/api/dashboard/tuning/base-values?site_id=i", bytes.NewBufferString(body))
+	r = auditmeta.WithRequestMetadata(r, auditmeta.RequestMetadata{RequestID: "request-priority-1", ActorID: "operator", ActorType: "human", ActorRole: "admin", AuthMethod: "session"})
 	rr := httptest.NewRecorder()
-	h.HandleTuningBaseValues(rr, httptest.NewRequest(http.MethodPut, "/api/dashboard/tuning/base-values?site_id=i", bytes.NewBufferString(body)))
+	h.HandleTuningBaseValues(rr, r)
 	if rr.Code != http.StatusOK || len(s.priorityWrites) != 2 {
 		t.Fatalf("expected normal and circuit priority sync: %d %s %#v", rr.Code, rr.Body.String(), s.priorityWrites)
 	}
@@ -195,5 +272,23 @@ func TestSavingBasePrioritySyncsOnlineIncludingCircuitChannels(t *testing.T) {
 	}
 	if len(s.baseSaved) != 2 || s.baseSaved[1].BasePriority != 4 {
 		t.Fatalf("circuit channel must still save latest base priority: %#v", s.baseSaved)
+	}
+	if len(s.priorityAudits) != 2 || s.priorityAudits[0].RequestID != "request-priority-1" || s.priorityAudits[1].RequestID != "request-priority-1" {
+		t.Fatalf("priority-sync audits must retain the initiating request: %#v", s.priorityAudits)
+	}
+}
+
+func TestSavingWeightDoesNotSyncUnchangedBasePriority(t *testing.T) {
+	before := []tuning.ChannelBaseValue{{
+		ChannelID: 7, ChannelName: "channel", ModelName: "m", BaseWeight: 10, BasePriority: 9,
+		CurrentWeight: 8, CurrentPriority: 3,
+	}}
+	s := &tuningStub{baseValues: before}
+	h := NewHandler(nil).WithTuningStore(s)
+	body := `{"items":[{"channel_id":7,"channel_name":"channel","model_name":"m","base_weight":20,"base_priority":9,"max_rpm":0,"max_tpm":0}]}`
+	rr := httptest.NewRecorder()
+	h.HandleTuningBaseValues(rr, httptest.NewRequest(http.MethodPut, "/api/dashboard/tuning/base-values?site_id=s", bytes.NewBufferString(body)))
+	if rr.Code != http.StatusOK || len(s.priorityWrites) != 0 {
+		t.Fatalf("weight-only update must not synchronize an unchanged base priority: status=%d writes=%#v body=%s", rr.Code, s.priorityWrites, rr.Body.String())
 	}
 }

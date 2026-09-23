@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS instances (
   base_url VARCHAR(512) NOT NULL,
   enabled TINYINT(1) NOT NULL,
   created_at DATETIME(6) NOT NULL,
-  updated_at DATETIME(6) NOT NULL
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS agents (
@@ -266,13 +266,28 @@ CREATE TABLE IF NOT EXISTS operation_audits (
   target_type VARCHAR(64) NOT NULL,
   target_id VARCHAR(128) NOT NULL,
   actor_id VARCHAR(128) NOT NULL,
+  actor_type VARCHAR(24) NOT NULL DEFAULT 'unknown',
+  actor_role VARCHAR(32) NOT NULL DEFAULT '',
+  source_component VARCHAR(64) NOT NULL DEFAULT '',
+  trigger_type VARCHAR(24) NOT NULL DEFAULT 'unknown',
+  request_id VARCHAR(64) NOT NULL DEFAULT '',
+  correlation_id VARCHAR(128) NOT NULL DEFAULT '',
+  client_ip VARCHAR(64) NOT NULL DEFAULT '',
+  auth_method VARCHAR(24) NOT NULL DEFAULT '',
+  http_method VARCHAR(12) NOT NULL DEFAULT '',
+  route VARCHAR(255) NOT NULL DEFAULT '',
+  http_status SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+  error_summary VARCHAR(1000) NOT NULL DEFAULT '',
   before_summary TEXT NOT NULL,
   after_summary TEXT NOT NULL,
   status VARCHAR(32) NOT NULL,
-  created_at DATETIME(6) NOT NULL
+  created_at DATETIME(6) NOT NULL,
+  updated_at DATETIME(6) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE INDEX idx_operation_audits_instance_created ON operation_audits (instance_id, created_at);
+CREATE INDEX idx_operation_audits_actor_created ON operation_audits (actor_id, created_at);
+CREATE INDEX idx_operation_audits_correlation ON operation_audits (correlation_id, created_at);
 
 CREATE TABLE IF NOT EXISTS channel_snapshots (
   id VARCHAR(64) NOT NULL PRIMARY KEY,

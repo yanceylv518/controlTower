@@ -2,8 +2,11 @@ package dashboard
 
 import (
 	"controltower/internal/channelcontrol"
+	"controltower/server/internal/auditmeta"
 	ctauth "controltower/server/internal/auth"
 	"controltower/server/internal/storage"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -62,7 +65,12 @@ func (h ChannelGroupPresetsHandler) ServeHTTP(w http.ResponseWriter, r *http.Req
 			item.Groups = strings.Split(group, ",")
 			names[name], ids[item.ID] = true, true
 		}
-		err := h.Store.SaveChannelGroupPresets(r.Context(), site, value, ctauth.Actor(r), time.Now().UTC())
+		before, err := h.Store.LoadChannelGroupPresets(r.Context(), site)
+		if err != nil {
+			writeDashboardError(w, 500, "query_failed")
+			return
+		}
+		err = h.Store.SaveChannelGroupPresets(r.Context(), site, value, ctauth.Actor(r), time.Now().UTC())
 		if errors.Is(err, storage.ErrGroupPresetConflict) {
 			writeDashboardError(w, 409, "presets_changed")
 			return
@@ -72,6 +80,25 @@ func (h ChannelGroupPresetsHandler) ServeHTTP(w http.ResponseWriter, r *http.Req
 			return
 		}
 		value.Revision++
+		if auditStore, ok := any(h.Store).(interface {
+			InsertOperationAudit(storage.OperationAudit) error
+		}); ok {
+			beforeJSON, _ := json.Marshal(before)
+			afterJSON, _ := json.Marshal(value)
+			var raw [16]byte
+			if _, err := rand.Read(raw[:]); err != nil {
+				writeDashboardError(w, 500, "audit_failed")
+				return
+			}
+			now := time.Now().UTC()
+			audit := storage.OperationAudit{ID: "group-presets-" + hex.EncodeToString(raw[:]), InstanceID: site, OperationType: "tuning.group_presets_update", TargetType: "tuning_group_presets", TargetID: site, ActorID: ctauth.Actor(r), SourceComponent: "tuning", BeforeSummary: string(beforeJSON), AfterSummary: string(afterJSON), Status: "succeeded", CreatedAt: now, UpdatedAt: now}
+			auditmeta.Enrich(r, &audit)
+			if err := auditStore.InsertOperationAudit(audit); err != nil {
+				writeDashboardError(w, 500, "audit_failed")
+				return
+			}
+			auditmeta.MarkSemanticAudit(r)
+		}
 		writeDashboardJSON(w, 200, value)
 	default:
 		writeDashboardError(w, 405, "method_not_allowed")

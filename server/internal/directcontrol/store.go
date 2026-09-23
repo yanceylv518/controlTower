@@ -96,6 +96,10 @@ func (s Store) controllerForSite(siteID string) (Controller, bool, error) {
 // direct sites, then records the same paper trail the command path leaves.
 // The recommendation's InstanceID carries the site id (engine convention).
 func (s Store) CreateContinuousWeightChange(v tuning.Recommendation, actor string, now time.Time) (string, error) {
+	return s.CreateContinuousWeightChangeWithAudit(v, actor, now, storage.OperationAudit{})
+}
+
+func (s Store) CreateContinuousWeightChangeWithAudit(v tuning.Recommendation, actor string, now time.Time, auditContext storage.OperationAudit) (string, error) {
 	started := time.Now()
 	controller, direct, err := s.controllerForSite(v.InstanceID)
 	if err != nil {
@@ -103,7 +107,7 @@ func (s Store) CreateContinuousWeightChange(v tuning.Recommendation, actor strin
 		return "", err
 	}
 	if !direct {
-		return s.Store.CreateContinuousWeightChange(v, actor, now)
+		return s.Store.CreateContinuousWeightChangeWithAudit(v, actor, now, auditContext)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
 	defer cancel()
@@ -128,7 +132,7 @@ func (s Store) CreateContinuousWeightChange(v tuning.Recommendation, actor strin
 		if err := s.Store.ApplyChannelWrite(v.InstanceID, v.ChannelID, weight, priority, nil, writtenAt); err != nil {
 			return "", fmt.Errorf("new-api write succeeded but channel state sync failed: %w", err)
 		}
-		return s.Store.RecordDirectWeightChange(v, actor, now)
+		return s.Store.RecordDirectWeightChangeWithAudit(v, actor, now, auditContext)
 	})
 	log.Printf("direct control: weight write site=%s channel=%d target=%d duration=%s succeeded", v.InstanceID, v.ChannelID, v.ProposedWeight, time.Since(started))
 	return commandID, err

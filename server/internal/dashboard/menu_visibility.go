@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"controltower/server/internal/auditmeta"
 	ctauth "controltower/server/internal/auth"
 	"controltower/server/internal/storage"
 	"crypto/rand"
@@ -83,10 +84,13 @@ func (h MenuVisibilityHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		}
 		id := make([]byte, 16)
 		_, _ = rand.Read(id)
-		if err := h.Store.InsertOperationAudit(storage.OperationAudit{ID: hex.EncodeToString(id), OperationType: "menu_visibility.update", TargetType: "system_settings", TargetID: "global", ActorID: actor, BeforeSummary: raw, AfterSummary: string(encoded), Status: "succeeded", CreatedAt: time.Now().UTC()}); err != nil {
+		audit := storage.OperationAudit{ID: hex.EncodeToString(id), OperationType: "menu_visibility.update", TargetType: "system_settings", TargetID: "global", ActorID: actor, BeforeSummary: raw, AfterSummary: string(encoded), Status: "succeeded", CreatedAt: time.Now().UTC()}
+		auditmeta.Enrich(r, &audit)
+		if err := h.Store.InsertOperationAudit(audit); err != nil {
 			writeDashboardError(w, 500, "audit_failed")
 			return
 		}
+		auditmeta.MarkSemanticAudit(r)
 		values = next
 	}
 	writeDashboardJSON(w, 200, map[string]any{"items": values})

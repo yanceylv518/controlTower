@@ -17,7 +17,7 @@ import (
 
 func TestInstanceCreateRotateAndDisable(t *testing.T) {
 	s := ingest.NewMemoryStore()
-	h := InstanceHandler{Store: s, Runtime: s, Pepper: "pep"}
+	h := InstanceHandler{Store: s, Audit: s, Runtime: s, Pepper: "pep"}
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(`{"instance_id":"inst-a","name":"A"}`))
 	h.Create(w, r)
@@ -31,6 +31,31 @@ func TestInstanceCreateRotateAndDisable(t *testing.T) {
 	}
 	if id, ok, _ := s.InstanceIDByTokenHash(tokenHash("pep", out["token"]), time.Now()); !ok || id != "inst-a" {
 		t.Fatal("token lookup failed")
+	}
+	audits, _ := s.QueryOperationAudits(storage.OperationAuditQuery{Limit: 20})
+	if audits.Total != 1 || audits.Items[0].OperationType != "instance.create" || strings.Contains(audits.Items[0].AfterSummary, out["token"]) {
+		t.Fatalf("instance creation audit is incomplete or leaked token: %+v", audits.Items)
+	}
+	rotate := httptest.NewRequest(http.MethodPost, "/api/dashboard/instances/inst-a/rotate-token", nil)
+	rotate.SetPathValue("id", "inst-a")
+	rotated := httptest.NewRecorder()
+	h.Rotate(rotated, rotate)
+	if rotated.Code != http.StatusOK {
+		t.Fatalf("rotate status=%d body=%s", rotated.Code, rotated.Body.String())
+	}
+	audits, _ = s.QueryOperationAudits(storage.OperationAuditQuery{Limit: 20})
+	var rotatedAudit *storage.OperationAudit
+	for index := range audits.Items {
+		if audits.Items[index].OperationType == "instance.token_rotate" {
+			rotatedAudit = &audits.Items[index]
+			break
+		}
+	}
+	if audits.Total != 2 || rotatedAudit == nil {
+		t.Fatalf("token rotation audit missing: %+v", audits.Items)
+	}
+	if strings.Contains(rotatedAudit.AfterSummary, "token-value") || strings.Contains(rotatedAudit.AfterSummary, `"token":`) {
+		t.Fatal("rotated token leaked into audit")
 	}
 	w = httptest.NewRecorder()
 	h.Create(w, httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(`{"instance_id":"BAD","name":"x"}`)))

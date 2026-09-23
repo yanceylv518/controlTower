@@ -3,6 +3,7 @@ package ingest
 import (
 	"errors"
 	"sort"
+	"strings"
 	"time"
 
 	"controltower/server/internal/storage"
@@ -54,6 +55,12 @@ func (s *MemoryStore) ExpireStaleCommands(before time.Time) (int, error) {
 			v.Status = "expired"
 			v.UpdatedAt = time.Now().UTC()
 			s.channelCommands[id] = v
+			if audit, ok := s.operationAudits[id]; ok && audit.Status == "submitted" {
+				audit.Status = "expired"
+				audit.ErrorSummary = "command expired before execution"
+				audit.UpdatedAt = v.UpdatedAt
+				s.operationAudits[id] = audit
+			}
 			n++
 		}
 	}
@@ -80,36 +87,138 @@ func (s *MemoryStore) QueryChannelCommands(q storage.ChannelCommandQuery) ([]sto
 	return append([]storage.ChannelCommand(nil), all[offset:end]...), nil
 }
 func (s *MemoryStore) InsertOperationAudit(v storage.OperationAudit) error {
-	if !storage.IsConfigurationAuditOperation(v.OperationType) {
+	v = storage.NormalizeOperationAudit(v)
+	if !storage.IsManualOperationAudit(v) {
 		return nil
+	}
+	if storage.IsExcludedOperationAudit(v.OperationType) {
+		return nil
+	}
+	if !storage.IsSupportedOperationAudit(v.OperationType) {
+		return storage.ErrUnsupportedOperationAudit
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.operationAudits[v.ID]; ok {
+	if old, ok := s.operationAudits[v.ID]; ok {
+		if old.Status == "submitted" && v.Status != "submitted" {
+			old.AfterSummary = v.AfterSummary
+			old.ErrorSummary = v.ErrorSummary
+			old.HTTPStatus = v.HTTPStatus
+			old.Status = v.Status
+			old.UpdatedAt = v.UpdatedAt
+			s.operationAudits[v.ID] = old
+		}
 		return nil
 	}
 	s.operationAudits[v.ID] = v
 	return nil
 }
-func (s *MemoryStore) QueryOperationAudits(q storage.OperationAuditQuery) ([]storage.OperationAudit, error) {
+
+func (s *MemoryStore) UpdateOperationAuditHTTPStatus(requestID string, status int) error {
+	if requestID == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, audit := range s.operationAudits {
+		if audit.RequestID == requestID {
+			audit.HTTPStatus = status
+			s.operationAudits[id] = audit
+		}
+	}
+	return nil
+}
+
+func (s *MemoryStore) QueryOperationAudits(q storage.OperationAuditQuery) (storage.OperationAuditPage, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var all []storage.OperationAudit
 	for _, v := range s.operationAudits {
-		if q.InstanceID == "" || v.InstanceID == q.InstanceID {
-			all = append(all, v)
+		if !storage.IsManualOperationAudit(v) {
+			continue
 		}
+		if q.InstanceID != "" && v.InstanceID != q.InstanceID {
+			continue
+		}
+		if q.SiteID != "" && v.InstanceID != q.SiteID {
+			instance, ok := s.instances[v.InstanceID]
+			if !ok || (instance.SiteID != q.SiteID && !(instance.SiteID == "" && instance.ID == q.SiteID)) {
+				continue
+			}
+		}
+		if q.OperationType != "" && !storage.OperationAuditTypeMatchesFilter(v.OperationType, q.OperationType) {
+			continue
+		}
+		if q.Actor != "" && !strings.Contains(strings.ToLower(v.ActorID), strings.ToLower(q.Actor)) {
+			continue
+		}
+		if q.Actor != "" && q.ActorExact && !strings.EqualFold(v.ActorID, q.Actor) {
+			continue
+		}
+		if q.RequestID != "" && v.RequestID != q.RequestID {
+			continue
+		}
+		if q.CorrelationID != "" && v.CorrelationID != q.CorrelationID {
+			continue
+		}
+		if q.Status != "" && v.Status != q.Status && !((q.Status == "success" || q.Status == "succeeded") && (v.Status == "success" || v.Status == "succeeded")) {
+			continue
+		}
+		if q.Source != "" && v.SourceComponent != q.Source {
+			continue
+		}
+		if q.Trigger != "" && v.TriggerType != q.Trigger {
+			continue
+		}
+		if !q.From.IsZero() && v.CreatedAt.Before(q.From) {
+			continue
+		}
+		if !q.To.IsZero() && !v.CreatedAt.Before(q.To) {
+			continue
+		}
+		if q.Search != "" {
+			needle := strings.ToLower(q.Search)
+			if !strings.Contains(strings.ToLower(v.OperationType+" "+v.TargetType+" "+v.TargetID+" "+v.ActorID+" "+v.ErrorSummary+" "+v.RequestID+" "+v.CorrelationID), needle) {
+				continue
+			}
+		}
+		all = append(all, v)
 	}
-	sort.Slice(all, func(i, j int) bool { return all[i].CreatedAt.After(all[j].CreatedAt) })
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].CreatedAt.Equal(all[j].CreatedAt) {
+			return all[i].ID > all[j].ID
+		}
+		return all[i].CreatedAt.After(all[j].CreatedAt)
+	})
 	limit, offset := storage.NormalizeCommandPagination(q.Limit, q.Offset)
+	page := storage.OperationAuditPage{Total: int64(len(all)), OperationTypes: storage.OperationAuditFilterTypes()}
+	if q.ActorOptions {
+		actors := map[string]bool{}
+		for _, v := range all {
+			if v.ActorID != "" {
+				actors[v.ActorID] = true
+			}
+		}
+		page.Actors = []string{}
+		for actor := range actors {
+			page.Actors = append(page.Actors, actor)
+		}
+		sort.Strings(page.Actors)
+		if len(page.Actors) > 100 {
+			page.Actors = page.Actors[:100]
+		}
+		return page, nil
+	}
 	if offset >= len(all) {
-		return []storage.OperationAudit{}, nil
+		page.Items = []storage.OperationAudit{}
+		return page, nil
 	}
 	end := offset + limit
 	if end > len(all) {
 		end = len(all)
 	}
-	return append([]storage.OperationAudit(nil), all[offset:end]...), nil
+	page.Items = append([]storage.OperationAudit(nil), all[offset:end]...)
+	return page, nil
 }
 
 // PruneBefore deletes rows strictly older than cutoff. Audits, alerts,

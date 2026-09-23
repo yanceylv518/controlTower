@@ -101,6 +101,20 @@ func (h BillingUpstreamConfigHandler) ServeHTTP(w http.ResponseWriter, r *http.R
 		if item.UpdatedBy == "" {
 			item.UpdatedBy = "legacy-admin"
 		}
+		var before *billing.Upstream
+		if item.ID > 0 {
+			existingItems, err := h.Store.ListBillingUpstreams(r.Context(), item.InstanceID)
+			if err != nil {
+				writeDashboardError(w, 500, "billing_upstreams_query_failed")
+				return
+			}
+			for index := range existingItems {
+				if existingItems[index].ID == item.ID {
+					before = &existingItems[index]
+					break
+				}
+			}
+		}
 		saved, err := h.Store.PutBillingUpstream(r.Context(), item)
 		if err != nil {
 			if err == sql.ErrNoRows {
@@ -110,6 +124,18 @@ func (h BillingUpstreamConfigHandler) ServeHTTP(w http.ResponseWriter, r *http.R
 			}
 			return
 		}
+		if audit, ok := any(h.Store).(billingAuditStore); ok {
+			beforeValue := any(map[string]any{})
+			operation := "billing.upstream.create"
+			if before != nil {
+				beforeValue = *before
+				operation = "billing.upstream.update"
+			}
+			if err := auditBillingMutation(audit, r, saved.InstanceID, operation, strconv.FormatInt(saved.ID, 10), beforeValue, saved); err != nil {
+				writeDashboardError(w, 500, "billing_upstream_audit_failed")
+				return
+			}
+		}
 		writeDashboardJSON(w, 200, saved)
 	case http.MethodDelete:
 		site := strings.TrimSpace(r.URL.Query().Get("instance_id"))
@@ -118,6 +144,18 @@ func (h BillingUpstreamConfigHandler) ServeHTTP(w http.ResponseWriter, r *http.R
 			writeDashboardError(w, 400, "invalid_upstream")
 			return
 		}
+		existingItems, err := h.Store.ListBillingUpstreams(r.Context(), site)
+		if err != nil {
+			writeDashboardError(w, 500, "billing_upstreams_query_failed")
+			return
+		}
+		var before *billing.Upstream
+		for index := range existingItems {
+			if existingItems[index].ID == id {
+				before = &existingItems[index]
+				break
+			}
+		}
 		if err := h.Store.DeleteBillingUpstream(r.Context(), site, id); err != nil {
 			if err == sql.ErrNoRows {
 				writeDashboardError(w, 404, "upstream_not_found")
@@ -125,6 +163,16 @@ func (h BillingUpstreamConfigHandler) ServeHTTP(w http.ResponseWriter, r *http.R
 				writeDashboardError(w, 500, "upstream_delete_failed")
 			}
 			return
+		}
+		if audit, ok := any(h.Store).(billingAuditStore); ok {
+			beforeValue := any(map[string]any{})
+			if before != nil {
+				beforeValue = *before
+			}
+			if err := auditBillingMutation(audit, r, site, "billing.upstream.delete", strconv.FormatInt(id, 10), beforeValue, map[string]any{"deleted": true}); err != nil {
+				writeDashboardError(w, 500, "billing_upstream_audit_failed")
+				return
+			}
 		}
 		writeDashboardJSON(w, 200, map[string]any{"deleted": true})
 	default:

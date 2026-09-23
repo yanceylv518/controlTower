@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -381,9 +382,25 @@ func (h BillingUserSettingsHandler) ServeHTTP(w http.ResponseWriter, r *http.Req
 		return
 	}
 	item.UpdatedAt, item.UpdatedBy = time.Now().UTC(), ctauth.Actor(r)
+	current, err := h.Store.ListBillingUserSettings(r.Context(), item.InstanceID)
+	if err != nil {
+		writeDashboardError(w, 500, "billing_settings_query_failed")
+		return
+	}
+	before, existed := current[item.UserID]
 	if err := h.Store.PutBillingUserSetting(r.Context(), item); err != nil {
 		writeDashboardError(w, 500, "billing_setting_save_failed")
 		return
+	}
+	if audit, ok := any(h.Store).(billingAuditStore); ok {
+		beforeValue := any(map[string]any{})
+		if existed {
+			beforeValue = before
+		}
+		if err := auditBillingMutation(audit, r, item.InstanceID, "billing.user_setting.update", strconv.FormatInt(item.UserID, 10), beforeValue, item); err != nil {
+			writeDashboardError(w, 500, "billing_setting_audit_failed")
+			return
+		}
 	}
 	writeDashboardJSON(w, 200, item)
 }

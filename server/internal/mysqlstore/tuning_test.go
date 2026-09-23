@@ -1,10 +1,34 @@
 package mysqlstore
 
 import (
+	"controltower/server/internal/storage"
 	"os"
 	"strings"
 	"testing"
 )
+
+func TestWeightChangeAuditMetadataDistinguishesManualAndAutomaticWrites(t *testing.T) {
+	tests := []struct {
+		rule, actor, operation, actorType, trigger string
+	}{
+		{"weight_write", "system:auto", "tuning.auto_execute", "system", "automatic"},
+		{"base_priority_sync", "operator", "tuning.base_priority_sync", "human", "manual"},
+		{"base_priority_sync", "token", "tuning.base_priority_sync", "service_token", "manual"},
+		{"weight_write", "", "tuning.manual_execute", "unknown", "manual"},
+	}
+	for _, test := range tests {
+		t.Run(test.operation+"/"+test.actor, func(t *testing.T) {
+			operation, actorType, trigger := weightChangeAuditMetadata(test.rule, test.actor, storage.OperationAudit{})
+			if operation != test.operation || actorType != test.actorType || trigger != test.trigger {
+				t.Fatalf("got (%q, %q, %q), want (%q, %q, %q)", operation, actorType, trigger, test.operation, test.actorType, test.trigger)
+			}
+		})
+	}
+	operation, actorType, trigger := weightChangeAuditMetadata("weight_write", "system:admin", storage.OperationAudit{ActorType: "human", ActorRole: "admin", AuthMethod: "session"})
+	if operation != "tuning.manual_execute" || actorType != "human" || trigger != "manual" {
+		t.Fatalf("authenticated administrator misclassified: %s %s %s", operation, actorType, trigger)
+	}
+}
 
 func TestLatestChannelsSQLAggregatesSnapshotsOnce(t *testing.T) {
 	for _, fragment := range []string{

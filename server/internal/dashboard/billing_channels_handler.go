@@ -44,11 +44,27 @@ func (h BillingChannelsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 			writeDashboardError(w, 400, "invalid_request")
 			return
 		}
+		current, err := h.Store.ListBillingChannelSettings(r.Context(), v.InstanceID)
+		if err != nil {
+			writeDashboardError(w, 500, "billing_channel_query_failed")
+			return
+		}
+		before, existed := current[v.ChannelID]
 		v.UpdatedAt = time.Now().UTC()
 		v.UpdatedBy = ctauth.Actor(r)
 		if e := h.Store.PutBillingChannelSetting(r.Context(), v); e != nil {
 			writeDashboardError(w, 500, "billing_channel_setting_failed")
 			return
+		}
+		if audit, ok := any(h.Store).(billingAuditStore); ok {
+			beforeValue := any(map[string]any{})
+			if existed {
+				beforeValue = before
+			}
+			if err := auditBillingMutation(audit, r, v.InstanceID, "billing.channel_setting.update", strconv.FormatInt(v.ChannelID, 10), beforeValue, v); err != nil {
+				writeDashboardError(w, 500, "billing_channel_audit_failed")
+				return
+			}
 		}
 		writeDashboardJSON(w, 200, v)
 		return

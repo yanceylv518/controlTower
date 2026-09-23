@@ -159,6 +159,7 @@ func (s Service) SaveReport(req agentgateway.AgentReportRequest) error {
 				}
 			}
 		}
+		auditError := storage.RedactAuditError(result.Error)
 		beforeSummary, afterSummary := "", ""
 		var groupAudit struct {
 			Group       *string `json:"group"`
@@ -166,13 +167,14 @@ func (s Service) SaveReport(req agentgateway.AgentReportRequest) error {
 		}
 		if command.CommandType == "channel.update" && json.Unmarshal([]byte(command.PayloadJSON), &groupAudit) == nil && groupAudit.Group != nil && groupAudit.BeforeGroup != nil {
 			before, _ := json.Marshal(map[string]string{"group": *groupAudit.BeforeGroup})
-			after, _ := json.Marshal(map[string]any{"group": *groupAudit.Group, "result": map[string]any{"status": status, "error": result.Error, "applied_at": result.AppliedAt}})
+			after, _ := json.Marshal(map[string]any{"group": *groupAudit.Group, "result": map[string]any{"status": status, "error": auditError, "applied_at": result.AppliedAt}})
 			beforeSummary, afterSummary = string(before), string(after)
 		} else {
-			summary, _ := json.Marshal(map[string]any{"payload": json.RawMessage(command.PayloadJSON), "result": map[string]any{"status": status, "error": result.Error, "applied_at": result.AppliedAt, "attempts": result.Attempts, "successes": result.Successes, "duration_seconds": result.DurationSeconds}})
+			summary, _ := json.Marshal(map[string]any{"payload": json.RawMessage(command.PayloadJSON), "result": map[string]any{"status": status, "error": auditError, "applied_at": result.AppliedAt, "attempts": result.Attempts, "successes": result.Successes, "duration_seconds": result.DurationSeconds}})
 			afterSummary = string(summary)
 		}
-		if err = s.store.InsertOperationAudit(storage.OperationAudit{ID: command.ID, InstanceID: command.InstanceID, OperationType: command.CommandType, TargetType: "channel", TargetID: strconv.FormatInt(command.ChannelID, 10), ActorID: command.CreatedBy, BeforeSummary: beforeSummary, AfterSummary: afterSummary, Status: status, CreatedAt: time.Now().UTC()}); err != nil {
+		now := time.Now().UTC()
+		if err = s.store.InsertOperationAudit(storage.OperationAudit{ID: command.ID, InstanceID: command.InstanceID, OperationType: command.CommandType, TargetType: "channel", TargetID: strconv.FormatInt(command.ChannelID, 10), ActorID: command.CreatedBy, CorrelationID: command.ID, BeforeSummary: beforeSummary, AfterSummary: afterSummary, ErrorSummary: auditError, Status: status, CreatedAt: now, UpdatedAt: now}); err != nil {
 			return err
 		}
 	}

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"controltower/server/internal/auditmeta"
 	ctauth "controltower/server/internal/auth"
 	"controltower/server/internal/billing"
 	"controltower/server/internal/storage"
@@ -90,5 +91,10 @@ func (h BillingBackfillHandler) audit(r *http.Request, req billingBackfillReques
 	raw := make([]byte, 16)
 	_, _ = rand.Read(raw)
 	after, _ := json.Marshal(map[string]any{"from": req.From, "to": req.To, "days": days})
-	_ = h.Audit.InsertOperationAudit(storage.OperationAudit{ID: hex.EncodeToString(raw), InstanceID: req.InstanceID, OperationType: "billing.backfill", TargetType: "billing_daily", TargetID: req.InstanceID, ActorID: ctauth.Actor(r), AfterSummary: string(after), Status: "succeeded", CreatedAt: time.Now().UTC()})
+	now := time.Now().UTC()
+	entry := storage.OperationAudit{ID: hex.EncodeToString(raw), InstanceID: req.InstanceID, OperationType: "billing.backfill", TargetType: "billing_daily", TargetID: req.InstanceID, ActorID: ctauth.Actor(r), AfterSummary: string(after), Status: "succeeded", CreatedAt: now, UpdatedAt: now}
+	auditmeta.Enrich(r, &entry)
+	if err := h.Audit.InsertOperationAudit(entry); err == nil {
+		auditmeta.MarkSemanticAudit(r)
+	}
 }

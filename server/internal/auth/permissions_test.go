@@ -133,16 +133,56 @@ func TestAccountsCannotEscalateOrModifyViewerRole(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	viewer.Permissions = []string{"audits.read"}
+	if err = s.UpdateUser(viewer); err != nil {
+		t.Fatal(err)
+	}
+	if HasPermission(viewer, "audits.read") || len(userResponse(viewer).Permissions) != 0 {
+		t.Fatal("viewer permissions must not grant access or be exposed through account responses")
+	}
+	if _, err = m.CreateAccount(root.ID, AccountInput{Username: "viewer-auditor", Password: "password1", Role: "viewer", ScopeSite: "site-a", ScopeUserIDs: []int64{11}, Permissions: []string{"audits.read"}}, now); err != ErrForbidden {
+		t.Fatalf("viewer permission grant accepted: %v", err)
+	}
+	if _, _, err = m.UpdateAccount(root.ID, viewer.ID, AccountInput{Role: "viewer", ScopeSite: "site-a", ScopeUserIDs: []int64{11}, Enabled: true, Permissions: []string{"audits.read"}}, now); err != ErrForbidden {
+		t.Fatalf("viewer permission update accepted: %v", err)
+	}
 	if _, _, err = m.UpdateAccount(root.ID, viewer.ID, AccountInput{Role: "admin", Permissions: []string{"*"}}, now); err != ErrInvalid {
 		t.Fatal("viewer role changed")
 	}
 	_, updated, err := m.UpdateAccount(root.ID, viewer.ID, AccountInput{Role: "viewer", ScopeSite: "site-a", ScopeUserIDs: []int64{12}, Enabled: true}, now)
-	if err != nil || updated.ScopeUserIDs[0] != 12 {
+	if err != nil || updated.ScopeUserIDs[0] != 12 || len(updated.Permissions) != 0 {
 		t.Fatalf("viewer edit broken: %v", err)
 	}
 	root.Enabled = false
 	if err = s.UpdateUser(root); err == nil {
 		t.Fatal("last full admin disabled")
+	}
+}
+
+func TestAuditPermissionIsAdminOnlyAndDelegatedWithinGrantablePermissions(t *testing.T) {
+	m, s := setup(t)
+	root, _, _ := s.UserByUsername("admin")
+	if !HasPermission(root, "audits.read") {
+		t.Fatal("the default administrator must retain audit access")
+	}
+	now := time.Now().UTC()
+	accountAdmin, err := m.CreateAccount(root.ID, AccountInput{Username: "account-manager", Password: "password1", Role: "admin", Permissions: []string{"accounts.manage"}}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if canGrant(accountAdmin, []string{"audits.read"}) {
+		t.Fatal("administrator must not grant a permission they do not hold")
+	}
+	auditAdmin, err := m.CreateAccount(root.ID, AccountInput{Username: "audit-manager", Password: "password1", Role: "admin", Permissions: []string{"accounts.manage", "audits.read"}}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !canGrant(auditAdmin, []string{"audits.read"}) {
+		t.Fatal("administrator with audit permission must be able to delegate it")
+	}
+	created, err := m.CreateAccount(auditAdmin.ID, AccountInput{Username: "audit-reader", Password: "password1", Role: "admin", Permissions: []string{"audits.read"}}, now)
+	if err != nil || !HasPermission(created, "audits.read") {
+		t.Fatalf("audit permission delegation failed: user=%+v err=%v", created, err)
 	}
 }
 
@@ -211,10 +251,10 @@ func TestAccountHandlerAuditUsesSessionIdentityAndNeverPassword(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if w.Code != 201 || len(items) != 1 {
-		t.Fatalf("%d %s audits=%d", w.Code, w.Body.String(), len(items))
+	if w.Code != 201 || len(items.Items) != 1 {
+		t.Fatalf("%d %s audits=%d", w.Code, w.Body.String(), len(items.Items))
 	}
-	item := items[0]
+	item := items.Items[0]
 	if item.ActorID != "admin" || strings.Contains(item.AfterSummary, "private-password") || strings.Contains(item.AfterSummary, "password_hash") {
 		t.Fatalf("bad audit: %+v", item)
 	}

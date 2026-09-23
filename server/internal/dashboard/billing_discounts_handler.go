@@ -71,6 +71,20 @@ func (h BillingDiscountHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 			writeDashboardError(w, 400, "discount_id_required")
 			return
 		}
+		var before *billing.DiscountRule
+		if v.ID > 0 {
+			current, err := h.Store.ListBillingDiscountRules(r.Context(), v.InstanceID, v.DiscountType)
+			if err != nil {
+				writeDashboardError(w, 500, "billing_discounts_query_failed")
+				return
+			}
+			for index := range current {
+				if current[index].ID == v.ID {
+					before = &current[index]
+					break
+				}
+			}
+		}
 		v.UpdatedBy = ctauth.Actor(r)
 		saved, err := h.Store.PutBillingDiscountRule(r.Context(), v)
 		if errors.Is(err, billing.ErrDiscountOverlap) {
@@ -85,6 +99,18 @@ func (h BillingDiscountHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 			writeDashboardError(w, 500, "billing_discount_save_failed")
 			return
 		}
+		if audit, ok := any(h.Store).(billingAuditStore); ok {
+			beforeValue := any(map[string]any{})
+			operation := "billing.discount.create"
+			if before != nil {
+				beforeValue = *before
+				operation = "billing.discount.update"
+			}
+			if err := auditBillingMutation(audit, r, saved.InstanceID, operation, strconv.FormatInt(saved.ID, 10), beforeValue, saved); err != nil {
+				writeDashboardError(w, 500, "billing_discount_audit_failed")
+				return
+			}
+		}
 		writeDashboardJSON(w, 200, saved)
 	case http.MethodDelete:
 		site := strings.TrimSpace(r.URL.Query().Get("instance_id"))
@@ -93,9 +119,31 @@ func (h BillingDiscountHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 			writeDashboardError(w, 400, "invalid_discount")
 			return
 		}
+		current, err := h.Store.ListBillingDiscountRules(r.Context(), site, billing.DiscountUpstreamChannel)
+		if err != nil {
+			writeDashboardError(w, 500, "billing_discounts_query_failed")
+			return
+		}
+		var before *billing.DiscountRule
+		for index := range current {
+			if current[index].ID == id {
+				before = &current[index]
+				break
+			}
+		}
 		if err := h.Store.DeleteBillingDiscountRule(r.Context(), site, id); err != nil {
 			writeDashboardError(w, 404, "billing_discount_not_found")
 			return
+		}
+		if audit, ok := any(h.Store).(billingAuditStore); ok {
+			beforeValue := any(map[string]any{})
+			if before != nil {
+				beforeValue = *before
+			}
+			if err := auditBillingMutation(audit, r, site, "billing.discount.delete", strconv.FormatInt(id, 10), beforeValue, map[string]any{"deleted": true}); err != nil {
+				writeDashboardError(w, 500, "billing_discount_audit_failed")
+				return
+			}
 		}
 		writeDashboardJSON(w, 200, map[string]any{"deleted": true})
 	default:

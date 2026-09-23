@@ -39,7 +39,7 @@ const emit = defineEmits<{
 const sheetOpen = ref(false)
 const emptyFilters = (): MobileLogFilterValues => ({ logType:0, modelName:'', group:'', tokenName:'', requestID:'', upstreamRequestID:'', channelID:'', statusCode:'', emptyOutput:false, fallbackFinalOnly:false })
 const draft = reactive(emptyFilters())
-const filterCount = computed(() => Object.entries(props.filters).filter(([key, value]) => (props.admin || (key !== 'channelID' && key !== 'emptyOutput')) && Boolean(typeof value === 'string' ? value.trim() : value)).length)
+const filterCount = computed(() => Object.entries(props.filters).filter(([key, value]) => (props.admin || !['channelID', 'emptyOutput', 'fallbackFinalOnly'].includes(key)) && Boolean(typeof value === 'string' ? value.trim() : value)).length)
 function openFilters() {
   Object.assign(draft, props.filters)
   sheetOpen.value = true

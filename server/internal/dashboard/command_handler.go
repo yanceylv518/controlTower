@@ -16,7 +16,7 @@ import (
 type CommandStore interface {
 	CreateChannelCommand(storage.ChannelCommand) error
 	QueryChannelCommands(storage.ChannelCommandQuery) ([]storage.ChannelCommand, error)
-	QueryOperationAudits(storage.OperationAuditQuery) ([]storage.OperationAudit, error)
+	QueryOperationAudits(storage.OperationAuditQuery) (storage.OperationAuditPage, error)
 }
 type CommandHandler struct {
 	Store     CommandStore
@@ -164,32 +164,110 @@ func (h CommandHandler) List(w http.ResponseWriter, r *http.Request) {
 }
 
 type operationAuditItem struct {
-	InstanceID    string    `json:"instance_id"`
-	InstanceName  string    `json:"instance_name"`
-	OperationType string    `json:"operation_type"`
-	TargetType    string    `json:"target_type"`
-	TargetID      string    `json:"target_id"`
-	ActorID       string    `json:"actor_id"`
-	AfterSummary  string    `json:"after_summary"`
-	CreatedAt     time.Time `json:"created_at"`
+	ID              string    `json:"id"`
+	InstanceID      string    `json:"instance_id"`
+	InstanceName    string    `json:"instance_name"`
+	OperationType   string    `json:"operation_type"`
+	TargetType      string    `json:"target_type"`
+	TargetID        string    `json:"target_id"`
+	ActorID         string    `json:"actor_id"`
+	ActorType       string    `json:"actor_type"`
+	ActorRole       string    `json:"actor_role"`
+	SourceComponent string    `json:"source_component"`
+	TriggerType     string    `json:"trigger_type"`
+	RequestID       string    `json:"request_id"`
+	CorrelationID   string    `json:"correlation_id"`
+	ClientIP        string    `json:"client_ip"`
+	AuthMethod      string    `json:"auth_method"`
+	HTTPMethod      string    `json:"http_method"`
+	Route           string    `json:"route"`
+	HTTPStatus      int       `json:"http_status"`
+	ErrorSummary    string    `json:"error_summary"`
+	BeforeSummary   string    `json:"before_summary"`
+	AfterSummary    string    `json:"after_summary"`
+	Status          string    `json:"status"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 func (h CommandHandler) Audits(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	limit, _ := strconv.Atoi(q.Get("limit"))
-	offset, _ := strconv.Atoi(q.Get("offset"))
-	items, e := h.Store.QueryOperationAudits(storage.OperationAuditQuery{InstanceID: q.Get("instance_id"), Limit: limit, Offset: offset})
+	limit, err := strconv.Atoi(q.Get("limit"))
+	if err != nil && q.Get("limit") != "" {
+		writeDashboardError(w, http.StatusBadRequest, "invalid_limit")
+		return
+	}
+	offset, err := strconv.Atoi(q.Get("offset"))
+	if err != nil && q.Get("offset") != "" {
+		writeDashboardError(w, http.StatusBadRequest, "invalid_offset")
+		return
+	}
+	for key, maximum := range map[string]int{"instance_id": 64, "site_id": 64, "operation_type": 64, "actor": 128, "status": 32, "source": 64, "trigger": 24, "q": 256, "request_id": 64, "correlation_id": 128} {
+		if len(q.Get(key)) > maximum {
+			writeDashboardError(w, http.StatusBadRequest, "invalid_filter")
+			return
+		}
+	}
+	switch q.Get("status") {
+	case "", "success", "succeeded", "failed", "submitted", "pending", "expired", "timed_out", "unknown":
+	default:
+		writeDashboardError(w, http.StatusBadRequest, "invalid_status")
+		return
+	}
+	switch q.Get("trigger") {
+	case "", "manual", "automatic", "unknown":
+	default:
+		writeDashboardError(w, http.StatusBadRequest, "invalid_trigger")
+		return
+	}
+	from, err := parseAuditTime(q.Get("from"))
+	if err != nil {
+		writeDashboardError(w, http.StatusBadRequest, "invalid_from")
+		return
+	}
+	to, err := parseAuditTime(q.Get("to"))
+	if err != nil {
+		writeDashboardError(w, http.StatusBadRequest, "invalid_to")
+		return
+	}
+	if !from.IsZero() && !to.IsZero() && !from.Before(to) {
+		writeDashboardError(w, http.StatusBadRequest, "invalid_range")
+		return
+	}
+	page, e := h.Store.QueryOperationAudits(storage.OperationAuditQuery{
+		ActorOptions: q.Get("actor_options") == "true",
+		ActorExact:   q.Get("actor_exact") == "true",
+		InstanceID:   q.Get("instance_id"), SiteID: q.Get("site_id"), OperationType: q.Get("operation_type"), Actor: q.Get("actor"),
+		RequestID: q.Get("request_id"), CorrelationID: q.Get("correlation_id"),
+		Status: q.Get("status"), Source: q.Get("source"), Trigger: q.Get("trigger"), Search: q.Get("q"),
+		From: from, To: to, Limit: limit, Offset: offset,
+	})
 	if e != nil {
 		writeDashboardError(w, 500, "query_failed")
 		return
 	}
-	out := make([]operationAuditItem, 0, len(items))
-	for _, v := range items {
+	out := make([]operationAuditItem, 0, len(page.Items))
+	for _, v := range page.Items {
 		name := v.InstanceID
 		if h.names != nil {
 			name = h.names.InstanceName(v.InstanceID)
 		}
-		out = append(out, operationAuditItem{InstanceID: v.InstanceID, InstanceName: name, OperationType: v.OperationType, TargetType: v.TargetType, TargetID: v.TargetID, ActorID: v.ActorID, AfterSummary: v.AfterSummary, CreatedAt: v.CreatedAt})
+		out = append(out, operationAuditItem{
+			ID: v.ID, InstanceID: v.InstanceID, InstanceName: name, OperationType: v.OperationType,
+			TargetType: v.TargetType, TargetID: v.TargetID, ActorID: v.ActorID, ActorType: v.ActorType,
+			ActorRole: v.ActorRole, SourceComponent: v.SourceComponent, TriggerType: v.TriggerType,
+			RequestID: v.RequestID, CorrelationID: v.CorrelationID, ClientIP: v.ClientIP,
+			AuthMethod: v.AuthMethod, HTTPMethod: v.HTTPMethod, Route: v.Route, HTTPStatus: v.HTTPStatus,
+			ErrorSummary: v.ErrorSummary, BeforeSummary: v.BeforeSummary, AfterSummary: v.AfterSummary,
+			Status: v.Status, CreatedAt: v.CreatedAt, UpdatedAt: v.UpdatedAt,
+		})
 	}
-	writeDashboardJSON(w, 200, map[string]any{"items": out})
+	writeDashboardJSON(w, 200, map[string]any{"items": out, "total": page.Total, "operation_types": storage.OperationAuditFilterTypes(), "actors": page.Actors})
+}
+
+func parseAuditTime(value string) (time.Time, error) {
+	if value == "" {
+		return time.Time{}, nil
+	}
+	return time.Parse(time.RFC3339, value)
 }

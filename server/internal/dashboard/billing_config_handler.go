@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"controltower/server/internal/auditmeta"
 	ctauth "controltower/server/internal/auth"
 	"controltower/server/internal/billing"
 	"controltower/server/internal/storage"
@@ -89,12 +90,32 @@ type billingAuditStore interface {
 }
 
 func billingConfigAudit(store billingAuditStore, r *http.Request, instanceID, operation, target string, after any) {
+	_ = auditBillingMutation(store, r, instanceID, operation, target, nil, after)
+}
+
+func auditBillingMutation(store billingAuditStore, r *http.Request, instanceID, operation, target string, before, after any) error {
 	raw := make([]byte, 16)
-	_, _ = rand.Read(raw)
-	body, _ := json.Marshal(after)
+	if _, err := rand.Read(raw); err != nil {
+		return err
+	}
+	beforeBody, err := json.Marshal(before)
+	if err != nil {
+		return err
+	}
+	afterBody, err := json.Marshal(after)
+	if err != nil {
+		return err
+	}
 	actor := ctauth.Actor(r)
 	if actor == "" {
 		actor = "legacy-admin"
 	}
-	_ = store.InsertOperationAudit(storage.OperationAudit{ID: hex.EncodeToString(raw), InstanceID: instanceID, OperationType: operation, TargetType: "billing", TargetID: target, ActorID: actor, AfterSummary: string(body), Status: "succeeded", CreatedAt: time.Now().UTC()})
+	now := time.Now().UTC()
+	entry := storage.OperationAudit{ID: hex.EncodeToString(raw), InstanceID: instanceID, OperationType: operation, TargetType: "billing", TargetID: target, ActorID: actor, BeforeSummary: string(beforeBody), AfterSummary: string(afterBody), Status: "succeeded", CreatedAt: now, UpdatedAt: now}
+	auditmeta.Enrich(r, &entry)
+	if err := store.InsertOperationAudit(entry); err != nil {
+		return err
+	}
+	auditmeta.MarkSemanticAudit(r)
+	return nil
 }

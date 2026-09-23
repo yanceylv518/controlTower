@@ -1510,24 +1510,27 @@ func parseReadonlyLogFiltersMode(values url.Values, userIDs []int64, viewer, cur
 		filters.hasRawFilter = true
 	}
 
-	emptyOutput, parseErr := parseReadonlyBoolean(values.Get("empty_output"))
-	if parseErr != nil {
-		return filters, parseErr
-	}
-	if emptyOutput {
-		filters.emptyOutput = true
-		// 未指定类型时，空输出按消费请求处理；显式指定错误类型时保留组合筛选能力。
-		if filters.logType == nil {
-			if err := forceReadonlyLogType(&filters, 2); err != nil {
-				return filters, err
+	// 空输出属于管理员筛选项；viewer 手工传参也不应改变查询结果。
+	if !viewer {
+		emptyOutput, parseErr := parseReadonlyBoolean(values.Get("empty_output"))
+		if parseErr != nil {
+			return filters, parseErr
+		}
+		if emptyOutput {
+			filters.emptyOutput = true
+			// 未指定类型时，空输出按消费请求处理；显式指定错误类型时保留组合筛选能力。
+			if filters.logType == nil {
+				if err := forceReadonlyLogType(&filters, 2); err != nil {
+					return filters, err
+				}
 			}
+			if cursorIdentity {
+				filters.where += " AND COALESCE(l.completion_tokens,0) = 0"
+			} else {
+				filters.where += " AND (l.completion_tokens = 0 OR l.completion_tokens IS NULL)"
+			}
+			filters.hasRawFilter = true
 		}
-		if cursorIdentity {
-			filters.where += " AND COALESCE(l.completion_tokens,0) = 0"
-		} else {
-			filters.where += " AND (l.completion_tokens = 0 OR l.completion_tokens IS NULL)"
-		}
-		filters.hasRawFilter = true
 	}
 
 	filters.hasRequestFilter = filters.requestID != "" || filters.upstreamRequestID != ""

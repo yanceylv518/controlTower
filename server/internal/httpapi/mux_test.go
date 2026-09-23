@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -10,6 +12,7 @@ import (
 	"time"
 
 	"controltower/server/internal/aggregator"
+	ctauth "controltower/server/internal/auth"
 	"controltower/server/internal/ingest"
 	"controltower/server/internal/storage"
 )
@@ -100,6 +103,113 @@ func TestNewMuxProtectsDashboardRoutes(t *testing.T) {
 	mux.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("dashboard with token status = %d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestOperationAuditRouteRequiresAuditPermissionAcrossAdmins(t *testing.T) {
+	store := newTestStore()
+	manager := ctauth.NewManager(store, time.Hour)
+	now := time.Now().UTC()
+	fixtures := []struct {
+		username    string
+		role        string
+		permissions []string
+		sessionID   string
+		wantStatus  int
+		wantUsers   int
+	}{
+		{username: "root-admin", role: "admin", permissions: nil, sessionID: "session-root", wantStatus: http.StatusOK, wantUsers: http.StatusOK},
+		{username: "audit-admin", role: "admin", permissions: []string{"audits.read"}, sessionID: "session-audit", wantStatus: http.StatusOK, wantUsers: http.StatusForbidden},
+		{username: "account-admin", role: "admin", permissions: []string{"accounts.manage"}, sessionID: "session-account", wantStatus: http.StatusForbidden, wantUsers: http.StatusOK},
+		{username: "tuning-admin", role: "admin", permissions: []string{"tuning.manage"}, sessionID: "session-tuning", wantStatus: http.StatusForbidden, wantUsers: http.StatusForbidden},
+		{username: "scoped-viewer", role: "viewer", permissions: []string{}, sessionID: "session-viewer", wantStatus: http.StatusForbidden, wantUsers: http.StatusForbidden},
+	}
+	for _, fixture := range fixtures {
+		user := storage.User{
+			Username: fixture.username, Role: fixture.role, Permissions: fixture.permissions,
+			ScopeSite: "site-a", ScopeUserIDs: []int64{101}, Enabled: true,
+			CreatedAt: now, UpdatedAt: now,
+		}
+		if err := store.CreateUser(user); err != nil {
+			t.Fatal(err)
+		}
+		created, ok, err := store.UserByUsername(fixture.username)
+		if err != nil || !ok {
+			t.Fatalf("load fixture user %q: ok=%v err=%v", fixture.username, ok, err)
+		}
+		if err := store.CreateSession(storage.Session{ID: fixture.sessionID, UserID: created.ID, CreatedAt: now, ExpiresAt: now.Add(time.Hour)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	actors := []string{"root-admin", "audit-admin", "account-admin", "tuning-admin", "system:auto"}
+	for index := 0; index < 40; index++ {
+		actor := actors[index%len(actors)]
+		status := "succeeded"
+		if index%4 == 0 {
+			status = "failed"
+		}
+		if index%7 == 0 {
+			status = "submitted"
+		}
+		trigger, actorType := "manual", "human"
+		actorRole := "admin"
+		if actor == "system:auto" {
+			trigger, actorType, actorRole = "automatic", "system", ""
+		}
+		instanceID := "instance-a"
+		if index%2 == 1 {
+			instanceID = "instance-b"
+		}
+		at := now.Add(time.Duration(index) * time.Second)
+		audit := storage.OperationAudit{
+			ID: fmt.Sprintf("mock-audit-%02d", index), InstanceID: instanceID,
+			OperationType: "settings.update", TargetType: "system_settings", TargetID: fmt.Sprintf("setting-%02d", index),
+			ActorID: actor, ActorType: actorType, ActorRole: actorRole, SourceComponent: "settings",
+			TriggerType: trigger, RequestID: fmt.Sprintf("request-%02d", index), CorrelationID: fmt.Sprintf("correlation-%02d", index),
+			BeforeSummary: `{"value":"before"}`, AfterSummary: `{"value":"after"}`,
+			Status: status, CreatedAt: at, UpdatedAt: at,
+		}
+		if err := store.InsertOperationAudit(audit); err != nil {
+			t.Fatalf("insert mock audit %d: %v", index, err)
+		}
+	}
+
+	mux := NewMux(Options{DashboardToken: "unused-in-session-test", Store: store, AuthManager: manager})
+	for _, fixture := range fixtures {
+		req := httptest.NewRequest(http.MethodGet, "/api/dashboard/operation-audits?limit=100", nil)
+		req.AddCookie(&http.Cookie{Name: "ct_session", Value: fixture.sessionID})
+		response := httptest.NewRecorder()
+		mux.ServeHTTP(response, req)
+		if response.Code != fixture.wantStatus {
+			t.Fatalf("user %q got status %d want %d: %s", fixture.username, response.Code, fixture.wantStatus, response.Body.String())
+		}
+		if fixture.wantStatus == http.StatusOK {
+			var result struct {
+				Items []struct {
+					ID string `json:"id"`
+				} `json:"items"`
+				Total int64 `json:"total"`
+			}
+			if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+				t.Fatalf("decode audit result for %q: %v", fixture.username, err)
+			}
+			if result.Total != 32 || len(result.Items) != 32 {
+				t.Fatalf("user %q should see all mock audits: total=%d items=%d", fixture.username, result.Total, len(result.Items))
+			}
+		}
+		usersRequest := httptest.NewRequest(http.MethodGet, "/api/auth/users", nil)
+		usersRequest.AddCookie(&http.Cookie{Name: "ct_session", Value: fixture.sessionID})
+		usersResponse := httptest.NewRecorder()
+		mux.ServeHTTP(usersResponse, usersRequest)
+		if usersResponse.Code != fixture.wantUsers {
+			t.Fatalf("user %q got account-list status %d want %d: %s", fixture.username, usersResponse.Code, fixture.wantUsers, usersResponse.Body.String())
+		}
+	}
+
+	unauthenticated := httptest.NewRecorder()
+	mux.ServeHTTP(unauthenticated, httptest.NewRequest(http.MethodGet, "/api/dashboard/operation-audits", nil))
+	if unauthenticated.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated audit query got %d want %d", unauthenticated.Code, http.StatusUnauthorized)
 	}
 }
 
