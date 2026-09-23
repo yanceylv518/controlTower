@@ -39,14 +39,14 @@ const emit = defineEmits<{
 const sheetOpen = ref(false)
 const emptyFilters = (): MobileLogFilterValues => ({ logType:0, modelName:'', group:'', tokenName:'', requestID:'', upstreamRequestID:'', channelID:'', statusCode:'', emptyOutput:false, fallbackFinalOnly:false })
 const draft = reactive(emptyFilters())
-const filterCount = computed(() => Object.entries(props.filters).filter(([key, value]) => (props.admin || key !== 'channelID') && Boolean(typeof value === 'string' ? value.trim() : value)).length)
+const filterCount = computed(() => Object.entries(props.filters).filter(([key, value]) => (props.admin || (key !== 'channelID' && key !== 'emptyOutput')) && Boolean(typeof value === 'string' ? value.trim() : value)).length)
 function openFilters() {
   Object.assign(draft, props.filters)
   sheetOpen.value = true
 }
 function applyFilters() {
   if (props.busy) return
-  emit('apply', { ...draft, channelID: props.admin ? draft.channelID : '' })
+  emit('apply', { ...draft, channelID: props.admin ? draft.channelID : '', emptyOutput: props.admin && draft.emptyOutput })
   sheetOpen.value = false
 }
 </script>
@@ -76,7 +76,7 @@ function applyFilters() {
         <el-form-item label="请求 ID"><el-input v-model="draft.requestID" aria-label="请求 ID" placeholder="输入请求 ID" clearable /></el-form-item>
         <el-form-item label="上游请求 ID"><el-input v-model="draft.upstreamRequestID" aria-label="上游请求 ID" placeholder="输入上游请求 ID" clearable /></el-form-item>
         <el-form-item label="错误码"><el-input v-model="draft.statusCode" aria-label="错误码" placeholder="例如 429、503" inputmode="numeric" clearable /></el-form-item>
-        <el-form-item><el-checkbox v-model="draft.emptyOutput">空输出</el-checkbox></el-form-item>
+        <el-form-item v-if="admin"><el-checkbox v-model="draft.emptyOutput">空输出</el-checkbox></el-form-item>
         <el-form-item v-if="admin"><el-checkbox v-model="draft.fallbackFinalOnly">Fallback 仅显示最后一条</el-checkbox></el-form-item>
         <el-form-item v-if="admin" label="渠道 ID"><el-input v-model="draft.channelID" aria-label="渠道 ID" placeholder="输入渠道 ID" inputmode="numeric" clearable /></el-form-item>
       </el-form>

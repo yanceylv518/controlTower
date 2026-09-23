@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -31,17 +30,7 @@ const readonlyCursorFinalPredicate = ` AND (l.request_id IS NULL OR l.request_id
 		))`
 
 func appendReadonlyCursorStatusCode(filters *readonlyLogFilters, code int) {
-	value := strconv.Itoa(code)
-	boundary := "([^[:digit:]]|$)"
-	prefix := "(^|[^[:alnum:]_])"
-	patterns := []string{
-		prefix + "status_code[[:space:]]*[:=][[:space:]]*[\"']?" + value + boundary,
-		prefix + "statusCode[[:space:]]*[:=][[:space:]]*[\"']?" + value + boundary,
-		prefix + "status[[:space:]]+code[[:space:]]*[:=][[:space:]]*[\"']?" + value + boundary,
-		prefix + "error_code[[:space:]]*[:=][[:space:]]*[\"']?" + value + boundary,
-		prefix + "[\"']code[\"'][[:space:]]*[:=][[:space:]]*[\"']?" + value + boundary,
-		prefix + "HTTP[[:space:]]+" + value + boundary,
-	}
+	patterns := statusCodeQueryPatterns(code)
 	conditions := make([]string, 0, len(patterns))
 	for _, pattern := range patterns {
 		conditions = append(conditions, "(l.content REGEXP ? OR l.other REGEXP ?)")

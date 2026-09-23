@@ -1341,14 +1341,38 @@ func readonlyLikePattern(value, param string) (string, error) {
 	return strings.ReplaceAll(value, "_", "!_"), nil
 }
 
+func statusCodeQueryPatterns(code int) []string {
+	value := strconv.Itoa(code)
+	boundary := "([^[:digit:]]|$)"
+	prefix := "(^|[^[:alnum:]_])"
+	return []string{
+		prefix + "status_code[[:space:]]*[:=][[:space:]]*[\"']?" + value + boundary,
+		prefix + "statusCode[[:space:]]*[:=][[:space:]]*[\"']?" + value + boundary,
+		prefix + "status[[:space:]]+code[[:space:]]*[:=][[:space:]]*[\"']?" + value + boundary,
+		prefix + "error_code[[:space:]]*[:=][[:space:]]*[\"']?" + value + boundary,
+		prefix + "[\"']code[\"'][[:space:]]*[:=][[:space:]]*[\"']?" + value + boundary,
+		prefix + "HTTP[[:space:]]+" + value + boundary,
+	}
+}
+
 func appendStatusCodeFilter(filters *readonlyLogFilters, code int) {
-	// Factor the shared boundaries and separator rather than repeating six
-	// complete alternatives at every text position. Keep both fields separate
-	// so NULLs and cross-column text cannot change the matching semantics.
-	field := `(status_code|statusCode|status[[:space:]]+code|error_code|["']code["'])`
-	pattern := `(^|[^[:alnum:]_])(` + field + `[[:space:]]*[:=][[:space:]]*["']?|HTTP[[:space:]]+)` + strconv.Itoa(code) + `([^[:digit:]]|$)`
-	filters.where += " AND (l.content REGEXP ? OR l.other REGEXP ?)"
-	filters.args = append(filters.args, pattern, pattern)
+	// Keep the established patterns separate: combining their alternatives can
+	// exceed MySQL's per-match step limit on text the original patterns handle.
+	// Every match contains the literal ASCII code. CASE skips regex work when
+	// that necessary condition is absent; unlike AND it fixes evaluation order.
+	// NULL takes ELSE and retains the original three-valued matching semantics.
+	patterns := statusCodeQueryPatterns(code)
+	fields := make([]string, 0, 2)
+	for _, field := range []string{"l.content", "l.other"} {
+		conditions := make([]string, 0, len(patterns))
+		filters.args = append(filters.args, strconv.Itoa(code))
+		for _, pattern := range patterns {
+			conditions = append(conditions, field+" REGEXP ?")
+			filters.args = append(filters.args, pattern)
+		}
+		fields = append(fields, "CASE WHEN LOCATE(?, "+field+") = 0 THEN 0 ELSE ("+strings.Join(conditions, " OR ")+") END")
+	}
+	filters.where += " AND (" + strings.Join(fields, " OR ") + ")"
 }
 
 func forceReadonlyLogType(filters *readonlyLogFilters, logType int) error {
@@ -1841,6 +1865,7 @@ func (h *PassthroughHandler) Logs(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback()
 	rows, err := tx.QueryContext(ctx, listSQL, pageArgs...)
 	if err != nil {
+		logReadonlyQueryFailure(site, "logs", "query", err)
 		writeDashboardError(w, 502, "readonly_query_failed")
 		return
 	}
@@ -1850,7 +1875,8 @@ func (h *PassthroughHandler) Logs(w http.ResponseWriter, r *http.Request) {
 		var v PassthroughLog
 		var created int64
 		var content string
-		if rows.Scan(&v.ID, &v.UserID, &created, &v.Type, &v.Username, &v.ModelName, &v.ChannelID, &v.TokenID, &v.TokenName, &v.PromptTokens, &v.CompletionTokens, &v.Quota, &v.UseTime, &v.RequestID, &v.UpstreamRequestID, &content, &v.Group, &v.IP, &v.IsStream, &v.Other) != nil {
+		if err := rows.Scan(&v.ID, &v.UserID, &created, &v.Type, &v.Username, &v.ModelName, &v.ChannelID, &v.TokenID, &v.TokenName, &v.PromptTokens, &v.CompletionTokens, &v.Quota, &v.UseTime, &v.RequestID, &v.UpstreamRequestID, &content, &v.Group, &v.IP, &v.IsStream, &v.Other); err != nil {
+			logReadonlyQueryFailure(site, "logs", "scan", err)
 			writeDashboardError(w, 502, "readonly_query_failed")
 			return
 		}
@@ -1867,12 +1893,14 @@ func (h *PassthroughHandler) Logs(w http.ResponseWriter, r *http.Request) {
 		items = append(items, v)
 	}
 	if err := rows.Err(); err != nil {
+		logReadonlyQueryFailure(site, "logs", "rows", err)
 		writeDashboardError(w, 502, "readonly_query_failed")
 		return
 	}
 	// MySQL 同一事务不能在结果集未关闭时再发起批量关联查询；显式关闭后才标记
 	// fallback，避免驱动返回 commands out of sync 后被降级逻辑静默忽略。
 	if err := rows.Close(); err != nil {
+		logReadonlyQueryFailure(site, "logs", "close", err)
 		writeDashboardError(w, 502, "readonly_query_failed")
 		return
 	}
@@ -1996,6 +2024,7 @@ func (h *PassthroughHandler) logStat(w http.ResponseWriter, r *http.Request) {
 			summary.Quota += value
 		}
 	} else if value, rawErr := queryRawQuota(ctx, db, start, end, quotaWhere, args); rawErr != nil {
+		logReadonlyQueryFailure(site, "stat", "quota", rawErr)
 		writeDashboardError(w, 502, "readonly_query_failed")
 		return
 	} else {
@@ -2011,6 +2040,7 @@ func (h *PassthroughHandler) logStat(w http.ResponseWriter, r *http.Request) {
 	}
 	rateArgs = append(rateArgs, args...)
 	if err := db.QueryRowContext(ctx, rateQuery+where, rateArgs...).Scan(&summary.RPM, &summary.TPM); err != nil {
+		logReadonlyQueryFailure(site, "stat", "rate", err)
 		writeDashboardError(w, 502, "readonly_query_failed")
 		return
 	}
@@ -2097,6 +2127,7 @@ func (h *PassthroughHandler) logCount(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	} else if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM logs l WHERE l.created_at>=? AND l.created_at<?`+where, args...).Scan(&total); err != nil {
+		logReadonlyQueryFailure(site, "count", "query", err)
 		writeDashboardError(w, 502, "readonly_query_failed")
 		return
 	}

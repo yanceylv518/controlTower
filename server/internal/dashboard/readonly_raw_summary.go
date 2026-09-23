@@ -110,6 +110,9 @@ func (h *PassthroughHandler) sharedReadonlyRawSummary(ctx context.Context, db *s
 		defer release()
 		var result readonlyRawSummary
 		err = db.QueryRowContext(work, query, args...).Scan(&result.Count, &result.Quota)
+		if err != nil {
+			logReadonlyQueryFailure(site, "count_stat", "shared_query", err)
+		}
 		return result, err
 	})
 }

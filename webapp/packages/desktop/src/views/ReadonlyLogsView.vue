@@ -216,7 +216,7 @@ const parsedStatusCode = computed(() => {
   const value = statusCode.value.trim()
   return /^\d{3}$/.test(value) ? Number(value) : undefined
 })
-const params = computed(() => ({ site: filters.site_id, user_ids: selectedUserID.value !== undefined ? String(selectedUserID.value) : scopedUserIDs.value, username: selectedUserID.value !== undefined ? undefined : username.value, start_time: timeRange.value[0].toISOString(), end_time: timeRange.value[1].toISOString(), token_name: tokenName.value, model_name: modelName.value, group: group.value, request_id: requestID.value, upstream_request_id: upstreamRequestID.value, channel_id: parsedChannelID.value, status_code: parsedStatusCode.value, empty_output: emptyOutput.value ? 1 : undefined, fallback_final_only: auth.user?.role === 'admin' && fallbackFinalOnly.value ? 1 : undefined, log_type: logType.value || undefined, limit: limit.value, offset: offset.value }))
+const params = computed(() => ({ site: filters.site_id, user_ids: selectedUserID.value !== undefined ? String(selectedUserID.value) : scopedUserIDs.value, username: selectedUserID.value !== undefined ? undefined : username.value, start_time: timeRange.value[0].toISOString(), end_time: timeRange.value[1].toISOString(), token_name: tokenName.value, model_name: modelName.value, group: group.value, request_id: requestID.value, upstream_request_id: upstreamRequestID.value, channel_id: parsedChannelID.value, status_code: parsedStatusCode.value, empty_output: auth.user?.role === 'admin' && emptyOutput.value ? 1 : undefined, fallback_final_only: auth.user?.role === 'admin' && fallbackFinalOnly.value ? 1 : undefined, log_type: logType.value || undefined, limit: limit.value, offset: offset.value }))
 // 输入框为草稿；翻页与附属查询只消费点击查询时保存的快照。
 const submitted = shallowRef({ ...params.value })
 const queryRevision = ref(0)
@@ -1726,7 +1726,7 @@ watch(() => filters.site_id, (site, previous) => {
           </div>
           <div v-if="!mobileViewport" class="toolbar-actions">
             <el-select v-model="logType" placeholder="全部类型" class="filter-type action-type"><el-option label="全部类型" :value="0" /><el-option label="消费" :value="2" /><el-option label="错误" :value="5" /><el-option label="充值" :value="1" /><el-option label="管理" :value="3" /><el-option label="系统" :value="4" /><el-option label="退款" :value="6" /><el-option label="登录" :value="7" /></el-select>
-            <label class="empty-output-toggle"><input v-model="emptyOutput" type="checkbox" :disabled="backgroundRefreshing" /><span>空输出</span></label>
+            <label v-if="isAdmin" class="empty-output-toggle"><input v-model="emptyOutput" type="checkbox" :disabled="backgroundRefreshing" /><span>空输出</span></label>
             <label v-if="isAdmin" class="empty-output-toggle fallback-final-toggle" title="同一请求只保留 fallback 链路最后一次尝试"><input v-model="fallbackFinalOnly" type="checkbox" :disabled="backgroundRefreshing" /><span>Fallback 仅最后一条</span></label>
             <button type="button" class="icon-action" :title="sensitiveVisible ? '隐藏敏感字段' : '显示敏感字段'" :aria-label="sensitiveVisible ? '隐藏敏感字段' : '显示敏感字段'" @click="sensitiveVisible = !sensitiveVisible"><el-icon><component :is="sensitiveVisible ? View : Hide" /></el-icon></button>
             <button type="button" class="secondary-action" :disabled="backgroundRefreshing" @click="reset"><el-icon><RefreshLeft /></el-icon><span>{{ backgroundRefreshing ? '更新中' : '重置' }}</span></button>

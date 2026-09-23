@@ -4,7 +4,7 @@
 
 ## 改动
 
-- 错误码：提取六种原匹配模式的公共边界和分隔符，每个内容字段只调用一次正则；仍分别匹配 `content` 和 `other`。不增加或删除任何历史格式。
+- 错误码：保留六种原匹配模式分别执行，先用 `CASE WHEN LOCATE(目标错误码, 字段)=0 THEN 0 ELSE ... END` 排除不含目标码的字段。分别处理 `content` 和 `other`，保留 NULL 语义、不增加或删除历史格式。初版合并正则在长空白正文上触发资源上限，已撤回（见下文 502 修复）。
 - 空输出：使用 `completion_tokens = 0 OR completion_tokens IS NULL`，保留 NULL 视为空输出的原语义。
 - 最终记录：改写为顶层 `NOT EXISTS`；继续按同一用户、同一请求的 `(created_at,id)` 判断，空/NULL 请求 ID 保留，比较不受外层时间、渠道、类型条件限制。
 - 链路展示：两次补查都限定当前页的请求/用户组合；同一记录的渠道序列只解析一次。viewer 不传输和解析最终不会返回的 `other` 链路元数据，但仍完成关联查询并保留 `fallback_checked` 的失败状态。链路不截断、不懒加载、不新增结果缓存。
@@ -33,9 +33,25 @@
 - 真实 SUM 溢出时 COUNT 仍正确返回；修正测试数据后失败统计可以重新查询，未缓存失败结果。
 - dashboard/auth/httpapi/mysqlstore 四个 Go 包测试和 vet 通过。
 
-本次未发现新增的筛选、计数、费用或链路结果差异。以上为本地测试数据结论，尚未在生产数据与源库版本上验证。
+该次复查未发现上述样本上的结果差异，但没有覆盖下文的长空白正文资源上限场景。以上为本地测试数据结论，尚未在生产数据与源库版本上验证。
 
-## 本地性能对照
+## 错误码查询 502 修复
+
+用户截图显示同一时间窗口的普通查询成功，加上 `status_code=500` 后列表约 1 秒、统计/总数约 2–3 秒返回 502。截图没有给出数据库原始错误，不能仅据此确认生产根因。
+
+本地 MySQL 8.0.46 默认 `regexp_time_limit=32` 下复现了初版优化引入的回归：100,000 个空格加 `unrelated-500`，合并正则报 `Error 3699: Timeout exceeded in regular expression match`；原六种分开匹配正常返回不匹配。该限制是正则引擎的匹配步数上限，独立于接口的整体超时。[MySQL 官方说明](https://dev.mysql.com/doc/refman/8.0/en/regexp.html#regexp-resource-control)
+
+- 恢复六种分开匹配，并加入目标错误码的必要条件预检查。使用 CASE 固定求值顺序，避免依赖 AND 的优化器顺序。
+- 不截断正文、不跳过匹配记录、不扩大接口超时，不调整源库参数。旧游标指纹保持一致。
+- 新增长文本接口回归：百万空格、大量其它错误码、长空白中混入普通数字 500、正文/other 中真正的 500、跨列片段和 NULL；三种排序规则下列表、总数和统计均返回 200，记录及费用符合预期。
+- 补充列表/统计/总数的错误阶段、MySQL 错误编号及 SQLSTATE 日志；不记录 DSN、查询参数或正文。生产若仍有 502，可用该日志区分正则限制、数据库其它错误和连接/查询超时。
+- 修复后重新通过 19,500 组错误码匹配、1,152 组筛选组合、旧游标、完整翻页、统计共享/溢出/取消测试，以及 dashboard/auth/httpapi/mysqlstore 四个包测试和 vet。
+
+同一 20,000 条样本重新测量，每项 3 次：错误码原两次统计扫描约 1,388 ms，修复后共享扫描约 198 ms；错误码＋空输出＋最终记录由约 2,741 ms 降至约 1,245 ms。仅为本机 SQL 对照，不包含网络或生产并发；不同轮次的绝对耗时不可直接对比。
+
+本修复需要更新服务端后生效，尚未部署或在生产源库复验。
+
+## 初版本地性能对照（历史数据）
 
 20,000 条合成日志，每请求四次尝试，含多用户、错误及空输出，错误正文约 420 字符。以下为统计 SQL 的原来两次扫描与优化后一次扫描对照，每项 3 次；不包含页面首屏、网络、RPM/TPM 或生产并发。
 
@@ -46,7 +62,7 @@
 | 最终记录 | 310 ms | 172 ms |
 | 错误码＋空输出＋最终记录 | 1,590 ms | 523 ms |
 
-早期直接拼接六个完整正则的版本在该样本上出现退化，已废弃；最终版本提取了公共前后缀。性能数字仅适用于此本地样本；生产版本、索引统计信息、数据分布与文本长度仍需部署前后 EXPLAIN/耗时对照。共享扫描要求两个接口的实际计算时间重叠，不承诺每次请求都合并。
+上表对应已撤回的合并正则版本，不代表 502 修复后的错误码查询性能。性能数字仅适用于此本地样本；生产版本、索引统计信息、数据分布与文本长度仍需部署前后 EXPLAIN/耗时对照。共享扫描要求两个接口的实际计算时间重叠，不承诺每次请求都合并。
 
 ## 复现
 
@@ -55,6 +71,7 @@
 ```powershell
 go test ./server/internal/dashboard -run 'TestReadonly(OptimizedQueries|ScopedFallback|RawSummary)' -count=1 -v
 go test ./server/internal/dashboard -run 'TestReadonly(LegacyCursor|CursorStill|FallbackCollation|RawSummaryOverflow|AllStatusCodes|HandlerPagination)' -count=1 -v
+go test ./server/internal/dashboard -run 'TestReadonly(StatusCodeLargeText|QueryFailureLogs)' -count=1 -v
 go test ./server/internal/dashboard -run '^$' -bench '^BenchmarkReadonlyQueryStatsMySQL$' -benchtime=3x -count=1
 ```
 
