@@ -766,6 +766,7 @@ type PassthroughHandler struct {
 	mu           sync.Mutex
 	pools        map[string]passthroughPool
 	summaryCache *readonlyQueryCache
+	rawSummaries readonlyRawSummaryGroup
 	summarySlots map[*sql.DB]chan struct{}
 	channelNames map[readonlyChannelKey]readonlyChannelName
 }
@@ -1048,8 +1049,10 @@ func readonlyFallbackChainFor(records []readonlyFallbackRecord) readonlyFallback
 		return records[i].id < records[j].id
 	})
 	paths := make([][]string, 0, len(records))
-	for _, record := range records {
-		if path := readonlyLogAttemptChannels(record.other); len(path) > 0 {
+	sequences := make([][]string, len(records))
+	for i, record := range records {
+		sequences[i] = readonlyLogAttemptChannels(record.other)
+		if path := sequences[i]; len(path) > 0 {
 			paths = append(paths, path)
 		}
 	}
@@ -1073,8 +1076,8 @@ func readonlyFallbackChainFor(records []readonlyFallbackRecord) readonlyFallback
 
 	indexByID := make(map[int64]int, len(records))
 	used := make([]bool, len(path))
-	for _, record := range records {
-		sequence := readonlyLogAttemptChannels(record.other)
+	for i, record := range records {
+		sequence := sequences[i]
 		index := -1
 		if len(sequence) > 0 && readonlySequencePrefix(sequence, path) && path[len(sequence)-1] == strconv.FormatInt(record.channelID, 10) {
 			index = len(sequence) - 1
@@ -1108,30 +1111,38 @@ func readonlyFallbackChainFor(records []readonlyFallbackRecord) readonlyFallback
 	return readonlyFallbackChain{channels: path, indexByID: indexByID}
 }
 
-// markReadonlyFallbackRequests 批量检查当前页请求 ID 是否存在其它尝试记录，并把
-// 同一链路的完整渠道序列和当前尝试序号回写给每一条当前页记录。
-// 计数查询只覆盖当前页最多 100 个请求；只有确认存在重试时才读取少量链路元数据。
-func markReadonlyFallbackRequests(ctx context.Context, tx *sql.Tx, items []PassthroughLog) {
-	requestIDs := make([]string, 0, len(items))
+// readonlyRequestPairs 限定当前页的请求和用户组合，避免同名请求带入其它用户的链路。
+func readonlyRequestPairs(items []PassthroughLog, only map[string]struct{}) (string, []any) {
+	conditions := make([]string, 0, len(items))
+	args := make([]any, 0, len(items)*2)
 	seen := make(map[string]struct{}, len(items))
 	for _, item := range items {
 		if item.RequestID == "" {
 			continue
 		}
-		if _, ok := seen[item.RequestID]; ok {
+		key := readonlyRequestKey(item.RequestID, item.UserID)
+		if only != nil {
+			if _, ok := only[key]; !ok {
+				continue
+			}
+		}
+		if _, ok := seen[key]; ok {
 			continue
 		}
-		seen[item.RequestID] = struct{}{}
-		requestIDs = append(requestIDs, item.RequestID)
+		seen[key] = struct{}{}
+		conditions = append(conditions, "(request_id = ? AND user_id = ?)")
+		args = append(args, item.RequestID, item.UserID)
 	}
-	if len(requestIDs) == 0 {
+	return strings.Join(conditions, " OR "), args
+}
+
+// markReadonlyFallbackRequests 批量检查请求的其它尝试，并为管理员补齐完整渠道链路。
+func markReadonlyFallbackRequests(ctx context.Context, tx *sql.Tx, items []PassthroughLog, viewer bool) {
+	where, args := readonlyRequestPairs(items, nil)
+	if where == "" {
 		return
 	}
-	args := make([]any, len(requestIDs))
-	for i, requestID := range requestIDs {
-		args[i] = requestID
-	}
-	query := `SELECT request_id,user_id,COUNT(*) FROM logs WHERE request_id IN (` + placeholders(len(requestIDs)) + `) GROUP BY request_id,user_id`
+	query := `SELECT request_id,user_id,COUNT(*) FROM logs WHERE (` + where + `) GROUP BY request_id,user_id`
 	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		// 标记属于展示增强；远端旧库不支持时保留基础日志，不让列表查询失败。
@@ -1166,21 +1177,17 @@ func markReadonlyFallbackRequests(ctx context.Context, tx *sql.Tx, items []Passt
 	}
 
 	// 只对确认存在多条日志的请求读取渠道路径，避免普通日志页额外扫描内容字段。
-	detailIDs := make([]string, 0, len(fallbackKeys))
-	seenDetailID := make(map[string]struct{}, len(fallbackKeys))
-	for key := range fallbackKeys {
-		requestID := strings.SplitN(key, "\x00", 2)[0]
-		if _, ok := seenDetailID[requestID]; ok {
-			continue
-		}
-		seenDetailID[requestID] = struct{}{}
-		detailIDs = append(detailIDs, requestID)
+	detailWhere, detailArgs := readonlyRequestPairs(items, fallbackKeys)
+	if detailWhere == "" {
+		return
 	}
-	detailArgs := make([]any, len(detailIDs))
-	for index, requestID := range detailIDs {
-		detailArgs[index] = requestID
+	otherProjection := "COALESCE(other,'')"
+	if viewer {
+		// Still consume the lookup and check for errors before setting checked,
+		// but do not transfer or parse chain metadata that viewer never receives.
+		otherProjection = "''"
 	}
-	detailRows, err := tx.QueryContext(ctx, `SELECT id,COALESCE(request_id,''),COALESCE(user_id,0),COALESCE(type,0),COALESCE(channel_id,0),COALESCE(created_at,0),COALESCE(other,'') FROM logs WHERE request_id IN (`+placeholders(len(detailIDs))+`) ORDER BY request_id,user_id,created_at,id`, detailArgs...)
+	detailRows, err := tx.QueryContext(ctx, `SELECT id,COALESCE(request_id,''),COALESCE(user_id,0),COALESCE(type,0),COALESCE(channel_id,0),COALESCE(created_at,0),`+otherProjection+` FROM logs WHERE (`+detailWhere+`) ORDER BY request_id,user_id,created_at,id`, detailArgs...)
 	if err != nil {
 		return
 	}
@@ -1192,7 +1199,7 @@ func markReadonlyFallbackRequests(ctx context.Context, tx *sql.Tx, items []Passt
 			return
 		}
 		key := readonlyRequestKey(record.requestID, record.userID)
-		if _, ok := fallbackKeys[key]; ok {
+		if _, ok := fallbackKeys[key]; ok && !viewer {
 			grouped[key] = append(grouped[key], record)
 		}
 	}
@@ -1334,29 +1341,14 @@ func readonlyLikePattern(value, param string) (string, error) {
 	return strings.ReplaceAll(value, "_", "!_"), nil
 }
 
-// statusCodeQueryPatterns 覆盖 NewAPI 常见错误详情格式；SQL 条件只用于缩小远端日志扫描范围。
-func statusCodeQueryPatterns(code int) []string {
-	value := strconv.Itoa(code)
-	boundary := "([^[:digit:]]|$)"
-	prefix := "(^|[^[:alnum:]_])"
-	return []string{
-		prefix + "status_code[[:space:]]*[:=][[:space:]]*[\"']?" + value + boundary,
-		prefix + "statusCode[[:space:]]*[:=][[:space:]]*[\"']?" + value + boundary,
-		prefix + "status[[:space:]]+code[[:space:]]*[:=][[:space:]]*[\"']?" + value + boundary,
-		prefix + "error_code[[:space:]]*[:=][[:space:]]*[\"']?" + value + boundary,
-		prefix + "[\"']code[\"'][[:space:]]*[:=][[:space:]]*[\"']?" + value + boundary,
-		prefix + "HTTP[[:space:]]+" + value + boundary,
-	}
-}
-
 func appendStatusCodeFilter(filters *readonlyLogFilters, code int) {
-	patterns := statusCodeQueryPatterns(code)
-	conditions := make([]string, 0, len(patterns))
-	for _, pattern := range patterns {
-		conditions = append(conditions, "(l.content REGEXP ? OR l.other REGEXP ?)")
-		filters.args = append(filters.args, pattern, pattern)
-	}
-	filters.where += " AND (" + strings.Join(conditions, " OR ") + ")"
+	// Factor the shared boundaries and separator rather than repeating six
+	// complete alternatives at every text position. Keep both fields separate
+	// so NULLs and cross-column text cannot change the matching semantics.
+	field := `(status_code|statusCode|status[[:space:]]+code|error_code|["']code["'])`
+	pattern := `(^|[^[:alnum:]_])(` + field + `[[:space:]]*[:=][[:space:]]*["']?|HTTP[[:space:]]+)` + strconv.Itoa(code) + `([^[:digit:]]|$)`
+	filters.where += " AND (l.content REGEXP ? OR l.other REGEXP ?)"
+	filters.args = append(filters.args, pattern, pattern)
 }
 
 func forceReadonlyLogType(filters *readonlyLogFilters, logType int) error {
@@ -1385,6 +1377,12 @@ func parseReadonlyBoolean(value string) (bool, error) {
 
 // parseReadonlyLogFilters 构造三类读取接口共用的 WHERE 条件，确保列表、COUNT 和统计不会出现筛选分叉。
 func parseReadonlyLogFilters(values url.Values, userIDs []int64, viewer bool) (readonlyLogFilters, error) {
+	return parseReadonlyLogFiltersMode(values, userIDs, viewer, false)
+}
+
+// cursorIdentity keeps the established cursor hash independent of SQL-only
+// optimizations. Its predicates are used for hashing, never database execution.
+func parseReadonlyLogFiltersMode(values url.Values, userIDs []int64, viewer, cursorIdentity bool) (readonlyLogFilters, error) {
 	filters := readonlyLogFilters{}
 	if len(userIDs) > 0 {
 		filters.where += " AND l.user_id IN (" + placeholders(len(userIDs)) + ")"
@@ -1474,7 +1472,11 @@ func parseReadonlyLogFilters(values url.Values, userIDs []int64, viewer bool) (r
 			return filters, err
 		}
 		filters.statusCode = &statusCode
-		appendStatusCodeFilter(&filters, statusCode)
+		if cursorIdentity {
+			appendReadonlyCursorStatusCode(&filters, statusCode)
+		} else {
+			appendStatusCodeFilter(&filters, statusCode)
+		}
 		filters.hasRawFilter = true
 	}
 
@@ -1490,7 +1492,11 @@ func parseReadonlyLogFilters(values url.Values, userIDs []int64, viewer bool) (r
 				return filters, err
 			}
 		}
-		filters.where += " AND COALESCE(l.completion_tokens,0) = 0"
+		if cursorIdentity {
+			filters.where += " AND COALESCE(l.completion_tokens,0) = 0"
+		} else {
+			filters.where += " AND (l.completion_tokens = 0 OR l.completion_tokens IS NULL)"
+		}
 		filters.hasRawFilter = true
 	}
 
@@ -1505,13 +1511,18 @@ func parseReadonlyLogFilters(values url.Values, userIDs []int64, viewer bool) (r
 		// created_at 可能因异步写入与自增 ID 顺序不一致，因此用时间和 ID 做稳定的
 		// 字典序比较；空请求 ID 没有可靠的链路键，仍逐条保留。该条件必须走原始
 		// 日志查询，不能复用不包含链路关系的聚合表。
-		filters.where += ` AND (l.request_id IS NULL OR l.request_id = '' OR NOT EXISTS (
+		if cursorIdentity {
+			filters.where += readonlyCursorFinalPredicate
+		} else {
+			filters.where += ` AND NOT EXISTS (
 			SELECT 1 FROM logs AS newer_logs
-			WHERE newer_logs.request_id = l.request_id
+			WHERE l.request_id IS NOT NULL AND l.request_id <> ''
+			  AND newer_logs.request_id = l.request_id
 			  AND newer_logs.user_id = l.user_id
 			  AND (newer_logs.created_at > l.created_at OR
 				(newer_logs.created_at = l.created_at AND newer_logs.id > l.id))
-		))`
+		)`
+		}
 		filters.hasRawFilter = true
 	}
 	return filters, nil
@@ -1809,7 +1820,11 @@ func (h *PassthroughHandler) Logs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	args := append([]any{start.Unix(), end.Unix()}, filters.args...)
-	scope := readonlyPageScope(site, viewer, filters.where, args)
+	scope, err := readonlyLogCursorScope(site, viewer, r.URL.Query(), ids, start, end)
+	if err != nil {
+		writeDashboardError(w, 400, err.Error())
+		return
+	}
 	cursor, err := parseReadonlyPageCursor(r.URL.Query().Get("cursor"), scope)
 	if err != nil {
 		writeDashboardError(w, 400, "invalid_cursor")
@@ -1863,7 +1878,7 @@ func (h *PassthroughHandler) Logs(w http.ResponseWriter, r *http.Request) {
 	}
 	// Optional lookup cannot hold the list for the full query timeout.
 	enrichCtx, enrichCancel := context.WithTimeout(ctx, time.Second)
-	markReadonlyFallbackRequests(enrichCtx, tx, items)
+	markReadonlyFallbackRequests(enrichCtx, tx, items, viewer)
 	enrichCancel()
 	_ = tx.Rollback()
 	if viewer {
@@ -1928,6 +1943,14 @@ func (h *PassthroughHandler) logStat(w http.ResponseWriter, r *http.Request) {
 	where, args := filters.where, filters.args
 	ctx, cancel := context.WithTimeout(r.Context(), readonlyLogQueryTimeout)
 	defer cancel()
+	var rawSummary *readonlyRawSummary
+	if filters.hasRawFilter {
+		if result, err := h.sharedReadonlyRawSummary(ctx, db, site, readonlyViewer(r), start, end, filters); err == nil {
+			rawSummary = &result
+		}
+		// On a shared-query failure, use the original endpoint-specific read.
+		// COUNT and SUM failures must not become coupled (for example overflow).
+	}
 	release, err := h.acquireReadonlySummary(ctx, db)
 	if err != nil {
 		writeDashboardError(w, 502, "readonly_query_failed")
@@ -1941,7 +1964,9 @@ func (h *PassthroughHandler) logStat(w http.ResponseWriter, r *http.Request) {
 		quotaWhere += " AND l.type=2"
 	}
 	quotaFrom, quotaTo, useRollup := completeHourWindow(start, end)
-	if useRollup && !filters.hasRequestFilter && !filters.hasLike && !filters.hasRawFilter && h.readonlyRollupReady(ctx, site, quotaFrom) {
+	if rawSummary != nil {
+		summary.Quota = rawSummary.Quota
+	} else if useRollup && !filters.hasRequestFilter && !filters.hasLike && !filters.hasRawFilter && h.readonlyRollupReady(ctx, site, quotaFrom) {
 		logType := filters.logType
 		if logType == nil {
 			consumeType := 2
@@ -2022,6 +2047,12 @@ func (h *PassthroughHandler) logCount(w http.ResponseWriter, r *http.Request) {
 	args := append([]any{start.Unix(), end.Unix()}, filters.args...)
 	ctx, cancel := context.WithTimeout(r.Context(), readonlyLogCountTimeout)
 	defer cancel()
+	if filters.hasRawFilter {
+		if result, err := h.sharedReadonlyRawSummary(ctx, db, site, viewer, start, end, filters); err == nil {
+			writeDashboardJSON(w, 200, map[string]any{"configured": true, "total": result.Count})
+			return
+		}
+	}
 	release, err := h.acquireReadonlySummary(ctx, db)
 	if err != nil {
 		writeDashboardError(w, 502, "readonly_query_failed")

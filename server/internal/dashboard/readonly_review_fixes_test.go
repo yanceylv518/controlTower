@@ -202,7 +202,7 @@ func TestReadonlyFallbackLookupDistinguishesUnknownFromNone(t *testing.T) {
 			items := []PassthroughLog{{ID: 11, RequestID: "one", UserID: 7}, {ID: 22, RequestID: "retry", UserID: 7}, {ID: 31, RequestID: "known", UserID: 7, Fallback: true, FallbackChecked: true}}
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 			defer cancel()
-			markReadonlyFallbackRequests(ctx, tx, items)
+			markReadonlyFallbackRequests(ctx, tx, items, false)
 			require.Equal(t, mode == "complete", items[0].FallbackChecked)
 			require.False(t, items[0].Fallback)
 			require.Equal(t, mode == "complete", items[1].FallbackChecked)
@@ -215,6 +215,45 @@ func TestReadonlyFallbackLookupDistinguishesUnknownFromNone(t *testing.T) {
 			require.True(t, items[2].Fallback)
 			require.True(t, items[2].FallbackChecked)
 		})
+	}
+}
+
+func TestReadonlyFallbackDetailFailurePreservesFactsForBothRoles(t *testing.T) {
+	for _, viewer := range []bool{false, true} {
+		for _, failDetail := range []bool{false, true} {
+			db := sql.OpenDB(reviewConnector{func(ctx context.Context, q string, args []driver.NamedValue) (driver.Rows, error) {
+				if strings.Contains(q, "COUNT(*)") {
+					return &reviewRows{columns: []string{"request_id", "user_id", "count"}, values: [][]driver.Value{{"retry", int64(7), int64(2)}, {"single", int64(7), int64(1)}}}, nil
+				}
+				// Only a retry belonging to the current page should reach the
+				// expensive detail lookup, and viewer must not fetch other.
+				require.Equal(t, []driver.NamedValue{{Ordinal: 1, Value: "retry"}, {Ordinal: 2, Value: int64(7)}}, args)
+				require.Equal(t, !viewer, strings.Contains(q, "COALESCE(other,'')"))
+				rows := &reviewRows{columns: []string{"id", "request_id", "user_id", "type", "channel_id", "created_at", "other"}, values: [][]driver.Value{
+					{int64(1), "retry", int64(7), int64(5), int64(11), int64(10), `{"use_channel":[11]}`},
+					{int64(2), "retry", int64(7), int64(2), int64(12), int64(20), `{"use_channel":[11,12]}`},
+				}}
+				if failDetail {
+					rows.failure = errors.New("detail interrupted")
+				}
+				return rows, nil
+			}})
+			tx, err := db.Begin()
+			require.NoError(t, err)
+			items := []PassthroughLog{{ID: 2, RequestID: "retry", UserID: 7}, {ID: 3, RequestID: "single", UserID: 7}}
+			markReadonlyFallbackRequests(context.Background(), tx, items, viewer)
+			require.NoError(t, tx.Rollback())
+			require.NoError(t, db.Close())
+			require.True(t, items[0].Fallback)
+			require.Equal(t, !failDetail, items[0].FallbackChecked)
+			require.False(t, items[1].Fallback)
+			require.True(t, items[1].FallbackChecked)
+			if viewer || failDetail {
+				require.Empty(t, items[0].FallbackChannels)
+			} else {
+				require.Equal(t, []string{"11", "12"}, items[0].FallbackChannels)
+			}
+		}
 	}
 }
 func TestReadonlySummaryGateLeavesConnectionForList(t *testing.T) {

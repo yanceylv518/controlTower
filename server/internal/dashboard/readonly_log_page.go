@@ -5,6 +5,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/url"
+	"strconv"
+	"strings"
+	"time"
 )
 
 type readonlyPageCursor struct {
@@ -12,6 +16,46 @@ type readonlyPageCursor struct {
 	ID       int64    `json:"i"`
 	Previous bool     `json:"p,omitempty"`
 	Scope    [32]byte `json:"s"`
+}
+
+// These strings are part of the existing cursor wire identity. Preserve even
+// whitespace: previously issued cursors hash the pre-optimization WHERE/args.
+// They are never executed as SQL. Validation and all base filters still use the
+// common parser, so site, role, user scope, time and filter isolation are intact.
+const readonlyCursorFinalPredicate = ` AND (l.request_id IS NULL OR l.request_id = '' OR NOT EXISTS (
+			SELECT 1 FROM logs AS newer_logs
+			WHERE newer_logs.request_id = l.request_id
+			  AND newer_logs.user_id = l.user_id
+			  AND (newer_logs.created_at > l.created_at OR
+				(newer_logs.created_at = l.created_at AND newer_logs.id > l.id))
+		))`
+
+func appendReadonlyCursorStatusCode(filters *readonlyLogFilters, code int) {
+	value := strconv.Itoa(code)
+	boundary := "([^[:digit:]]|$)"
+	prefix := "(^|[^[:alnum:]_])"
+	patterns := []string{
+		prefix + "status_code[[:space:]]*[:=][[:space:]]*[\"']?" + value + boundary,
+		prefix + "statusCode[[:space:]]*[:=][[:space:]]*[\"']?" + value + boundary,
+		prefix + "status[[:space:]]+code[[:space:]]*[:=][[:space:]]*[\"']?" + value + boundary,
+		prefix + "error_code[[:space:]]*[:=][[:space:]]*[\"']?" + value + boundary,
+		prefix + "[\"']code[\"'][[:space:]]*[:=][[:space:]]*[\"']?" + value + boundary,
+		prefix + "HTTP[[:space:]]+" + value + boundary,
+	}
+	conditions := make([]string, 0, len(patterns))
+	for _, pattern := range patterns {
+		conditions = append(conditions, "(l.content REGEXP ? OR l.other REGEXP ?)")
+		filters.args = append(filters.args, pattern, pattern)
+	}
+	filters.where += " AND (" + strings.Join(conditions, " OR ") + ")"
+}
+
+func readonlyLogCursorScope(site string, viewer bool, values url.Values, ids []int64, start, end time.Time) ([32]byte, error) {
+	filters, err := parseReadonlyLogFiltersMode(values, ids, viewer, true)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	return readonlyPageScope(site, viewer, filters.where, append([]any{start.Unix(), end.Unix()}, filters.args...)), nil
 }
 
 func readonlyPageScope(site string, viewer bool, where string, args []any) [32]byte {

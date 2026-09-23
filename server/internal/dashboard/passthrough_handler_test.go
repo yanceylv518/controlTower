@@ -265,7 +265,7 @@ func TestReadonlyLogFiltersSupportStatusCodeAndEmptyOutput(t *testing.T) {
 	assert.Equal(t, 5, *filters.logType)
 	assert.Contains(t, filters.where, "l.content REGEXP ?")
 	assert.Contains(t, filters.where, "l.other REGEXP ?")
-	assert.Contains(t, filters.where, "COALESCE(l.completion_tokens,0) = 0")
+	assert.Contains(t, filters.where, "l.completion_tokens = 0 OR l.completion_tokens IS NULL")
 	foundStatusPattern := false
 	for _, value := range filters.args {
 		if pattern, ok := value.(string); ok && strings.Contains(pattern, "429") {
@@ -282,7 +282,7 @@ func TestReadonlyLogFiltersDefaultsEmptyOutputToConsumption(t *testing.T) {
 	assert.True(t, filters.emptyOutput)
 	assert.NotNil(t, filters.logType)
 	assert.Equal(t, 2, *filters.logType)
-	assert.Contains(t, filters.where, "COALESCE(l.completion_tokens,0) = 0")
+	assert.Contains(t, filters.where, "l.completion_tokens = 0 OR l.completion_tokens IS NULL")
 }
 
 func TestReadonlyLogFiltersRejectInvalidStatusCodeAndTypeCombination(t *testing.T) {
