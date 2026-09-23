@@ -250,7 +250,7 @@ async function refreshCurrentRates() {
 const evaluationText = (row: ChannelBaseValue) => {
   const state = stateFor(row), requests = state?.last_observed_requests ?? 0;
   if ((row.models?.length ?? 1) > 1 || state?.paused_reason === "mixed_channel") return "多模型渠道，安全暂停";
-  if (modelMode(row.model_name) === "off") return "模型已关闭";
+  if (modelMode(row.model_name) === "off") return "该模型调权已关闭，渠道未参与调权；此设置不代表模型或渠道停用";
   if (row.base_weight <= 0) return "基础权重为 0，未参与调权";
   if (!state) return "等待评估数据";
   if (state?.paused_reason || (state?.phase && state.phase !== "normal")) return phaseText(state);
@@ -305,7 +305,7 @@ const limitReason = (row: ChannelBaseValue) => {
 };
 const rowStatus = (row: ChannelBaseValue) => {
   const state = stateFor(row), text = evaluationText(row);
-  if (text === "模型已关闭") return { kind: "muted", icon: "—", label: "已关闭" };
+  if (text === "该模型调权已关闭，渠道未参与调权；此设置不代表模型或渠道停用") return { kind: "muted", icon: "—", label: "未参与调权" };
   if (state?.phase === "circuit") return { kind: "danger", icon: "", label: "熔断" };
   if (effectivePause(state) === "write_failed") return { kind: "danger", icon: "", label: "写入失败" };
   if (text.includes("暂停")) return { kind: "warning", icon: "Ⅱ", label: "已暂停" };
@@ -324,7 +324,7 @@ const overallEvaluationStatus = (row: ChannelBaseValue) => {
 const coefficientEmptyText = (row: ChannelBaseValue) => {
   const status = overallEvaluationStatus(row);
   if (status.startsWith('窗口样本不足')) return '窗口样本不足';
-  return ['未参与', '已关闭', '已暂停'].includes(status) ? '未参与调权' : '';
+  return ['未参与', '未参与调权', '已暂停'].includes(status) ? '未参与调权' : '';
 };
 const coefficientSpan = ({column}: {column: {property?: string}}) => {
   if (column.property === 'coefficient_speed') return [1,4];
