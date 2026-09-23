@@ -188,12 +188,12 @@ func TestReadonlyAllStatusCodesEquivalentMySQL(t *testing.T) {
 	require.NoError(t, err)
 	for _, collation := range []string{"utf8mb4_0900_ai_ci", "utf8mb4_unicode_ci", "utf8mb4_bin"} {
 		t.Run(collation, func(t *testing.T) {
-			rowSQL := "SELECT 5 AS type,CAST(? AS CHAR CHARACTER SET utf8mb4) COLLATE " + collation + " AS content,CAST(? AS CHAR CHARACTER SET utf8mb4) COLLATE " + collation + " AS other"
+			rowSQL := "SELECT 5 AS type,CAST(? AS CHAR CHARACTER SET utf8mb4) COLLATE " + collation + " AS content,CAST(? AS CHAR CHARACTER SET utf8mb4) COLLATE " + collation + " AS other,? AS fallback_match"
 			rows := make([]string, len(corpus(100)))
 			for i := range rows {
 				rows[i] = rowSQL
 			}
-			query := "SELECT COUNT(*) FROM (" + strings.Join(rows, " UNION ALL ") + ") l WHERE NOT ((1=1" + base.where + ") <=> (1=1" + current.where + "))"
+			query := "SELECT COUNT(*) FROM (" + strings.Join(rows, " UNION ALL ") + ") l WHERE NOT ((1=1" + base.where + ") <=> (1=1" + current.where + ")) OR COALESCE((1=1" + current.where + "),0) <> fallback_match"
 			stmt, err := db.Prepare(query)
 			require.NoError(t, err)
 			defer stmt.Close()
@@ -204,10 +204,13 @@ func TestReadonlyAllStatusCodesEquivalentMySQL(t *testing.T) {
 				current, err := parseReadonlyLogFilters(values, nil, false)
 				require.NoError(t, err)
 				var args []any
+				matcher := newReadonlyStatusMatcher(code)
 				for _, pair := range corpus(code) {
 					args = append(args, pair[0], pair[1])
+					args = append(args, matcher.match(fmt.Sprint(pair[0]), collation) || matcher.match(fmt.Sprint(pair[1]), collation))
 				}
 				args = append(args, old.args...)
+				args = append(args, current.args...)
 				args = append(args, current.args...)
 				var mismatches int
 				require.NoError(t, stmt.QueryRow(args...).Scan(&mismatches), "code=%d", code)

@@ -110,6 +110,10 @@ func (h *PassthroughHandler) sharedReadonlyRawSummary(ctx context.Context, db *s
 		defer release()
 		var result readonlyRawSummary
 		err = db.QueryRowContext(work, query, args...).Scan(&result.Count, &result.Quota)
+		if filters.statusCode != nil && readonlyRegexpLimit(err) {
+			logReadonlyQueryFailure(site, "count_stat", "regex_fallback", err)
+			result, _, err = fallbackReadonlyStatusSummary(work, db, start, end, filters, "quota")
+		}
 		if err != nil {
 			logReadonlyQueryFailure(site, "count_stat", "shared_query", err)
 		}

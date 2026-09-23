@@ -247,6 +247,18 @@ func compareReadonlyQueriesMySQL(t *testing.T, db *sql.DB) {
 						cursor *readonlyPageCursor
 					}{{0, nil}, {10, nil}, {0, &readonlyPageCursor{Time: 150, ID: 12}}, {10, &readonlyPageCursor{Time: 150, ID: 12, Previous: true}}} {
 						require.Equal(t, readonlyEquivalenceIDs(t, db, legacy, page.offset, page.cursor), readonlyEquivalenceIDs(t, db, current, page.offset, page.cursor), label)
+						if current.statusCode != nil {
+							tx, err := db.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
+							require.NoError(t, err)
+							items, err := fallbackReadonlyLogPage(context.Background(), tx, start, end, current, 10, page.offset, page.cursor, viewer)
+							require.NoError(t, tx.Rollback())
+							require.NoError(t, err)
+							ids := []int64{}
+							for _, item := range items {
+								ids = append(ids, item.ID)
+							}
+							require.Equal(t, readonlyEquivalenceIDs(t, db, legacy, page.offset, page.cursor), ids, "fallback: "+label)
+						}
 					}
 					var count, quota int64
 					args := append([]any{start.Unix(), end.Unix()}, legacy.args...)
@@ -275,6 +287,14 @@ func compareReadonlyQueriesMySQL(t *testing.T, db *sql.DB) {
 						return result
 					}
 					require.Equal(t, rate(legacy), rate(current), label)
+					if current.statusCode != nil {
+						fallback, _, err := fallbackReadonlyStatusSummary(context.Background(), db, start, end, current, "quota")
+						require.NoError(t, err)
+						require.Equal(t, combined, fallback, "fallback summary: "+label)
+						fallback, tokens, err := fallbackReadonlyStatusSummary(context.Background(), db, time.Unix(120, 0), time.Unix(180, 0), current, "rate")
+						require.NoError(t, err)
+						require.Equal(t, rate(legacy), [2]int64{fallback.Count, tokens}, "fallback rate: "+label)
+					}
 					comparisons++
 				}
 			}

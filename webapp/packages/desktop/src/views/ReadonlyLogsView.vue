@@ -199,10 +199,8 @@ const affinityOpen = ref(false)
 const affinityCloseButton = ref<HTMLButtonElement | null>(null)
 const defaultTimeRange = (): [Date, Date] => {
   const now = new Date()
-  // 默认覆盖当天已产生的记录，并给时钟误差预留一小时，避免新打开页面误报为空。
-  const start = new Date(now)
-  start.setHours(0, 0, 0, 0)
-  return [start, new Date(now.getTime() + 60 * 60 * 1000)]
+  // 默认仅查询最近两小时；首次进入和重置均以操作时刻为结束时间。
+  return [new Date(now.getTime() - 2 * 60 * 60 * 1000), now]
 }
 const timeRange = ref<[Date, Date]>(defaultTimeRange())
 // 记录路由初始化后的范围，只有用户实际调整时间后才启用重置按钮。

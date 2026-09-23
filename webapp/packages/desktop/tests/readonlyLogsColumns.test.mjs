@@ -29,10 +29,9 @@ test('readonly logs exposes a persistent rc35 column menu', () => {
   }
 })
 
-// 回归保护：默认范围应覆盖当天记录，避免稀疏日志在最近一小时之外时显示为空。
-test('readonly logs defaults to the current day', () => {
-  assert.match(source, /start\.setHours\(0, 0, 0, 0\)/)
-  assert.match(source, /new Date\(now\.getTime\(\) \+ 60 \* 60 \* 1000\)/)
+// 默认窗口为当前时刻往前两小时，首次进入与重置共用该范围。
+test('readonly logs defaults to the last two hours', () => {
+  assert.match(source, /return \[new Date\(now\.getTime\(\) - 2 \* 60 \* 60 \* 1000\), now\]/)
   assert.match(source, /timeRangeChanged = computed\(/)
   assert.match(source, /:reset-enabled="timeRangeChanged && !backgroundRefreshing"/)
 })

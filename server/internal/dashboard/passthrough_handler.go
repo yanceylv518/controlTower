@@ -1237,6 +1237,9 @@ type readonlyLogFilters struct {
 	logType           *int
 	channelID         *int64
 	statusCode        *int
+	statusClause      string
+	statusArgOffset   int
+	statusArgCount    int
 	emptyOutput       bool
 	fallbackFinalOnly bool
 	hasLike           bool
@@ -1356,6 +1359,7 @@ func statusCodeQueryPatterns(code int) []string {
 }
 
 func appendStatusCodeFilter(filters *readonlyLogFilters, code int) {
+	argStart := len(filters.args)
 	// Keep the established patterns separate: combining their alternatives can
 	// exceed MySQL's per-match step limit on text the original patterns handle.
 	// Every match contains the literal ASCII code. CASE skips regex work when
@@ -1372,7 +1376,9 @@ func appendStatusCodeFilter(filters *readonlyLogFilters, code int) {
 		}
 		fields = append(fields, "CASE WHEN LOCATE(?, "+field+") = 0 THEN 0 ELSE ("+strings.Join(conditions, " OR ")+") END")
 	}
-	filters.where += " AND (" + strings.Join(fields, " OR ") + ")"
+	filters.statusClause = " AND (" + strings.Join(fields, " OR ") + ")"
+	filters.statusArgOffset, filters.statusArgCount = argStart, len(filters.args)-argStart
+	filters.where += filters.statusClause
 }
 
 func forceReadonlyLogType(filters *readonlyLogFilters, logType int) error {
@@ -1863,44 +1869,13 @@ func (h *PassthroughHandler) Logs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	rows, err := tx.QueryContext(ctx, listSQL, pageArgs...)
+	items, err := readReadonlyLogPage(ctx, tx, listSQL, pageArgs, viewer)
+	if filters.statusCode != nil && readonlyRegexpLimit(err) {
+		logReadonlyQueryFailure(site, "logs", "regex_fallback", err)
+		items, err = fallbackReadonlyLogPage(ctx, tx, start, end, filters, limit, offset, cursor, viewer)
+	}
 	if err != nil {
-		logReadonlyQueryFailure(site, "logs", "query", err)
-		writeDashboardError(w, 502, "readonly_query_failed")
-		return
-	}
-	defer rows.Close()
-	items := []PassthroughLog{}
-	for rows.Next() {
-		var v PassthroughLog
-		var created int64
-		var content string
-		if err := rows.Scan(&v.ID, &v.UserID, &created, &v.Type, &v.Username, &v.ModelName, &v.ChannelID, &v.TokenID, &v.TokenName, &v.PromptTokens, &v.CompletionTokens, &v.Quota, &v.UseTime, &v.RequestID, &v.UpstreamRequestID, &content, &v.Group, &v.IP, &v.IsStream, &v.Other); err != nil {
-			logReadonlyQueryFailure(site, "logs", "scan", err)
-			writeDashboardError(w, 502, "readonly_query_failed")
-			return
-		}
-		v.CreatedAt = time.Unix(created, 0).UTC()
-		v.ContentSummary = redactSummary(content)
-		v.Content = v.ContentSummary
-		v.Channel = v.ChannelID
-		v.Fallback, v.FallbackChannels = readonlyLogFallbackInfo(v.Other)
-		v.FallbackChecked = v.Fallback
-		v.Other = projectReadonlyLogOther(v.Other, viewer)
-		if viewer {
-			v.ChannelName = ""
-		}
-		items = append(items, v)
-	}
-	if err := rows.Err(); err != nil {
-		logReadonlyQueryFailure(site, "logs", "rows", err)
-		writeDashboardError(w, 502, "readonly_query_failed")
-		return
-	}
-	// MySQL 同一事务不能在结果集未关闭时再发起批量关联查询；显式关闭后才标记
-	// fallback，避免驱动返回 commands out of sync 后被降级逻辑静默忽略。
-	if err := rows.Close(); err != nil {
-		logReadonlyQueryFailure(site, "logs", "close", err)
+		logReadonlyQueryFailure(site, "logs", "read", err)
 		writeDashboardError(w, 502, "readonly_query_failed")
 		return
 	}
@@ -2024,9 +1999,16 @@ func (h *PassthroughHandler) logStat(w http.ResponseWriter, r *http.Request) {
 			summary.Quota += value
 		}
 	} else if value, rawErr := queryRawQuota(ctx, db, start, end, quotaWhere, args); rawErr != nil {
-		logReadonlyQueryFailure(site, "stat", "quota", rawErr)
-		writeDashboardError(w, 502, "readonly_query_failed")
-		return
+		if filters.statusCode != nil && readonlyRegexpLimit(rawErr) {
+			var result readonlyRawSummary
+			result, _, rawErr = fallbackReadonlyStatusSummary(ctx, db, start, end, filters, "quota")
+			summary.Quota = result.Quota
+		}
+		if rawErr != nil {
+			logReadonlyQueryFailure(site, "stat", "quota", rawErr)
+			writeDashboardError(w, 502, "readonly_query_failed")
+			return
+		}
 	} else {
 		summary.Quota = value
 	}
@@ -2040,9 +2022,16 @@ func (h *PassthroughHandler) logStat(w http.ResponseWriter, r *http.Request) {
 	}
 	rateArgs = append(rateArgs, args...)
 	if err := db.QueryRowContext(ctx, rateQuery+where, rateArgs...).Scan(&summary.RPM, &summary.TPM); err != nil {
-		logReadonlyQueryFailure(site, "stat", "rate", err)
-		writeDashboardError(w, 502, "readonly_query_failed")
-		return
+		if filters.statusCode != nil && readonlyRegexpLimit(err) {
+			var result readonlyRawSummary
+			result, summary.TPM, err = fallbackReadonlyStatusSummary(ctx, db, rateEnd.Add(-60*time.Second), rateEnd, filters, "rate")
+			summary.RPM = result.Count
+		}
+		if err != nil {
+			logReadonlyQueryFailure(site, "stat", "rate", err)
+			writeDashboardError(w, 502, "readonly_query_failed")
+			return
+		}
 	}
 	writeDashboardJSON(w, 200, map[string]any{"configured": true, "summary": summary})
 }
@@ -2127,9 +2116,16 @@ func (h *PassthroughHandler) logCount(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	} else if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM logs l WHERE l.created_at>=? AND l.created_at<?`+where, args...).Scan(&total); err != nil {
-		logReadonlyQueryFailure(site, "count", "query", err)
-		writeDashboardError(w, 502, "readonly_query_failed")
-		return
+		if filters.statusCode != nil && readonlyRegexpLimit(err) {
+			var result readonlyRawSummary
+			result, _, err = fallbackReadonlyStatusSummary(ctx, db, start, end, filters, "count")
+			total = result.Count
+		}
+		if err != nil {
+			logReadonlyQueryFailure(site, "count", "query", err)
+			writeDashboardError(w, 502, "readonly_query_failed")
+			return
+		}
 	}
 	writeDashboardJSON(w, 200, map[string]any{"configured": true, "total": total})
 }
