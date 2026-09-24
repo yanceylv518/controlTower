@@ -22,6 +22,11 @@ type ChannelCommandQuery struct {
 }
 
 type OperationAuditQuery struct {
+	// ListOnly avoids the historical exact count. CountOnly ignores pagination.
+	ListOnly      bool
+	CountOnly     bool
+	BeforeTime    time.Time
+	BeforeID      string
 	ActorOptions  bool
 	ActorExact    bool
 	InstanceID    string
@@ -41,6 +46,7 @@ type OperationAuditQuery struct {
 }
 
 type OperationAuditPage struct {
+	HasMore        bool
 	Actors         []string
 	Items          []OperationAudit
 	Total          int64

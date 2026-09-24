@@ -343,13 +343,14 @@ func (s Store) UpdateOperationAuditHTTPStatus(requestID string, status int) erro
 }
 
 func (s Store) QueryOperationAudits(q storage.OperationAuditQuery) (storage.OperationAuditPage, error) {
+	return s.QueryOperationAuditsContext(context.Background(), q)
+}
+
+func (s Store) QueryOperationAuditsContext(ctx context.Context, q storage.OperationAuditQuery) (storage.OperationAuditPage, error) {
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
 	limit, offset := storage.NormalizeCommandPagination(q.Limit, q.Offset)
-	where := []string{
-		"COALESCE(a.actor_type,'') <> 'system'",
-		"COALESCE(a.trigger_type,'') <> 'automatic'",
-		"COALESCE(a.operation_type,'') <> 'tuning.auto_execute'",
-		"((a.actor_type='human' AND a.actor_role IN ('admin','viewer') AND a.auth_method IN ('session','web_session')) OR (COALESCE(a.actor_id,'') NOT IN ('system','agent') AND COALESCE(a.actor_id,'') NOT LIKE 'system:%' AND COALESCE(a.actor_id,'') NOT LIKE 'agent:%'))",
-	}
+	where := []string{"a.is_manual_audit=1"}
 	args := []any{}
 	if q.InstanceID != "" {
 		where = append(where, "a.instance_id=?")
@@ -417,10 +418,13 @@ func (s Store) QueryOperationAudits(q storage.OperationAuditQuery) (storage.Oper
 	}
 	var page storage.OperationAuditPage
 	page.OperationTypes = storage.OperationAuditFilterTypes()
-	fromSQL := " FROM operation_audits a LEFT JOIN instances i ON i.id=a.instance_id"
+	fromSQL := " FROM operation_audits a"
+	if q.SiteID != "" {
+		fromSQL += " LEFT JOIN instances i ON i.id=a.instance_id"
+	}
 	if q.ActorOptions {
 		page.Actors = []string{}
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 		rows, err := s.db.QueryContext(ctx, "SELECT DISTINCT a.actor_id"+fromSQL+whereSQL+" AND a.actor_id<>'' ORDER BY a.actor_id LIMIT 100", args...)
 		if err != nil {
@@ -436,16 +440,36 @@ func (s Store) QueryOperationAudits(q storage.OperationAuditQuery) (storage.Oper
 		}
 		return page, rows.Err()
 	}
-	if e := s.db.QueryRowContext(context.Background(), "SELECT COUNT(*)"+fromSQL+whereSQL, args...).Scan(&page.Total); e != nil {
-		return page, e
+	if !q.ListOnly || q.CountOnly {
+		count := func() (int64, error) {
+			var total int64
+			err := s.db.QueryRowContext(ctx, "SELECT COUNT(*)"+fromSQL+whereSQL, args...).Scan(&total)
+			return total, err
+		}
+		var err error
+		if q.CountOnly {
+			page.Total, err = s.auditCounts.count(ctx, q, count)
+		} else {
+			page.Total, err = count()
+		}
+		if err != nil {
+			return page, err
+		}
+	} else {
+		page.Total = -1
 	}
-	if int64(offset) >= page.Total {
+	if q.CountOnly || (!q.ListOnly && int64(offset) >= page.Total) {
 		page.Items = []storage.OperationAudit{}
 		return page, nil
 	}
+	if !q.BeforeTime.IsZero() && q.BeforeID != "" {
+		whereSQL += " AND (a.created_at < ? OR (a.created_at = ? AND a.id < ?))"
+		args = append(args, q.BeforeTime, q.BeforeTime, q.BeforeID)
+		offset = 0
+	}
 	sqlText := `SELECT a.id,a.instance_id,a.operation_type,a.target_type,a.target_id,a.actor_id,a.actor_type,a.actor_role,a.source_component,a.trigger_type,a.request_id,a.correlation_id,a.client_ip,a.auth_method,a.http_method,a.route,a.http_status,a.error_summary,a.before_summary,a.after_summary,a.status,a.created_at,a.updated_at` + fromSQL + whereSQL + ` ORDER BY a.created_at DESC,a.id DESC LIMIT ? OFFSET ?`
-	args = append(args, limit, offset)
-	rows, e := s.db.QueryContext(context.Background(), sqlText, args...)
+	args = append(args, limit+1, offset)
+	rows, e := s.db.QueryContext(ctx, sqlText, args...)
 	if e != nil {
 		return page, e
 	}
@@ -459,6 +483,10 @@ func (s Store) QueryOperationAudits(q storage.OperationAuditQuery) (storage.Oper
 	}
 	if page.Items == nil {
 		page.Items = []storage.OperationAudit{}
+	}
+	if len(page.Items) > limit {
+		page.HasMore = true
+		page.Items = page.Items[:limit]
 	}
 	return page, rows.Err()
 }

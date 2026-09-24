@@ -6,22 +6,27 @@ import AppShell from "../components/AppShell.vue";
 import AsyncPanel from "../components/AsyncPanel.vue";
 import AuditSnapshotDiff from "../components/AuditSnapshotDiff.vue";
 import CompactDateTimeRangePicker from "../components/CompactDateTimeRangePicker.vue";
-import ListPager from "../components/ListPager.vue";
-import { useAsyncData } from "../composables/useAsyncData";
+import { useAuditHistory } from "../composables/useAuditHistory";
 import { useAutoRefresh } from "../composables/useAutoRefresh";
 import { formatTime } from "../utils/format";
 import { copyText } from "../utils/copyText";
 import type { OperationAuditItem } from "@ct/shared";
 
-const page = ref(1);
 const pageSize = ref(20);
 const expandedRows = ref<string[]>([]);
 const auditTable = ref<{
   toggleRowExpansion: (row: OperationAuditItem, expanded?: boolean) => void;
 } | null>(null);
-const draftTimeRange = ref<[Date, Date] | null>(null);
-const appliedTimeRange = ref<[Date, Date] | null>(null);
-const draft = reactive({ q: "", actor: "", operation_type: "", status: "" });
+function todayTimeRange(): [Date, Date] {
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(start);
+  end.setHours(23, 59, 59, 0);
+  return [start, end];
+}
+const draftTimeRange = ref<[Date, Date] | null>(todayTimeRange());
+const appliedTimeRange = ref<[Date, Date] | null>(draftTimeRange.value!.map(date => new Date(date)) as [Date, Date]);
+const draft = reactive({ q: "", search_mode: "text", actor: "", operation_type: "", status: "" });
 const applied = ref({ ...draft });
 const appliedTimeParams = computed(() => {
   if (!appliedTimeRange.value) return {};
@@ -34,21 +39,17 @@ const appliedTimeParams = computed(() => {
 });
 const timeRangeResetEnabled = computed(() => draftTimeRange.value !== null || appliedTimeRange.value !== null);
 
-const state = useAsyncData(async (signal) => {
-  return dashboard.operationAudits({
-    q: applied.value.q.trim() || undefined,
+const history = useAuditHistory(() => ({
+    ...(applied.value.search_mode === 'request' ? { request_id: applied.value.q.trim() || undefined } : { q: applied.value.q.trim() || undefined }),
     actor: applied.value.actor.trim() || undefined,
     actor_exact: applied.value.actor ? true : undefined,
     operation_type: applied.value.operation_type.trim() || undefined,
     status: applied.value.status || undefined,
     ...appliedTimeParams.value,
-    limit: pageSize.value,
-    offset: (page.value - 1) * pageSize.value,
-  }, signal);
-});
+  }), () => pageSize.value);
+const { state, page, total } = history;
 
 const items = computed(() => (state.data.value?.items || []).map(item => ({ ...item, target_display: targetLabel(item) })));
-const total = computed(() => state.data.value?.total || 0);
 const operationTypes = computed(() => state.data.value?.operation_types || []);
 const actorOptions = ref<string[]>([]);
 const actorLoading = ref(false);
@@ -67,7 +68,7 @@ function searchActors(value: string) {
     actorSearchController = controller;
     const timeout = setTimeout(() => controller.abort(), 8_000);
     try {
-      const response = await dashboard.operationAudits({ actor_options: true, actor: value.trim() || undefined }, controller.signal);
+      const response = await dashboard.operationAudits({ actor_options: true, actor: value.trim() || undefined, ...appliedTimeParams.value }, controller.signal);
       if (version === actorSearchVersion) actorOptions.value = response.actors || [];
     } catch {
       if (version === actorSearchVersion) { actorOptions.value = []; actorError.value = true; }
@@ -77,9 +78,18 @@ function searchActors(value: string) {
     }
   }, 250);
 }
-onBeforeUnmount(() => { ++actorSearchVersion; clearTimeout(actorSearchTimer); actorSearchController?.abort(); state.cancel(); });
+onBeforeUnmount(() => { ++actorSearchVersion; clearTimeout(actorSearchTimer); actorSearchController?.abort(); history.cancel(); });
+watch(appliedTimeParams, () => {
+  ++actorSearchVersion;
+  clearTimeout(actorSearchTimer);
+  actorSearchController?.abort();
+  actorOptions.value = [];
+  actorLoading.value = false;
+  actorError.value = false;
+});
 
-watch([page, pageSize], () => { expandedRows.value = []; void state.reload(); });
+watch(page, () => { expandedRows.value = []; });
+watch(pageSize, () => { expandedRows.value = []; void history.reset(); });
 useAutoRefresh((silent) => {
   if (silent && (expandedRows.value.length > 0 || page.value > 1 || state.loading.value)) return;
   return state.reload(silent);
@@ -91,21 +101,19 @@ function applyFilters() {
   appliedTimeRange.value = draftTimeRange.value
     ? [new Date(draftTimeRange.value[0]), new Date(draftTimeRange.value[1])]
     : null;
-  if (page.value === 1) void state.reload();
-  else page.value = 1;
+  void history.reset();
 }
 
 function resetTimeRange() {
   expandedRows.value = [];
-  draftTimeRange.value = null;
-  appliedTimeRange.value = null;
-  if (page.value === 1) void state.reload();
-  else page.value = 1;
+  draftTimeRange.value = todayTimeRange();
+  appliedTimeRange.value = draftTimeRange.value.map(date => new Date(date)) as [Date, Date];
+  void history.reset();
 }
 
 function clearFilters() {
-  Object.assign(draft, { q: "", actor: "", operation_type: "", status: "" });
-  draftTimeRange.value = null;
+  Object.assign(draft, { q: "", search_mode: "text", actor: "", operation_type: "", status: "" });
+  draftTimeRange.value = todayTimeRange();
   applyFilters();
 }
 
@@ -444,7 +452,11 @@ function httpStatus(item: OperationAuditItem) {
           class="audit-time-range"
           @reset="resetTimeRange"
         />
-        <el-input v-model="draft.q" clearable placeholder="目标ID / 请求ID / 错误信息" title="按目标ID、请求ID或错误信息模糊搜索；操作名称请使用操作类型筛选" class="audit-search" @keyup.enter="applyFilters" />
+        <el-select v-model="draft.search_mode" class="audit-select" aria-label="搜索方式">
+          <el-option label="内容搜索" value="text" />
+          <el-option label="请求ID精确" value="request" />
+        </el-select>
+        <el-input v-model="draft.q" clearable :placeholder="draft.search_mode === 'request' ? '完整请求ID' : '目标ID / 错误信息'" class="audit-search" @keyup.enter="applyFilters" />
         <el-select v-model="draft.actor" clearable filterable remote :remote-method="searchActors" :loading="actorLoading" :no-data-text="actorError ? '加载失败，请重新搜索' : '无匹配操作人'" placeholder="搜索操作人" class="audit-actor" @visible-change="(visible: boolean) => { if (visible) searchActors(''); }">
           <el-option v-for="actor in actorOptions" :key="actor" :label="actor === 'unknown' ? '未验证身份' : actor" :value="actor" />
         </el-select>
@@ -527,7 +539,18 @@ function httpStatus(item: OperationAuditItem) {
         </el-table-column>
       </el-table>
 
-      <ListPager v-model:page="page" v-model:page-size="pageSize" :item-count="items.length" :total="total" />
+      <div class="ct-pager">
+        <span class="ct-pager-info">第 {{ page }} 页 · 本页 {{ items.length }} 条<span v-if="total !== undefined" title="统计可能略有延迟"> · 共 {{ total }} 条</span></span>
+        <div class="ct-pager-controls">
+          <span v-if="history.counting.value" class="audit-refresh-hint">统计中…</span>
+          <el-button v-else-if="history.countError.value" text @click="history.loadCount(true)">重试总数</el-button>
+          <el-button :disabled="page <= 1 || state.loading.value" @click="history.previous">上一页</el-button>
+          <el-button :disabled="!state.data.value?.has_more || state.loading.value || !!state.error.value" @click="history.next">下一页</el-button>
+          <el-select v-model="pageSize" class="ct-pager-size" aria-label="每页条数">
+            <el-option v-for="n in [20, 50, 100]" :key="n" :label="`每页条数：${n}`" :value="n" />
+          </el-select>
+        </div>
+      </div>
       </AsyncPanel>
     </section>
   </AppShell>

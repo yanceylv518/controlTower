@@ -15,7 +15,8 @@ import (
 )
 
 type Store struct {
-	db *sql.DB
+	db          *sql.DB
+	auditCounts *auditCountCache
 }
 
 // A channel snapshot owns the channel's model assignment, but it must not
@@ -31,7 +32,7 @@ updated_by=IF(model_name<>VALUES(model_name),VALUES(updated_by),updated_by),
 model_name=VALUES(model_name)`
 
 func New(db *sql.DB) Store {
-	return Store{db: db}
+	return Store{db: db, auditCounts: newAuditCountCache()}
 }
 
 func (s Store) UpsertAgent(agent storage.Agent) error {
