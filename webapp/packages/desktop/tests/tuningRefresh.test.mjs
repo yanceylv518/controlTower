@@ -43,10 +43,12 @@ function page() {
     tuningRecommendations: async () => ({ items: [] }),
     tuningContinuousStates: async () => ({ items: [state(42)] }),
   }
-  const names = ['computed', 'reactive', 'ref', 'watch', 'onMounted', 'onBeforeUnmount', 'useFiltersStore', 'dashboard', 'formatTime', 'ApiError', 'ElMessage', 'ElMessageBox', 'useMobileViewport', 'splitChannelGroups']
-  const create = new Function(...names, `${compiled}\nreturn { refreshCurrentRates, ratesError, saveCapacity, saving, mobileEditRow, stageMobileEdit, mobileChanges, mobilePriorityChanges, mobileRuleChanges, mobileSaveOpen, load, refreshRuntime, loadChannelDirectory, applyGroupLocally, acceptStates, stateFor, sampleText, evaluationText, states, refreshError, bases, channels, policy, channelQuery, groupQuery, channelStatusFilter, displayedRows, activeModel, dirty, selectModel, fieldChanged, savedBases, originalBase, calculatedWeight, displayedSpeedFactor, coefficientCell, overallEvaluationStatus, coefficientEmptyText, coefficientSpan, displayedPriority, editPriority, priorityLocked, cancelChanges, limitReason, currentRates, ratesReady, rowStatus, eventResult, eventResultClass, events, filteredEvents, eventDateRange };`)
-  const splitChannelGroups = value => String(value ?? '').split(',').map(item => item.trim()).filter(Boolean)
-  const view = create(computed, reactive, ref, () => {}, () => {}, () => {}, () => filters, dashboard, String, ApiError, {info() {}, success() {}}, {}, () => ref(false), splitChannelGroups)
+  const names = ['computed', 'reactive', 'ref', 'watch', 'onMounted', 'onBeforeUnmount', 'useFiltersStore', 'dashboard', 'formatTime', 'ApiError', 'ElMessage', 'ElMessageBox', 'useMobileViewport', 'splitChannelGroups', 'matchesChannelGroup']
+  const create = new Function(...names, `${compiled}\nreturn { refreshCurrentRates, ratesError, saveCapacity, saving, mobileEditRow, stageMobileEdit, mobileChanges, mobilePriorityChanges, mobileRuleChanges, mobileSaveOpen, load, refreshRuntime, loadChannelDirectory, applyGroupLocally, acceptStates, stateFor, sampleText, evaluationText, states, refreshError, bases, channels, policy, channelQuery, selectedGroupFilter, channelStatusFilter, displayedRows, activeModel, dirty, selectModel, fieldChanged, savedBases, originalBase, calculatedWeight, displayedSpeedFactor, coefficientCell, overallEvaluationStatus, coefficientEmptyText, coefficientSpan, displayedPriority, editPriority, priorityLocked, cancelChanges, limitReason, currentRates, ratesReady, rowStatus, eventResult, eventResultClass, events, filteredEvents, eventDateRange };`)
+  const groupSource = readFileSync(new URL('../src/utils/channelGroup.ts', import.meta.url), 'utf8').replace(/export /g, '')
+  const groupCode = ts.transpileModule(groupSource, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText
+  const { splitChannelGroups, matchesChannelGroup } = new Function(groupCode + '; return { splitChannelGroups, matchesChannelGroup };')()
+  const view = create(computed, reactive, ref, () => {}, () => {}, () => {}, () => filters, dashboard, String, ApiError, {info() {}, success() {}}, {}, () => ref(false), splitChannelGroups, matchesChannelGroup)
   return { ...view, filters, dashboard }
 }
 
@@ -289,18 +291,18 @@ test('channel search and attention filter retain circuit precedence over output 
 })
 
 test('runtime overview filters channels by a matching group item', async () => {
-  assert.match(sfc, /v-model="groupQuery" clearable placeholder="按分组筛选，如 vip"/)
+  assert.match(sfc, /matchesChannelGroup\(row.group_name, selectedGroupName.value\)/)
   assert.match(sfc, /:data="displayedRows"/)
   const p = page(); await p.load(); p.activeModel.value = 'm';
   p.bases.value = [
     { ...row, channel_id: 1, channel_name: 'primary', group_name: 'default,vip' },
     { ...row, channel_id: 2, channel_name: 'fast', group_name: 'default,fast' },
   ];
-  p.groupQuery.value = 'vip';
+  p.selectedGroupFilter.value = { kind: 'group', name: 'vip' };
   assert.deepEqual(p.displayedRows.value.map(item => item.channel_id), [1]);
-  p.groupQuery.value = 'FAST';
+  p.selectedGroupFilter.value = { kind: 'group', name: 'fast' };
   assert.deepEqual(p.displayedRows.value.map(item => item.channel_id), [2]);
-  p.groupQuery.value = 'missing';
+  p.selectedGroupFilter.value = { kind: 'group', name: 'missing' };
   assert.equal(p.displayedRows.value.length, 0);
 })
 

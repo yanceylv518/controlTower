@@ -58,13 +58,24 @@ test('IME confirmation and held Enter do not submit or select users', () => {
   assert.equal(picker.open.value, true)
 })
 
-// 回归保护：用户搜索必须防抖并取消旧请求，避免输入过程产生竞态和额外连接。
-test('user name picker debounces and cancels stale searches', () => {
-  assert.match(componentSource, /setTimeout\(\(\) => \{ void searchUsers\(keyword\) \}, 240\)/)
+// 回归保护：候选先用当前页结果即时显示，远端搜索仍取消旧请求并保持短防抖。
+test('user name picker shows local options immediately and cancels stale searches', () => {
+  assert.match(componentSource, /options\.value = localSuggestions\(keyword\)/)
+  assert.match(componentSource, /setTimeout\(\(\) => \{ void searchUsers\(keyword\) \}, keyword \? 100 : 0\)/)
+  assert.match(componentSource, /keyword \? mergeUserSuggestions\(remote, local\) : mergeUserSuggestions\(local, remote\)/)
   assert.match(componentSource, /activeController\?\.abort\(\)/)
   assert.match(componentSource, /sequence !== searchSequence/)
+  assert.match(componentSource, /userSuggestionCache\.set\(cacheKey\(keyword\), remote\)/)
   assert.match(apiSource, /users: \(params: \{[\s\S]*?\}, signal\?: AbortSignal\)/)
   assert.match(apiSource, /requestOptions\(signal\)/)
+})
+
+test('loading and remote errors do not hide local user choices', () => {
+  assert.match(componentSource, /loading && !options\.length/)
+  assert.match(componentSource, /searchError && !options\.length/)
+  assert.match(componentSource, /远端搜索失败，当前显示已有日志中的用户/)
+  assert.match(componentSource, /aria-live="polite"/)
+  assert.match(componentSource, /:aria-busy="loading"/)
 })
 
 // 回归保护：选择用户传递精确 ID，手动输入和清空则解除上次选择。

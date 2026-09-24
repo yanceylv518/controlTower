@@ -8,6 +8,7 @@ import (
 	"os"
 	"reflect"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -420,6 +421,29 @@ func TestReadonlyFallbackChainPreservesRepeatedChannelAttempts(t *testing.T) {
 	chain := readonlyFallbackChainFor(records)
 	assert.Equal(t, []string{"141", "141", "148"}, chain.channels)
 	assert.Equal(t, map[int64]int{1: 1, 2: 2, 3: 3}, chain.indexByID)
+}
+
+func TestReadonlyFallbackChainSupportsMoreThanThreeAttempts(t *testing.T) {
+	channels := make([]string, 0, 12)
+	records := make([]readonlyFallbackRecord, 0, 12)
+	for attempt := 1; attempt <= 12; attempt++ {
+		channels = append(channels, strconv.Itoa(attempt))
+		records = append(records, readonlyFallbackRecord{
+			id:        int64(attempt),
+			requestID: "request-many-attempts",
+			userID:    9,
+			typeID:    5,
+			channelID: int64(attempt),
+			createdAt: int64(attempt),
+			other:     `{"use_channel":["` + strings.Join(channels, `","`) + `"]}`,
+		})
+	}
+
+	chain := readonlyFallbackChainFor(records)
+	assert.Equal(t, channels, chain.channels)
+	assert.Len(t, chain.indexByID, 12)
+	assert.Equal(t, 10, chain.indexByID[10])
+	assert.Equal(t, 12, chain.indexByID[12])
 }
 
 // 使用真实隔离 MySQL 只执行日志查询，验证 rc35 投影在目标方言上可解析。

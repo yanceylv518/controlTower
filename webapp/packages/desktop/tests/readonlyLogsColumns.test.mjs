@@ -15,6 +15,7 @@ const passthroughApiSource = readFileSync(
   new URL('../../shared/src/api/passthrough.ts', import.meta.url),
   'utf8'
 )
+const themeSource = readFileSync(new URL('../src/theme.css', import.meta.url), 'utf8')
 
 // 回归保护：rc35 的列菜单必须保留持久化入口和全部可选列。
 test('readonly logs exposes a persistent rc35 column menu', () => {
@@ -58,7 +59,7 @@ test('readonly logs keeps identity filters before compact model filters', () => 
 
 // viewer 使用后端固定的站点和用户范围，仍可使用用户名与渠道 ID 做范围内筛选。
 test('readonly logs exposes username and channel filters to viewer accounts', () => {
-  assert.match(source, /<UserNamePicker v-model="username" :site="filters\.site_id" class="filter-username"/)
+  assert.match(source, /<UserNamePicker v-model="username" :site="filters\.site_id" :suggestions="userPickerSuggestions" class="filter-username"/)
   assert.match(source, /selectedUserID = ref<number \| undefined>\(undefined\)/)
   assert.match(source, /user_ids: selectedUserID\.value !== undefined \? String\(selectedUserID\.value\) : scopedUserIDs\.value/)
   assert.match(source, /username: selectedUserID\.value !== undefined \? undefined : username\.value/)
@@ -272,17 +273,27 @@ test('readonly logs exposes fallback requests and channel chains', () => {
   assert.match(source, /v-if="isAdmin && \(view\.fallback \|\| view\.retryChain \|\| view\.retryUnknown\)"/)
   assert.match(source, /function openRetryHover\(view: LogRowView, event: MouseEvent \| FocusEvent\)/)
   assert.match(source, /const channels = retryChannelsFor\(view\.source\)/)
-  assert.match(source, /firstAttempt: Boolean\(view\.retryChain\) && attempt\.firstAttempt/)
+  assert.match(source, /position: view\.retryChain \? attempt\.position : 0, total: view\.retryChain \? attempt\.total : 0/)
   assert.match(source, /class="retry-hover-card"/)
   assert.match(source, /class="channel-cell" :aria-label="isAdmin && view\.retryChain \? requestChainTitle\(view\.source\) : undefined"/)
   assert.doesNotMatch(source, /class="channel-cell"[^>]*:title=/)
   assert.match(source, /@mouseenter="openRetryHover\(view, \$event\)" @mouseleave="closeRetryHover"/)
-  assert.match(source, /重试\{\{ retryHover\.retryCount \}\}次：/)
-  assert.match(source, /首次尝试：/)
+  assert.match(source, /retryAttemptPrefix\(retryHover\.position, retryHover\.total\)/)
+  assert.match(source, /retryHover\.position > 0 && retryHover\.total > 1/)
+  assert.match(source, /<strong v-else>Fallback：<\/strong>/)
   assert.match(source, /class="retry-hover-step"/)
+  assert.match(source, /step\.current && 'is-current'/)
   assert.match(source, /step\.current \? `is-\$\{step\.tone\}`/)
-  assert.match(source, /\.retry-hover-step\.is-failed \{ color: var\(--ct-crit\)/)
-  assert.match(source, /\.retry-hover-step\.is-success \{ color: var\(--ct-ok\)/)
+  assert.match(source, /\.retry-hover-step\.is-current \{ color: var\(--ct-log-tooltip-warn\); font-weight: 800/)
+  assert.match(source, /\.retry-hover-step\.is-failed \{ color: var\(--ct-log-tooltip-danger\)/)
+  assert.match(source, /\.retry-hover-step\.is-success \{ color: var\(--ct-log-tooltip-success\)/)
+  assert.match(source, /\.retry-hover-card span \{[\s\S]*?color: var\(--ct-log-tooltip-muted\)/)
+  assert.match(source, /\.retry-hover-separator \{[^}]*color: var\(--ct-log-tooltip-muted\)/)
+  assert.doesNotMatch(source.match(/\.retry-hover-card \{[\s\S]*?\.retry-chain-text/)[0], /--rc35-ink-[23]/)
+  const hoverPosition = source.match(/function positionRetryHover\(\) \{[\s\S]*?\n\}/)?.[0]
+  assert.ok(hoverPosition)
+  assert.match(hoverPosition, /const preferredLeft = rect\.left \+ \(rect\.width - width\) \/ 2/)
+  assert.match(source, /querySelector<HTMLElement>\('\.retry-chain-trigger'\)/)
   assert.doesNotMatch(source, /fallback-label/)
   assert.match(source, /const expandedRetryID = ref<number \| null>\(null\)/)
   assert.match(source, /<FallbackRequestChain/)
@@ -309,8 +320,110 @@ test('fallback hover marks failed and final successful attempts', () => {
   assert.deepEqual(failed.map(step => [step.channel, step.current, step.tone]), [['1', true, 'failed'], ['2', false, 'plain']])
   assert.deepEqual(finalSuccess.map(step => [step.channel, step.current, step.tone]), [['1', false, 'plain'], ['2', true, 'success']])
   assert.deepEqual(middle.map(step => [step.channel, step.current, step.tone]), [['1', false, 'plain'], ['2', true, 'failed'], ['3', false, 'plain']])
-  assert.deepEqual(retryAttemptMeta({ type: 5, fallback_index: 1, fallback_total: 3, fallback_channels: ['1', '2', '3'] }), { firstAttempt: true, retryCount: 0 })
-  assert.deepEqual(retryAttemptMeta({ type: 5, fallback_index: 2, fallback_total: 3, fallback_channels: ['1', '2', '3'] }), { firstAttempt: false, retryCount: 1 })
+  assert.deepEqual(retryAttemptMeta({ type: 5, fallback_index: 1, fallback_total: 3, fallback_channels: ['1', '2', '3'] }), { firstAttempt: true, retryCount: 0, position: 1, total: 3 })
+  assert.deepEqual(retryAttemptMeta({ type: 5, fallback_index: 2, fallback_total: 3, fallback_channels: ['1', '2', '3'] }), { firstAttempt: false, retryCount: 1, position: 2, total: 3 })
+  const twelveChannels = Array.from({ length: 12 }, (_, index) => String(index + 1))
+  assert.deepEqual(retryAttemptMeta({ type: 5, fallback_index: 12, fallback_total: 12, fallback_channels: twelveChannels }), { firstAttempt: false, retryCount: 11, position: 12, total: 12 })
+})
+
+test('model name filters remain plain text inputs without dropdown suggestions', () => {
+  const mobileSource = readFileSync(new URL('../src/components/MobileLogFilters.vue', import.meta.url), 'utf8')
+  assert.match(source, /<el-input v-model="modelName" clearable placeholder="模型名称" @keyup\.enter="search" class="filter-model" \/>/)
+  assert.match(mobileSource, /<el-input v-model="draft\.modelName" aria-label="模型名称" placeholder="输入模型名称" clearable \/>/)
+  assert.doesNotMatch(source, /ModelNamePicker|modelPickerSuggestions/)
+  assert.doesNotMatch(mobileSource, /ModelNamePicker|modelSuggestions/)
+})
+
+test('fallback tooltip labels each attempt with its position and chain length', () => {
+  const functionSource = source.match(/function retryAttemptPrefix\(position: number, total: number\) \{[\s\S]*?\n\}/)?.[0]
+  assert.ok(functionSource)
+  const compiled = ts.transpileModule(functionSource, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
+  const retryAttemptPrefix = new Function(`${compiled}; return retryAttemptPrefix`)()
+
+  assert.equal(retryAttemptPrefix(1, 3), '首次尝试（1/3）')
+  assert.equal(retryAttemptPrefix(2, 3), '第 2 次尝试（2/3）')
+  assert.equal(retryAttemptPrefix(12, 12), '第 12 次尝试（12/12）')
+  assert.equal(retryAttemptPrefix(0, 3), '')
+  assert.equal(retryAttemptPrefix(1, 1), '')
+  assert.match(source, /const attempt = retryAttemptPrefix\(view\.retryPosition, view\.retryTotal\)/)
+})
+
+test('fallback hover tooltip centers on the chain icon and stays within the viewport', () => {
+  const functionSource = source.match(/function positionRetryHover\(\) \{[\s\S]*?\n\}/)?.[0]
+  assert.ok(functionSource)
+  const compiled = ts.transpileModule(functionSource, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
+  const state = { value: { left: 0, top: 0 } }
+  const trigger = { isConnected: true, getBoundingClientRect: () => ({ left: 100, width: 22, top: 100, bottom: 122 }) }
+  const popover = { offsetWidth: 200, offsetHeight: 40 }
+  const positionRetryHover = new Function('retryHover', 'retryHoverTrigger', 'retryHoverElement', 'window', 'closeRetryHover', `${compiled}; return positionRetryHover`)(
+    state,
+    { value: trigger },
+    { value: popover },
+    { innerWidth: 430, innerHeight: 300 },
+    () => {},
+  )
+
+  positionRetryHover()
+  assert.equal(state.value.left, 11)
+  assert.equal(state.value.top, 52)
+
+  trigger.getBoundingClientRect = () => ({ left: 0, width: 22, top: 5, bottom: 27 })
+  positionRetryHover()
+  assert.equal(state.value.left, 8)
+  assert.equal(state.value.top, 35)
+})
+
+test('fallback icon number follows each record position and separates outcome color', () => {
+  const functionSource = source.match(/function retryIconClasses\(view: LogRowView\) \{[\s\S]*?\n\}/)?.[0]
+  assert.ok(functionSource)
+  const compiled = ts.transpileModule(functionSource, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
+  const retryIconClasses = new Function(`${compiled}; return retryIconClasses`)()
+  assert.deepEqual(retryIconClasses({ retryPosition: 1, retryTotal: 3, retryUnknown: false, source: { type: 5 } }), {
+    'is-first-attempt': true,
+    'is-retry-attempt': false,
+    'is-failed-attempt': true,
+    'is-success-attempt': false,
+    'retry-chain-unknown': false,
+  })
+  assert.deepEqual(retryIconClasses({ retryPosition: 2, retryTotal: 3, retryUnknown: false, source: { type: 5 } }), {
+    'is-first-attempt': false,
+    'is-retry-attempt': true,
+    'is-failed-attempt': true,
+    'is-success-attempt': false,
+    'retry-chain-unknown': false,
+  })
+  assert.deepEqual(retryIconClasses({ retryPosition: 3, retryTotal: 3, retryUnknown: false, source: { type: 2 } }), {
+    'is-first-attempt': false,
+    'is-retry-attempt': true,
+    'is-failed-attempt': false,
+    'is-success-attempt': true,
+    'retry-chain-unknown': false,
+  })
+  assert.equal((source.match(/class="retry-chain-count"/g) || []).length, 2)
+  assert.match(source, /\{\{ view\.retryPosition \}\}/)
+  assert.doesNotMatch(source, /retry-chain-count[^>]*>\s*[123]\s*</)
+  assert.match(source, /--retry-count-bg: var\(--ct-log-badge-danger\)/)
+  assert.match(source, /--retry-count-bg: var\(--ct-log-badge-success\)/)
+  assert.match(source, /\.retry-chain-trigger\.is-first-attempt \{ color: var\(--ct-log-tooltip-first\)/)
+  assert.match(themeSource, /--ct-log-tooltip-first: #1d4ed8/)
+  assert.match(themeSource, /--ct-log-tooltip-first: #3b82f6/)
+})
+
+test('stream soft errors attach the red accessible indicator to the stream cell', () => {
+  const icon = readFileSync(new URL('../src/components/StreamStatusError.vue', import.meta.url), 'utf8')
+  assert.match(source, /function streamSoftErrorReason\(row: ReadonlyLog\)/)
+  assert.match(source, /status\.status === 'ok'/)
+  assert.match(source, /<StreamStatusError v-if="view\.streamSoftErrorReason !== undefined" :reason="view\.streamSoftErrorReason"/)
+  assert.match(icon, /role="img"/)
+  assert.match(icon, /流状态：错误/)
+  assert.match(icon, /var\(--ct-log-tooltip-danger\)/)
+  assert.match(icon, /background: var\(--ct-log-tooltip-bg\)/)
+  assert.match(source, /background: var\(--ct-log-tooltip-bg\)/)
+  assert.match(icon, /border-radius: 6px/)
+  assert.match(source, /border-radius: 6px/)
+  assert.match(themeSource, /--ct-log-tooltip-bg: var\(--ct-surface\)/)
+  assert.match(themeSource, /--ct-log-tooltip-bg: var\(--ct-surface-2\)/)
+  assert.match(themeSource, /--ct-log-badge-danger: var\(--ct-danger-solid\)/)
 })
 
 // 回归保护：管理员日志中的渠道亲和性命中必须像 New API 一样在渠道 ID 角标显示，并能进入快照详情。
@@ -369,7 +482,11 @@ test('readonly logs keeps the rc35 native detail dialog layout', () => {
   assert.match(source, /\.detail-dialog-status \{[\s\S]*height: 20px;[\s\S]*gap: 4px;[\s\S]*padding: 0 6px;/)
   assert.match(source, /\.detail-row \{[\s\S]*grid-template-columns: 5\.25rem minmax\(0, 1fr\);/)
   assert.match(source, /\.detail-section-card \{[\s\S]*gap: 4px;[\s\S]*padding: 10px;/)
-  assert.match(source, /\.detail-dialog-content \{[\s\S]*gap: 10px;/)
+  assert.match(source, /\.detail-dialog-content \{[\s\S]*gap: 16px;/)
+  assert.match(source, /\.detail-dialog-content \{ gap: 16px; \}/)
+  assert.match(source, /\.detail-dialog-content \{ gap:16px; \}/)
+  assert.doesNotMatch(source, /<details|<summary|detail-full-information/)
+  assert.doesNotMatch(source, /mobile-detail-rows|mobile-error-content/)
   assert.match(source, /\.detail-label \{[\s\S]*text-align: left;/)
   assert.match(source, /\.detail-dialog-body \{[\s\S]*flex: 0 1 auto;[\s\S]*overflow-y: auto;/)
   assert.match(source, /\.detail-dialog-body-inner \{[\s\S]*padding: 4px 8px 4px 4px;/)
