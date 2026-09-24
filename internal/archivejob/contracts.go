@@ -6,9 +6,26 @@ import "time"
 const Protocol = 1
 
 type Settings struct {
-	Collection bool   `json:"collection"`
-	History    bool   `json:"history"`
-	RetryToken string `json:"retry_token,omitempty"`
+	CollectionBatches int    `json:"collection_batches,omitempty"`
+	HistoryBatches    int    `json:"history_batches,omitempty"`
+	Collection        bool   `json:"collection"`
+	History           bool   `json:"history"`
+	RetryToken        string `json:"retry_token,omitempty"`
+}
+
+// Zero preserves the legacy 4:1 schedule for stored configs and older clients.
+func (s Settings) BatchRatio() (int, int) {
+	c, h := s.CollectionBatches, s.HistoryBatches
+	if c == 0 {
+		c = 4
+	}
+	if h == 0 {
+		h = 1
+	}
+	return c, h
+}
+func (s Settings) Valid() bool {
+	return s.CollectionBatches >= 0 && s.CollectionBatches <= 100 && s.HistoryBatches >= 0 && s.HistoryBatches <= 100 && len(s.RetryToken) <= 64
 }
 
 type Progress struct {

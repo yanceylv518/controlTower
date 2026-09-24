@@ -45,3 +45,21 @@ func TestLargeCursorWirePrecision(t *testing.T) {
 		t.Fatal("cursor lost precision")
 	}
 }
+
+func TestScheduleSettingsValidationAndRoundTrip(t *testing.T) {
+	for _, s := range []Settings{{}, {CollectionBatches: 1, HistoryBatches: 100}} {
+		if !s.Valid() {
+			t.Fatal("valid ratio rejected")
+		}
+		b, _ := json.Marshal(s)
+		var restored Settings
+		if err := json.Unmarshal(b, &restored); err != nil || restored != s {
+			t.Fatal("ratio lost", err)
+		}
+	}
+	for _, s := range []Settings{{CollectionBatches: -1}, {HistoryBatches: 101}} {
+		if s.Valid() {
+			t.Fatal("invalid ratio accepted")
+		}
+	}
+}

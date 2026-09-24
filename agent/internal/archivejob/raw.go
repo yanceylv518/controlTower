@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -50,15 +51,28 @@ func chain(previous string, r row) string {
 	h := sha256.Sum256([]byte(previous + rowHash(r)))
 	return hex.EncodeToString(h[:])
 }
+
+const maxPageBytes = 8 * 1024 * 1024
+
+// readRows is for bounded point lookups. Scanning callers must use readPage and
+// honor its byteLimited result instead of interpreting a short page as EOF.
 func readRows(ctx context.Context, db queryer, query string, args ...any) ([]row, error) {
+	records, limited, err := readPage(ctx, db, query, args...)
+	if err == nil && limited {
+		return nil, errors.New("point_lookup_payload_limit")
+	}
+	return records, err
+}
+
+func readPage(ctx context.Context, db queryer, query string, args ...any) ([]row, bool, error) {
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer rows.Close()
 	cols, err := rows.Columns()
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	out := []row{}
 	totalBytes := 0
@@ -69,24 +83,35 @@ func readRows(ctx context.Context, db queryer, query string, args ...any) ([]row
 			dest[i] = &cells[i]
 		}
 		if err = rows.Scan(dest...); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		r := row{}
+		rowBytes := 0
 		for i, col := range cols {
 			if cells[i].Valid {
 				v := cells[i].String
-				totalBytes += len(v)
-				if totalBytes > 8*1024*1024 {
-					return nil, errors.New("batch_payload_limit_reduce_batch_size")
-				}
+				rowBytes += len(v)
 				r[col] = &v
 			} else {
 				r[col] = nil
 			}
 		}
+		if rowBytes > maxPageBytes {
+			// Commit the valid prefix first. The next attempt reports the oversized
+			// record without advancing past it or exposing its contents.
+			if len(out) > 0 {
+				return out, true, nil
+			}
+			id, _ := r.number("id")
+			return nil, false, fmt.Errorf("archive_row_payload_limit:id=%d,bytes=%d,limit=%d", id, rowBytes, maxPageBytes)
+		}
+		if totalBytes+rowBytes > maxPageBytes {
+			return out, true, nil
+		}
 		out = append(out, r)
+		totalBytes += rowBytes
 	}
-	return out, rows.Err()
+	return out, false, rows.Err()
 }
 
 func (e *Engine) ensureMonth(ctx context.Context, c *sql.Conn, name string) error {
@@ -118,7 +143,7 @@ func (e *Engine) collect(ctx context.Context, c *sql.Conn, s *state, batch, dela
 	}
 	// Do not filter out recent IDs and then advance beyond them: stop at the
 	// first row inside the delay window, otherwise a delayed ID could be skipped.
-	rows, err := readRows(ctx, e.source, "SELECT /*+ MAX_EXECUTION_TIME(3000) */ * FROM logs WHERE id>? ORDER BY id LIMIT ?", s.Collection.AfterID, batch)
+	rows, _, err := readPage(ctx, e.source, "SELECT /*+ MAX_EXECUTION_TIME(3000) */ * FROM logs WHERE id>? ORDER BY id LIMIT ?", s.Collection.AfterID, batch)
 	if err != nil {
 		return err
 	}

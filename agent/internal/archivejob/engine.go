@@ -70,16 +70,19 @@ type history struct {
 	TargetRows   uint64
 }
 type state struct {
-	SeedFrom        string
-	SeedThrough     string
-	Collection      aj.Progress
-	History         history
-	HistoryProgress aj.Progress
-	FirstDate       string
-	FirstDateSource string
-	Frontier        string
-	RetryToken      string
-	Turns           int
+	SeedFrom           string
+	SeedThrough        string
+	Collection         aj.Progress
+	History            history
+	HistoryProgress    aj.Progress
+	FirstDate          string
+	FirstDateSource    string
+	Frontier           string
+	RetryToken         string
+	HistoryTurns       int
+	ScheduleCollection int
+	ScheduleHistory    int
+	Turns              int
 }
 
 func Open(sourceDSN, targetDSN string) (*Engine, error) {
@@ -310,10 +313,9 @@ func save(ctx context.Context, tx *sql.Tx, s state) error {
 	return err
 }
 
-// Step commits at most one source-reading batch. Four collection opportunities
-// alternate with one history opportunity; disabling either gives the other all slots.
+// Step executes one scheduled batch; disabling either task gives the other all slots.
 func (e *Engine) Step(ctx context.Context, settings aj.Settings, batch, delay int, immutable bool) (aj.Status, error) {
-	if batch < 1 || batch > 5000 || delay < 60 || delay > 86400 {
+	if !settings.Valid() || batch < 1 || batch > 5000 || delay < 60 || delay > 86400 {
 		return aj.Status{Protocol: aj.Protocol}, errors.New("invalid_archive_settings")
 	}
 	historyTurn := false
@@ -334,12 +336,10 @@ func (e *Engine) Step(ctx context.Context, settings aj.Settings, batch, delay in
 		if err = seedDays(ctx, c, &s); err != nil {
 			return err
 		}
-		historyTurn = settings.History && (!settings.Collection || s.Turns >= 4)
+		historyTurn = s.nextHistoryTurn(settings)
 		if historyTurn {
-			s.Turns = 0
 			err = e.historyStep(ctx, c, &s, batch, immutable)
 		} else if settings.Collection {
-			s.Turns++
 			err = e.collect(ctx, c, &s, batch, delay)
 		}
 		if err != nil {
