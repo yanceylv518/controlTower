@@ -1,5 +1,13 @@
 # 操作审计加载慢排查
 
+## rc136打包发布（2026-09-24）
+
+- 用户先要求打包；自动审批认为远程标签会触发公开Release/GHCR而拒绝，已向用户说明。用户随后明确回复“确认”，据此创建并推送v2.0.0-rc136，固定功能提交e02737fbd7e47ea079a60dbd2a7c0958b04e1b07。
+- CI [35960442242](https://github.com/yanceylv518/controlTower/actions/runs/35960442242)成功；release [35960671835](https://github.com/yanceylv518/controlTower/actions/runs/35960671835)成功，包括安装包构建、GHCR版本/latest镜像推送、GitHub Release创建。
+- [正式Release](https://github.com/yanceylv518/controlTower/releases/tag/v2.0.0-rc136)非草稿，三个安装包及SHA256SUMS均uploaded。已下载到dist/releases/v2.0.0-rc136；逐包校验SHA256一致、ELF架构与可执行权限正确，Agent包含rc136版本及LF安装脚本，Server含前端和095迁移。本地此前交叉编译也通过，最终交付以CI附件为准。
+- 本版还包含cb6e207c1熔断禁用恢复及bcda77166命令清理/Agent诊断补修。升级Server需093–095，审计前后端随包配套；Agent诊断增强需升级Agent，单独审计修复不要求Agent更新。未执行生产部署、生产DDL或Linux实机安装。
+- 发布记录作为后续文档提交保存，不改变已发布标签的功能提交。
+
 ## 提交验收（2026-09-24）
 
 用户明确授权提交并推送。提交前fetch确认main与origin/main均为bcda77166，本次仅纳入审计优化及配套测试、095迁移和文档，共17个文件。最终前端类型/生产构建及diff检查通过（既有chunk提示），此前本轮Go五包、15项前端、独立MySQL和Chrome验证见下文，未重复生产或手机验收。提交与远程接收结果以Git记录为准；下方“未提交”保留阶段历史。本次不发布版本或部署，仍需Server/Web及095配套升级。
