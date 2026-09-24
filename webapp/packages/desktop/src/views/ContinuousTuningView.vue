@@ -241,10 +241,15 @@ async function refreshCurrentRates() {
     ratesWindowStart.value = result.window_start;
     ratesDelay.value = result.delay_seconds;
     ratesReady.value = true; ratesError.value = "";
-  } catch {
+  } catch (error) {
     if (site !== siteID.value) return;
     ratesReady.value = false;
-    ratesError.value = "实时负载暂不可用：请确认 Agent 已升级且上报正常";
+    ratesError.value = error instanceof ApiError
+      ? error.status === 401 ? ""
+        : error.status === 403 ? "无权读取实时负载，请检查当前账户的站点权限"
+        : error.code === "current_rates_unavailable" ? "实时负载暂不可用：服务端尚无法提供完整数据，请检查采集节点上报及服务端状态，正在重试"
+        : `实时负载读取失败（HTTP ${error.status}），正在重试`
+      : "实时负载请求失败，请检查网络连接，正在重试";
   } finally { ratesLoading = false; }
 }
 const evaluationText = (row: ChannelBaseValue) => {
@@ -910,7 +915,7 @@ async function save() {
   } finally { saving.value = false; }
 }
 watch(() => filters.site_id, () => { groupDialogOpen.value = false; groupManagerOpen.value = false; cancelGroupPolls(); channels.value = []; availableGroups.value = []; pendingGroups.value = new Map(); groupErrors.value = new Map(); groupQuery.value = ""; channelDirectoryGeneration++; groupDirectoryGeneration++; void load(true); void watchChannelChanges(); });
-watch(siteID, () => { ratesReady.value = false; currentRates.value.clear(); void refreshCurrentRates(); });
+watch(siteID, () => { ratesReady.value = false; ratesError.value = ""; currentRates.value.clear(); void refreshCurrentRates(); });
 watch([eventModelFilter, eventRuleFilter, eventChannelQuery, eventDateRange, activeModel], () => { eventPage.value = 1; });
 onMounted(() => { void load(true); void watchChannelChanges(); void refreshCurrentRates(); refreshTimer = setInterval(() => void refreshRuntime(), 30000); ratesTimer = setInterval(() => { if (!document.hidden) void refreshCurrentRates(); }, 5000); });
 onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPolls(); if (refreshTimer) clearInterval(refreshTimer); if (ratesTimer) clearInterval(ratesTimer); });

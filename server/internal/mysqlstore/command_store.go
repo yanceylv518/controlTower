@@ -11,6 +11,7 @@ import (
 
 	"controltower/server/internal/channelupdates"
 	"controltower/server/internal/storage"
+	"github.com/go-sql-driver/mysql"
 )
 
 func (s Store) CreateChannelCommand(v storage.ChannelCommand) error {
@@ -165,30 +166,114 @@ func (s Store) CompleteChannelCommand(id, status, errorSummary string, now time.
 }
 
 func (s Store) ExpireStaleCommands(before time.Time) (int, error) {
+	total := 0
+	for {
+		var n int
+		var done bool
+		var err error
+		for attempt := 0; attempt < 3; attempt++ {
+			n, done, err = s.expireStaleCommandsBatch(before)
+			var databaseError *mysql.MySQLError
+			if !errors.As(err, &databaseError) || databaseError.Number != 1213 {
+				break
+			}
+		}
+		if err != nil {
+			return total, err
+		}
+		total += n
+		if done {
+			return total, nil
+		}
+	}
+}
+
+const expiredCommandBatchSize = 100
+
+// Discover candidates without locking the status index: even an empty locking
+// range scan can touch its first nonmatching row and deadlock with delivery.
+// Candidates are rechecked under primary-key locks before any writes.
+const expiredCommandCandidatesSQL = `SELECT id FROM channel_commands FORCE INDEX (idx_channel_commands_expiry)
+WHERE status='pending' AND created_at < ? ORDER BY created_at,id LIMIT ?`
+
+func (s Store) expireStaleCommandsBatch(before time.Time) (int, bool, error) {
 	ctx := context.Background()
-	tx, e := s.db.BeginTx(ctx, nil)
+	// No snapshot is needed: candidates are locked and rechecked by each batch.
+	// READ COMMITTED releases locks on candidates that no longer match and
+	// avoids retaining gap locks if a candidate was removed concurrently.
+	tx, e := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if e != nil {
-		return 0, e
+		return 0, false, e
 	}
 	defer tx.Rollback()
-	now := time.Now().UTC()
-	if _, e = tx.ExecContext(ctx, `UPDATE operation_audits a JOIN channel_commands c ON c.id=a.id
-SET a.status='expired',a.error_summary='command expired before execution',a.updated_at=?
-WHERE c.status='pending' AND c.created_at<? AND a.status='submitted'`, now, before); e != nil {
-		return 0, e
-	}
-	r, e := tx.ExecContext(ctx, "UPDATE channel_commands SET status='expired',updated_at=? WHERE status='pending' AND created_at < ?", now, before)
+	rows, e := tx.QueryContext(ctx, expiredCommandCandidatesSQL, before, expiredCommandBatchSize)
 	if e != nil {
-		return 0, e
+		return 0, false, e
+	}
+	var ids []string
+	var idArgs []any
+	for rows.Next() {
+		var id string
+		if e = rows.Scan(&id); e != nil {
+			rows.Close()
+			return 0, false, e
+		}
+		ids = append(ids, "?")
+		idArgs = append(idArgs, id)
+	}
+	e = rows.Err()
+	rows.Close()
+	if e != nil {
+		return 0, false, e
+	}
+	if len(ids) == 0 {
+		return 0, true, tx.Commit()
+	}
+	// Lock in primary-key order, not creation-time order. A concurrent cleaner
+	// or claimant may already have transitioned a discovered candidate; only
+	// rows still eligible under these locks can have their audits expired.
+	lockArgs := append(append([]any{}, idArgs...), before)
+	rows, e = tx.QueryContext(ctx, "SELECT id FROM channel_commands FORCE INDEX (PRIMARY) WHERE id IN ("+strings.Join(ids, ",")+") AND status='pending' AND created_at < ? ORDER BY id FOR UPDATE", lockArgs...)
+	if e != nil {
+		return 0, false, e
+	}
+	ids, idArgs = nil, nil
+	for rows.Next() {
+		var id string
+		if e = rows.Scan(&id); e != nil {
+			rows.Close()
+			return 0, false, e
+		}
+		ids = append(ids, "?")
+		idArgs = append(idArgs, id)
+	}
+	e = rows.Err()
+	rows.Close()
+	if e != nil {
+		return 0, false, e
+	}
+	if len(ids) == 0 {
+		// Do not stop because another cleaner consumed this batch. There may
+		// still be further candidates beyond the initial LIMIT.
+		return 0, false, tx.Commit()
+	}
+	now := time.Now().UTC()
+	args := append([]any{now}, idArgs...)
+	r, e := tx.ExecContext(ctx, "UPDATE channel_commands FORCE INDEX (PRIMARY) SET status='expired',updated_at=? WHERE id IN ("+strings.Join(ids, ",")+") AND status='pending'", args...)
+	if e != nil {
+		return 0, false, e
+	}
+	if _, e = tx.ExecContext(ctx, "UPDATE operation_audits FORCE INDEX (PRIMARY) SET status='expired',error_summary='command expired before execution',updated_at=? WHERE id IN ("+strings.Join(ids, ",")+") AND status='submitted'", args...); e != nil {
+		return 0, false, e
 	}
 	n, e := r.RowsAffected()
 	if e != nil {
-		return 0, e
+		return 0, false, e
 	}
 	if e = tx.Commit(); e != nil {
-		return 0, e
+		return 0, false, e
 	}
-	return int(n), nil
+	return int(n), false, nil
 }
 
 func (s Store) QueryChannelCommands(q storage.ChannelCommandQuery) ([]storage.ChannelCommand, error) {

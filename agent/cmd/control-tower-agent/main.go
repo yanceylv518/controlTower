@@ -269,7 +269,7 @@ func runCollectorLoop(ctx context.Context, cfg config.Config, collect func(conte
 			if backoff := reporter.BackoffDelay(failures); backoff > wait {
 				wait = backoff
 			}
-			log.Printf("control tower agent collector pass failed; retrying in %s", wait)
+			log.Printf("control tower agent collector pass failed; %s; failures=%d; retrying in %s", collectorFailureSummary(err), failures, wait)
 		} else {
 			failures = 0
 		}
@@ -356,14 +356,14 @@ func collectAndReportFullPass(ctx context.Context, client controlTowerReporter, 
 	// collection and alerting independent from heartbeat availability.
 	flushedLastLogID, flushed, err := flushBufferedReports(ctx, client, bufferStore)
 	if err != nil {
-		return bufferFailedPass(bufferStore, stateStore, &current, report, lastLogID, now, cfg.MaxLocalBufferEvents, err)
+		return bufferFailedPass(bufferStore, stateStore, &current, report, lastLogID, now, cfg.MaxLocalBufferEvents, collectorFailure("buffer_flush", err))
 	}
 	if flushed && flushedLastLogID > current.LastLogID {
 		current.LastLogID = flushedLastLogID
 	}
 	heartbeat, err := client.Heartbeat(ctx, reporter.AgentHeartbeatRequest{InstanceID: cfg.InstanceID, AgentID: cfg.AgentID, AgentVersion: agentVersion, ReportedAt: now, Sequence: sequence, LastLogID: current.LastLogID})
 	if err != nil {
-		return bufferFailedPass(bufferStore, stateStore, &current, report, lastLogID, now, cfg.MaxLocalBufferEvents, err)
+		return bufferFailedPass(bufferStore, stateStore, &current, report, lastLogID, now, cfg.MaxLocalBufferEvents, collectorFailure("heartbeat", err))
 	}
 	report.CommandResults = executeCommands(ctx, controller, heartbeat.Commands)
 	if heartbeat.ServerLastLogID > current.LastLogID {
@@ -379,7 +379,7 @@ func collectAndReportFullPass(ctx context.Context, client controlTowerReporter, 
 	}
 
 	if err := client.Report(ctx, report); err != nil {
-		return bufferFailedPass(bufferStore, stateStore, &current, report, lastLogID, now, cfg.MaxLocalBufferEvents, err)
+		return bufferFailedPass(bufferStore, stateStore, &current, report, lastLogID, now, cfg.MaxLocalBufferEvents, collectorFailure("report", err))
 	}
 	if activeNginxTiming != nil {
 		activeNginxTiming.Ack(len(report.NginxTimingBuckets))
@@ -400,7 +400,7 @@ func bufferFailedPass(bufferStore localbuffer.FileStore, stateStore state.FileSt
 		report.NginxSlowSamples = nil
 		if err := bufferStore.Append(localbuffer.Entry{CreatedAt: now, LastLogID: lastLogID, Report: report}, maxEvents); err != nil {
 			_ = stateStore.Save(*current)
-			return err
+			return collectorFailure("buffer_append", err)
 		}
 		if lastLogID > current.LastLogID {
 			current.LastLogID = lastLogID

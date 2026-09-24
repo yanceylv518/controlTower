@@ -13,6 +13,10 @@ const row = { channel_id: 1, model_name: 'm', base_weight: 100, base_priority: 1
 const state = (requests, weight = 80) => ({ channel_id: 1, model_name: 'm', last_observed_requests: requests, proposed_weight: weight, speed_stats_version: 1, phase: 'normal', metric_ready: true, baseline_ready: true, updated_at: '2026-09-14T00:00:00Z' })
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no }); return { promise, resolve, reject } }
 
+class ApiError extends Error {
+  constructor(status, code) { super(code); this.status = status; this.code = code }
+}
+
 function page() {
   const filters = reactive({ site_id: 'a', loadInstances: async () => {} })
   const dashboard = {
@@ -22,11 +26,33 @@ function page() {
     tuningContinuousStates: async () => ({ items: [state(42)] }),
   }
   const names = ['computed', 'reactive', 'ref', 'watch', 'onMounted', 'onBeforeUnmount', 'useFiltersStore', 'dashboard', 'formatTime', 'ApiError', 'ElMessage', 'ElMessageBox', 'useMobileViewport', 'splitChannelGroups']
-  const create = new Function(...names, `${compiled}\nreturn { saveCapacity, saving, mobileEditRow, stageMobileEdit, mobileChanges, mobilePriorityChanges, mobileRuleChanges, mobileSaveOpen, load, refreshRuntime, loadChannelDirectory, applyGroupLocally, acceptStates, stateFor, sampleText, evaluationText, states, refreshError, bases, channels, policy, channelQuery, groupQuery, channelStatusFilter, displayedRows, activeModel, dirty, selectModel, fieldChanged, savedBases, originalBase, calculatedWeight, displayedSpeedFactor, coefficientCell, overallEvaluationStatus, coefficientEmptyText, coefficientSpan, displayedPriority, editPriority, priorityLocked, cancelChanges, limitReason, currentRates, ratesReady, rowStatus, eventResult, eventResultClass, events, filteredEvents, eventDateRange };`)
+  const create = new Function(...names, `${compiled}\nreturn { refreshCurrentRates, ratesError, saveCapacity, saving, mobileEditRow, stageMobileEdit, mobileChanges, mobilePriorityChanges, mobileRuleChanges, mobileSaveOpen, load, refreshRuntime, loadChannelDirectory, applyGroupLocally, acceptStates, stateFor, sampleText, evaluationText, states, refreshError, bases, channels, policy, channelQuery, groupQuery, channelStatusFilter, displayedRows, activeModel, dirty, selectModel, fieldChanged, savedBases, originalBase, calculatedWeight, displayedSpeedFactor, coefficientCell, overallEvaluationStatus, coefficientEmptyText, coefficientSpan, displayedPriority, editPriority, priorityLocked, cancelChanges, limitReason, currentRates, ratesReady, rowStatus, eventResult, eventResultClass, events, filteredEvents, eventDateRange };`)
   const splitChannelGroups = value => String(value ?? '').split(',').map(item => item.trim()).filter(Boolean)
-  const view = create(computed, reactive, ref, () => {}, () => {}, () => {}, () => filters, dashboard, String, class extends Error {}, {info() {}, success() {}}, {}, () => ref(false), splitChannelGroups)
+  const view = create(computed, reactive, ref, () => {}, () => {}, () => {}, () => filters, dashboard, String, ApiError, {info() {}, success() {}}, {}, () => ref(false), splitChannelGroups)
   return { ...view, filters, dashboard }
 }
+
+test('rate failures distinguish transport, permissions and server availability; recovery clears the warning', async () => {
+  const p = page()
+  for (const [error, expected] of [
+    [new Error('network down'), /网络连接/],
+    [new ApiError(403, 'forbidden'), /站点权限/],
+    [new ApiError(503, 'current_rates_unavailable'), /服务端尚无法提供完整数据/],
+    [new ApiError(500, 'query_failed'), /HTTP 500/],
+    [new ApiError(401, 'unauthorized'), /^$/],
+  ]) {
+    p.dashboard.tuningCurrentRates = async () => { throw error }
+    await p.refreshCurrentRates()
+    assert.equal(p.ratesReady.value, false)
+    assert.match(p.ratesError.value, expected)
+    assert.doesNotMatch(p.ratesError.value, /Agent 已升级/)
+  }
+  p.dashboard.tuningCurrentRates = async () => ({ items: [{ channel_id: 1, rpm: 12, tpm: 100 }], as_of: '', window_start: '', delay_seconds: 0 })
+  await p.refreshCurrentRates()
+  assert.equal(p.ratesReady.value, true)
+  assert.equal(p.ratesError.value, '')
+  assert.equal(p.currentRates.value.get(1).rpm, 12)
+})
 
 test('initial unavailable state is unknown, and retry loads real samples', async () => {
   const p = page()

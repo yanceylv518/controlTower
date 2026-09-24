@@ -65,7 +65,7 @@ func (c Client) postJSONResponse(ctx context.Context, path string, value any, la
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("%s failed with status %d", label, resp.StatusCode)
+		return &HTTPStatusError{Operation: label, StatusCode: resp.StatusCode}
 	}
 	if target != nil {
 		if err := json.NewDecoder(resp.Body).Decode(target); err != nil {
