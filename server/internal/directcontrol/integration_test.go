@@ -106,6 +106,13 @@ func TestDirectControlIntegration(t *testing.T) {
 	// 使用唯一后缀，避免本地长驻服务或并行测试遗留同名站点配置污染断言。
 	runID := fmt.Sprintf("%d", time.Now().UnixNano())
 	site, plainSite := "smoke-direct-"+runID, "smoke-queue-"+runID
+	defer func() {
+		// Do not leave queue-fallback fixtures for a later global expiry test.
+		for _, table := range []string{"channel_commands", "tuning_recommendations", "operation_audits", "channel_current", "channel_base_values", "tuning_continuous_states", "tuning_policies"} {
+			_, _ = db.Exec("DELETE FROM "+table+" WHERE instance_id IN (?,?)", site, plainSite)
+		}
+		_, _ = db.Exec("DELETE FROM instances WHERE id IN (?,?)", site, plainSite)
+	}()
 	for _, id := range []string{site, plainSite} {
 		if err := inner.CreateInstance(storage.Instance{ID: id, SiteID: id, Name: id, Enabled: true, CreatedAt: now, UpdatedAt: now}); err != nil && !strings.Contains(err.Error(), "Duplicate") {
 			t.Fatalf("create instance %s: %v", id, err)
@@ -157,8 +164,13 @@ func TestDirectControlIntegration(t *testing.T) {
 		t.Fatalf("direct command row must be terminal: %q %v", status, err)
 	}
 	var auditCount int
-	if err := db.QueryRow("SELECT COUNT(*) FROM operation_audits WHERE id=?", commandID).Scan(&auditCount); err != nil || auditCount != 1 {
-		t.Fatalf("audit row missing: %d %v", auditCount, err)
+	// Automatic tuning is recorded in tuning_recommendations/commands; the
+	// operation-audit feed intentionally contains only manual operations.
+	if err := db.QueryRow("SELECT COUNT(*) FROM operation_audits WHERE id=?", commandID).Scan(&auditCount); err != nil || auditCount != 0 {
+		t.Fatalf("automatic write leaked into manual audits: %d %v", auditCount, err)
+	}
+	if err := db.QueryRow("SELECT COUNT(*) FROM tuning_recommendations WHERE command_id=?", commandID).Scan(&auditCount); err != nil || auditCount != 1 {
+		t.Fatalf("automatic write record missing: %d %v", auditCount, err)
 	}
 
 	// 2b. 直连分组写入支持规范化多分组组合，立即更新站点快照并记录新旧值。
@@ -259,5 +271,50 @@ func TestDirectControlIntegration(t *testing.T) {
 	}
 	if _, err := store.UpdateChannelGroup(ctx, plainSite, 5, "custom-only", "admin", now); err != nil {
 		t.Fatalf("custom queued group failed: %v", err)
+	}
+
+	// 6. Capacity writes use the real synchronous path, while an invalidated
+	// decision must be rejected before any new-api request is made.
+	policy := tuning.DefaultPolicy()
+	policy.DispatchModes = map[string]string{"m": "auto"}
+	if err := inner.PutPolicy(tuning.PolicyRecord{InstanceID: site, Policy: policy, Mode: "observe", UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE channel_base_values SET max_tpm=1000 WHERE instance_id=? AND channel_id=9`, site); err != nil {
+		t.Fatal(err)
+	}
+	capState := tuning.ContinuousState{InstanceID: site, ChannelID: 9, ModelName: "m", Phase: "normal", ProposedWeight: 19, CapacityLimited: true, UpdatedAt: now, Capacity: tuning.CapacityControl{Initialized: true, Active: true, Fresh: true, Phase: "reducing", MaxTPM: 1000, Utilization: 1.5, SampleAt: now, ConfirmedWeight: 25, RawTarget: 15, BoundWeight: 19}}
+	if err := inner.PutContinuousState(capState); err != nil {
+		t.Fatal(err)
+	}
+	capRec := tuning.Recommendation{ID: "smoke-cap-" + runID, InstanceID: site, ChannelID: 9, CreatedAt: now, Rule: "capacity_reduce", ModeAtCreation: "auto", CurrentWeight: 25, ProposedWeight: 19, Evidence: map[string]any{"model": "m", "capacity_managed": true, "capacity": capState.Capacity}}
+	beforeWrite := time.Now().UTC()
+	capID, err := store.CreateContinuousWeightChange(capRec, "system:auto", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, appliedAt, err := inner.ContinuousCommandResult(capID)
+	if err != nil || result != "succeeded" || appliedAt.Before(beforeWrite.Truncate(time.Microsecond)) {
+		t.Fatalf("direct acknowledgement must include actual write time: %s %s %v", result, appliedAt, err)
+	}
+	if put := fake.lastPut(t); put["weight"] != float64(19) {
+		t.Fatalf("capacity target not applied: %+v", put)
+	}
+	fake.mu.Lock()
+	beforeRequests := len(fake.requests)
+	fake.mu.Unlock()
+	policy.DispatchModes["m"] = "off"
+	if err := inner.PutPolicy(tuning.PolicyRecord{InstanceID: site, Policy: policy, Mode: "observe", UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	capRec.ID += "stale"
+	if _, err := store.CreateContinuousWeightChange(capRec, "system:auto", now); err == nil {
+		t.Fatal("mode change must invalidate capacity write")
+	}
+	fake.mu.Lock()
+	afterRequests := len(fake.requests)
+	fake.mu.Unlock()
+	if afterRequests != beforeRequests {
+		t.Fatal("invalid capacity decision reached new-api")
 	}
 }

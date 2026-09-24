@@ -177,6 +177,7 @@ function moveHighlight(delta: number) {
 }
 
 function handleKeydown(event: KeyboardEvent) {
+  if (event.isComposing || event.keyCode === 229) return
   if (event.key === 'ArrowDown') {
     if (!open.value && options.value.length) open.value = true
     if (options.value.length) {
@@ -194,12 +195,13 @@ function handleKeydown(event: KeyboardEvent) {
     return
   }
   if (event.key === 'Enter') {
+    // 同时阻止移动端外层 form 的原生提交，保证一次 Enter 只查询一次。
+    event.preventDefault()
+    if (event.repeat) return
     if (open.value && highlightedIndex.value >= 0 && options.value[highlightedIndex.value]) {
-      event.preventDefault()
       selectOption(options.value[highlightedIndex.value])
-    } else {
-      emit('submit')
     }
+    emit('submit')
     return
   }
   if (event.key === 'Escape' && open.value) {

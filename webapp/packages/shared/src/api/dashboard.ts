@@ -452,6 +452,13 @@ export interface TuningContinuousState {
   metric_rpm: number;
   metric_tpm: number;
   capacity_limited: boolean;
+	capacity?: {
+	  initialized: boolean; active: boolean; phase: string; reason?: string; fresh: boolean;
+	  max_rpm: number; max_tpm: number; utilization: number;
+	  sample_at: string; over_since: string; under_since: string; applied_at: string;
+	  confirmed_weight: number; raw_target: number; bound_weight: number;
+	  pending_command_id?: string; pending_weight: number;
+	};
   speed_sample_count?: number;
   speed_retry_count?: number;
   speed_unknown_count?: number;

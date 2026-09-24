@@ -324,6 +324,8 @@ type ContinuousState struct {
 	// the threshold per step and stays unrecorded no matter how far it goes.
 	LastObservedWeight *int64    `json:"last_observed_weight,omitempty"`
 	UpdatedAt          time.Time `json:"updated_at"`
+
+	Capacity CapacityControl `json:"capacity"`
 }
 
 type RecentChannelBucket struct {

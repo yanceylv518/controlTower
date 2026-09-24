@@ -102,7 +102,16 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 	currentMetrics := metrics
 	currentRatesAreWindowTotals := true
 	currentRatesUnavailable := false
-	if rateStore, ok := e.store.(currentChannelRatesStore); ok {
+	var ratesAsOf time.Time
+	_, hasRateSnapshot := e.store.(currentChannelRateSnapshotStore)
+	if rateStore, ok := e.store.(currentChannelRateSnapshotStore); ok {
+		currentMetrics, ratesAsOf, err = rateStore.QueryCurrentChannelRateSnapshot(id, now)
+		currentRatesAreWindowTotals = false
+		currentRatesUnavailable = err != nil
+		if err != nil {
+			log.Printf("tuning continuous evaluation site=%s stage=current_rates failed error=%v", id, err)
+		}
+	} else if rateStore, ok := e.store.(currentChannelRatesStore); ok {
 		if latest, rateErr := rateStore.QueryCurrentChannelRates(id, now); rateErr != nil {
 			log.Printf("tuning continuous evaluation site=%s stage=current_rates failed error=%v; blocking increases for capacity-configured channels", id, rateErr)
 			currentMetrics = nil
@@ -174,7 +183,8 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 			// naturally stop producing traffic and must recover without it.
 			// Explicit exclusion settings still take effect without samples.
 			if len(metrics) == 0 && exists && previous.ModelName == model && previous.LastObservedRequests > 0 &&
-				(previous.Phase == "normal" || previous.Phase == "") && base.BaseWeight > 0 && len(base.Models) <= 1 {
+				(previous.Phase == "normal" || previous.Phase == "") && base.BaseWeight > 0 && len(base.Models) <= 1 &&
+				!capacityConfigured(base) && !previous.Capacity.Initialized {
 				preserved++
 				continue
 			}
@@ -219,6 +229,17 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 			state.CapacityLimited = (base.MaxRPM > 0 && state.MetricRPM >= float64(base.MaxRPM)) || (base.MaxTPM > 0 && state.MetricTPM >= float64(base.MaxTPM))
 			if currentRatesUnavailable && (base.MaxRPM > 0 || base.MaxTPM > 0) {
 				state.CapacityLimited = true
+			}
+			if hasRateSnapshot || state.Capacity.Initialized {
+				e.settleCapacityWrite(cs, id, base, &state, now)
+				updateCapacity(base, &state, ratesAsOf, now, !currentRatesUnavailable)
+				if state.Capacity.Fresh && (state.Capacity.Phase == "reducing" || state.Capacity.PendingCommandID != "") {
+					canDivert, reason := capacityDiversion(base, rows, stateByID, currentMetricByID, p)
+					state.Capacity.Reason = reason
+					if !canDivert && state.Capacity.PendingCommandID == "" {
+						state.Capacity.Phase = "no_headroom"
+					}
+				}
 			}
 			state.MetricReady = speedEvidenceReady(m, p.MinSamples)
 			state.SpeedSamples, state.SpeedRetries, state.SpeedUnknown, state.SpeedLegacy = m.SpeedSamples, m.SpeedRetries, m.SpeedUnknown, m.SpeedLegacy
@@ -330,6 +351,12 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 				}
 				probeMultiplier := successRatio * probeSpeed
 				if probeMultiplier >= p.RecoveryThreshold {
+					if capacityRecoveryBlocked(base, state) {
+						state.UpdatedAt = now
+						_ = cs.PutContinuousState(state)
+						evaluated++
+						continue
+					}
 					if mode == "auto" && state.CircuitDisabled {
 						state.CircuitStatusTarget = 1
 						state.ProposedWeight = max(int64(1), int64(math.Round(float64(base.BaseWeight)*p.SoftStartMultiplier)))
@@ -355,13 +382,15 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 					rec := continuousEvent(id, base, state, "circuit_recovered", mode, now)
 					rec.ProposedPriority = nil
 					if mode == "auto" {
-						if _, err = cs.CreateContinuousWeightChange(rec, "system:auto", now); err == nil {
+						if _, err = e.createTrackedWeightChange(cs, rec, base, &state, now); err == nil {
 							recoveredNow = true
 							w := state.ProposedWeight
 							at := now
-							state.LastWrittenWeight = &w
-							state.LastWriteAt = &at
-							e.noteWriteSuccess(&state)
+							if !state.Capacity.Initialized {
+								state.LastWrittenWeight = &w
+								state.LastWriteAt = &at
+								e.noteWriteSuccess(&state)
+							}
 							writes++
 						} else {
 							state.Phase, state.SoftStartPending = "circuit", false
@@ -509,12 +538,14 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 				rec := continuousEvent(id, base, state, "circuit_opened", mode, now)
 				rec.ProposedPriority = nil
 				if mode == "auto" {
-					if _, err = cs.CreateContinuousWeightChange(rec, "system:auto", now); err == nil {
+					if _, err = e.createTrackedWeightChange(cs, rec, base, &state, now); err == nil {
 						w := int64(0)
 						at := now
-						state.LastWrittenWeight = &w
-						state.LastWriteAt = &at
-						e.noteWriteSuccess(&state)
+						if !state.Capacity.Initialized {
+							state.LastWrittenWeight = &w
+							state.LastWriteAt = &at
+							e.noteWriteSuccess(&state)
+						}
 						writes++
 					} else {
 						state.Phase = "normal"
@@ -537,10 +568,17 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 			if m.RequestCount < p.MinSamples || (!state.MetricReady || !state.BaselineReady) && !state.OTPSReady {
 				state.ProposedWeight = effectiveCurrentWeight(base, state)
 				state.Multiplier = float64(state.ProposedWeight) / float64(base.BaseWeight)
-				state.UpdatedAt = now
-				_ = cs.PutContinuousState(state)
-				evaluated++
-				continue
+				if !state.Capacity.Initialized {
+					state.UpdatedAt = now
+					_ = cs.PutContinuousState(state)
+					evaluated++
+					continue
+				}
+			}
+			capacityReduction := false
+			if state.Capacity.Initialized {
+				capacityReduction = applyCapacityTarget(&state)
+				state.Multiplier = float64(state.ProposedWeight) / float64(base.BaseWeight)
 			}
 
 			// Preserve useful observation evidence without adding one event per
@@ -549,7 +587,7 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 			// previous tick instead would rate-filter — a slow drift never
 			// exceeds the threshold per step and would stay unrecorded no
 			// matter how far it travels.
-			if mode == "observe" && (healthy || baseline.otpsReady) && m.RequestCount >= p.MinSamples &&
+			if mode == "observe" && (capacityReduction || (healthy || baseline.otpsReady) && m.RequestCount >= p.MinSamples) &&
 				(state.LastObservedWeight == nil || weightChangeOutsideDeadband(state.ProposedWeight, *state.LastObservedWeight, base.BaseWeight, observeEventDeadbandPercent)) {
 				_ = e.store.InsertRecommendation(continuousEvent(id, base, state, "weight_observed", mode, now))
 				anchor := state.ProposedWeight
@@ -566,6 +604,9 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 			// only exact-value deduplication so a stale channel snapshot does not
 			// cause the same command to be sent repeatedly before it refreshes.
 			needsWrite := state.ProposedWeight != writeReference(state, base) || confirmedExternalChange
+			if state.Capacity.Initialized {
+				needsWrite = state.ProposedWeight != state.Capacity.ConfirmedWeight
+			}
 			retryingWriteFailure := state.PausedReason == "write_failed" && writeAttemptAllowed(state, now)
 			// A due retry with no write left has nothing useful to test.
 			// Clear the pause; the next real change will exercise the path again.
@@ -573,16 +614,24 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 				e.noteWriteSuccess(&state)
 				retryingWriteFailure = false
 			}
-			if mode == "auto" && writeAttemptAllowed(state, now) && needsWrite {
-				rec := continuousEvent(id, base, state, "weight_write", mode, now)
-				if _, err = cs.CreateContinuousWeightChange(rec, "system:auto", now); err == nil {
-					written := state.ProposedWeight
-					at := now
-					state.LastWrittenWeight, state.LastWriteAt = &written, &at
-					e.noteWriteSuccess(&state)
+			if mode == "auto" && writeAttemptAllowed(state, now) && needsWrite && state.Capacity.PendingCommandID == "" {
+				rule := "weight_write"
+				if capacityReduction {
+					rule = "capacity_reduce"
+				}
+				rec := continuousEvent(id, base, state, rule, mode, now)
+				if _, err = e.createTrackedWeightChange(cs, rec, base, &state, now); err == nil {
+					if !state.Capacity.Initialized {
+						written, at := state.ProposedWeight, now
+						state.LastWrittenWeight, state.LastWriteAt = &written, &at
+						e.noteWriteSuccess(&state)
+					}
 					writes++
 				} else {
 					e.noteWriteFailure(id, base, &state, mode, err, now)
+					if state.Capacity.Initialized {
+						state.Capacity.Phase = "write_failed"
+					}
 				}
 			}
 			state.UpdatedAt = now
@@ -862,8 +911,14 @@ func absInt64(value int64) int64 {
 }
 
 func continuousEvent(id string, base ChannelBaseValue, state ContinuousState, rule, mode string, now time.Time) Recommendation {
+	currentWeight := base.CurrentWeight
+	if state.Capacity.Initialized {
+		currentWeight = state.Capacity.ConfirmedWeight
+	}
 	return Recommendation{ID: NewID(now, id, base.ChannelID, rule), InstanceID: id, ChannelID: base.ChannelID, ChannelName: base.ChannelName, CreatedAt: now, Rule: rule,
 		Evidence: map[string]any{
+			"capacity": state.Capacity, "capacity_managed": state.Capacity.Initialized && (rule == "weight_write" || rule == "capacity_reduce" || rule == "circuit_opened" || rule == "circuit_recovered"),
+			"metric_rpm": state.MetricRPM, "metric_tpm": state.MetricTPM, "max_rpm": base.MaxRPM, "max_tpm": base.MaxTPM,
 			"model": base.ModelName, "phase": state.Phase, "multiplier": state.Multiplier,
 			"k_speed": state.KSpeed, "k_cache": state.KCache, "k_otps": state.KOTPS, "k_error": state.KError,
 			"speed_sample_count": state.SpeedSamples, "speed_retry_count": state.SpeedRetries, "speed_unknown_count": state.SpeedUnknown, "speed_legacy_count": state.SpeedLegacy, "speed_stats_version": state.SpeedStatsVersion,
@@ -874,7 +929,7 @@ func continuousEvent(id string, base ChannelBaseValue, state ContinuousState, ru
 			"otps_sample_count": state.OTPSSamples, "otps_retry_count": state.OTPSRetries, "otps_unknown_count": state.OTPSUnknown, "otps_stats_version": state.OTPSStatsVersion,
 			"smoothed_error_rate": state.SmoothedErrorRate, "probe_attempts": state.ProbeAttempts, "probe_successes": state.ProbeSuccesses,
 		},
-		CurrentWeight: base.CurrentWeight, ProposedWeight: state.ProposedWeight, CurrentPriority: &base.CurrentPriority, ProposedPriority: nil, ModeAtCreation: mode, Status: "recorded"}
+		CurrentWeight: currentWeight, ProposedWeight: state.ProposedWeight, CurrentPriority: &base.CurrentPriority, ProposedPriority: nil, ModeAtCreation: mode, Status: "recorded"}
 }
 
 func speedEvidenceReady(m ChannelMetric, minSamples int64) bool {

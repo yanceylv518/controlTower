@@ -102,11 +102,11 @@ func (e *Engine) evaluateFastCircuit(batch FastCircuitBatch, now time.Time) {
 		rec.Evidence["min_samples"] = p.FastCircuitMinSamples
 		rec.Evidence["agent_id"] = batch.AgentID
 		rec.Evidence["metric_batch_id"] = batch.BatchID
-		if _, err = store.CreateContinuousWeightChange(rec, "system:auto", now); err != nil {
+		if _, err = e.createTrackedWeightChange(store, rec, base, &state, now); err != nil {
 			state.Phase = "normal"
 			state.CircuitOpenedAt, state.NextProbeAt, state.OriginalPriority = nil, nil, nil
 			e.noteWriteFailure(siteID, base, &state, "auto", err, now)
-		} else {
+		} else if !state.Capacity.Initialized {
 			written := int64(0)
 			state.LastWrittenWeight, state.LastWriteAt = &written, &opened
 			e.noteWriteSuccess(&state)

@@ -117,6 +117,9 @@ func (s Store) CreateContinuousWeightChangeWithAudit(v tuning.Recommendation, ac
 	if err := s.CheckCircuitStatus(v); err != nil {
 		return "", err
 	}
+	if err := s.CheckContinuousCapacity(v, time.Now().UTC()); err != nil {
+		return "", err
+	}
 	if err := executeWeightUpdate(ctx, controller, v); err != nil {
 		log.Printf("direct control: weight write site=%s channel=%d target=%d duration=%s failed: %v", v.InstanceID, v.ChannelID, v.ProposedWeight, time.Since(started), err)
 		return "", fmt.Errorf("direct weight write: %w", err)
@@ -135,7 +138,7 @@ func (s Store) CreateContinuousWeightChangeWithAudit(v tuning.Recommendation, ac
 		if err := s.Store.ApplyChannelWrite(v.InstanceID, v.ChannelID, weight, priority, v.ProposedChannelStatus, writtenAt); err != nil {
 			return "", fmt.Errorf("new-api write succeeded but channel state sync failed: %w", err)
 		}
-		return s.Store.RecordDirectWeightChangeWithAudit(v, actor, now, auditContext)
+		return s.Store.RecordDirectWeightChangeWithAudit(v, actor, writtenAt, auditContext)
 	})
 	log.Printf("direct control: weight write site=%s channel=%d target=%d duration=%s succeeded", v.InstanceID, v.ChannelID, v.ProposedWeight, time.Since(started))
 	return commandID, err

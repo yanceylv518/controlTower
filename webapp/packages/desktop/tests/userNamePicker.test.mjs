@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
+import ts from 'typescript'
 
 const componentSource = readFileSync(
   new URL('../src/components/UserNamePicker.vue', import.meta.url),
@@ -10,6 +11,52 @@ const apiSource = readFileSync(
   new URL('../../shared/src/api/passthrough.ts', import.meta.url),
   'utf8'
 )
+
+function keyboardPicker() {
+  const script = componentSource.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1].replace(/^import .*$/gm, '')
+  const code = ts.transpileModule(script, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 } }).outputText
+  const events = []
+  const create = new Function('computed', 'ref', 'watch', 'onMounted', 'onUnmounted', 'nextTick', 'defineProps', 'withDefaults', 'defineEmits', code + '; return { handleKeydown, options, open, highlightedIndex, inputValue };')
+  const picker = create(fn => ({ get value() { return fn() } }), value => ({ value }), () => {}, () => {}, () => {}, async () => {}, () => ({ modelValue: 'alice' }), props => props, () => (...args) => events.push(args))
+  return { ...picker, events }
+}
+
+function enter(overrides = {}) {
+  return { key: 'Enter', defaultPrevented: false, preventDefault() { this.defaultPrevented = true }, ...overrides }
+}
+
+test('Enter selects the highlighted user before submitting exactly once', () => {
+  const picker = keyboardPicker()
+  const user = { id: 42, username: 'alice', display_name: 'Alice' }
+  picker.options.value = [user]
+  picker.open.value = true
+  picker.highlightedIndex.value = 0
+  const event = enter()
+  picker.handleKeydown(event)
+  assert.deepEqual(picker.events, [['update:modelValue', 'alice'], ['select', user], ['submit']])
+  assert.equal(picker.open.value, false)
+  assert.equal(event.defaultPrevented, true)
+})
+
+test('Enter without a candidate submits once and prevents native form submission', () => {
+  const picker = keyboardPicker()
+  const event = enter()
+  picker.handleKeydown(event)
+  assert.deepEqual(picker.events, [['submit']])
+  assert.equal(event.defaultPrevented, true)
+})
+
+test('IME confirmation and held Enter do not submit or select users', () => {
+  const picker = keyboardPicker()
+  picker.options.value = [{ id: 42, username: 'alice', display_name: 'Alice' }]
+  picker.open.value = true
+  picker.highlightedIndex.value = 0
+  for (const flags of [{ isComposing: true }, { keyCode: 229 }, { repeat: true }]) {
+    picker.handleKeydown(enter(flags))
+  }
+  assert.deepEqual(picker.events, [])
+  assert.equal(picker.open.value, true)
+})
 
 // 回归保护：用户搜索必须防抖并取消旧请求，避免输入过程产生竞态和额外连接。
 test('user name picker debounces and cancels stale searches', () => {

@@ -49,6 +49,11 @@ FROM channel_commands WHERE instance_id=? AND status='pending' ORDER BY created_
 	rows.Close()
 	valid := out[:0]
 	for _, cmd := range out {
+		if validCapacity, err := validateCapacityClaim(tx, cmd.ID, now); err != nil {
+			return nil, err
+		} else if !validCapacity {
+			continue
+		}
 		var rec tuning.Recommendation
 		err := tx.QueryRowContext(ctx, `SELECT instance_id,channel_id,rule,mode_at_creation,proposed_priority FROM tuning_recommendations WHERE command_id=? AND rule='base_priority_sync'`, cmd.ID).Scan(&rec.InstanceID, &rec.ChannelID, &rec.Rule, &rec.ModeAtCreation, &rec.ProposedPriority)
 		if err != nil && err != sql.ErrNoRows {

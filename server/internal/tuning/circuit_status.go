@@ -15,6 +15,9 @@ func (e *Engine) advanceCircuitStatus(cs ContinuousStore, site string, base Chan
 		rule = "circuit_recovered"
 	}
 	if state.CircuitStatusCommandID == "" {
+		if target == 1 && capacityRecoveryBlocked(base, *state) {
+			return 0
+		}
 		if !writeAttemptAllowed(*state, now) {
 			return 0
 		}

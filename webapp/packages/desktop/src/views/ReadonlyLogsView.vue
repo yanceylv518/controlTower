@@ -368,6 +368,18 @@ const search = () => {
   if (backgroundRefreshing.value) return
   void refreshSearch()
 }
+function handlePageSearchKeydown(event: KeyboardEvent) {
+  if (event.key !== 'Enter' || event.defaultPrevented || event.isComposing || event.keyCode === 229 || event.repeat
+    || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return
+  if (state.loading.value || backgroundRefreshing.value || detailOpen.value || affinityOpen.value || pageSizeOpen.value) return
+  // 输入框已有查询绑定；按钮、分页及弹层继续使用各自的键盘操作。
+  const target = event.target
+  if (target instanceof Element && target.closest('input, textarea, select, button, a, [contenteditable]:not([contenteditable="false"]), [role="combobox"], [role="dialog"], [role="menu"], [role="listbox"]')) return
+  const overlays = document.querySelectorAll('[role="dialog"], [role="listbox"], .el-popover, .compact-date-popover')
+  if (Array.from(overlays).some(overlay => overlay.getClientRects().length > 0)) return
+  event.preventDefault()
+  search()
+}
 const fallbackTotal = computed(() => (state.data.value?.pageOffset || 0) + (state.data.value?.items.length || 0) + (state.data.value?.has_more ? 1 : 0))
 // 总数不能低于当前已返回的列表行，防止聚合短暂失配时出现“有记录但总计为 0”。
 const effectiveTotal = computed(() => {
@@ -1627,6 +1639,7 @@ onMounted(() => {
   document.body.classList.add('ct-rc35-logs-theme')
   document.addEventListener('pointerdown', handlePageSizePointerdown)
   window.addEventListener('keydown', handleRequestChainKeydown)
+  window.addEventListener('keydown', handlePageSearchKeydown)
   window.addEventListener('keydown', handlePageSizeKeydown)
   window.addEventListener('resize', handlePageSizeViewportChange)
   window.addEventListener('scroll', handlePageSizeViewportChange, true)
@@ -1663,6 +1676,7 @@ onUnmounted(() => {
   closePageSizeMenu()
   document.removeEventListener('pointerdown', handlePageSizePointerdown)
   window.removeEventListener('keydown', handleRequestChainKeydown)
+  window.removeEventListener('keydown', handlePageSearchKeydown)
   window.removeEventListener('keydown', handlePageSizeKeydown)
   window.removeEventListener('resize', handlePageSizeViewportChange)
   window.removeEventListener('scroll', handlePageSizeViewportChange, true)

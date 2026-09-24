@@ -13,6 +13,24 @@ const row = { channel_id: 1, model_name: 'm', base_weight: 100, base_priority: 1
 const state = (requests, weight = 80) => ({ channel_id: 1, model_name: 'm', last_observed_requests: requests, proposed_weight: weight, speed_stats_version: 1, phase: 'normal', metric_ready: true, baseline_ready: true, updated_at: '2026-09-14T00:00:00Z' })
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no }); return { promise, resolve, reject } }
 
+test('capacity feedback and hysteresis remain visible below the live limit and without performance samples', async () => {
+  const p = page(); await p.load(); p.ratesReady.value = true;
+  const limited = { ...row, max_tpm: 1000 };
+  p.currentRates.value.set(1, { rpm: 0, tpm: 900 });
+  for (const [phase, text] of [['holding', /保持容量限升/], ['waiting_feedback', /完整60秒/], ['awaiting_write', /执行回执/], ['reducing', /按比例降权/], ['no_headroom', /分流空间不足/], ['minimum_weight', /最低权重/], ['recovering', /恢复观察/]]) {
+    p.states.value = [{ ...state(0, 75), capacity: { initialized: true, active: true, phase } }];
+    assert.match(p.limitReason(limited), text);
+    assert.match(p.evaluationText(limited), text);
+    assert.doesNotMatch(p.evaluationText(limited), /本轮不调权/);
+  }
+  p.events.value = [{ id: 'cap', rule: 'capacity_reduce', channel_id: 1, channel_name: 'a', evidence: { model: 'm' }, status: 'pending' }];
+  assert.equal(p.filteredEvents.value.length, 1);
+  p.ratesReady.value = false;
+  assert.match(p.limitReason(limited), /实时负载不可用/);
+  p.ratesReady.value = true; p.currentRates.value.set(1, {rpm: 0, tpm: 1500}); p.policy.dispatch_modes.m = 'off';
+  assert.match(p.limitReason(limited), /未参与自动容量控制/);
+});
+
 class ApiError extends Error {
   constructor(status, code) { super(code); this.status = status; this.code = code }
 }
