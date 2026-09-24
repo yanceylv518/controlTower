@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"context"
 	"errors"
 	"sort"
 	"strings"
@@ -130,10 +131,20 @@ func (s *MemoryStore) UpdateOperationAuditHTTPStatus(requestID string, status in
 }
 
 func (s *MemoryStore) QueryOperationAudits(q storage.OperationAuditQuery) (storage.OperationAuditPage, error) {
+	return s.QueryOperationAuditsContext(context.Background(), q)
+}
+
+func (s *MemoryStore) QueryOperationAuditsContext(ctx context.Context, q storage.OperationAuditQuery) (storage.OperationAuditPage, error) {
+	if err := ctx.Err(); err != nil {
+		return storage.OperationAuditPage{}, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var all []storage.OperationAudit
 	for _, v := range s.operationAudits {
+		if err := ctx.Err(); err != nil {
+			return storage.OperationAuditPage{}, err
+		}
 		if !storage.IsManualOperationAudit(v) {
 			continue
 		}
@@ -209,11 +220,25 @@ func (s *MemoryStore) QueryOperationAudits(q storage.OperationAuditQuery) (stora
 		}
 		return page, nil
 	}
+	if q.CountOnly {
+		page.Items = []storage.OperationAudit{}
+		return page, nil
+	}
+	if q.ListOnly {
+		page.Total = -1
+	}
+	if !q.BeforeTime.IsZero() && q.BeforeID != "" {
+		offset = 0
+		for offset < len(all) && (all[offset].CreatedAt.After(q.BeforeTime) || (all[offset].CreatedAt.Equal(q.BeforeTime) && all[offset].ID >= q.BeforeID)) {
+			offset++
+		}
+	}
 	if offset >= len(all) {
 		page.Items = []storage.OperationAudit{}
 		return page, nil
 	}
 	end := offset + limit
+	page.HasMore = end < len(all)
 	if end > len(all) {
 		end = len(all)
 	}

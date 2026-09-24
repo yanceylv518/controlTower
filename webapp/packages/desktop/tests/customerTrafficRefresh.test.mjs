@@ -14,7 +14,7 @@ function card() {
   const props = reactive({ customer: { instance_id: 'a', dimension_key: 'a:user:7' }, totals: [], hours: 1, asOf: Date.now(), refreshKey: 1, minute: null })
   const requests = []
   const dashboard = { metricHistory: params => { const pending = deferred(); requests.push({ ...pending, params }); return pending.promise } }
-  const create = new Function('computed', 'ref', 'shallowRef', 'watch', 'onBeforeUnmount', 'onMounted', 'defineProps', 'defineEmits', 'dashboard', 'buildCustomerTraffic', `${compiled}\nreturn {load, dimension, points, loadedScope, scope, error, loading, nearViewport, expanded, traffic, minuteStatus, lastPlotTime};`)
+  const create = new Function('computed', 'ref', 'shallowRef', 'watch', 'onBeforeUnmount', 'onMounted', 'defineProps', 'defineEmits', 'dashboard', 'buildCustomerTraffic', `${compiled}\nreturn {load, dimension, points, loadedScope, scope, error, notice, emptyText, loading, nearViewport, expanded, traffic, minuteStatus, lastPlotTime};`)
   return { ...create(computed, ref, shallowRef, () => {}, () => {}, () => {}, () => props, () => () => {}, dashboard, trafficApi.buildCustomerTraffic), props, requests }
 }
 
@@ -90,7 +90,8 @@ test('refresh failure preserves same-scope data, but exposes no old data for a n
   c.props.refreshKey++
   const refresh = c.load(); c.requests[1].reject(new Error('down')); await refresh
   assert.deepEqual(c.points.value, ['good'])
-  assert.match(c.error.value, /失败/)
+  assert.equal(c.error.value, '')
+  assert.equal(c.notice.value, '')
   c.dimension.value = 'channel'
   const changed = c.load(); c.requests[2].reject(new Error('down')); await changed
   assert.notEqual(c.loadedScope.value, c.scope.value)
@@ -125,7 +126,8 @@ test('headline mismatch is marked updating while last plotted interval stays exp
 test('failed breakdown and stale headline are not presented as actively updating', async () => {
   const c = latestCard(), first = c.load()
   c.requests[0].reject(new Error('network')); await first
-  assert.equal(c.minuteStatus.value, '拆分更新失败')
+  assert.equal(c.minuteStatus.value, '')
+  assert.equal(c.emptyText.value, '数据暂未就绪')
   assert.equal(c.lastPlotTime.value, '')
   c.props.minute.stale = true
   assert.equal(c.minuteStatus.value, '数据滞后')
@@ -155,4 +157,44 @@ test('verified zero is aligned; old gaps do not mark the latest aligned minute a
   assert.equal(c.traffic.value.incompleteBuckets, 1)
   assert.equal(c.traffic.value.lastCompleteTime, stamp('26'))
   assert.equal(c.minuteStatus.value, '')
+})
+
+
+test('transient failures stay quiet, sustained failures escalate and recovery clears the notice', async (t) => {
+  let now = 1_000_000
+  t.mock.method(Date, 'now', () => now)
+  const c = card()
+  const initial = c.load(); c.requests.at(-1).resolve({ items: [] }); await initial
+  assert.equal(c.emptyText.value, '暂无完整模型拆分数据')
+  for (const elapsed of [30_000, 60_000, 119_999]) {
+    now = 1_000_000 + elapsed
+    c.props.refreshKey++
+    const pending = c.load(); c.requests.at(-1).reject(new Error('network')); await pending
+    assert.equal(c.notice.value, '')
+    assert.equal(c.error.value, '')
+  }
+  now = 1_120_000
+  let pending = c.load(); c.requests.at(-1).reject(new Error('network')); await pending
+  assert.equal(c.notice.value, '数据更新稍有延迟')
+  now = 1_300_000
+  pending = c.load()
+  assert.equal(c.notice.value, '暂时无法更新，正在重试')
+  c.requests.at(-1).reject(new Error('network')); await pending
+  pending = c.load(); c.requests.at(-1).resolve({ items: [] }); await pending
+  assert.equal(c.notice.value, '')
+  c.dimension.value = 'channel'
+  pending = c.load(); c.requests.at(-1).reject(new Error('network')); await pending
+  assert.equal(c.notice.value, '')
+  assert.equal(c.emptyText.value, '数据暂未就绪')
+})
+
+test('elapsed time alone does not escalate one failure, but permission errors are immediate', async (t) => {
+  let now = 1_000_000
+  t.mock.method(Date, 'now', () => now)
+  const c = card(), pending = c.load()
+  now += 300_000
+  c.requests.at(-1).reject(new Error('network')); await pending
+  assert.equal(c.notice.value, '')
+  const retry = c.load(); c.requests.at(-1).reject({ status: 403 }); await retry
+  assert.equal(c.error.value, '暂无查看权限，请联系管理员')
 })

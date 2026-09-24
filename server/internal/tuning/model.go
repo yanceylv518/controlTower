@@ -298,17 +298,20 @@ type ContinuousState struct {
 	// Buckets arrive late (agent reports every ~30s), so the decay must walk
 	// complete buckets past this cursor instead of re-reading "the last
 	// minute" — that both misses late counts and re-counts on jitter.
-	LastBucketAt     *time.Time `json:"last_bucket_at,omitempty"`
-	PausedReason     string     `json:"paused_reason,omitempty"`
-	Phase            string     `json:"phase"`
-	CircuitOpenedAt  *time.Time `json:"circuit_opened_at,omitempty"`
-	NextProbeAt      *time.Time `json:"next_probe_at,omitempty"`
-	ProbeCommandID   *string    `json:"probe_command_id,omitempty"`
-	ProbeAttempts    int        `json:"probe_attempts"`
-	ProbeSuccesses   int        `json:"probe_successes"`
-	ProbeDurationSum float64    `json:"probe_duration_sum"`
-	OriginalPriority *int64     `json:"original_priority,omitempty"`
-	SoftStartPending bool       `json:"soft_start_pending"`
+	LastBucketAt           *time.Time `json:"last_bucket_at,omitempty"`
+	PausedReason           string     `json:"paused_reason,omitempty"`
+	Phase                  string     `json:"phase"`
+	CircuitDisabled        bool       `json:"circuit_disabled"`
+	CircuitStatusTarget    int        `json:"circuit_status_target,omitempty"`
+	CircuitStatusCommandID string     `json:"circuit_status_command_id,omitempty"`
+	CircuitOpenedAt        *time.Time `json:"circuit_opened_at,omitempty"`
+	NextProbeAt            *time.Time `json:"next_probe_at,omitempty"`
+	ProbeCommandID         *string    `json:"probe_command_id,omitempty"`
+	ProbeAttempts          int        `json:"probe_attempts"`
+	ProbeSuccesses         int        `json:"probe_successes"`
+	ProbeDurationSum       float64    `json:"probe_duration_sum"`
+	OriginalPriority       *int64     `json:"original_priority,omitempty"`
+	SoftStartPending       bool       `json:"soft_start_pending"`
 	// Direct-control write failure accounting: after a streak of failed
 	// new-api writes the channel pauses (paused_reason=write_failed) and
 	// retries on a slow interval instead of hammering every tick.
@@ -357,6 +360,7 @@ type Recommendation struct {
 	Evidence                          map[string]any
 	CurrentWeight, ProposedWeight     int64
 	CurrentPriority, ProposedPriority *int64
+	ProposedChannelStatus             *int
 	ModeAtCreation, Status            string
 	CommandID                         *string
 	Outcome                           map[string]any

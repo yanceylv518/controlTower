@@ -67,6 +67,28 @@ func TestContinuousStateRetryFieldsMySQLIntegration(t *testing.T) {
 		})
 	}
 
+	t.Run("circuit disable ownership and pending command survive reloads", func(t *testing.T) {
+		state := tuning.ContinuousState{InstanceID: site, ChannelID: 199, ModelName: "m", Phase: "probing", CircuitDisabled: true, CircuitStatusTarget: 2, CircuitStatusCommandID: "disable-in-flight", UpdatedAt: now}
+		for tick := 0; tick < 3; tick++ {
+			require.NoError(t, s.PutContinuousState(state))
+			rows, err := s.ListContinuousStates(site)
+			require.NoError(t, err)
+			require.Len(t, rows, 1)
+			state = rows[0]
+			require.True(t, state.CircuitDisabled)
+			require.Equal(t, 2, state.CircuitStatusTarget)
+			require.Equal(t, "disable-in-flight", state.CircuitStatusCommandID)
+		}
+		state.CircuitDisabled = false
+		state.CircuitStatusTarget = 0
+		state.CircuitStatusCommandID = ""
+		require.NoError(t, s.PutContinuousState(state))
+		rows, err := s.ListContinuousStates(site)
+		require.NoError(t, err)
+		require.False(t, rows[0].CircuitDisabled)
+		require.Empty(t, rows[0].CircuitStatusCommandID)
+	})
+
 	t.Run("engine retries across database reloads", func(t *testing.T) {
 		for _, legacy := range []bool{false, true} {
 			failedAt := now.Add(-10 * time.Minute)

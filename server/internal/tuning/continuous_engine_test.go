@@ -252,17 +252,19 @@ func TestObserveDeadbandAnchorsOnLastRecordedEvent(t *testing.T) {
 }
 
 type continuousFake struct {
-	metrics         []ChannelMetric
-	recentBuckets   map[int64][]RecentChannelBucket
-	recommendations []Recommendation
-	bases           []ChannelBaseValue
-	states          map[int64]ContinuousState
-	writes          []Recommendation
-	probes          []Recommendation
-	writeErr        error
-	writeAttempts   int
-	metricsQueries  int
-	policy          *PolicyRecord
+	expectedProbeCount int
+	commandStatus      string
+	metrics            []ChannelMetric
+	recentBuckets      map[int64][]RecentChannelBucket
+	recommendations    []Recommendation
+	bases              []ChannelBaseValue
+	states             map[int64]ContinuousState
+	writes             []Recommendation
+	probes             []Recommendation
+	writeErr           error
+	writeAttempts      int
+	metricsQueries     int
+	policy             *PolicyRecord
 }
 
 func TestContinuousEmptySiteMetricsPreservesPreviousEvaluation(t *testing.T) {
@@ -1000,4 +1002,18 @@ func addNeutralPerformanceEvidence(f *continuousFake) {
 	for _, b := range f.bases {
 		f.metrics = append(f.metrics, ChannelMetric{ChannelID: b.ChannelID, RequestCount: 100, TTFTP50: 1, TTFTP90: 1, TTFTP95: 1, SpeedSamples: 100, SpeedTTFTP50: 1, SpeedTTFTP90: 1, SpeedTTFTP95: 1, OTPS: 100, OTPSSamples: 100, OTPSSampleTokens: 1000, OTPSStatsVersion: 1})
 	}
+}
+
+func (f *continuousFake) ContinuousCommandStatus(string) (string, error) {
+	if f.commandStatus != "" {
+		return f.commandStatus, nil
+	}
+	return "succeeded", nil
+}
+
+func (f *continuousFake) CompletedProbeCount(string, int64) (int, error) {
+	if f.expectedProbeCount > 0 {
+		return f.expectedProbeCount, nil
+	}
+	return 10, nil
 }

@@ -4,12 +4,14 @@ import (
 	"context"
 	"controltower/server/internal/tuning"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
 
 	"controltower/server/internal/channelupdates"
 	"controltower/server/internal/storage"
+	"github.com/go-sql-driver/mysql"
 )
 
 func (s Store) CreateChannelCommand(v storage.ChannelCommand) error {
@@ -68,6 +70,38 @@ FROM channel_commands WHERE instance_id=? AND status='pending' ORDER BY created_
 			}
 			if err != nil {
 				return nil, err
+			}
+		}
+		// A queued circuit transition must still belong to an active auto
+		// recovery when the Agent actually claims it, not only when enqueued.
+		if cmd.CommandType == "channel.update" {
+			var payload struct {
+				Status *int `json:"status"`
+			}
+			if json.Unmarshal([]byte(cmd.PayloadJSON), &payload) == nil && payload.Status != nil {
+				var circuitRec tuning.Recommendation
+				err = tx.QueryRowContext(ctx, `SELECT instance_id,channel_id,rule,mode_at_creation,proposed_weight FROM tuning_recommendations WHERE command_id=? AND rule IN ('circuit_disabled','circuit_recovered')`, cmd.ID).Scan(&circuitRec.InstanceID, &circuitRec.ChannelID, &circuitRec.Rule, &circuitRec.ModeAtCreation, &circuitRec.ProposedWeight)
+				if err != nil && err != sql.ErrNoRows {
+					return nil, err
+				}
+				if err == nil {
+					circuitRec.ProposedChannelStatus = payload.Status
+					if err := checkCircuitStatus(tx, circuitRec); err != nil {
+						if !errors.Is(err, ErrCircuitStatusSuperseded) {
+							return nil, err
+						}
+						if _, err = tx.ExecContext(ctx, `UPDATE channel_commands SET status='expired',error_summary='circuit target or mode changed',updated_at=? WHERE id=?`, now, cmd.ID); err != nil {
+							return nil, err
+						}
+						if _, err = tx.ExecContext(ctx, `UPDATE operation_audits SET status='expired',error_summary='circuit target or mode changed',updated_at=? WHERE id=? AND status='submitted'`, now, cmd.ID); err != nil {
+							return nil, err
+						}
+						if _, err = tx.ExecContext(ctx, `UPDATE tuning_recommendations SET status='expired',outcome_at=? WHERE command_id=?`, now, cmd.ID); err != nil {
+							return nil, err
+						}
+						continue
+					}
+				}
 			}
 		}
 		valid = append(valid, cmd)
@@ -132,30 +166,114 @@ func (s Store) CompleteChannelCommand(id, status, errorSummary string, now time.
 }
 
 func (s Store) ExpireStaleCommands(before time.Time) (int, error) {
+	total := 0
+	for {
+		var n int
+		var done bool
+		var err error
+		for attempt := 0; attempt < 3; attempt++ {
+			n, done, err = s.expireStaleCommandsBatch(before)
+			var databaseError *mysql.MySQLError
+			if !errors.As(err, &databaseError) || databaseError.Number != 1213 {
+				break
+			}
+		}
+		if err != nil {
+			return total, err
+		}
+		total += n
+		if done {
+			return total, nil
+		}
+	}
+}
+
+const expiredCommandBatchSize = 100
+
+// Discover candidates without locking the status index: even an empty locking
+// range scan can touch its first nonmatching row and deadlock with delivery.
+// Candidates are rechecked under primary-key locks before any writes.
+const expiredCommandCandidatesSQL = `SELECT id FROM channel_commands FORCE INDEX (idx_channel_commands_expiry)
+WHERE status='pending' AND created_at < ? ORDER BY created_at,id LIMIT ?`
+
+func (s Store) expireStaleCommandsBatch(before time.Time) (int, bool, error) {
 	ctx := context.Background()
-	tx, e := s.db.BeginTx(ctx, nil)
+	// No snapshot is needed: candidates are locked and rechecked by each batch.
+	// READ COMMITTED releases locks on candidates that no longer match and
+	// avoids retaining gap locks if a candidate was removed concurrently.
+	tx, e := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if e != nil {
-		return 0, e
+		return 0, false, e
 	}
 	defer tx.Rollback()
-	now := time.Now().UTC()
-	if _, e = tx.ExecContext(ctx, `UPDATE operation_audits a JOIN channel_commands c ON c.id=a.id
-SET a.status='expired',a.error_summary='command expired before execution',a.updated_at=?
-WHERE c.status='pending' AND c.created_at<? AND a.status='submitted'`, now, before); e != nil {
-		return 0, e
-	}
-	r, e := tx.ExecContext(ctx, "UPDATE channel_commands SET status='expired',updated_at=? WHERE status='pending' AND created_at < ?", now, before)
+	rows, e := tx.QueryContext(ctx, expiredCommandCandidatesSQL, before, expiredCommandBatchSize)
 	if e != nil {
-		return 0, e
+		return 0, false, e
+	}
+	var ids []string
+	var idArgs []any
+	for rows.Next() {
+		var id string
+		if e = rows.Scan(&id); e != nil {
+			rows.Close()
+			return 0, false, e
+		}
+		ids = append(ids, "?")
+		idArgs = append(idArgs, id)
+	}
+	e = rows.Err()
+	rows.Close()
+	if e != nil {
+		return 0, false, e
+	}
+	if len(ids) == 0 {
+		return 0, true, tx.Commit()
+	}
+	// Lock in primary-key order, not creation-time order. A concurrent cleaner
+	// or claimant may already have transitioned a discovered candidate; only
+	// rows still eligible under these locks can have their audits expired.
+	lockArgs := append(append([]any{}, idArgs...), before)
+	rows, e = tx.QueryContext(ctx, "SELECT id FROM channel_commands FORCE INDEX (PRIMARY) WHERE id IN ("+strings.Join(ids, ",")+") AND status='pending' AND created_at < ? ORDER BY id FOR UPDATE", lockArgs...)
+	if e != nil {
+		return 0, false, e
+	}
+	ids, idArgs = nil, nil
+	for rows.Next() {
+		var id string
+		if e = rows.Scan(&id); e != nil {
+			rows.Close()
+			return 0, false, e
+		}
+		ids = append(ids, "?")
+		idArgs = append(idArgs, id)
+	}
+	e = rows.Err()
+	rows.Close()
+	if e != nil {
+		return 0, false, e
+	}
+	if len(ids) == 0 {
+		// Do not stop because another cleaner consumed this batch. There may
+		// still be further candidates beyond the initial LIMIT.
+		return 0, false, tx.Commit()
+	}
+	now := time.Now().UTC()
+	args := append([]any{now}, idArgs...)
+	r, e := tx.ExecContext(ctx, "UPDATE channel_commands FORCE INDEX (PRIMARY) SET status='expired',updated_at=? WHERE id IN ("+strings.Join(ids, ",")+") AND status='pending'", args...)
+	if e != nil {
+		return 0, false, e
+	}
+	if _, e = tx.ExecContext(ctx, "UPDATE operation_audits FORCE INDEX (PRIMARY) SET status='expired',error_summary='command expired before execution',updated_at=? WHERE id IN ("+strings.Join(ids, ",")+") AND status='submitted'", args...); e != nil {
+		return 0, false, e
 	}
 	n, e := r.RowsAffected()
 	if e != nil {
-		return 0, e
+		return 0, false, e
 	}
 	if e = tx.Commit(); e != nil {
-		return 0, e
+		return 0, false, e
 	}
-	return int(n), nil
+	return int(n), false, nil
 }
 
 func (s Store) QueryChannelCommands(q storage.ChannelCommandQuery) ([]storage.ChannelCommand, error) {
@@ -225,13 +343,14 @@ func (s Store) UpdateOperationAuditHTTPStatus(requestID string, status int) erro
 }
 
 func (s Store) QueryOperationAudits(q storage.OperationAuditQuery) (storage.OperationAuditPage, error) {
+	return s.QueryOperationAuditsContext(context.Background(), q)
+}
+
+func (s Store) QueryOperationAuditsContext(ctx context.Context, q storage.OperationAuditQuery) (storage.OperationAuditPage, error) {
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
 	limit, offset := storage.NormalizeCommandPagination(q.Limit, q.Offset)
-	where := []string{
-		"COALESCE(a.actor_type,'') <> 'system'",
-		"COALESCE(a.trigger_type,'') <> 'automatic'",
-		"COALESCE(a.operation_type,'') <> 'tuning.auto_execute'",
-		"((a.actor_type='human' AND a.actor_role IN ('admin','viewer') AND a.auth_method IN ('session','web_session')) OR (COALESCE(a.actor_id,'') NOT IN ('system','agent') AND COALESCE(a.actor_id,'') NOT LIKE 'system:%' AND COALESCE(a.actor_id,'') NOT LIKE 'agent:%'))",
-	}
+	where := []string{"a.is_manual_audit=1"}
 	args := []any{}
 	if q.InstanceID != "" {
 		where = append(where, "a.instance_id=?")
@@ -299,10 +418,13 @@ func (s Store) QueryOperationAudits(q storage.OperationAuditQuery) (storage.Oper
 	}
 	var page storage.OperationAuditPage
 	page.OperationTypes = storage.OperationAuditFilterTypes()
-	fromSQL := " FROM operation_audits a LEFT JOIN instances i ON i.id=a.instance_id"
+	fromSQL := " FROM operation_audits a"
+	if q.SiteID != "" {
+		fromSQL += " LEFT JOIN instances i ON i.id=a.instance_id"
+	}
 	if q.ActorOptions {
 		page.Actors = []string{}
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 		rows, err := s.db.QueryContext(ctx, "SELECT DISTINCT a.actor_id"+fromSQL+whereSQL+" AND a.actor_id<>'' ORDER BY a.actor_id LIMIT 100", args...)
 		if err != nil {
@@ -318,16 +440,36 @@ func (s Store) QueryOperationAudits(q storage.OperationAuditQuery) (storage.Oper
 		}
 		return page, rows.Err()
 	}
-	if e := s.db.QueryRowContext(context.Background(), "SELECT COUNT(*)"+fromSQL+whereSQL, args...).Scan(&page.Total); e != nil {
-		return page, e
+	if !q.ListOnly || q.CountOnly {
+		count := func() (int64, error) {
+			var total int64
+			err := s.db.QueryRowContext(ctx, "SELECT COUNT(*)"+fromSQL+whereSQL, args...).Scan(&total)
+			return total, err
+		}
+		var err error
+		if q.CountOnly {
+			page.Total, err = s.auditCounts.count(ctx, q, count)
+		} else {
+			page.Total, err = count()
+		}
+		if err != nil {
+			return page, err
+		}
+	} else {
+		page.Total = -1
 	}
-	if int64(offset) >= page.Total {
+	if q.CountOnly || (!q.ListOnly && int64(offset) >= page.Total) {
 		page.Items = []storage.OperationAudit{}
 		return page, nil
 	}
+	if !q.BeforeTime.IsZero() && q.BeforeID != "" {
+		whereSQL += " AND (a.created_at < ? OR (a.created_at = ? AND a.id < ?))"
+		args = append(args, q.BeforeTime, q.BeforeTime, q.BeforeID)
+		offset = 0
+	}
 	sqlText := `SELECT a.id,a.instance_id,a.operation_type,a.target_type,a.target_id,a.actor_id,a.actor_type,a.actor_role,a.source_component,a.trigger_type,a.request_id,a.correlation_id,a.client_ip,a.auth_method,a.http_method,a.route,a.http_status,a.error_summary,a.before_summary,a.after_summary,a.status,a.created_at,a.updated_at` + fromSQL + whereSQL + ` ORDER BY a.created_at DESC,a.id DESC LIMIT ? OFFSET ?`
-	args = append(args, limit, offset)
-	rows, e := s.db.QueryContext(context.Background(), sqlText, args...)
+	args = append(args, limit+1, offset)
+	rows, e := s.db.QueryContext(ctx, sqlText, args...)
 	if e != nil {
 		return page, e
 	}
@@ -341,6 +483,10 @@ func (s Store) QueryOperationAudits(q storage.OperationAuditQuery) (storage.Oper
 	}
 	if page.Items == nil {
 		page.Items = []storage.OperationAudit{}
+	}
+	if len(page.Items) > limit {
+		page.HasMore = true
+		page.Items = page.Items[:limit]
 	}
 	return page, rows.Err()
 }

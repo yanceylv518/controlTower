@@ -12,6 +12,8 @@ type ContinuousStore interface {
 	PutContinuousState(ContinuousState) error
 	CreateContinuousWeightChange(Recommendation, string, time.Time) (string, error)
 	CreateContinuousProbe(Recommendation, string, int, int, time.Time) (string, error)
+	ContinuousCommandStatus(string) (string, error)
+	CompletedProbeCount(string, int64) (int, error)
 }
 
 type continuousRecentBucketsStore interface {
@@ -156,7 +158,15 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 		if mode == "" {
 			mode = "off"
 		}
-		baseline, healthy := buildContinuousBaseline(rows, metricByID, p.MinSamples)
+		baselineRows := make([]ChannelBaseValue, 0, len(rows))
+		for _, row := range rows {
+			// Disabled channels are retained only for recovery processing, not
+			// to reintroduce their old measurements into healthy peers' baseline.
+			if !stateByID[row.ChannelID].CircuitDisabled {
+				baselineRows = append(baselineRows, row)
+			}
+		}
+		baseline, healthy := buildContinuousBaseline(baselineRows, metricByID, p.MinSamples)
 		for _, base := range rows {
 			previous, exists := stateByID[base.ChannelID]
 			// Preserve normal evaluations during a site-wide evidence gap. Do
@@ -222,6 +232,11 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 			state.OTPSSamples, state.OTPSRetries, state.OTPSUnknown = m.OTPSSamples, m.OTPSRetries, m.OTPSUnknown
 			state.OTPSStatsVersion = m.OTPSStatsVersion
 
+			// An operator exclusion suspends an owned circuit without erasing
+			// its recovery evidence or changing a queued status write's weight.
+			if state.CircuitDisabled && (base.BaseWeight <= 0 || len(base.Models) > 1) {
+				continue
+			}
 			// Mixed-channel fuse (design §4): the weight knob is channel-wide,
 			// so a channel serving several models must never be auto-tuned on
 			// one model's metrics.
@@ -258,6 +273,19 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 			}
 
 			wasCircuit := state.Phase == "circuit"
+			if state.CircuitDisabled && mode != "auto" {
+				// Observation must not consume the evidence needed to re-enable a real disabled channel.
+				continue
+			}
+			if state.CircuitStatusTarget != 0 {
+				if mode == "auto" {
+					writes += e.advanceCircuitStatus(cs, id, base, &state, p, now)
+				}
+				state.UpdatedAt = now
+				_ = cs.PutContinuousState(state)
+				evaluated++
+				continue
+			}
 			foldedRequests, foldedErrors := e.foldErrorDecayWithBuckets(id, base.ChannelID, &state, now, recentBuckets, p)
 			// In observe mode, settled production traffic is the passive probe.
 			// Keep its evidence independent from the larger performance-ranking
@@ -270,6 +298,28 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 
 			// A completed probe round is folded before normal factor evaluation.
 			if state.Phase == "probing" && state.ProbeCommandID == nil && state.ProbeAttempts > 0 {
+				completeFailure := false
+				if mode == "auto" && state.ProbeSuccesses == 0 && !state.CircuitDisabled {
+					// The configured count may change while a round is in flight.
+					// Judge completeness against that command, not today's policy.
+					expected, err := cs.CompletedProbeCount(id, base.ChannelID)
+					if err != nil {
+						continue
+					}
+					completeFailure = expected > 0 && state.ProbeAttempts >= expected
+				}
+				if completeFailure {
+					state.CircuitDisabled, state.CircuitStatusTarget = true, 2
+					state.ProposedWeight = 0
+					// Persist ownership before disabling: disabled channels must remain eligible after a restart.
+					if err := cs.PutContinuousState(state); err == nil {
+						writes += e.advanceCircuitStatus(cs, id, base, &state, p, now)
+					}
+					state.UpdatedAt = now
+					_ = cs.PutContinuousState(state)
+					evaluated++
+					continue
+				}
 				successRatio := float64(state.ProbeSuccesses) / float64(state.ProbeAttempts)
 				probeSpeed := 1.0
 				if state.ProbeSuccesses > 0 && healthy && baseline.probeTTFT95 > 0 {
@@ -280,6 +330,17 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 				}
 				probeMultiplier := successRatio * probeSpeed
 				if probeMultiplier >= p.RecoveryThreshold {
+					if mode == "auto" && state.CircuitDisabled {
+						state.CircuitStatusTarget = 1
+						state.ProposedWeight = max(int64(1), int64(math.Round(float64(base.BaseWeight)*p.SoftStartMultiplier)))
+						if err := cs.PutContinuousState(state); err == nil {
+							writes += e.advanceCircuitStatus(cs, id, base, &state, p, now)
+						}
+						state.UpdatedAt = now
+						_ = cs.PutContinuousState(state)
+						evaluated++
+						continue
+					}
 					// The probes just proved the channel serves again, but KError
 					// still carries the crushed pre-circuit value. Without a floor
 					// the first normal cycle after soft start recomputes

@@ -478,6 +478,9 @@ export interface TuningContinuousState {
   smoothed_error_rate: number;
   paused_reason?: string;
   phase: "normal" | "circuit" | "probing" | "soft_start";
+  circuit_disabled?: boolean;
+  circuit_status_target?: number;
+  circuit_status_command_id?: string;
   circuit_opened_at?: string;
   next_probe_at?: string;
   probe_command_id?: string;
@@ -912,10 +915,10 @@ export const dashboardApi = (client: ApiClient) => ({
       `/api/dashboard/channel-commands${query(params)}`,
     ),
   operationAudits: (
-    params: { actor_exact?: boolean; actor_options?: boolean; instance_id?: string; site_id?: string; operation_type?: string; actor?: string; status?: string; source?: string; trigger?: string; q?: string; request_id?: string; correlation_id?: string; from?: string; to?: string; limit?: number; offset?: number } = {},
+    params: { list_only?: boolean; count_only?: boolean; before_time?: string; before_id?: string; actor_exact?: boolean; actor_options?: boolean; instance_id?: string; site_id?: string; operation_type?: string; actor?: string; status?: string; source?: string; trigger?: string; q?: string; request_id?: string; correlation_id?: string; from?: string; to?: string; limit?: number; offset?: number } = {},
     signal?: AbortSignal,
   ) =>
-    client.request<ListResponse<OperationAuditItem> & { total: number; operation_types: string[]; actors: string[] }>(
+    client.request<ListResponse<OperationAuditItem> & { total: number; has_more?: boolean; operation_types: string[]; actors: string[] }>(
       `/api/dashboard/operation-audits${query(params)}`,
       { signal },
     ),

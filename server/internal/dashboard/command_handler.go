@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -16,7 +17,7 @@ import (
 type CommandStore interface {
 	CreateChannelCommand(storage.ChannelCommand) error
 	QueryChannelCommands(storage.ChannelCommandQuery) ([]storage.ChannelCommand, error)
-	QueryOperationAudits(storage.OperationAuditQuery) (storage.OperationAuditPage, error)
+	QueryOperationAuditsContext(context.Context, storage.OperationAuditQuery) (storage.OperationAuditPage, error)
 }
 type CommandHandler struct {
 	Store     CommandStore
@@ -234,7 +235,18 @@ func (h CommandHandler) Audits(w http.ResponseWriter, r *http.Request) {
 		writeDashboardError(w, http.StatusBadRequest, "invalid_range")
 		return
 	}
-	page, e := h.Store.QueryOperationAudits(storage.OperationAuditQuery{
+	before, err := parseAuditTime(q.Get("before_time"))
+	if err != nil || (before.IsZero() != (q.Get("before_id") == "")) || len(q.Get("before_id")) > 64 || (q.Get("before_id") != "" && offset != 0) {
+		writeDashboardError(w, http.StatusBadRequest, "invalid_cursor")
+		return
+	}
+	if q.Get("list_only") == "true" && q.Get("count_only") == "true" {
+		writeDashboardError(w, http.StatusBadRequest, "invalid_query_mode")
+		return
+	}
+	page, e := h.Store.QueryOperationAuditsContext(r.Context(), storage.OperationAuditQuery{
+		ListOnly: q.Get("list_only") == "true", CountOnly: q.Get("count_only") == "true",
+		BeforeTime: before, BeforeID: q.Get("before_id"),
 		ActorOptions: q.Get("actor_options") == "true",
 		ActorExact:   q.Get("actor_exact") == "true",
 		InstanceID:   q.Get("instance_id"), SiteID: q.Get("site_id"), OperationType: q.Get("operation_type"), Actor: q.Get("actor"),
@@ -262,7 +274,7 @@ func (h CommandHandler) Audits(w http.ResponseWriter, r *http.Request) {
 			Status: v.Status, CreatedAt: v.CreatedAt, UpdatedAt: v.UpdatedAt,
 		})
 	}
-	writeDashboardJSON(w, 200, map[string]any{"items": out, "total": page.Total, "operation_types": storage.OperationAuditFilterTypes(), "actors": page.Actors})
+	writeDashboardJSON(w, 200, map[string]any{"items": out, "total": page.Total, "has_more": page.HasMore, "operation_types": storage.OperationAuditFilterTypes(), "actors": page.Actors})
 }
 
 func parseAuditTime(value string) (time.Time, error) {

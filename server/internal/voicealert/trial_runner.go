@@ -69,7 +69,7 @@ func (r *TrialRunner) scanSite(ctx context.Context, site string) error {
 	}
 	active := false
 	for _, w := range watches {
-		if w.Enabled {
+		if w.Enabled && w.Model != "" {
 			active = true
 		}
 	}
@@ -267,7 +267,7 @@ func (r *TrialRunner) deliver(ctx context.Context, id string) error {
 	if err = json.Unmarshal([]byte(watchRaw), &currentWatch); err != nil {
 		return err
 	}
-	if !currentWatch.Enabled || currentWatch.Round != eventRound {
+	if !currentWatch.Enabled || currentWatch.Round != eventRound || currentWatch.Model == "" || currentWatch.Model != e.Log.Model {
 		status = "watch_changed"
 	}
 	if d.Kind == "phone" && status == "unknown" {

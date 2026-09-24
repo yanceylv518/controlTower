@@ -9,6 +9,7 @@ const props = defineProps<{
   name: string;
   loading: boolean;
   error: string;
+  notice?: string;
   emptyText: string;
   hours: number;
   bucketMinutes: number;
@@ -43,6 +44,7 @@ watch(() => [props.dimension, props.active], () => { moreVisible.value = false; 
       </el-popover>
     </div>
     <div v-if="error" class="traffic-notice" role="alert">{{ error }}<el-button link type="primary" @click="emit('retry')">重试</el-button></div>
+    <div v-else-if="notice" class="traffic-delay" role="status">{{ notice }}<el-button link type="primary" @click="emit('retry')">重试</el-button></div>
     <div v-loading="loading && !hasPlot" class="traffic-content">
       <CustomerTrafficChart v-if="hasPlot && active" ref="chart" :series="traffic.series" :expanded="expanded" />
       <div v-else-if="hasPlot" :style="{ height: expanded ? '320px' : '190px' }" />
@@ -68,6 +70,7 @@ watch(() => [props.dimension, props.active], () => { moreVisible.value = false; 
 .traffic-caption { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 3px; font-size: 11px; color: var(--ct-ink-3); }
 .traffic-empty { display: grid; place-items: center; min-height: 210px; padding: 20px; text-align: center; color: var(--ct-ink-3); font-size: 12px; }
 .traffic-notice { color: var(--ct-warn); font-size: 11px; margin-top: 8px; }
+.traffic-delay { color: var(--ct-ink-3); font-size: 11px; margin-top: 8px; }
 .legend-title { font-size: 13px; color: var(--ct-ink); font-weight: 500; }
 .legend-note { font-size: 11px; color: var(--ct-ink-3); margin: 4px 0 10px; }
 .legend-table-head, .legend-table-row { display: grid; grid-template-columns: minmax(0, 1fr) 78px 50px; gap: 7px; padding: 7px 0; font-size: 11px; color: var(--ct-ink-2); }

@@ -151,7 +151,7 @@ const acceptStates = (site: string, items: TuningContinuousState[]) => {
   refreshError.value = "";
 };
 const validEvent = (item: TuningRecommendation) => item.rule !== "circuit_recovered" || item.proposed_weight > 0;
-const recentEvents = computed(() => events.value.filter(x => validEvent(x) && ["weight_observed", "weight_write", "manual_takeover", "auto_paused", "circuit_opened", "probe_started", "probe_failed", "circuit_recovered"].includes(x.rule)));
+const recentEvents = computed(() => events.value.filter(x => validEvent(x) && ["weight_observed", "weight_write", "manual_takeover", "auto_paused", "circuit_opened", "probe_started", "probe_failed", "circuit_disabled", "circuit_recovered"].includes(x.rule)));
 const eventModel = (item: TuningRecommendation) => String(item.evidence?.model ?? bases.value.find(row => row.channel_id === item.channel_id)?.model_name ?? "");
 const filteredEvents = computed(() => {
   const selectedModel = eventModelFilter.value === "__current__" ? activeModel.value : eventModelFilter.value;
@@ -213,9 +213,9 @@ const modelMode = (model: string) => policy.dispatch_modes[model] || "off";
 const modeText = (model: string) => ({ off: "已关闭", observe: "只观察", auto: "自动执行" }[modelMode(model)]);
 const modeType = (model: string) => modelMode(model) === "auto" ? "success" : modelMode(model) === "observe" ? "warning" : "info";
 const effectivePause = (s?: TuningContinuousState) => s?.paused_reason === "manual_override" ? "" : s?.paused_reason || "";
-const phaseText = (s?: TuningContinuousState) => !s ? "等待首次评估" : effectivePause(s) === "write_failed" ? `写入 new-api 失败已暂停，每10分钟自动重试${s.last_write_error ? `：${s.last_write_error}` : ""}` : effectivePause(s) ? "安全保护已暂停" : s.phase === "circuit" ? `已熔断，下次检测 ${s.next_probe_at ? formatTime(s.next_probe_at) : "待定"}` : s.phase === "probing" ? `恢复检测 ${s.probe_attempts || 0}/${policy.continuous.probe_count}` : s.phase === "soft_start" ? "恢复中（低权重运行）" : "运行正常";
+const phaseText = (s?: TuningContinuousState) => !s ? "等待首次评估" : effectivePause(s) === "write_failed" ? `写入 new-api 失败已暂停，每10分钟自动重试${s.last_write_error ? `：${s.last_write_error}` : ""}` : effectivePause(s) ? "安全保护已暂停" : s.circuit_status_target ? (s.circuit_status_target === 2 ? "正在禁用渠道，等待执行确认" : "正在启用渠道，等待执行确认") : s.circuit_disabled ? `已禁用，${s.phase === "probing" ? "恢复检测中" : `下次检测 ${s.next_probe_at ? formatTime(s.next_probe_at) : "待定"}`}` : s.phase === "circuit" ? `已熔断，下次检测 ${s.next_probe_at ? formatTime(s.next_probe_at) : "待定"}` : s.phase === "probing" ? `恢复检测 ${s.probe_attempts || 0}/${policy.continuous.probe_count}` : s.phase === "soft_start" ? "恢复中（低权重运行）" : "运行正常";
 const phaseType = (s?: TuningContinuousState) => s?.phase === "circuit" ? "danger" : s?.phase === "probing" || s?.phase === "soft_start" || effectivePause(s) ? "warning" : "success";
-const eventName = (rule: string) => ({ weight_observed: "观察到权重变化", weight_write: "自动调整权重", manual_takeover: "检测到人工修改", auto_paused: "安全保护暂停", circuit_opened: "渠道熔断", probe_started: "开始恢复检测", probe_failed: "恢复检测未通过", circuit_recovered: "渠道恢复" } as Record<string, string>)[rule] || rule;
+const eventName = (rule: string) => ({ weight_observed: "观察到权重变化", weight_write: "自动调整权重", manual_takeover: "检测到人工修改", auto_paused: "安全保护暂停", circuit_opened: "渠道熔断", probe_started: "开始恢复检测", probe_failed: "恢复检测未通过", circuit_disabled: "探针全部失败，禁用渠道", circuit_recovered: "渠道恢复" } as Record<string, string>)[rule] || rule;
 const eventCount = (days: number, rule: string) => events.value.filter(x => validEvent(x) && x.rule === rule && new Date(x.created_at).getTime() >= Date.now() - days * 86400000).length;
 const sampleText = (row: ChannelBaseValue) => { const state = stateFor(row); return state ? `${state.last_observed_requests}/${(savedPolicy.value?.continuous ?? policy.continuous).min_samples}` : "—"; };
 const rateText = (value?: number) => value == null ? "—" : Math.round(value).toLocaleString("zh-CN");
@@ -241,10 +241,15 @@ async function refreshCurrentRates() {
     ratesWindowStart.value = result.window_start;
     ratesDelay.value = result.delay_seconds;
     ratesReady.value = true; ratesError.value = "";
-  } catch {
+  } catch (error) {
     if (site !== siteID.value) return;
     ratesReady.value = false;
-    ratesError.value = "实时负载暂不可用：请确认 Agent 已升级且上报正常";
+    ratesError.value = error instanceof ApiError
+      ? error.status === 401 ? ""
+        : error.status === 403 ? "无权读取实时负载，请检查当前账户的站点权限"
+        : error.code === "current_rates_unavailable" ? "实时负载暂不可用：服务端尚无法提供完整数据，请检查采集节点上报及服务端状态，正在重试"
+        : `实时负载读取失败（HTTP ${error.status}），正在重试`
+      : "实时负载请求失败，请检查网络连接，正在重试";
   } finally { ratesLoading = false; }
 }
 const evaluationText = (row: ChannelBaseValue) => {
@@ -925,7 +930,7 @@ async function save() {
   } finally { saving.value = false; }
 }
 watch(() => filters.site_id, () => { groupDialogOpen.value = false; groupManagerOpen.value = false; groupFilterOpen.value = false; selectedGroupFilter.value = null; groupFilterSearch.value = ""; cancelGroupPolls(); channels.value = []; availableGroups.value = []; pendingGroups.value = new Map(); groupErrors.value = new Map(); channelDirectoryGeneration++; groupDirectoryGeneration++; void load(true); void watchChannelChanges(); });
-watch(siteID, () => { ratesReady.value = false; currentRates.value.clear(); void refreshCurrentRates(); });
+watch(siteID, () => { ratesReady.value = false; ratesError.value = ""; currentRates.value.clear(); void refreshCurrentRates(); });
 watch([eventModelFilter, eventRuleFilter, eventChannelQuery, eventDateRange, activeModel], () => { eventPage.value = 1; });
 onMounted(() => { void load(true); void watchChannelChanges(); void refreshCurrentRates(); refreshTimer = setInterval(() => void refreshRuntime(), 30000); ratesTimer = setInterval(() => { if (!document.hidden) void refreshCurrentRates(); }, 5000); });
 onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPolls(); if (refreshTimer) clearInterval(refreshTimer); if (ratesTimer) clearInterval(ratesTimer); });

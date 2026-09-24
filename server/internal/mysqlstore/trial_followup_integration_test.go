@@ -93,7 +93,7 @@ func TestTrialFollowupIntegration(t *testing.T) {
 	if err = store.SaveConfig(ctx, site, cfg, "test"); err != nil {
 		t.Fatal(err)
 	}
-	input := voicealert.TrialWatch{Site: site, UserID: 7, Label: "测试客户", Rule: "first", GapMinutes: 30, IncludeFailed: true, Phone: true, Message: true, PersonIDs: []string{people[0].ID, people[1].ID}, Enabled: true}
+	input := voicealert.TrialWatch{Model: "gpt-4.1", Site: site, UserID: 7, Label: "测试客户", Rule: "first", GapMinutes: 30, IncludeFailed: true, Phone: true, Message: true, PersonIDs: []string{people[0].ID, people[1].ID}, Enabled: true}
 	first, err := store.SaveWatch(ctx, input, "test", source)
 	if err != nil {
 		t.Fatal(err)
@@ -106,7 +106,15 @@ func TestTrialFollowupIntegration(t *testing.T) {
 	defer db.Exec("DELETE FROM operation_audits WHERE target_id IN (?,?)", first.ID, second.ID)
 	var messages atomic.Int32
 	runner := &voicealert.TrialRunner{Store: store, Source: source, Caller: caller, Message: func(context.Context, voicealert.TrialEvent) (string, error) { messages.Add(1); return "sent", nil }}
-	source.logs = []voicealert.TrialLog{{ID: 99, UserID: 7, TokenID: 9, Type: 2, CreatedAt: now.Add(-time.Hour)}, {ID: 101, UserID: 7, TokenID: 9, Type: 5, CreatedAt: time.Now().UTC().Add(time.Second)}}
+	source.logs = []voicealert.TrialLog{{Model: "other", ID: 101, UserID: 7, TokenID: 9, Type: 2, CreatedAt: time.Now().UTC().Add(time.Second)}}
+	if err = runner.Once(ctx); err != nil {
+		t.Fatal(err)
+	}
+	ignored, err := store.TrialEvents(ctx, site)
+	if err != nil || len(ignored) != 0 || caller.calls.Load() != 0 || messages.Load() != 0 {
+		t.Fatal("unselected model generated notifications", ignored, err)
+	}
+	source.logs = []voicealert.TrialLog{{Model: "gpt-4.1", ID: 99, UserID: 7, TokenID: 9, Type: 2, CreatedAt: now.Add(-time.Hour)}, {Model: "gpt-4.1", ID: 101, UserID: 7, TokenID: 9, Type: 5, CreatedAt: time.Now().UTC().Add(time.Second)}}
 	var group sync.WaitGroup
 	for i := 0; i < 2; i++ {
 		group.Add(1)
@@ -181,7 +189,7 @@ func TestTrialFollowupIntegration(t *testing.T) {
 	if err = store.SaveConfig(ctx, site, cfg, "test"); err != nil {
 		t.Fatal(err)
 	}
-	source.logs = []voicealert.TrialLog{{ID: 102, UserID: 7, TokenID: 9, Type: 2, CreatedAt: time.Now().UTC().Add(2 * time.Second)}}
+	source.logs = []voicealert.TrialLog{{Model: "gpt-4.1", ID: 102, UserID: 7, TokenID: 9, Type: 2, CreatedAt: time.Now().UTC().Add(2 * time.Second)}}
 	if err = runner.Once(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -200,5 +208,65 @@ func TestTrialFollowupIntegration(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("disabled service outcome missing")
+	}
+	// Changing only the model starts a fresh round, even without an explicit reset.
+	second.Model = "  gpt-4.1-mini  "
+	second.Phone = false
+	changed, err := store.SaveWatch(ctx, second, "test", source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed.Model != "gpt-4.1-mini" || changed.Round != second.Round+1 || changed.Fired || !changed.LastAt.IsZero() || changed.LastID != 100 {
+		t.Fatalf("model change retained previous state: %+v", changed)
+	}
+	// Requeue a historical delivery owned by the changed watch. No stale
+	// notification may escape after the model/round changes.
+	var oldEvent string
+	if err = db.QueryRow(`SELECT id FROM trial_events WHERE watch_id=? ORDER BY log_id LIMIT 1`, second.ID).Scan(&oldEvent); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(`UPDATE trial_deliveries SET event_id=?,status='pending' WHERE site_id=? AND log_id=101 AND kind='message'`, oldEvent, site); err != nil {
+		t.Fatal(err)
+	}
+	before := messages.Load()
+	if err = runner.Once(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var outcome string
+	if err = db.QueryRow(`SELECT status FROM trial_deliveries WHERE site_id=? AND log_id=101 AND kind='message'`, site).Scan(&outcome); err != nil {
+		t.Fatal(err)
+	}
+	if outcome != "watch_changed" || messages.Load() != before {
+		t.Fatal("old model notification escaped", outcome)
+	}
+	source.logs = []voicealert.TrialLog{{Model: changed.Model, ID: 103, UserID: 7, TokenID: 9, Type: 2, CreatedAt: time.Now().UTC().Add(3 * time.Second)}}
+	if err = runner.Once(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if messages.Load() != before+1 {
+		t.Fatal("new model did not notify")
+	}
+	if err = runner.Once(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if messages.Load() != before+1 {
+		t.Fatal("new model replay notified again")
+	}
+	// Simulate persisted pre-upgrade JSON with no model. Even a pending
+	// delivery in the same round must be suppressed until a model is set.
+	if _, err = db.Exec(`UPDATE trial_watches SET config_json=JSON_REMOVE(config_json,'$.model') WHERE id=?`, second.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(`UPDATE trial_deliveries SET status='pending' WHERE site_id=? AND log_id=103 AND kind='message'`, site); err != nil {
+		t.Fatal(err)
+	}
+	if err = runner.Once(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.QueryRow(`SELECT status FROM trial_deliveries WHERE site_id=? AND log_id=103 AND kind='message'`, site).Scan(&outcome); err != nil {
+		t.Fatal(err)
+	}
+	if outcome != "watch_changed" || messages.Load() != before+1 {
+		t.Fatal("legacy watch delivered without a model", outcome)
 	}
 }

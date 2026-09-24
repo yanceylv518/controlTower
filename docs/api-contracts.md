@@ -234,6 +234,15 @@ Instance tokens are stored only as `SHA-256(pepper + token)` hashes. A token may
 
 操作审计的 `actor_exact=true` 可与 `actor` 配合精确匹配账号；默认仍保持模糊匹配兼容。关键词 `q` 和操作人模糊匹配中的 `%`、`_` 不作为 SQL 通配符。
 
+操作审计性能扩展（095迁移）：
+
+- `list_only=true`：只查当前页及一条探测记录，不执行总数统计，返回 `total=-1` 与 `has_more`。不传此参数仍兼容原分页与精确总数。
+- `count_only=true`：仅返回当前筛选的总数（`items=[]`），忽略分页条件；与 `list_only=true` 互斥。MySQL按完整筛选条件缓存30秒，每个Store最多128项且同时只执行一个计数，等待可取消。
+- `before_time`（RFC3339，可含微秒）和 `before_id` 必须成对提供，用于按 `created_at DESC,id DESC` 查询游标之后的记录；不能与非零 `offset` 同用。`has_more`决定下一页是否可用，与缓存总数无关。
+- `request_id` 为精确筛选；`correlation_id`、`source`、`trigger` 沿用原筛选语义。页面提供独立“请求ID精确”模式，内容搜索仍用 `q`。
+- 查询继承HTTP取消，列表/计数最多8秒，操作人候选最多5秒。计数失败不影响独立列表请求。
+- 页面默认浏览器本地当天00:00:00至23:59:59，转换为UTC传递 `[from,to)`（to为次日零点）；重置恢复当天。分页使用上一页/下一页，不再按任意页码执行大OFFSET。
+
 | 方法与路径 | 参数 | 响应 |
 | --- | --- | --- |
 | `GET /api/dashboard/tuning/channels?site_id=` | 返回站点内每个渠道的最新名称、状态、模型、权重、优先级和 `group_name`；包含禁用渠道及多模型渠道 | `200 {"items":[{"channel_id":7,"channel_name":"primary","status":"enabled","models":["gpt-4o"],"group_name":"default,vip"}]}` |

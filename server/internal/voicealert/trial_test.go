@@ -12,8 +12,8 @@ import (
 
 func TestTrialObservationBoundaries(t *testing.T) {
 	start := time.Date(2026, 9, 20, 0, 0, 0, 0, time.UTC)
-	w := TrialWatch{Enabled: true, UserID: 7, TokenID: 9, Rule: "first", GapMinutes: 30, StartedAt: start, LastID: 10}
-	l := TrialLog{ID: 11, UserID: 7, TokenID: 9, Type: 2, CreatedAt: start.Add(time.Second)}
+	w := TrialWatch{Model: "gpt-4.1", Enabled: true, UserID: 7, TokenID: 9, Rule: "first", GapMinutes: 30, StartedAt: start, LastID: 10}
+	l := TrialLog{Model: "gpt-4.1", ID: 11, UserID: 7, TokenID: 9, Type: 2, CreatedAt: start.Add(time.Second)}
 	wrong := l
 	wrong.UserID = 8
 	if w.Observe(wrong) {
@@ -91,7 +91,7 @@ func TestTrialTemplateParameters(t *testing.T) {
 }
 
 func TestTrialConfigurationValidation(t *testing.T) {
-	w := TrialWatch{Site: "a", UserID: 1, Label: "客户", Rule: "first", GapMinutes: 30, Enabled: true, Phone: true}
+	w := TrialWatch{Model: "gpt-4.1", Site: "a", UserID: 1, Label: "客户", Rule: "first", GapMinutes: 30, Enabled: true, Phone: true}
 	if w.Validate() == nil {
 		t.Fatal("phone without recipient accepted")
 	}
@@ -108,5 +108,61 @@ func TestTrialConfigurationValidation(t *testing.T) {
 	c.TrialTemplateReady = true
 	if c.Validate() == nil {
 		t.Fatal("unconfigured template marked ready")
+	}
+}
+
+func TestTrialModelFiltering(t *testing.T) {
+	start := time.Now().UTC()
+	for _, token := range []int64{0, 9} {
+		w := TrialWatch{Model: "gpt-4.1", Enabled: true, UserID: 7, TokenID: token, Rule: "resume", GapMinutes: 30, StartedAt: start, LastID: 10, IncludeFailed: true}
+		l := TrialLog{Model: "gpt-4.1", ID: 11, UserID: 7, TokenID: 9, Type: 2, CreatedAt: start.Add(time.Second)}
+		for _, model := range []string{"", "gpt-4.1-mini", "GPT-4.1"} {
+			l.Model = model
+			if w.Observe(l) || w.Fired || w.LastID != 10 || !w.LastAt.IsZero() {
+				t.Fatalf("unselected model changed state: %+v", w)
+			}
+		}
+		l.Model = w.Model
+		if !w.Observe(l) {
+			t.Fatal("selected model did not trigger")
+		}
+		l.ID++
+		l.Model = "other"
+		l.Type = 5
+		l.CreatedAt = l.CreatedAt.Add(29 * time.Minute)
+		if w.Observe(l) {
+			t.Fatal("other failed model triggered")
+		}
+		l.ID++
+		l.Model = w.Model
+		l.CreatedAt = l.CreatedAt.Add(time.Minute)
+		if !w.Observe(l) {
+			t.Fatal("other model postponed silence threshold")
+		}
+		w.Model = ""
+		w.Fired = false
+		l.ID++
+		if w.Observe(l) {
+			t.Fatal("legacy watch without model triggered")
+		}
+	}
+}
+
+func TestTrialModelValidation(t *testing.T) {
+	w := TrialWatch{Site: "a", UserID: 1, Label: "客户", Rule: "first", GapMinutes: 30, Enabled: true, Message: true}
+	for _, model := range []string{"", "  ", strings.Repeat("模", 201)} {
+		w.Model = model
+		if w.Validate() == nil {
+			t.Fatalf("invalid model accepted: %q", model)
+		}
+	}
+	w.Model = "gpt-4.1"
+	if err := w.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	w.Model = ""
+	w.Enabled = false
+	if err := w.Validate(); err != nil {
+		t.Fatalf("legacy watch cannot be paused: %v", err)
 	}
 }

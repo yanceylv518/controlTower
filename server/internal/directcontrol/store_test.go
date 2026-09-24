@@ -77,6 +77,23 @@ func TestExecuteWeightUpdatePropagatesFailure(t *testing.T) {
 	}
 }
 
+func TestCircuitStatusWritesWeightAndStatusTogether(t *testing.T) {
+	for _, target := range []int{2, 1} {
+		f := &fakeController{}
+		v := tuning.Recommendation{ChannelID: 9, ProposedWeight: 0, ProposedChannelStatus: &target}
+		if target == 1 {
+			v.ProposedWeight = 20
+		}
+		if err := executeWeightUpdate(context.Background(), f, v); err != nil {
+			t.Fatal(err)
+		}
+		u := f.updates[0]
+		if u.Status == nil || *u.Status != target || u.Weight == nil || int64(*u.Weight) != v.ProposedWeight || u.Priority != nil {
+			t.Fatalf("wrong transition: %+v", u)
+		}
+	}
+}
+
 func TestExecuteProbeRoundCountsWholeRound(t *testing.T) {
 	f := &fakeController{results: []channelcontrol.ProbeResult{
 		{Success: true, Duration: 1.5},

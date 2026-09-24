@@ -88,7 +88,7 @@ JOIN (SELECT cs.* FROM channel_current cs JOIN instances i ON i.id=cs.instance_i
       AND NOT EXISTS (SELECT 1 FROM channel_current tie JOIN instances ti ON ti.id=tie.instance_id
         WHERE tie.channel_id=cs.channel_id AND tie.captured_at=cs.captured_at AND tie.instance_id<cs.instance_id AND ti.enabled=1
         AND CASE WHEN ti.site_id='' THEN ti.id ELSE ti.site_id END=CASE WHEN i.site_id='' THEN i.id ELSE i.site_id END)) c ON c.channel_id=b.channel_id
-WHERE b.instance_id=? AND b.model_name<>'' AND LOWER(c.status) IN ('enabled','enable','active','normal','1')`+filter+` ORDER BY b.model_name,c.channel_name`, args...)
+WHERE b.instance_id=? AND b.model_name<>'' AND (LOWER(c.status) IN ('enabled','enable','active','normal','1') OR EXISTS (SELECT 1 FROM tuning_continuous_states ts WHERE ts.instance_id=b.instance_id AND ts.channel_id=b.channel_id AND ts.circuit_disabled=1))`+filter+` ORDER BY b.model_name,c.channel_name`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -359,7 +359,7 @@ func (s Store) QueryCurrentChannelRates(id string, now time.Time) ([]tuning.Chan
 }
 
 func (s Store) ListContinuousStates(id string) ([]tuning.ContinuousState, error) {
-	rows, err := s.db.QueryContext(context.Background(), `SELECT instance_id,channel_id,model_name,k_error,k_speed,k_cache,k_otps,multiplier,proposed_weight,last_written_weight,last_write_at,last_observed_requests,last_observed_errors,metric_rpm,metric_tpm,capacity_limited,metric_ready,baseline_ready,metric_ttft_p50,metric_ttft_p90,metric_ttft_p95,baseline_ttft_p50,baseline_ttft_p90,baseline_ttft_p95,metric_cache,baseline_cache,cache_ready,metric_otps,baseline_otps,otps_ready,smoothed_error_rate,last_bucket_at,paused_reason,phase,circuit_opened_at,next_probe_at,probe_command_id,probe_attempts,probe_successes,probe_duration_sum,original_priority,soft_start_pending,write_failure_streak,last_write_failure_at,last_write_error,last_observed_weight,updated_at,speed_sample_count,speed_retry_count,speed_unknown_count,speed_legacy_count,speed_stats_version,otps_sample_count,otps_retry_count,otps_unknown_count,otps_stats_version FROM tuning_continuous_states WHERE instance_id=?`, id)
+	rows, err := s.db.QueryContext(context.Background(), `SELECT instance_id,channel_id,model_name,k_error,k_speed,k_cache,k_otps,multiplier,proposed_weight,last_written_weight,last_write_at,last_observed_requests,last_observed_errors,metric_rpm,metric_tpm,capacity_limited,metric_ready,baseline_ready,metric_ttft_p50,metric_ttft_p90,metric_ttft_p95,baseline_ttft_p50,baseline_ttft_p90,baseline_ttft_p95,metric_cache,baseline_cache,cache_ready,metric_otps,baseline_otps,otps_ready,smoothed_error_rate,last_bucket_at,paused_reason,phase,circuit_opened_at,next_probe_at,probe_command_id,probe_attempts,probe_successes,probe_duration_sum,original_priority,soft_start_pending,write_failure_streak,last_write_failure_at,last_write_error,last_observed_weight,updated_at,speed_sample_count,speed_retry_count,speed_unknown_count,speed_legacy_count,speed_stats_version,otps_sample_count,otps_retry_count,otps_unknown_count,otps_stats_version,circuit_disabled,circuit_status_target,circuit_status_command_id FROM tuning_continuous_states WHERE instance_id=?`, id)
 	if err != nil {
 		return nil, err
 	}
@@ -371,7 +371,7 @@ func (s Store) ListContinuousStates(id string) ([]tuning.ContinuousState, error)
 		var writeAt, bucketAt, openedAt, nextProbeAt, writeFailAt sql.NullTime
 		var probeID sql.NullString
 		var originalPriority sql.NullInt64
-		if err = rows.Scan(&v.InstanceID, &v.ChannelID, &v.ModelName, &v.KError, &v.KSpeed, &v.KCache, &v.KOTPS, &v.Multiplier, &v.ProposedWeight, &written, &writeAt, &v.LastObservedRequests, &v.LastObservedErrors, &v.MetricRPM, &v.MetricTPM, &v.CapacityLimited, &v.MetricReady, &v.BaselineReady, &v.MetricTTFTP50, &v.MetricTTFTP90, &v.MetricTTFTP95, &v.BaselineTTFTP50, &v.BaselineTTFTP90, &v.BaselineTTFTP95, &v.MetricCache, &v.BaselineCache, &v.CacheReady, &v.MetricOTPS, &v.BaselineOTPS, &v.OTPSReady, &v.SmoothedErrorRate, &bucketAt, &v.PausedReason, &v.Phase, &openedAt, &nextProbeAt, &probeID, &v.ProbeAttempts, &v.ProbeSuccesses, &v.ProbeDurationSum, &originalPriority, &v.SoftStartPending, &v.WriteFailureStreak, &writeFailAt, &v.LastWriteError, &observed, &v.UpdatedAt, &v.SpeedSamples, &v.SpeedRetries, &v.SpeedUnknown, &v.SpeedLegacy, &v.SpeedStatsVersion, &v.OTPSSamples, &v.OTPSRetries, &v.OTPSUnknown, &v.OTPSStatsVersion); err != nil {
+		if err = rows.Scan(&v.InstanceID, &v.ChannelID, &v.ModelName, &v.KError, &v.KSpeed, &v.KCache, &v.KOTPS, &v.Multiplier, &v.ProposedWeight, &written, &writeAt, &v.LastObservedRequests, &v.LastObservedErrors, &v.MetricRPM, &v.MetricTPM, &v.CapacityLimited, &v.MetricReady, &v.BaselineReady, &v.MetricTTFTP50, &v.MetricTTFTP90, &v.MetricTTFTP95, &v.BaselineTTFTP50, &v.BaselineTTFTP90, &v.BaselineTTFTP95, &v.MetricCache, &v.BaselineCache, &v.CacheReady, &v.MetricOTPS, &v.BaselineOTPS, &v.OTPSReady, &v.SmoothedErrorRate, &bucketAt, &v.PausedReason, &v.Phase, &openedAt, &nextProbeAt, &probeID, &v.ProbeAttempts, &v.ProbeSuccesses, &v.ProbeDurationSum, &originalPriority, &v.SoftStartPending, &v.WriteFailureStreak, &writeFailAt, &v.LastWriteError, &observed, &v.UpdatedAt, &v.SpeedSamples, &v.SpeedRetries, &v.SpeedUnknown, &v.SpeedLegacy, &v.SpeedStatsVersion, &v.OTPSSamples, &v.OTPSRetries, &v.OTPSUnknown, &v.OTPSStatsVersion, &v.CircuitDisabled, &v.CircuitStatusTarget, &v.CircuitStatusCommandID); err != nil {
 			return nil, err
 		}
 		if written.Valid {
@@ -424,7 +424,7 @@ func (s Store) ListContinuousStates(id string) ([]tuning.ContinuousState, error)
 // stamped into last_probe_command_id — a column this upsert never assigns.
 func (s Store) PutContinuousState(v tuning.ContinuousState) error {
 	started := time.Now()
-	_, err := s.db.ExecContext(context.Background(), `INSERT INTO tuning_continuous_states(instance_id,channel_id,model_name,k_error,k_speed,k_cache,k_otps,multiplier,proposed_weight,last_written_weight,last_write_at,last_observed_requests,last_observed_errors,metric_ready,baseline_ready,metric_ttft_p50,metric_ttft_p90,metric_ttft_p95,baseline_ttft_p50,baseline_ttft_p90,baseline_ttft_p95,metric_cache,baseline_cache,cache_ready,metric_otps,baseline_otps,otps_ready,smoothed_error_rate,last_bucket_at,paused_reason,phase,circuit_opened_at,next_probe_at,probe_command_id,probe_attempts,probe_successes,probe_duration_sum,original_priority,soft_start_pending,write_failure_streak,last_write_failure_at,last_write_error,last_observed_weight,updated_at,speed_sample_count,speed_retry_count,speed_unknown_count,speed_legacy_count,speed_stats_version,otps_sample_count,otps_retry_count,otps_unknown_count,otps_stats_version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE model_name=VALUES(model_name),k_error=VALUES(k_error),k_speed=VALUES(k_speed),k_cache=VALUES(k_cache),k_otps=VALUES(k_otps),multiplier=VALUES(multiplier),proposed_weight=VALUES(proposed_weight),last_written_weight=VALUES(last_written_weight),last_write_at=VALUES(last_write_at),last_observed_requests=VALUES(last_observed_requests),last_observed_errors=VALUES(last_observed_errors),metric_ready=VALUES(metric_ready),baseline_ready=VALUES(baseline_ready),metric_ttft_p50=VALUES(metric_ttft_p50),metric_ttft_p90=VALUES(metric_ttft_p90),metric_ttft_p95=VALUES(metric_ttft_p95),baseline_ttft_p50=VALUES(baseline_ttft_p50),baseline_ttft_p90=VALUES(baseline_ttft_p90),baseline_ttft_p95=VALUES(baseline_ttft_p95),metric_cache=VALUES(metric_cache),baseline_cache=VALUES(baseline_cache),cache_ready=VALUES(cache_ready),metric_otps=VALUES(metric_otps),baseline_otps=VALUES(baseline_otps),otps_ready=VALUES(otps_ready),smoothed_error_rate=VALUES(smoothed_error_rate),last_bucket_at=VALUES(last_bucket_at),paused_reason=VALUES(paused_reason),phase=VALUES(phase),circuit_opened_at=VALUES(circuit_opened_at),next_probe_at=VALUES(next_probe_at),probe_command_id=IF(@keep_probe:=(VALUES(probe_command_id) IS NOT NULL AND VALUES(probe_command_id)=last_probe_command_id),probe_command_id,VALUES(probe_command_id)),probe_attempts=IF(@keep_probe,probe_attempts,VALUES(probe_attempts)),probe_successes=IF(@keep_probe,probe_successes,VALUES(probe_successes)),probe_duration_sum=IF(@keep_probe,probe_duration_sum,VALUES(probe_duration_sum)),original_priority=VALUES(original_priority),soft_start_pending=VALUES(soft_start_pending),write_failure_streak=VALUES(write_failure_streak),last_write_failure_at=VALUES(last_write_failure_at),last_write_error=VALUES(last_write_error),last_observed_weight=VALUES(last_observed_weight),updated_at=VALUES(updated_at),speed_sample_count=VALUES(speed_sample_count),speed_retry_count=VALUES(speed_retry_count),speed_unknown_count=VALUES(speed_unknown_count),speed_legacy_count=VALUES(speed_legacy_count),speed_stats_version=VALUES(speed_stats_version),otps_sample_count=VALUES(otps_sample_count),otps_retry_count=VALUES(otps_retry_count),otps_unknown_count=VALUES(otps_unknown_count),otps_stats_version=VALUES(otps_stats_version)`, v.InstanceID, v.ChannelID, v.ModelName, v.KError, v.KSpeed, v.KCache, v.KOTPS, v.Multiplier, v.ProposedWeight, v.LastWrittenWeight, v.LastWriteAt, v.LastObservedRequests, v.LastObservedErrors, v.MetricReady, v.BaselineReady, v.MetricTTFTP50, v.MetricTTFTP90, v.MetricTTFTP95, v.BaselineTTFTP50, v.BaselineTTFTP90, v.BaselineTTFTP95, v.MetricCache, v.BaselineCache, v.CacheReady, v.MetricOTPS, v.BaselineOTPS, v.OTPSReady, v.SmoothedErrorRate, v.LastBucketAt, v.PausedReason, v.Phase, v.CircuitOpenedAt, v.NextProbeAt, v.ProbeCommandID, v.ProbeAttempts, v.ProbeSuccesses, v.ProbeDurationSum, v.OriginalPriority, v.SoftStartPending, v.WriteFailureStreak, v.LastWriteFailureAt, v.LastWriteError, v.LastObservedWeight, v.UpdatedAt, v.SpeedSamples, v.SpeedRetries, v.SpeedUnknown, v.SpeedLegacy, v.SpeedStatsVersion, v.OTPSSamples, v.OTPSRetries, v.OTPSUnknown, v.OTPSStatsVersion)
+	_, err := s.db.ExecContext(context.Background(), `INSERT INTO tuning_continuous_states(instance_id,channel_id,model_name,k_error,k_speed,k_cache,k_otps,multiplier,proposed_weight,last_written_weight,last_write_at,last_observed_requests,last_observed_errors,metric_ready,baseline_ready,metric_ttft_p50,metric_ttft_p90,metric_ttft_p95,baseline_ttft_p50,baseline_ttft_p90,baseline_ttft_p95,metric_cache,baseline_cache,cache_ready,metric_otps,baseline_otps,otps_ready,smoothed_error_rate,last_bucket_at,paused_reason,phase,circuit_opened_at,next_probe_at,probe_command_id,probe_attempts,probe_successes,probe_duration_sum,original_priority,soft_start_pending,write_failure_streak,last_write_failure_at,last_write_error,last_observed_weight,updated_at,speed_sample_count,speed_retry_count,speed_unknown_count,speed_legacy_count,speed_stats_version,otps_sample_count,otps_retry_count,otps_unknown_count,otps_stats_version,circuit_disabled,circuit_status_target,circuit_status_command_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE model_name=VALUES(model_name),k_error=VALUES(k_error),k_speed=VALUES(k_speed),k_cache=VALUES(k_cache),k_otps=VALUES(k_otps),multiplier=VALUES(multiplier),proposed_weight=VALUES(proposed_weight),last_written_weight=VALUES(last_written_weight),last_write_at=VALUES(last_write_at),last_observed_requests=VALUES(last_observed_requests),last_observed_errors=VALUES(last_observed_errors),metric_ready=VALUES(metric_ready),baseline_ready=VALUES(baseline_ready),metric_ttft_p50=VALUES(metric_ttft_p50),metric_ttft_p90=VALUES(metric_ttft_p90),metric_ttft_p95=VALUES(metric_ttft_p95),baseline_ttft_p50=VALUES(baseline_ttft_p50),baseline_ttft_p90=VALUES(baseline_ttft_p90),baseline_ttft_p95=VALUES(baseline_ttft_p95),metric_cache=VALUES(metric_cache),baseline_cache=VALUES(baseline_cache),cache_ready=VALUES(cache_ready),metric_otps=VALUES(metric_otps),baseline_otps=VALUES(baseline_otps),otps_ready=VALUES(otps_ready),smoothed_error_rate=VALUES(smoothed_error_rate),last_bucket_at=VALUES(last_bucket_at),paused_reason=VALUES(paused_reason),phase=VALUES(phase),circuit_opened_at=VALUES(circuit_opened_at),next_probe_at=VALUES(next_probe_at),probe_command_id=IF(@keep_probe:=(VALUES(probe_command_id) IS NOT NULL AND VALUES(probe_command_id)=last_probe_command_id),probe_command_id,VALUES(probe_command_id)),probe_attempts=IF(@keep_probe,probe_attempts,VALUES(probe_attempts)),probe_successes=IF(@keep_probe,probe_successes,VALUES(probe_successes)),probe_duration_sum=IF(@keep_probe,probe_duration_sum,VALUES(probe_duration_sum)),original_priority=VALUES(original_priority),soft_start_pending=VALUES(soft_start_pending),write_failure_streak=VALUES(write_failure_streak),last_write_failure_at=VALUES(last_write_failure_at),last_write_error=VALUES(last_write_error),last_observed_weight=VALUES(last_observed_weight),updated_at=VALUES(updated_at),speed_sample_count=VALUES(speed_sample_count),speed_retry_count=VALUES(speed_retry_count),speed_unknown_count=VALUES(speed_unknown_count),speed_legacy_count=VALUES(speed_legacy_count),speed_stats_version=VALUES(speed_stats_version),otps_sample_count=VALUES(otps_sample_count),otps_retry_count=VALUES(otps_retry_count),otps_unknown_count=VALUES(otps_unknown_count),otps_stats_version=VALUES(otps_stats_version),circuit_disabled=VALUES(circuit_disabled),circuit_status_target=VALUES(circuit_status_target),circuit_status_command_id=VALUES(circuit_status_command_id)`, v.InstanceID, v.ChannelID, v.ModelName, v.KError, v.KSpeed, v.KCache, v.KOTPS, v.Multiplier, v.ProposedWeight, v.LastWrittenWeight, v.LastWriteAt, v.LastObservedRequests, v.LastObservedErrors, v.MetricReady, v.BaselineReady, v.MetricTTFTP50, v.MetricTTFTP90, v.MetricTTFTP95, v.BaselineTTFTP50, v.BaselineTTFTP90, v.BaselineTTFTP95, v.MetricCache, v.BaselineCache, v.CacheReady, v.MetricOTPS, v.BaselineOTPS, v.OTPSReady, v.SmoothedErrorRate, v.LastBucketAt, v.PausedReason, v.Phase, v.CircuitOpenedAt, v.NextProbeAt, v.ProbeCommandID, v.ProbeAttempts, v.ProbeSuccesses, v.ProbeDurationSum, v.OriginalPriority, v.SoftStartPending, v.WriteFailureStreak, v.LastWriteFailureAt, v.LastWriteError, v.LastObservedWeight, v.UpdatedAt, v.SpeedSamples, v.SpeedRetries, v.SpeedUnknown, v.SpeedLegacy, v.SpeedStatsVersion, v.OTPSSamples, v.OTPSRetries, v.OTPSUnknown, v.OTPSStatsVersion, v.CircuitDisabled, v.CircuitStatusTarget, v.CircuitStatusCommandID)
 	if err == nil {
 		_, err = s.db.ExecContext(context.Background(), `UPDATE tuning_continuous_states SET metric_rpm=?,metric_tpm=?,capacity_limited=? WHERE instance_id=? AND channel_id=?`, v.MetricRPM, v.MetricTPM, v.CapacityLimited, v.InstanceID, v.ChannelID)
 	}
@@ -450,6 +450,9 @@ func (s Store) CreateContinuousWeightChangeWithAudit(v tuning.Recommendation, ac
 		return "", err
 	}
 	defer tx.Rollback()
+	if err := checkCircuitStatus(tx, v); err != nil {
+		return "", err
+	}
 	controlInstanceID, err := controlInstanceForSite(tx, v.InstanceID)
 	if err != nil {
 		return "", err
@@ -457,6 +460,9 @@ func (s Store) CreateContinuousWeightChangeWithAudit(v tuning.Recommendation, ac
 	ev, _ := json.Marshal(v.Evidence)
 	commandID := randomCommandID()
 	payloadValues := map[string]any{}
+	if v.ProposedChannelStatus != nil {
+		payloadValues["status"] = *v.ProposedChannelStatus
+	}
 	if v.Rule != "base_priority_sync" {
 		payloadValues["weight"] = v.ProposedWeight
 	}
@@ -470,11 +476,25 @@ func (s Store) CreateContinuousWeightChangeWithAudit(v tuning.Recommendation, ac
 	if _, err = tx.Exec(`INSERT INTO channel_commands(id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at) VALUES(?,?,?,?,?,'pending',?,'',?,?)`, commandID, controlInstanceID, v.ChannelID, "channel.update", string(payload), actor, now, now); err != nil {
 		return "", err
 	}
+	if v.ProposedChannelStatus != nil {
+		// Persist the command marker in the same transaction as the queued
+		// command so a restart cannot enqueue a duplicate status transition.
+		if _, err = tx.Exec(`UPDATE tuning_continuous_states SET circuit_status_command_id=?,circuit_status_target=? WHERE instance_id=? AND channel_id=?`, commandID, *v.ProposedChannelStatus, v.InstanceID, v.ChannelID); err != nil {
+			return "", err
+		}
+	}
 	before := fmt.Sprintf(`{"weight":%d}`, v.CurrentWeight)
 	after := fmt.Sprintf(`{"weight":%d,"command_id":%q,"rule":%q,"evidence":%s}`, v.ProposedWeight, commandID, v.Rule, ev)
 	if v.Rule == "base_priority_sync" {
 		before = fmt.Sprintf(`{"priority":%d}`, *v.CurrentPriority)
 		after = fmt.Sprintf(`{"priority":%d,"command_id":%q,"rule":%q,"evidence":%s}`, *v.ProposedPriority, commandID, v.Rule, ev)
+	}
+	if v.ProposedChannelStatus != nil {
+		var fields map[string]any
+		_ = json.Unmarshal([]byte(after), &fields)
+		fields["status"] = *v.ProposedChannelStatus
+		encoded, _ := json.Marshal(fields)
+		after = string(encoded)
 	}
 	operation, actorType, trigger := weightChangeAuditMetadata(v.Rule, actor, auditContext)
 	audit := auditContext
@@ -549,6 +569,9 @@ func (s Store) RecordDirectWeightChangeWithAudit(v tuning.Recommendation, actor 
 	ev, _ := json.Marshal(v.Evidence)
 	commandID := randomCommandID()
 	payloadValues := map[string]any{}
+	if v.ProposedChannelStatus != nil {
+		payloadValues["status"] = *v.ProposedChannelStatus
+	}
 	if v.Rule != "base_priority_sync" {
 		payloadValues["weight"] = v.ProposedWeight
 	}
@@ -562,11 +585,25 @@ func (s Store) RecordDirectWeightChangeWithAudit(v tuning.Recommendation, actor 
 	if _, err = tx.Exec(`INSERT INTO channel_commands(id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at) VALUES(?,?,?,?,?,'succeeded',?,'',?,?)`, commandID, controlInstanceID, v.ChannelID, "channel.update", string(payload), actor, now, now); err != nil {
 		return "", err
 	}
+	if v.ProposedChannelStatus != nil {
+		// Persist the command marker in the same transaction as the queued
+		// command so a restart cannot enqueue a duplicate status transition.
+		if _, err = tx.Exec(`UPDATE tuning_continuous_states SET circuit_status_command_id=?,circuit_status_target=? WHERE instance_id=? AND channel_id=?`, commandID, *v.ProposedChannelStatus, v.InstanceID, v.ChannelID); err != nil {
+			return "", err
+		}
+	}
 	before := fmt.Sprintf(`{"weight":%d}`, v.CurrentWeight)
 	after := fmt.Sprintf(`{"weight":%d,"command_id":%q,"direct":true}`, v.ProposedWeight, commandID)
 	if v.Rule == "base_priority_sync" {
 		before = fmt.Sprintf(`{"priority":%d}`, *v.CurrentPriority)
 		after = fmt.Sprintf(`{"priority":%d,"command_id":%q,"direct":true}`, *v.ProposedPriority, commandID)
+	}
+	if v.ProposedChannelStatus != nil {
+		var fields map[string]any
+		_ = json.Unmarshal([]byte(after), &fields)
+		fields["status"] = *v.ProposedChannelStatus
+		encoded, _ := json.Marshal(fields)
+		after = string(encoded)
 	}
 	operation, actorType, trigger := weightChangeAuditMetadata(v.Rule, actor, auditContext)
 	audit := auditContext
@@ -962,4 +999,13 @@ func tuningSpeedSumsSQL() string {
 		sums = append(sums, "SUM(COALESCE("+c+",0))")
 	}
 	return strings.Join(sums, ",")
+}
+
+func (s Store) ContinuousCommandStatus(id string) (string, error) {
+	var status string
+	err := s.db.QueryRowContext(context.Background(), "SELECT status FROM channel_commands WHERE id=?", id).Scan(&status)
+	if err == sql.ErrNoRows {
+		return "missing", nil
+	}
+	return status, err
 }
