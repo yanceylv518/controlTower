@@ -16,6 +16,7 @@ type TrialWatch struct {
 	UserID        int64     `json:"user_id"`
 	TokenID       int64     `json:"token_id"`
 	Label         string    `json:"label"`
+	Model         string    `json:"model"`
 	Rule          string    `json:"rule"`
 	GapMinutes    int       `json:"gap_minutes"`
 	IncludeFailed bool      `json:"include_failed"`
@@ -70,6 +71,9 @@ type TrialDelivery struct {
 }
 
 func (w TrialWatch) Validate() error {
+	if (w.Enabled && strings.TrimSpace(w.Model) == "") || utf8.RuneCountInString(w.Model) > 200 {
+		return fmt.Errorf("请填写测试模型，最多200字")
+	}
 	if !validSite(w.Site) || w.UserID <= 0 || w.UserID > 9007199254740991 || w.TokenID < 0 || w.TokenID > 9007199254740991 {
 		return fmt.Errorf("请选择当前站点的账户及 Key")
 	}
@@ -101,6 +105,9 @@ func (w TrialWatch) Validate() error {
 // Replayed rows and historical requests cannot start a new round. A failed
 // source query never advances this state or establishes a silence interval.
 func (w *TrialWatch) Observe(l TrialLog) bool {
+	if strings.TrimSpace(w.Model) == "" || l.Model != w.Model {
+		return false
+	}
 	if !w.Enabled || l.UserID != w.UserID || (w.TokenID > 0 && l.TokenID != w.TokenID) || l.ID <= w.LastID || l.CreatedAt.Before(w.StartedAt) || (l.Type != 2 && (!w.IncludeFailed || l.Type != 5)) {
 		return false
 	}
@@ -143,6 +150,7 @@ func readWatches(ctx context.Context, q interface {
 
 func (s Store) SaveWatch(ctx context.Context, w TrialWatch, actor string, source TrialSource) (TrialWatch, error) {
 	w.Label = strings.TrimSpace(w.Label)
+	w.Model = strings.TrimSpace(w.Model)
 	if err := w.Validate(); err != nil {
 		return w, err
 	}
@@ -247,6 +255,9 @@ func (s Store) SaveWatch(ctx context.Context, w TrialWatch, actor string, source
 		if (old.UserID != w.UserID || old.TokenID != w.TokenID) && !w.Reset {
 			return w, fmt.Errorf("变更监控对象请开启新一轮")
 		}
+		// A model change starts a fresh observation boundary and invalidates
+		// queued deliveries from the previous model's round.
+		w.Reset = w.Reset || old.Model != w.Model
 		w.Round = old.Round
 		w.StartedAt = old.StartedAt
 		w.LastAt = old.LastAt
