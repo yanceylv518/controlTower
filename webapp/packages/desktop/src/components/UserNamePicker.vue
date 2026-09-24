@@ -9,12 +9,14 @@ export type UserPickerOption = {
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import type { ReadonlyUser } from '@ct/shared'
 import { passthrough } from '../api'
+import { filterUserSuggestions, mergeUserSuggestions, suggestionCacheKey, userSuggestionCache } from '../utils/logPickerSuggestions'
 
 type UserPickerOption = Pick<ReadonlyUser, 'id' | 'username' | 'display_name'>
 
 const props = withDefaults(defineProps<{
   modelValue: string
   site?: string
+  suggestions?: UserPickerOption[]
   placeholder?: string
   ariaLabel?: string
   disabled?: boolean
@@ -37,6 +39,7 @@ const inputValue = ref(props.modelValue)
 const options = ref<UserPickerOption[]>([])
 const open = ref(false)
 const loading = ref(false)
+const searchError = ref(false)
 const highlightedIndex = ref(-1)
 const dropdownStyle = ref<Record<string, string>>({})
 let debounceTimer: number | undefined
@@ -55,6 +58,16 @@ function primaryLabel(option: UserPickerOption) {
 function secondaryLabel(option: UserPickerOption) {
   const username = option.username && option.username !== primaryLabel(option) ? `@${option.username}` : ''
   return username ? `${username} · ID ${option.id}` : `ID ${option.id}`
+}
+function localSuggestions(keyword: string) {
+  return filterUserSuggestions(props.suggestions || [], keyword)
+}
+function combineSuggestions(keyword: string, remote: UserPickerOption[]) {
+  const local = localSuggestions(keyword)
+  return keyword ? mergeUserSuggestions(remote, local) : mergeUserSuggestions(local, remote)
+}
+function cacheKey(keyword: string) {
+  return suggestionCacheKey('users', props.site || '', keyword.toLowerCase())
 }
 
 // Teleport 下拉菜单到 body，避免日志筛选行的横向滚动容器裁剪候选列表。
@@ -88,17 +101,28 @@ function cancelSearch() {
 }
 
 // 防抖并取消过期查询，保证快速输入时最后一次关键词拥有结果优先级。
-function scheduleSearch(value: string) {
+function scheduleSearch(value: string, allowEmpty = false) {
   cancelSearch()
   const keyword = value.trim()
-  if (!keyword) {
-    options.value = []
+  if (!keyword && !allowEmpty) {
+    options.value = localSuggestions('')
     open.value = false
+    searchError.value = false
     return
   }
+  searchError.value = false
+  options.value = localSuggestions(keyword)
+  highlightedIndex.value = options.value.length ? 0 : -1
   open.value = true
+  const cached = userSuggestionCache.get(cacheKey(keyword))
+  if (cached !== undefined) {
+    options.value = combineSuggestions(keyword, cached)
+    loading.value = false
+    void nextTick(updateDropdownPosition)
+    return
+  }
   loading.value = true
-  debounceTimer = window.setTimeout(() => { void searchUsers(keyword) }, 240)
+  debounceTimer = window.setTimeout(() => { void searchUsers(keyword) }, keyword ? 100 : 0)
   void nextTick(updateDropdownPosition)
 }
 
@@ -109,13 +133,19 @@ async function searchUsers(keyword: string) {
   try {
     const result = await passthrough.users({ site: props.site || undefined, keyword, status: 1, limit: 20, offset: 0 }, controller.signal)
     if (sequence !== searchSequence || controller.signal.aborted) return
-    options.value = result.items.map(({ id, username, display_name }) => ({ id, username, display_name }))
+    const remote = result.items.map(({ id, username, display_name }) => ({ id, username, display_name }))
+    userSuggestionCache.set(cacheKey(keyword), remote)
+    options.value = combineSuggestions(keyword, remote)
     highlightedIndex.value = options.value.length ? 0 : -1
     open.value = true
     await nextTick(updateDropdownPosition)
   } catch {
     // 搜索失败时保持输入框可继续编辑，不用错误提示打断日志筛选流程。
-    if (sequence === searchSequence && !controller.signal.aborted) options.value = []
+    if (sequence === searchSequence && !controller.signal.aborted) {
+      options.value = localSuggestions(keyword)
+      highlightedIndex.value = options.value.length ? 0 : -1
+      searchError.value = true
+    }
   } finally {
     if (sequence === searchSequence) {
       loading.value = false
@@ -131,15 +161,18 @@ function handleInput(event: Event) {
   // 手动修改后不再沿用上一次选中的精确用户 ID。
   emit('select', null)
   highlightedIndex.value = -1
-  scheduleSearch(value)
+  scheduleSearch(value, !value.trim())
 }
 
 function handleFocus() {
   if (props.disabled) return
-  if (inputValue.value.trim() && (options.value.length || loading.value)) {
+  if (loading.value) {
     open.value = true
+    if (options.value.length && highlightedIndex.value < 0) highlightedIndex.value = 0
     void nextTick(updateDropdownPosition)
+    return
   }
+  scheduleSearch(inputValue.value, true)
 }
 
 function closeDropdown() {
@@ -154,6 +187,7 @@ function handleClear(event: MouseEvent) {
   emit('update:modelValue', '')
   emit('select', null)
   options.value = []
+  searchError.value = false
   cancelSearch()
   closeDropdown()
   input.value?.focus()
@@ -198,12 +232,14 @@ function handleKeydown(event: KeyboardEvent) {
       event.preventDefault()
       selectOption(options.value[highlightedIndex.value])
     } else {
+      event.preventDefault()
       emit('submit')
     }
     return
   }
   if (event.key === 'Escape' && open.value) {
     event.preventDefault()
+    cancelSearch()
     closeDropdown()
   }
 }
@@ -211,6 +247,7 @@ function handleKeydown(event: KeyboardEvent) {
 function handleDocumentPointerdown(event: PointerEvent) {
   const target = event.target
   if (target instanceof Node && (root.value?.contains(target) || dropdown.value?.contains(target))) return
+  cancelSearch()
   closeDropdown()
 }
 
@@ -254,12 +291,14 @@ onUnmounted(() => {
       autocomplete="off"
       @input="handleInput"
       @focus="handleFocus"
+      @click="handleFocus"
       @keydown="handleKeydown"
     />
     <button v-if="inputValue" type="button" class="user-name-picker-clear" aria-label="清空用户名称" title="清空" @pointerdown="handleClear">×</button>
     <Teleport to="body">
-      <div v-if="open" ref="dropdown" id="user-name-picker-options" class="user-name-picker-dropdown" role="listbox" :style="dropdownStyle">
-        <div v-if="loading" class="user-name-picker-state">正在搜索用户…</div>
+      <div v-if="open" ref="dropdown" id="user-name-picker-options" class="user-name-picker-dropdown" role="listbox" :aria-busy="loading" :style="dropdownStyle">
+        <div v-if="loading && !options.length" class="user-name-picker-state" role="status" aria-live="polite">正在搜索用户…</div>
+        <div v-else-if="searchError && !options.length" class="user-name-picker-state" role="status" aria-live="polite">用户列表加载失败，点击输入框重试</div>
         <template v-else-if="options.length">
           <button
             v-for="(option, index) in options"
@@ -277,7 +316,9 @@ onUnmounted(() => {
             <span class="user-name-picker-option-secondary">{{ secondaryLabel(option) }}</span>
           </button>
         </template>
-        <div v-else class="user-name-picker-state">未找到匹配用户</div>
+        <div v-if="options.length && loading" class="user-name-picker-state" role="status" aria-live="polite">正在搜索更多用户…</div>
+        <div v-else-if="options.length && searchError" class="user-name-picker-state" role="status" aria-live="polite">远端搜索失败，当前显示已有日志中的用户</div>
+        <div v-else-if="!options.length && !loading && !searchError" class="user-name-picker-state" role="status" aria-live="polite">未找到匹配用户</div>
       </div>
     </Teleport>
   </div>

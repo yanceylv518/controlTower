@@ -21,6 +21,7 @@ import UserNamePicker, { type UserPickerOption } from './UserNamePicker.vue'
 const props = defineProps<{
   username: string
   site?: string
+  userSuggestions?: UserPickerOption[]
   timeRange: [Date, Date]
   filters: MobileLogFilterValues
   busy: boolean
@@ -54,7 +55,7 @@ function applyFilters() {
 <template>
   <div class="mobile-log-filters">
     <form class="mobile-search" @submit.prevent="emit('search')">
-      <UserNamePicker :model-value="username" :site="site" aria-label="用户名称" placeholder="输入用户名" @update:model-value="emit('update:username', $event)" @select="emit('select-user', $event)" @submit="emit('search')" />
+      <UserNamePicker :model-value="username" :site="site" :suggestions="userSuggestions" aria-label="用户名称" placeholder="输入用户名" @update:model-value="emit('update:username', $event)" @select="emit('select-user', $event)" @submit="emit('search')" />
       <el-button type="primary" native-type="submit" :loading="busy">查询</el-button>
     </form>
     <div class="mobile-filter-actions">

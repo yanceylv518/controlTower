@@ -19,3 +19,11 @@ pwsh.exe -NoLogo -NoProfile -NonInteractive -File .\deploy\seed-log-filter-load.
 
 脚本默认写入 `new_api_mock.logs`，使用 `ct-perf-v1-` 请求 ID 前缀，并生成 70 万条正常请求、10 万条空输出请求和 20 万条错误请求（429、413、503、400、502 各 4 万条）。重复执行不会追加重复数据；需要重建这组数据时使用 `-Reset`。脚本只删除和重建自己的前缀记录，不会清理其他日志。
 
+验证使用日志的流状态异常图标和 fallback 尝试序号：
+
+```powershell
+pwsh.exe -NoLogo -NoProfile -NonInteractive -File .\deploy\seed-log-visual-cases.ps1
+```
+
+脚本只在 `new_api_mock.logs` 插入 1 条 `client_gone` 流状态异常记录和 3 条同请求 ID 的 fallback 尝试记录，默认使用 `ct-visual-v1` 标记；重复执行不会重复插入，也不会修改或删除其它日志。
+
