@@ -34,11 +34,21 @@ const points = shallowRef<MetricItem[]>([]);
 const loadedScope = ref("");
 const loading = ref(false);
 const error = ref("");
+const failures = ref(0);
+const sessionExpired = ref(false);
+const checkedAt = ref(0);
+const waitingSince = ref(0);
+let statusScope = "";
+const notice = computed(() => {
+  if (sessionExpired.value || failures.value < 3 || checkedAt.value - waitingSince.value < 120_000) return "";
+  return checkedAt.value - waitingSince.value >= 300_000
+    ? "暂时无法更新，正在重试" : "数据更新稍有延迟";
+});
 const scope = computed(() => `${props.customer.instance_id}|${props.customer.dimension_key}|${props.hours}|${dimension.value}`);
 const bucketMinutes = computed(() => props.hours === 24 ? 5 : 1);
 const name = computed(() => props.customer.display_name || props.customer.display_key || props.customer.dimension_key);
 const id = computed(() => props.customer.dimension_key.slice(props.customer.dimension_key.lastIndexOf(":user:") + 6));
-const scopeCache = new Map<string, { revision: number; items: MetricItem[] }>();
+const scopeCache = new Map<string, { revision: number; items: MetricItem[]; updatedAt: number }>();
 let requestToken = 0;
 let pendingScope: string | undefined;
 
@@ -48,7 +58,15 @@ async function load() {
   if (pendingScope === context) return;
   const token = ++requestToken;
   const cached = scopeCache.get(context);
-  error.value = "";
+  checkedAt.value = Date.now();
+  if (statusScope !== context) {
+    statusScope = context;
+    failures.value = 0;
+    sessionExpired.value = false;
+    error.value = "";
+    waitingSince.value = cached?.updatedAt ?? checkedAt.value;
+    if (cached) { points.value = cached.items; loadedScope.value = context; }
+  }
   if (cached?.revision === props.refreshKey) {
     points.value = cached.items; loadedScope.value = context; loading.value = false; pendingScope = undefined; return;
   }
@@ -66,9 +84,22 @@ async function load() {
     if (token !== requestToken || context !== scope.value) return;
     points.value = response.items;
     loadedScope.value = context;
-    scopeCache.set(context, { revision, items: response.items });
-  } catch {
-    if (token === requestToken && context === scope.value) error.value = "流量拆分加载失败，请重试";
+    checkedAt.value = Date.now();
+    waitingSince.value = checkedAt.value;
+    failures.value = 0;
+    error.value = "";
+    sessionExpired.value = false;
+    scopeCache.set(context, { revision, items: response.items, updatedAt: checkedAt.value });
+  } catch (cause) {
+    if (token === requestToken && context === scope.value) {
+      checkedAt.value = Date.now();
+      failures.value++;
+      const status = (cause as { status?: number } | null)?.status;
+      sessionExpired.value = status === 401;
+      // Session expiry is handled globally by the API client.
+      error.value = status === 403 ? "暂无查看权限，请联系管理员"
+        : status === 400 ? "查询条件不可用，请调整后重试" : "";
+    }
   } finally {
     if (token === requestToken) { loading.value = false; pendingScope = undefined; }
   }
@@ -92,7 +123,7 @@ const minuteTime = computed(() => {
 const minuteStatus = computed(() => {
   if (!props.minute) return "";
   if (props.minute.stale) return "数据滞后";
-  if (error.value) return "拆分更新失败";
+  if (failures.value) return "";
   // A five-minute chart cannot certify the independent one-minute headline.
   // Only compare the headline's exact bucket when both use one-minute data.
   if (loading.value || (bucketMinutes.value === 1 && !traffic.value.completeTimes.has(props.minute.time))) return "数据更新中";
@@ -100,12 +131,15 @@ const minuteStatus = computed(() => {
 });
 const lastPlotTime = computed(() => hasPlot.value && traffic.value.lastCompleteTime !== null
   ? timeRange(traffic.value.lastCompleteTime, bucketMinutes.value) : "");
-const emptyText = computed(() => dimension.value === "channel"
+const emptyText = computed(() => loadedScope.value !== scope.value && failures.value
+  ? "数据暂未就绪"
+  : dimension.value === "channel"
   ? "暂无完整渠道拆分；升级 Agent 后开始积累"
   : "暂无完整模型拆分数据");
 const panelProps = computed(() => ({
   traffic: traffic.value, dimension: dimension.value, name: name.value,
   loading: loading.value, error: error.value, emptyText: emptyText.value,
+  notice: error.value ? "" : notice.value,
   hours: props.hours, bucketMinutes: bucketMinutes.value, lastPlotTime: lastPlotTime.value,
 }));
 </script>

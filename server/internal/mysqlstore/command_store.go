@@ -4,6 +4,7 @@ import (
 	"context"
 	"controltower/server/internal/tuning"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -68,6 +69,38 @@ FROM channel_commands WHERE instance_id=? AND status='pending' ORDER BY created_
 			}
 			if err != nil {
 				return nil, err
+			}
+		}
+		// A queued circuit transition must still belong to an active auto
+		// recovery when the Agent actually claims it, not only when enqueued.
+		if cmd.CommandType == "channel.update" {
+			var payload struct {
+				Status *int `json:"status"`
+			}
+			if json.Unmarshal([]byte(cmd.PayloadJSON), &payload) == nil && payload.Status != nil {
+				var circuitRec tuning.Recommendation
+				err = tx.QueryRowContext(ctx, `SELECT instance_id,channel_id,rule,mode_at_creation,proposed_weight FROM tuning_recommendations WHERE command_id=? AND rule IN ('circuit_disabled','circuit_recovered')`, cmd.ID).Scan(&circuitRec.InstanceID, &circuitRec.ChannelID, &circuitRec.Rule, &circuitRec.ModeAtCreation, &circuitRec.ProposedWeight)
+				if err != nil && err != sql.ErrNoRows {
+					return nil, err
+				}
+				if err == nil {
+					circuitRec.ProposedChannelStatus = payload.Status
+					if err := checkCircuitStatus(tx, circuitRec); err != nil {
+						if !errors.Is(err, ErrCircuitStatusSuperseded) {
+							return nil, err
+						}
+						if _, err = tx.ExecContext(ctx, `UPDATE channel_commands SET status='expired',error_summary='circuit target or mode changed',updated_at=? WHERE id=?`, now, cmd.ID); err != nil {
+							return nil, err
+						}
+						if _, err = tx.ExecContext(ctx, `UPDATE operation_audits SET status='expired',error_summary='circuit target or mode changed',updated_at=? WHERE id=? AND status='submitted'`, now, cmd.ID); err != nil {
+							return nil, err
+						}
+						if _, err = tx.ExecContext(ctx, `UPDATE tuning_recommendations SET status='expired',outcome_at=? WHERE command_id=?`, now, cmd.ID); err != nil {
+							return nil, err
+						}
+						continue
+					}
+				}
 			}
 		}
 		valid = append(valid, cmd)

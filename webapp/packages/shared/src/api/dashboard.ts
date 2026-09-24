@@ -478,6 +478,9 @@ export interface TuningContinuousState {
   smoothed_error_rate: number;
   paused_reason?: string;
   phase: "normal" | "circuit" | "probing" | "soft_start";
+  circuit_disabled?: boolean;
+  circuit_status_target?: number;
+  circuit_status_command_id?: string;
   circuit_opened_at?: string;
   next_probe_at?: string;
   probe_command_id?: string;
