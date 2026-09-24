@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { ArrowLeft, ArrowRight } from "@element-plus/icons-vue";
+import { ArrowLeft, ArrowRight, CirclePlus } from "@element-plus/icons-vue";
 import { ApiError, type ChannelBaseValue, type TuningChannel, type TuningContinuousState, type TuningPolicy, type TuningRecommendation } from "@ct/shared";
 import { dashboard } from "../api";
 import AppShell from "../components/AppShell.vue";
@@ -13,7 +13,7 @@ import TuningCapacityMetric from "../components/TuningCapacityMetric.vue";
 import ChannelGroupEditor from "../components/ChannelGroupEditor.vue";
 import { useFiltersStore } from "../stores/filters";
 import { formatTime } from "../utils/format";
-import { hiddenChannelGroupCount, MAX_VISIBLE_CHANNEL_GROUPS, normalizeChannelGroups, splitChannelGroups, visibleChannelGroups } from "../utils/channelGroup";
+import { hiddenChannelGroupCount, matchesChannelGroup, MAX_VISIBLE_CHANNEL_GROUPS, normalizeChannelGroups, splitChannelGroups, visibleChannelGroups } from "../utils/channelGroup";
 
 const filters = useFiltersStore();
 const mobile = useMobileViewport();
@@ -293,8 +293,24 @@ const coefficientCell = (row: ChannelBaseValue, key: 'speed' | 'cache' | 'otps' 
   if (state.otps_stats_version !== 1) return result('口径待确认', '接口缺少新版输出统计标记，暂无法确认当前系数的统计口径');
   return result(state.otps_ready ? '有效' : value === 1 ? '中性回退' : '保留值', state.otps_ready ? '输出样本与基线有效' : '输出样本或基线不足');
 };
-// 运行概览分组筛选按逗号分隔的分组项匹配，避免把多个分组组合误当成一个名称。
-const channelQuery = ref(""), groupQuery = ref(""), channelStatusFilter = ref("");
+// 分组筛选只匹配渠道实际拥有的完整分组名，不按子串误命中。
+const channelQuery = ref(""), groupFilterSearch = ref(""), channelStatusFilter = ref("");
+const groupFilterOpen = ref(false);
+const selectedGroupFilter = ref<{ kind: "all" } | { kind: "group"; name: string } | null>(null);
+const selectedGroupName = computed(() => {
+  const selected = selectedGroupFilter.value;
+  return selected?.kind === "group" ? selected.name : null;
+});
+const groupFilterLabel = computed(() => selectedGroupFilter.value?.kind === "all" ? "所有分组" : selectedGroupName.value || "");
+const filteredGroupOptions = computed(() => {
+  const query = groupFilterSearch.value.trim().toLowerCase();
+  return groupOptions.value.filter(group => !query || group.toLowerCase().includes(query));
+});
+const toggleGroupFilter = (group: string | null) => {
+  const current = selectedGroupFilter.value;
+  const isSelected = group === null ? current?.kind === "all" : current?.kind === "group" && current.name === group;
+  selectedGroupFilter.value = isSelected ? null : group === null ? { kind: "all" } : { kind: "group", name: group };
+};
 const eventDateRange = ref<[string, string] | null>(null);
 const settingsSection = ref("basic"), helpSection = ref("calculation");
 const limitReason = (row: ChannelBaseValue) => {
@@ -334,15 +350,14 @@ const coefficientSpan = ({column}: {column: {property?: string}}) => {
 const displayedRows = computed(() => activeRows.value.filter(row => {
   const query = channelQuery.value.trim().toLowerCase();
   if (query && !`${row.channel_name} ${row.channel_id} ${row.group_name}`.toLowerCase().includes(query)) return false;
-  const groupQueryValue = groupQuery.value.trim().toLowerCase();
-  if (groupQueryValue && !splitChannelGroups(row.group_name).some(group => group.toLowerCase().includes(groupQueryValue))) return false;
+  if (!matchesChannelGroup(row.group_name, selectedGroupName.value)) return false;
   if (channelStatusFilter.value === "limited") return !!limitReason(row);
   if (channelStatusFilter.value === "attention") return ["danger", "warning"].includes(rowStatus(row).kind) || !!limitReason(row);
   if (channelStatusFilter.value === "changed") return !!stateFor(row) && stateFor(row)!.proposed_weight !== row.current_weight;
   return true;
 }));
 const priorityDrafts = reactive(new Map<number, number>());
-watch([activeModel, channelQuery, groupQuery, channelStatusFilter], () => { mobileRowCount.value = 20; });
+watch([activeModel, channelQuery, selectedGroupFilter, channelStatusFilter], () => { mobileRowCount.value = 20; });
 watch(siteID, () => { mobileEditRow.value = null; mobileSaveOpen.value = false; mobileRowCount.value = 20; });
 watch(mobile, value => { if (!value) { mobileEditRow.value = null; mobileSaveOpen.value = false; } });
 const mobileChanges = computed(() => bases.value.flatMap(row => {
@@ -909,7 +924,7 @@ async function save() {
     ElMessage.error(error instanceof Error ? error.message : "保存失败");
   } finally { saving.value = false; }
 }
-watch(() => filters.site_id, () => { groupDialogOpen.value = false; groupManagerOpen.value = false; cancelGroupPolls(); channels.value = []; availableGroups.value = []; pendingGroups.value = new Map(); groupErrors.value = new Map(); groupQuery.value = ""; channelDirectoryGeneration++; groupDirectoryGeneration++; void load(true); void watchChannelChanges(); });
+watch(() => filters.site_id, () => { groupDialogOpen.value = false; groupManagerOpen.value = false; groupFilterOpen.value = false; selectedGroupFilter.value = null; groupFilterSearch.value = ""; cancelGroupPolls(); channels.value = []; availableGroups.value = []; pendingGroups.value = new Map(); groupErrors.value = new Map(); channelDirectoryGeneration++; groupDirectoryGeneration++; void load(true); void watchChannelChanges(); });
 watch(siteID, () => { ratesReady.value = false; currentRates.value.clear(); void refreshCurrentRates(); });
 watch([eventModelFilter, eventRuleFilter, eventChannelQuery, eventDateRange, activeModel], () => { eventPage.value = 1; });
 onMounted(() => { void load(true); void watchChannelChanges(); void refreshCurrentRates(); refreshTimer = setInterval(() => void refreshRuntime(), 30000); ratesTimer = setInterval(() => { if (!document.hidden) void refreshCurrentRates(); }, 5000); });
@@ -932,7 +947,7 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
             <button v-if="modelNavCollapsed" class="model-nav-rail" type="button" :title="'当前模型：' + activeModel" aria-label="展开模型列表" @click="modelNavCollapsed=false">模型</button>
             <div v-show="!modelNavCollapsed" class="model-list"><button v-for="model in visibleModels" :key="model" :class="{active:activeModel===model}" :title="model + ' · ' + modeText(model)" :aria-label="model + '，' + modeText(model)" @click="selectModel(model)"><span><b>{{ model }}</b><span class="model-secondary"><small>{{ bases.filter(x=>x.model_name===model).length }} 个渠道</small><span class="model-mode-text" :class="modelMode(model)">{{ modelMode(model) === 'auto' ? '自动' : modelMode(model) === 'observe' ? '观察' : '关闭' }}</span></span></span></button><el-empty v-if="!visibleModels.length" :image-size="48" description="没有匹配模型"/></div>
           </aside>
-          <section ref="detailElement" class="model-detail"><div class="model-head"><div><b v-if="!mobile">{{ activeModel }}</b><small v-if="!mobile">{{ activeRows.length }} 个渠道</small><small v-if="refreshError" class="stale">刷新失败：{{ refreshError }}</small><small v-else-if="evaluationStalled" class="stale">评估已停滞：最后成功于 {{ formatTime(lastEvaluationAt!) }}</small><small v-else-if="lastEvaluationAt">{{ mobile ? '评估 ' + formatTime(lastEvaluationAt).split(' ').pop() : '最近评估 ' + formatTime(lastEvaluationAt) + ' · 每 30 秒自动刷新' }}</small><small v-else-if="mobile">等待首次评估</small><TuningInfo label="实时负载统计"><p>负载更新：{{ ratesAsOf ? formatTime(ratesAsOf) : '—' }}</p><p>已覆盖的 60 秒负载，每 5 秒刷新；Agent 保持 30 秒采集。</p><p>统计区间：{{ ratesWindowStart ? formatTime(ratesWindowStart) : '—' }} 至 {{ ratesAsOf ? formatTime(ratesAsOf) : '—' }}（不含结束秒）</p><p>数据延迟 {{ ratesDelay }} 秒。容量输入 0 表示不限制。</p></TuningInfo></div><div v-if="!mobile" class="channel-toolbar model-filter"><div class="channel-filters"><el-input v-model="groupQuery" clearable placeholder="按分组筛选，如 vip" aria-label="按分组筛选" /></div><span v-if="groupQuery.trim()" class="channel-filter-summary">匹配 {{ displayedRows.length }} / {{ activeRows.length }} 个渠道</span></div><el-radio-group v-if="activeModel" v-model="policy.dispatch_modes[activeModel]" size="small" @change="dirty=true"><el-radio-button value="off">关闭</el-radio-button><el-radio-button value="observe">只观察</el-radio-button><el-radio-button value="auto">自动执行</el-radio-button></el-radio-group></div>
+          <section ref="detailElement" class="model-detail"><div class="model-head"><div><b v-if="!mobile">{{ activeModel }}</b><small v-if="!mobile">{{ activeRows.length }} 个渠道</small><small v-if="refreshError" class="stale">刷新失败：{{ refreshError }}</small><small v-else-if="evaluationStalled" class="stale">评估已停滞：最后成功于 {{ formatTime(lastEvaluationAt!) }}</small><small v-else-if="lastEvaluationAt">{{ mobile ? '评估 ' + formatTime(lastEvaluationAt).split(' ').pop() : '最近评估 ' + formatTime(lastEvaluationAt) + ' · 每 30 秒自动刷新' }}</small><small v-else-if="mobile">等待首次评估</small><TuningInfo label="实时负载统计"><p>负载更新：{{ ratesAsOf ? formatTime(ratesAsOf) : '—' }}</p><p>已覆盖的 60 秒负载，每 5 秒刷新；Agent 保持 30 秒采集。</p><p>统计区间：{{ ratesWindowStart ? formatTime(ratesWindowStart) : '—' }} 至 {{ ratesAsOf ? formatTime(ratesAsOf) : '—' }}（不含结束秒）</p><p>数据延迟 {{ ratesDelay }} 秒。容量输入 0 表示不限制。</p></TuningInfo></div><div class="channel-toolbar model-filter"><div class="channel-filters"><el-popover v-model:visible="groupFilterOpen" trigger="click" placement="bottom-start" role="dialog" aria-label="分组筛选" :width="360" popper-class="tuning-group-filter-popper"><template #reference><button type="button" class="group-filter-trigger" :class="{ active: selectedGroupFilter }" aria-label="按分组筛选" aria-haspopup="dialog" :aria-expanded="groupFilterOpen"><el-icon aria-hidden="true"><CirclePlus /></el-icon><span>分组</span><template v-if="groupFilterLabel"><span class="group-filter-divider" aria-hidden="true"></span><span class="group-filter-value">{{ groupFilterLabel }}</span></template></button></template><div class="group-filter-panel"><el-input v-model="groupFilterSearch" clearable placeholder="分组" aria-label="搜索分组"/><div class="group-filter-options" role="group" aria-label="分组筛选选项"><div class="group-filter-option"><el-checkbox :model-value="selectedGroupFilter?.kind === 'all'" @change="toggleGroupFilter(null)">所有分组</el-checkbox></div><div v-for="group in filteredGroupOptions" :key="group" class="group-filter-option"><el-checkbox :model-value="selectedGroupFilter?.kind === 'group' && selectedGroupFilter.name === group" @change="toggleGroupFilter(group)">{{ group }}</el-checkbox></div></div><p v-if="groupFilterSearch.trim() && !filteredGroupOptions.length" class="group-filter-empty">没有匹配分组</p><div v-if="selectedGroupFilter" class="group-filter-footer"><button type="button" @click="selectedGroupFilter = null">清除筛选</button></div></div></el-popover></div><span v-if="selectedGroupFilter" class="channel-filter-summary">匹配 {{ displayedRows.length }} / {{ activeRows.length }} 个渠道</span></div><el-radio-group v-if="activeModel" v-model="policy.dispatch_modes[activeModel]" size="small" @change="dirty=true"><el-radio-button value="off">关闭</el-radio-button><el-radio-button value="observe">只观察</el-radio-button><el-radio-button value="auto">自动执行</el-radio-button></el-radio-group></div>
             <el-alert v-if="ratesError" :title="ratesError" type="warning" :closable="false"/>
             <div v-if="mobile" class="mobile-tuning-list">
               <div class="mobile-channel-filters"><el-input v-model="channelQuery" clearable aria-label="搜索渠道或分组" placeholder="搜索渠道 / ID / 分组" /><el-select v-model="channelStatusFilter" aria-label="渠道筛选" placeholder="全部渠道"><el-option value="" label="全部渠道"/><el-option value="attention" label="需关注"/><el-option value="changed" label="待调整"/></el-select></div>
@@ -1062,9 +1077,24 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
 .model-head .stale{color:var(--ct-crit)}
 .channel-toolbar{padding:8px 10px;gap:10px;flex-wrap:wrap}
 .channel-filters{gap:8px}
-.channel-filters :deep(.el-input){width:190px}
-.channel-filters :deep(.el-select){width:125px}
+.group-filter-trigger{display:inline-flex;align-items:center;gap:6px;min-height:32px;padding:0 10px;border:1px dashed var(--ct-line-strong);border-radius:5px;background:var(--ct-surface);color:var(--ct-ink-2);font:inherit;font-size:12px;cursor:pointer}
+.group-filter-trigger:hover,.group-filter-trigger.active{background:var(--ct-surface-2);color:var(--ct-ink)}
+.group-filter-trigger:focus-visible{outline:2px solid var(--ct-accent);outline-offset:2px}
+.group-filter-divider{height:16px;border-left:1px solid var(--ct-line-strong);margin:0 2px}
+.group-filter-value{max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:1px 5px;border-radius:3px;background:var(--ct-surface-2);font-size:11px}
 .channel-filter-summary{font-size:11px;color:var(--ct-ink-3);white-space:nowrap}
+:global(.tuning-group-filter-popper.el-popover){max-width:calc(100vw - 24px);padding:10px;border-color:var(--ct-line);background:var(--ct-surface);color:var(--ct-ink);box-shadow:0 8px 24px rgb(0 0 0 / 18%)}
+:global(.tuning-group-filter-popper .group-filter-panel){display:grid;gap:8px}
+:global(.tuning-group-filter-popper .el-input__wrapper){background:var(--ct-surface-2);box-shadow:0 0 0 1px var(--ct-line) inset}
+:global(.tuning-group-filter-popper .group-filter-options){max-height:min(288px,calc(100vh - 160px));overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain;padding:2px 0}
+:global(.tuning-group-filter-popper .group-filter-option){display:flex;align-items:center;min-height:36px;padding:0 8px;border-radius:4px;cursor:pointer}
+:global(.tuning-group-filter-popper .group-filter-option:hover){background:var(--ct-surface-2)}
+:global(.tuning-group-filter-popper .group-filter-option .el-checkbox){width:100%;height:auto;margin:0}
+:global(.tuning-group-filter-popper .group-filter-option .el-checkbox__label){min-width:0;overflow-wrap:anywhere;color:var(--ct-ink-2);font-size:13px}
+:global(.tuning-group-filter-popper .group-filter-empty){margin:4px 0;text-align:center;color:var(--ct-ink-3);font-size:12px}
+:global(.tuning-group-filter-popper .group-filter-footer){border-top:1px solid var(--ct-line);padding-top:6px;text-align:center}
+:global(.tuning-group-filter-popper .group-filter-footer button){border:0;background:transparent;color:var(--ct-ink-3);font:inherit;font-size:12px;cursor:pointer}
+:global(.tuning-group-filter-popper .group-filter-footer button:hover){color:var(--ct-accent)}
 .load-time{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--ct-ink-3)}
 .channel-table{flex:1;min-height:0;width:100%;font-variant-numeric:tabular-nums}
 .channel-table :deep(th.el-table__cell),.event-history-card :deep(th.el-table__cell){background:var(--ct-surface);color:var(--ct-ink-3);font-weight:500;height:38px;border-bottom:1px solid var(--ct-line)}
@@ -1324,7 +1354,6 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
 .model-head>div:first-child{flex:1 1 460px;gap:6px 10px}
 .model-head .model-filter{flex:0 1 auto;min-width:0;padding:0;gap:8px;justify-content:flex-end}
 .model-head .model-filter .channel-filters{min-width:0}
-.model-head .model-filter .channel-filters :deep(.el-input){width:190px;max-width:100%}
 .model-head :deep(.el-radio-group){flex-shrink:0;margin-left:auto}
 @container(max-width:680px){
  .overview-actions{position:static;justify-content:flex-end;padding:8px 10px;background:var(--ct-surface);border:1px solid var(--ct-line);border-bottom:0;border-radius:8px 8px 0 0;flex-wrap:wrap}

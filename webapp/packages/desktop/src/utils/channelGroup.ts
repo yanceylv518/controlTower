@@ -1,6 +1,10 @@
 export const MAX_CHANNEL_GROUP_LENGTH = 128;
 export const MAX_VISIBLE_CHANNEL_GROUPS = 3;
 
+export function matchesChannelGroup(value: string | null | undefined, selectedGroup: string | null): boolean {
+  return !selectedGroup || splitChannelGroups(value).includes(selectedGroup);
+}
+
 // 将 New API 的逗号字符串拆成去空格、去重后的标签，便于编辑器稳定渲染。
 export function splitChannelGroups(value: string | null | undefined): string[] {
   const seen = new Set<string>();
