@@ -48,6 +48,13 @@ func TestRestrictedAdminEndpointMatrix(t *testing.T) {
 		{"monitor.channels", "GET", "channel-snapshots", true},
 		{"monitor.channels", "GET", "metrics?dimension_type=instance_model", false},
 		{"monitor.models", "GET", "metrics?dimension_type=instance_model_user", true},
+		{"monitor.models", "GET", "metrics?dimension_type=instance_model_channel", true},
+		{"monitor.models", "GET", "metric-history?dimension_type=instance_model_channel", true},
+		{"monitor.models", "POST", "metrics?dimension_type=instance_model_channel", false},
+		{"monitor.models", "POST", "metric-history?dimension_type=instance_model_channel", false},
+		{"monitor.customers", "GET", "metrics?dimension_type=instance_model_channel", false},
+		{"monitor.channels", "GET", "metric-history?dimension_type=instance_model_channel", false},
+		{"monitor.read", "GET", "metric-history?dimension_type=instance_model_channel", true},
 		{"monitor.models", "GET", "channel-snapshots", false},
 		{"monitor.runtime", "GET", "server-metrics", true},
 		{"monitor.runtime", "GET", "metrics?dimension_type=instance_user", false},
@@ -93,6 +100,25 @@ func TestRestrictedAdminEndpointMatrix(t *testing.T) {
 			u := storage.User{Role: "admin", Permissions: []string{tc.permission}}
 			if got := allowAdminRequest(u, httptest.NewRequest(tc.method, "/api/dashboard/"+tc.path, nil)); got != tc.want {
 				t.Fatalf("got %v want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestViewerCannotReadModelChannelMetrics(t *testing.T) {
+	m, session := viewerSetup(t)
+	handler := RequireSessionOrToken(m, "", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("viewer reached model channel metrics")
+		w.WriteHeader(http.StatusOK)
+	}))
+	for _, endpoint := range []string{"metrics", "metric-history"} {
+		t.Run(endpoint, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodGet, "/api/dashboard/"+endpoint+"?dimension_type=instance_model_channel&dimension_key_prefix=inst:model:provider:user:7:channel:", nil)
+			r.AddCookie(&http.Cookie{Name: "ct_session", Value: session})
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, r)
+			if w.Code != http.StatusForbidden {
+				t.Fatalf("got %d want %d", w.Code, http.StatusForbidden)
 			}
 		})
 	}

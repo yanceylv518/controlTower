@@ -234,7 +234,7 @@ func allowAdminRequest(u storage.User, r *http.Request) bool {
 			return any("monitor.customers")
 		case "instance_channel", "instance_channel_model", "instance_channel_user":
 			return any("monitor.channels")
-		case "instance_model", "instance_model_user":
+		case "instance_model", "instance_model_user", "instance_model_channel":
 			return any("monitor.models")
 		default:
 			return false

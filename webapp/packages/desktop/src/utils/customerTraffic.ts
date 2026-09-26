@@ -72,28 +72,52 @@ export function latestCustomerMinute(points: MetricItem[], now: number, verified
   return point ? { tpm: point.tpm, time: Date.parse(point.bucket_time), stale: now - Date.parse(point.bucket_time) - 60_000 > 2 * 60_000 } : null;
 }
 
-export function buildCustomerTraffic(options: {
-  customerKey: string;
+interface TrafficOptions {
   instanceID: string;
-  dimension: TrafficDimension;
-  customerParent?: "channel" | "model";
   points: MetricItem[];
   totals: MetricItem[];
   bucketMinutes: number;
   hours: number;
   now: number;
+}
+
+export function buildCustomerTraffic(options: TrafficOptions & {
+  customerKey: string;
+  dimension: TrafficDimension;
+  customerParent?: "channel" | "model";
   verifiedBuckets?: number[];
 }) {
-  const { customerKey, instanceID, dimension, points, totals, bucketMinutes, hours, now } = options;
-  const parentType = dimension === "user" ? `instance_${options.customerParent || "channel"}` : "instance_user";
+  const parentType = options.dimension === "user" ? `instance_${options.customerParent || "channel"}` : "instance_user";
+  return buildTraffic({ ...options, rootKey: options.customerKey, strictChannelIDs: options.dimension === "user",
+    totalDimensionType: parentType, crossDimensionType: `${parentType}_${options.dimension}` });
+}
+
+export function buildModelChannelTraffic(options: TrafficOptions & { modelKey: string }) {
+  return buildModelTraffic({ ...options, dimension: "channel" });
+}
+
+export function buildModelTraffic(options: TrafficOptions & { modelKey: string; dimension: "user" | "channel" }) {
+  return buildTraffic({ ...options, rootKey: options.modelKey,
+    totalDimensionType: "instance_model", crossDimensionType: `instance_model_${options.dimension}`, strictChannelIDs: true });
+}
+
+function buildTraffic(options: TrafficOptions & {
+  rootKey: string;
+  dimension: TrafficDimension | "user";
+  totalDimensionType: string;
+  crossDimensionType: string;
+  verifiedBuckets?: number[];
+  strictChannelIDs?: boolean;
+}) {
+  const { rootKey, instanceID, dimension, points, totals, bucketMinutes, hours, now } = options;
   const bucketMs = bucketMinutes * 60_000;
   const start = Math.ceil((now - hours * 3_600_000) / bucketMs) * bucketMs;
   const end = Math.floor(now / bucketMs) * bucketMs;
-  const prefix = `${customerKey}:${dimension}:`;
+  const prefix = `${rootKey}:${dimension}:`;
   const verified = new Set(options.verifiedBuckets || []);
   const totalByTime = new Map<number, number>();
   for (const point of totals) {
-    if (point.instance_id === instanceID && point.dimension_type === parentType && point.dimension_key === customerKey) {
+    if (point.instance_id === instanceID && point.dimension_type === options.totalDimensionType && point.dimension_key === rootKey) {
       totalByTime.set(Date.parse(point.bucket_time), point.tpm);
     }
   }
@@ -101,9 +125,12 @@ export function buildCustomerTraffic(options: {
   const sumByTime = new Map<number, number>();
   for (const point of points) {
     const time = Date.parse(point.bucket_time);
-    if (point.instance_id !== instanceID || point.dimension_type !== `${parentType}_${dimension}` || !point.dimension_key.startsWith(prefix) || time < start || time >= end) continue;
+    if (point.instance_id !== instanceID || point.dimension_type !== options.crossDimensionType || !point.dimension_key.startsWith(prefix) || time < start || time >= end) continue;
     const id = point.dimension_key.slice(prefix.length);
-    if (!id || (dimension === "user" && !/^[1-9]\d*$/.test(id))) continue;
+    if (!id) continue;
+    // A model name can itself contain ':channel:'. Require a complete channel ID
+    // after the exact model prefix so neighboring models cannot enter this stack.
+    if (options.strictChannelIDs && !/^[1-9]\d*$/.test(id)) continue;
     let series = catalog.get(id);
     if (!series) {
       const label = point.display_name && point.display_name !== point.dimension_key ? point.display_name : `${dimension === "user" ? "客户" : "渠道"} ${id}`;
@@ -123,7 +150,9 @@ export function buildCustomerTraffic(options: {
     else if ((total || 0) > 0 || sum > 0) incompleteBuckets++;
   }
   const series: TrafficSeries[] = [...catalog.entries()]
-    .sort(([a], [b]) => dimension === "channel" ? Number(a) - Number(b) || compareKey(a, b) : compareKey(a, b))
+    .sort(([a], [b]) => dimension !== "model"
+      ? (options.strictChannelIDs ? a.length - b.length || compareKey(a, b) : Number(a) - Number(b) || compareKey(a, b))
+      : compareKey(a, b))
     .map(([key, item]) => ({
       key, name: item.name,
       color: trafficColor(dimension === "model" ? `model:${key}` : `${instanceID}:${dimension}:${key}`),

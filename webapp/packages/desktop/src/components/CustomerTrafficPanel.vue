@@ -16,6 +16,7 @@ const props = defineProps<{
   lastPlotTime: string;
   active: boolean;
   expanded?: boolean;
+  hideMode?: boolean;
 }>();
 const emit = defineEmits<{ dimension: [value: TrafficDimension]; retry: [] }>();
 const chart = ref<InstanceType<typeof CustomerTrafficChart>>();
@@ -27,7 +28,7 @@ watch(() => [props.dimension, props.active], () => { moreVisible.value = false; 
 
 <template>
   <div class="traffic-panel">
-    <div class="traffic-mode"><span>流量构成</span><span v-if="dimension === 'user'">按客户 · TPM</span><el-segmented v-else :model-value="dimension" @update:model-value="emit('dimension', $event as TrafficDimension)" :options="[{ label: '按模型', value: 'model' }, { label: '按渠道', value: 'channel' }]" size="small" /></div>
+    <div v-if="!hideMode" class="traffic-mode"><span>流量构成</span><span v-if="dimension === 'user'">按客户 · TPM</span><el-segmented v-else :model-value="dimension" @update:model-value="emit('dimension', $event as TrafficDimension)" :options="[{ label: '按模型', value: 'model' }, { label: '按渠道', value: 'channel' }]" size="small" /></div>
     <div v-if="hasPlot" class="traffic-legend" :aria-label="`按流量排序的${dimensionLabel}图例`">
       <button v-for="item in traffic.ranked.slice(0, 2)" :key="item.key" type="button" :title="item.name" @mouseenter="chart?.highlight(item.key)" @mouseleave="chart?.highlight()" @focus="chart?.highlight(item.key)" @blur="chart?.highlight()"><i :style="{ background: item.color }" /><span>{{ item.name }}</span></button>
       <el-popover v-if="traffic.ranked.length > 2" v-model:visible="moreVisible" trigger="click" placement="bottom-end" :width="360" popper-class="customer-traffic-popover">

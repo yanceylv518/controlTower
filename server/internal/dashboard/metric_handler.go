@@ -378,7 +378,7 @@ func (h Handler) instanceName(instanceID string) string {
 }
 
 func (h Handler) displayDimensionKey(dimensionType string, dimensionKey string) string {
-	if dimensionType == "instance_user_channel" {
+	if dimensionType == "instance_user_channel" || dimensionType == "instance_model_channel" {
 		return h.displayDimensionName(dimensionType, dimensionKey)
 	}
 	parts := strings.Split(dimensionKey, ":")
@@ -425,6 +425,20 @@ func (h Handler) displayDimensionName(dimensionType string, dimensionKey string)
 			return dimensionKey
 		}
 		return h.displayDimensionName("instance_user", dimensionKey[:channelMarker]+dimensionKey[userMarker:])
+	}
+	if dimensionType == "instance_model_channel" {
+		instanceID, tail, ok := strings.Cut(dimensionKey, ":model:")
+		marker := strings.LastIndex(tail, ":channel:")
+		if ok && instanceID != "" && marker > 0 {
+			idText := tail[marker+len(":channel:"):]
+			if id, err := strconv.ParseInt(idText, 10, 64); err == nil && id > 0 && strconv.FormatInt(id, 10) == idText {
+				if h.names != nil {
+					return h.names.ChannelName(instanceID, id)
+				}
+				return "渠道 " + idText
+			}
+		}
+		return dimensionKey
 	}
 	if dimensionType == "instance_model_user" {
 		instanceID, tail, ok := strings.Cut(dimensionKey, ":model:")

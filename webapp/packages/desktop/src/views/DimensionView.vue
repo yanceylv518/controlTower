@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { siteOf, type ChannelSnapshot, type MetricItem } from "@ct/shared";
 import { FullScreen, Refresh, Search } from "@element-plus/icons-vue";
@@ -14,6 +14,7 @@ import ChannelOperations from "../components/ChannelOperations.vue";
 import { formatTokens } from "../utils/format";
 import { usePrefsStore } from "../stores/prefs";
 import CustomerTrafficPanel from "../components/CustomerTrafficPanel.vue";
+import ModelChannelTraffic from "../components/ModelChannelTraffic.vue";
 import { buildCustomerTraffic } from "../utils/customerTraffic";
 import CustomerCompareChart from "../components/CustomerCompareChart.vue";
 import CustomerTokenChart from "../components/CustomerTokenChart.vue";
@@ -44,6 +45,8 @@ const history = ref<MetricItem[]>([]);
 const customerPoints = ref<MetricItem[]>([]);
 const customerError = ref("");
 const asOf = ref(Date.now());
+const refreshKey = ref(0);
+const modelDimensions = ref<Record<string, "user" | "channel">>({});
 const chartTimeRange = computed<[number, number]>(() => {
   const end = Math.floor(asOf.value / 60_000) * 60_000;
   return [end - hours.value * 3_600_000, end];
@@ -53,7 +56,6 @@ const snapshots = ref<ChannelSnapshot[]>([]);
 const dimensionType = computed(() =>
   props.kind === "channels" ? "instance_channel" : "instance_model",
 );
-let initialized = false;
 const title = computed(
   () => ({ channels: "渠道监控", models: "模型监控" })[props.kind],
 );
@@ -68,42 +70,38 @@ watch(
   { immediate: true },
 );
 
-const state = useAsyncData(async () => {
+const state = useAsyncData(async (signal) => {
+  const kind = props.kind, siteID = filters.site_id, selectedHours = hours.value, type = dimensionType.value;
   await filters.loadInstances();
-  const instanceIDs = filters.instances
-    .filter((item) => item.enabled && siteOf(item) === filters.site_id)
-    .map((item) => item.instance_id);
-  const window = hours.value === 24 ? "5m" : "1m";
+  if (signal?.aborted) return [];
+  const instanceIDs = filters.instances.filter(item => item.enabled && siteOf(item) === siteID).map(item => item.instance_id);
+  const window = selectedHours === 24 ? "5m" : "1m";
   const requestedAt = Date.now();
-  const prefix = (instanceID: string) => `${instanceID}:${props.kind === "channels" ? "channel" : "model"}:`;
-  const metricResponses = await Promise.all(instanceIDs.flatMap((instanceID) => [
-    dashboard.metricHistory({ instance_id: instanceID, window, dimension_type: dimensionType.value, dimension_key_prefix: prefix(instanceID), hours: hours.value, aggregate: true }),
-    dashboard.metricHistory({ instance_id: instanceID, window, dimension_type: dimensionType.value, dimension_key_prefix: prefix(instanceID), hours: hours.value }),
+  const prefix = (instanceID: string) => `${instanceID}:${kind === "channels" ? "channel" : "model"}:`;
+  const responses = await Promise.all(instanceIDs.flatMap(instanceID => [
+    dashboard.metricHistory({ instance_id: instanceID, window, dimension_type: type, dimension_key_prefix: prefix(instanceID), hours: selectedHours, aggregate: true }),
+    dashboard.metricHistory({ instance_id: instanceID, window, dimension_type: type, dimension_key_prefix: prefix(instanceID), hours: selectedHours }),
   ]));
-  const summaries: MetricItem[] = [];
-  const points: MetricItem[] = [];
-  metricResponses.forEach((response, index) => index % 2 === 0 ? summaries.push(...response.items) : points.push(...response.items));
+  if (signal?.aborted) return [];
+  const summaries: MetricItem[] = [], points: MetricItem[] = [];
+  responses.forEach((response, index) => index % 2 === 0 ? summaries.push(...response.items) : points.push(...response.items));
+  const channelData = kind === "channels"
+    ? (await Promise.all(instanceIDs.map(instance_id => dashboard.channelSnapshots({ instance_id, latest_only: true, limit: 500 })))).flatMap(response => response.items)
+    : [];
+  if (signal?.aborted) return [];
+  let crossPoints: MetricItem[] = [], crossError = "";
+  if (kind === "channels") {
+    try {
+      crossPoints = (await Promise.all(instanceIDs.map(instance_id => dashboard.metricHistory({ instance_id, window, dimension_type: `${type}_user`, dimension_key_prefix: prefix(instance_id), hours: selectedHours })))).flatMap(response => response.items);
+    } catch { crossError = "客户流量拆分加载失败，请重试"; }
+  }
+  if (signal?.aborted) return [];
   history.value = points;
   asOf.value = requestedAt;
-  const channelData = await (
-    props.kind === "channels"
-      ? Promise.all(instanceIDs.map((instanceID) => dashboard.channelSnapshots({
-          instance_id: instanceID,
-          latest_only: true,
-          limit: 500,
-        }))).then((responses) => ({ items: responses.flatMap((response) => response.items) }))
-      : Promise.resolve({ items: [] as ChannelSnapshot[] })
-  );
-  customerError.value = "";
-  customerPoints.value = [];
-  {
-    try {
-      const responses = await Promise.all(instanceIDs.map(instanceID => dashboard.metricHistory({ instance_id: instanceID, window, dimension_type: `${dimensionType.value}_user`, dimension_key_prefix: prefix(instanceID), hours: hours.value })));
-      customerPoints.value = responses.flatMap(response => response.items);
-    } catch { customerError.value = "客户流量拆分加载失败，请重试"; }
-  }
-  snapshots.value = channelData.items;
-  initialized = true;
+  customerPoints.value = crossPoints;
+  customerError.value = crossError;
+  snapshots.value = channelData;
+  refreshKey.value++;
   return summaries.sort((a, b) => totalTokens(b) - totalTokens(a));
 });
 watch(
@@ -115,10 +113,16 @@ watch(
       search.value = "";
       selectedKeys.value = [];
     }
-    if (initialized) void state.reload();
+    state.data.value = undefined;
+    history.value = [];
+    customerPoints.value = [];
+    snapshots.value = [];
+    modelDimensions.value = {};
+    void state.reload();
   },
 );
 useAutoRefresh(state.reload);
+onBeforeUnmount(state.cancel);
 
 type DimRow = MetricItem & { channelStatus?: string };
 // 时间窗内无流量的渠道不产生指标行，靠快照兜底补出"无流量/已禁用"行，
@@ -414,6 +418,7 @@ function rowClass({ row }: { row: DimRow }) {
               <el-button v-if="activeMetric === 'tpm'" class="dimension-expand" text :icon="FullScreen" aria-label="弹窗查看大图" title="弹窗查看大图" @click="expandedKey = group.key" />
             </header>
             <section v-if="activeMetric === 'ttft'" class="dimension-chart"><CustomerCompareChart :series="group.ttft" :time-range="chartTimeRange" unit="s" :thresholds="ttftThresholds" /></section>
+            <ModelChannelTraffic v-else-if="kind === 'models' && activeMetric === 'tpm' && group.row" v-model:dimension="modelDimensions[group.key]" :model="group.row" :totals="historyByKey.get(group.key) || []" :hours="hours" :as-of="asOf" :refresh-key="refreshKey" :active="activeTab === 'charts' && expandedKey !== group.key" />
             <CustomerTrafficPanel v-else-if="activeMetric === 'tpm' && group.traffic" :traffic="group.traffic" dimension="user" :name="group.name" :loading="state.loading.value" :error="customerError" empty-text="暂无完整客户拆分数据" :hours="hours" :bucket-minutes="bucketMinutes" :last-plot-time="trafficTime(group.traffic.lastCompleteTime)" :active="activeTab === 'charts' && expandedKey !== group.key" @retry="state.reload" />
             <section v-else-if="activeMetric === 'tpm'" class="dimension-chart"><CustomerCompareChart :series="group.tpm" :time-range="chartTimeRange" compact /></section>
             <section v-else class="dimension-chart"><CustomerCompareChart :series="group.otps" :time-range="chartTimeRange" unit=" token/s" /></section>
@@ -558,7 +563,8 @@ function rowClass({ row }: { row: DimRow }) {
           <span>{{ expandedGroup.headline.label }} <strong>{{ expandedGroup.headline.value }}</strong></span>
           <span>{{ expandedGroup.headline.detail }}</span>
         </div>
-        <CustomerTrafficPanel :traffic="expandedGroup.traffic" dimension="user" :name="expandedGroup.name" :loading="state.loading.value" :error="customerError" empty-text="暂无完整客户拆分数据" :hours="hours" :bucket-minutes="bucketMinutes" :last-plot-time="trafficTime(expandedGroup.traffic.lastCompleteTime)" active expanded @retry="state.reload" />
+        <ModelChannelTraffic v-if="kind === 'models' && expandedGroup.row" v-model:dimension="modelDimensions[expandedGroup.key]" :model="expandedGroup.row" :totals="historyByKey.get(expandedGroup.key) || []" :hours="hours" :as-of="asOf" :refresh-key="refreshKey" active expanded />
+        <CustomerTrafficPanel v-else :traffic="expandedGroup.traffic" dimension="user" :name="expandedGroup.name" :loading="state.loading.value" :error="customerError" empty-text="暂无完整客户拆分数据" :hours="hours" :bucket-minutes="bucketMinutes" :last-plot-time="trafficTime(expandedGroup.traffic.lastCompleteTime)" active expanded @retry="state.reload" />
       </template>
     </el-dialog>
     <el-drawer
