@@ -3,6 +3,8 @@
 <!-- AI_CURRENT_START -->
 ## 当前总览
 
+- **大日志与归档调度修复（2026-09-27）**：归档worktree新增8MiB普通分页/64MiB单条独占处理；失败保留调度机会，恢复已提交数据游标。大行、点查、失败轮换单测及Go全量vet/test通过；本轮MySQL集成因无DSN/Docker不可用跳过。仅Agent改动，无迁移；未提交发布部署。见归档worktree docs/ai-tasks/2026-09-25-archive-byte-pagination.md最新段。
+
 - **归档交替批次可配置（2026-09-25，未提交/部署）**：设置页新增采集/历史连续批次1–100，默认4:1，配置JSON保存下发及Server/Agent校验；轮次持久化、变更开新周期、单任务连续推进，不重置日志游标。最终Go全量vet/test、7项前端行为回归、typecheck/build及新引擎隔离MySQL8.570s通过。需配套Server/Web/Agent，无迁移，未生产或浏览器验收。见[接续记录](docs/ai-tasks/2026-09-25-archive-byte-pagination.md#后续交替批次可配置)。
 
 - **归档8 MiB阻塞修复（2026-09-25，未提交/部署）**：基于d610eded的独立分支codex/archive-byte-pagination，采集/历史补齐/归档核验/统计改为字节预算分页，短批次不误判日终；单条超限报告ID和大小，不跳游标。现场证据为前500条10616911字节、最大单条170885字节，确认为累计超限。Go全量vet/test通过，隔离MySQL新引擎全包8.456s通过，覆盖重启、超限接续、统计事务回滚和单条阻塞。无迁移，升级Agent即可从原检查点接续；未生产验证。见[修复交接](docs/ai-tasks/2026-09-25-archive-byte-pagination.md)。

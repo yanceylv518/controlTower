@@ -54,10 +54,13 @@ func chain(previous string, r row) string {
 
 const maxPageBytes = 8 * 1024 * 1024
 
+// Large records travel alone; retain a separate bound on per-record memory.
+const maxRowBytes = 64 * 1024 * 1024
+
 // readRows is for bounded point lookups. Scanning callers must use readPage and
 // honor its byteLimited result instead of interpreting a short page as EOF.
 func readRows(ctx context.Context, db queryer, query string, args ...any) ([]row, error) {
-	records, limited, err := readPage(ctx, db, query, args...)
+	records, limited, err := readPageBudget(ctx, db, maxRowBytes, query, args...)
 	if err == nil && limited {
 		return nil, errors.New("point_lookup_payload_limit")
 	}
@@ -65,6 +68,10 @@ func readRows(ctx context.Context, db queryer, query string, args ...any) ([]row
 }
 
 func readPage(ctx context.Context, db queryer, query string, args ...any) ([]row, bool, error) {
+	return readPageBudget(ctx, db, maxPageBytes, query, args...)
+}
+
+func readPageBudget(ctx context.Context, db queryer, budget int, query string, args ...any) ([]row, bool, error) {
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, false, err
@@ -96,16 +103,16 @@ func readPage(ctx context.Context, db queryer, query string, args ...any) ([]row
 				r[col] = nil
 			}
 		}
-		if rowBytes > maxPageBytes {
+		if rowBytes > maxRowBytes {
 			// Commit the valid prefix first. The next attempt reports the oversized
 			// record without advancing past it or exposing its contents.
 			if len(out) > 0 {
 				return out, true, nil
 			}
 			id, _ := r.number("id")
-			return nil, false, fmt.Errorf("archive_row_payload_limit:id=%d,bytes=%d,limit=%d", id, rowBytes, maxPageBytes)
+			return nil, false, fmt.Errorf("archive_row_payload_limit:id=%d,bytes=%d,limit=%d", id, rowBytes, maxRowBytes)
 		}
-		if totalBytes+rowBytes > maxPageBytes {
+		if len(out) > 0 && totalBytes+rowBytes > budget {
 			return out, true, nil
 		}
 		out = append(out, r)

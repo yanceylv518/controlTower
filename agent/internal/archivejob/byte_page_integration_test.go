@@ -14,6 +14,9 @@ func TestBytePagesCollectVerifySummarizeResumeMySQL(t *testing.T) {
 	start, _ := dateBounds("2026-01-01")
 	for i := 1; i <= 4; i++ {
 		at, content := start+int64(i), strings.Repeat("x", 3*1024*1024)
+		if i == 3 {
+			content = strings.Repeat("L", 11613906)
+		}
 		if i == 4 {
 			at = start + 86401
 			content = "tail"
@@ -34,6 +37,10 @@ func TestBytePagesCollectVerifySummarizeResumeMySQL(t *testing.T) {
 		t.Fatalf("byte page skipped tail: %+v", st.Collection)
 	}
 	e.ready = false
+	st, err = e.Step(ctx, aj.Settings{Collection: true}, 1000, 60, true)
+	if err != nil || st.Collection.AfterID != 3 || st.Collection.Rows != 3 {
+		t.Fatalf("large singleton resume %+v %v", st.Collection, err)
+	}
 	st, err = e.Step(ctx, aj.Settings{Collection: true}, 1000, 60, true)
 	if err != nil || st.Collection.AfterID != 4 || st.Collection.Rows != 4 {
 		t.Fatalf("collection resume %+v %v", st.Collection, err)
@@ -100,11 +107,18 @@ func TestBytePagesCollectVerifySummarizeResumeMySQL(t *testing.T) {
 
 func TestOversizedRowPreservesPrefixAndCursorMySQL(t *testing.T) {
 	e, ctx := fixture(t)
+	var packet int
+	if err := e.source.QueryRowContext(ctx, "SELECT @@max_allowed_packet").Scan(&packet); err != nil {
+		t.Fatal(err)
+	}
+	if packet <= maxRowBytes+1024 {
+		t.Skip("oversized-row fixture requires MySQL max_allowed_packet > 64 MiB; boundary also covered by driver unit test")
+	}
 	if _, err := e.source.ExecContext(ctx, "ALTER TABLE logs ADD COLUMN content LONGTEXT"); err != nil {
 		t.Fatal(err)
 	}
 	start, _ := dateBounds("2026-01-01")
-	for i, content := range []string{"small", strings.Repeat("z", maxPageBytes+1)} {
+	for i, content := range []string{"small", strings.Repeat("z", maxRowBytes+1)} {
 		if _, err := e.source.ExecContext(ctx, "INSERT INTO logs(id,created_at,type,other,content) VALUES(?,?,2,'{}',?)", i+1, start+int64(i+1), content); err != nil {
 			t.Fatal(err)
 		}
@@ -128,5 +142,63 @@ func TestOversizedRowPreservesPrefixAndCursorMySQL(t *testing.T) {
 		if saved.Collection.AfterID != 1 || saved.Collection.Rows != 1 {
 			t.Fatal("oversized record skipped or prefix duplicated")
 		}
+	}
+}
+
+func TestHistoryFailureStillSchedulesCollectionMySQL(t *testing.T) {
+	e, ctx := fixture(t)
+	start, _ := dateBounds("2026-01-01")
+	if _, err := e.source.ExecContext(ctx, "INSERT INTO logs(id,created_at,type,quota,other) VALUES(1,?,2,7,'{}'),(2,?,2,7,'{}')", start+1, start+86401); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Step(ctx, aj.Settings{Collection: true}, 1000, 60, true); err != nil {
+		t.Fatal(err)
+	}
+	// Reach a summary transaction, then fail its write repeatedly.
+	for i := 0; i < 15; i++ {
+		s, err := load(ctx, e.target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if s.History.Step == "summarize" {
+			break
+		}
+		if _, err = e.Step(ctx, aj.Settings{History: true}, 1000, 60, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before, err := load(ctx, e.target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.History.Step != "summarize" {
+		t.Fatal("did not reach summary")
+	}
+	if _, err = e.target.ExecContext(ctx, "CREATE TRIGGER fail_summary BEFORE INSERT ON log_archive_daily_stats FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='test failure'"); err != nil {
+		t.Fatal(err)
+	}
+	both := aj.Settings{Collection: true, History: true, CollectionBatches: 1, HistoryBatches: 4}
+	if _, err = e.Step(ctx, both, 1000, 60, true); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 4; i++ {
+		if _, err = e.Step(ctx, both, 1000, 60, true); err == nil {
+			t.Fatal("expected history failure")
+		}
+		saved, err := load(ctx, e.target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if saved.History != before.History {
+			t.Fatal("failed history cursor changed")
+		}
+		e.ready = false // persisted schedule must survive restart-like reload
+	}
+	if _, err = e.source.ExecContext(ctx, "INSERT INTO logs(id,created_at,type,quota,other) VALUES(3,?,2,7,'{}')", start+86402); err != nil {
+		t.Fatal(err)
+	}
+	st, err := e.Step(ctx, both, 1000, 60, true)
+	if err != nil || st.Collection.AfterID != 3 {
+		t.Fatalf("history starved collection: %+v %v", st.Collection, err)
 	}
 }
