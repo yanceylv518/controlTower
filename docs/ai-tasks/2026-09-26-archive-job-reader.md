@@ -177,3 +177,9 @@ https://github.com/yanceylv518/controlTower/releases/tag/v2.0.0-rc140
 - **归档优化本地打包完成（2026-09-27）**：v2.0.0-rc142-local包含当前未提交的归档数据融合、live统计、日统计批量写入、异常超时及价格显示修复。三Linux包及SHA256SUMS位于release/v2.0.0-rc142-local；Agent amd64/arm64、Server/Web amd64。重新执行Go全量vet/test及Web typecheck/build通过；校验SHA256、ELF架构、执行位、脚本LF、Agent版本/live结构、Server前端及097迁移通过。未提交推送、未远程发布、未部署或Linux实机安装；配套升级Agent与Server/Web，生产RDS验收仍待执行。
 
 按deploy/package.sh相同包结构交叉编译，使用Python tarfile明确写入Linux执行权限；构建来源为main 3e8744c6加当前工作树业务改动，BUILD-INFO.json明确标记未提交工作树。本轮未重复实库测试，前一实现轮证据保留；未修改生产环境。
+
+## rc142远程发布
+
+- **rc142远程发布完成（2026-09-27）**：85b5e0502ed1907e0f05c8699a11f94fdf22edb9已推送main，v2.0.0-rc142固定同一提交。CI36300306928与release36300311097成功；三Linux安装包、SHA256及GHCR版本/latest镜像已发布。正式附件下载release/v2.0.0-rc142，SHA256、ELF架构/执行位、脚本LF、Agent版本/live结构、Server前端及097迁移核验通过。需配套升级Agent和Server/Web；未生产部署或真实RDS性能验收。此前本地未提交/未发布状态由本条更新。
+
+发布：https://github.com/yanceylv518/controlTower/releases/tag/v2.0.0-rc142
