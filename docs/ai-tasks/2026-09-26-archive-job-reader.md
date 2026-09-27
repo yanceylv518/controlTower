@@ -94,3 +94,12 @@
 
 - **RDS归档只读权限兼容修复（2026-09-27，本地未发布）**：允许配置目标归档库的SELECT，继续拒绝写入/其他库/全局/授权/角色；旧reader仍表级限制。连接测试新增TLS、认证、网络及未知库固定错误分类，不泄露底层连接信息。Go全量vet/test、4项连接前端测试、typecheck/build通过；未做真实RDS/TLS或MySQL实库验证。rc138不含此修复，需后续Server/Web发布；Agent无改动。
 截图仅确认权限拒绝与TLS开启后通用失败；未证明TLS失败的具体原因，需新版分类或服务端环境实测。
+
+## rc139正式发布
+
+- **rc139远程发布完成（2026-09-27）**：修复提交b18a1765已推送main，标签v2.0.0-rc139固定该提交。release 36286027299成功，三安装包/SHA256及镜像发布完成。附件下载release/v2.0.0-rc139，校验值、ELF架构/执行位、脚本LF、Server错误分类/前端和097迁移核验通过。沿用本轮Go全量vet/test、4项连接前端测试、typecheck/build；未真实RDS/TLS验收或生产部署。此次仅需更新Server/Web，Agent逻辑不变。
+https://github.com/yanceylv518/controlTower/releases/tag/v2.0.0-rc139
+
+## RDS授权能力分类
+
+- **归档授权按能力分类（2026-09-27，本地未发布）**：依据用户RDS 8.0.36实际授权，移除新版reader库名/表名和纯SELECT模板匹配，允许RDS附带观察权限与额外只读授权；拒绝写入、DDL、执行、提权、角色及未知管理权限。固定归档SQL/身份绑定保留，旧reader不变。新增实际授权与危险能力回归，Go全量vet/test、4项连接前端测试、typecheck/build通过；未真实RDS联调。rc139不包含此后续修复，尚未提交发布。

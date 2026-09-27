@@ -48,7 +48,7 @@ DSN 放在 Server 进程的 `CT_ARCHIVE_SITE_A_DSN` 环境变量中；使用专�
 - log_archive_daily_stats
 - 需要查询的 logs_YYYYMM 月表
 
-禁止 INSERT/UPDATE/DELETE、其他库或全局授权、角色及 GRANT OPTION。使用表级授权时，新月份月表需补 SELECT；使用目标库级 SELECT 时无需逐月授权。Agent 写入账号不要复用。旧读取器和新读取器账号应独立，避免各自表白名单校验冲突。只读查询不修改归档库结构；页面配置需要CT库097迁移。
+权限按能力分类：允许 SELECT、SHOW VIEW、LOCK TABLES、PROCESS、REPLICATION SLAVE/CLIENT、XA_RECOVER_ADMIN、USAGE，不按数据库/表名限制这些只读或观察类授权。拒绝 INSERT/UPDATE/DELETE、DDL、EXECUTE、FILE、SUPER、授权/角色及未识别的管理权限。使用表级授权时，新月份月表需补 SELECT；使用目标库级 SELECT 时无需逐月授权。Agent 写入账号不要复用。旧读取器和新读取器账号应独立，避免各自表白名单校验冲突。只读查询不修改归档库结构；页面配置需要CT库097迁移。
 
 ## API
 
@@ -81,7 +81,7 @@ GET /api/dashboard/log-archive-read/anomalies?site_id=actual-site-id&date=2026-0
 - 400 archive_invalid_query：日期、游标、筛选或分页不合法。
 - 409 archive_identity_or_schema_mismatch：站点绑定hash或schema不匹配。
 - 409 archive_sealed_version_unavailable：未封存、发布记录不一致或分页版本变化。
-- 503 archive_readonly_permissions_required：账号不符合目标归档库或归档表只读权限。
+- 503 archive_readonly_permissions_required：账号含非只读/未支持管理能力，或权限核验失败。
 - 503 archive_read_time_index_required：月表缺少时间索引（也应先确认目标月表存在）。
 - 503 archive_read_row_too_large：单行超过读取预算。
 - 503 archive_readonly_unavailable：配置、连接或查询失败；不回退源库，不将异常伪装为空结果。
@@ -97,3 +97,5 @@ GET /api/dashboard/log-archive-read/anomalies?site_id=actual-site-id&date=2026-0
 异常分析保留按日分页明细，新增独立当日汇总与24小时趋势，分别显示空输出、输出NULL和type5错误。空输出占比的分母仅为type2消费日志数，分母为零显示未知；不提供混合三类记录的“失败率”。更换筛选、站点或重试时丢弃旧响应；明细翻页不重复汇总。查询失败明确提示，不能把失败当零数据。两个页面均要求Server新版只读接口与归档连接就绪；本次无需新增归档库迁移，仍需CT097。
 
 连接测试区分 archive_tls_failed、archive_auth_failed、archive_network_failed、archive_database_missing；仅返回固定分类，不回传驱动错误、密码或DSN。未分类失败仍显示通用提示。
+
+RDS只读模板兼容：截图中的全局观察权限、目标库SELECT/LOCK TABLES/SHOW VIEW及mysql系统表SELECT均纳入回归。额外只读授权不扩大应用查询范围；归档SQL仍为固定表和绑定站点身份，旧版账单reader继续使用原表级限制。CURRENT_ROLE需为NONE，尚不解析角色有效权限。

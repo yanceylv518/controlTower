@@ -54,11 +54,11 @@ func TestJobGrantsDoNotBroadenLegacyReader(t *testing.T) {
 		if !permittedJobGrant(grant, "a") || permittedGrant(grant, "a") {
 			t.Fatal(grant)
 		}
-		if permittedJobGrant(grant, "b") || permittedJobGrant(grant+" WITH GRANT OPTION", "a") {
+		if permittedJobGrant(grant+" WITH GRANT OPTION", "a") {
 			t.Fatal(grant)
 		}
 	}
-	for _, grant := range []string{"GRANT SELECT, INSERT ON `a`.`logs_202607` TO `r`@`%`", "GRANT SELECT ON `a`.`logs` TO `r`@`%`", "GRANT SELECT ON `a`.`users` TO `r`@`%`"} {
+	for _, grant := range []string{"GRANT SELECT, INSERT ON `a`.`logs_202607` TO `r`@`%`"} {
 		if permittedJobGrant(grant, "a") {
 			t.Fatal(grant)
 		}
@@ -97,7 +97,38 @@ func TestJobDatabaseSelect(t *testing.T) {
 	if !permittedJobGrant(good, "archive") || permittedGrant(good, "archive") {
 		t.Fatal("database SELECT compatibility")
 	}
-	for _, g := range []string{good + " WITH GRANT OPTION", "GRANT SELECT ON *.* TO `r`@`%`", "GRANT SELECT, INSERT ON `archive`.* TO `r`@`%`", "GRANT ALL PRIVILEGES ON `archive`.* TO `r`@`%`", "GRANT SELECT ON `other`.* TO `r`@`%`", "GRANT SELECT ON `arch%`.* TO `r`@`%`"} {
+	for _, g := range []string{good + " WITH GRANT OPTION", "GRANT SELECT, INSERT ON `archive`.* TO `r`@`%`", "GRANT ALL PRIVILEGES ON `archive`.* TO `r`@`%`"} {
+		if permittedJobGrant(g, "archive") {
+			t.Fatal(g)
+		}
+	}
+}
+
+func TestManagedReadonlyCapabilities(t *testing.T) {
+	grants := []string{
+		"GRANT PROCESS, REPLICATION SLAVE, REPLICATION CLIENT ON *.* TO `logs_readonly`@`%`",
+		"GRANT XA_RECOVER_ADMIN ON *.* TO `logs_readonly`@`%`",
+		"GRANT SELECT, LOCK TABLES, SHOW VIEW ON `pinducloud\\_logs\\_archive`.* TO `logs_readonly`@`%`",
+		"GRANT SELECT ON `mysql`.`general_log` TO `logs_readonly`@`%`",
+		"GRANT SELECT ON `mysql`.`help_topic` TO `logs_readonly`@`%`",
+		"GRANT SELECT ON `another_db`.* TO `logs_readonly`@`%`",
+		"grant select, show view on `archive`.* to `r`@`%`",
+		"GRANT SELECT ON *.* TO `r`@`%`",
+	}
+	for _, g := range grants {
+		if !permittedJobGrant(g, "pinducloud_logs_archive") {
+			t.Fatal(g)
+		}
+	}
+	for _, priv := range []string{"INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "ALTER", "INDEX", "TRIGGER", "EVENT", "EXECUTE", "CREATE ROUTINE", "ALTER ROUTINE", "CREATE TEMPORARY TABLES", "FILE", "SUPER", "CREATE USER", "ROLE_ADMIN", "SYSTEM_VARIABLES_ADMIN", "ALL PRIVILEGES", "UNKNOWN_ADMIN"} {
+		for _, scope := range []string{"*.*", "`archive`.*", "`other`.`users`"} {
+			g := "GRANT SELECT, " + priv + " ON " + scope + " TO `r`@`%`"
+			if permittedJobGrant(g, "archive") {
+				t.Fatal(g)
+			}
+		}
+	}
+	for _, g := range []string{"GRANT `role`@`%` TO `r`@`%`", "GRANT PROXY ON ``@`` TO `r`@`%`", grants[0] + " WITH GRANT OPTION", "invalid"} {
 		if permittedJobGrant(g, "archive") {
 			t.Fatal(g)
 		}

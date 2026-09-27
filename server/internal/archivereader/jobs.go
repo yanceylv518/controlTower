@@ -89,27 +89,30 @@ func (q JobQuery) Validate() error {
 	return nil
 }
 
-func permittedJobGrant(grant, database string) bool {
-	if strings.HasPrefix(grant, "GRANT USAGE ON *.* TO ") && !strings.Contains(grant, "WITH GRANT OPTION") {
-		return true
-	}
-	// Permit only SELECT on the configured database; legacy reader remains table-only.
-	if !strings.Contains(grant, "WITH GRANT OPTION") {
-		prefix := "GRANT SELECT ON `" + database + "`.* TO "
-		escaped := strings.NewReplacer("_", `\_`, "%", `\%`).Replace(database)
-		if strings.HasPrefix(grant, prefix) || strings.HasPrefix(grant, "GRANT SELECT ON `"+escaped+"`.* TO ") {
-			return true
-		}
-	}
-	m := selectGrant.FindStringSubmatch(grant)
-	if len(m) != 3 || m[1] != database || strings.Contains(grant, "WITH GRANT OPTION") {
+// Classify capabilities, not RDS account templates or table/database names.
+// Actual reads are still fixed SQL against the configured, identity-bound archive.
+var jobGrantPattern = regexp.MustCompile("(?i)^GRANT (.+?) ON (?:`(?:[^`]|``)+`|[a-z0-9_$]+|\\*)\\.(?:`(?:[^`]|``)+`|[a-z0-9_$]+|\\*) TO .+$")
+
+func permittedJobGrant(grant, _ string) bool {
+	grant = strings.Join(strings.Fields(grant), " ")
+	if strings.Contains(strings.ToUpper(grant), "WITH GRANT OPTION") {
 		return false
 	}
-	switch m[2] {
-	case "log_archive_meta", "log_archive_days", "log_archive_day_versions", "log_archive_daily_stats":
-		return true
+	match := jobGrantPattern.FindStringSubmatch(grant)
+	if len(match) != 2 {
+		return false
 	}
-	return jobMonth.MatchString(m[2])
+	for _, privilege := range strings.Split(strings.ToUpper(match[1]), ",") {
+		switch strings.TrimSpace(privilege) {
+		case "USAGE", "SELECT", "SHOW VIEW", "LOCK TABLES", "PROCESS", "REPLICATION SLAVE", "REPLICATION CLIENT", "XA_RECOVER_ADMIN":
+			// Read/inspection capabilities supplied by managed MySQL read-only accounts.
+		default:
+			// Mutations, execution, grants and unclassified administrative capabilities
+			// require a different account; never silently accept unknown privileges.
+			return false
+		}
+	}
+	return true
 }
 
 // ReadJob uses a deployment-owned job:<site_id> binding, never the retired
