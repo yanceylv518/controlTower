@@ -70,3 +70,16 @@ test('task toggles preserve configured scheduling ratio',async t=>{
  assert.equal(body.tasks.collection_batches,2);assert.equal(body.tasks.history_batches,3)
  req.reject(new Error('test failure'));await new Promise(r=>setImmediate(r))
 })
+
+test('settings remain inspectable while offline or refreshing but cannot be saved',async t=>{
+ const ctx=setup(t);await initial(ctx)
+ value(ctx,'item').value.seen_at='2000-01-01T00:00:00Z'
+ assert.equal(value(ctx,'canOpenSettings').value,true)
+ value(ctx,'edit')();assert.ok(value(ctx,'form').value)
+ const before=ctx.requests.length
+ await value(ctx,'save')(value(ctx,'form').value)
+ assert.equal(ctx.requests.length,before)
+ value(ctx,'loading').value=true
+ assert.equal(value(ctx,'canOpenSettings').value,true)
+ assert.match(value(ctx,'settingsBlockReason').value,/刷新/)
+})

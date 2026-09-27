@@ -3,6 +3,9 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ApiError } from '@ct/shared'
 import { ElMessage } from 'element-plus'
 import AppShell from '../components/AppShell.vue'
+import ArchiveConnectionSettings from '../components/ArchiveConnectionSettings.vue'
+import ArchiveUsageStatistics from '../components/ArchiveUsageStatistics.vue'
+import ArchiveAnomalyAnalysis from '../components/ArchiveAnomalyAnalysis.vue'
 import { client } from '../api'
 import { useFiltersStore } from '../stores/filters'
 import { useAuthStore } from '../stores/auth'
@@ -24,6 +27,8 @@ const emptyDescription=computed(()=>unavailable.value?'当前 Server 未提供�
 const engine=computed(()=>item.value?.status.engine)
 const online=computed(()=>!!item.value?.seen_at&&now.value-Date.parse(item.value.seen_at)<90000)
 const writable=computed(()=>can(auth.user,'archive.manage')&&!loading.value&&!saving.value&&!error.value&&online.value&&item.value?.config.version===item.value?.status.applied_version)
+const canOpenSettings=computed(()=>can(auth.user,'archive.manage')&&!!item.value&&!saving.value)
+const settingsBlockReason=computed(()=>!item.value?'尚未读取到执行配置':saving.value?'正在保存配置':loading.value?'正在刷新状态，完成后可保存':error.value?'状态读取失败，请刷新成功后保存':!online.value?'Agent 当前离线，连接恢复后可保存':item.value.config.version!==item.value.status.applied_version?'上一份配置尚未应用，确认后可保存':'')
 const labels:Record<string,string>={collecting:'采集中',pending:'待处理',processing:'处理中',sealed:'已封存',failed:'处理失败',unknown:'状态待上报',future:'未来日期'}
 const steps:Record<string,string>={idle:'等待采集',collect:'采集源日志',verify_source:'校验并补齐源日志',verify_archive:'核对归档完整性',summarize:'整理多维日统计',seal:'发布封存结果',sealed:'当日处理完成',failed:'当日处理失败'}
 const reasons:Record<string,string>={created_at_index_required:'日志时间字段缺少索引，无法安全读取日期边界',source_archive_content_mismatch:'源库与归档库的日志数量或内容不一致',source_history_retention_unconfirmed:'尚未确认源库历史日志完整保留且稳定，不能封存',invalid_billing_other_json:'日志 other 字段不是有效 JSON，无法整理计费数据',invalid_billing_integer:'计费用量或额度不是有效的非负整数',archive_identity_or_schema_mismatch:'新归档数据集身份或结构版本不匹配',database_timeout:'数据库查询超时，批次未完成',archive_writer_busy:'另一个归档执行器持有写入锁'}
@@ -49,11 +54,11 @@ async function load(){
  if(!initialized.value&&engine.value?.first_date){initialized.value=true;const first=engine.value.first_date.slice(0,7);if(first!==month.value){month.value=first;void load()}}
  }catch(e){if(!disposed&&ticket===sequence&&site===filters.site_id){unavailable.value=e instanceof ApiError&&(e.status===404||e.status===410);error.value=unavailable.value?'新版归档接口尚未就绪':apiFailure(e)}}finally{if(ticket===sequence)loading.value=false}
 }
-async function save(config:Config){const site=filters.site_id;saving.value=true
+async function save(config:Config){if(!writable.value||!item.value)return;const site=filters.site_id;saving.value=true
  try{await client.request(`/api/dashboard/log-archive-jobs/${encodeURIComponent(site)}`,{method:'PUT',body:JSON.stringify(config)});if(site!==filters.site_id)return;form.value=undefined;ElMessage.success('已提交，等待 Agent 应用');await load()}catch(e){ElMessage.error(e instanceof Error?e.message:'保存失败')}finally{saving.value=false}}
 function toggle(task:keyof Pick<Tasks,'collection'|'history'>){if(!item.value||!writable.value)return;const c=item.value.config;const tasks={...c.tasks};if(!c.running){tasks.collection=false;tasks.history=false}tasks[task]=!c.running||!c.tasks[task];void save({...c,tasks,running:tasks.collection||tasks.history})}
 function retryToken(){return globalThis.crypto.randomUUID()}
-function edit(){if(item.value){const config:Config=JSON.parse(JSON.stringify(item.value.config));config.tasks.collection_batches ||= 4;config.tasks.history_batches ||= 1;form.value=config}}
+function edit(){if(!canOpenSettings.value)return;if(item.value){const config:Config=JSON.parse(JSON.stringify(item.value.config));config.tasks.collection_batches ||= 4;config.tasks.history_batches ||= 1;form.value=config}}
 watch(()=>filters.site_id,()=>{sequence++;error.value='';unavailable.value=false;item.value=undefined;reports.value=[];selected.value=undefined;form.value=undefined;initialized.value=false;month.value=beijingDate().slice(0,7);void load()})
 onMounted(async()=>{await filters.loadInstances();await load();timer=setInterval(()=>{now.value=Date.now();if(!document.hidden&&!loading.value&&!saving.value)void load()},15000)})
 onUnmounted(()=>{disposed=true;sequence++;if(timer)clearInterval(timer)})
@@ -61,7 +66,7 @@ onUnmounted(()=>{disposed=true;sequence++;if(timer)clearInterval(timer)})
 <template>
  <AppShell title="日志归档"><div class="archive-jobs">
  <header class="archive-toolbar">
-  <el-tabs v-model="tab" class="archive-tabs"><el-tab-pane label="运行总览" name="overview"/><el-tab-pane label="每日数据" name="daily"/><el-tab-pane label="设置" name="settings"/></el-tabs>
+  <el-tabs v-model="tab" class="archive-tabs"><el-tab-pane label="运行总览" name="overview"/><el-tab-pane label="每日数据" name="daily"/><el-tab-pane label="用量统计" name="usage"/><el-tab-pane label="异常分析" name="anomalies"/><el-tab-pane label="设置" name="settings"/></el-tabs>
   <div v-if="item" class="executor-status" aria-label="执行 Agent 状态">
    <div class="executor-identity"><span class="status-label">执行 Agent</span><span class="executor-name" :title="item.config.agent_id">{{item.config.agent_id||'未配置'}}</span></div>
    <span class="connection-status" :class="{'is-online':online}"><i aria-hidden="true"/>{{online?'在线':'离线 / 状态待确认'}}</span>
@@ -73,6 +78,9 @@ onUnmounted(()=>{disposed=true;sequence++;if(timer)clearInterval(timer)})
  <el-alert v-if="error||!item" :title="item?error:emptyTitle" :description="item?'当前展示最近成功读取的数据，实时状态待确认，操作暂不可用。':emptyDescription" :type="unavailable||!error?'warning':'error'" show-icon :closable="false"/>
  <el-alert v-if="item?.status.error" :title="reason(item.status.error)" type="warning" :closable="false"/>
  <el-alert v-if="countError" :title="`每日数量统计${engine?.counts_date?'（'+engine.counts_date+'）':''}：${countError}`" type="warning" show-icon :closable="false"/>
+ <ArchiveUsageStatistics v-if="tab==='usage'" :site-id="filters.site_id"/>
+ <ArchiveAnomalyAnalysis v-if="tab==='anomalies'" :site-id="filters.site_id"/>
+ <ArchiveConnectionSettings v-if="tab==='settings'" :site-id="filters.site_id"/>
  <div v-if="tab==='overview'" class="task-grid">
  <section v-for="task in (['collection','history'] as const)" :key="task"><header><h3>{{task==='collection'?'日志采集':'历史处理'}}</h3><span>{{!item?'等待连接':!online||error?'状态待确认':item.config.running&&item.config.tasks[task]?'已启用':'已暂停'}}</span></header>
  <h2>{{task==='collection'?(engine?.latest ? time(engine.latest.log_time) : '最新归档位置尚未上报'):engine?.history.date||(item?'等待历史日期':'历史处理进度待上报')}}</h2>
@@ -98,8 +106,8 @@ onUnmounted(()=>{disposed=true;sequence++;if(timer)clearInterval(timer)})
  <el-table v-else :data="days" class="daily-table" row-key="date" highlight-current-row @row-click="selected=$event"><el-table-column prop="date" label="日期" min-width="130"/><el-table-column label="状态" min-width="150"><template #default="{row}"><span class="day-status" :class="row.state"><i aria-hidden="true"/>{{labels[row.state]}}</span></template></el-table-column><el-table-column label="日志数" min-width="130" align="right"><template #default="{row}"><span :class="row.rows!==''?'list-count':'muted'">{{row.rows!==''?formatArchiveCount(row.rows):'数量待统计'}}</span></template></el-table-column><el-table-column label="原因" min-width="220" show-overflow-tooltip><template #default="{row}"><span class="muted">{{reason(row.error)||'—'}}</span></template></el-table-column></el-table>
  <div v-if="selected" class="day-detail"><header><div class="detail-title"><h3>{{selected.date}}</h3><span class="day-status" :class="selected.state"><i aria-hidden="true"/>{{labels[selected.state]}}</span></div><el-button text size="small" @click="selected=undefined">收起详情</el-button></header><p v-if="selected.step" class="muted">{{steps[selected.step]}}</p><p v-if="selected.error" class="failure">{{reason(selected.error)}}</p><dl class="detail-values"><div><dt>日志数</dt><dd>{{selected.rows!==''?formatArchiveCount(selected.rows)+' 条':'数量待统计'}}</dd></div><div><dt>数据版本</dt><dd>{{selected.revision}}</dd></div><div><dt>封存版本</dt><dd>{{selected.version||'尚未封存'}}</dd></div></dl></div>
  </section>
- <section v-if="tab==='settings'"><header><h3>执行设置</h3><el-button :disabled="!writable" @click="edit">编辑设置</el-button></header><p v-if="item">每批 {{item.config.batch_size}} 条 · 间隔 {{item.config.interval_seconds}} 秒 · 采集延迟 {{item.config.delay_seconds}} 秒</p><p>两个任务按批次交接源库读取权。每轮采集 {{item?.config.tasks.collection_batches||4}} 个批次，再历史处理 {{item?.config.tasks.history_batches||1}} 个批次；只启动一个任务时独立推进。</p><p v-if="!item" class="muted">执行 Agent、每批条数、间隔及采集延迟等待 Server 提供配置，连接就绪后可编辑。</p><p v-if="item">源历史完整保留声明：{{item.config.history_immutable?'已确认':'尚未确认，历史处理不能封存'}}</p><el-button :disabled="!writable" @click="item&&save({...item.config,tasks:{...item.config.tasks,retry_token:retryToken()}})">重试失败日期</el-button></section>
- <el-dialog :model-value="!!form" title="执行设置" @close="form=undefined"><el-form v-if="form" label-width="120px"><el-form-item label="执行 Agent"><el-select v-model="form.agent_id"><el-option v-for="t in item?.targets" :key="t.agent_id" :value="t.agent_id" :label="t.agent_id" @click="form.instance_id=t.instance_id"/></el-select></el-form-item><el-form-item label="每批条数"><el-input-number v-model="form.batch_size" :min="1" :max="5000"/></el-form-item><el-form-item label="间隔（秒）"><el-input-number v-model="form.interval_seconds" :min="2" :max="3600"/></el-form-item><el-form-item label="采集连续批次"><el-input-number v-model="form.tasks.collection_batches" :min="1" :max="100" :precision="0"/></el-form-item><el-form-item label="历史连续批次"><el-input-number v-model="form.tasks.history_batches" :min="1" :max="100" :precision="0"/></el-form-item><p>两个任务都启用时按上述批次数交替；修改后从新一轮开始，不重置日志游标。需配套新版 Agent。</p><el-form-item label="延迟（秒）"><el-input-number v-model="form.delay_seconds" :min="60" :max="86400"/></el-form-item><el-checkbox v-model="form.history_immutable">确认源历史日志完整保留、已稳定，可用于完整性校验</el-checkbox><p>已有月表最大 ID 不代表此前日志完整。此声明应符合源库实际保留策略。</p></el-form><template #footer><el-button :loading="saving" @click="form&&save(form)">保存</el-button></template></el-dialog>
+ <section v-if="tab==='settings'"><header><h3>执行设置</h3><el-button :disabled="!canOpenSettings" @click="edit">编辑设置</el-button></header><p v-if="item">每批 {{item.config.batch_size}} 条 · 间隔 {{item.config.interval_seconds}} 秒 · 采集延迟 {{item.config.delay_seconds}} 秒</p><p>两个任务按批次交接源库读取权。每轮采集 {{item?.config.tasks.collection_batches||4}} 个批次，再历史处理 {{item?.config.tasks.history_batches||1}} 个批次；只启动一个任务时独立推进。</p><p v-if="!item" class="muted">执行 Agent、每批条数、间隔及采集延迟等待 Server 提供配置，连接就绪后可编辑。</p><p v-if="item">源历史完整保留声明：{{item.config.history_immutable?'已确认':'尚未确认，历史处理不能封存'}}</p><el-button :disabled="!writable" @click="item&&save({...item.config,tasks:{...item.config.tasks,retry_token:retryToken()}})">重试失败日期</el-button></section>
+ <el-dialog :model-value="!!form" title="执行设置" @close="form=undefined"><el-alert v-if="settingsBlockReason" :title="settingsBlockReason" type="info" :closable="false" show-icon/><el-form v-if="form" label-width="120px"><el-form-item label="执行 Agent"><el-select v-model="form.agent_id"><el-option v-for="t in item?.targets" :key="t.agent_id" :value="t.agent_id" :label="t.agent_id" @click="form.instance_id=t.instance_id"/></el-select></el-form-item><el-form-item label="每批条数"><el-input-number v-model="form.batch_size" :min="1" :max="5000"/></el-form-item><el-form-item label="间隔（秒）"><el-input-number v-model="form.interval_seconds" :min="2" :max="3600"/></el-form-item><el-form-item label="采集连续批次"><el-input-number v-model="form.tasks.collection_batches" :min="1" :max="100" :precision="0"/></el-form-item><el-form-item label="历史连续批次"><el-input-number v-model="form.tasks.history_batches" :min="1" :max="100" :precision="0"/></el-form-item><p>两个任务都启用时按上述批次数交替；修改后从新一轮开始，不重置日志游标。需配套新版 Agent。</p><el-form-item label="延迟（秒）"><el-input-number v-model="form.delay_seconds" :min="60" :max="86400"/></el-form-item><el-checkbox v-model="form.history_immutable">确认源历史日志完整保留、已稳定，可用于完整性校验</el-checkbox><p>已有月表最大 ID 不代表此前日志完整。此声明应符合源库实际保留策略。</p></el-form><template #footer><el-button :disabled="!writable" :loading="saving" @click="form&&save(form)">保存</el-button></template></el-dialog>
  </div></AppShell>
 </template>
 <style scoped>
