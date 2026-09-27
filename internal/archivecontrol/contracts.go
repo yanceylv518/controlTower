@@ -30,7 +30,7 @@ type Config struct {
 
 func Default() Config { return Config{BatchSize: 500, IntervalSeconds: 30, DelaySeconds: 300} }
 func (c Config) Validate() bool {
-	if c.Tasks != nil && (c.Pipeline != nil || c.FullHistory || c.ReconcileID != "" || c.ReconcileDate != "" || len(c.Tasks.RetryToken) > 64) {
+	if c.Tasks != nil && (c.Pipeline != nil || c.FullHistory || c.ReconcileID != "" || c.ReconcileDate != "" || !c.Tasks.Valid()) {
 		return false
 	}
 	if c.Pipeline != nil && (!c.FullHistory || !c.Pipeline.Validate()) {

@@ -116,7 +116,7 @@ func (e *Engine) verifySource(ctx context.Context, c *sql.Conn, s *state, batch 
 		return err
 	}
 	from, to := dateBounds(h.Date)
-	rows, err := readRows(ctx, e.source, "SELECT /*+ MAX_EXECUTION_TIME(3000) */ * FROM logs WHERE created_at>=? AND created_at<? AND (created_at>? OR (created_at=? AND id>?)) ORDER BY created_at,id LIMIT ?", from, to, h.AfterCreated, h.AfterCreated, h.AfterID, batch)
+	rows, byteLimited, err := readPage(ctx, e.source, "SELECT /*+ MAX_EXECUTION_TIME(3000) */ * FROM logs WHERE created_at>=? AND created_at<? AND (created_at>? OR (created_at=? AND id>?)) ORDER BY created_at,id LIMIT ?", from, to, h.AfterCreated, h.AfterCreated, h.AfterID, batch)
 	if err != nil {
 		return err
 	}
@@ -150,7 +150,7 @@ func (e *Engine) verifySource(ctx context.Context, c *sql.Conn, s *state, batch 
 	if err = receipt(ctx, tx, "history", before, h.AfterID, len(rows), inserted, changed, unchanged); err != nil {
 		return err
 	}
-	if len(rows) < batch {
+	if !byteLimited && len(rows) < batch {
 		h.Step = "verify_archive"
 		h.AfterID = 0
 		h.AfterCreated = 0
@@ -171,7 +171,7 @@ func (e *Engine) verifySource(ctx context.Context, c *sql.Conn, s *state, batch 
 func (e *Engine) verifyArchive(ctx context.Context, c *sql.Conn, s *state, batch int) error {
 	h := &s.History
 	from, to := dateBounds(h.Date)
-	rows, err := readRows(ctx, c, "SELECT /*+ MAX_EXECUTION_TIME(3000) */ * FROM "+q(table(h.Date))+" WHERE created_at>=? AND created_at<? AND (created_at>? OR (created_at=? AND id>?)) ORDER BY created_at,id LIMIT ?", from, to, h.AfterCreated, h.AfterCreated, h.AfterID, batch)
+	rows, byteLimited, err := readPage(ctx, c, "SELECT /*+ MAX_EXECUTION_TIME(3000) */ * FROM "+q(table(h.Date))+" WHERE created_at>=? AND created_at<? AND (created_at>? OR (created_at=? AND id>?)) ORDER BY created_at,id LIMIT ?", from, to, h.AfterCreated, h.AfterCreated, h.AfterID, batch)
 	if err != nil {
 		return err
 	}
@@ -181,7 +181,7 @@ func (e *Engine) verifyArchive(ctx context.Context, c *sql.Conn, s *state, batch
 		h.AfterID, _ = r.number("id")
 		h.AfterCreated, _ = r.number("created_at")
 	}
-	if len(rows) < batch {
+	if !byteLimited && len(rows) < batch {
 		if h.SourceRows != h.TargetRows || h.SourceHash != h.TargetHash {
 			return failDay(ctx, c, s, "source_archive_content_mismatch")
 		}

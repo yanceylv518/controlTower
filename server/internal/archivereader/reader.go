@@ -1,5 +1,6 @@
 // Package archivereader opens dedicated, table-scoped SELECT-only connections.
-// It deliberately exposes neither a SQL handle nor raw log/evidence reads.
+// Legacy catalog access and the separately bound job reader have distinct grants.
+// Neither exposes a SQL handle or caller-controlled table names.
 package archivereader
 
 import (
@@ -24,18 +25,27 @@ var envName = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,127}$`)
 var factTable = regexp.MustCompile(`^billing_facts_[0-9]{6}$`)
 var selectGrant = regexp.MustCompile("^GRANT SELECT ON `([^`]+)`\\.`([^`]+)` TO ")
 
-type Reader struct{ ConnectionsFile string }
+type Reader struct {
+	ConnectionsFile string
+	Connections     ConnectionStore
+	SecretKey       string
+}
 
 // The file contains storage references -> environment variable names, not DSNs.
 // Both are deployment-owned; an API caller can only select a registered ref.
 func (r Reader) open(ctx context.Context, ref string) (*sql.DB, error) {
+	return r.openChecked(ctx, ref, permittedGrant)
+}
+
+func (r Reader) openChecked(ctx context.Context, ref string, permit func(string, string) bool) (*sql.DB, error) {
 	f, err := os.Open(r.ConnectionsFile)
 	if err != nil {
 		return nil, ErrUnavailable
 	}
 	defer f.Close()
 	var entries map[string]struct {
-		DSNEnv string `json:"dsn_env"`
+		DSNEnv     string `json:"dsn_env"`
+		SourceHash string `json:"source_hash,omitempty"`
 	}
 	d := json.NewDecoder(io.LimitReader(f, 65537))
 	d.DisallowUnknownFields()
@@ -46,6 +56,10 @@ func (r Reader) open(ctx context.Context, ref string) (*sql.DB, error) {
 	if err != nil || cfg.DBName == "" || cfg.User == "" {
 		return nil, ErrUnavailable
 	}
+	return openConfig(ctx, cfg, permit)
+}
+
+func openConfig(ctx context.Context, cfg *mysql.Config, permit func(string, string) bool) (*sql.DB, error) {
 	cfg.ParseTime = true
 	cfg.Loc = time.UTC
 	cfg.MultiStatements = false
@@ -66,7 +80,7 @@ func (r Reader) open(ctx context.Context, ref string) (*sql.DB, error) {
 		db.Close()
 		return nil, ErrUnavailable
 	}
-	if err = checkGrants(ctx, db, cfg.DBName); err != nil {
+	if err = checkGrantsWith(ctx, db, cfg.DBName, permit); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -88,6 +102,10 @@ func permittedGrant(grant, database string) bool {
 	return factTable.MatchString(m[2])
 }
 func checkGrants(ctx context.Context, db *sql.DB, database string) error {
+	return checkGrantsWith(ctx, db, database, permittedGrant)
+}
+
+func checkGrantsWith(ctx context.Context, db *sql.DB, database string, permit func(string, string) bool) error {
 	var role string
 	if db.QueryRowContext(ctx, "SELECT CURRENT_ROLE()").Scan(&role) != nil || role != "NONE" {
 		return ErrPermissions
@@ -100,7 +118,7 @@ func checkGrants(ctx context.Context, db *sql.DB, database string) error {
 	n := 0
 	for rows.Next() {
 		var grant string
-		if rows.Scan(&grant) != nil || !permittedGrant(grant, database) {
+		if rows.Scan(&grant) != nil || !permit(grant, database) {
 			return ErrPermissions
 		}
 		n++

@@ -70,16 +70,19 @@ type history struct {
 	TargetRows   uint64
 }
 type state struct {
-	SeedFrom        string
-	SeedThrough     string
-	Collection      aj.Progress
-	History         history
-	HistoryProgress aj.Progress
-	FirstDate       string
-	FirstDateSource string
-	Frontier        string
-	RetryToken      string
-	Turns           int
+	SeedFrom           string
+	SeedThrough        string
+	Collection         aj.Progress
+	History            history
+	HistoryProgress    aj.Progress
+	FirstDate          string
+	FirstDateSource    string
+	Frontier           string
+	RetryToken         string
+	HistoryTurns       int
+	ScheduleCollection int
+	ScheduleHistory    int
+	Turns              int
 }
 
 func Open(sourceDSN, targetDSN string) (*Engine, error) {
@@ -310,10 +313,9 @@ func save(ctx context.Context, tx *sql.Tx, s state) error {
 	return err
 }
 
-// Step commits at most one source-reading batch. Four collection opportunities
-// alternate with one history opportunity; disabling either gives the other all slots.
+// Step executes one scheduled batch; disabling either task gives the other all slots.
 func (e *Engine) Step(ctx context.Context, settings aj.Settings, batch, delay int, immutable bool) (aj.Status, error) {
-	if batch < 1 || batch > 5000 || delay < 60 || delay > 86400 {
+	if !settings.Valid() || batch < 1 || batch > 5000 || delay < 60 || delay > 86400 {
 		return aj.Status{Protocol: aj.Protocol}, errors.New("invalid_archive_settings")
 	}
 	historyTurn := false
@@ -334,12 +336,10 @@ func (e *Engine) Step(ctx context.Context, settings aj.Settings, batch, delay in
 		if err = seedDays(ctx, c, &s); err != nil {
 			return err
 		}
-		historyTurn = settings.History && (!settings.Collection || s.Turns >= 4)
+		historyTurn = s.nextHistoryTurn(settings)
 		if historyTurn {
-			s.Turns = 0
 			err = e.historyStep(ctx, c, &s, batch, immutable)
 		} else if settings.Collection {
-			s.Turns++
 			err = e.collect(ctx, c, &s, batch, delay)
 		}
 		if err != nil {
@@ -351,17 +351,13 @@ func (e *Engine) Step(ctx context.Context, settings aj.Settings, batch, delay in
 			p.UpdatedAt = time.Now().UTC()
 		}
 		// On failure the batch transaction has rolled back. Persist only diagnostic
-		// state; reload committed cursors so no failed write can advance the stream.
+		// state and consumed scheduling slots; never advance failed data cursors.
 		if err != nil {
 			committed, readErr := load(ctx, c)
 			if readErr != nil {
 				return readErr
 			}
-			if historyTurn {
-				committed.HistoryProgress = s.HistoryProgress
-			} else {
-				committed.Collection.Error = s.Collection.Error
-			}
+			committed = failedAttempt(committed, s, historyTurn)
 			s = committed
 		}
 		tx, txErr := c.BeginTx(ctx, nil)
@@ -496,4 +492,24 @@ func seedDays(ctx context.Context, c *sql.Conn, s *state) error {
 		_, err = c.ExecContext(ctx, "UPDATE log_archive_days SET state='collecting' WHERE state='pending' AND (log_date>=? OR log_date>=?)", s.Frontier, today)
 	}
 	return err
+}
+
+// failedAttempt keeps committed data checkpoints and counts but consumes the
+// attempted task slot, so a failing task cannot monopolize the scheduler.
+func failedAttempt(committed, attempted state, historyTurn bool) state {
+	if historyTurn {
+		committed.HistoryProgress.Error = attempted.HistoryProgress.Error
+		committed.HistoryProgress.UpdatedAt = attempted.HistoryProgress.UpdatedAt
+		committed.HistoryProgress.Date = attempted.HistoryProgress.Date
+		committed.HistoryProgress.Step = attempted.HistoryProgress.Step
+		committed.HistoryProgress.Table = attempted.HistoryProgress.Table
+	} else {
+		committed.Collection.Error = attempted.Collection.Error
+		committed.Collection.UpdatedAt = attempted.Collection.UpdatedAt
+	}
+	committed.Turns = attempted.Turns
+	committed.HistoryTurns = attempted.HistoryTurns
+	committed.ScheduleCollection = attempted.ScheduleCollection
+	committed.ScheduleHistory = attempted.ScheduleHistory
+	return committed
 }

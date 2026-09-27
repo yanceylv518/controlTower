@@ -49,3 +49,37 @@ test('refresh failure retains last report but disables actions',async t=>{
  const ctx=setup(t);await initial(ctx);const previous=value(ctx,'item').value;const p=value(ctx,'load')();ctx.requests.at(-1).reject(new ApiError(503));await p
  assert.equal(value(ctx,'item').value,previous);assert.equal(value(ctx,'writable').value,false);assert.equal(value(ctx,'unavailable').value,false)
 })
+
+test('batch ratio defaults survive editing and custom values are submitted',async t=>{
+ const ctx=setup(t);await initial(ctx);value(ctx,'edit')()
+ const form=value(ctx,'form').value
+ assert.equal(form.tasks.collection_batches,4)
+ assert.equal(form.tasks.history_batches,1)
+ form.tasks.collection_batches=2;form.tasks.history_batches=3
+ assert.equal(value(ctx,'item').value.config.tasks.collection_batches,undefined)
+ const saving=value(ctx,'save')(form)
+ const req=ctx.requests.at(-1),body=JSON.parse(req.options.body)
+ assert.equal(body.tasks.collection_batches,2);assert.equal(body.tasks.history_batches,3)
+ req.reject(new Error('test failure'));await saving
+})
+test('task toggles preserve configured scheduling ratio',async t=>{
+ const ctx=setup(t);await initial(ctx)
+ Object.assign(value(ctx,'item').value.config.tasks,{collection_batches:2,history_batches:3})
+ value(ctx,'toggle')('history')
+ const req=ctx.requests.at(-1),body=JSON.parse(req.options.body)
+ assert.equal(body.tasks.collection_batches,2);assert.equal(body.tasks.history_batches,3)
+ req.reject(new Error('test failure'));await new Promise(r=>setImmediate(r))
+})
+
+test('settings remain inspectable while offline or refreshing but cannot be saved',async t=>{
+ const ctx=setup(t);await initial(ctx)
+ value(ctx,'item').value.seen_at='2000-01-01T00:00:00Z'
+ assert.equal(value(ctx,'canOpenSettings').value,true)
+ value(ctx,'edit')();assert.ok(value(ctx,'form').value)
+ const before=ctx.requests.length
+ await value(ctx,'save')(value(ctx,'form').value)
+ assert.equal(ctx.requests.length,before)
+ value(ctx,'loading').value=true
+ assert.equal(value(ctx,'canOpenSettings').value,true)
+ assert.match(value(ctx,'settingsBlockReason').value,/刷新/)
+})

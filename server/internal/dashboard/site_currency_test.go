@@ -59,3 +59,28 @@ func TestCurrencyUsesEachNewAPISite(t *testing.T) {
 		t.Fatal("must not invent a currency when a site is unavailable")
 	}
 }
+
+func TestCurrencyRetainsExactConversionObservation(t *testing.T) {
+	source := testSiteCurrencySource{
+		"precise": `{"QuotaPerUnit":"1000000.000000000001","USDExchangeRate":"7.123456789012345678","general_setting.quota_display_type":"CNY"}`,
+		"invalid": `{"QuotaPerUnit":"500000","USDExchangeRate":"0","general_setting.quota_display_type":"CNY"}`,
+		"unknown": `{"QuotaPerUnit":"500000","general_setting.quota_display_type":"NOT_A_CURRENCY"}`,
+		"tokens":  `{"QuotaPerUnit":"1234567","general_setting.quota_display_type":"TOKENS"}`,
+	}
+	got, err := readSiteCurrency(context.Background(), source, "precise")
+	if err != nil || got.SiteID != "precise" || got.RawQuotaPerUnit != "1000000.000000000001" || got.ExchangeRate != "7.123456789012345678" {
+		t.Fatalf("lost monetary precision: %+v %v", got, err)
+	}
+	if _, err = time.Parse(time.RFC3339Nano, got.ObservedAt); err != nil {
+		t.Fatal(err)
+	}
+	for _, site := range []string{"invalid", "unknown", "missing"} {
+		if _, err := readSiteCurrency(context.Background(), source, site); err == nil {
+			t.Fatalf("invented fallback for %s", site)
+		}
+	}
+	got, err = readSiteCurrency(context.Background(), source, "tokens")
+	if err != nil || got.RawQuotaPerUnit != "1234567" || got.QuotaPerUnit != 1 || got.PriceMultiplier != 1234567 {
+		t.Fatalf("token display %+v %v", got, err)
+	}
+}

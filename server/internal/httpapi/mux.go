@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"controltower/server/internal/agentgateway"
+	"controltower/server/internal/archivereader"
 	ctauth "controltower/server/internal/auth"
 	"controltower/server/internal/billing"
 	"controltower/server/internal/dashboard"
@@ -89,6 +90,14 @@ func NewMux(options Options) *http.ServeMux {
 		return dashboard.RequireBearerToken(options.DashboardToken, h)
 	}
 	a := ctauth.Handlers{M: options.AuthManager, Limiter: ctauth.NewIPLimiter(), Audit: options.Store}
+	jobReader, _ := options.ArchiveReader.(dashboard.ArchiveJobReader)
+	mux.Handle("GET /api/dashboard/log-archive-read/{kind}", protect(dashboard.ArchiveReadHandler{Reader: jobReader}))
+	if connectionStore, ok := any(options.Store).(archivereader.ConnectionStore); ok {
+		h := dashboard.ArchiveConnectionHandler{Store: connectionStore, SecretKey: options.SecretKey}
+		mux.Handle("GET /api/dashboard/log-archive-connection", protect(h))
+		mux.Handle("POST /api/dashboard/log-archive-connection/test", protect(h))
+		mux.Handle("PUT /api/dashboard/log-archive-connection", protect(h))
+	}
 	auditAuthMutation := func(h http.HandlerFunc) http.Handler {
 		return auditMutations(h, options.Store)
 	}
