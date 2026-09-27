@@ -129,6 +129,7 @@ watch(themeSignature, () => { void render(); }, { flush: "post" });
     <header class="trend-header"><h3>{{ title }}</h3><slot name="actions" /></header>
     <div v-if="hasData" ref="chartEl" class="trend-chart-canvas"></div>
     <el-empty v-else :image-size="52" description="暂无趋势数据" />
+    <slot name="footer" />
   </section>
 </template>
 

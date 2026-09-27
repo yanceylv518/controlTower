@@ -36,8 +36,10 @@ onBeforeUnmount(()=>{generation++;controller?.abort();});
  <div class="request-error-card" v-loading="loading && mode==='codes'">
   <TrendChart :title="title" :series="chartSeries" :context-series="contextSeries">
    <template #actions><el-radio-group v-model="mode" size="small"><el-radio-button value="overview">总览</el-radio-button><el-radio-button value="codes">按错误码</el-radio-button></el-radio-group><el-button text :icon="FullScreen" aria-label="展开请求与错误" @click="expanded=true" /></template>
+   <template #footer>
+    <div v-if="mode==='codes' && (error || (data && !data.configured) || !windowRange || selected!==null)" class="error-status"><span v-if="error">{{ error }} <el-button link type="primary" @click="load(true)">重试</el-button></span><span v-else-if="data && !data.configured">尚未配置站点只读连接</span><span v-else-if="!windowRange">暂无可对齐的监控时间桶</span><el-button v-else link @click="selected=null">查看全部</el-button></div>
+   </template>
   </TrendChart>
-  <div v-if="mode==='codes'" class="error-status"><span v-if="error">{{ error }} <el-button link type="primary" @click="load(true)">重试</el-button></span><span v-else-if="data && !data.configured">尚未配置站点只读连接</span><span v-else-if="!windowRange">暂无可对齐的监控时间桶</span><span v-else>Top 5 + 其他 · 源错误日志 <el-button v-if="selected!==null" link @click="selected=null">查看全部</el-button></span></div>
  </div>
  <el-dialog v-model="expanded" title="请求与错误" width="min(1100px, 94vw)" destroy-on-close>
   <div class="expanded-toolbar"><el-radio-group v-model="mode" size="small"><el-radio-button value="overview">总览</el-radio-button><el-radio-button value="codes">按错误码</el-radio-button></el-radio-group><el-button size="small" :disabled="loading" @click="load(true)">刷新</el-button></div>
@@ -54,4 +56,4 @@ onBeforeUnmount(()=>{generation++;controller?.abort();});
   </div>
  </el-dialog>
 </template>
-<style scoped>.request-error-card{min-width:0;position:relative}.error-status{padding:0 12px 6px;font-size:12px;color:var(--el-text-color-secondary)}.expanded-toolbar,.distribution-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}.request-error-card :deep(.trend-header){flex-wrap:nowrap}.request-error-card :deep(.trend-header h3){white-space:nowrap;font-size:12px}.request-error-card :deep(.el-radio-button__inner){padding:5px 7px}.request-error-card :deep(.trend-chart){height:100%;box-sizing:border-box}</style>
+<style scoped>.request-error-card{min-width:0;position:relative;display:flex}.error-status{padding-top:4px;font-size:12px;overflow-wrap:anywhere;color:var(--el-text-color-secondary)}.expanded-toolbar,.distribution-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}.request-error-card :deep(.trend-header h3){font-size:12px}.request-error-card :deep(.el-radio-button__inner){padding:5px 7px}.request-error-card :deep(.trend-chart){width:100%;box-sizing:border-box}</style>

@@ -24,3 +24,7 @@
 ## 发布结果
 
 **rc144监控优化远程发布完成（2026-09-27）**：f762febfb4818f425c9aa15528d56ddb83ff4a0f已推送main，v2.0.0-rc144固定同一提交；CI36321082647与release36321085845成功，三Linux附件、SHA256SUMS及GHCR镜像已发布。正式包下载release/v2.0.0-rc144，校验和、ELF架构/执行位、脚本LF、版本与Server错误码接口/前端内容检查通过；Go vet/test、Web typecheck/build及489项前端测试通过。本次仅更新Server/Web，Agent保持现有版本；rc143大记录归档修复尚在独立分支，rc144不包含该修复，发布说明已明确不可替换现有rc143 Agent。未生产部署，真实错误码曲线与源库性能待验收。
+
+## 卡片布局修复
+
+监控错误码卡片布局修复（2026-09-27，本地未发布）：修复图表height:100%与外置说明叠加导致提示溢出覆盖下一行；状态提示移入TrendChart footer，移除常驻Top5说明，外层改flex自然撑高，标题允许换行。实际Vue组件合成数据浏览器验证第一行卡片等高200px、下一行间距10px，无内容溢出；截图local/monitor-layout-fixed.png。Web typecheck/build通过；未提交打包，rc144仍含旧布局。
