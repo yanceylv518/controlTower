@@ -19,3 +19,8 @@
 - 验证：Go全量go vet ./...及go test ./...通过（local/monitor-error-trend-go.log）；Web typecheck/build通过（既有chunk提示）；4项组件/趋势回归通过，覆盖取消与竞态、失败清空、按需加载及区间、Top5与其他合计和未知码；git diff --check通过。
 - 本地5192连接远程可访问，缓存命中率入口可见。浏览器详情交互验证未完成；远程Server新端点仍未部署（404），真实错误码曲线、查询性能与生产验收待配套Server/Web发布后完成。
 - 状态：本地未提交、未打包、未发布；无需Agent改动。用户本次已拒绝Workspace推送，不上传。
+
+
+## 发布结果
+
+**rc144监控优化远程发布完成（2026-09-27）**：f762febfb4818f425c9aa15528d56ddb83ff4a0f已推送main，v2.0.0-rc144固定同一提交；CI36321082647与release36321085845成功，三Linux附件、SHA256SUMS及GHCR镜像已发布。正式包下载release/v2.0.0-rc144，校验和、ELF架构/执行位、脚本LF、版本与Server错误码接口/前端内容检查通过；Go vet/test、Web typecheck/build及489项前端测试通过。本次仅更新Server/Web，Agent保持现有版本；rc143大记录归档修复尚在独立分支，rc144不包含该修复，发布说明已明确不可替换现有rc143 Agent。未生产部署，真实错误码曲线与源库性能待验收。

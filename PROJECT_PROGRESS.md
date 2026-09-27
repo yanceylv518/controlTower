@@ -3,6 +3,8 @@
 <!-- AI_CURRENT_START -->
 ## 当前总览
 
+- **rc144监控优化远程发布完成（2026-09-27）**：f762febfb4818f425c9aa15528d56ddb83ff4a0f已推送main，v2.0.0-rc144固定同一提交；CI36321082647与release36321085845成功，三Linux附件、SHA256SUMS及GHCR镜像已发布。正式包下载release/v2.0.0-rc144，校验和、ELF架构/执行位、脚本LF、版本与Server错误码接口/前端内容检查通过；Go vet/test、Web typecheck/build及489项前端测试通过。本次仅更新Server/Web，Agent保持现有版本；rc143大记录归档修复尚在独立分支，rc144不包含该修复，发布说明已明确不可替换现有rc143 Agent。未生产部署，真实错误码曲线与源库性能待验收。
+
 - **rc142远程发布完成（2026-09-27）**：85b5e0502ed1907e0f05c8699a11f94fdf22edb9已推送main，v2.0.0-rc142固定同一提交。CI36300306928与release36300311097成功；三Linux安装包、SHA256及GHCR版本/latest镜像已发布。正式附件下载release/v2.0.0-rc142，SHA256、ELF架构/执行位、脚本LF、Agent版本/live结构、Server前端及097迁移核验通过。需配套升级Agent和Server/Web；未生产部署或真实RDS性能验收。此前本地未提交/未发布状态由本条更新。
 
 - **归档优化本地打包完成（2026-09-27）**：v2.0.0-rc142-local包含当前未提交的归档数据融合、live统计、日统计批量写入、异常超时及价格显示修复。三Linux包及SHA256SUMS位于release/v2.0.0-rc142-local；Agent amd64/arm64、Server/Web amd64。重新执行Go全量vet/test及Web typecheck/build通过；校验SHA256、ELF架构、执行位、脚本LF、Agent版本/live结构、Server前端及097迁移通过。未提交推送、未远程发布、未部署或Linux实机安装；配套升级Agent与Server/Web，生产RDS验收仍待执行。
