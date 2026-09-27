@@ -17,7 +17,7 @@ SUM(CASE WHEN type=5 THEN 1 ELSE 0 END) AS error,
 SUM(CASE WHEN type=2 AND completion_tokens=0 AND quota>0 THEN 1 ELSE 0 END) AS charged_empty_output
 FROM ` + "`logs_" + d.Format("200601") + "` WHERE created_at>=? AND created_at<?"
 	args := []any{d.Unix(), d.Unix(), d.AddDate(0, 0, 1).Unix()}
-	for _, filter := range []struct{ column, value string }{{"user_id", q.UserID}, {"model_name", q.Model}, {"channel", q.ChannelID}} {
+	for _, filter := range []struct{ column, value string }{{"user_id", q.UserID}, {"model_name", q.Model}, {q.channelSQL(), q.ChannelID}} {
 		if filter.value != "" {
 			query += " AND " + filter.column + "=?"
 			args = append(args, filter.value)

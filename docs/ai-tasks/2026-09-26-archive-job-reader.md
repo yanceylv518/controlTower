@@ -103,3 +103,26 @@ https://github.com/yanceylv518/controlTower/releases/tag/v2.0.0-rc139
 ## RDS授权能力分类
 
 - **归档授权按能力分类（2026-09-27，本地未发布）**：依据用户RDS 8.0.36实际授权，移除新版reader库名/表名和纯SELECT模板匹配，允许RDS附带观察权限与额外只读授权；拒绝写入、DDL、执行、提权、角色及未知管理权限。固定归档SQL/身份绑定保留，旧reader不变。新增实际授权与危险能力回归，Go全量vet/test、4项连接前端测试、typecheck/build通过；未真实RDS联调。rc139不包含此后续修复，尚未提交发布。
+
+## rc140正式发布
+
+- **rc140远程发布完成（2026-09-27）**：权限能力分类修复fd225971已推送main，v2.0.0-rc140固定同一SHA。CI36286884365和release36286886737成功，三安装包、SHA256和GHCR镜像已发布。正式附件下载release/v2.0.0-rc140，校验值、ELF架构/二进制执行位、脚本LF、Server构建提交/前端/097迁移核验通过。沿用实现轮Go全量vet/test、4项连接前端测试及typecheck/build；未真实RDS/TLS联调、未生产部署。仅需更新Server/Web，Agent逻辑未改。
+https://github.com/yanceylv518/controlTower/releases/tag/v2.0.0-rc140
+
+## 币种站点参数修复
+
+- **归档币种请求参数修复（2026-09-27，本地未发布）**：用户截图显示归档统计红色错误已消失、9月无封存数据，币种仍失败。核查发现useArchiveCurrency错传site_id，而passthroughScope要求site，已修正前端并在真实composable测试中核验请求参数。5项币种测试、typecheck/build通过；未浏览器真实币种联调。仅Web变更，rc140不包含；无需改数据库权限或Agent。
+
+## 月表渠道字段兼容
+
+- **归档明细渠道字段兼容（2026-09-27，本地未发布）**：用户实库EXPLAIN确认1054 Unknown column channel。月表读取改为从information_schema.columns探测channel_id/channel，优先channel_id，统一返回channel；明细和异常汇总筛选共用同一字段。两者都缺失时无筛选返回NULL，有渠道筛选明确拒绝，避免忽略条件。Go全量vet/test通过，新增SQL/schema回归和实库变体测试；本轮未配置DSN，实库变体未执行，未生产验证。无需Agent或归档表迁移；与未发布的币种参数修复一并待交付。
+
+## 集中复查源表创建与读取契约（2026-09-27）
+
+- 目标：停止逐个截图修复后立即发布，集中检查归档写入、统计、明细、筛选、分页、币种链路。
+- 根因证据：`agent/internal/archivejob/raw.go` 的 `ensureMonth` 从源库 `SHOW CREATE TABLE logs` 复制 DDL，仅替换表名；`writeRaw` 原样写入列。`agent/internal/logcollector/mysql.go` 已使用 channel_id；reader 先前却固定 channel，测试只覆盖自建 channel 表，遗漏两模块契约差异。
+- 改动：探测渠道与可选 content 列；兼容 channel_id/channel，两列并存按非NULL优先级，与统计JSON筛选一致。缺渠道且指定筛选明确报错；缺content保留NULL，不捏造内容。币种请求使用 site。数据库查询错误保留安全固定分类，页面展示短提示，驱动SQL/连接信息不外泄。
+- 实测：隔离本机 MySQL 9.7、127.0.0.1:33386，临时库由测试创建清理。执行 `go test ./agent/internal/archivejob ./server/internal/archivereader ./server/internal/dashboard -count=1`（设置测试DSN）通过。新增 Agent 真实 ensureMonth/writeRaw/parseAggregate 测试覆盖两种渠道字段、长内容、大整数；reader实测字段变体、筛选、分页、NULL、内容截断、身份及只读授权、明确字段异常；币种HTTP handler从真实options表读取精确汇率，验证site与site_id参数差异。
+- 质量门：Go全量vet/test通过；77项归档前端测试通过；pnpm typecheck/build通过（既有chunk大小警告）；git diff --check通过。初次前端测试因测试夹具未注入新增错误函数失败，已修复夹具并全套重跑通过。
+- 限制：这不是生产RDS 8.0.36或远程UI验收；没有获取生产SHOW CREATE，不声称已检查完整实库结构，也未性能压测。未重新打包、提交、推送或部署。Agent仅新增测试，运行逻辑未变化，不需升级Agent或改表。
+- 下一步：统一交付 Server/Web 后核验 July 7 明细、三类异常筛选、下一页、渠道过滤与实际站点币种；避免将“编译通过/本地集成通过”当“生产验收”。

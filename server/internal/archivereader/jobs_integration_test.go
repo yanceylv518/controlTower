@@ -190,6 +190,73 @@ func TestJobReaderMySQL(t *testing.T) {
 	if _, err = reader.ReadJob(ctx, q); !errors.Is(err, ErrIdentity) {
 		t.Fatal("wrong site", err)
 	}
+
+	t.Run("channel_id source schema", func(t *testing.T) {
+		exec(db, "ALTER TABLE logs_202607 RENAME COLUMN channel TO channel_id")
+		defer exec(db, "ALTER TABLE logs_202607 RENAME COLUMN channel_id TO channel")
+		detail := JobQuery{Site: "site", Kind: "logs", Date: "2026-07-04", Limit: 100, ChannelID: "8", Category: "empty_output"}
+		result, e := reader.ReadJob(ctx, detail)
+		if e != nil || len(result.Items) != 2 || result.Items[0]["channel"] != "8" {
+			t.Fatalf("channel_id detail: %+v %v", result, e)
+		}
+		detail.ChannelID = "999"
+		result, e = reader.ReadJob(ctx, detail)
+		if e != nil || len(result.Items) != 0 {
+			t.Fatalf("filter: %+v %v", result, e)
+		}
+		detail.Kind = "anomalies"
+		detail.Category = ""
+		detail.ChannelID = "8"
+		result, e = reader.ReadJob(ctx, detail)
+		if e != nil || len(result.Items) == 0 {
+			t.Fatalf("channel_id summary: %+v %v", result, e)
+		}
+	})
+	t.Run("missing channel is unknown", func(t *testing.T) {
+		exec(db, "ALTER TABLE logs_202607 RENAME COLUMN channel TO original_channel")
+		defer exec(db, "ALTER TABLE logs_202607 RENAME COLUMN original_channel TO channel")
+		detail := JobQuery{Site: "site", Kind: "logs", Date: "2026-07-04", Limit: 100}
+		result, e := reader.ReadJob(ctx, detail)
+		if e != nil || len(result.Items) == 0 || result.Items[0]["channel"] != nil {
+			t.Fatalf("missing: %+v %v", result, e)
+		}
+		detail.ChannelID = "8"
+		_, e = reader.ReadJob(ctx, detail)
+		if !errors.Is(e, ErrChannelColumn) {
+			t.Fatal(e)
+		}
+	})
+	t.Run("both channel names use same fallback as statistics", func(t *testing.T) {
+		exec(db, "ALTER TABLE logs_202607 ADD COLUMN channel_id BIGINT NULL")
+		defer exec(db, "ALTER TABLE logs_202607 DROP COLUMN channel_id")
+		exec(db, "UPDATE logs_202607 SET channel_id=9 WHERE id=1")
+		for _, kind := range []string{"logs", "anomalies"} {
+			result, e := reader.ReadJob(ctx, JobQuery{Site: "site", Kind: kind, Date: "2026-07-04", Limit: 100, ChannelID: "9"})
+			if e != nil || len(result.Items) != 1 {
+				t.Fatalf("%s primary: %+v %v", kind, result, e)
+			}
+			result, e = reader.ReadJob(ctx, JobQuery{Site: "site", Kind: kind, Date: "2026-07-04", Limit: 100, ChannelID: "8"})
+			if e != nil || len(result.Items) == 0 || (kind == "logs" && len(result.Items) != 3) {
+				t.Fatalf("%s fallback: %+v %v", kind, result, e)
+			}
+		}
+	})
+	t.Run("source without content still supports detail", func(t *testing.T) {
+		exec(db, "ALTER TABLE logs_202607 RENAME COLUMN content TO source_content")
+		defer exec(db, "ALTER TABLE logs_202607 RENAME COLUMN source_content TO content")
+		result, e := reader.ReadJob(ctx, JobQuery{Site: "site", Kind: "logs", Date: "2026-07-04", Limit: 100})
+		if e != nil || len(result.Items) != 4 || result.Items[0]["content_preview"] != nil {
+			t.Fatalf("optional content: %+v %v", result, e)
+		}
+	})
+	t.Run("required schema mismatch has a specific safe error", func(t *testing.T) {
+		exec(db, "ALTER TABLE logs_202607 RENAME COLUMN quota TO source_quota")
+		defer exec(db, "ALTER TABLE logs_202607 RENAME COLUMN source_quota TO quota")
+		_, e := reader.ReadJob(ctx, JobQuery{Site: "site", Kind: "logs", Date: "2026-07-04", Limit: 100})
+		if ReadErrorCode(e) != "archive_read_schema_mismatch" {
+			t.Fatal(e)
+		}
+	})
 	q.Site = "site"
 	exec(admin, "GRANT INSERT ON `"+name+"`.`logs_202607` TO '"+user+"'@'%'")
 	if _, err = reader.ReadJob(ctx, q); !errors.Is(err, ErrPermissions) {

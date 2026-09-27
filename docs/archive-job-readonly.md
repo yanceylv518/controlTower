@@ -99,3 +99,7 @@ GET /api/dashboard/log-archive-read/anomalies?site_id=actual-site-id&date=2026-0
 连接测试区分 archive_tls_failed、archive_auth_failed、archive_network_failed、archive_database_missing；仅返回固定分类，不回传驱动错误、密码或DSN。未分类失败仍显示通用提示。
 
 RDS只读模板兼容：截图中的全局观察权限、目标库SELECT/LOCK TABLES/SHOW VIEW及mysql系统表SELECT均纳入回归。额外只读授权不扩大应用查询范围；归档SQL仍为固定表和绑定站点身份，旧版账单reader继续使用原表级限制。CURRENT_ROLE需为NONE，尚不解析角色有效权限。
+
+月表渠道字段按实际结构探测，优先channel_id、其次channel；两列同时存在时用COALESCE，与统计维度筛选一致，响应统一为channel。无渠道字段时显示NULL；带渠道筛选则返回archive_channel_column_missing，不静默忽略筛选。
+
+Agent 按源 logs 的 SHOW CREATE TABLE 克隆月表，并原样保留列和索引；Server 不假设月表采用固定渠道列名。可选 content 缺失时明细预览为NULL。必需列不匹配、缺表、查询权限与超时分别返回 archive_read_schema_mismatch、archive_read_table_missing、archive_read_access_denied、archive_read_timeout；不将全部查询错误归为连接失败。

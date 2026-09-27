@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import {computed,ref,watch,onUnmounted} from 'vue'
-import {ApiError} from '@ct/shared'
+import {archiveReadError} from '../utils/archiveReadError'
 import {client} from '../api'
 import TrendChart from './TrendChart.vue'
 import ArchiveModelPrices from './ArchiveModelPrices.vue'
@@ -21,7 +21,7 @@ const total=computed(()=>totals(rows.value)),groups=computed(()=>groupStats(rows
 const dailyTotals=computed(()=>new Map(days.value.map(date=>[date,totals(rows.value.filter(r=>r.date===date))])))
 const series=computed(()=>[{name:metric.value==='quota'?moneyLabel.value:metric.value==='requests'?'请求次数':'输出 Token',color:'#3284c6',data:calendar().map(date=>{const total=dailyTotals.value.get(date);let value:number|null=null;if(total&&total[`${metric.value}_missing`]===0n){value=metric.value==='quota'?(money.value?Number(amount(total.quota)):null):Number(total[metric.value]);if(value!==null&&!Number.isFinite(value))value=null}return [date,value] as [string,number|null]})}])
 function calendar(){if(!month.value)return [];const count=new Date(Number(month.value.slice(0,4)),Number(month.value.slice(5)),0).getDate();return Array.from({length:count},(_,i)=>`${month.value}-${String(i+1).padStart(2,'0')}`)}
-function failure(e:unknown){return e instanceof ApiError?`读取失败（${e.status} · ${e.code}）。请确认 Server 已更新，并在设置中配置归档库连接。`:e instanceof Error?e.message:'归档读取失败'}
+function failure(e:unknown){return archiveReadError(e)}
 async function read(kind:string,extra:Record<string,string>){return client.request<Page>(`/api/dashboard/log-archive-read/${kind}?${new URLSearchParams({site_id:props.siteId,limit:'200',...extra})}`)}
 async function load(){const ticket=++sequence;rows.value=[];days.value=[];versions.value={};loaded.value=false;error.value='';if(!props.siteId||!month.value)return;busy.value=true
  void refreshMoney()

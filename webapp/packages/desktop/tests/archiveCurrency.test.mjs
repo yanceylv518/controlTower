@@ -32,7 +32,7 @@ test('unavailable, old, cross-site and invalid configuration never fall back to 
  for(const raw of [{...cny,site_id:'b'},{...cny,raw_quota_per_unit:500000},{...cny,exchange_rate:'0'},{...cny,type:'WHAT'},{...cny,observed_at:'bad'},{...cny,raw_quota_per_unit:'NaN'}, {type:'CNY',quota_per_unit:500000/7.2,price_multiplier:7.2}])assert.throws(()=>parseArchiveCurrency(raw,'a'))
 })
 test('site switch clears conversion and ignores stale errors, retry changes currency',async()=>{
- const requests=[],site=ref('a'),client={request:url=>new Promise((resolve,reject)=>requests.push({url,resolve,reject}))}
+ const requests=[],site=ref('a'),client={request:url=>{const q=new URL(url,'http://localhost').searchParams;assert.equal(q.get('site'),site.value);assert.equal(q.has('site_id'),false);return new Promise((resolve,reject)=>requests.push({url,resolve,reject}))}}
  const source=readFileSync(new URL('../src/composables/useArchiveCurrency.ts',import.meta.url),'utf8').replace(/^import .*$/gm,'')
  const api={};let dispose
  new Function('exports','ref','watch','onUnmounted','client','parseArchiveCurrency',compile(source))(api,ref,watch,fn=>dispose=fn,client,parseArchiveCurrency)

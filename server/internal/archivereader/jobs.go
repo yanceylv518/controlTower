@@ -16,6 +16,7 @@ var ErrQuery = errors.New("archive_invalid_query")
 var ErrIdentity = errors.New("archive_identity_or_schema_mismatch")
 var ErrVersion = errors.New("archive_sealed_version_unavailable")
 var ErrPageSize = errors.New("archive_read_row_too_large")
+var ErrChannelColumn = errors.New("archive_channel_column_missing")
 var ErrIndex = errors.New("archive_read_time_index_required")
 var hash64 = regexp.MustCompile(`^[a-f0-9]{64}$`)
 var hash32 = regexp.MustCompile(`^[a-f0-9]{32}$`)
@@ -25,18 +26,20 @@ var numericID = regexp.MustCompile(`^[0-9]{1,20}$`)
 // JobQuery never accepts a database, table name, DSN or storage reference.
 // Stats continuations must carry the returned immutable version.
 type JobQuery struct {
-	Site      string `json:"site_id"`
-	Kind      string `json:"kind"`
-	Date      string `json:"date"`
-	Limit     int    `json:"limit"`
-	Version   string `json:"version"`
-	AfterHash string `json:"after_hash"`
-	AfterTime int64  `json:"after_time"`
-	AfterID   int64  `json:"after_id"`
-	UserID    string `json:"user_id"`
-	ChannelID string `json:"channel_id"`
-	Model     string `json:"model"`
-	Category  string `json:"category"`
+	channelColumn string // server-discovered SQL identifier, never request-controlled
+	contentAbsent bool
+	Site          string `json:"site_id"`
+	Kind          string `json:"kind"`
+	Date          string `json:"date"`
+	Limit         int    `json:"limit"`
+	Version       string `json:"version"`
+	AfterHash     string `json:"after_hash"`
+	AfterTime     int64  `json:"after_time"`
+	AfterID       int64  `json:"after_id"`
+	UserID        string `json:"user_id"`
+	ChannelID     string `json:"channel_id"`
+	Model         string `json:"model"`
+	Category      string `json:"category"`
 }
 
 type JobPage struct {
@@ -151,6 +154,17 @@ func (r Reader) ReadJob(ctx context.Context, q JobQuery) (JobPage, error) {
 		if count == 0 {
 			return page, ErrIndex
 		}
+		// Raw monthly tables retain the source schema: support both channel names.
+		var channelID, channel, content int
+		err = tx.QueryRowContext(ctx, `SELECT COUNT(CASE WHEN column_name='channel_id' THEN 1 END),COUNT(CASE WHEN column_name='channel' THEN 1 END),COUNT(CASE WHEN column_name='content' THEN 1 END) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name=? AND column_name IN ('channel_id','channel','content')`, month).Scan(&channelID, &channel, &content)
+		if err != nil {
+			return page, ErrUnavailable
+		}
+		q.channelColumn = archiveChannelColumn(channelID > 0, channel > 0)
+		q.contentAbsent = content == 0
+		if q.channelColumn == "NULL" && q.ChannelID != "" {
+			return page, ErrChannelColumn
+		}
 	}
 	if q.Kind == "stats" {
 		err = tx.QueryRowContext(ctx, `SELECT d.version_id FROM log_archive_days d JOIN log_archive_day_versions v ON v.version_id=d.version_id AND v.log_date=d.log_date AND v.revision=d.revision WHERE d.log_date=? AND d.state='sealed'`, q.Date).Scan(&page.Version)
@@ -167,7 +181,7 @@ func (r Reader) ReadJob(ctx context.Context, q JobQuery) (JobPage, error) {
 	query, args := jobSQL(q, page.Version)
 	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
-		return page, ErrUnavailable
+		return page, readFailure(err)
 	}
 	columns, err := rows.Columns()
 	if err != nil {
@@ -213,9 +227,12 @@ func (r Reader) ReadJob(ctx context.Context, q JobQuery) (JobPage, error) {
 		page.Items = append(page.Items, item)
 	}
 	err = rows.Err()
-	rows.Close()
+	closeErr := rows.Close()
+	if err == nil {
+		err = closeErr
+	}
 	if err != nil {
-		return page, ErrUnavailable
+		return page, readFailure(err)
 	}
 	if tx.Commit() != nil {
 		return page, ErrUnavailable
@@ -253,7 +270,11 @@ func jobSQL(q JobQuery, version string) (string, []any) {
 		d, _ := time.ParseInLocation("2006-01-02", q.Date, time.FixedZone("Beijing", 28800))
 		// Explicit projection: no API keys, IPs or arbitrary source columns.
 		// Content is a bounded error preview; truncation is visible to callers.
-		query = `SELECT /*+ MAX_EXECUTION_TIME(3000) */ id,created_at,type,user_id,channel,model_name,prompt_tokens,completion_tokens,quota,LEFT(content,4096) AS content_preview,(CHAR_LENGTH(content)>4096) AS content_truncated FROM ` + "`logs_" + d.Format("200601") + "`" + ` WHERE created_at>=? AND created_at<? AND (created_at>? OR (created_at=? AND id>?))`
+		content := "content"
+		if q.contentAbsent {
+			content = "NULL"
+		}
+		query = `SELECT /*+ MAX_EXECUTION_TIME(3000) */ id,created_at,type,user_id,` + q.channelSQL() + ` AS channel,model_name,prompt_tokens,completion_tokens,quota,LEFT(` + content + `,4096) AS content_preview,(CHAR_LENGTH(` + content + `)>4096) AS content_truncated FROM ` + "`logs_" + d.Format("200601") + "`" + ` WHERE created_at>=? AND created_at<? AND (created_at>? OR (created_at=? AND id>?))`
 		args = []any{d.Unix(), d.AddDate(0, 0, 1).Unix(), q.AfterTime, q.AfterTime, q.AfterID}
 		switch q.Category {
 		case "empty_output":
@@ -272,7 +293,7 @@ func jobSQL(q JobQuery, version string) (string, []any) {
 			args = append(args, q.Model)
 		}
 		if q.ChannelID != "" {
-			query += " AND channel=?"
+			query += " AND " + q.channelSQL() + "=?"
 			args = append(args, q.ChannelID)
 		}
 		query += " ORDER BY created_at,id LIMIT ?"
@@ -305,4 +326,25 @@ func (r Reader) openJobFile(ctx context.Context, site string) (*sql.DB, string, 
 		return nil, "", err
 	}
 	return db, expected, nil
+}
+
+func archiveChannelColumn(hasID, hasLegacy bool) string {
+	if hasID && hasLegacy {
+		return "COALESCE(`channel_id`,`channel`)"
+	}
+	if hasID {
+		return "`channel_id`"
+	}
+	if hasLegacy {
+		return "`channel`"
+	}
+	return "NULL"
+}
+func (q JobQuery) channelSQL() string {
+	switch q.channelColumn {
+	case "`channel_id`", "NULL", "COALESCE(`channel_id`,`channel`)":
+		return q.channelColumn
+	default:
+		return "`channel`"
+	}
 }

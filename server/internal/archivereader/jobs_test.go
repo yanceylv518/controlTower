@@ -134,3 +134,34 @@ func TestManagedReadonlyCapabilities(t *testing.T) {
 		}
 	}
 }
+
+func TestArchiveChannelSchemaVariants(t *testing.T) {
+	for _, tc := range []struct {
+		id, legacy bool
+		column     string
+	}{{true, false, "`channel_id`"}, {false, true, "`channel`"}, {true, true, "COALESCE(`channel_id`,`channel`)"}, {false, false, "NULL"}} {
+		column := archiveChannelColumn(tc.id, tc.legacy)
+		if column != tc.column {
+			t.Fatal(column)
+		}
+		for _, kind := range []string{"logs", "anomalies"} {
+			q := JobQuery{Kind: kind, Date: "2026-07-07", Limit: 100, ChannelID: "8", channelColumn: column}
+			query, args := jobSQL(q, "")
+			if !strings.Contains(query, " AND "+column+"=?") {
+				t.Fatal(query)
+			}
+			if kind == "logs" && !strings.Contains(query, column+" AS channel") {
+				t.Fatal(query)
+			}
+			found := false
+			for _, a := range args {
+				if a == "8" {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatal(args)
+			}
+		}
+	}
+}

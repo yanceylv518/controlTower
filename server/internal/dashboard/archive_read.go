@@ -53,7 +53,7 @@ func (h ArchiveReadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	page, err := h.Reader.ReadJob(r.Context(), q)
 	if err != nil {
-		status, code := 503, "archive_readonly_unavailable"
+		status, code := 503, archivereader.ReadErrorCode(err)
 		switch {
 		case errors.Is(err, archivereader.ErrQuery):
 			status, code = 400, "archive_invalid_query"
@@ -65,6 +65,8 @@ func (h ArchiveReadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			code = "archive_readonly_permissions_required"
 		case errors.Is(err, archivereader.ErrPageSize):
 			code = "archive_read_row_too_large"
+		case errors.Is(err, archivereader.ErrChannelColumn):
+			code = "archive_channel_column_missing"
 		case errors.Is(err, archivereader.ErrIndex):
 			code = "archive_read_time_index_required"
 		}

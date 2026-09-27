@@ -11,6 +11,11 @@ const currencyStub=()=>({money:ref(),moneyError:ref(''),moneyBusy:ref(false),ref
 const moneyAPI={}
 new Function('exports',ts.transpileModule(readFileSync(new URL('../src/utils/archiveMoney.ts',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText)(moneyAPI)
 const {quotaAmount,currencyUnit,moneyContext}=moneyAPI
+class ApiError extends Error { constructor(status,code){super(code);this.status=status;this.code=code} }
+const errorAPI={}
+new Function('exports','require',ts.transpileModule(readFileSync(new URL('../src/utils/archiveReadError.ts',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText)(errorAPI,()=>({ApiError}))
+const {archiveReadError}=errorAPI
+
 test('exact quota, missing cache and consumption-only aggregation',()=>{
  const rows=[{dimensions:{type:'2',model_name:'m'},amounts:{quota:'9007199254740993',requests:'2',log_rows:'2'}},{dimensions:{type:'5'},amounts:{quota:'100',requests:'9'}}]
  assert.equal(totals(rows).quota,9007199254740993n)
@@ -23,8 +28,8 @@ test('exact quota, missing cache and consumption-only aggregation',()=>{
 function setup(){const source=readFileSync(new URL('../src/components/ArchiveUsageStatistics.vue',import.meta.url),'utf8').split('<script setup lang="ts">')[1].split('</script>')[0].replace(/^import .*$/gm,'')
  const js=ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ES2022}}).outputText
  const props={siteId:'site-a'},requests=[];const client={request:url=>new Promise((resolve,reject)=>requests.push({url,resolve,reject}))}
- const c=new Function('computed','ref','watch','onUnmounted','defineProps','client','beijingDate','totals','usd','groupStats','csvCell','ApiError','useArchiveCurrency','quotaAmount','currencyUnit','moneyContext',js+';return {load,reset,rows,days,loaded,error,user,model,channel}')
- return {...c(computed,ref,()=>{},()=>{},()=>props,client,()=> '2026-07-04',totals,usd,groupStats,csvCell,class extends Error{},currencyStub,quotaAmount,currencyUnit,moneyContext),requests,props}}
+ const c=new Function('computed','ref','watch','onUnmounted','defineProps','client','beijingDate','totals','usd','groupStats','csvCell','archiveReadError','useArchiveCurrency','quotaAmount','currencyUnit','moneyContext',js+';return {load,reset,rows,days,loaded,error,user,model,channel}')
+ return {...c(computed,ref,()=>{},()=>{},()=>props,client,()=> '2026-07-04',totals,usd,groupStats,csvCell,archiveReadError,currencyStub,quotaAmount,currencyUnit,moneyContext),requests,props}}
 const tick=()=>new Promise(resolve=>setImmediate(resolve))
 test('sealed pages preserve version and filters and publish only complete result',async()=>{const c=setup();c.user.value='12';const pending=c.load();c.requests[0].resolve({items:[{date:'2026-07-04',state:'sealed',version_id:'v'},{date:'2026-07-05',state:'processing'}]});await tick()
  assert.match(c.requests[1].url,/user_id=12/);assert.match(c.requests[1].url,/version=v/)
@@ -44,8 +49,14 @@ test('anomaly pagination keeps exact IDs and discards stale site response',async
  const source=readFileSync(new URL('../src/components/ArchiveAnomalyAnalysis.vue',import.meta.url),'utf8').split('<script setup lang="ts">')[1].split('</script>')[0].replace(/^import .*$/gm,'')
  const js=ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ES2022}}).outputText
  const requests=[],props={siteId:'a'},client={request:url=>new Promise(resolve=>requests.push({url,resolve}))}
- const c=new Function('ref','computed','watch','onUnmounted','defineProps','client','beijingDate','usd','ApiError','useArchiveCurrency','quotaAmount','currencyUnit','moneyContext',js+';return {load,reset,rows,cursors,loaded}') (ref,computed,()=>{},()=>{},()=>props,client,()=> '2026-07-04',usd,class extends Error{},currencyStub,quotaAmount,currencyUnit,moneyContext)
+ const c=new Function('ref','computed','watch','onUnmounted','defineProps','client','beijingDate','usd','archiveReadError','useArchiveCurrency','quotaAmount','currencyUnit','moneyContext',js+';return {load,reset,rows,cursors,loaded}') (ref,computed,()=>{},()=>{},()=>props,client,()=> '2026-07-04',usd,archiveReadError,currencyStub,quotaAmount,currencyUnit,moneyContext)
  let pending=c.load();requests[0].resolve({items:[{id:'9007199254740993',created_at:'1783094400',quota:'0'}],has_more:true});await pending
  pending=c.load(2);assert.match(requests[1].url,/after_id=9007199254740993/);c.reset();requests[1].resolve({items:[{id:'old'}],has_more:false});await pending
  assert.equal(c.rows.value.length,0);assert.equal(c.loaded.value,false)
+})
+
+test('specific archive errors identify the failing layer',()=>{
+ assert.match(archiveReadError(new ApiError(503,'archive_read_schema_mismatch')),/字段不兼容/)
+ assert.match(archiveReadError(new ApiError(503,'archive_read_timeout')),/超时/)
+ assert.match(archiveReadError(new ApiError(503,'archive_read_access_denied')),/查询权限/)
 })

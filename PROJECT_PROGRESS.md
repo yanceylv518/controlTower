@@ -3,6 +3,8 @@
 <!-- AI_CURRENT_START -->
 ## 当前总览
 
+- **归档读写契约集中复查（2026-09-27，本地未提交/发布）**：从 Agent ensureMonth 的源库 SHOW CREATE TABLE logs 克隆路径确认月表保留源字段，不是固定 channel 模板。Server 兼容 channel_id/channel，两列并存用 COALESCE 与统计筛选一致；无 content 返回未知预览，不阻断明细。币种请求修复 site 参数；查询错误按字段不兼容、缺表、权限和超时分类并简化页面提示。新增 Agent 实际建表/原样写入/大整数与统计维度测试、reader 两列/缺内容/字段异常实库测试、Currency HTTP→真实 options 查询测试。隔离 MySQL 9.7 三模块实库测试、Go 全量 vet/test、77项归档前端测试、typecheck/build、diff 检查通过（既有 chunk 警告）。未连接生产 RDS 8.0.36、未验收远程页面或性能；先前“未配置DSN、变体测试未执行”被本轮本地实库证据更新。生产代码仅 Server/Web 变化，无需 Agent 升级或归档迁移。下一步统一交付后核验用户 July 7 明细/筛选/分页与实际币种；不能将本地通过当生产验收。
+
 - **归档分支合入主线验收（2026-09-27）**：按用户授权将codex/archive-byte-pagination的280dcc51、8d324fb0、8d206f68合入当前main，包含字节分页/大行与调度修复、归档只读连接和097迁移、统计异常及站点币种。独立合并工作区保留主线模型TPM功能，仅进度文档冲突合并双方记录。Go全量vet/test、478项前端测试、typecheck/build和diff检查通过；本轮未重跑MySQL或生产验收。合并推送结果以Git为准；未发布部署。主目录其他本地工作以stash备份后恢复。
 
 - **模型 TPM 双维已提交推送（2026-09-27）**：功能提交 1fb92634 已推送 origin/main，远程 SHA 已核对。仅提交模型按客户/按渠道切换、权限与渠道名称补齐及测试；其他归档、协作规则和历史文档改动保留。独立暂存快照 Go 全量 vet/test、455 项前端回归、typecheck/build 通过；未重做 MySQL 或浏览器验收，未发布部署。见[交接](docs/ai-tasks/2026-09-26-model-tpm-channel.md)。

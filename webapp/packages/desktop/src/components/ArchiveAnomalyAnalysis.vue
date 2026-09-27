@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import {ref,watch,onUnmounted,computed} from 'vue'
-import {ApiError} from '@ct/shared'
+import {archiveReadError} from '../utils/archiveReadError'
 import {client} from '../api'
 import {beijingDate} from '../utils/logArchive'
 import {useArchiveCurrency} from '../composables/useArchiveCurrency'
@@ -24,7 +24,7 @@ async function load(target=1){const ticket=++sequence;busy.value=true;error.valu
  const result=await client.request<{items:Log[];has_more:boolean}>(`/api/dashboard/log-archive-read/logs?${query}`);if(ticket!==sequence)return
  rows.value=result.items;more.value=result.has_more;page.value=target;loaded.value=true;const last=result.items.at(-1)
  if(result.has_more&&last)cursors.value[target]={time:String(last.created_at),id:String(last.id)}
- }catch(e){if(ticket===sequence)error.value=e instanceof ApiError?`归档日志读取失败（${e.status} · ${e.code}）。请检查归档连接、读取接口和月表时间索引。`:'连接失败，请重试'}finally{if(ticket===sequence)busy.value=false}}
+ }catch(e){if(ticket===sequence)error.value=archiveReadError(e)}finally{if(ticket===sequence)busy.value=false}}
 watch(()=>props.siteId,reset,{immediate:true});watch([date,category,user,model,channel],reset);onUnmounted(()=>sequence++)
 function amount(row:Log){return row.quota==null?'未知':quotaAmount(BigInt(row.quota),money.value)}
 function time(raw:string|null){return raw?new Date(Number(raw)*1000).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false}):'未知'}
