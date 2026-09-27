@@ -4,6 +4,9 @@ import { computed, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { ArrowLeft, ArrowRight } from "@element-plus/icons-vue";
 import type { AlertItem, ChannelSnapshot, LogSample, MetricItem } from "@ct/shared";
+import { siteOf } from "@ct/shared";
+import { useFiltersStore } from "../stores/filters";
+import MonitorErrorCodes from "../components/MonitorErrorCodes.vue";
 import { dashboard } from "../api";
 import { usePrefsStore } from "../stores/prefs";
 import { useAuthStore } from "../stores/auth";
@@ -26,6 +29,10 @@ const props = defineProps<{
 const router = useRouter();
 const prefs = usePrefsStore();
 const auth = useAuthStore();
+const filters = useFiltersStore();
+onMounted(() => void filters.loadInstances());
+const errorSite = computed(() => { const instance = filters.instances.find(i => i.instance_id === instancePart.value); return instance ? siteOf(instance) : ""; });
+const errorDimensionValue = computed(() => props.kind === "models" ? props.dimensionKey.slice(`${instancePart.value}:model:`.length) : idPart.value);
 onMounted(() => void prefs.load());
 
 const hours = ref(1);
@@ -379,14 +386,12 @@ const firingCount = computed(
             label="OTPS"
             :value="summary?.otps == null ? '—' : `${summary.otps.toFixed(2)} token/s`"
           />
+          <MetricMini label="缓存命中率" :value="pct(summary?.cache_hit_rate ?? null)" />
         </div>
         <el-tabs v-model="tab" class="detail-tabs">
           <el-tab-pane label="趋势" name="trends">
             <div v-loading="historyLoading" class="trend-grid">
-              <TrendChart
-                :title="`请求与错误（${bucketLabel}）`"
-                :series="requestSeries"
-              />
+              <MonitorErrorCodes :site="errorSite" :dimension-type="dimensionType" :value="errorDimensionValue" :hours="hours" :active="tab === 'trends'" :series="requestSeries" :bucket="historyWindow" />
               <TrendChart
                 :title="`延迟（秒，${bucketLabel}）`"
                 :series="latencySeries"

@@ -220,7 +220,7 @@ func allowAdminRequest(u storage.User, r *http.Request) bool {
 	switch path {
 	case "overview":
 		return read && any("overview.read")
-	case "metrics", "metric-history":
+	case "metrics", "metric-history", "monitor-error-codes":
 		if !read {
 			return false
 		}

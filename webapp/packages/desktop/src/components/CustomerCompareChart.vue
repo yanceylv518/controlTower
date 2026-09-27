@@ -98,7 +98,7 @@ function renderNow() {
     yAxis: {
       type: "value",
       min: 0,
-      max: yMax,
+      max: props.unit === "%" ? 100 : yMax,
       interval: yMax == null ? undefined : 1,
       axisLabel: { formatter: (value: number) => {
         if (props.compact) return compactNumber(value);

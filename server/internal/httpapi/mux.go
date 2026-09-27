@@ -254,6 +254,7 @@ func NewMux(options Options) *http.ServeMux {
 	mux.Handle("GET /api/dashboard/passthrough/logs", protect(http.HandlerFunc(passthrough.Logs)))
 	mux.Handle("GET /api/dashboard/passthrough/logs/stat", protect(http.HandlerFunc(passthrough.LogStat)))
 	mux.Handle("GET /api/dashboard/passthrough/logs/count", protect(http.HandlerFunc(passthrough.LogCount)))
+	mux.Handle("GET /api/dashboard/monitor-error-codes", protect(http.HandlerFunc(passthrough.MonitorErrorCodes)))
 	if jobs, ok := any(options.Store).(dashboard.BillingJobsStore); ok {
 		preflight, _ := any(options.Store).(dashboard.BillingJobsPreflightStore)
 		jobsHandler := dashboard.BillingJobsHandler{Store: jobs, Preflight: preflight, Source: dashboard.BillingReadonlySource{Handler: passthrough}}

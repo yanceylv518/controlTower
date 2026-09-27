@@ -25,7 +25,7 @@ void prefs.load();
 const router = useRouter();
 const hours = ref(1);
 const activeTab = ref<"charts" | "ranking">("charts");
-const activeMetric = ref<"ttft" | "tpm" | "otps">("tpm");
+const activeMetric = ref<"ttft" | "tpm" | "otps" | "cache">("tpm");
 const ttftThresholds = computed(() => [
   { name: "P50", value: prefs.ttftP50Threshold, color: "#2f6fed" },
   { name: "P90", value: prefs.ttftP90Threshold, color: "#16a6b6" },
@@ -203,7 +203,7 @@ function pointsFor(key: string, field: "ttft_p50_ms" | "ttft_p95_ms" | "prompt_t
 function tokenTrendPoints(key: string) {
   return (historyByKey.value.get(key) || []).map(item => item.prompt_tokens + item.completion_tokens);
 }
-function customerSeries(key: string, field: "ttft_p50_ms" | "ttft_p90_ms" | "ttft_p95_ms" | "tpm" | "otps", scale = 1, seriesName?: string) {
+function customerSeries(key: string, field: "ttft_p50_ms" | "ttft_p90_ms" | "ttft_p95_ms" | "tpm" | "otps" | "cache_hit_rate", scale = 1, seriesName?: string) {
   const row = allRows.value.find(item => item.dimension_key === key);
   const data = (historyByKey.value.get(key) || [])
     .map(item => [item.bucket_time, item[field] == null ? null : Number(item[field]) / scale] as [string, number | null]);
@@ -217,6 +217,7 @@ const selectedTrendGroups = computed(() => selectedKeys.value.map(key => {
     id: row ? customerID(row) : key,
     tpm: customerSeries(key, "tpm", bucketMinutes.value, "TPM"),
     otps: customerSeries(key, "otps", 1, "OTPS"),
+    cache: customerSeries(key, "cache_hit_rate", 0.01, "缓存命中率"),
     ttft: [
       ...customerSeries(key, "ttft_p50_ms", 1000, "P50"),
       ...customerSeries(key, "ttft_p90_ms", 1000, "P90"),
@@ -249,7 +250,7 @@ function openDetail(row: MetricItem) {
         </div>
         <template v-if="activeTab === 'charts'">
           <span class="customer-toolbar-divider" aria-hidden="true" />
-          <el-segmented v-model="activeMetric" class="customer-metric-switch" :options="[{ label: 'TPM', value: 'tpm' }, { label: 'TTFT', value: 'ttft' }, { label: 'OTPS', value: 'otps' }]" size="small" aria-label="监控指标" />
+          <el-segmented v-model="activeMetric" class="customer-metric-switch" :options="[{ label: 'TPM', value: 'tpm' }, { label: 'TTFT', value: 'ttft' }, { label: 'OTPS', value: 'otps' }, { label: '缓存命中率', value: 'cache' }]" size="small" aria-label="监控指标" />
         </template>
         <div class="customer-toolbar-right">
           <span class="customer-toolbar-count">{{ filteredRows.length }} 位客户</span>
@@ -289,6 +290,7 @@ function openDetail(row: MetricItem) {
           <article v-for="group in selectedTrendGroups" :key="group.key" class="customer-trend-group">
             <header><div><div class="customer-name-line"><MonitorNameButton :name="group.name" @detail="router.push(`/customers/${encodeURIComponent(group.key)}`)" /><MonitorCopyButton :value="group.name" label="复制客户名称" /></div><p>客户 ID {{ group.id }} · 按 Token 排名</p></div></header>
             <section v-if="activeMetric === 'ttft'" class="customer-metric-card"><h3>TTFT</h3><p>P50 / P90 / P95 首字响应分位数</p><CustomerCompareChart :series="group.ttft" unit="s" :thresholds="ttftThresholds" /></section>
+            <section v-else-if="activeMetric === 'cache'" class="customer-metric-card"><h3>缓存命中率</h3><CustomerCompareChart :series="group.cache" unit="%" /></section>
             <section v-else class="customer-metric-card"><h3>OTPS</h3><p>平均输出 Token 速度 · 输出 Token ÷ 请求总耗时（含非流式）</p><CustomerCompareChart :series="group.otps" unit=" token/s" /></section>
           </article>
         </div>

@@ -32,7 +32,7 @@ const router = useRouter();
 const search = ref("");
 const hours = ref(1);
 const activeTab = ref<"charts" | "ranking">("charts");
-const activeMetric = ref<"ttft" | "tpm" | "otps">("tpm");
+const activeMetric = ref<"ttft" | "tpm" | "otps" | "cache">("tpm");
 const ttftThresholds = computed(() => [
   { name: "P50", value: prefs.ttftP50Threshold, color: "#2f6fed" },
   { name: "P90", value: prefs.ttftP90Threshold, color: "#16a6b6" },
@@ -266,7 +266,7 @@ const historyByKey = computed(() => {
   map.forEach((list) => list.sort((a, b) => Date.parse(a.bucket_time) - Date.parse(b.bucket_time)));
   return map;
 });
-function dimensionSeries(key: string, field: "ttft_p50_ms" | "ttft_p90_ms" | "ttft_p95_ms" | "tpm" | "otps", scale = 1, name?: string) {
+function dimensionSeries(key: string, field: "ttft_p50_ms" | "ttft_p90_ms" | "ttft_p95_ms" | "tpm" | "otps" | "cache_hit_rate", scale = 1, name?: string) {
   return [{
     name: name || field,
     data: (historyByKey.value.get(key) || [])
@@ -279,6 +279,7 @@ function peakDimTPM(key: string) {
 function metricHeadline(key: string, row?: DimRow) {
   if (activeMetric.value === "ttft") return { label: "时段 P95", value: msFmt(row?.ttft_p95_ms), detail: "所选时段首字响应 P95" };
   if (activeMetric.value === "otps") return { label: "时段 OTPS", value: row?.otps == null ? "—" : `${row.otps.toFixed(2)} token/s`, detail: "所选时段有效输出 Token ÷ 总耗时（含非流式）" };
+  if (activeMetric.value === "cache") return { label: "时段缓存命中率", value: pct(row?.cache_hit_rate ?? null), detail: "沿用缓存命中率统计口径" };
   const point = [...(historyByKey.value.get(key) || [])].reverse().find(item => Date.parse(item.bucket_time) + bucketMinutes.value * 60_000 <= asOf.value);
   const time = point ? Date.parse(point.bucket_time) : 0;
   const stale = point && asOf.value - time - bucketMinutes.value * 60_000 > 120_000;
@@ -319,6 +320,7 @@ const chartTrendGroups = computed(() => chartKeys.value.map((key) => {
     traffic: activeMetric.value === "tpm" ? customerTraffic(key, row) : null,
     tpm: dimensionSeries(key, "tpm", bucketMinutes.value, "TPM"),
     otps: dimensionSeries(key, "otps", 1, "OTPS"),
+    cache: dimensionSeries(key, "cache_hit_rate", 0.01, "缓存命中率"),
     ttft: [
       ...dimensionSeries(key, "ttft_p50_ms", 1000, "P50"),
       ...dimensionSeries(key, "ttft_p90_ms", 1000, "P90"),
@@ -402,7 +404,7 @@ function rowClass({ row }: { row: DimRow }) {
         </div>
         <template v-if="activeTab === 'charts'">
           <span class="dimension-toolbar-divider" aria-hidden="true" />
-          <el-segmented v-model="activeMetric" class="dimension-metric-switch" :options="[{ label: 'TTFT', value: 'ttft' }, { label: 'TPM', value: 'tpm' }, { label: 'OTPS', value: 'otps' }]" size="small" aria-label="监控指标" />
+          <el-segmented v-model="activeMetric" class="dimension-metric-switch" :options="[{ label: 'TTFT', value: 'ttft' }, { label: 'TPM', value: 'tpm' }, { label: 'OTPS', value: 'otps' }, { label: '缓存命中率', value: 'cache' }]" size="small" aria-label="监控指标" />
         </template>
         <span class="dimension-toolbar-count">按总 Token 排序 · {{ visibleRows.length }} 个{{ kind === 'channels' ? '渠道' : '模型' }}</span>
       </div>
@@ -421,6 +423,7 @@ function rowClass({ row }: { row: DimRow }) {
             <ModelChannelTraffic v-else-if="kind === 'models' && activeMetric === 'tpm' && group.row" v-model:dimension="modelDimensions[group.key]" :model="group.row" :totals="historyByKey.get(group.key) || []" :hours="hours" :as-of="asOf" :refresh-key="refreshKey" :active="activeTab === 'charts' && expandedKey !== group.key" />
             <CustomerTrafficPanel v-else-if="activeMetric === 'tpm' && group.traffic" :traffic="group.traffic" dimension="user" :name="group.name" :loading="state.loading.value" :error="customerError" empty-text="暂无完整客户拆分数据" :hours="hours" :bucket-minutes="bucketMinutes" :last-plot-time="trafficTime(group.traffic.lastCompleteTime)" :active="activeTab === 'charts' && expandedKey !== group.key" @retry="state.reload" />
             <section v-else-if="activeMetric === 'tpm'" class="dimension-chart"><CustomerCompareChart :series="group.tpm" :time-range="chartTimeRange" compact /></section>
+            <section v-else-if="activeMetric === 'cache'" class="dimension-chart"><CustomerCompareChart :series="group.cache" :time-range="chartTimeRange" unit="%" /></section>
             <section v-else class="dimension-chart"><CustomerCompareChart :series="group.otps" :time-range="chartTimeRange" unit=" token/s" /></section>
           </article>
         </div>

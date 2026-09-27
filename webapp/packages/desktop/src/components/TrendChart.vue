@@ -23,9 +23,10 @@ export interface TrendSeries {
   unit?: string;
   type?: "line" | "bar";
   sparse?: boolean;
+  smooth?: boolean;
 }
 const props = withDefaults(
-  defineProps<{ title: string; series: TrendSeries[]; percent?: boolean }>(),
+  defineProps<{ title: string; series: TrendSeries[]; percent?: boolean; contextSeries?: TrendSeries[] }>(),
   { percent: false },
 );
 const chartEl = ref<HTMLDivElement>();
@@ -65,7 +66,13 @@ function renderNow() {
     withChartTheme({
       animationDuration: initial ? 150 : 0,
       color: props.series.map((item) => item.color),
-      tooltip: { trigger: "axis" },
+      tooltip: { trigger: "axis", ...(props.contextSeries?.length ? { formatter: (params: any) => {
+        const values = Array.isArray(params) ? params : [params];
+        const time = Date.parse(String(values[0]?.data?.[0] ?? ""));
+        const escape = (v: unknown) => String(v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!));
+        const context = props.contextSeries!.map(s => {const point=s.data.find(([t])=>Date.parse(t)===time);return `${escape(s.name)}：${point?.[1] == null ? '—' : escape(point[1])}`;});
+        return [escape(values[0]?.axisValueLabel || ''), ...context, ...values.map((v:any)=>`${v.marker}${escape(v.seriesName)}：${v.data?.[1] == null ? '—' : escape(v.data[1])}`)].join('<br/>');
+      }} : {}) },
       legend: { top: 0, right: 0, data: props.series.map((item) => item.name) },
       grid: { left: 44, right: 18, top: 38, bottom: 28 },
       xAxis: { type: "time", axisLabel: { hideOverlap: true } },
@@ -81,7 +88,7 @@ function renderNow() {
         showSymbol: item.sparse === true,
         symbolSize: item.sparse ? 5 : undefined,
         connectNulls: item.sparse === true,
-        smooth: item.type !== "bar",
+        smooth: item.smooth ?? item.type !== "bar",
         data: item.data,
         tooltip: {
           valueFormatter: (value: unknown) =>
@@ -94,7 +101,7 @@ function renderNow() {
 }
 
 watch(
-  () => props.series,
+  () => [props.series, props.contextSeries],
   () => void render(),
   { deep: true, immediate: true },
 );
@@ -119,8 +126,10 @@ watch(themeSignature, () => { void render(); }, { flush: "post" });
 
 <template>
   <section class="trend-chart">
-    <h3>{{ title }}</h3>
+    <header class="trend-header"><h3>{{ title }}</h3><slot name="actions" /></header>
     <div v-if="hasData" ref="chartEl" class="trend-chart-canvas"></div>
     <el-empty v-else :image-size="52" description="暂无趋势数据" />
   </section>
 </template>
+
+<style scoped>.trend-header{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}.trend-header h3{margin-right:auto}</style>
