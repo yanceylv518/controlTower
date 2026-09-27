@@ -126,3 +126,10 @@ https://github.com/yanceylv518/controlTower/releases/tag/v2.0.0-rc140
 - 质量门：Go全量vet/test通过；77项归档前端测试通过；pnpm typecheck/build通过（既有chunk大小警告）；git diff --check通过。初次前端测试因测试夹具未注入新增错误函数失败，已修复夹具并全套重跑通过。
 - 限制：这不是生产RDS 8.0.36或远程UI验收；没有获取生产SHOW CREATE，不声称已检查完整实库结构，也未性能压测。未重新打包、提交、推送或部署。Agent仅新增测试，运行逻辑未变化，不需升级Agent或改表。
 - 下一步：统一交付 Server/Web 后核验 July 7 明细、三类异常筛选、下一页、渠道过滤与实际站点币种；避免将“编译通过/本地集成通过”当“生产验收”。
+
+## rc141正式发布
+
+- **rc141远程发布完成（2026-09-27）**：归档字段兼容、可选content、查询错误分类和币种site参数修复 bdb145e374b2cad040ea3781f5165b526a982c59 已推送main；v2.0.0-rc141固定此提交。CI36288665868与release36288679787成功；三Linux安装包、SHA256及GHCR版本/latest镜像已发布。正式附件下载release/v2.0.0-rc141，SHA256、ELF架构/执行位、脚本LF、Agent版本、Server内嵌提交/前端错误码/097迁移核验通过。沿用紧接发布前的隔离MySQL9.7三模块集成、Go全量vet/test、77项归档前端测试与typecheck/build。仅需升级Server/Web；未生产部署、未真实RDS8.0.36/UI/性能验收。
+
+发布：https://github.com/yanceylv518/controlTower/releases/tag/v2.0.0-rc141
+流程：https://github.com/yanceylv518/controlTower/actions/runs/36288679787
