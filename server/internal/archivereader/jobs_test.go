@@ -165,3 +165,21 @@ func TestArchiveChannelSchemaVariants(t *testing.T) {
 		}
 	}
 }
+
+func TestOverviewRangeValidation(t *testing.T) {
+	q := JobQuery{Site: "s", Kind: "overview", Date: "2026-09", Limit: 100, Dimension: "model_name", From: "2026-08-29", Through: "2026-09-27"}
+	if err := q.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	for _, end := range []string{"2026-08-28", "2026-12-01", "2026-02-30", ""} {
+		bad := q
+		bad.Through = end
+		if bad.Validate() == nil {
+			t.Fatal("accepted invalid range", end)
+		}
+	}
+	q.Dimension = "pricing"
+	if q.Validate() == nil {
+		t.Fatal("accepted unsupported dimension")
+	}
+}

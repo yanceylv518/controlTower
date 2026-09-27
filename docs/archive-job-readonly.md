@@ -88,7 +88,7 @@ GET /api/dashboard/log-archive-read/anomalies?site_id=actual-site-id&date=2026-0
 
 本轮未配置生产连接或部署。真实上线时需验证上述身份、授权和代表性日期查询。
 
-## 统计和异常页面
+## 统计和异常页面（旧版，统一页面见下文）
 
 用量统计按月枚举已封存日期并携带版本读取日汇总；消费口径type=2，BigInt累计，不完整读取不展示合计。金额通过当前站点只读 options 获取币种、QuotaPerUnit 与汇率：quota / QuotaPerUnit × 汇率；TOKENS 保留原始额度。配置失败不回退美元。CSV包含筛选、版本清单及币种/单位/汇率/读取时间；当前配置不等于历史汇率或正式账单。
 
@@ -103,3 +103,17 @@ RDS只读模板兼容：截图中的全局观察权限、目标库SELECT/LOCK TA
 月表渠道字段按实际结构探测，优先channel_id、其次channel；两列同时存在时用COALESCE，与统计维度筛选一致，响应统一为channel。无渠道字段时显示NULL；带渠道筛选则返回archive_channel_column_missing，不静默忽略筛选。
 
 Agent 按源 logs 的 SHOW CREATE TABLE 克隆月表，并原样保留列和索引；Server 不假设月表采用固定渠道列名。可选 content 缺失时明细预览为NULL。必需列不匹配、缺表、查询权限与超时分别返回 archive_read_schema_mismatch、archive_read_table_missing、archive_read_access_denied、archive_read_timeout；不将全部查询错误归为连接失败。
+
+全天异常汇总在同一只读REPEATABLE READ快照中按北京时间小时串行读取，强制使用元数据确认的created_at首列BTREE索引。单条SQL仍限3秒，MySQL3024时二分慢时段至约一分钟；整次请求限45秒。所有片段成功后才返回全天结果，任何中途失败都不返回部分总量。无需源表/归档表迁移。
+
+## 统一归档数据（2026-09-27）
+
+新版以归档数据、运行总览、设置三个入口组织；归档数据使用overview只读接口。date保留月份参数，from/through可选且为北京时间闭区间，最多62天；dimension只允许模型/用户/渠道/分组/令牌。服务端在同一RR快照选择每日唯一统计版本并批量聚合，不扫描原始日志。缺少新统计表提示升级并启动Agent；超出有界读取预算返回archive_statistics_limit，不展示截断总量。
+
+Agent新增log_archive_live_stats元数据，组内容仍在log_archive_daily_stats、采用独立version_id。临时统计与封存独立：ready表示已扫描已有归档记录，不等于已与源库校验；sealed仍由原完整校验流程产生。首次上界固定并持久化，之后新记录与历史修正按覆盖区间应用差量，原始数据和差量同事务，游标与统计同事务。新增异常计数保留类型区分及未知覆盖证据；旧汇总缺少指标不当零。新开始的历史任务parser_version=2，升级前在途任务沿用旧版本口径。
+
+页面打开自动加载，同会话筛选结果最多缓存8份、30秒内复用；过期先展示缓存再刷新，可见页每60秒刷新，切换用户不会复用旧会话缓存。请求明细和原始小时趋势按需读取。每日和用量、异常总量共享筛选与快照；前端未知/统计中/待校验/已校验状态分开，部分统计不伪装完整数据。
+
+历史价格列表不再出现在主页面，完整pricing/hash/历史证据仍保留供账单使用。参考价格只在最终展示时保留10位有效数字并去尾零，小单价不会因固定小数位被抹成零；quota、原始倍率和账单计算均不参与此舍入。
+
+部署需同时升级Agent、Server/Web；Agent自动创建live元数据表，已有源日志/月表不迁移。存量临时统计后台有界补建，最新日期优先，第一次打开可能显示部分覆盖。真实生产吞吐与补建耗时须上线核验。

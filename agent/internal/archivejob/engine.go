@@ -58,18 +58,20 @@ func (e *Engine) BindSite(site string) error {
 }
 
 type history struct {
-	AfterCreated int64
-	Date         string
-	Step         string
-	AfterID      int64
-	Revision     uint64
-	Version      string
-	SourceHash   string
-	TargetHash   string
-	SourceRows   uint64
-	TargetRows   uint64
+	ParserVersion int
+	AfterCreated  int64
+	Date          string
+	Step          string
+	AfterID       int64
+	Revision      uint64
+	Version       string
+	SourceHash    string
+	TargetHash    string
+	SourceRows    uint64
+	TargetRows    uint64
 }
 type state struct {
+	liveChanges        []rawChange
 	SeedFrom           string
 	SeedThrough        string
 	Collection         aj.Progress
@@ -370,6 +372,9 @@ func (e *Engine) Step(ctx context.Context, settings aj.Settings, batch, delay in
 		}
 		if txErr = tx.Commit(); txErr != nil {
 			return txErr
+		}
+		if err == nil && (settings.Collection || settings.History) {
+			_ = e.liveStep(ctx, c, batch)
 		}
 		return err
 	})

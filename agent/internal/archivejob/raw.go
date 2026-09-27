@@ -207,6 +207,9 @@ func (e *Engine) collect(ctx context.Context, c *sql.Conn, s *state, batch, dela
 		s.Collection.Date = day(created)
 		s.Collection.Table = table(s.Collection.Date)
 	}
+	if err = flushLive(ctx, tx, s); err != nil {
+		return err
+	}
 	if err = receipt(ctx, tx, "collection", before, s.Collection.AfterID, len(accepted), inserted, changed, unchanged); err != nil {
 		return err
 	}
@@ -270,6 +273,13 @@ func writeRaw(ctx context.Context, tx *sql.Tx, r row, s *state) (bool, bool, err
 		if _, err = tx.ExecContext(ctx, "UPDATE log_archive_days SET revision=revision+1,state='pending',version_id='',raw_rows=NULL,error_code='',updated_at=UTC_TIMESTAMP(6) WHERE log_date=?", date); err != nil {
 			return false, false, err
 		}
+	}
+	if changed {
+		var before row
+		if len(existing) > 0 {
+			before = existing[0]
+		}
+		s.liveChanges = append(s.liveChanges, rawChange{before: before, after: r})
 	}
 	if date > s.Frontier {
 		s.Frontier = date

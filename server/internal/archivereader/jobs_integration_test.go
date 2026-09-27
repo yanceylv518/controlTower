@@ -76,7 +76,7 @@ func TestJobReaderMySQL(t *testing.T) {
 	}
 	start := time.Date(2026, 7, 3, 16, 0, 0, 0, time.UTC).Unix()
 	exec(db, `INSERT INTO logs_202607 VALUES(1,?,2,7,8,'m',1,0,5,'a'),(2,?,2,7,8,'m',1,0,6,'b'),(3,?,2,7,8,'m',1,NULL,0,'c'),(4,?,5,7,8,'m',1,0,0,?), (5,?,2,7,8,'m',1,0,0,'outside')`, start, start, start, start, strings.Repeat("x", 5000), start+86400)
-	for _, table := range []string{"log_archive_meta", "log_archive_days", "log_archive_day_versions", "log_archive_daily_stats", "logs_202607"} {
+	for _, table := range []string{"log_archive_meta", "log_archive_days", "log_archive_day_versions", "log_archive_daily_stats", "log_archive_live_stats", "logs_202607"} {
 		exec(admin, "GRANT SELECT ON `"+name+"`.`"+table+"` TO '"+user+"'@'%'")
 	}
 	cfg.User = user
@@ -88,6 +88,38 @@ func TestJobReaderMySQL(t *testing.T) {
 	}
 	reader := Reader{ConnectionsFile: file}
 	ctx := context.Background()
+	t.Run("overview chooses one snapshot and retains partial coverage", func(t *testing.T) {
+		live := strings.Repeat("e", 32)
+		exec(db, `INSERT INTO log_archive_live_stats(log_date,version_id,ready,updated_at) VALUES('2026-07-04',?,1,NOW(6)),('2026-07-05',?,0,NOW(6))`, strings.Repeat("c", 32), live)
+		exec(db, `UPDATE log_archive_daily_stats SET dimensions=JSON_SET(dimensions,'$.type','2'),amounts=JSON_SET(amounts,'$.log_rows','1','$.requests','1')`)
+		exec(db, `INSERT INTO log_archive_daily_stats VALUES(?,?,'2026-07-05','{"type":"2","model_name":"m","user_id":"7","channel":"8"}','{"requests":"3","quota":"10","log_rows":"3"}')`, live, strings.Repeat("3", 64))
+		result, e := reader.ReadJob(ctx, JobQuery{Site: "site", Kind: "overview", Date: "2026-07", Limit: 100, Dimension: "model_name"})
+		if e != nil || len(result.Items) != 1 {
+			t.Fatal(result, e)
+		}
+		days := result.Items[0]["days"].([]map[string]any)
+		if len(days) != 2 || days[1]["ready"] != false {
+			t.Fatal(days)
+		}
+		stats := result.Items[0]["rows"].([]map[string]any)
+		if len(stats) != 2 {
+			t.Fatal(stats)
+		}
+		if stats[0]["amounts"].(map[string]string)["quota"] != "18014398509481986" {
+			t.Fatal("duplicate or inexact sealed totals", stats)
+		}
+		if stats[1]["amounts"].(map[string]string)["quota"] != "10" {
+			t.Fatal("missing live totals", stats)
+		}
+		single, e := reader.ReadJob(ctx, JobQuery{Site: "site", Kind: "overview", Date: "2026-09", From: "2026-07-05", Through: "2026-07-05", Limit: 100, Dimension: "model_name"})
+		if e != nil || len(single.Items[0]["days"].([]map[string]any)) != 1 || len(single.Items[0]["rows"].([]map[string]any)) != 1 {
+			t.Fatal("date range ignored", single, e)
+		}
+		filtered, e := reader.ReadJob(ctx, JobQuery{Site: "site", Kind: "overview", Date: "2026-07", Limit: 100, Dimension: "channel_id", UserID: "99"})
+		if e != nil || len(filtered.Items[0]["rows"].([]map[string]any)) != 0 {
+			t.Fatal(filtered, e)
+		}
+	})
 	t.Run("saved connection probe and read use pinned identity", func(t *testing.T) {
 		host, portText, e := net.SplitHostPort(cfg.Addr)
 		if e != nil {
@@ -258,6 +290,32 @@ func TestJobReaderMySQL(t *testing.T) {
 		}
 	})
 	q.Site = "site"
+	t.Run("million row day", func(t *testing.T) {
+		if os.Getenv("CT_ARCHIVE_PERF_TEST") != "1" {
+			t.Skip("CT_ARCHIVE_PERF_TEST=1 required")
+		}
+		digits := `(SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9)`
+		query := `INSERT INTO logs_202607 SELECT 1000+n,?+MOD(n,86400),2,7,8,'m',1,0,1,REPEAT('x',200) FROM (SELECT a.n+10*b.n+100*c.n+1000*d.n+10000*e.n+100000*f.n AS n FROM ` + digits + ` a CROSS JOIN ` + digits + ` b CROSS JOIN ` + digits + ` c CROSS JOIN ` + digits + ` d CROSS JOIN ` + digits + ` e CROSS JOIN ` + digits + ` f) numbers`
+		exec(db, query, start)
+		defer exec(db, "DELETE FROM logs_202607 WHERE id>=1000")
+		began := time.Now()
+		result, e := reader.ReadJob(ctx, JobQuery{Site: "site", Kind: "anomalies", Date: "2026-07-04", Limit: 100, ChannelID: "8", UserID: "7", Model: "m"})
+		if e != nil || len(result.Items) != 24 {
+			t.Fatalf("million row summary: %d %v", len(result.Items), e)
+		}
+		var total int64
+		for _, item := range result.Items {
+			n, e := strconv.ParseInt(item["log_rows"].(string), 10, 64)
+			if e != nil {
+				t.Fatal(e)
+			}
+			total += n
+		}
+		if total != 1000004 {
+			t.Fatal(total)
+		}
+		t.Logf("one million rows plus baseline, 24 hourly totals: %s", time.Since(began))
+	})
 	exec(admin, "GRANT INSERT ON `"+name+"`.`logs_202607` TO '"+user+"'@'%'")
 	if _, err = reader.ReadJob(ctx, q); !errors.Is(err, ErrPermissions) {
 		t.Fatal("writer accepted", err)

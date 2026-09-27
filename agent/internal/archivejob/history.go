@@ -30,7 +30,7 @@ func (e *Engine) historyStep(ctx context.Context, c *sql.Conn, s *state, batch i
 		if err != nil {
 			return err
 		}
-		s.History = history{Date: date, Step: "verify_source", Revision: revision, Version: id()}
+		s.History = history{Date: date, Step: "verify_source", Revision: revision, Version: id(), ParserVersion: 2}
 	}
 	h := &s.History
 	s.HistoryProgress.Date = h.Date
@@ -70,7 +70,11 @@ func (e *Engine) historyStep(ctx context.Context, c *sql.Conn, s *state, batch i
 			s.History = history{}
 			return nil
 		}
-		if _, err = tx.ExecContext(ctx, "INSERT INTO log_archive_day_versions VALUES(?,?,?,?,?,1,UTC_TIMESTAMP(6))", h.Version, h.Date, h.Revision, h.TargetRows, h.TargetHash); err != nil {
+		parserVersion := h.ParserVersion
+		if parserVersion == 0 {
+			parserVersion = 1
+		}
+		if _, err = tx.ExecContext(ctx, "INSERT INTO log_archive_day_versions VALUES(?,?,?,?,?,?,UTC_TIMESTAMP(6))", h.Version, h.Date, h.Revision, h.TargetRows, h.TargetHash, parserVersion); err != nil {
 			return err
 		}
 		if _, err = tx.ExecContext(ctx, "UPDATE log_archive_days SET state='sealed',version_id=?,raw_rows=?,step='',error_code='',updated_at=UTC_TIMESTAMP(6) WHERE log_date=?", h.Version, h.TargetRows, h.Date); err != nil {
@@ -146,6 +150,9 @@ func (e *Engine) verifySource(ctx context.Context, c *sql.Conn, s *state, batch 
 		h.SourceRows++
 		h.AfterID, _ = r.number("id")
 		h.AfterCreated, _ = r.number("created_at")
+	}
+	if err = flushLive(ctx, tx, s); err != nil {
+		return err
 	}
 	if err = receipt(ctx, tx, "history", before, h.AfterID, len(rows), inserted, changed, unchanged); err != nil {
 		return err

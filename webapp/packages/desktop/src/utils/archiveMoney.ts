@@ -27,6 +27,15 @@ export function quotaAmount(quota: bigint,c?: ArchiveCurrency): string {
   const unit=decimal(c.raw_quota_per_unit),rate=decimal(c.exchange_rate)
   return format(quota*unit.d*rate.n,unit.n*rate.d)
 }
+// Display precision only; retain ten significant digits, including tiny prices.
+function significant(n:bigint,d:bigint,digits=10):string {
+ if(n===0n)return '0'
+ let exponent=n.toString().length-d.toString().length
+ if(exponent>=0 ? n<d*10n**BigInt(exponent) : n*10n**BigInt(-exponent)<d)exponent--
+ const places=digits-1-exponent
+ if(places<0){const scale=10n**BigInt(-places);return String(((n*2n+d*scale)/(2n*d*scale))*scale)}
+ return format(n,d,places).replace(/(\.\d*?)0+$/,'$1').replace(/\.$/,'')
+}
 // ModelRatio is a quota/token coefficient. Display it with this query's site unit,
 // not a hard-coded USD-per-million conversion. Request prices are USD references.
 export function historicalPrice(c: ArchiveCurrency|undefined,kind:'token'|'request',...factors: unknown[]):string {
@@ -39,7 +48,7 @@ export function historicalPrice(c: ArchiveCurrency|undefined,kind:'token'|'reque
       n*=1000000n
       if(c.type!=='TOKENS'){n*=unit.d*rate.n;d*=unit.n*rate.d}
     }else if(c.type==='TOKENS'){n*=unit.n;d*=unit.d}else{n*=rate.n;d*=rate.d}
-    return format(n,d,12).replace(/0+$/,'').replace(/\.$/,'')
+    return significant(n,d)
   }catch{return '—'}
 }
 export function moneyContext(c?: ArchiveCurrency){

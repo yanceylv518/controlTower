@@ -55,6 +55,25 @@ func parseAggregate(r row) (string, aggregate, error) {
 	if err := add(a.Amounts, "log_rows", "1"); err != nil {
 		return "", a, err
 	}
+	a.Amounts["anomaly_rows"] = "1"
+	for _, k := range []string{"empty_output", "missing_output", "error_logs", "charged_empty_output"} {
+		a.Amounts[k] = "0"
+	}
+	if r.text("type") == "5" {
+		a.Amounts["error_logs"] = "1"
+	}
+	if r.text("type") == "2" {
+		if r.text("completion_tokens") == "" {
+			a.Amounts["missing_output"] = "1"
+		}
+		if r.text("completion_tokens") == "0" {
+			a.Amounts["empty_output"] = "1"
+			quota, _ := new(big.Int).SetString(r.text("quota"), 10)
+			if quota != nil && quota.Sign() > 0 {
+				a.Amounts["charged_empty_output"] = "1"
+			}
+		}
+	}
 	if r.text("type") == "2" {
 		a.Amounts["requests"] = "1"
 	}
@@ -119,27 +138,8 @@ func (e *Engine) summarize(ctx context.Context, c *sql.Conn, s *state, batch int
 		return err
 	}
 	defer tx.Rollback()
-	for key, a := range groups {
-		var raw []byte
-		err = tx.QueryRowContext(ctx, "SELECT amounts FROM log_archive_daily_stats WHERE version_id=? AND group_hash=? FOR UPDATE", h.Version, key).Scan(&raw)
-		if err == nil {
-			old := map[string]string{}
-			if json.Unmarshal(raw, &old) != nil {
-				return errors.New("invalid_summary_json")
-			}
-			for k, v := range old {
-				if err = add(a.Amounts, k, v); err != nil {
-					return err
-				}
-			}
-		} else if !errors.Is(err, sql.ErrNoRows) {
-			return err
-		}
-		dimensions, _ := json.Marshal(a.Dimensions)
-		amounts, _ := json.Marshal(a.Amounts)
-		if _, err = tx.ExecContext(ctx, "INSERT INTO log_archive_daily_stats VALUES(?,?,?,?,?) ON DUPLICATE KEY UPDATE amounts=VALUES(amounts)", h.Version, key, h.Date, string(dimensions), string(amounts)); err != nil {
-			return err
-		}
+	if err = writeAggregateBatch(ctx, tx, h.Version, h.Date, groups); err != nil {
+		return err
 	}
 	if len(rows) > 0 {
 		h.AfterID, _ = rows[len(rows)-1].number("id")

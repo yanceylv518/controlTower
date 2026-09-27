@@ -25,7 +25,7 @@ func (h ArchiveReadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	v := r.URL.Query()
-	q := archivereader.JobQuery{Site: v.Get("site_id"), Kind: r.PathValue("kind"), Date: v.Get("date"), Limit: 100, Version: v.Get("version"), AfterHash: v.Get("after_hash"), UserID: v.Get("user_id"), Model: v.Get("model"), ChannelID: v.Get("channel_id"), Category: v.Get("category")}
+	q := archivereader.JobQuery{Site: v.Get("site_id"), Kind: r.PathValue("kind"), Date: v.Get("date"), Limit: 100, Version: v.Get("version"), AfterHash: v.Get("after_hash"), UserID: v.Get("user_id"), Model: v.Get("model"), ChannelID: v.Get("channel_id"), Category: v.Get("category"), Dimension: v.Get("dimension"), From: v.Get("from"), Through: v.Get("through")}
 	var err error
 	if v.Has("limit") {
 		q.Limit, err = strconv.Atoi(v.Get("limit"))

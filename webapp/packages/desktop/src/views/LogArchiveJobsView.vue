@@ -4,8 +4,7 @@ import { ApiError } from '@ct/shared'
 import { ElMessage } from 'element-plus'
 import AppShell from '../components/AppShell.vue'
 import ArchiveConnectionSettings from '../components/ArchiveConnectionSettings.vue'
-import ArchiveUsageStatistics from '../components/ArchiveUsageStatistics.vue'
-import ArchiveAnomalyAnalysis from '../components/ArchiveAnomalyAnalysis.vue'
+import ArchiveDataView from '../components/ArchiveDataView.vue'
 import { client } from '../api'
 import { useFiltersStore } from '../stores/filters'
 import { useAuthStore } from '../stores/auth'
@@ -18,7 +17,7 @@ type Progress={step:string;date?:string;table?:string;after_id:string;rows:strin
 type Day={date:string;state:string;revision:string;version?:string;rows:string;step?:string;error?:string}
 type Engine={latest?:{id:string;table:string;log_time:string;observed_at:string};protocol:number;collection:Progress;history:Progress;first_date?:string;first_date_source?:string;frontier?:string;cutoff?:string;counts_date?:string;counts_error?:string}
 type Item={site_id:string;config:Config;seen_at?:string;targets:{agent_id:string;instance_id:string;configured:boolean}[];status:{engine?:Engine;applied_version:number;state:string;error:string}}
-const filters=useFiltersStore(),auth=useAuthStore(),tab=ref('overview'),mode=ref('calendar'),month=ref(beijingDate().slice(0,7))
+const filters=useFiltersStore(),auth=useAuthStore(),tab=ref('data'),mode=ref('calendar'),month=ref(beijingDate().slice(0,7))
 const item=ref<Item>(),reports=ref<Day[]>([]),loading=ref(false),saving=ref(false),error=ref(''),selected=ref<Day>(),initialized=ref(false)
 const form=ref<Config>(),now=ref(Date.now());let sequence=0,disposed=false,timer:ReturnType<typeof setInterval>|undefined
 const unavailable=ref(false)
@@ -66,7 +65,7 @@ onUnmounted(()=>{disposed=true;sequence++;if(timer)clearInterval(timer)})
 <template>
  <AppShell title="日志归档"><div class="archive-jobs">
  <header class="archive-toolbar">
-  <el-tabs v-model="tab" class="archive-tabs"><el-tab-pane label="运行总览" name="overview"/><el-tab-pane label="每日数据" name="daily"/><el-tab-pane label="用量统计" name="usage"/><el-tab-pane label="异常分析" name="anomalies"/><el-tab-pane label="设置" name="settings"/></el-tabs>
+  <el-tabs v-model="tab" class="archive-tabs"><el-tab-pane label="归档数据" name="data"/><el-tab-pane label="运行总览" name="overview"/><el-tab-pane label="设置" name="settings"/></el-tabs>
   <div v-if="item" class="executor-status" aria-label="执行 Agent 状态">
    <div class="executor-identity"><span class="status-label">执行 Agent</span><span class="executor-name" :title="item.config.agent_id">{{item.config.agent_id||'未配置'}}</span></div>
    <span class="connection-status" :class="{'is-online':online}"><i aria-hidden="true"/>{{online?'在线':'离线 / 状态待确认'}}</span>
@@ -78,8 +77,7 @@ onUnmounted(()=>{disposed=true;sequence++;if(timer)clearInterval(timer)})
  <el-alert v-if="error||!item" :title="item?error:emptyTitle" :description="item?'当前展示最近成功读取的数据，实时状态待确认，操作暂不可用。':emptyDescription" :type="unavailable||!error?'warning':'error'" show-icon :closable="false"/>
  <el-alert v-if="item?.status.error" :title="reason(item.status.error)" type="warning" :closable="false"/>
  <el-alert v-if="countError" :title="`每日数量统计${engine?.counts_date?'（'+engine.counts_date+'）':''}：${countError}`" type="warning" show-icon :closable="false"/>
- <ArchiveUsageStatistics v-if="tab==='usage'" :site-id="filters.site_id"/>
- <ArchiveAnomalyAnalysis v-if="tab==='anomalies'" :site-id="filters.site_id"/>
+ <ArchiveDataView v-if="can(auth.user,'archive.manage')" v-show="tab==='data'" :site-id="filters.site_id" :active="tab==='data'"/>
  <ArchiveConnectionSettings v-if="tab==='settings'" :site-id="filters.site_id"/>
  <div v-if="tab==='overview'" class="task-grid">
  <section v-for="task in (['collection','history'] as const)" :key="task"><header><h3>{{task==='collection'?'日志采集':'历史处理'}}</h3><span>{{!item?'等待连接':!online||error?'状态待确认':item.config.running&&item.config.tasks[task]?'已启用':'已暂停'}}</span></header>
@@ -87,7 +85,8 @@ onUnmounted(()=>{disposed=true;sequence++;if(timer)clearInterval(timer)})
  <p v-if="task==='collection'&&engine?.latest">{{engine.latest.table}} · 最大日志 ID {{engine.latest.id}}<br>采集游标 ID {{engine.collection.after_id}} · 月表位置不代表历史完整</p><p>{{steps[engine?.[task].step||'']||(item?'等待执行':'尚未获取任务状态')}}</p><p v-if="engine?.[task].table">处理表：{{engine[task].table}}</p>
  <p v-if="task==='collection'">按 ID 持续采集，无需日期范围。首次从已有月表最大 ID 开始，历史缺口由历史处理补齐。</p><p v-else>逐日校验补齐 → 整理日统计 → 封存。处理到昨天；某天失败记录原因，继续下一天。</p>
  <p v-if="engine?.[task].error" class="failure">{{reason(engine[task].error)}}</p>
- <p class="muted">最近提交：{{time(engine?.[task].updated_at)}} · 已处理 {{formatArchiveCount(engine?.[task].rows)}} 条</p>
+ <p v-if="task==='history'&&engine?.history" class="muted">阶段游标 ID {{engine.history.after_id}}</p>
+ <p class="muted">最近更新：{{time(engine?.[task].updated_at)}} · {{task==='history'&&['summarize','seal','sealed'].includes(engine?.history.step||'')?'校验记录':'已处理'}} {{formatArchiveCount(engine?.[task].rows)}} 条</p>
  <el-button :disabled="!writable" @click="toggle(task)">{{item?.config.running&&item.config.tasks[task]?'暂停':'启动'}}{{task==='collection'?'日志采集':'历史处理'}}</el-button></section>
  </div>
  <section v-if="tab==='daily'" class="daily-panel"><header class="daily-heading"><h3>每日数据</h3><div class="daily-controls"><el-radio-group v-model="mode" aria-label="每日数据视图"><el-radio-button value="calendar">日历</el-radio-button><el-radio-button value="list">列表</el-radio-button></el-radio-group><el-date-picker v-model="month" class="month-picker" type="month" value-format="YYYY-MM" :clearable="false" :disabled="!engine?.first_date" :disabled-date="disabledMonth" @change="load"/></div></header>

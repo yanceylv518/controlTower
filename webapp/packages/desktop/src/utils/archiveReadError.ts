@@ -1,6 +1,8 @@
 import {ApiError} from '@ct/shared'
 
 const messages:Record<string,string>={
+ archive_statistics_schema_required:'统计表尚未就绪，请升级并启动 Agent',
+ archive_statistics_limit:'统计范围超过读取上限，请缩小日期范围或筛选用户、模型、渠道',
  archive_read_schema_mismatch:'归档表字段不兼容，请更新 Server',
  archive_read_table_missing:'所选月份的归档表不存在',
  archive_read_access_denied:'归档账号缺少查询权限',

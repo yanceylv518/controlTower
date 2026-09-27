@@ -3,7 +3,6 @@ import {computed,ref,watch,onUnmounted} from 'vue'
 import {archiveReadError} from '../utils/archiveReadError'
 import {client} from '../api'
 import TrendChart from './TrendChart.vue'
-import ArchiveModelPrices from './ArchiveModelPrices.vue'
 import {beijingDate} from '../utils/logArchive'
 import {totals,groupStats,csvCell,type StatRow} from '../utils/archiveAnalysis'
 import {useArchiveCurrency} from '../composables/useArchiveCurrency'
@@ -54,7 +53,6 @@ function exportCSV(){const url=URL.createObjectURL(new Blob(['\uFEFF'+csvText()]
  <div class="chart"><el-radio-group v-model="metric"><el-radio-button value="quota">金额</el-radio-button><el-radio-button value="requests">请求</el-radio-button><el-radio-button value="completion_tokens">输出 Token</el-radio-button></el-radio-group><TrendChart title="每日用量趋势" :series="series"/></div>
  <div class="table-head"><el-radio-group v-model="dimension"><el-radio-button value="model_name">模型</el-radio-button><el-radio-button value="user_id">用户</el-radio-button><el-radio-button value="channel_id">渠道</el-radio-button><el-radio-button value="group">分组</el-radio-button><el-radio-button value="token_id">令牌 ID</el-radio-button></el-radio-group><el-button @click="exportCSV">导出 CSV</el-button></div>
  <el-table :data="groups" max-height="480"><el-table-column prop="name" label="维度" min-width="200"/><el-table-column label="请求次数"><template #default="{row}">{{row.requests.toLocaleString()}}</template></el-table-column><el-table-column label="输入 Token"><template #default="{row}">{{row.prompt_tokens.toLocaleString()}}{{row.prompt_tokens_missing>0n?'（部分缺失）':''}}</template></el-table-column><el-table-column label="输出 Token"><template #default="{row}">{{row.completion_tokens.toLocaleString()}}{{row.completion_tokens_missing>0n?'（部分缺失）':''}}</template></el-table-column><el-table-column label="缓存读取 Token"><template #default="{row}">{{row.cache_tokens.toLocaleString()}}{{row.cache_tokens_missing>0n?'（部分缺失）':''}}</template></el-table-column><el-table-column :label="moneyLabel"><template #default="{row}">{{amount(row.quota)}}{{row.quota_missing>0n?'（部分缺失）':''}}</template></el-table-column></el-table>
- <ArchiveModelPrices :rows="rows" :currency="money"/>
  </template><el-empty v-else-if="!loaded&&!busy&&!error" description="选择月份与筛选条件后查询"/>
 </section></template>
 <style scoped>details{margin:12px 0;color:var(--el-text-color-secondary);font-size:13px}summary{cursor:pointer;width:fit-content}.analysis{background:var(--el-bg-color);border:1px solid var(--el-border-color);border-radius:12px;padding:20px}.filters,.table-head{display:flex;gap:12px;flex-wrap:wrap;align-items:center}.filters .el-input{width:180px}.muted{color:var(--el-text-color-secondary);font-size:13px;line-height:1.8}.kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:16px;margin:20px 0}.kpis div{display:flex;flex-direction:column;gap:8px}.kpis strong{font-size:23px}.kpis small{color:var(--el-color-warning)}.chart{margin:20px 0}.table-head{justify-content:space-between;margin-bottom:16px}@media(max-width:900px){.kpis{grid-template-columns:repeat(2,1fr)}}</style>

@@ -1,0 +1,16 @@
+<script setup lang="ts">
+import {computed} from 'vue'
+const props=defineProps<{points:{date:string;value:number|null;sealed:boolean;partial:boolean}[];selected:string;unit:string}>()
+const emit=defineEmits<{select:[date:string]}>()
+const max=computed(()=>Math.max(1,...props.points.map(p=>p.value??0)))
+function number(n:number){return new Intl.NumberFormat('zh-CN',{notation:'compact',maximumFractionDigits:1}).format(n)}
+</script>
+<template><div class="daily-chart">
+ <div class="legend"><span><i class="blue"/>已校验</span><span><i class="amber"/>待校验</span></div>
+ <div class="plot"><div class="scale"><span v-for="n in [4,3,2,1,0]" :key="n">{{number(max*n/4)}}</span></div>
+ <div class="columns"><div class="grid-lines"><i v-for="n in 5" :key="n"/></div><button v-for="p in points" :key="p.date" :class="{selected:p.date===selected}" :aria-label="`${p.date}，${p.value===null?'待统计':p.value+' '+unit}，${p.sealed?'已校验':'待校验'}`" :title="`${p.date} · ${p.value===null?'待统计':p.value.toLocaleString()+' '+unit}${p.partial?'（部分统计）':''}`" @click="emit('select',p.date)"><div class="bar-space"><i v-if="p.value!==null" class="bar" :class="{pending:!p.sealed}" :style="{height:Math.max(0.6,p.value/max*100)+'%'}"/><span v-else class="missing">—</span></div><span class="date">{{p.date.slice(5).replace('-','/')}}</span></button></div></div>
+ <div class="hint">点击日期查看当天</div>
+</div></template>
+<style scoped>
+.daily-chart{margin-top:4px}.legend{display:flex;justify-content:flex-end;gap:18px;font-size:12px;color:var(--el-text-color-secondary);margin:0 0 14px}.legend span{display:flex;align-items:center;gap:6px}.legend i{width:9px;height:9px;border-radius:50%}.blue{background:#5793fa}.amber{background:#ffb329}.plot{display:flex;height:215px;gap:10px}.scale{width:52px;flex-shrink:0;display:flex;flex-direction:column;justify-content:space-between;padding-bottom:25px;text-align:right;font-size:11px;color:var(--el-text-color-secondary)}.columns{display:flex;position:relative;flex:1;min-width:0;gap:5px}.columns button{position:relative;z-index:1;flex:1;min-width:0;cursor:pointer;border:0;background:transparent;padding:0 2px;color:var(--el-text-color-secondary)}.bar-space{height:190px;display:flex;align-items:flex-end;justify-content:center}.bar{display:block;width:80%;max-width:34px;min-height:1px;background:linear-gradient(#79aaff,#4e90f4);border-top:3px solid #5793fa;box-sizing:border-box}.bar.pending{background:linear-gradient(#a4c9fc,#d5e4fc);border-top-color:#ffb329}.selected{background:var(--el-color-primary-light-9)!important;border-radius:4px}.selected .bar{box-shadow:0 0 0 1px var(--el-color-primary)}.date{height:25px;line-height:25px;font-size:10px;white-space:nowrap}.grid-lines{position:absolute;inset:0 0 25px;display:flex;flex-direction:column;justify-content:space-between;pointer-events:none}.grid-lines i{border-top:1px solid var(--el-border-color-lighter);width:100%}.missing{margin-bottom:6px;color:var(--el-text-color-placeholder)}.hint{text-align:right;color:var(--el-text-color-secondary);font-size:11px;margin-top:7px}@media(max-width:800px){.columns{gap:1px}.columns button{padding:0}.columns button:nth-child(even) .date{visibility:hidden}.date{font-size:9px}}
+</style>

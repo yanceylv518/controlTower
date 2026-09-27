@@ -6,12 +6,13 @@ import {beijingDate} from '../utils/logArchive'
 import {useArchiveCurrency} from '../composables/useArchiveCurrency'
 import {quotaAmount,currencyUnit,moneyContext} from '../utils/archiveMoney'
 import ArchiveAnomalyOverview from './ArchiveAnomalyOverview.vue'
-const props=defineProps<{siteId:string}>()
+const props=defineProps<{siteId:string;initialDate?:string;initialUser?:string;initialModel?:string;initialChannel?:string;embedded?:boolean}>()
 const {money,moneyError,moneyBusy,refreshMoney}=useArchiveCurrency(()=>props.siteId)
 const unit=computed(()=>currencyUnit(money.value))
 const moneyLabel=computed(()=>money.value?.type==='TOKENS'?'额度（Quota）':`金额 ${unit.value}`)
+const showTrend=ref(false)
 const summaryQuery=ref<Record<string,string>>()
-const date=ref(beijingDate()),category=ref('empty_output'),user=ref(''),model=ref(''),channel=ref(''),busy=ref(false),error=ref(''),loaded=ref(false),more=ref(false)
+const date=ref(props.initialDate||beijingDate()),category=ref('empty_output'),user=ref(props.initialUser||''),model=ref(props.initialModel||''),channel=ref(props.initialChannel||''),busy=ref(false),error=ref(''),loaded=ref(false),more=ref(false)
 type Log=Record<string,string|null>
 const rows=ref<Log[]>([]),selected=ref<Log>(),page=ref(1),cursors=ref([{time:'0',id:'0'}]);let sequence=0
 const charged=computed(()=>rows.value.filter(r=>r.quota&&BigInt(r.quota)>0n).length)
@@ -25,19 +26,19 @@ async function load(target=1){const ticket=++sequence;busy.value=true;error.valu
  rows.value=result.items;more.value=result.has_more;page.value=target;loaded.value=true;const last=result.items.at(-1)
  if(result.has_more&&last)cursors.value[target]={time:String(last.created_at),id:String(last.id)}
  }catch(e){if(ticket===sequence)error.value=archiveReadError(e)}finally{if(ticket===sequence)busy.value=false}}
-watch(()=>props.siteId,reset,{immediate:true});watch([date,category,user,model,channel],reset);onUnmounted(()=>sequence++)
+watch(()=>props.siteId,()=>{reset();if(props.embedded)void load()},{immediate:true});watch([date,category,user,model,channel],()=>{reset();if(props.embedded)void load()});onUnmounted(()=>sequence++)
 function amount(row:Log){return row.quota==null?'未知':quotaAmount(BigInt(row.quota),money.value)}
 function time(raw:string|null){return raw?new Date(Number(raw)*1000).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false}):'未知'}
 </script>
 <template><section class="anomalies">
- <h3>异常请求分析</h3><details class="muted"><summary>统计口径与币种</summary><p>仅统计已归档记录。空输出不一定代表调用失败。</p><p>{{moneyBusy?'正在读取币种…':moneyContext(money)}}</p></details>
- <div class="filters"><el-date-picker v-model="date" type="date" value-format="YYYY-MM-DD" :clearable="false"/><el-select v-model="category"><el-option label="空输出请求" value="empty_output"/><el-option label="错误日志" value="error"/><el-option label="输出 Token 缺失" value="missing_output"/></el-select><el-input v-model="user" placeholder="用户 ID"/><el-input v-model="model" placeholder="模型（精确匹配）"/><el-input v-model="channel" placeholder="渠道 ID"/><el-button type="primary" :loading="busy" :disabled="!siteId||!date" @click="cursors=[{time:'0',id:'0'}];load(1)">查询异常</el-button></div>
+ <h3 v-if="!embedded">异常请求分析</h3><details v-if="!embedded" class="muted"><summary>统计口径与币种</summary><p>仅统计已归档记录。空输出不一定代表调用失败。</p><p>{{moneyBusy?'正在读取币种…':moneyContext(money)}}</p></details>
+ <div class="filters"><el-date-picker v-if="!embedded" v-model="date" type="date" value-format="YYYY-MM-DD" :clearable="false"/><el-radio-group v-if="embedded" v-model="category" size="small"><el-radio-button value="">全部</el-radio-button><el-radio-button value="empty_output">空输出</el-radio-button><el-radio-button value="error">错误日志</el-radio-button><el-radio-button value="missing_output">输出缺失</el-radio-button></el-radio-group><el-select v-else v-model="category"><el-option label="空输出请求" value="empty_output"/><el-option label="错误日志" value="error"/><el-option label="输出 Token 缺失" value="missing_output"/></el-select><el-input v-if="!embedded" v-model="user" placeholder="用户 ID"/><el-input v-if="!embedded" v-model="model" placeholder="模型（精确匹配）"/><el-input v-if="!embedded" v-model="channel" placeholder="渠道 ID"/><el-button type="primary" :loading="busy" :disabled="!siteId||!date" @click="cursors=[{time:'0',id:'0'}];load(1)">{{embedded?'刷新记录':'查询异常'}}</el-button><el-button v-if="embedded" @click="showTrend=!showTrend">{{showTrend?'收起小时趋势':'查看小时趋势'}}</el-button></div>
  <el-alert v-if="error" :title="error" type="error" :closable="false"/>
 
  <el-alert v-if="moneyError" :title="moneyError" type="warning" :closable="false"><el-button link @click="refreshMoney">重试币种配置</el-button></el-alert>
- <ArchiveAnomalyOverview v-if="summaryQuery" :query="summaryQuery"/>
+ <ArchiveAnomalyOverview v-if="summaryQuery&&(!embedded||showTrend)" :query="summaryQuery"/>
  <template v-if="loaded"><p>本页 {{rows.length}} 条 · 有扣费 {{charged}} 条</p>
- <el-table :data="rows" row-key="id" @row-click="selected=$event"><el-table-column prop="id" label="日志 ID" width="120"/><el-table-column label="北京时间" min-width="180"><template #default="{row}">{{time(row.created_at)}}</template></el-table-column><el-table-column prop="user_id" label="用户 ID"/><el-table-column prop="model_name" label="模型" min-width="160"/><el-table-column prop="channel" label="渠道"/><el-table-column prop="prompt_tokens" label="输入 Token"/><el-table-column label="输出 Token"><template #default="{row}">{{row.completion_tokens??'缺失'}}</template></el-table-column><el-table-column :label="moneyLabel"><template #default="{row}">{{amount(row)}}</template></el-table-column><el-table-column prop="content_preview" label="日志内容" min-width="240" show-overflow-tooltip/><el-table-column width="90"><template #default="{row}"><el-button link type="primary" @click="selected=row">详情</el-button></template></el-table-column></el-table>
+ <el-table :data="rows" row-key="id" @row-click="selected=$event"><el-table-column v-if="!embedded" prop="id" label="日志 ID" width="120"/><el-table-column :label="embedded?'时间':'北京时间'" :min-width="embedded?80:180"><template #default="{row}">{{embedded?time(row.created_at).split(' ').at(-1):time(row.created_at)}}</template></el-table-column><el-table-column prop="user_id" label="用户" :width="embedded?55:undefined"/><el-table-column prop="model_name" label="模型" :min-width="embedded?110:160" show-overflow-tooltip/><el-table-column prop="channel" label="渠道" :width="embedded?55:undefined"/><el-table-column v-if="!embedded" prop="prompt_tokens" label="输入 Token"/><el-table-column label="输出 Token" width="75"><template #default="{row}">{{row.completion_tokens??'缺失'}}</template></el-table-column><el-table-column :label="moneyLabel" min-width="100"><template #default="{row}">{{amount(row)}}</template></el-table-column><el-table-column v-if="!embedded" prop="content_preview" label="日志内容" min-width="240" show-overflow-tooltip/><el-table-column :width="embedded?52:90"><template #default="{row}"><el-button link type="primary" @click="selected=row">详情</el-button></template></el-table-column></el-table>
  <footer><el-button :disabled="busy||page===1" @click="load(page-1)">上一页</el-button><span>第 {{page}} 页</span><el-button :disabled="busy||!more" @click="load(page+1)">下一页</el-button></footer></template>
  <el-empty v-else-if="!busy&&!error" description="选择日期和异常类型，查询归档记录"/>
  <el-dialog :model-value="!!selected" title="归档日志详情" width="min(800px, 95vw)" @close="selected=undefined"><template v-if="selected"><el-descriptions :column="2" border><el-descriptions-item v-for="key in ['id','user_id','model_name','channel','prompt_tokens','completion_tokens','quota']" :key="key" :label="key">{{selected[key]??'缺失'}}</el-descriptions-item></el-descriptions><p>{{moneyLabel}}：{{amount(selected)}}</p><el-alert v-if="selected.content_truncated==='1'" title="日志内容超过 4096 字符，仅显示前部预览" type="warning" :closable="false"/><pre>{{selected.content_preview||'日志未保存内容'}}</pre></template></el-dialog>

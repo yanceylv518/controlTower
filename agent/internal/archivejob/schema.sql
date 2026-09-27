@@ -27,3 +27,11 @@ CREATE TABLE IF NOT EXISTS log_archive_issues (
  issue_id CHAR(32) PRIMARY KEY, log_date DATE NULL, step VARCHAR(32) NOT NULL,
  error_code VARCHAR(256) NOT NULL, created_at DATETIME(6) NOT NULL, KEY(log_date)
 ) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS log_archive_live_stats (
+ log_date DATE PRIMARY KEY, version_id CHAR(32) NOT NULL,
+ after_created BIGINT NOT NULL DEFAULT 0, after_id BIGINT NOT NULL DEFAULT 0,
+ upper_created BIGINT NOT NULL DEFAULT 0, upper_id BIGINT NOT NULL DEFAULT 0,
+ ready BOOLEAN NOT NULL DEFAULT 0, updated_at DATETIME(6) NOT NULL,
+ error_code VARCHAR(256) NOT NULL DEFAULT '', retry_at DATETIME(6) NULL
+) ENGINE=InnoDB;

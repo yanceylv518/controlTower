@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { ApiError } from '@ct/shared'
+import { archiveReadError } from '../utils/archiveReadError'
 import { client } from '../api'
 import { anomalySummary, percent } from '../utils/archiveInsights'
 import TrendChart from './TrendChart.vue'
@@ -17,7 +18,7 @@ async function load() {
     data.value = anomalySummary(page.items)
     observedAt.value = new Date().toLocaleTimeString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })
   } catch (e) {
-    if (ticket === sequence) error.value = e instanceof ApiError ? `全天统计读取失败（${e.status} · ${e.code}），请确认 Server 已升级；可重试或缩小筛选范围。` : e instanceof Error ? e.message : '统计读取失败'
+    if (ticket === sequence) error.value = e instanceof ApiError ? archiveReadError(e) : e instanceof Error ? e.message : '统计读取失败'
   } finally { if (ticket === sequence) busy.value = false }
 }
 watch(() => props.query, () => void load(), { immediate: true }); onUnmounted(() => sequence++)
@@ -29,7 +30,7 @@ const series = computed(() => [
 </script>
 <template>
   <section class="anomaly-overview" aria-label="当日归档异常统计">
-    <p v-if="busy">正在汇总当日归档记录…</p>
+    <p v-if="busy">正在按时段汇总当日记录…</p>
     <el-alert v-if="error" :title="error" type="error" :closable="false"><el-button link @click="load">重试统计</el-button></el-alert>
     <template v-if="data">
       <div class="kpis">

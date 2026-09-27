@@ -42,11 +42,15 @@ test('expression and absent prices do not invent a token price or use current co
  assert.equal(historicalPrices([stat({model_ratio:-1})])[0].input,'—')
  assert.equal(historicalPrices([stat({}, {dimensions:{type:5}})]).length,0)
 })
+class ApiError extends Error { constructor(status,code){super(code);this.status=status;this.code=code} }
+const errorAPI={}
+new Function('exports','require',compile(readFileSync(new URL('../src/utils/archiveReadError.ts',import.meta.url),'utf8')))(errorAPI,()=>({ApiError}))
+const {archiveReadError}=errorAPI
 function overview(){
  const script=readFileSync(new URL('../src/components/ArchiveAnomalyOverview.vue',import.meta.url),'utf8').split('<script setup lang="ts">')[1].split('</script>')[0].replace(/^import .*$/gm,'')
  const props={query:{site_id:'a',date:'2026-07-04'}},requests=[],client={request:url=>new Promise((resolve,reject)=>requests.push({url,resolve,reject}))}
  const js=compile(script)
- const c=new Function('computed','ref','watch','onUnmounted','defineProps','client','ApiError','anomalySummary','percent',js+';return {load,data,error,busy}') (computed,ref,()=>{},()=>{},()=>props,client,class extends Error{},anomalySummary,percent)
+ const c=new Function('computed','ref','watch','onUnmounted','defineProps','client','ApiError','archiveReadError','anomalySummary','percent',js+';return {load,data,error,busy}') (computed,ref,()=>{},()=>{},()=>props,client,ApiError,archiveReadError,anomalySummary,percent)
  return {...c,props,requests}
 }
 test('overview ignores stale site results and rejects partial aggregate pages',async()=>{
@@ -58,4 +62,20 @@ test('overview ignores stale site results and rejects partial aggregate pages',a
  assert.equal(c.data.value,undefined);assert.match(c.error.value,/不完整/)
  const retry=c.load();c.requests[3].resolve({items:[],has_more:false});await retry
  assert.equal(c.data.value.total.log_rows,0n);assert.equal(c.error.value,'')
+})
+
+test('overview reports timeout without blaming server version',async()=>{
+ const c=overview(),pending=c.load()
+ c.requests[0].reject(new ApiError(503,'archive_read_timeout'));await pending
+ assert.match(c.error.value,/超时/);assert.doesNotMatch(c.error.value,/升级/)
+ assert.equal(c.data.value,undefined);assert.equal(c.busy.value,false)
+})
+
+test('price display removes far-tail noise without erasing small prices',()=>{
+ const c={site_id:'a',type:'USD',symbol:'$',raw_quota_per_unit:'1000000',exchange_rate:'1',observed_at:'2026-09-27T00:00:00Z'}
+ assert.equal(moneyAPI.historicalPrice(c,'token','1.300000000002'),'1.3')
+ assert.equal(moneyAPI.historicalPrice(c,'token','3','0.008333333333'),'0.025')
+ assert.equal(moneyAPI.historicalPrice(c,'token','0.000000000000123456789'),'0.000000000000123456789')
+ assert.equal(moneyAPI.historicalPrice(c,'token','1.234567891234'),'1.234567891')
+ assert.equal(moneyAPI.historicalPrice(c,'token','10'),'10')
 })

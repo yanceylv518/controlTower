@@ -28,6 +28,7 @@ var numericID = regexp.MustCompile(`^[0-9]{1,20}$`)
 type JobQuery struct {
 	channelColumn string // server-discovered SQL identifier, never request-controlled
 	contentAbsent bool
+	timeIndex     string // discovered created_at-leading index, never supplied by a request
 	Site          string `json:"site_id"`
 	Kind          string `json:"kind"`
 	Date          string `json:"date"`
@@ -40,6 +41,9 @@ type JobQuery struct {
 	ChannelID     string `json:"channel_id"`
 	Model         string `json:"model"`
 	Category      string `json:"category"`
+	Dimension     string `json:"dimension"`
+	From          string `json:"from"`
+	Through       string `json:"through"`
 }
 
 type JobPage struct {
@@ -53,14 +57,28 @@ func (q JobQuery) Validate() error {
 		return ErrQuery
 	}
 	layout := "2006-01-02"
-	if q.Kind == "days" {
+	if q.Kind == "days" || q.Kind == "overview" {
 		layout = "2006-01"
 	} else if q.Kind != "stats" && q.Kind != "logs" && q.Kind != "anomalies" {
 		return ErrQuery
 	}
+	if q.Kind == "overview" {
+		switch q.Dimension {
+		case "model_name", "user_id", "channel_id", "group", "token_id":
+		default:
+			return ErrQuery
+		}
+	}
 	d, err := time.ParseInLocation(layout, q.Date, time.FixedZone("Beijing", 28800))
 	if err != nil || d.Format(layout) != q.Date {
 		return ErrQuery
+	}
+	if q.From != "" || q.Through != "" {
+		from, e1 := time.Parse("2006-01-02", q.From)
+		through, e2 := time.Parse("2006-01-02", q.Through)
+		if q.Kind != "overview" || e1 != nil || e2 != nil || through.Before(from) || through.Sub(from) > 61*24*time.Hour {
+			return ErrQuery
+		}
 	}
 	if (q.UserID != "" && !numericID.MatchString(q.UserID)) || (q.ChannelID != "" && !numericID.MatchString(q.ChannelID)) {
 		return ErrQuery
@@ -125,7 +143,11 @@ func (r Reader) ReadJob(ctx context.Context, q JobQuery) (JobPage, error) {
 	if err := q.Validate(); err != nil {
 		return page, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	budget := 10 * time.Second
+	if q.Kind == "anomalies" {
+		budget = 45 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	db, expected, err := r.openJob(ctx, q.Site)
 	if err != nil {
@@ -145,14 +167,17 @@ func (r Reader) ReadJob(ctx context.Context, q JobQuery) (JobPage, error) {
 	if source != expected || schema != 1 {
 		return page, ErrIdentity
 	}
+	if q.Kind == "overview" {
+		return readOverview(ctx, tx, q)
+	}
 	if q.Kind == "logs" || q.Kind == "anomalies" {
-		var count int
 		month := "logs_" + strings.ReplaceAll(q.Date[:7], "-", "")
-		if tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name=? AND seq_in_index=1 AND column_name='created_at'`, month).Scan(&count) != nil {
-			return page, ErrUnavailable
-		}
-		if count == 0 {
+		err = tx.QueryRowContext(ctx, `SELECT index_name FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name=? AND seq_in_index=1 AND column_name='created_at' AND index_type='BTREE' ORDER BY index_name LIMIT 1`, month).Scan(&q.timeIndex)
+		if errors.Is(err, sql.ErrNoRows) {
 			return page, ErrIndex
+		}
+		if err != nil {
+			return page, readFailure(err)
 		}
 		// Raw monthly tables retain the source schema: support both channel names.
 		var channelID, channel, content int
@@ -165,6 +190,9 @@ func (r Reader) ReadJob(ctx context.Context, q JobQuery) (JobPage, error) {
 		if q.channelColumn == "NULL" && q.ChannelID != "" {
 			return page, ErrChannelColumn
 		}
+	}
+	if q.Kind == "anomalies" {
+		return readAnomalyDay(ctx, tx, q)
 	}
 	if q.Kind == "stats" {
 		err = tx.QueryRowContext(ctx, `SELECT d.version_id FROM log_archive_days d JOIN log_archive_day_versions v ON v.version_id=d.version_id AND v.log_date=d.log_date AND v.revision=d.revision WHERE d.log_date=? AND d.state='sealed'`, q.Date).Scan(&page.Version)
