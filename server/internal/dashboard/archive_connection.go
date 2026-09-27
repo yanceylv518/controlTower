@@ -97,7 +97,7 @@ func (h ArchiveConnectionHandler) ServeHTTP(w http.ResponseWriter, r *http.Reque
 	}
 	hash, err := probe(r.Context(), input.Connection)
 	if err != nil {
-		code := "archive_connection_test_failed"
+		code := archivereader.ConnectionErrorCode(err)
 		if errors.Is(err, archivereader.ErrIdentity) {
 			code = "archive_identity_or_schema_mismatch"
 		}

@@ -58,7 +58,7 @@ func TestJobGrantsDoNotBroadenLegacyReader(t *testing.T) {
 			t.Fatal(grant)
 		}
 	}
-	for _, grant := range []string{"GRANT SELECT ON `a`.* TO `r`@`%`", "GRANT SELECT, INSERT ON `a`.`logs_202607` TO `r`@`%`", "GRANT SELECT ON `a`.`logs` TO `r`@`%`", "GRANT SELECT ON `a`.`users` TO `r`@`%`"} {
+	for _, grant := range []string{"GRANT SELECT, INSERT ON `a`.`logs_202607` TO `r`@`%`", "GRANT SELECT ON `a`.`logs` TO `r`@`%`", "GRANT SELECT ON `a`.`users` TO `r`@`%`"} {
 		if permittedJobGrant(grant, "a") {
 			t.Fatal(grant)
 		}
@@ -88,6 +88,18 @@ func TestAnomalyQueryIsBoundedAndFiltered(t *testing.T) {
 		mutate(&invalid)
 		if invalid.Validate() == nil {
 			t.Fatalf("accepted %+v", invalid)
+		}
+	}
+}
+
+func TestJobDatabaseSelect(t *testing.T) {
+	good := "GRANT SELECT ON `archive`.* TO `r`@`%`"
+	if !permittedJobGrant(good, "archive") || permittedGrant(good, "archive") {
+		t.Fatal("database SELECT compatibility")
+	}
+	for _, g := range []string{good + " WITH GRANT OPTION", "GRANT SELECT ON *.* TO `r`@`%`", "GRANT SELECT, INSERT ON `archive`.* TO `r`@`%`", "GRANT ALL PRIVILEGES ON `archive`.* TO `r`@`%`", "GRANT SELECT ON `other`.* TO `r`@`%`", "GRANT SELECT ON `arch%`.* TO `r`@`%`"} {
+		if permittedJobGrant(g, "archive") {
+			t.Fatal(g)
 		}
 	}
 }

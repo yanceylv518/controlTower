@@ -93,6 +93,14 @@ func permittedJobGrant(grant, database string) bool {
 	if strings.HasPrefix(grant, "GRANT USAGE ON *.* TO ") && !strings.Contains(grant, "WITH GRANT OPTION") {
 		return true
 	}
+	// Permit only SELECT on the configured database; legacy reader remains table-only.
+	if !strings.Contains(grant, "WITH GRANT OPTION") {
+		prefix := "GRANT SELECT ON `" + database + "`.* TO "
+		escaped := strings.NewReplacer("_", `\_`, "%", `\%`).Replace(database)
+		if strings.HasPrefix(grant, prefix) || strings.HasPrefix(grant, "GRANT SELECT ON `"+escaped+"`.* TO ") {
+			return true
+		}
+	}
 	m := selectGrant.FindStringSubmatch(grant)
 	if len(m) != 3 || m[1] != database || strings.Contains(grant, "WITH GRANT OPTION") {
 		return false

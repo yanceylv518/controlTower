@@ -79,3 +79,18 @@
 ## 合入main验收（2026-09-27）
 
 - **归档分支合入主线验收（2026-09-27）**：按用户授权将codex/archive-byte-pagination的280dcc51、8d324fb0、8d206f68合入当前main，包含字节分页/大行与调度修复、归档只读连接和097迁移、统计异常及站点币种。独立合并工作区保留主线模型TPM功能，仅进度文档冲突合并双方记录。Go全量vet/test、478项前端测试、typecheck/build和diff检查通过；本轮未重跑MySQL或生产验收。合并推送结果以Git为准；未发布部署。主目录其他本地工作以stash备份后恢复。
+
+## 本地打包（2026-09-27）
+
+- **main本地打包完成（2026-09-27）**：基于干净a9d2c140生成v2.0.0-rc138-local，三包及SHA256SUMS位于release/v2.0.0-rc138-local。打包脚本及前端构建成功；Windows tar默认0644，已修正包内二进制/脚本0755后重算校验值。ELF架构、Agent版本、脚本LF、执行位、Server前端和097迁移、SHA256验证通过。未Linux实机安装，未打正式tag、未发布部署。
+
+## rc138远程发布
+
+- **rc138远程正式发布（2026-09-27）**：标签v2.0.0-rc138固定main a9d2c140，GitHub Actions release 36283909955成功，三安装包、SHA256SUMS和GHCR版本/latest镜像发布完成。正式附件下载release/v2.0.0-rc138，SHA256、ELF架构/二进制执行位、Agent版本、脚本LF、Server前端及097核验通过；独立install-log-reader.sh现有0644需bash运行，不影响Agent二进制升级。未生产部署或Linux实机安装。
+发布：https://github.com/yanceylv518/controlTower/releases/tag/v2.0.0-rc138
+流程：https://github.com/yanceylv518/controlTower/actions/runs/36283909955
+
+## RDS库级只读兼容
+
+- **RDS归档只读权限兼容修复（2026-09-27，本地未发布）**：允许配置目标归档库的SELECT，继续拒绝写入/其他库/全局/授权/角色；旧reader仍表级限制。连接测试新增TLS、认证、网络及未知库固定错误分类，不泄露底层连接信息。Go全量vet/test、4项连接前端测试、typecheck/build通过；未做真实RDS/TLS或MySQL实库验证。rc138不含此修复，需后续Server/Web发布；Agent无改动。
+截图仅确认权限拒绝与TLS开启后通用失败；未证明TLS失败的具体原因，需新版分类或服务端环境实测。

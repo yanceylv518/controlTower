@@ -78,7 +78,7 @@ func openConfig(ctx context.Context, cfg *mysql.Config, permit func(string, stri
 	db.SetMaxIdleConns(1)
 	if err = db.PingContext(ctx); err != nil {
 		db.Close()
-		return nil, ErrUnavailable
+		return nil, connectionFailure(err)
 	}
 	if err = checkGrantsWith(ctx, db, cfg.DBName, permit); err != nil {
 		db.Close()

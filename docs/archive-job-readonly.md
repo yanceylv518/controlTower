@@ -40,7 +40,7 @@ FROM log_archive_meta WHERE singleton_id = 1;
 
 DSN 放在 Server 进程的 `CT_ARCHIVE_SITE_A_DSN` 环境变量中；使用专用 MySQL 只读账号。配置文件只包含环境变量名和身份 hash，不写密码。Compose 部署需要实际传入这些环境变量，并将 JSON 文件只读挂载到容器；仅修改宿主机文件不会自动进入容器。网络、TLS 和账号来源地址按实际部署设置，不开放公网数据库端口。
 
-账号仅授予以下表的 SELECT：
+账号可授予目标归档数据库的 SELECT（兼容 RDS 库级只读），或仅授予以下表的 SELECT：
 
 - log_archive_meta
 - log_archive_days
@@ -48,7 +48,7 @@ DSN 放在 Server 进程的 `CT_ARCHIVE_SITE_A_DSN` 环境变量中；使用专�
 - log_archive_daily_stats
 - 需要查询的 logs_YYYYMM 月表
 
-禁止 INSERT/UPDATE/DELETE、数据库级或全局通配授权、角色及 GRANT OPTION。新月份月表创建后，需要部署侧为此只读账号补对应表 SELECT；Agent 写入账号不要复用。旧读取器和新读取器账号应独立，避免各自表白名单校验冲突。只读查询不修改归档库结构；页面配置需要CT库097迁移。
+禁止 INSERT/UPDATE/DELETE、其他库或全局授权、角色及 GRANT OPTION。使用表级授权时，新月份月表需补 SELECT；使用目标库级 SELECT 时无需逐月授权。Agent 写入账号不要复用。旧读取器和新读取器账号应独立，避免各自表白名单校验冲突。只读查询不修改归档库结构；页面配置需要CT库097迁移。
 
 ## API
 
@@ -81,7 +81,7 @@ GET /api/dashboard/log-archive-read/anomalies?site_id=actual-site-id&date=2026-0
 - 400 archive_invalid_query：日期、游标、筛选或分页不合法。
 - 409 archive_identity_or_schema_mismatch：站点绑定hash或schema不匹配。
 - 409 archive_sealed_version_unavailable：未封存、发布记录不一致或分页版本变化。
-- 503 archive_readonly_permissions_required：账号不符合只读表级权限。
+- 503 archive_readonly_permissions_required：账号不符合目标归档库或归档表只读权限。
 - 503 archive_read_time_index_required：月表缺少时间索引（也应先确认目标月表存在）。
 - 503 archive_read_row_too_large：单行超过读取预算。
 - 503 archive_readonly_unavailable：配置、连接或查询失败；不回退源库，不将异常伪装为空结果。
@@ -95,3 +95,5 @@ GET /api/dashboard/log-archive-read/anomalies?site_id=actual-site-id&date=2026-0
 模型历史价格按模型及完整pricing证据分组，保留不同分组倍率/折扣、表达式和观测首末日期。参考输入价格为model_ratio×1000000/站点QuotaPerUnit再乘当前汇率，输出和缓存读取再乘对应倍率；model_price按当前汇率显示每次参考价。TOKENS显示原始额度参考价。参考价不再乘分组倍率或用户折扣，不能用于重算已汇总quota。零价保留，缺失显示未知，表达式不执行也不推导Token单价；没有查询当前源库价格配置。
 
 异常分析保留按日分页明细，新增独立当日汇总与24小时趋势，分别显示空输出、输出NULL和type5错误。空输出占比的分母仅为type2消费日志数，分母为零显示未知；不提供混合三类记录的“失败率”。更换筛选、站点或重试时丢弃旧响应；明细翻页不重复汇总。查询失败明确提示，不能把失败当零数据。两个页面均要求Server新版只读接口与归档连接就绪；本次无需新增归档库迁移，仍需CT097。
+
+连接测试区分 archive_tls_failed、archive_auth_failed、archive_network_failed、archive_database_missing；仅返回固定分类，不回传驱动错误、密码或DSN。未分类失败仍显示通用提示。
