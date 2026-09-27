@@ -28,3 +28,8 @@
 ## 卡片布局修复
 
 监控错误码卡片布局修复（2026-09-27，本地未发布）：修复图表height:100%与外置说明叠加导致提示溢出覆盖下一行；状态提示移入TrendChart footer，移除常驻Top5说明，外层改flex自然撑高，标题允许换行。实际Vue组件合成数据浏览器验证第一行卡片等高200px、下一行间距10px，无内容溢出；截图local/monitor-layout-fixed.png。Web typecheck/build通过；未提交打包，rc144仍含旧布局。
+
+
+## rc145发布结果
+
+**rc145布局修复远程发布完成（2026-09-27）**：4ba787936ba3ef88fb2c605cc8f0a6a28c5d5890已推送main，v2.0.0-rc145固定同一提交；CI36322400250与release36322403092成功，Linux附件、SHA256SUMS及GHCR镜像已发布。正式包下载release/v2.0.0-rc145，校验和、ELF架构/执行位、脚本LF、版本及打包CSS修复核验通过。沿用修复轮Web typecheck/build与真实组件合成数据浏览器布局验证；未生产部署。本次仅更新Server/Web，Agent保持现有版本，勿替换现有rc143 Agent（其大记录修复仍在独立分支）。
