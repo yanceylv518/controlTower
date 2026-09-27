@@ -2,7 +2,7 @@
 
 - 标识：2026-09-27-archive-large-record-streaming
 - 更新时间：2026-09-27 20:10 +08:00
-- 状态：实现与本地验证完成，待提交、发布和生产验收。
+- 状态：已提交推送并发布rc143；尚未合入main，待生产部署验收。
 - 目标与验收条件：解决现场历史2026-08-16、ID23496801、189629491字节超过64 MiB限制；完整保留原始日志，不靠继续放大Agent整行限制，不跳过问题行；重启/失败可接续，校验和统计均可完成。
 - 负责会话、分支和范围：本会话，codex/archive-byte-pagination，工作区local/archive-history-20260924；Agent archivejob包及归档库新增暂存表。期间主线发布rc142，已将工作区快进到bb107ee0后接续修复，保留其live统计和批量汇总。没有修改主目录业务代码，没有提交、推送、打包或部署本修复。
 
@@ -64,3 +64,12 @@ FROM log_archive_meta WHERE singleton_id=1;
 生产仍需验证远程网络、RDS限制、最终重组耗时、实际源库压力及真实日志计价证据。回退旧Agent前应先完成/清理在途大记录，由受控流程处理，不能直接删除状态或降级覆盖新检查点。
 
 相关：[引擎设计](../archive-new-engine.md)、[前期字节分页修复](2026-09-25-archive-byte-pagination.md)。原先未提交的rc137迭代记录和旧任务补充仍保留，不归为本次发布事实。
+
+## rc143正式发布
+
+用户本次授权提交推送打包，沿用之前明确的远程正式发布方式。提交0418042a9093b64f5cc912aeebc059bcddee096b已推送origin/codex/archive-byte-pagination，附注标签v2.0.0-rc143固定同一提交，远程ref已核对。release工作流36318268142成功，GitHub正式Release（非草稿、非预发布）及GHCR版本/latest镜像步骤完成。未推送main、未部署生产。
+
+三个正式tar.gz及SHA256SUMS下载到主目录release/v2.0.0-rc143；实际校验和、ELF amd64/arm64、执行权限、Agent脚本LF、Agent rc143版本及分块暂存/包限制符号、Server前端及097迁移均检查通过。仅本次修复需要Agent升级，已有rc142 Server/Web可继续使用。MySQL包大小/字段容量仍为部署前提。
+
+- [Release](https://github.com/yanceylv518/controlTower/releases/tag/v2.0.0-rc143)
+- [远程构建](https://github.com/yanceylv518/controlTower/actions/runs/36318268142)
