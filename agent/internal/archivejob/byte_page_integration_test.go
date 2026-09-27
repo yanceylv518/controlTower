@@ -36,18 +36,21 @@ func TestBytePagesCollectVerifySummarizeResumeMySQL(t *testing.T) {
 	if st.Collection.AfterID != 2 || st.Collection.Rows != 2 {
 		t.Fatalf("byte page skipped tail: %+v", st.Collection)
 	}
-	e.ready = false
-	st, err = e.Step(ctx, aj.Settings{Collection: true}, 1000, 60, true)
-	if err != nil || st.Collection.AfterID != 3 || st.Collection.Rows != 3 {
-		t.Fatalf("large singleton resume %+v %v", st.Collection, err)
+
+	for i := 0; i < 100 && st.Collection.AfterID != 4; i++ {
+		e.ready = false
+		st, err = e.Step(ctx, aj.Settings{Collection: true}, 1000, 60, true)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
-	st, err = e.Step(ctx, aj.Settings{Collection: true}, 1000, 60, true)
-	if err != nil || st.Collection.AfterID != 4 || st.Collection.Rows != 4 {
-		t.Fatalf("collection resume %+v %v", st.Collection, err)
+	if st.Collection.AfterID != 4 || st.Collection.Rows != 4 {
+		t.Fatalf("large record did not resume %+v", st.Collection)
 	}
+
 	seen := map[string]bool{}
 	injected := false
-	for i := 0; i < 20; i++ {
+	for i := 0; i < 150; i++ {
 		before, err := load(ctx, e.target)
 		if err != nil {
 			t.Fatal(err)
@@ -102,46 +105,6 @@ func TestBytePagesCollectVerifySummarizeResumeMySQL(t *testing.T) {
 	err = e.target.QueryRowContext(ctx, "SELECT SUM(CAST(JSON_UNQUOTE(amounts->'$.log_rows') AS UNSIGNED)),SUM(CAST(JSON_UNQUOTE(amounts->'$.quota') AS UNSIGNED)) FROM log_archive_daily_stats s JOIN log_archive_days d ON d.version_id=s.version_id WHERE d.log_date='2026-01-01' AND d.state='sealed'").Scan(&count, &quota)
 	if err != nil || count != 3 || quota != 21 {
 		t.Fatalf("missing/duplicate summary: %d %d %v", count, quota, err)
-	}
-}
-
-func TestOversizedRowPreservesPrefixAndCursorMySQL(t *testing.T) {
-	e, ctx := fixture(t)
-	var packet int
-	if err := e.source.QueryRowContext(ctx, "SELECT @@max_allowed_packet").Scan(&packet); err != nil {
-		t.Fatal(err)
-	}
-	if packet <= maxRowBytes+1024 {
-		t.Skip("oversized-row fixture requires MySQL max_allowed_packet > 64 MiB; boundary also covered by driver unit test")
-	}
-	if _, err := e.source.ExecContext(ctx, "ALTER TABLE logs ADD COLUMN content LONGTEXT"); err != nil {
-		t.Fatal(err)
-	}
-	start, _ := dateBounds("2026-01-01")
-	for i, content := range []string{"small", strings.Repeat("z", maxRowBytes+1)} {
-		if _, err := e.source.ExecContext(ctx, "INSERT INTO logs(id,created_at,type,other,content) VALUES(?,?,2,'{}',?)", i+1, start+int64(i+1), content); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, err := e.target.ExecContext(ctx, "ALTER TABLE logs_202601 ADD COLUMN content LONGTEXT"); err != nil {
-		t.Fatal(err)
-	}
-	st, err := e.Step(ctx, aj.Settings{Collection: true}, 1000, 60, true)
-	if err != nil || st.Collection.AfterID != 1 {
-		t.Fatalf("valid prefix lost: %+v %v", st, err)
-	}
-	for i := 0; i < 2; i++ {
-		_, err = e.Step(ctx, aj.Settings{Collection: true}, 1000, 60, true)
-		if err == nil || !strings.Contains(err.Error(), "archive_row_payload_limit:id=2,bytes=") || strings.Contains(err.Error(), "zzzz") {
-			t.Fatalf("unsafe/missing diagnostic: %v", err)
-		}
-		saved, err := load(ctx, e.target)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if saved.Collection.AfterID != 1 || saved.Collection.Rows != 1 {
-			t.Fatal("oversized record skipped or prefix duplicated")
-		}
 	}
 }
 

@@ -113,7 +113,7 @@ func parseAggregate(r row) (string, aggregate, error) {
 func (e *Engine) summarize(ctx context.Context, c *sql.Conn, s *state, batch int) error {
 	h := &s.History
 	from, to := dateBounds(h.Date)
-	rows, byteLimited, err := readPage(ctx, c, "SELECT /*+ MAX_EXECUTION_TIME(3000) */ * FROM "+q(table(h.Date))+" WHERE created_at>=? AND created_at<? AND (created_at>? OR (created_at=? AND id>?)) ORDER BY created_at,id LIMIT ?", from, to, h.AfterCreated, h.AfterCreated, h.AfterID, batch)
+	rows, byteLimited, err := readArchivePage(ctx, c, table(h.Date), "SELECT /*+ MAX_EXECUTION_TIME(3000) */ * FROM "+q(table(h.Date))+" WHERE created_at>=? AND created_at<? AND (created_at>? OR (created_at=? AND id>?)) ORDER BY created_at,id LIMIT ?", from, to, h.AfterCreated, h.AfterCreated, h.AfterID, batch)
 	if err != nil {
 		return err
 	}

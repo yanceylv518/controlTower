@@ -3,6 +3,8 @@
 <!-- AI_CURRENT_START -->
 ## 当前总览
 
+- **大记录归档长期修复（2026-09-27，未提交/发布）**：归档worktree已快进到最新主线bb107ee0并兼容rc142 live及批量统计。超过8 MiB日志改为最多4 MiB块、持久化偏移/SHA，完整原始字段写入及校验成功后才推进游标；采集、历史核验、封存/live统计均接入。自动新增log_archive_large_chunks，无CT迁移；目标MySQL包大小仍须容纳完整字段，不足明确报错并保留暂存。Go全量vet/test通过，隔离MySQL9.7全包185.955s（含约181 MiB全链路175.67s）及复查短回归10.179s通过，持续追加/替换live专项通过；另修复大行live解析错误/退避阻塞其他普通日期的问题，实库验证错误隔离和断点保留。未生产性能或真实日志验收，未提交推送部署。 详见[交接](docs/ai-tasks/2026-09-27-archive-large-record-streaming.md)。
+
 - **rc142远程发布完成（2026-09-27）**：85b5e0502ed1907e0f05c8699a11f94fdf22edb9已推送main，v2.0.0-rc142固定同一提交。CI36300306928与release36300311097成功；三Linux安装包、SHA256及GHCR版本/latest镜像已发布。正式附件下载release/v2.0.0-rc142，SHA256、ELF架构/执行位、脚本LF、Agent版本/live结构、Server前端及097迁移核验通过。需配套升级Agent和Server/Web；未生产部署或真实RDS性能验收。此前本地未提交/未发布状态由本条更新。
 
 - **归档优化本地打包完成（2026-09-27）**：v2.0.0-rc142-local包含当前未提交的归档数据融合、live统计、日统计批量写入、异常超时及价格显示修复。三Linux包及SHA256SUMS位于release/v2.0.0-rc142-local；Agent amd64/arm64、Server/Web amd64。重新执行Go全量vet/test及Web typecheck/build通过；校验SHA256、ELF架构、执行位、脚本LF、Agent版本/live结构、Server前端及097迁移通过。未提交推送、未远程发布、未部署或Linux实机安装；配套升级Agent与Server/Web，生产RDS验收仍待执行。
