@@ -166,7 +166,7 @@ const panelProps = computed(() => ({
         <span>最近 1 分钟 <strong>{{ minute ? formatTokens(minute.tpm) : '—' }}</strong> TPM</span>
         <span>{{ minuteTime }}{{ minuteStatus ? ` · ${minuteStatus}` : '' }}</span>
       </div>
-      <CustomerTrafficPanel v-if="expanded" v-bind="panelProps" active expanded @dimension="dimension = $event" @retry="load" />
+      <CustomerTrafficPanel v-if="expanded" :key="customer.dimension_key" v-bind="panelProps" active expanded @dimension="dimension = $event" @retry="load" />
     </el-dialog>
   </article>
 </template>

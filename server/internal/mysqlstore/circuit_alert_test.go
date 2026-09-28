@@ -29,6 +29,55 @@ func TestCircuitEventAlertIdentityAndRecovery(t *testing.T) {
 	}
 }
 
+func TestCircuitEventAlertDescribesConfirmedAction(t *testing.T) {
+	for _, tc := range []struct {
+		name, rule, evidence string
+		want, absent         []string
+	}{
+		{
+			name: "regular circuit", rule: "circuit_opened", evidence: `{}`,
+			want:   []string{"渠道权重已置零", "优先级保持不变", "完整一轮探针全部失败时禁用渠道", "禁用后继续定期探测"},
+			absent: []string{"渠道已禁用", "优先级已置零", "已重新启用"},
+		},
+		{
+			name: "fast circuit", rule: "circuit_opened", evidence: `{"trigger":"agent_report_batch","error_rate":0.6}`,
+			want:   []string{"渠道权重已置零", "优先级保持不变", "上报批次快速熔断", "60.0%"},
+			absent: []string{"优先级已置零", "渠道已禁用"},
+		},
+		{
+			name: "weight recovery", rule: "circuit_recovered", evidence: `{}`,
+			want:   []string{"软启动权重已写入", "优先级保持不变", "后续权重按调权策略评估"},
+			absent: []string{"已重新启用", "恢复全部流量"},
+		},
+		{
+			name: "disabled channel recovery", rule: "circuit_recovered", evidence: `{"channel_status":1,"secret":"must-not-leak"}`,
+			want:   []string{"渠道已重新启用", "软启动权重已写入", "优先级保持不变"},
+			absent: []string{"must-not-leak", "恢复全部流量"},
+		},
+		{
+			name: "invalid evidence", rule: "circuit_recovered", evidence: `{"channel_status":1,`,
+			want: []string{"软启动权重已写入"}, absent: []string{"已重新启用"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := circuitEventAlert(circuitEvent{ID: tc.name, Rule: tc.rule, Evidence: tc.evidence})
+			for _, want := range tc.want {
+				if !strings.Contains(a.Summary, want) {
+					t.Fatalf("missing %q in %s", want, a.Summary)
+				}
+			}
+			for _, absent := range tc.absent {
+				if strings.Contains(a.Summary, absent) {
+					t.Fatalf("misleading or unsafe %q in %s", absent, a.Summary)
+				}
+			}
+			if tc.rule == "circuit_recovered" && !strings.Contains(a.Title, "软启动") {
+				t.Fatalf("recovery title must identify soft start: %s", a.Title)
+			}
+		})
+	}
+}
+
 func TestMySQLCircuitAlertLifecycle(t *testing.T) {
 	dsn := os.Getenv("CT_MYSQL_TEST_DSN")
 	if dsn == "" {

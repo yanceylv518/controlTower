@@ -94,11 +94,11 @@ func (a *accumulator) add(event logcollector.Event, cacheHitMinPromptTokens int6
 		a.metric.OutputSpeed.Add(event.CompletionTokens, event.UseTime, event.AttemptCount, a.metric.DimensionType == "instance_channel")
 	}
 	a.metric.RequestCount++
-	zeroOutput := event.LogType == "consume" && event.CompletionTokens == 0
-	if event.LogType == "consume" && !zeroOutput {
+	// Consumption logs remain successful even when output tokens are zero.
+	if event.LogType == "consume" {
 		a.metric.SuccessCount++
 	}
-	if event.LogType == "error" || zeroOutput {
+	if event.LogType == "error" {
 		a.metric.ErrorCount++
 		if event.LogType == "error" && errorclass.IsUserError(event.ErrorSummary, userCodes) {
 			a.metric.UserErrorCount++

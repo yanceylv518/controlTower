@@ -25,7 +25,8 @@ function setup() {
 
 test('all stacked layers stay visible and refresh clears legend emphasis before and after redraw', () => {
   const h = setup()
-  assert.ok(h.options[0].series.every(series => series.emphasis.focus === 'none' && series.areaStyle.opacity === 1))
+  assert.ok(h.options[0].series.every(series => series.emphasis.focus === 'series' && series.areaStyle.opacity === 1 && series.blur.areaStyle.opacity > 0 && series.blur.areaStyle.opacity < .2 && series.emphasis.areaStyle.opacity >= .6))
+  assert.equal(h.options[0].xAxis.axisPointer.triggerEmphasis, false)
   vm.runInContext('highlight("7")', h.context)
   assert.equal(h.actions.at(-1).type, 'highlight')
   h.actions.length = 0

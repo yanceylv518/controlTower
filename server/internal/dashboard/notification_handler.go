@@ -393,7 +393,7 @@ func dingTalkSignedURL(raw, secret string, now time.Time) string {
 
 func notificationPayload(alert storage.Alert, channel storage.NotificationChannel) map[string]any {
 	if isCircuitAlert(alert.RuleKey) && (channel.ChannelType == "wecom" || channel.ChannelType == "dingtalk") {
-		content := fmt.Sprintf("【%s】\n%s\n事件时间：%s", alert.Title, alert.Summary, alert.FirstSeenAt.Local().Format("2006-01-02 15:04:05"))
+		content := fmt.Sprintf("【%s】\n%s\n事件时间：%s（北京时间 UTC+8）", alert.Title, alert.Summary, alert.FirstSeenAt.In(time.FixedZone("UTC+8", 8*60*60)).Format("2006-01-02 15:04:05"))
 		return map[string]any{"msgtype": "text", "text": map[string]string{"content": content}}
 	}
 	if alert.RuleKey == "user_low_balance" && (channel.ChannelType == "wecom" || channel.ChannelType == "dingtalk") {

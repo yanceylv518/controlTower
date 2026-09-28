@@ -18,7 +18,7 @@ func TestAggregateTracksTotalAndUserErrors(t *testing.T) {
 	}
 }
 
-func TestAggregateTreatsSuccessfulZeroOutputAsChannelError(t *testing.T) {
+func TestAggregateTreatsSuccessfulZeroOutputAsSuccess(t *testing.T) {
 	now := time.Now().UTC()
 	metrics := Aggregate("inst", []logcollector.Event{
 		{CreatedAt: now, LogType: "consume", CompletionTokens: 0},
@@ -29,11 +29,29 @@ func TestAggregateTreatsSuccessfulZeroOutputAsChannelError(t *testing.T) {
 		t.Fatalf("unexpected metrics: %#v", metrics)
 	}
 	metric := metrics[0]
-	if metric.RequestCount != 3 || metric.SuccessCount != 1 || metric.ErrorCount != 2 || metric.UserErrorCount != 0 {
+	if metric.RequestCount != 3 || metric.SuccessCount != 2 || metric.ErrorCount != 1 || metric.UserErrorCount != 0 {
 		t.Fatalf("unexpected zero-output attribution: %#v", metric)
 	}
-	if metric.SuccessRate == nil || *metric.SuccessRate != float64(1)/3 || metric.ErrorRate == nil || *metric.ErrorRate != float64(2)/3 {
+	if metric.SuccessRate == nil || *metric.SuccessRate != float64(2)/3 || metric.ErrorRate == nil || *metric.ErrorRate != float64(1)/3 {
 		t.Fatalf("unexpected zero-output rates: %#v", metric)
+	}
+}
+
+func TestZeroOutputCannotSupplyCircuitErrorsInAnyDimension(t *testing.T) {
+	now := time.Now().UTC()
+	events := make([]logcollector.Event, 50)
+	for i := range events {
+		events[i] = logcollector.Event{CreatedAt: now, LogType: "consume", UserID: 7, ChannelID: 18, ModelName: "m", CompletionTokens: 0, PromptTokens: 10, TotalTokens: 10, ErrorSummary: "HTTP 502"}
+	}
+	metrics := Aggregate("inst", events, 512)
+	for _, metric := range metrics {
+		// Traffic-only cross dimensions carry tokens without request counters.
+		if metric.RequestCount == 0 {
+			continue
+		}
+		if metric.RequestCount != 50 || metric.SuccessCount != 50 || metric.ErrorCount != 0 || metric.UserErrorCount != 0 || metric.ErrorRate == nil || *metric.ErrorRate != 0 {
+			t.Fatalf("zero output supplied circuit errors: %#v", metric)
+		}
 	}
 }
 

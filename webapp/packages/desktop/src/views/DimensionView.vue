@@ -113,6 +113,7 @@ watch(
       search.value = "";
       selectedKeys.value = [];
     }
+    state.cancel();
     state.data.value = undefined;
     history.value = [];
     customerPoints.value = [];
@@ -566,8 +567,8 @@ function rowClass({ row }: { row: DimRow }) {
           <span>{{ expandedGroup.headline.label }} <strong>{{ expandedGroup.headline.value }}</strong></span>
           <span>{{ expandedGroup.headline.detail }}</span>
         </div>
-        <ModelChannelTraffic v-if="kind === 'models' && expandedGroup.row" v-model:dimension="modelDimensions[expandedGroup.key]" :model="expandedGroup.row" :totals="historyByKey.get(expandedGroup.key) || []" :hours="hours" :as-of="asOf" :refresh-key="refreshKey" active expanded />
-        <CustomerTrafficPanel v-else :traffic="expandedGroup.traffic" dimension="user" :name="expandedGroup.name" :loading="state.loading.value" :error="customerError" empty-text="暂无完整客户拆分数据" :hours="hours" :bucket-minutes="bucketMinutes" :last-plot-time="trafficTime(expandedGroup.traffic.lastCompleteTime)" active expanded @retry="state.reload" />
+        <ModelChannelTraffic v-if="kind === 'models' && expandedGroup.row" :key="expandedGroup.key" v-model:dimension="modelDimensions[expandedGroup.key]" :model="expandedGroup.row" :totals="historyByKey.get(expandedGroup.key) || []" :hours="hours" :as-of="asOf" :refresh-key="refreshKey" active expanded />
+        <CustomerTrafficPanel v-else :key="expandedGroup.key" :traffic="expandedGroup.traffic" dimension="user" :name="expandedGroup.name" :loading="state.loading.value" :error="customerError" empty-text="暂无完整客户拆分数据" :hours="hours" :bucket-minutes="bucketMinutes" :last-plot-time="trafficTime(expandedGroup.traffic.lastCompleteTime)" active expanded @retry="state.reload" />
       </template>
     </el-dialog>
     <el-drawer

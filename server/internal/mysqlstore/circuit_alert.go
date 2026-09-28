@@ -24,16 +24,24 @@ func circuitEventAlert(e circuitEvent) storage.Alert {
 	a := storage.Alert{ID: hex.EncodeToString(hash[:]), InstanceID: e.InstanceID,
 		RuleKey: "channel_" + e.Rule, Status: "firing", Severity: "critical",
 		Title: "渠道已熔断", FirstSeenAt: e.At, LastSeenAt: e.At}
-	action := "自动熔断已执行，渠道权重和优先级已置零。"
+	// Read only the event snapshot: live state may have advanced before delivery.
+	var evidence map[string]any
+	if json.Unmarshal([]byte(e.Evidence), &evidence) != nil {
+		evidence = nil
+	}
+	action := "自动熔断已执行，渠道权重已置零，优先级保持不变。\n后续处理：自动模式下，静默期后探测；完整一轮探针全部失败时禁用渠道，禁用后继续定期探测。"
 	if e.Rule == "circuit_recovered" {
-		a.Status, a.Severity, a.Title = "resolved", "info", "渠道熔断已恢复"
+		a.Status, a.Severity, a.Title = "resolved", "info", "渠道熔断恢复（软启动）"
 		a.ResolvedAt = &e.At
-		action = "恢复写入已执行，渠道进入恢复/软启动流程。"
+		action = "探测达到恢复条件，软启动权重已写入，优先级保持不变。"
+		if status, ok := evidence["channel_status"].(float64); ok && status == 1 {
+			action = "探测达到恢复条件，渠道已重新启用，软启动权重已写入，优先级保持不变。"
+		}
+		action += "\n后续处理：进入软启动，后续权重按调权策略评估。"
 	}
 	a.Summary = fmt.Sprintf("站点：%s\n渠道：%s（ID %d）\n%s", e.SiteID, e.Name, e.ChannelID, action)
 	// Only known diagnostic fields are included, never raw error payloads or credentials.
-	var evidence map[string]any
-	if json.Unmarshal([]byte(e.Evidence), &evidence) == nil {
+	if evidence != nil {
 		if model, ok := evidence["model"].(string); ok {
 			a.Summary += "\n模型：" + model
 		}

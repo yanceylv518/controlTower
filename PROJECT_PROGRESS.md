@@ -3,6 +3,8 @@
 <!-- AI_CURRENT_START -->
 ## 当前总览
 
+- **监控修复提交验收（2026-09-28）**：本轮通知文案/北京时间、TPM弹窗勾选及悬停高亮、错误码超限自动分段、零输出消费不计错误已按独立提交范围验收。仅待提交文件的隔离副本通过 Go 全量 test/vet、493项前端回归、typecheck/build及diff检查；未配置实库的测试沿用跳过行为，未生产验收。排除主副图及独立错误统计开发，保留远程已发布缓存命中率与模型双维TPM。按授权提交推送，最终结果以Git为准；不打包或部署。见[交付记录](docs/tasks/2026-09-28-monitor-fixes-delivery.md)。
+
 - **rc145布局修复远程发布完成（2026-09-27）**：4ba787936ba3ef88fb2c605cc8f0a6a28c5d5890已推送main，v2.0.0-rc145固定同一提交；CI36322400250与release36322403092成功，Linux附件、SHA256SUMS及GHCR镜像已发布。正式包下载release/v2.0.0-rc145，校验和、ELF架构/执行位、脚本LF、版本及打包CSS修复核验通过。沿用修复轮Web typecheck/build与真实组件合成数据浏览器布局验证；未生产部署。本次仅更新Server/Web，Agent保持现有版本，勿替换现有rc143 Agent（其大记录修复仍在独立分支）。
 
 - **rc144监控优化远程发布完成（2026-09-27）**：f762febfb4818f425c9aa15528d56ddb83ff4a0f已推送main，v2.0.0-rc144固定同一提交；CI36321082647与release36321085845成功，三Linux附件、SHA256SUMS及GHCR镜像已发布。正式包下载release/v2.0.0-rc144，校验和、ELF架构/执行位、脚本LF、版本与Server错误码接口/前端内容检查通过；Go vet/test、Web typecheck/build及489项前端测试通过。本次仅更新Server/Web，Agent保持现有版本；rc143大记录归档修复尚在独立分支，rc144不包含该修复，发布说明已明确不可替换现有rc143 Agent。未生产部署，真实错误码曲线与源库性能待验收。

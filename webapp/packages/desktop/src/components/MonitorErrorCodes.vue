@@ -4,6 +4,7 @@ import { FullScreen } from '@element-plus/icons-vue';
 import { client } from '../api';
 import TrendChart, {type TrendSeries} from './TrendChart.vue';
 import {errorTrend,type ErrorCodeResult} from '../utils/monitorErrorTrend';
+import {loadMonitorErrors} from '../utils/loadMonitorErrors';
 const props=defineProps<{site:string;dimensionType:string;value:string;hours:number;active:boolean;series:TrendSeries[];bucket:'1m'|'5m'}>();
 const mode=ref('overview');const expanded=ref(false);const selected=ref<string|null>(null);
 const data=ref<ErrorCodeResult>();const loading=ref(false);const error=ref('');
@@ -23,8 +24,8 @@ async function load(force=false){
  if(!props.active||!props.site||!props.value||!range||(mode.value==='overview'&&!expanded.value))return;
  controller=new AbortController();loading.value=true;
  const query=new URLSearchParams({site:props.site,dimension_type:props.dimensionType,value:props.value,start_time:range.start,end_time:range.end,bucket:props.bucket});
- try{const result=await client.request<ErrorCodeResult>(`/api/dashboard/monitor-error-codes?${query}`,{signal:controller.signal});if(token===generation){data.value=result;loadedKey=key;}}
- catch(e){if(token===generation)error.value=(e as {code?:string}).code==='error_statistics_limit'?'错误日志较多，请缩短时间范围。':'错误码统计读取失败，请重试。';}
+ try{const result=await loadMonitorErrors(query,controller.signal,(url,options)=>client.request<ErrorCodeResult>(url,options));if(token===generation){data.value=result;loadedKey=key;}}
+ catch(e){if(token===generation)error.value=(e as {code?:string}).code==='error_statistics_limit'?'自动分段后仍超出读取限制，请缩短时间范围。':'错误码统计读取失败，请重试。';}
  finally{if(token===generation)loading.value=false;}
 }
 watch(()=>[props.site,props.dimensionType,props.value,props.hours,props.bucket],()=>{selected.value=null;loadedKey='';});
