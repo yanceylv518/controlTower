@@ -7,8 +7,12 @@ import { computed, reactive, ref } from 'vue'
 // Exercise the actual page script with controlled API promises. Lifecycle
 // timers and unrelated components are excluded so request ordering is explicit.
 const sfc = readFileSync(new URL('../src/views/ContinuousTuningView.vue', import.meta.url), 'utf8')
+const groupFilterSfc = readFileSync(new URL('../src/components/TuningGroupFilter.vue', import.meta.url), 'utf8')
 const script = sfc.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1].replace(/^import .*;\r?\n/gm, '')
 const compiled = ts.transpileModule(script, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText
+const groupUtilsSource = readFileSync(new URL('../src/utils/channelGroup.ts', import.meta.url), 'utf8')
+const groupUtilsCode = ts.transpileModule(groupUtilsSource, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText
+const groupUtils = new Function('exports', `${groupUtilsCode}\nreturn exports;`)({})
 const row = { channel_id: 1, model_name: 'm', base_weight: 100, base_priority: 1, current_weight: 80, current_priority: 1, group_name: 'default,vip', models: ['m'] }
 const state = (requests, weight = 80) => ({ channel_id: 1, model_name: 'm', last_observed_requests: requests, proposed_weight: weight, speed_stats_version: 1, phase: 'normal', metric_ready: true, baseline_ready: true, updated_at: '2026-09-14T00:00:00Z' })
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no }); return { promise, resolve, reject } }
@@ -42,13 +46,11 @@ function page() {
     tuningBaseValues: async () => ({ items: [{ ...row }] }),
     tuningRecommendations: async () => ({ items: [] }),
     tuningContinuousStates: async () => ({ items: [state(42)] }),
+    tuningChannels: async () => { throw new Error('channel directory unavailable') },
   }
-  const names = ['computed', 'reactive', 'ref', 'watch', 'onMounted', 'onBeforeUnmount', 'useFiltersStore', 'dashboard', 'formatTime', 'ApiError', 'ElMessage', 'ElMessageBox', 'useMobileViewport', 'splitChannelGroups', 'matchesChannelGroup']
-  const create = new Function(...names, `${compiled}\nreturn { refreshCurrentRates, ratesError, saveCapacity, saving, mobileEditRow, stageMobileEdit, mobileChanges, mobilePriorityChanges, mobileRuleChanges, mobileSaveOpen, load, refreshRuntime, loadChannelDirectory, applyGroupLocally, acceptStates, stateFor, sampleText, evaluationText, states, refreshError, bases, channels, policy, channelQuery, selectedGroupFilter, channelStatusFilter, displayedRows, activeModel, dirty, selectModel, fieldChanged, savedBases, originalBase, calculatedWeight, displayedSpeedFactor, coefficientCell, overallEvaluationStatus, coefficientEmptyText, coefficientSpan, displayedPriority, editPriority, priorityLocked, cancelChanges, limitReason, currentRates, ratesReady, rowStatus, eventResult, eventResultClass, events, filteredEvents, eventDateRange };`)
-  const groupSource = readFileSync(new URL('../src/utils/channelGroup.ts', import.meta.url), 'utf8').replace(/export /g, '')
-  const groupCode = ts.transpileModule(groupSource, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText
-  const { splitChannelGroups, matchesChannelGroup } = new Function(groupCode + '; return { splitChannelGroups, matchesChannelGroup };')()
-  const view = create(computed, reactive, ref, () => {}, () => {}, () => {}, () => filters, dashboard, String, ApiError, {info() {}, success() {}}, {}, () => ref(false), splitChannelGroups, matchesChannelGroup)
+  const names = ['computed', 'reactive', 'ref', 'watch', 'onMounted', 'onBeforeUnmount', 'useFiltersStore', 'dashboard', 'formatTime', 'ApiError', 'ElMessage', 'ElMessageBox', 'useMobileViewport', 'hiddenChannelGroupCount', 'matchesChannelGroup', 'MAX_VISIBLE_CHANNEL_GROUPS', 'normalizeChannelGroups', 'splitChannelGroups', 'visibleChannelGroups']
+  const create = new Function(...names, `${compiled}\nreturn { refreshCurrentRates, ratesError, saveCapacity, saving, mobileEditRow, stageMobileEdit, mobileChanges, mobilePriorityChanges, mobileRuleChanges, mobileSaveOpen, load, refreshRuntime, loadChannelDirectory, applyGroupLocally, acceptStates, stateFor, sampleText, evaluationText, states, refreshError, bases, channels, channelDirectorySite, channelDirectoryLoading, policy, channelSwitchFilter, selectedGroupFilter, toggleGroupFilter, selectedGroupName, displayedRows, activeRows, modelChannelRows, models, modelChannelCount, activeModel, dirty, selectModel, fieldChanged, savedBases, originalBase, calculatedWeight, displayedSpeedFactor, coefficientCell, overallEvaluationStatus, coefficientEmptyText, coefficientSpan, displayedPriority, editPriority, priorityLocked, cancelChanges, limitReason, currentRates, ratesReady, rowStatus, channelStatusFor, channelStatusLabel, isDirectoryOnlyRow, eventResult, eventResultClass, events, filteredEvents, eventDateRange };`)
+  const view = create(computed, reactive, ref, () => {}, () => {}, () => {}, () => filters, dashboard, String, ApiError, {info() {}, success() {}}, {}, () => ref(false), groupUtils.hiddenChannelGroupCount, groupUtils.matchesChannelGroup, groupUtils.MAX_VISIBLE_CHANNEL_GROUPS, groupUtils.normalizeChannelGroups, groupUtils.splitChannelGroups, groupUtils.visibleChannelGroups)
   return { ...view, filters, dashboard }
 }
 
@@ -280,30 +282,120 @@ test('capacity distinguishes unavailable rates from zero and reports the exceede
   assert.equal(p.limitReason({...b,max_rpm:0,max_tpm:0}), '');
 })
 
-test('channel search and attention filter retain circuit precedence over output substitution', async () => {
+test('channel tuning status remains visible without the removed channel text search', async () => {
+  assert.doesNotMatch(sfc, /搜索渠道或分组|搜索渠道 \/ ID \/ 分组/)
+  assert.doesNotMatch(script, /const channelQuery = ref\(/)
   const p = page(); await p.load(); p.activeModel.value='m';
-  p.bases.value = [{...row, channel_name:'north', max_rpm:0,max_tpm:0}];
-  p.acceptStates('a',[{...state(100), phase:'circuit',otps_ready:true,otps_stats_version:1,metric_ready:false}]);
+  p.bases.value = [
+    {...row, channel_id:1, channel_name:'north', max_rpm:0,max_tpm:0},
+    {...row, channel_id:2, channel_name:'south', max_rpm:0,max_tpm:0},
+  ];
+  p.acceptStates('a',[
+    {...state(100), channel_id:1, phase:'circuit',otps_ready:true,otps_stats_version:1,metric_ready:false},
+    {...state(100), channel_id:2, phase:'normal',otps_ready:true,otps_stats_version:1,metric_ready:true},
+  ]);
   assert.equal(p.rowStatus(p.bases.value[0]).label,'熔断');
-  p.channelStatusFilter.value='attention'; assert.equal(p.displayedRows.value.length,1);
-  p.channelQuery.value='south'; assert.equal(p.displayedRows.value.length,0);
-  p.channelQuery.value='1'; assert.equal(p.displayedRows.value.length,1);
+  assert.deepEqual(p.displayedRows.value.map(item => item.channel_id), [1,2]);
 })
 
 test('runtime overview filters channels by a matching group item', async () => {
-  assert.match(sfc, /matchesChannelGroup\(row.group_name, selectedGroupName.value\)/)
+  assert.match(sfc, /<TuningGroupFilter/)
+  assert.match(script, /matchesChannelGroup\(row\.group_name, selectedGroupName\.value\)/)
   assert.match(sfc, /:data="displayedRows"/)
   const p = page(); await p.load(); p.activeModel.value = 'm';
   p.bases.value = [
     { ...row, channel_id: 1, channel_name: 'primary', group_name: 'default,vip' },
     { ...row, channel_id: 2, channel_name: 'fast', group_name: 'default,fast' },
   ];
-  p.selectedGroupFilter.value = { kind: 'group', name: 'vip' };
+  p.toggleGroupFilter('vip');
   assert.deepEqual(p.displayedRows.value.map(item => item.channel_id), [1]);
-  p.selectedGroupFilter.value = { kind: 'group', name: 'fast' };
+  p.selectedGroupFilter.value = {kind:'group',name:'fast'};
   assert.deepEqual(p.displayedRows.value.map(item => item.channel_id), [2]);
-  p.selectedGroupFilter.value = { kind: 'group', name: 'missing' };
+  p.selectedGroupFilter.value = {kind:'group',name:'missing'};
   assert.equal(p.displayedRows.value.length, 0);
+})
+
+test('group filter stays on the second filter row and keeps selection until its text is cleared', () => {
+  const desktopFilters = sfc.match(/<div v-if="!mobile" class="desktop-channel-filters"[\s\S]*?<div v-if="mobile"/)?.[0] ?? ''
+  const mobileFilters = sfc.match(/<div class="mobile-channel-filters"[\s\S]*?<el-empty/)?.[0] ?? ''
+
+  assert.match(desktopFilters, /<TuningGroupFilter/)
+  assert.match(mobileFilters, /<TuningGroupFilter/)
+  assert.ok(desktopFilters.indexOf('<TuningGroupFilter') < desktopFilters.indexOf('<el-select'))
+  assert.ok(mobileFilters.indexOf('<TuningGroupFilter') < mobileFilters.indexOf('<el-select'))
+  assert.ok(desktopFilters.indexOf('<el-select') < desktopFilters.indexOf('channel-filter-summary'))
+  assert.ok(mobileFilters.indexOf('<el-select') < mobileFilters.indexOf('channel-filter-summary'))
+  assert.ok(desktopFilters.indexOf('<TuningGroupFilter') < desktopFilters.indexOf('channel-filter-summary'))
+  assert.ok(mobileFilters.indexOf('<TuningGroupFilter') < mobileFilters.indexOf('channel-filter-summary'))
+  assert.match(groupFilterSfc, /if \(props\.modelValue && nextValue\.length === 0\) emit\("clear"\)/)
+  assert.match(groupFilterSfc, /hasSearchInput\.value \? search\.value : selectedLabel\.value/)
+})
+
+test('channel directory keeps disabled-only and multi-model channels visible under every associated model', () => {
+  const p = page()
+  const primary = { ...row, channel_id: 1, channel_name: 'primary' }
+  p.bases.value = [primary]
+  p.channels.value = [
+    { channel_id: 1, channel_name: 'primary', status: 'enabled', weight: 80, priority: 10, models: ['m'], group_name: 'default' },
+    { channel_id: 2, channel_name: 'manual-off', status: 'disabled', weight: 0, priority: 9, models: ['m'], group_name: 'vip' },
+    { channel_id: 3, channel_name: 'auto-off', status: 'auto_disabled', weight: 0, priority: 8, models: ['m', 'n'], group_name: 'fast' },
+    { channel_id: 4, channel_name: 'only-off', status: 'disabled', weight: 0, priority: 7, models: ['closed-only'], group_name: 'legacy' },
+  ]
+  p.channelDirectorySite.value = 'a'
+  p.activeModel.value = 'm'
+
+  assert.deepEqual(p.modelChannelRows.value.map(item => item.channel_id), [2, 3, 1])
+  assert.equal(p.modelChannelRows.value[2], p.bases.value[0], 'eligible base rows remain the editable source objects')
+  const manualOff = p.modelChannelRows.value.find(item => item.channel_id === 2)
+  assert.equal(p.isDirectoryOnlyRow(manualOff), true)
+  assert.equal(manualOff.current_weight, 0)
+  assert.equal(manualOff.group_name, 'vip')
+  assert.equal('base_weight' in manualOff, false, 'directory-only rows do not fabricate tuning values')
+  assert.equal(p.models.value.includes('closed-only'), true)
+  assert.equal(p.modelChannelCount('closed-only'), 1)
+
+  p.activeModel.value = 'n'
+  assert.deepEqual(p.modelChannelRows.value.map(item => item.channel_id), [3])
+  p.activeModel.value = 'closed-only'
+  assert.deepEqual(p.modelChannelRows.value.map(item => item.channel_id), [4])
+})
+
+test('loading a directory with only closed channels selects its model and ends loading state', async () => {
+  const p = page()
+  p.dashboard.tuningChannels = async () => ({ items: [
+    { channel_id: 9, channel_name: 'legacy-off', status: 'disabled', weight: 0, priority: 3, models: ['legacy-model'], group_name: 'legacy' },
+  ] })
+  await p.loadChannelDirectory('a')
+
+  assert.equal(p.channelDirectoryLoading.value, false)
+  assert.equal(p.activeModel.value, 'legacy-model')
+  assert.deepEqual(p.modelChannelRows.value.map(item => item.channel_id), [9])
+  assert.equal(p.models.value.includes('legacy-model'), true)
+})
+
+test('channel switch status filters compose with the group filter without tuning status filtering', () => {
+  assert.doesNotMatch(sfc, /调权状态筛选|全部调权状态/)
+  assert.doesNotMatch(script, /channelTuningFilter/)
+  const p = page()
+  p.bases.value = [{ ...row, channel_id: 1, channel_name: 'enabled', group_name: 'alpha' }]
+  p.channels.value = [
+    { channel_id: 1, channel_name: 'enabled', status: 'enabled', weight: 80, priority: 1, models: ['m'], group_name: 'alpha' },
+    { channel_id: 2, channel_name: 'disabled', status: 'disabled', weight: 0, priority: 2, models: ['m'], group_name: 'alpha' },
+    { channel_id: 3, channel_name: 'automatic', status: 'auto_disabled', weight: 0, priority: 3, models: ['m'], group_name: 'beta' },
+    { channel_id: 4, channel_name: 'unknown', status: 'other', weight: 0, priority: 4, models: ['m'], group_name: 'beta' },
+  ]
+  p.channelDirectorySite.value = 'a'
+  p.activeModel.value = 'm'
+
+  p.channelSwitchFilter.value = 'not_enabled'
+  assert.deepEqual(p.displayedRows.value.map(item => item.channel_id), [4, 3, 2])
+  p.channelSwitchFilter.value = 'enabled'
+  p.acceptStates('a', [{ ...state(100), proposed_weight: 90 }])
+  assert.deepEqual(p.displayedRows.value.map(item => item.channel_id), [1])
+  p.selectedGroupFilter.value = {kind:'group',name:'beta'}
+  assert.deepEqual(p.displayedRows.value, [])
+  p.channelSwitchFilter.value = ''
+  assert.deepEqual(p.displayedRows.value.map(item => item.channel_id), [4, 3])
 })
 
 test('recorded events are not presented as successful writes and dates include the last day', async () => {
