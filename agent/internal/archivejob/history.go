@@ -102,6 +102,12 @@ func failDay(ctx context.Context, c *sql.Conn, s *state, reason string) error {
 	if _, err = tx.ExecContext(ctx, "INSERT INTO log_archive_issues VALUES(?,?,?,?,UTC_TIMESTAMP(6))", id(), h.Date, h.Step, reason); err != nil {
 		return err
 	}
+	if s.LargeHistory != nil {
+		if _, err = tx.ExecContext(ctx, "DELETE FROM log_archive_large_chunks WHERE transfer_id=?", s.LargeHistory.Token); err != nil {
+			return err
+		}
+		s.LargeHistory = nil
+	}
 	s.HistoryProgress.Error = reason
 	s.HistoryProgress.Step = "failed"
 	s.History = history{}
@@ -120,7 +126,7 @@ func (e *Engine) verifySource(ctx context.Context, c *sql.Conn, s *state, batch 
 		return err
 	}
 	from, to := dateBounds(h.Date)
-	rows, byteLimited, err := readPage(ctx, e.source, "SELECT /*+ MAX_EXECUTION_TIME(3000) */ * FROM logs WHERE created_at>=? AND created_at<? AND (created_at>? OR (created_at=? AND id>?)) ORDER BY created_at,id LIMIT ?", from, to, h.AfterCreated, h.AfterCreated, h.AfterID, batch)
+	rows, byteLimited, err := readArchivePage(ctx, e.source, "logs", "SELECT /*+ MAX_EXECUTION_TIME(3000) */ * FROM logs WHERE created_at>=? AND created_at<? AND (created_at>? OR (created_at=? AND id>?)) ORDER BY created_at,id LIMIT ?", from, to, h.AfterCreated, h.AfterCreated, h.AfterID, batch)
 	if err != nil {
 		return err
 	}
@@ -178,7 +184,7 @@ func (e *Engine) verifySource(ctx context.Context, c *sql.Conn, s *state, batch 
 func (e *Engine) verifyArchive(ctx context.Context, c *sql.Conn, s *state, batch int) error {
 	h := &s.History
 	from, to := dateBounds(h.Date)
-	rows, byteLimited, err := readPage(ctx, c, "SELECT /*+ MAX_EXECUTION_TIME(3000) */ * FROM "+q(table(h.Date))+" WHERE created_at>=? AND created_at<? AND (created_at>? OR (created_at=? AND id>?)) ORDER BY created_at,id LIMIT ?", from, to, h.AfterCreated, h.AfterCreated, h.AfterID, batch)
+	rows, byteLimited, err := readArchivePage(ctx, c, table(h.Date), "SELECT /*+ MAX_EXECUTION_TIME(3000) */ * FROM "+q(table(h.Date))+" WHERE created_at>=? AND created_at<? AND (created_at>? OR (created_at=? AND id>?)) ORDER BY created_at,id LIMIT ?", from, to, h.AfterCreated, h.AfterCreated, h.AfterID, batch)
 	if err != nil {
 		return err
 	}

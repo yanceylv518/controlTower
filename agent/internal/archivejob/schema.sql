@@ -35,3 +35,8 @@ CREATE TABLE IF NOT EXISTS log_archive_live_stats (
  ready BOOLEAN NOT NULL DEFAULT 0, updated_at DATETIME(6) NOT NULL,
  error_code VARCHAR(256) NOT NULL DEFAULT '', retry_at DATETIME(6) NULL
 ) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS log_archive_large_chunks (
+ transfer_id CHAR(32) NOT NULL, column_index INT NOT NULL, chunk_index BIGINT NOT NULL,
+ payload MEDIUMBLOB NOT NULL, PRIMARY KEY(transfer_id,column_index,chunk_index)
+) ENGINE=InnoDB;

@@ -72,6 +72,9 @@ type history struct {
 }
 type state struct {
 	liveChanges        []rawChange
+	LargeCollection    *largeRecord `json:",omitempty"`
+	LargeHistory       *largeRecord `json:",omitempty"`
+	LargeLive          *largeRecord `json:",omitempty"`
 	SeedFrom           string
 	SeedThrough        string
 	Collection         aj.Progress
@@ -339,11 +342,30 @@ func (e *Engine) Step(ctx context.Context, settings aj.Settings, batch, delay in
 			return err
 		}
 		historyTurn = s.nextHistoryTurn(settings)
-		if historyTurn {
+		if historyTurn && s.LargeHistory != nil {
+			err = e.largeStep(ctx, c, &s, s.LargeHistory)
+		} else if !historyTurn && settings.Collection && s.LargeCollection != nil {
+			err = e.largeStep(ctx, c, &s, s.LargeCollection)
+		} else if historyTurn {
 			err = e.historyStep(ctx, c, &s, batch, immutable)
 		} else if settings.Collection {
 			err = e.collect(ctx, c, &s, batch, delay)
 		}
+		var candidate *largeCandidate
+		if errors.As(err, &candidate) {
+			mode := "collect"
+			if historyTurn {
+				mode = s.History.Step
+			}
+			if mode == "collect" && candidate.Created > time.Now().Unix()-int64(delay) {
+				s.Collection.Error = ""
+				s.Collection.UpdatedAt = time.Now().UTC()
+				err = nil
+			} else {
+				err = e.startLarge(ctx, c, &s, candidate, mode)
+			}
+		}
+
 		if err != nil {
 			p := &s.Collection
 			if historyTurn {

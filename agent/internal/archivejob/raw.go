@@ -150,7 +150,7 @@ func (e *Engine) collect(ctx context.Context, c *sql.Conn, s *state, batch, dela
 	}
 	// Do not filter out recent IDs and then advance beyond them: stop at the
 	// first row inside the delay window, otherwise a delayed ID could be skipped.
-	rows, _, err := readPage(ctx, e.source, "SELECT /*+ MAX_EXECUTION_TIME(3000) */ * FROM logs WHERE id>? ORDER BY id LIMIT ?", s.Collection.AfterID, batch)
+	rows, _, err := readArchivePage(ctx, e.source, "logs", "SELECT /*+ MAX_EXECUTION_TIME(3000) */ * FROM logs WHERE id>? ORDER BY id LIMIT ?", s.Collection.AfterID, batch)
 	if err != nil {
 		return err
 	}
@@ -255,31 +255,73 @@ func writeRaw(ctx context.Context, tx *sql.Tx, r row, s *state) (bool, bool, err
 			updates = append(updates, q(k)+"=VALUES("+q(k)+")")
 		}
 	}
-	existing, err := readRows(ctx, tx, "SELECT "+strings.Join(quoted, ",")+" FROM "+q(name)+" WHERE id=? FOR UPDATE", n)
-	if err != nil {
+
+	checks := make([]string, len(cols))
+	checkArgs := make([]any, 0, len(cols)+1)
+	for i, k := range cols {
+		checks[i] = "(CAST(" + q(k) + " AS BINARY) <=> CAST(? AS BINARY))"
+		checkArgs = append(checkArgs, values[i])
+	}
+	checkArgs = append(checkArgs, n)
+	var equal bool
+	err = tx.QueryRowContext(ctx, "SELECT "+strings.Join(checks, " AND ")+" FROM "+q(name)+" WHERE id=? FOR UPDATE", checkArgs...).Scan(&equal)
+	inserted := errors.Is(err, sql.ErrNoRows)
+	if err != nil && !inserted {
 		return false, false, err
 	}
-	inserted := len(existing) == 0
-	changed := inserted || rowHash(existing[0]) != rowHash(r)
+	changed := inserted || !equal
+	var before row
+	if changed && !inserted {
+		metadata, readErr := largeMetadata(ctx, tx, name, n)
+		if readErr != nil {
+			return false, false, readErr
+		}
+		var size int64
+		for _, col := range metadata {
+			size += col.Bytes
+		}
+		if size > maxPageBytes {
+			if err = invalidateLive(ctx, tx, date); err != nil {
+				return false, false, err
+			}
+		} else {
+			existing, readErr := readRows(ctx, tx, "SELECT * FROM "+q(name)+" WHERE id=?", n)
+			if readErr != nil {
+				return false, false, readErr
+			}
+			if len(existing) > 0 {
+				before = existing[0]
+			}
+		}
+	}
+
 	if changed {
 		if _, err = tx.ExecContext(ctx, "INSERT INTO "+q(name)+" ("+strings.Join(quoted, ",")+") VALUES ("+strings.Join(marks, ",")+") ON DUPLICATE KEY UPDATE "+strings.Join(updates, ","), values...); err != nil {
 			return false, false, err
 		}
 	}
-	if _, err = tx.ExecContext(ctx, "INSERT INTO log_archive_days(log_date,revision,state,updated_at) VALUES(?,1,'pending',UTC_TIMESTAMP(6)) ON DUPLICATE KEY UPDATE log_date=VALUES(log_date)", date); err != nil {
+	if err = touchRawDay(ctx, tx, s, date, changed); err != nil {
 		return false, false, err
 	}
 	if changed {
-		if _, err = tx.ExecContext(ctx, "UPDATE log_archive_days SET revision=revision+1,state='pending',version_id='',raw_rows=NULL,error_code='',updated_at=UTC_TIMESTAMP(6) WHERE log_date=?", date); err != nil {
-			return false, false, err
+		s.liveChanges = append(s.liveChanges, rawChange{before: before, after: r})
+		if s.LargeLive != nil && s.LargeLive.Table == name && s.LargeLive.ID == n {
+			s.LargeLive = nil
 		}
 	}
+
+	return inserted, changed && !inserted, nil
+}
+
+func touchRawDay(ctx context.Context, tx *sql.Tx, s *state, date string, changed bool) error {
+	var err error
+	if _, err = tx.ExecContext(ctx, "INSERT INTO log_archive_days(log_date,revision,state,updated_at) VALUES(?,1,'pending',UTC_TIMESTAMP(6)) ON DUPLICATE KEY UPDATE log_date=VALUES(log_date)", date); err != nil {
+		return err
+	}
 	if changed {
-		var before row
-		if len(existing) > 0 {
-			before = existing[0]
+		if _, err = tx.ExecContext(ctx, "UPDATE log_archive_days SET revision=revision+1,state='pending',version_id='',raw_rows=NULL,error_code='',updated_at=UTC_TIMESTAMP(6) WHERE log_date=?", date); err != nil {
+			return err
 		}
-		s.liveChanges = append(s.liveChanges, rawChange{before: before, after: r})
 	}
 	if date > s.Frontier {
 		s.Frontier = date
@@ -288,5 +330,5 @@ func writeRaw(ctx context.Context, tx *sql.Tx, r row, s *state) (bool, bool, err
 		s.FirstDate = date
 		s.FirstDateSource = "archive"
 	}
-	return inserted, changed && !inserted, nil
+	return nil
 }

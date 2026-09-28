@@ -133,9 +133,49 @@ func applyLiveChanges(ctx context.Context, tx *sql.Tx, s *state) error {
 }
 
 func (e *Engine) liveStep(ctx context.Context, c *sql.Conn, batch int) error {
+	s, err := load(ctx, c)
+	if err != nil {
+		return err
+	}
+	if s.LargeLive != nil {
+		r := s.LargeLive
+		var retry bool
+		if err = c.QueryRowContext(ctx, "SELECT retry_at IS NULL OR retry_at<=UTC_TIMESTAMP(6) FROM log_archive_live_stats WHERE log_date=?", day(r.Created)).Scan(&retry); err != nil {
+			return err
+		}
+		if retry {
+			if err = e.processLarge(ctx, c, &s, r); err != nil {
+				// A failed attempt may have mutated in-memory offsets. Reload the
+				// committed checkpoint before recording diagnostics or discarding it.
+				committed, readErr := load(ctx, c)
+				if readErr != nil {
+					return readErr
+				}
+				if largeSummaryDataError(err) {
+					committed.LargeLive = nil
+				}
+				tx, saveErr := c.BeginTx(ctx, nil)
+				if saveErr != nil {
+					return saveErr
+				}
+				defer tx.Rollback()
+				if _, saveErr = tx.ExecContext(ctx, "UPDATE log_archive_live_stats SET error_code=?,retry_at=DATE_ADD(UTC_TIMESTAMP(6),INTERVAL 60 SECOND) WHERE log_date=?", code(err), day(r.Created)); saveErr != nil {
+					return saveErr
+				}
+				if saveErr = save(ctx, tx, committed); saveErr != nil {
+					return saveErr
+				}
+				if saveErr = tx.Commit(); saveErr != nil {
+					return saveErr
+				}
+			}
+			return err
+		}
+		// During a transient failure's backoff, other dates can still build.
+	}
 	var date string
 	// Newest incomplete dates first: today's statistics do not wait for history.
-	err := c.QueryRowContext(ctx, `SELECT CAST(d.log_date AS CHAR) FROM log_archive_days d LEFT JOIN log_archive_live_stats l ON l.log_date=d.log_date WHERE (l.log_date IS NULL OR l.ready=0) AND (l.retry_at IS NULL OR l.retry_at<=UTC_TIMESTAMP(6)) ORDER BY d.log_date DESC LIMIT 1`).Scan(&date)
+	err = c.QueryRowContext(ctx, `SELECT CAST(d.log_date AS CHAR) FROM log_archive_days d LEFT JOIN log_archive_live_stats l ON l.log_date=d.log_date WHERE (l.log_date IS NULL OR l.ready=0) AND (l.retry_at IS NULL OR l.retry_at<=UTC_TIMESTAMP(6)) ORDER BY d.log_date DESC LIMIT 1`).Scan(&date)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
@@ -143,6 +183,15 @@ func (e *Engine) liveStep(ctx context.Context, c *sql.Conn, batch int) error {
 		return err
 	}
 	err = e.buildLive(ctx, c, date, batch)
+	var candidate *largeCandidate
+	if errors.As(err, &candidate) {
+		if s.LargeLive != nil {
+			return nil
+		} // Keep the first transfer's resumable state.
+		if err = e.startLarge(ctx, c, &s, candidate, "live_summary"); err == nil {
+			err = saveStandalone(ctx, c, s)
+		}
+	}
 	if err != nil {
 		_, _ = c.ExecContext(ctx, `UPDATE log_archive_live_stats SET error_code=?,retry_at=DATE_ADD(UTC_TIMESTAMP(6),INTERVAL 60 SECOND) WHERE log_date=?`, code(err), date)
 	}
@@ -170,7 +219,17 @@ func (e *Engine) buildLive(ctx context.Context, c *sql.Conn, date string, batch 
 			return err
 		}
 	}
-	rows, limited, err := readPage(ctx, tx, "SELECT /*+ MAX_EXECUTION_TIME(3000) */ * FROM "+q(table(date))+" WHERE created_at>=? AND created_at<? AND (created_at>? OR (created_at=? AND id>?)) AND (created_at<? OR (created_at=? AND id<=?)) ORDER BY created_at,id LIMIT ?", from, to, p.created, p.created, p.id, p.upperCreated, p.upperCreated, p.upperID, batch)
+	rows, limited, err := readArchivePage(ctx, tx, table(date), "SELECT /*+ MAX_EXECUTION_TIME(3000) */ * FROM "+q(table(date))+" WHERE created_at>=? AND created_at<? AND (created_at>? OR (created_at=? AND id>?)) AND (created_at<? OR (created_at=? AND id<=?)) ORDER BY created_at,id LIMIT ?", from, to, p.created, p.created, p.id, p.upperCreated, p.upperCreated, p.upperID, batch)
+	var candidate *largeCandidate
+	if errors.As(err, &candidate) {
+		if _, saveErr := tx.ExecContext(ctx, "UPDATE log_archive_live_stats SET upper_created=?,upper_id=? WHERE log_date=?", p.upperCreated, p.upperID, date); saveErr != nil {
+			return saveErr
+		}
+		if saveErr := tx.Commit(); saveErr != nil {
+			return saveErr
+		}
+		return candidate
+	}
 	if err != nil {
 		return err
 	}
@@ -192,4 +251,9 @@ func (e *Engine) buildLive(ctx context.Context, c *sql.Conn, date string, batch 
 		return err
 	}
 	return tx.Commit()
+}
+
+func invalidateLive(ctx context.Context, tx *sql.Tx, date string) error {
+	_, err := tx.ExecContext(ctx, "UPDATE log_archive_live_stats SET version_id=?,after_created=0,after_id=0,upper_created=-1,upper_id=0,ready=0,error_code='',retry_at=NULL,updated_at=UTC_TIMESTAMP(6) WHERE log_date=?", id(), date)
+	return err
 }

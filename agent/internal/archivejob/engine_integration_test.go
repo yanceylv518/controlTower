@@ -11,7 +11,8 @@ import (
 	"time"
 )
 
-func fixture(t *testing.T) (*Engine, context.Context) {
+func fixture(t *testing.T) (*Engine, context.Context) { return fixtureTimeout(t, 90*time.Second) }
+func fixtureTimeout(t *testing.T, timeout time.Duration) (*Engine, context.Context) {
 	t.Helper()
 	dsn := os.Getenv("CT_ARCHIVE_TEST_DSN")
 	if dsn == "" {
@@ -28,7 +29,7 @@ func fixture(t *testing.T) (*Engine, context.Context) {
 	}
 	source := "ct_jobs_src_" + id()
 	target := "ct_jobs_dst_" + id()
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	for _, name := range []string{source, target} {
 		if _, err = admin.ExecContext(ctx, "CREATE DATABASE "+q(name)); err != nil {
 			t.Fatal(err)
