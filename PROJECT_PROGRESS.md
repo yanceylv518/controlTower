@@ -3,6 +3,8 @@
 <!-- AI_CURRENT_START -->
 ## 当前总览
 
+- **模型广场复制按钮修复（2026-09-29）**：模型广场复制模型名称改为复用共享 `copyText`，支持剪贴板 API 不可用、权限拒绝及非安全上下文下的选区复制回退；新增复制入口回归断言。定向复制测试、Vue 类型检查和生产构建通过，未提交或部署。
+
 - **调权中心精简渠道筛选（2026-09-28）**：移除渠道名称/ID/分组通用搜索框及其行过滤逻辑；桌面与移动端均按“分组、渠道开关状态、数量”顺序显示，数量在筛选行末尾。保留分组控件的文本匹配、勾选状态保持行为和开关状态筛选；事件记录搜索不受影响。更新回归断言；按用户要求未运行测试、类型检查或构建，未做浏览器验收。详见[筛选控件](webapp/packages/desktop/src/components/TuningGroupFilter.vue)、[页面](webapp/packages/desktop/src/views/ContinuousTuningView.vue)与[回归](webapp/packages/desktop/tests/tuningRefresh.test.mjs)。
 
 - **调权中心移除调权状态筛选（2026-09-28）**：桌面和移动列表移除“全部调权状态 / 需关注 / 待调整 / 容量受限”筛选及对应行过滤；保留渠道搜索、分组筛选、已启用/未启用渠道开关筛选，以及表格中的调权状态展示。移动端剩余筛选控件改为单列铺满。更新前端回归断言；按用户要求未运行测试、类型检查或构建，未做浏览器验收。详见[页面](webapp/packages/desktop/src/views/ContinuousTuningView.vue)与[回归](webapp/packages/desktop/tests/tuningRefresh.test.mjs)。

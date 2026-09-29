@@ -6,6 +6,7 @@ import { ElMessage } from 'element-plus'
 import { client, dashboard } from '../api'
 import AppShell from '../components/AppShell.vue'
 import { useFiltersStore } from '../stores/filters'
+import { copyText } from '../utils/copyText'
 import { modelPrice, displayPrice, currencyUnit, expressionTiers, pricingMode, type ModelSquare, type SquareModel, type SquareCurrency } from '../utils/modelSquare'
 
 const filters = useFiltersStore()
@@ -52,7 +53,8 @@ function cardPrices(item:SquareModel) {
 }
 function shortList(items:string[] = []) { return items.length ? `${items[0]}${items.length>1 ? ` +${items.length-1}` : ''}` : '—' }
 async function copyModel(name:string) {
-  try {await navigator.clipboard.writeText(name);ElMessage.success('已复制模型名称')} catch {ElMessage.error('复制失败，请手动复制模型名称')}
+  if (await copyText(name)) ElMessage.success('已复制模型名称')
+  else ElMessage.error('复制失败，请手动复制模型名称')
 }
 async function loadCurrency(site:string,id:number) {
   try {
