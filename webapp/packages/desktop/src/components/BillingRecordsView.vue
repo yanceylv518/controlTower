@@ -45,7 +45,7 @@ const state = useAsyncData(async () => {
   return dashboard.billingJobs({ instance_id: filters.site_id, status: "complete", limit: 200 });
 });
 const records = computed(() => (state.data.value?.items || []).filter((job) => props.billType === "user"
-  ? job.job_type === "user_statement" && Number(job.user_id) > 0
+  ? job.job_type === "user_statement" && Number(job.user_id) > 0 && Number(job.usage_version||0)<3
   : job.job_type === "upstream_statement" && Number(job.upstream_id) > 0));
 const userSearch = ref("");
 const billDateRange = ref<[Date, Date] | null>(null);

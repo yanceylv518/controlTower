@@ -1,0 +1,1 @@
+ALTER TABLE billing_jobs ADD COLUMN bill_period VARCHAR(16) NOT NULL DEFAULT '';

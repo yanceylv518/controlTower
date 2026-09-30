@@ -82,7 +82,23 @@ func (g UserDailyFileGenerator) GenerateJobFiles(ctx context.Context, job Job) e
 				_ = os.Remove(tmpName)
 			}
 		}()
-		if err = WriteUserDailyWorkbook(tmp, job, group, details); err != nil {
+		if job.UsageVersion >= SettlementUsageVersion && job.JobType == "user_statement" && job.BillPeriod == "daily" {
+			iterate := func(visit func(RequestDetail) error) error {
+				for _, v := range details {
+					if e := visit(v); e != nil {
+						return e
+					}
+				}
+				return nil
+			}
+			err = WriteSettlementSavedDetails(ctx, target+".details.zip", job, iterate)
+			if err == nil {
+				err = writeSettlementDailyWorkbookMode(tmp, job, iterate, true)
+			}
+		} else {
+			err = WriteUserDailyWorkbook(tmp, job, group, details)
+		}
+		if err != nil {
 			_ = tmp.Close()
 			return err
 		}
@@ -217,6 +233,9 @@ func WriteUserDailyWorkbook(out io.Writer, job Job, group UserDailyFile, rows []
 }
 
 func writeUserDailyWorkbook(out io.Writer, job Job, group UserDailyFile, columns optionalWorkbookColumns, iterate func(func(RequestDetail) error) error) error {
+	if job.UsageVersion >= SettlementUsageVersion {
+		return writeSettlementDailyWorkbook(out, job, iterate)
+	}
 	var err error
 	widths := []float64{20, 28, 12, 18, 14, 18, 14, 16, 14, 14, 14}
 	headers := []string{"时间", "请求 ID", "用户", "令牌", "渠道", "模型", "计费模式", "命中价格层级", "输入 Token", "输出 Token", "缓存读取 Token"}
@@ -262,6 +281,9 @@ func writeUserDailyWorkbook(out io.Writer, job Job, group UserDailyFile, columns
 		if job.UsesNewAPICharge() {
 			priceNote += "金额采用 NewAPI 原始扣费。"
 		}
+	}
+	if job.UsageVersion >= SettlementUsageVersion {
+		priceNote = "金额单位：USD；费用按账单创建时保存的结算规则计算。"
 	}
 	if columns.perRequest {
 		priceNote += "；按次单价单位：金额/次"

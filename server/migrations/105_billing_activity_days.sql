@@ -1,0 +1,3 @@
+CREATE TABLE IF NOT EXISTS billing_activity_days(instance_id VARCHAR(64) NOT NULL,kind VARCHAR(32) NOT NULL,subject_id BIGINT NOT NULL,bill_day DATE NOT NULL,PRIMARY KEY(instance_id,kind,subject_id,bill_day)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+-- Empty v3 generation attempts are checks, not payable bills. Keep their history.
+UPDATE billing_jobs j SET j.status='no_data' WHERE j.usage_version>=3 AND j.job_type IN ('user_statement','upstream_statement') AND j.status='complete' AND NOT EXISTS(SELECT 1 FROM billing_compact_daily_totals t WHERE t.job_id=j.id AND t.request_count>0) AND NOT EXISTS(SELECT 1 FROM billing_job_steps s WHERE s.job_id=j.id AND s.processed_rows>0);

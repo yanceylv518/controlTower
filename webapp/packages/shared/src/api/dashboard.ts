@@ -1,7 +1,17 @@
+export type SettlementReportTask = {id:string;instance_id:string;from:string;to:string;status:string;overwrite:boolean;automatic:boolean;created_at:string;updated_at:string;days:{day:string;status:string;processed:number;error:string;updated_at:string}[]};
 import type { ApiClient } from "../client";
 
 export interface ChannelGroupPreset { id: string; name: string; groups: string[] }
 export interface ChannelGroupPresets { items: ChannelGroupPreset[]; revision: number }
+
+export interface BillingGenerationDay {day:string;status:string;job_id?:string;processed:number;error?:string;updated_at?:string}
+export interface BillingGenerationProgress {subject_id:number;outcome:string;total_days:number;checked:number;complete:number;empty:number;pending:number;running:number;failed:number;processed:number;error?:string;last_attempt?:string;days:BillingGenerationDay[];monthly?:BillingGenerationDay}
+export interface BillingGenerationTask {id:string;instance_id:string;kind:string;from:string;to:string;work_until:string;source:string;overwrite:boolean;subject_ids:number[];created_at:string;outcome:string;percentage:number;completed_users:number;failed_users:number;complete_days:number;empty_days:number;items?:BillingGenerationProgress[]}
+export interface BillingGenerationBatch {kind?:string;instance_id:string;subject_ids:number[];from:string;to:string;overwrite?:boolean}
+export interface BillingDetailRow {image_input_tokens?:string;image_output_tokens?:string;audio_input_tokens?:string;audio_output_tokens?:string;time:string;request_id:string;model:string;token:string;token_id:string;input:string;output:string;cache_read:string;cache_write:string;amount:string;before_amount?:string;discount?:string}
+export interface BillingDetailFilter {from?:string;to?:string;model?:string;token?:string}
+export interface BillingDetailTask {key:string;kind:'prepare'|'export';status:'running'|'complete'|'failed';processed:number;total:number;matched:number;error?:string}
+export interface BillingDetailPage {preparing?:boolean;task?:BillingDetailTask;items?:BillingDetailRow[];next_cursor?:number;total?:number;currency?:string;models?:string[];tokens?:string[]}
 
 // API types intentionally retain snake_case so every field maps one-to-one to the frozen contract.
 export interface MetricSummary {
@@ -608,12 +618,14 @@ export interface BillingJob {
   exclude_zero_output?: boolean;
   pricing_source?: "newapi" | "recalculate";
   usage_version?: number;
+  bill_period?: string;
+  data_source?: string;
   upstream_id?: number;
   upstream_name?: string;
   range_from?: string;
   range_to?: string;
   updated_at?: string;
-  status: "pending" | "running" | "publishing" | "complete" | "failed";
+  status: "pending" | "running" | "publishing" | "complete" | "failed" | "no_data";
   total_steps: number;
   completed_steps: number;
   abnormal_rows: number;
@@ -650,10 +662,10 @@ export interface BillingUpstreamMember { channel_id:number;channel_name:string;m
 export interface BillingUpstreamGroup { upstream_fp:string;display_name:string;base_url:string;member_count:number;members:BillingUpstreamMember[];totals:BillingUpstreamTotals;bill_days:string[] }
 export interface BillingUpstreamDetail { day:string;model_name:string;group_name:string;tier_from:number;request_count:number;prompt_tokens:number;completion_tokens:number;cache_tokens:number;cache_write_tokens:number;quota:number;amount:string;unpriced:boolean;abnormal_rows:number;abnormal_amount:string }
 export interface BillingChannelRequestDetail { created_at:string;request_id:string;username:string;token_name:string;model_name:string;prompt_tokens:number;completion_tokens:number;cache_read_tokens:number;cache_write_tokens:number;input_price:string;output_price:string;cache_read_price:string;cache_write_price:string;amount:string;abnormal:boolean;reasons:string }
-export interface BillingUpstreamChannel { channel_id:number;channel_name:string }
+export interface BillingUpstreamChannel { channel_id:number;channel_name:string;selected_models?:string[] }
 export interface BillingReadonlyChannel { channel_id:number;channel_name:string;status:number;models:string }
 export interface BillingUpstream { id:number;instance_id:string;name:string;enabled:boolean;remark:string;channels:BillingUpstreamChannel[];created_at?:string;updated_at?:string;updated_by?:string }
-export interface BillingDiscountRule { id:number;instance_id:string;discount_type:"upstream_channel";subject_id:number;subject_name?:string;channel_id:number;channel_name?:string;model_name:string;discount:string;effective_from:string;effective_to?:string;remark:string;created_at?:string;updated_at?:string;updated_by?:string }
+export interface BillingDiscountRule { id:number;instance_id:string;discount_type:"upstream_channel"|"user_model";subject_id:number;subject_name?:string;channel_id:number;channel_name?:string;model_name:string;discount:string;effective_from:string;effective_to?:string;remark:string;created_at?:string;updated_at?:string;updated_by?:string }
 export interface BillingTokenSummary { token_id:number;token_name:string;request_count:number;abnormal_rows:number;abnormal_amount:string;prompt_tokens:number;completion_tokens:number;cache_tokens:number;cache_write_tokens:number;quota:number;billing_amount:string }
 export interface BillingReconciliationBreakdown { anomaly: string; cache_write_policy: string; residual: string }
 export interface BillingReconciliationRow {
@@ -1007,7 +1019,7 @@ export const dashboardApi = (client: ApiClient) => ({
   billingJobSteps: (id: string) => client.request<{ items: BillingJobStep[] }>(`/api/dashboard/billing/jobs/steps${query({ id })}`),
   cancelBillingJob: (id: string) => client.request<BillingJob>(`/api/dashboard/billing/jobs${query({ id })}`, { method: "DELETE" }),
   deleteFailedBillingJob: (id: string) => client.request<{ deleted: boolean; id: string }>(`/api/dashboard/billing/jobs${query({ id })}`, { method: "DELETE" }),
-  billingJobs: (params: { instance_id?: string; status?: BillingJob["status"]; limit?: number } = {}) =>
+  billingJobs: (params: { instance_id?: string; status?: BillingJob["status"]; kind?: string; subject_id?: number; limit?: number } = {}) =>
     client.request<{ items: BillingJob[]; pricing_source_selection?: boolean }>(`/api/dashboard/billing/jobs${query(params)}`),
   billingOverview: (params: { instance_id?: string; month?: string } = {}) =>
     client.request<{ items: BillingDailyOverview[]; from: string; to: string }>(`/api/dashboard/billing/overview${query(params)}`),
@@ -1023,6 +1035,25 @@ export const dashboardApi = (client: ApiClient) => ({
   billingUpstreams:(instance_id:string)=>client.request<{items:BillingUpstream[];channels:BillingReadonlyChannel[]}>(`/api/dashboard/billing/upstreams${query({instance_id})}`),
   saveBillingUpstream:(input:BillingUpstream)=>client.request<BillingUpstream>("/api/dashboard/billing/upstreams",{method:input.id?"PUT":"POST",body:JSON.stringify(input)}),
   deleteBillingUpstream:(instance_id:string,id:number)=>client.request<{deleted:boolean}>(`/api/dashboard/billing/upstreams${query({instance_id,id})}`,{method:"DELETE"}),
+  reportTasks:(instance_id:string)=>client.request<{items:SettlementReportTask[]}>(`/api/dashboard/billing/report-tasks${query({instance_id})}`),
+  createReportTask:(input:{instance_id:string;from:string;to:string;overwrite:boolean})=>client.request<SettlementReportTask>('/api/dashboard/billing/report-tasks',{method:'POST',body:JSON.stringify(input)}),
+  cancelReportTask:(instance_id:string,id:string)=>client.request<{ok:boolean}>('/api/dashboard/billing/report-tasks?action=cancel',{method:'POST',body:JSON.stringify({instance_id,id})}),
+  settlementReport:(params:{instance_id:string;from:string;to:string},signal?:AbortSignal)=>client.request<{items:{user_id:number;user:string;model:string;channel_id:number;channel:string;upstream:string;discount:string;requests:number;input:number;output:number;cache:number;empty:number;amount:string;cost:string;raw_amount:string;raw_cost:string;base_fallback?:number;cost_discount:string;unknown_cost:number}[];failed_requests:number|null;expected_days:number;generated_days:number;missing_days:string[];complete:boolean;currency?:BillingCurrencyDisplay}>(`/api/dashboard/billing/reports${query(params)}`,{signal}),
+  billingWorkspace:(params:{instance_id:string;kind:string;subject_id:number;from:string;to:string})=>client.request<{items:{job:BillingJob;currency?:BillingCurrencyDisplay;requests:number;input:number;output:number;cache_read:number;cache_write:number;amount:string;before_amount:string;discount?:string;empty_count:number;empty_amount:string;image_input_tokens?:number;image_output_tokens?:number;audio_input_tokens?:number;audio_output_tokens?:number}[];remaining_days:number}>(`/api/dashboard/billing/workspace${query(params)}`),
+  billingDetailPage:(id:string,params:BillingDetailFilter&{cursor?:number;retry?:number})=>client.request<BillingDetailPage>(`/api/dashboard/billing/statements/details${query({id,...params})}`),
+  exportBillingDetails:(id:string,filter:BillingDetailFilter)=>client.request<BillingDetailTask>(`/api/dashboard/billing/statements/details${query({id,action:'export'})}`,{method:'POST',body:JSON.stringify(filter)}),
+  billingDetailTask:(id:string,key:string)=>client.request<BillingDetailTask>(`/api/dashboard/billing/statements/details${query({id,key,action:'status'})}`),
+  billingGenerationHistory:(site:string,page=1,kind="user_statement")=>client.request<{items:BillingGenerationTask[];total:number}>(`/api/dashboard/billing/generation-batch${query({instance_id:site,action:'history',page,kind})}`),
+  billingGenerationHistoryDetail:(site:string,id:string,kind="user_statement")=>client.request<BillingGenerationTask>(`/api/dashboard/billing/generation-batch${query({instance_id:site,action:'history-detail',id,kind})}`),
+  billingGenerationStatus:(site:string,kind="user_statement")=>client.request<{busy:boolean;targets:{instance_id:string;kind:string;subject_id:number;from:string;to:string}[];jobs:BillingJob[]}>(`/api/dashboard/billing/generation-batch${query({instance_id:site,action:'status',kind})}`),
+  cancelBillingBatch:(input:BillingGenerationBatch)=>client.request<{cancelled:boolean}>('/api/dashboard/billing/generation-batch?action=cancel',{method:'POST',body:JSON.stringify(input)}),
+  generateBillingBatch:(input:BillingGenerationBatch)=>client.request<{accepted:boolean;items:BillingGenerationProgress[]}>('/api/dashboard/billing/generation-batch',{method:'POST',body:JSON.stringify(input)}),
+  billingBatchProgress:(input:BillingGenerationBatch)=>client.request<{items:BillingGenerationProgress[];subject_ids?:number[]}>(`/api/dashboard/billing/generation-batch${query({...input,subject_ids:input.subject_ids.join(',')})}`),
+  generateMissingBills:(input:{instance_id:string;kind:string;subject_id:number;from?:string;to?:string})=>client.request<{accepted:boolean;automatic:boolean;outcome:'registered'|'generating'|'already_complete'|'no_consumption'|'failed'}>('/api/dashboard/billing/generate-missing',{method:'POST',body:JSON.stringify(input)}),
+  createNewStatement:(input:{instance_id:string;statement_type:string;user_id?:number;upstream_id?:number;from:string;to:string;period?:string})=>client.request('/api/dashboard/billing/statements',{method:'POST',body:JSON.stringify({...input,new_edition:true})}),
+  billingConfiguration:()=>client.request<{data_source:string}>('/api/dashboard/billing/configuration'),
+  saveBillingConfiguration:(data_source:string)=>client.request('/api/dashboard/billing/configuration',{method:'PUT',body:JSON.stringify({data_source})}),
+  billingCurrentDiscounts:(instance_id:string,user_id:number)=>client.request<{items:{model_name:string;discount:string}[]}>(`/api/dashboard/billing/current-discounts${query({instance_id,user_id})}`),
   billingDiscounts:(instance_id:string,type?:BillingDiscountRule["discount_type"])=>client.request<{items:BillingDiscountRule[]}>(`/api/dashboard/billing/discounts${query({instance_id,type})}`),
   saveBillingDiscount:(input:BillingDiscountRule)=>client.request<BillingDiscountRule>("/api/dashboard/billing/discounts",{method:input.id?"PUT":"POST",body:JSON.stringify(input)}),
   deleteBillingDiscount:(instance_id:string,id:number)=>client.request<{deleted:boolean}>(`/api/dashboard/billing/discounts${query({instance_id,id})}`,{method:"DELETE"}),

@@ -50,6 +50,16 @@ func (h BillingJobStepsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 		writeDashboardError(w, http.StatusBadRequest, "invalid_query")
 		return
 	}
+	if store, ok := h.Store.(interface {
+		BillingJob(context.Context, string) (billing.Job, error)
+	}); ok {
+		if !requireBillingJobPermission(w, r, store, id) {
+			return
+		}
+	} else if u, authenticated := ctauth.CurrentUser(r); authenticated && !ctauth.HasPermission(u, "billing.tasks") {
+		writeDashboardError(w, http.StatusForbidden, "forbidden")
+		return
+	}
 	steps, err := h.Store.ListBillingJobSteps(r.Context(), id)
 	if err != nil {
 		writeDashboardError(w, http.StatusInternalServerError, "billing_job_steps_query_failed")
@@ -137,7 +147,31 @@ func (h BillingJobsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				writeDashboardError(w, 400, "invalid_status")
 				return
 			}
-			items, err := h.Store.ListBillingJobs(r.Context(), strings.TrimSpace(r.URL.Query().Get("instance_id")), status, limit)
+			var items []billing.Job
+			var err error
+			site, kind := strings.TrimSpace(r.URL.Query().Get("instance_id")), r.URL.Query().Get("kind")
+			if kind != "" {
+				subjectID, e := strconv.ParseInt(r.URL.Query().Get("subject_id"), 10, 64)
+				if e != nil || subjectID <= 0 || (kind != "user_statement" && kind != "upstream_statement") {
+					writeDashboardError(w, 400, "invalid_query")
+					return
+				}
+				if !billingTypeAllowed(r, kind) {
+					writeDashboardError(w, 403, "forbidden")
+					return
+				}
+				store, ok := h.Store.(interface {
+					ListBillingSubjectJobs(context.Context, string, string, int64, int) ([]billing.Job, error)
+				})
+				if !ok {
+					writeDashboardError(w, 503, "billing_history_unavailable")
+					return
+				}
+				items, err = store.ListBillingSubjectJobs(r.Context(), site, kind, subjectID, limit)
+			} else {
+				items, err = h.Store.ListBillingJobs(r.Context(), site, status, limit)
+			}
+
 			if err != nil {
 				writeDashboardError(w, 500, "billing_job_query_failed")
 				return
@@ -318,6 +352,12 @@ func (h BillingJobsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func parseBillingInputRange(fromRaw, toRaw string) (time.Time, time.Time, error) {
 	parse := func(raw string) (time.Time, bool, error) {
+		if value, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+			return value, true, nil
+		}
+		if value, err := time.ParseInLocation("2006-01-02 15:04", raw, billing.BusinessLocation); err == nil {
+			return value, true, nil
+		}
 		if value, err := time.ParseInLocation("2006-01-02 15:04:05", raw, billing.BusinessLocation); err == nil {
 			return value, true, nil
 		}

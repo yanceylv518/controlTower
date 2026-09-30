@@ -1,0 +1,1 @@
+CREATE TABLE IF NOT EXISTS billing_archive_versions(job_id VARCHAR(40) NOT NULL,bill_day DATE NOT NULL,source_hash VARCHAR(64) NOT NULL,version_id VARCHAR(64) NOT NULL,PRIMARY KEY(job_id,bill_day),CONSTRAINT fk_billing_archive_job FOREIGN KEY(job_id) REFERENCES billing_jobs(id) ON DELETE CASCADE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

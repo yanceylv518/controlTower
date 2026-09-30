@@ -12,7 +12,7 @@ const deferred = () => { let resolve; const promise = new Promise(r => resolve =
 const fixture = () => ({ items: [{id:1,name:'One',remark:'',enabled:true,instance_id:'a',channels:[{channel_id:10,channel_name:'ten'},{channel_id:99,channel_name:'retired'}]},{id:2,name:'Two',remark:'',enabled:false,instance_id:'a',channels:[{channel_id:20,channel_name:'twenty'}]}], channels:[{channel_id:10,channel_name:'ten',status:1,models:'glm'},{channel_id:20,channel_name:'twenty',status:2,models:'gpt'},{channel_id:30,channel_name:'thirty',status:1,models:'glm'},{channel_id:30,channel_name:'thirty',status:1,models:'glm'}] });
 async function page(t) {
   const filters=reactive({site_id:'a',loadInstances:async()=>{}}), calls=[], messages=[];
-  const dashboard={billingUpstreams:async()=>fixture(),saveBillingUpstream:async p=>{calls.push(p);return {...p,id:p.id||3}},deleteBillingUpstream:async(...args)=>calls.push(args)};
+  const dashboard={billingDiscounts:async()=>({items:[]}),billingUpstreams:async()=>fixture(),saveBillingUpstream:async p=>{calls.push(p);return {...p,id:p.id||3}},deleteBillingUpstream:async(...args)=>calls.push(args)};
   const confirm = { confirm:async()=>{} };
   const scope=effectScope();t.after(()=>scope.stop());
   const names=['computed','onBeforeUnmount','reactive','ref','watch','ElMessage','ElMessageBox','dashboard','useAsyncData','useFiltersStore'];

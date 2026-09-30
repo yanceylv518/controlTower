@@ -1,0 +1,1 @@
+CREATE TABLE IF NOT EXISTS billing_generation_ranges(instance_id VARCHAR(64) NOT NULL,kind VARCHAR(32) NOT NULL,subject_id BIGINT NOT NULL,range_from DATE NOT NULL,range_to DATE NOT NULL,created_at DATETIME(6) NOT NULL,PRIMARY KEY(instance_id,kind,subject_id,range_from,range_to)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

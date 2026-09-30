@@ -57,6 +57,7 @@ func (h BillingStatementResultHandler) ServeHTTP(w http.ResponseWriter, r *http.
 			full := filepath.Join(root, filepath.FromSlash(relative))
 			if rel, relErr := filepath.Rel(root, full); relErr == nil && rel != "." && !strings.HasPrefix(rel, "..") {
 				_ = os.Remove(full)
+				_ = os.Remove(full + ".details.zip")
 			}
 		}
 		for _, jobType := range []string{"user_statement", "upstream_statement"} {
@@ -77,6 +78,10 @@ func (h BillingStatementResultHandler) ServeHTTP(w http.ResponseWriter, r *http.
 	rows, err := h.Store.QueryBillingStatementAggregates(r.Context(), job.ID)
 	if err != nil {
 		writeDashboardError(w, http.StatusInternalServerError, "billing_statement_query_failed")
+		return
+	}
+	if r.URL.Query().Get("section") == "monthly" {
+		h.writeMonthlyPreview(w, r, job, rows)
 		return
 	}
 	if r.URL.Query().Get("export") == "reconciliation" {
@@ -171,7 +176,17 @@ func (h BillingStatementResultHandler) ServeHTTP(w http.ResponseWriter, r *http.
 		}
 		entry, createErr := z.Create("日明细/" + statementDailyMemberFilename(job, file))
 		if createErr == nil {
-			_, _ = io.Copy(entry, in)
+			if job.UsageVersion >= billing.SettlementUsageVersion {
+				if info, e := in.Stat(); e == nil {
+					copy := job
+					copy.From = file.BillDay
+					copy.To = file.BillDay.AddDate(0, 0, 1)
+					copy.BillPeriod = "daily"
+					_ = billing.RestyleSettlementDailyFile(r.Context(), entry, in, info.Size(), copy)
+				}
+			} else {
+				_, _ = io.Copy(entry, in)
+			}
 		}
 		_ = in.Close()
 	}
@@ -230,6 +245,28 @@ func (h BillingStatementResultHandler) writeDailyFile(w http.ResponseWriter, r *
 			writeDashboardError(w, http.StatusInternalServerError, "billing_file_unavailable")
 			return
 		}
+		if job.UsageVersion >= billing.SettlementUsageVersion {
+			styled, e := os.CreateTemp("", "ct-bill-download-*.xlsx")
+			if e != nil {
+				writeDashboardError(w, 500, "billing_file_unavailable")
+				return
+			}
+			defer os.Remove(styled.Name())
+			defer styled.Close()
+			copy := job
+			copy.From = day
+			copy.To = day.AddDate(0, 0, 1)
+			copy.BillPeriod = "daily"
+			if e = billing.RestyleSettlementDailyFile(r.Context(), styled, file, info.Size(), copy); e != nil {
+				writeDashboardError(w, 500, "billing_file_format_failed")
+				return
+			}
+			if _, e = styled.Seek(0, io.SeekStart); e != nil {
+				writeDashboardError(w, 500, "billing_file_unavailable")
+				return
+			}
+			file = styled
+		}
 		w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="billing-daily-%s.xlsx"; filename*=UTF-8''%s`, day.Format("2006-01-02"), url.PathEscape(statementDailyFilename(job, day))))
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -264,7 +301,7 @@ func groupStatementRows(job billing.Job, rows []billing.StatementAggregateRow, d
 	grouped := map[string]statementGroupedRow{}
 	for _, row := range rows {
 		discount := "1.000000"
-		if job.JobType == "upstream_statement" {
+		if job.JobType == "upstream_statement" && job.UsageVersion < billing.SettlementUsageVersion {
 			discount = billing.DiscountForDay(discounts, job.JobType, row.ChannelID, row.ModelName, row.Day)
 		}
 		key := statementSummaryKey(job, row, discount)
@@ -277,6 +314,13 @@ func groupStatementRows(job billing.Job, rows []billing.StatementAggregateRow, d
 		item.Row.Day = row.Day
 		if job.JobType == "upstream_statement" {
 			item.Row.ChannelID, item.Row.ChannelName = row.ChannelID, row.ChannelName
+		}
+		if item.Row.RequestCount == 0 {
+			item.Row.BeforeAmount = row.BeforeAmount
+			item.Row.SettlementDiscount = row.SettlementDiscount
+		} else {
+			item.Row.BeforeAmount = billing.MergeBefore(item.Row.BeforeAmount, row.BeforeAmount)
+			item.Row.SettlementDiscount = billing.MergeDiscount(item.Row.SettlementDiscount, row.SettlementDiscount)
 		}
 		item.Row.RequestCount += row.RequestCount
 		item.Row.MultimediaUsage.Add(row.MultimediaUsage)
@@ -502,6 +546,9 @@ func (s *statementSheet) Total() error {
 }
 
 func statementWorkbook(job billing.Job, rows []billing.StatementAggregateRow, store BillingStatementResultStore, roots ...string) ([]byte, error) {
+	if job.UsageVersion >= billing.SettlementUsageVersion {
+		return settlementWorkbook(job, rows, store)
+	}
 	book := xlsxwriter.New()
 	var err error
 	discounts := []billing.StatementDiscount{}

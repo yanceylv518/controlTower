@@ -1,0 +1,78 @@
+package mysqlstore
+
+import (
+	"context"
+	"controltower/server/internal/billing"
+	"database/sql"
+	"time"
+)
+
+// Old complete files remain downloadable while replacements are in progress.
+// Only discovery and generation progress disregard the previous generation.
+const billingCurrentGenerationSQL = ` AND NOT EXISTS (SELECT 1 FROM billing_generation_ranges r WHERE r.instance_id=j.instance_id AND r.kind=j.job_type AND r.subject_id=(SELECT st.subject_id FROM billing_statement_jobs st WHERE st.job_id=j.id) AND r.cancelled=0 AND r.overwrite_existing=1 AND j.range_from>=CONVERT_TZ(r.range_from,'+08:00','+00:00') AND j.range_to<=CONVERT_TZ(r.range_to,'+08:00','+00:00') AND j.created_at<r.generation_started_at) `
+
+func (s Store) BillingGenerationVersion(ctx context.Context, t billing.AutomaticTarget) (string, error) {
+	var cancelled, overwrite bool
+	var started sql.NullTime
+	err := s.db.QueryRowContext(ctx, `SELECT cancelled,overwrite_existing,generation_started_at FROM billing_generation_ranges WHERE instance_id=? AND kind=? AND subject_id=? AND range_from<=? AND range_to>? ORDER BY generation_started_at DESC LIMIT 1`, t.InstanceID, t.Kind, t.SubjectID, t.From.In(billing.BusinessLocation).Format("2006-01-02"), t.From.In(billing.BusinessLocation).Format("2006-01-02")).Scan(&cancelled, &overwrite, &started)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if cancelled {
+		return "", billing.ErrGenerationCancelled
+	}
+	if overwrite && started.Valid {
+		return started.Time.UTC().Format("20060102150405.000000"), nil
+	}
+	return "", nil
+}
+
+func (s Store) CancelBillingGeneration(ctx context.Context, targets []billing.AutomaticTarget) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, t := range targets {
+		if _, err = tx.ExecContext(ctx, `UPDATE billing_generation_ranges SET cancelled=1,last_error=NULL WHERE instance_id=? AND kind=? AND subject_id=? AND range_from=? AND range_to=?`, t.InstanceID, t.Kind, t.SubjectID, t.From.In(billing.BusinessLocation).Format("2006-01-02"), t.To.In(billing.BusinessLocation).Format("2006-01-02")); err != nil {
+			return err
+		}
+		// Lock jobs before steps, matching the worker's publication lock order.
+		if _, err = tx.ExecContext(ctx, `UPDATE billing_jobs j JOIN billing_statement_jobs st ON st.job_id=j.id SET j.status='failed',j.error_message='cancelled manually',j.finished_at=UTC_TIMESTAMP(6),j.updated_at=UTC_TIMESTAMP(6) WHERE j.instance_id=? AND j.job_type=? AND st.subject_id=? AND j.range_from>=? AND j.range_to<=? AND j.status IN ('pending','running','publishing')`, t.InstanceID, t.Kind, t.SubjectID, t.From.UTC(), t.To.UTC()); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, `UPDATE billing_job_steps s JOIN billing_jobs j ON j.id=s.job_id JOIN billing_statement_jobs st ON st.job_id=j.id SET s.status='failed',s.error_message='cancelled manually',s.finished_at=UTC_TIMESTAMP(6),s.updated_at=UTC_TIMESTAMP(6) WHERE j.instance_id=? AND j.job_type=? AND st.subject_id=? AND j.range_from>=? AND j.range_to<=? AND j.error_message='cancelled manually' AND s.status IN ('pending','running')`, t.InstanceID, t.Kind, t.SubjectID, t.From.UTC(), t.To.UTC()); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func supersedeBillingStatement(ctx context.Context, tx *sql.Tx, job billing.Job) error {
+	if (job.JobType != "user_statement" && job.JobType != "upstream_statement") || job.UsageVersion < 3 || (job.BillPeriod != "daily" && job.BillPeriod != "monthly") {
+		return nil
+	}
+	subject := billingJobSubject(job)
+	if subject == 0 {
+		if err := tx.QueryRowContext(ctx, `SELECT subject_id FROM billing_statement_jobs WHERE job_id=?`, job.ID).Scan(&subject); err != nil {
+			return err
+		}
+	}
+	_, err := tx.ExecContext(ctx, `UPDATE billing_jobs j JOIN billing_statement_jobs st ON st.job_id=j.id SET j.status='superseded',j.updated_at=? WHERE j.instance_id=? AND j.job_type=? AND st.subject_id=? AND j.bill_period=? AND j.range_from=? AND j.range_to=? AND j.usage_version>=3 AND j.status IN ('complete','no_data') AND j.id<>?`, time.Now().UTC(), job.InstanceID, job.JobType, subject, job.BillPeriod, job.From.UTC(), job.To.UTC(), job.ID)
+	if err != nil {
+		return err
+	}
+	if job.BillPeriod == "daily" {
+		_, err = tx.ExecContext(ctx, `UPDATE billing_jobs j JOIN billing_statement_jobs st ON st.job_id=j.id SET j.status='superseded',j.updated_at=? WHERE j.instance_id=? AND j.job_type=? AND st.subject_id=? AND j.bill_period='monthly' AND j.range_from<=? AND j.range_to>=? AND j.usage_version>=3 AND j.status='complete' AND j.created_at<?`, time.Now().UTC(), job.InstanceID, job.JobType, subject, job.From.UTC(), job.To.UTC(), job.CreatedAt.UTC())
+	}
+	return err
+}
+func billingJobSubject(job billing.Job) int64 {
+	if job.JobType == "upstream_statement" {
+		return job.UpstreamID
+	}
+	return job.UserID
+}

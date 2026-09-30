@@ -150,6 +150,10 @@
 html, body { background: var(--ct-bg); color: var(--ct-ink); }
 ::selection { background: var(--ct-accent-weak); color: var(--ct-ink); }
 :focus-visible { outline: 2px solid var(--ct-accent); outline-offset: 3px; }
+/* These controls draw their focus ring on the wrapper, not the inner input. */
+.el-select__input:focus-visible,
+.el-input__inner:focus-visible,
+.el-range-input:focus-visible { outline: none; }
 .shell .nav-group { opacity: 1; }
 .shell .nav-group:hover, .shell .nav-group[aria-expanded="true"],
 .shell .sidebar a:hover, .shell .sidebar-toggle:hover { background: var(--ct-sidebar-hover); opacity: 1; }

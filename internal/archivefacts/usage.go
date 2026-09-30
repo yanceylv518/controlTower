@@ -31,6 +31,7 @@ type UsageContext struct {
 var decimalSyntax = regexp.MustCompile(`^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$`)
 
 var priceKeys = []string{
+	"quota_before_discount", "quota_after_discount", "user_model_discount",
 	"model_price", "model_ratio", "completion_ratio", "cache_ratio", "cache_creation_ratio",
 	"cache_creation_ratio_5m", "cache_creation_ratio_1h", "group_ratio", "image_ratio",
 }

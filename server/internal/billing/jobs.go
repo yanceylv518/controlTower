@@ -23,6 +23,7 @@ var ErrStatementQueueFull = errors.New("billing statement queue is full")
 var BusinessLocation = time.FixedZone("Asia/Shanghai", 8*60*60)
 
 type PagedLogRecord struct {
+	QuotaBeforeDiscount, UserModelDiscount                          string
 	ID, CreatedUnix, UserID, TokenID, ChannelID, CacheTokens, Quota int64
 	CacheWriteTokens, CacheWrite5mTokens, CacheWrite1hTokens        int64
 	ContextTokens                                                   int64
@@ -53,6 +54,10 @@ type UserPageSource interface {
 type UpstreamPageSource interface {
 	DetailedChannelsLogsPage(context.Context, string, []int64, time.Time, time.Time, LogCursor, int) ([]PagedLogRecord, error)
 }
+type statementDiscountStore interface {
+	ListBillingStatementDiscounts(context.Context, string) ([]StatementDiscount, error)
+}
+
 type statementChannelStore interface {
 	BillingStatementChannelIDs(context.Context, string) (map[int64]bool, error)
 }
@@ -77,34 +82,36 @@ type UserSetting struct {
 }
 
 type Job struct {
+	BillPeriod        string         `json:"bill_period,omitempty"`
+	DataSource        string         `json:"data_source,omitempty"`
 	MoneySnapshot     *MoneySnapshot `json:"money_snapshot,omitempty"`
-	ID                string    `json:"id"`
-	BillNo            string    `json:"bill_no,omitempty"`
-	RequestKey        string    `json:"-"`
-	InstanceID        string    `json:"instance_id"`
-	JobType           string    `json:"job_type"`
-	UserID            int64     `json:"user_id"`
-	ExcludeZeroOutput bool      `json:"exclude_zero_output"`
-	UserName          string    `json:"user_name,omitempty"`
-	UpstreamID        int64     `json:"upstream_id,omitempty"`
-	UpstreamName      string    `json:"upstream_name,omitempty"`
-	From              time.Time `json:"range_from"`
-	To                time.Time `json:"range_to"`
-	Status            string    `json:"status"`
-	TotalSteps        int       `json:"total_steps"`
-	CompletedSteps    int       `json:"completed_steps"`
-	AbnormalRows      int64     `json:"abnormal_rows"`
-	MismatchRows      int64     `json:"mismatch_rows"`
-	BilledRows        int64     `json:"billed_rows"`
-	OutputDays        int64     `json:"output_days"`
-	OutputLatestDay   string    `json:"output_latest_day,omitempty"`
-	ErrorMessage      string    `json:"error_message,omitempty"`
-	OutputPath        string    `json:"output_path,omitempty"`
-	RequestedBy       string    `json:"requested_by"`
-	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
-	PricingSource     string    `json:"pricing_source"`
-	UsageVersion      int       `json:"usage_version"`
+	ID                string         `json:"id"`
+	BillNo            string         `json:"bill_no,omitempty"`
+	RequestKey        string         `json:"-"`
+	InstanceID        string         `json:"instance_id"`
+	JobType           string         `json:"job_type"`
+	UserID            int64          `json:"user_id"`
+	ExcludeZeroOutput bool           `json:"exclude_zero_output"`
+	UserName          string         `json:"user_name,omitempty"`
+	UpstreamID        int64          `json:"upstream_id,omitempty"`
+	UpstreamName      string         `json:"upstream_name,omitempty"`
+	From              time.Time      `json:"range_from"`
+	To                time.Time      `json:"range_to"`
+	Status            string         `json:"status"`
+	TotalSteps        int            `json:"total_steps"`
+	CompletedSteps    int            `json:"completed_steps"`
+	AbnormalRows      int64          `json:"abnormal_rows"`
+	MismatchRows      int64          `json:"mismatch_rows"`
+	BilledRows        int64          `json:"billed_rows"`
+	OutputDays        int64          `json:"output_days"`
+	OutputLatestDay   string         `json:"output_latest_day,omitempty"`
+	ErrorMessage      string         `json:"error_message,omitempty"`
+	OutputPath        string         `json:"output_path,omitempty"`
+	RequestedBy       string         `json:"requested_by"`
+	CreatedAt         time.Time      `json:"created_at"`
+	UpdatedAt         time.Time      `json:"updated_at"`
+	PricingSource     string         `json:"pricing_source"`
+	UsageVersion      int            `json:"usage_version"`
 }
 
 type JobStep struct {
@@ -208,6 +215,7 @@ type ReconciliationOrder struct {
 }
 
 type RequestDetail struct {
+	EmptyOutput bool `json:",omitempty"`
 	MultimediaUsage
 	InstanceID, JobID, RequestID, UpstreamRequestID, Username, TokenName, ChannelName, ModelName string
 	SourceLogID, CreatedUnix, UserID, TokenID, ChannelID                                         int64
@@ -360,6 +368,8 @@ func NewVerificationJob(source Job, requestedBy string) (Job, []JobStep, error) 
 }
 
 type JobRunner struct {
+	// OnIdle wakes the producer once after a drained batch, not on each poll.
+	OnIdle    func()
 	Source    PageSource
 	Store     JobStore
 	Files     JobFileGenerator
@@ -372,14 +382,20 @@ func (r JobRunner) Run(ctx context.Context) error {
 	if r.Poll <= 0 {
 		r.Poll = time.Second
 	}
+	busy := false
 	for {
 		worked, err := r.RunOnce(ctx)
 		if err != nil {
 			return err
 		}
 		if worked {
+			busy = true
 			continue
 		}
+		if busy && r.OnIdle != nil {
+			r.OnIdle()
+		}
+		busy = false
 		t := time.NewTimer(r.Poll)
 		select {
 		case <-ctx.Done():
@@ -413,6 +429,9 @@ func (r JobRunner) RunOnce(ctx context.Context) (bool, error) {
 }
 
 func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error {
+	if source, ok := r.Source.(interface{ ForBillingJob(Job) PageSource }); ok {
+		r.Source = source.ForBillingJob(job)
+	}
 	if job.JobType == "verify" {
 		return r.processVerificationStep(ctx, job, step)
 	}
@@ -446,8 +465,20 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 	for _, m := range metadata {
 		maxByModel[m.ModelName] = m.MaxContextTokens
 	}
+	var settlementRules []StatementDiscount
+	if job.UsageVersion >= SettlementUsageVersion {
+		store, ok := r.Store.(statementDiscountStore)
+		if !ok {
+			return fmt.Errorf("billing settlement snapshot store unavailable")
+		}
+		settlementRules, err = store.ListBillingStatementDiscounts(ctx, job.ID)
+		if err != nil {
+			return err
+		}
+	}
 	cursor := step.Cursor
 	var processed, abnormal int64
+	var upstreamModels map[int64][]string
 	var upstreamChannelIDs []int64
 	if job.JobType == "upstream_statement" {
 		store, ok := r.Store.(statementChannelStore)
@@ -457,6 +488,16 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 		allowed, channelErr := store.BillingStatementChannelIDs(ctx, job.ID)
 		if channelErr != nil {
 			return channelErr
+		}
+		if job.UsageVersion >= SettlementUsageVersion {
+			if store, ok := r.Store.(interface {
+				BillingStatementChannelModels(context.Context, string) (map[int64][]string, error)
+			}); ok {
+				upstreamModels, err = store.BillingStatementChannelModels(ctx, job.ID)
+				if err != nil {
+					return err
+				}
+			}
 		}
 		for id := range allowed {
 			upstreamChannelIDs = append(upstreamChannelIDs, id)
@@ -509,10 +550,23 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 		mismatches := []ReconciliationOrder{}
 		requestDetails := []RequestDetail{}
 		for _, log := range logs {
+			if models := upstreamModels[log.ChannelID]; len(models) > 0 {
+				matched := false
+				for _, model := range models {
+					if model == log.ModelName {
+						matched = true
+						break
+					}
+				}
+				if !matched {
+					pageRows--
+					continue
+				}
+			}
 			billDay := dateOnly(time.Unix(log.CreatedUnix, 0))
 			billDayKey := billDay.Format("2006-01-02")
 			reasons := StatementAnomalyReasons(log, maxByModel[log.ModelName], job.ExcludeZeroOutput)
-			verification, pricingReason, chargeErr := StatementLogCharge(job, log, quotaPerUnit)
+			verification, pricingReason, chargeErr := StatementLogCharge(job, log, quotaPerUnit, settlementRules...)
 			if chargeErr != nil {
 				return chargeErr
 			}
@@ -535,6 +589,7 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 			}
 			requestDetails = append(requestDetails, RequestDetail{
 				MultimediaUsage: media,
+				EmptyOutput:     log.CompletionTokens.Valid && log.CompletionTokens.Int64 == 0,
 				InstanceID:      job.InstanceID, JobID: job.ID, SourceLogID: log.ID, CreatedUnix: log.CreatedUnix, BillDay: billDay, RequestID: log.RequestID, UpstreamRequestID: log.UpstreamRequestID,
 				UserID: log.UserID, Username: log.Username, TokenID: log.TokenID, TokenName: log.TokenName, ChannelID: log.ChannelID, ChannelName: log.ChannelName, ModelName: log.ModelName,
 				PromptTokens: displayPrompt, CompletionTokens: displayCompletion, CacheReadTokens: log.CacheTokens, CacheWriteTokens: log.CacheWriteTokens,
@@ -618,7 +673,7 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 		if e = r.Store.AppendBillingHour(ctx, job, step, rows, tokenRows, channelRows, requestDetails, anomalies, mismatches, cursor, pageRows); e != nil {
 			return e
 		}
-		if len(logs) < BillingPageSize {
+		if len(logs) < BillingPageSize && job.DataSource != "archive" {
 			break
 		}
 		if r.PagePause > 0 {
@@ -758,7 +813,7 @@ func (r JobRunner) processVerificationStep(ctx context.Context, job Job, step Jo
 		if err = store.AppendBillingVerificationPage(ctx, job, step, rows, cursor, int64(len(logs))); err != nil {
 			return err
 		}
-		if len(logs) < BillingPageSize {
+		if len(logs) < BillingPageSize && job.DataSource != "archive" {
 			break
 		}
 		if r.PagePause > 0 {

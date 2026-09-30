@@ -4,6 +4,7 @@ import { ApiError, type SystemSettingItem } from "@ct/shared";
 import { ElMessage } from "element-plus";
 import { dashboard } from "../api";
 import AppShell from "../components/AppShell.vue";
+import BillingConfiguration from '../components/BillingConfiguration.vue';
 import VoiceAlertsSettings from "../components/VoiceAlertsSettings.vue";
 import MenuVisibilitySettings from "../components/MenuVisibilitySettings.vue";
 
@@ -123,6 +124,7 @@ onMounted(load);
       <el-radio-group v-model="activeTab" size="small" aria-label="设置分类">
         <el-radio-button value="voice">电话预警</el-radio-button>
         <el-radio-button value="system">系统与监控</el-radio-button>
+        <el-radio-button value="billing">账单配置</el-radio-button>
         <el-radio-button value="menus">菜单显示</el-radio-button>
       </el-radio-group>
       <el-button v-if="activeTab === 'system'" type="primary" :loading="saving" :disabled="loading" @click="save"
@@ -130,6 +132,7 @@ onMounted(load);
       >
     </template>
     <div class="settings-page">
+      <BillingConfiguration v-if="activeTab === 'billing'"/>
       <MenuVisibilitySettings v-if="activeTab === 'menus'" />
       <VoiceAlertsSettings v-if="activeTab === 'voice'" />
       <div v-show="activeTab === 'system'" v-loading="loading" class="system-settings-grid">

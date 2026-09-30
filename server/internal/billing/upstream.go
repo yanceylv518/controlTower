@@ -26,8 +26,9 @@ type Upstream struct {
 }
 
 type UpstreamChannel struct {
-	ChannelID   int64  `json:"channel_id"`
-	ChannelName string `json:"channel_name"`
+	Models      []string `json:"selected_models,omitempty"`
+	ChannelID   int64    `json:"channel_id"`
+	ChannelName string   `json:"channel_name"`
 }
 
 type UpstreamTotals struct {

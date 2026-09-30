@@ -23,7 +23,7 @@ let sequence=0,debounce:ReturnType<typeof setTimeout>|undefined
 const {money,moneyError,refreshMoney}=useArchiveCurrency(()=>props.siteId)
 const amount=(quota:bigint)=>quotaAmount(quota,money.value)
 const moneyLabel=computed(()=>money.value?.type==='TOKENS'?'额度':`金额 ${currencyUnit(money.value)}`)
-const query=computed(()=>new URLSearchParams({site_id:props.siteId,date:month.value,from:range.value?.[0]??'',through:range.value?.[1]??'',user_id:user.value,model:model.value,channel_id:channel.value,dimension:dimension.value,limit:'200'}).toString())
+const query=computed(()=>new URLSearchParams({site_id:props.siteId,date:month.value,from:range.value?.[0]??'',through:range.value?.[1]??'',user_id:user.value??'',model:model.value??'',channel_id:channel.value??'',dimension:dimension.value,limit:'200'}).toString())
 const hasStats=computed(()=>!!data.value&&(data.value.rows.length>0||data.value.days.some(d=>d.ready)))
 const rows=computed(()=>data.value?.rows??[]),total=computed(()=>totals(rows.value))
 const scoped=computed(()=>selected.value?rows.value.filter(r=>r.date===selected.value):rows.value)
@@ -62,9 +62,9 @@ function exportCSV(){const text=[['日期范围','维度','请求次数','输入
  <section class="filter-panel"><div class="filters">
   <el-date-picker v-model="range" type="daterange" value-format="YYYY-MM-DD" range-separator="至" start-placeholder="开始日期" end-placeholder="结束日期" :clearable="false" @change="preset='custom'"/>
   <el-radio-group v-model="preset" @change="quick(String($event))"><el-radio-button value="month">本月</el-radio-button><el-radio-button value="recent">近30天</el-radio-button><el-radio-button value="custom">自定义</el-radio-button></el-radio-group>
-  <label>用户<el-select v-model="user" filterable allow-create default-first-option clearable placeholder="全部"><el-option v-for="v in options('user_id')" :key="v" :label="v" :value="v"/></el-select></label>
-  <label>模型<el-select v-model="model" filterable allow-create default-first-option clearable placeholder="全部"><el-option v-for="v in options('model_name')" :key="v" :label="v" :value="v"/></el-select></label>
-  <label>渠道<el-select v-model="channel" filterable allow-create default-first-option clearable placeholder="全部"><el-option v-for="v in options('channel_id')" :key="v" :label="v" :value="v"/></el-select></label>
+  <label>用户<el-select v-model="user" filterable allow-create default-first-option clearable value-on-clear="" placeholder="全部"><el-option v-for="v in options('user_id')" :key="v" :label="v" :value="v"/></el-select></label>
+  <label>模型<el-select v-model="model" filterable allow-create default-first-option clearable value-on-clear="" placeholder="全部"><el-option v-for="v in options('model_name')" :key="v" :label="v" :value="v"/></el-select></label>
+  <label>渠道<el-select v-model="channel" filterable allow-create default-first-option clearable value-on-clear="" placeholder="全部"><el-option v-for="v in options('channel_id')" :key="v" :label="v" :value="v"/></el-select></label>
   <el-button :loading="busy" @click="load(true)">刷新</el-button>
  </div><div class="caption"><span>更新至 {{data?new Date(data.observed_at).toLocaleTimeString('zh-CN',{hour12:false}):'—'}}<span v-if="busy"> · 更新中</span></span><span>已统计 {{complete}} / {{days.length}} 天</span><span class="verified-dot">已校验 {{days.filter(d=>d.state==='sealed').length}} 天</span><span class="pending-dot">待校验 {{days.filter(d=>d.state!=='sealed').length}} 天</span><span v-if="complete<days.length">部分统计</span></div></section>
  <el-alert v-if="error" :title="error" type="error" :closable="false"/>

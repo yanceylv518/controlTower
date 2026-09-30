@@ -29,7 +29,7 @@ func (j Job) UsesNewAPICharge() bool { return j.PricingSource == PricingSourceNe
 
 // StatementLogCharge does not evaluate prices, expressions or ratios in source
 // mode. QuotaPerUnit only converts NewAPI's integer quota into currency units.
-func StatementLogCharge(job Job, log PagedLogRecord, quotaPerUnit string) (LogChargeVerification, string, error) {
+func StatementLogCharge(job Job, log PagedLogRecord, quotaPerUnit string, rules ...StatementDiscount) (LogChargeVerification, string, error) {
 	if !job.UsesNewAPICharge() {
 		v, reason := VerifyLogChargeReason(log, quotaPerUnit)
 		return v, reason, nil
@@ -37,6 +37,18 @@ func StatementLogCharge(job Job, log PagedLogRecord, quotaPerUnit string) (LogCh
 	qpu, err := decimalRat(quotaPerUnit)
 	if err != nil || qpu.Sign() <= 0 {
 		return LogChargeVerification{}, "", fmt.Errorf("invalid QuotaPerUnit")
+	}
+	if job.UsageVersion >= SettlementUsageVersion {
+		subject := job.UserID
+		if job.JobType == "upstream_statement" {
+			subject = job.UpstreamID
+		}
+		settled, err := ResolveSettlement(log, job.JobType, subject, rules, quotaPerUnit)
+		if err != nil {
+			return LogChargeVerification{}, "", err
+		}
+		amount, _ := decimalRat(settled.Amount)
+		return LogChargeVerification{Charge: LogCharge{Mode: settled.Source, Total: settled.Amount, Settlement: &settled}, CalculatedQuota: quotaFromRat(new(big.Rat).Mul(amount, qpu)), LoggedQuota: log.Quota}, "", nil
 	}
 	amount := new(big.Rat).Quo(big.NewRat(log.Quota, 1), qpu)
 	return LogChargeVerification{

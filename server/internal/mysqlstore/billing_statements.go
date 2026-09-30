@@ -10,7 +10,7 @@ import (
 )
 
 func (s Store) CreateBillingStatementJob(ctx context.Context, job billing.Job, steps []billing.JobStep, subjectName string) error {
-	if job.MoneySnapshot == nil {
+	if job.MoneySnapshot == nil && !(job.UsageVersion >= 3 && job.BillPeriod == "monthly") {
 		return fmt.Errorf("billing money snapshot required")
 	}
 	conn, err := s.db.Conn(ctx)
@@ -28,9 +28,23 @@ func (s Store) CreateBillingStatementJob(ctx context.Context, job billing.Job, s
 		return err
 	}
 	defer tx.Rollback()
+	if job.UsageVersion >= 3 && (job.JobType == "user_statement" || job.JobType == "upstream_statement") && (job.BillPeriod == "daily" || job.BillPeriod == "monthly") {
+		var cancelled bool
+		e := tx.QueryRowContext(ctx, `SELECT cancelled FROM billing_generation_ranges WHERE instance_id=? AND kind=? AND subject_id=? AND range_from<=? AND range_to>? ORDER BY generation_started_at DESC LIMIT 1 FOR UPDATE`, job.InstanceID, job.JobType, billingJobSubject(job), job.From.In(billing.BusinessLocation).Format("2006-01-02"), job.From.In(billing.BusinessLocation).Format("2006-01-02")).Scan(&cancelled)
+		if e != nil && e != sql.ErrNoRows {
+			return e
+		}
+		if cancelled {
+			return billing.ErrGenerationCancelled
+		}
+	}
 	var duplicateID, duplicateStatus string
 	err = tx.QueryRowContext(ctx, `SELECT id,status FROM billing_jobs WHERE request_key=? LIMIT 1 FOR UPDATE`, job.RequestKey).Scan(&duplicateID, &duplicateStatus)
-	if err == nil {
+	if err == nil && duplicateStatus == "superseded" {
+		if _, err = tx.ExecContext(ctx, `UPDATE billing_jobs SET request_key=NULL WHERE id=?`, duplicateID); err != nil {
+			return err
+		}
+	} else if err == nil {
 		if duplicateStatus != "failed" {
 			return billing.ErrStatementDuplicate
 		}
@@ -39,8 +53,11 @@ func (s Store) CreateBillingStatementJob(ctx context.Context, job billing.Job, s
 		if loadErr != nil && loadErr != sql.ErrNoRows {
 			return loadErr
 		}
-		if loadErr == nil && previousSnapshot != job.MoneySnapshot.ID {
+		if loadErr == nil && job.BillPeriod != "monthly" && (job.MoneySnapshot == nil || previousSnapshot != job.MoneySnapshot.ID) {
 			return fmt.Errorf("failed statement must retain its money snapshot")
+		}
+		if err = s.freezeStandaloneTask(ctx, duplicateID); err != nil {
+			return err
 		}
 		// A failed attempt did not produce a bill. Remove it atomically so the
 		// same request key can be retried without a manual cleanup step.
@@ -49,6 +66,34 @@ func (s Store) CreateBillingStatementJob(ctx context.Context, job billing.Job, s
 		}
 	} else if err != sql.ErrNoRows {
 		return err
+	}
+	if job.UsageVersion >= 3 && (job.BillPeriod == "daily" || job.BillPeriod == "monthly") {
+		subject := job.UserID
+		if job.JobType == "upstream_statement" {
+			subject = job.UpstreamID
+		}
+		var existing string
+		err = tx.QueryRowContext(ctx, `SELECT j.id FROM billing_jobs j JOIN billing_statement_jobs st ON st.job_id=j.id WHERE j.instance_id=? AND st.statement_type=? AND st.subject_id=? AND j.usage_version>=3 AND j.bill_period=? AND j.range_from=? AND j.range_to=? AND j.status IN ('pending','running','publishing','complete','no_data') `+billingCurrentGenerationSQL+` LIMIT 1`, job.InstanceID, job.JobType, subject, job.BillPeriod, job.From.UTC(), job.To.UTC()).Scan(&existing)
+		if err == nil {
+			return billing.ErrStatementDuplicate
+		}
+		if err != sql.ErrNoRows {
+			return err
+		}
+	}
+	if job.UsageVersion >= 3 && job.BillPeriod == "monthly" {
+		if err = s.createBillingMonthFromDays(ctx, tx, job, subjectName); err != nil {
+			if err == billing.ErrStatementNoData {
+				if e := supersedeBillingStatement(ctx, tx, job); e != nil {
+					return e
+				}
+				if e := tx.Commit(); e != nil {
+					return e
+				}
+			}
+			return err
+		}
+		return tx.Commit()
 	}
 	var queued int
 	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM billing_jobs WHERE job_type IN ('user_statement','upstream_statement') AND status='pending'`).Scan(&queued); err != nil {
@@ -69,7 +114,7 @@ func (s Store) CreateBillingStatementJob(ctx context.Context, job billing.Job, s
 		return err
 	}
 	if job.JobType == "upstream_statement" {
-		result, copyErr := tx.ExecContext(ctx, `INSERT INTO billing_statement_channels(job_id,channel_id,channel_name) SELECT ?,channel_id,channel_name FROM billing_upstream_channel_bindings WHERE instance_id=? AND upstream_id=?`, job.ID, job.InstanceID, job.UpstreamID)
+		result, copyErr := tx.ExecContext(ctx, `INSERT INTO billing_statement_channels(job_id,channel_id,channel_name,models_json) SELECT ?,channel_id,channel_name,models_json FROM billing_upstream_channel_bindings WHERE instance_id=? AND upstream_id=?`, job.ID, job.InstanceID, job.UpstreamID)
 		if copyErr != nil {
 			return copyErr
 		}
@@ -78,17 +123,26 @@ func (s Store) CreateBillingStatementJob(ctx context.Context, job billing.Job, s
 		}
 	}
 	if job.JobType == "upstream_statement" {
-		_, err = tx.ExecContext(ctx, `INSERT INTO billing_statement_discount_snapshots(job_id,discount_type,subject_id,channel_id,channel_name,model_name,discount,effective_from,effective_to,source_rule_id,created_at) SELECT ?,'upstream_channel',r.subject_id,r.channel_id,b.channel_name,'',r.discount,r.effective_from,r.effective_to,r.id,? FROM billing_discount_rules r JOIN billing_statement_channels b ON b.job_id=? AND b.channel_id=r.channel_id WHERE r.instance_id=? AND r.discount_type='upstream_channel' AND r.subject_id=? AND r.effective_from<? AND COALESCE(r.effective_to,DATE('9999-12-31'))>?`, job.ID, job.CreatedAt, job.ID, job.InstanceID, job.UpstreamID, job.To.In(billing.BusinessLocation).Format("2006-01-02"), job.From.In(billing.BusinessLocation).Format("2006-01-02"))
+		_, err = tx.ExecContext(ctx, `INSERT INTO billing_statement_discount_snapshots(job_id,discount_type,subject_id,channel_id,channel_name,model_name,discount,effective_from,effective_to,source_rule_id,created_at) SELECT ?,'upstream_channel',r.subject_id,r.channel_id,b.channel_name,'',r.discount,r.effective_from,r.effective_to,r.id,? FROM billing_discount_rules r JOIN billing_statement_channels b ON b.job_id=? AND b.channel_id=r.channel_id WHERE r.instance_id=? AND r.discount_type='upstream_channel' AND r.subject_id=? AND r.effective_from<? AND COALESCE(r.effective_to,DATE('9999-12-31'))>?`, job.ID, job.CreatedAt, job.ID, job.InstanceID, job.UpstreamID, job.To.UTC(), job.From.UTC())
 		if err != nil {
 			return err
 		}
+	}
+	if job.JobType == "user_statement" {
+		_, err = tx.ExecContext(ctx, `INSERT INTO billing_statement_discount_snapshots(job_id,discount_type,subject_id,channel_id,channel_name,model_name,discount,effective_from,effective_to,source_rule_id,created_at) SELECT ?,discount_type,subject_id,0,'',model_name,discount,effective_from,effective_to,id,? FROM billing_discount_rules WHERE instance_id=? AND discount_type='user_model' AND subject_id=? AND effective_from<? AND (effective_to IS NULL OR effective_to>?)`, job.ID, job.CreatedAt, job.InstanceID, job.UserID, job.To.UTC(), job.From.UTC())
+		if err != nil {
+			return err
+		}
+	}
+	if err = recordStandaloneBillingTask(ctx, tx, job); err != nil {
+		return err
 	}
 	return tx.Commit()
 }
 
 func (s Store) BillingStatementUpstream(ctx context.Context, site string, id int64) (billing.Upstream, error) {
 	var v billing.Upstream
-	err := s.db.QueryRowContext(ctx, `SELECT id,instance_id,name,enabled,remark,created_at,updated_at,updated_by FROM billing_upstreams WHERE instance_id=? AND id=? AND enabled=1`, site, id).Scan(&v.ID, &v.InstanceID, &v.Name, &v.Enabled, &v.Remark, &v.CreatedAt, &v.UpdatedAt, &v.UpdatedBy)
+	err := s.db.QueryRowContext(ctx, `SELECT id,instance_id,name,enabled,remark,created_at,updated_at,updated_by FROM billing_upstreams WHERE instance_id=? AND id=?`, site, id).Scan(&v.ID, &v.InstanceID, &v.Name, &v.Enabled, &v.Remark, &v.CreatedAt, &v.UpdatedAt, &v.UpdatedBy)
 	if err != nil {
 		return v, err
 	}
@@ -255,6 +309,9 @@ func (s Store) finalizeBillingStatement(ctx context.Context, tx *sql.Tx, job bil
 	}
 	_, err := tx.ExecContext(ctx, `INSERT INTO billing_statements(id,job_id,instance_id,statement_type,subject_id,subject_name,range_from,range_to,normal_orders,abnormal_orders,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, job.ID, job.ID, job.InstanceID, kind, subjectID, name, job.From, job.To, normal, job.AbnormalRows, now)
 	if err != nil {
+		return err
+	}
+	if err = supersedeBillingStatement(ctx, tx, job); err != nil {
 		return err
 	}
 	_, err = tx.ExecContext(ctx, `UPDATE billing_jobs SET status='complete',finished_at=?,updated_at=? WHERE id=? AND completed_steps>=total_steps`, now, now, job.ID)

@@ -3,6 +3,7 @@ package mysqlstore
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"time"
 
 	"controltower/server/internal/billing"
@@ -27,7 +28,7 @@ func (s Store) ListBillingUpstreams(ctx context.Context, site string) ([]billing
 	if err = rows.Err(); err != nil {
 		return nil, err
 	}
-	bindings, err := s.db.QueryContext(ctx, `SELECT b.upstream_id,b.channel_id,b.channel_name FROM billing_upstream_channel_bindings b JOIN billing_upstreams u ON u.id=b.upstream_id AND u.instance_id=b.instance_id WHERE b.instance_id=? ORDER BY b.upstream_id,b.channel_id`, site)
+	bindings, err := s.db.QueryContext(ctx, `SELECT b.upstream_id,b.channel_id,b.channel_name,COALESCE(b.models_json,JSON_ARRAY()) FROM billing_upstream_channel_bindings b JOIN billing_upstreams u ON u.id=b.upstream_id AND u.instance_id=b.instance_id WHERE b.instance_id=? ORDER BY b.upstream_id,b.channel_id`, site)
 	if err != nil {
 		return nil, err
 	}
@@ -35,7 +36,11 @@ func (s Store) ListBillingUpstreams(ctx context.Context, site string) ([]billing
 	for bindings.Next() {
 		var upstreamID int64
 		var channel billing.UpstreamChannel
-		if err = bindings.Scan(&upstreamID, &channel.ChannelID, &channel.ChannelName); err != nil {
+		var models string
+		if err = bindings.Scan(&upstreamID, &channel.ChannelID, &channel.ChannelName, &models); err != nil {
+			return nil, err
+		}
+		if err = json.Unmarshal([]byte(models), &channel.Models); err != nil {
 			return nil, err
 		}
 		if index, ok := byID[upstreamID]; ok {
@@ -75,7 +80,8 @@ func (s Store) PutBillingUpstream(ctx context.Context, item billing.Upstream) (b
 		}
 	}
 	for _, channel := range item.Channels {
-		if _, err = tx.ExecContext(ctx, `INSERT INTO billing_upstream_channel_bindings(instance_id,upstream_id,channel_id,channel_name,created_at) VALUES(?,?,?,?,?)`, item.InstanceID, item.ID, channel.ChannelID, channel.ChannelName, now); err != nil {
+		models, _ := json.Marshal(channel.Models)
+		if _, err = tx.ExecContext(ctx, `INSERT INTO billing_upstream_channel_bindings(instance_id,upstream_id,channel_id,channel_name,created_at,models_json) VALUES(?,?,?,?,?,?)`, item.InstanceID, item.ID, channel.ChannelID, channel.ChannelName, now, string(models)); err != nil {
 			return item, err
 		}
 	}

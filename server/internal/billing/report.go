@@ -13,6 +13,7 @@ import (
 const defaultQuotaPerUnit = "500000"
 
 type AggregateRow struct {
+	BeforeAmount, SettlementDiscount string
 	MultimediaUsage
 	InstanceID                                                       string
 	UserID                                                           int64

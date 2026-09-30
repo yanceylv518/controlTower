@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	ctauth "controltower/server/internal/auth"
 	"controltower/server/internal/billing"
@@ -20,7 +21,10 @@ type BillingDiscountStore interface {
 	DeleteBillingDiscountRule(context.Context, string, int64) error
 }
 
-type BillingDiscountHandler struct{ Store BillingDiscountStore }
+type BillingDiscountHandler struct {
+	Store           BillingDiscountStore
+	CurrentDiscount func(context.Context, string, int64, string) (bool, error)
+}
 
 func (h BillingDiscountHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !billingAdminAllowed(r) {
@@ -30,11 +34,13 @@ func (h BillingDiscountHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 	switch r.Method {
 	case http.MethodGet:
 		site, kind := strings.TrimSpace(r.URL.Query().Get("instance_id")), strings.TrimSpace(r.URL.Query().Get("type"))
-		if site == "" || (kind != "" && kind != billing.DiscountUpstreamChannel) {
+		if site == "" || (kind != "" && kind != billing.DiscountUpstreamChannel && kind != billing.DiscountUserModel) {
 			writeDashboardError(w, 400, "invalid_discount_query")
 			return
 		}
-		kind = billing.DiscountUpstreamChannel
+		if kind == "" {
+			kind = billing.DiscountUpstreamChannel
+		}
 		items, err := h.Store.ListBillingDiscountRules(r.Context(), site, kind)
 		if err != nil {
 			writeDashboardError(w, 500, "billing_discounts_query_failed")
@@ -51,14 +57,35 @@ func (h BillingDiscountHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 		v.ModelName = strings.TrimSpace(v.ModelName)
 		v.Remark = strings.TrimSpace(v.Remark)
 		d, ok := new(big.Rat).SetString(v.Discount)
-		if v.InstanceID == "" || v.SubjectID <= 0 || !ok || d.Sign() <= 0 || d.Cmp(big.NewRat(1, 1)) > 0 || v.EffectiveFrom.IsZero() || (v.EffectiveTo != nil && !v.EffectiveTo.After(v.EffectiveFrom)) {
+		if v.InstanceID == "" || v.SubjectID <= 0 || !ok || d.Sign() < 0 || d.Cmp(big.NewRat(1, 1)) > 0 || v.EffectiveFrom.IsZero() || (v.EffectiveTo != nil && !v.EffectiveTo.After(v.EffectiveFrom)) {
 			writeDashboardError(w, 400, "invalid_discount")
 			return
 		}
 		if v.DiscountType == billing.DiscountUpstreamChannel {
+			if d.Cmp(big.NewRat(1, 1)) == 0 {
+				writeDashboardError(w, 400, "channel_discount_full_price")
+				return
+			}
 			v.ModelName = ""
 			if v.ChannelID <= 0 {
 				writeDashboardError(w, 400, "discount_channel_required")
+				return
+			}
+		} else if v.DiscountType == billing.DiscountUserModel {
+			if h.CurrentDiscount != nil && (v.EffectiveTo == nil || v.EffectiveTo.After(time.Now())) {
+				discounted, err := h.CurrentDiscount(r.Context(), v.InstanceID, v.SubjectID, v.ModelName)
+				if err != nil {
+					writeDashboardError(w, 502, "user_discount_current_unavailable")
+					return
+				}
+				if discounted {
+					writeDashboardError(w, 400, "user_discount_history_only")
+					return
+				}
+			}
+			v.ChannelID = 0
+			if v.ModelName == "" {
+				writeDashboardError(w, 400, "discount_model_required")
 				return
 			}
 		} else {
@@ -119,7 +146,7 @@ func (h BillingDiscountHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 			writeDashboardError(w, 400, "invalid_discount")
 			return
 		}
-		current, err := h.Store.ListBillingDiscountRules(r.Context(), site, billing.DiscountUpstreamChannel)
+		current, err := h.Store.ListBillingDiscountRules(r.Context(), site, "")
 		if err != nil {
 			writeDashboardError(w, 500, "billing_discounts_query_failed")
 			return

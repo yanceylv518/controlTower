@@ -3,6 +3,8 @@ package mysqlstore
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"fmt"
 	"time"
 
 	"controltower/server/internal/billing"
@@ -37,15 +39,25 @@ func (s Store) ListBillingDiscountRules(ctx context.Context, site, kind string) 
 }
 
 func (s Store) PutBillingDiscountRule(ctx context.Context, v billing.DiscountRule) (billing.DiscountRule, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return v, err
+	}
+	defer conn.Close()
+	var locked int
+	if err = conn.QueryRowContext(ctx, `SELECT GET_LOCK('ct:billing-discount-write',10)`).Scan(&locked); err != nil || locked != 1 {
+		return v, fmt.Errorf("billing discount lock unavailable")
+	}
+	defer conn.ExecContext(context.Background(), `SELECT RELEASE_LOCK('ct:billing-discount-write')`)
+	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return v, err
 	}
 	defer tx.Rollback()
-	fromDay := v.EffectiveFrom.In(billing.BusinessLocation).Format("2006-01-02")
+	fromDay := v.EffectiveFrom.UTC()
 	var endDay any
 	if v.EffectiveTo != nil {
-		endDay = v.EffectiveTo.In(billing.BusinessLocation).Format("2006-01-02")
+		endDay = v.EffectiveTo.UTC()
 	}
 	if v.DiscountType == billing.DiscountUpstreamChannel {
 		var exists int
@@ -54,7 +66,7 @@ func (s Store) PutBillingDiscountRule(ctx context.Context, v billing.DiscountRul
 		}
 	}
 	var overlaps int
-	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM billing_discount_rules WHERE instance_id=? AND discount_type=? AND subject_id=? AND channel_id=? AND model_name=? AND id<>? AND effective_from<COALESCE(?,DATE('9999-12-31')) AND COALESCE(effective_to,DATE('9999-12-31'))>? FOR UPDATE`, v.InstanceID, v.DiscountType, v.SubjectID, v.ChannelID, v.ModelName, v.ID, endDay, fromDay).Scan(&overlaps); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM billing_discount_rules WHERE instance_id=? AND discount_type=? AND subject_id=? AND channel_id=? AND BINARY model_name=BINARY ? AND id<>? AND effective_from<COALESCE(?,DATE('9999-12-31')) AND COALESCE(effective_to,DATE('9999-12-31'))>? FOR UPDATE`, v.InstanceID, v.DiscountType, v.SubjectID, v.ChannelID, v.ModelName, v.ID, endDay, fromDay).Scan(&overlaps); err != nil {
 		return v, err
 	}
 	if overlaps > 0 {
@@ -69,7 +81,7 @@ func (s Store) PutBillingDiscountRule(ctx context.Context, v billing.DiscountRul
 		v.ID, err = result.LastInsertId()
 		v.CreatedAt = now
 	} else {
-		result, e := tx.ExecContext(ctx, `UPDATE billing_discount_rules SET discount=?,effective_from=?,effective_to=?,remark=?,updated_at=?,updated_by=? WHERE id=? AND instance_id=?`, v.Discount, fromDay, endDay, v.Remark, now, v.UpdatedBy, v.ID, v.InstanceID)
+		result, e := tx.ExecContext(ctx, `UPDATE billing_discount_rules SET discount=?,effective_from=?,effective_to=?,remark=?,updated_at=?,updated_by=? WHERE id=? AND instance_id=? AND discount_type=? AND subject_id=? AND channel_id=? AND BINARY model_name=BINARY ?`, v.Discount, fromDay, endDay, v.Remark, now, v.UpdatedBy, v.ID, v.InstanceID, v.DiscountType, v.SubjectID, v.ChannelID, v.ModelName)
 		if e != nil {
 			return v, e
 		}
@@ -117,7 +129,7 @@ func (s Store) ListBillingStatementDiscounts(ctx context.Context, jobID string) 
 }
 
 func (s Store) QueryBillingStatementAggregates(ctx context.Context, jobID string) ([]billing.StatementAggregateRow, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT instance_id,user_id,MAX(username),channel_id,MAX(channel_name),model_name,bill_day,SUM(request_count),SUM(prompt_tokens),SUM(completion_tokens),SUM(image_input_tokens),SUM(image_output_tokens),SUM(audio_input_tokens),SUM(audio_output_tokens),SUM(cache_read_tokens),SUM(cache_write_tokens),SUM(cache_write_5m_tokens),SUM(cache_write_1h_tokens),SUM(calculated_quota),CAST(SUM(total_amount) AS CHAR) FROM billing_compact_daily_totals WHERE job_id=? GROUP BY instance_id,user_id,channel_id,model_name,bill_day ORDER BY bill_day,channel_id,model_name`, jobID)
+	rows, err := s.db.QueryContext(ctx, `SELECT instance_id,user_id,MAX(username),channel_id,MAX(channel_name),model_name,bill_day,SUM(request_count),SUM(prompt_tokens),SUM(completion_tokens),SUM(image_input_tokens),SUM(image_output_tokens),SUM(audio_input_tokens),SUM(audio_output_tokens),SUM(cache_read_tokens),SUM(cache_write_tokens),SUM(cache_write_5m_tokens),SUM(cache_write_1h_tokens),SUM(calculated_quota),CAST(SUM(total_amount) AS CHAR),CASE WHEN SUM(CASE WHEN before_known_count=request_count OR settlement_discount IN ('','1','1.000000') THEN 0 ELSE 1 END)=0 THEN CAST(SUM(CASE WHEN before_known_count=request_count THEN before_amount ELSE total_amount END) AS CHAR) ELSE '' END,CASE WHEN MIN(COALESCE(NULLIF(settlement_discount,''),'1.000000'))=MAX(COALESCE(NULLIF(settlement_discount,''),'1.000000')) THEN MIN(COALESCE(NULLIF(settlement_discount,''),'1.000000')) ELSE 'mixed' END FROM billing_compact_daily_totals WHERE job_id=? GROUP BY instance_id,user_id,channel_id,model_name,bill_day ORDER BY bill_day,channel_id,model_name`, jobID)
 	if err != nil {
 		return nil, err
 	}
@@ -125,10 +137,32 @@ func (s Store) QueryBillingStatementAggregates(ctx context.Context, jobID string
 	items := []billing.StatementAggregateRow{}
 	for rows.Next() {
 		var v billing.StatementAggregateRow
-		if err = rows.Scan(&v.InstanceID, &v.UserID, &v.Username, &v.ChannelID, &v.ChannelName, &v.ModelName, &v.Day, &v.RequestCount, &v.PromptTokens, &v.CompletionTokens, &v.ImageInputTokens, &v.ImageOutputTokens, &v.AudioInputTokens, &v.AudioOutputTokens, &v.CacheTokens, &v.CacheWriteTokens, &v.CacheWrite5mTokens, &v.CacheWrite1hTokens, &v.Quota, &v.Amount); err != nil {
+		if err = rows.Scan(&v.InstanceID, &v.UserID, &v.Username, &v.ChannelID, &v.ChannelName, &v.ModelName, &v.Day, &v.RequestCount, &v.PromptTokens, &v.CompletionTokens, &v.ImageInputTokens, &v.ImageOutputTokens, &v.AudioInputTokens, &v.AudioOutputTokens, &v.CacheTokens, &v.CacheWriteTokens, &v.CacheWrite5mTokens, &v.CacheWrite1hTokens, &v.Quota, &v.Amount, &v.BeforeAmount, &v.SettlementDiscount); err != nil {
 			return nil, err
 		}
 		items = append(items, v)
 	}
 	return items, rows.Err()
+}
+
+func (s Store) BillingStatementChannelModels(ctx context.Context, job string) (map[int64][]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT channel_id,COALESCE(models_json,JSON_ARRAY()) FROM billing_statement_channels WHERE job_id=?`, job)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int64][]string{}
+	for rows.Next() {
+		var id int64
+		var raw string
+		var models []string
+		if err = rows.Scan(&id, &raw); err != nil {
+			return nil, err
+		}
+		if err = json.Unmarshal([]byte(raw), &models); err != nil {
+			return nil, err
+		}
+		out[id] = models
+	}
+	return out, rows.Err()
 }

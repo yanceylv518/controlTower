@@ -48,6 +48,9 @@ func (c UserDailyFileCleaner) Cleanup(ctx context.Context, cutoff time.Time) (in
 			if removeErr := os.Remove(path); removeErr != nil && !os.IsNotExist(removeErr) {
 				return removed, removeErr
 			}
+			if removeErr := os.Remove(path + ".details.zip"); removeErr != nil && !os.IsNotExist(removeErr) {
+				return removed, removeErr
+			}
 			if deleteErr := c.Store.DeleteBillingUserDailyFile(ctx, item); deleteErr != nil {
 				return removed, deleteErr
 			}

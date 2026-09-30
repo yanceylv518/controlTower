@@ -104,9 +104,6 @@ func (h BillingUpstreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 	}
 	mappings := make([]billing.UpstreamChannelMapping, 0)
 	for _, upstream := range upstreams {
-		if !upstream.Enabled {
-			continue
-		}
 		for _, channel := range upstream.Channels {
 			mappings = append(mappings, billing.UpstreamChannelMapping{InstanceID: site, ChannelID: channel.ChannelID, ChannelName: channel.ChannelName, UpstreamFP: strconv.FormatInt(upstream.ID, 10), UpstreamName: upstream.Name})
 		}
