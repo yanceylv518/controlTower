@@ -23,6 +23,30 @@ type capture struct {
 	contents []string
 }
 
+func TestAlertAndReminderTimesUseBeijingTimezone(t *testing.T) {
+	previous := time.Local
+	t.Cleanup(func() { time.Local = previous })
+	at := time.Date(2026, 12, 31, 18, 30, 0, 0, time.UTC)
+	notifier := &Notifier{instanceID: "node"}
+	state := &dimensionState{title: "渠道错误激增", label: "渠道 1"}
+	for _, local := range []*time.Location{time.UTC, time.FixedZone("host", -7*60*60)} {
+		time.Local = local
+		for _, source := range []*time.Location{time.UTC, time.FixedZone("source", 8*60*60)} {
+			start := at.In(source)
+			alert := notifier.alertContent(state, "error", 3, 10, start)
+			if !strings.Contains(alert, "时间: 2027-01-01 02:30:00（北京时间 UTC+8）") {
+				t.Fatalf("wrong alert time: %s", alert)
+			}
+			reminder := notifier.remindContent(state, "error", 4, 10, &ruleState{episodeStartAt: start, episodeTotal: 4}, start.Add(time.Hour))
+			for _, want := range []string{"自 2027-01-01 02:30:00（北京时间 UTC+8） 起", "时间: 2027-01-01 03:30:00（北京时间 UTC+8）"} {
+				if !strings.Contains(reminder, want) {
+					t.Fatalf("missing %q in %s", want, reminder)
+				}
+			}
+		}
+	}
+}
+
 func TestChannelAndCustomerUseSameErrorFilter(t *testing.T) {
 	for _, tc := range []struct {
 		name, summary string

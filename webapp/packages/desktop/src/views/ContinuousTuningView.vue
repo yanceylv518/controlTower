@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { ArrowLeft, ArrowRight, CirclePlus } from "@element-plus/icons-vue";
+import { ArrowLeft, ArrowRight } from "@element-plus/icons-vue";
 import { ApiError, type ChannelBaseValue, type TuningChannel, type TuningContinuousState, type TuningPolicy, type TuningRecommendation } from "@ct/shared";
 import { dashboard } from "../api";
 import AppShell from "../components/AppShell.vue";
@@ -11,9 +11,18 @@ import { useMobileViewport } from '../composables/useMobileViewport';
 import TuningInfo from "../components/TuningInfo.vue";
 import TuningCapacityMetric from "../components/TuningCapacityMetric.vue";
 import ChannelGroupEditor from "../components/ChannelGroupEditor.vue";
+import TuningGroupFilter from "../components/TuningGroupFilter.vue";
 import { useFiltersStore } from "../stores/filters";
 import { formatTime } from "../utils/format";
 import { hiddenChannelGroupCount, matchesChannelGroup, MAX_VISIBLE_CHANNEL_GROUPS, normalizeChannelGroups, splitChannelGroups, visibleChannelGroups } from "../utils/channelGroup";
+
+type DirectoryOnlyChannelRow = TuningChannel & {
+  model_name: string;
+  current_weight: number;
+  current_priority: number;
+  directoryOnly: true;
+};
+type ChannelDisplayRow = ChannelBaseValue | DirectoryOnlyChannelRow;
 
 const filters = useFiltersStore();
 const mobile = useMobileViewport();
@@ -23,6 +32,8 @@ const loading = ref(false), saving = ref(false), dirty = ref(false), activeTab =
 const mode = ref<"observe" | "confirm" | "auto">("observe");
 const bases = ref<ChannelBaseValue[]>([]), states = ref<TuningContinuousState[]>([]), events = ref<TuningRecommendation[]>([]);
 const channels = ref<TuningChannel[]>([]);
+const channelDirectorySite = ref("");
+const channelDirectoryLoading = ref(false);
 let channelDirectoryGeneration = 0;
 const groupManagerOpen = ref(false);
 const groupDialogOpen = ref(false), groupSaving = ref(false);
@@ -89,18 +100,64 @@ const wait = (milliseconds: number) => new Promise(resolve => setTimeout(resolve
 const defaults = () => ({ sensitivity: 1, speed_exponent: .35, speed_p50_weight: .5, speed_p90_weight: .3, speed_p95_weight: .2, speed_min_factor: .75, speed_max_factor: 1.25, cache_exponent: .15, cache_min_factor: .9, cache_max_factor: 1.1, otps_exponent: .25, otps_min_factor: .8, otps_max_factor: 1.2, error_healthy_rate: .01, error_degraded_rate: .05, error_poor_rate: .15, error_floor_rate: .3, error_degraded_factor: .85, error_poor_factor: .5, error_min_factor: .2, combined_min_factor: .5, combined_max_factor: 1.5, circuit_threshold: .1, recovery_threshold: .2, circuit_error_rate: .3, recovery_error_rate: .1, silent_minutes: 5, probe_interval_seconds: 5, probe_count: 10, soft_start_multiplier: .2, window_minutes: 15, min_samples: 20, sparse_lookback_minutes: 360, fast_circuit_enabled: true, fast_circuit_min_samples: 50, fast_circuit_error_rate: .5 });
 const policy = reactive<TuningPolicy>({ scheduling: { window_minutes: 15, min_samples: 20, sparse_min_samples: 10, sparse_lookback_minutes: 360 }, continuous: defaults(), dispatch_modes: {} });
 const siteID = computed(() => filters.site_id || "");
-const modelChannelCount = (model: string) => bases.value.filter(x => x.model_name === model).length;
+const currentChannels = computed(() => channelDirectorySite.value === siteID.value && siteID.value ? channels.value : []);
+const channelDirectoryByID = computed(() => new Map(currentChannels.value.map(row => [row.channel_id, row])));
+const channelDirectoryReady = computed(() => channelDirectorySite.value === siteID.value && !!siteID.value);
+const baseRowsForModel = (model: string) => bases.value.filter(row =>
+  row.model_name === model && (!channelDirectoryReady.value || channelDirectoryByID.value.get(row.channel_id)?.models.includes(model)),
+);
+const isDirectoryOnlyRow = (row: ChannelDisplayRow): row is DirectoryOnlyChannelRow => "directoryOnly" in row;
+const normalizeChannelStatus = (value: string | number | undefined) => {
+  const status = String(value ?? "").trim().toLowerCase();
+  if (["1", "enabled", "enable", "active", "normal"].includes(status)) return "enabled";
+  if (["2", "disabled", "disable", "inactive"].includes(status)) return "disabled";
+  if (["3", "auto_disabled", "auto-disabled"].includes(status)) return "auto_disabled";
+  return "unknown";
+};
+const channelStatusFor = (row: ChannelDisplayRow) => normalizeChannelStatus(isDirectoryOnlyRow(row) ? row.status : channelDirectoryByID.value.get(row.channel_id)?.status);
+const channelStatusLabel = (row: ChannelDisplayRow) => ({ enabled: "已启用", disabled: "已关闭", auto_disabled: "自动禁用", unknown: "状态未知" }[channelStatusFor(row)]);
+const channelStatusClass = (row: ChannelDisplayRow) => `is-${channelStatusFor(row).replace("_", "-")}`;
+const channelStatusTitle = (row: ChannelDisplayRow) => {
+  const status = isDirectoryOnlyRow(row) ? row.status : channelDirectoryByID.value.get(row.channel_id)?.status;
+  return status ? `渠道状态：${channelStatusLabel(row)}（${status}）` : "渠道状态尚未同步";
+};
+const modelChannelCounts = computed(() => {
+  const counts = new Map<string, Set<number>>();
+  const add = (model: string, channelID: number) => {
+    const channelIDs = counts.get(model) ?? new Set<number>();
+    channelIDs.add(channelID);
+    counts.set(model, channelIDs);
+  };
+  if (channelDirectoryReady.value) {
+    for (const channel of currentChannels.value) for (const model of channel.models) add(model, channel.channel_id);
+  } else {
+    for (const row of bases.value) add(row.model_name, row.channel_id);
+  }
+  return new Map([...counts].map(([model, channelIDs]) => [model, channelIDs.size]));
+});
+const modelChannelCount = (model: string) => modelChannelCounts.value.get(model) ?? 0;
 const models = computed(() => {
   const modeOrder = { auto: 0, observe: 1, off: 2 } as const;
-  return [...new Set(bases.value.map(x => x.model_name))].sort((a, b) =>
+  const baseModels = channelDirectoryReady.value ? [] : bases.value.map(row => row.model_name);
+  return [...new Set([...baseModels, ...currentChannels.value.flatMap(channel => channel.models)])].sort((a, b) =>
     modeOrder[policy.dispatch_modes[a] || "off"] - modeOrder[policy.dispatch_modes[b] || "off"]
     || modelChannelCount(b) - modelChannelCount(a)
     || a.localeCompare(b),
   );
 });
 const visibleModels = computed(() => models.value.filter(model => model.toLowerCase().includes(modelQuery.value.trim().toLowerCase())));
-const activeRows = computed(() => bases.value.filter(x => x.model_name === activeModel.value).sort((a, b) => b.current_priority - a.current_priority || b.current_weight - a.current_weight || a.channel_id - b.channel_id));
-const channelRowKey = (row: ChannelBaseValue) => `${row.channel_id}:${row.model_name}`;
+const activeBaseRows = computed(() => baseRowsForModel(activeModel.value).sort((a, b) => b.current_priority - a.current_priority || b.current_weight - a.current_weight || a.channel_id - b.channel_id));
+const activeRows = computed<ChannelDisplayRow[]>(() => {
+  const rows: ChannelDisplayRow[] = [...activeBaseRows.value];
+  const represented = new Set(activeBaseRows.value.map(row => row.channel_id));
+  for (const channel of currentChannels.value) {
+    if (!channel.models.includes(activeModel.value) || represented.has(channel.channel_id)) continue;
+    rows.push({ ...channel, model_name: activeModel.value, current_weight: channel.weight, current_priority: channel.priority, directoryOnly: true });
+  }
+  return rows.sort((a, b) => b.current_priority - a.current_priority || b.current_weight - a.current_weight || a.channel_id - b.channel_id);
+});
+const modelChannelRows = activeRows;
+const channelRowKey = (row: ChannelDisplayRow) => `${row.channel_id}:${row.model_name}`;
 const priorityGroupStarts = computed(() => {
   const starts = new Map<string, { priority: number; count: number; first: boolean }>();
   const rows = activeRows.value;
@@ -113,14 +170,21 @@ const priorityGroupStarts = computed(() => {
   }
   return starts;
 });
-const priorityRowClass = ({ row }: { row: ChannelBaseValue }) => {
+const priorityRowClass = ({ row }: { row: ChannelDisplayRow }) => {
   const group = priorityGroupStarts.value.get(channelRowKey(row));
   return group && !group.first ? 'priority-group-start' : '';
 };
 
 // 总览表可能先于全渠道目录完成加载；缺少目录行时用基础值补齐编辑器上下文。
-const channelDirectoryByID = computed(() => new Map(channels.value.map(row => [row.channel_id, row])));
-const groupEditorRowFor = (row: ChannelBaseValue): TuningChannel => channelDirectoryByID.value.get(row.channel_id) ?? ({
+const groupEditorRowFor = (row: ChannelDisplayRow): TuningChannel => isDirectoryOnlyRow(row) ? ({
+  channel_id: row.channel_id,
+  channel_name: row.channel_name,
+  status: row.status,
+  weight: row.weight,
+  priority: row.priority,
+  models: row.models,
+  group_name: row.group_name,
+}) : channelDirectoryByID.value.get(row.channel_id) ?? ({
   channel_id: row.channel_id,
   channel_name: row.channel_name,
   status: "unknown",
@@ -140,7 +204,7 @@ const groupCellTitle = (value: string | null | undefined) => {
   return groups.length > MAX_VISIBLE_CHANNEL_GROUPS ? `点击编辑分组（完整分组：${groups.join("、")}）` : "点击编辑分组";
 };
 const stateMap = computed(() => new Map((statesSite.value === siteID.value ? states.value : []).map(x => [`${x.channel_id}:${x.model_name}`, x])));
-const stateFor = (row: ChannelBaseValue) => stateMap.value.get(`${row.channel_id}:${row.model_name}`);
+const stateFor = (row: ChannelDisplayRow) => isDirectoryOnlyRow(row) ? undefined : stateMap.value.get(`${row.channel_id}:${row.model_name}`);
 const acceptStates = (site: string, items: TuningContinuousState[]) => {
   if (!items.length && statesSite.value === site && states.value.length) {
     refreshError.value = "评估状态暂时为空，正在显示上次成功结果";
@@ -168,7 +232,8 @@ const pagedEvents = computed(() => filteredEvents.value.slice((eventPage.value -
 const counts = computed(() => models.value.reduce((v, model) => { v[policy.dispatch_modes[model] || "off"]++; return v; }, { off: 0, observe: 0, auto: 0 }));
 const factor = (value?: number) => Number(value ?? 1).toFixed(3);
 const clampNumber = (value: number, low: number, high: number) => Math.min(high, Math.max(low, value));
-const factorExplanation = (row: ChannelBaseValue) => {
+const factorExplanation = (row: ChannelDisplayRow) => {
+  if (isDirectoryOnlyRow(row)) return "渠道没有调权基础值；此处仅展示渠道目录信息。";
   const state = stateFor(row);
   if (!state) return "尚未完成首次评估，没有可解释的计算数据。";
   if (row.base_weight <= 0) return "基础权重为 0，该渠道不参与调权；所有性能系数保持中性值 1.000。";
@@ -212,7 +277,7 @@ const factorExplanation = (row: ChannelBaseValue) => {
 const seconds = (value?: number) => value ? `${value.toFixed(2)}s` : "—";
 const percent = (value?: number) => value == null ? "—" : `${(value * 100).toFixed(1)}%`;
 const comparisonClass = (value?: number, baseline = 1) => value == null || value === baseline ? "" : value > baseline ? "positive" : "negative";
-const weightClass = (row: ChannelBaseValue) => comparisonClass(stateFor(row)?.proposed_weight, row.base_weight);
+const weightClass = (row: ChannelDisplayRow) => isDirectoryOnlyRow(row) ? "" : comparisonClass(stateFor(row)?.proposed_weight, row.base_weight);
 const modelMode = (model: string) => policy.dispatch_modes[model] || "off";
 const modeText = (model: string) => ({ off: "已关闭", observe: "只观察", auto: "自动执行" }[modelMode(model)]);
 const modeType = (model: string) => modelMode(model) === "auto" ? "success" : modelMode(model) === "observe" ? "warning" : "info";
@@ -221,15 +286,16 @@ const phaseText = (s?: TuningContinuousState) => !s ? "等待首次评估" : eff
 const phaseType = (s?: TuningContinuousState) => s?.phase === "circuit" ? "danger" : s?.phase === "probing" || s?.phase === "soft_start" || effectivePause(s) ? "warning" : "success";
 const eventName = (rule: string) => ({ weight_observed: "观察到权重变化", weight_write: "自动调整权重", capacity_reduce: "持续超限主动降权", manual_takeover: "检测到人工修改", auto_paused: "安全保护暂停", circuit_opened: "渠道熔断", probe_started: "开始恢复检测", probe_failed: "恢复检测未通过", circuit_disabled: "探针全部失败，禁用渠道", circuit_recovered: "渠道恢复" } as Record<string, string>)[rule] || rule;
 const eventCount = (days: number, rule: string) => events.value.filter(x => validEvent(x) && x.rule === rule && new Date(x.created_at).getTime() >= Date.now() - days * 86400000).length;
-const sampleText = (row: ChannelBaseValue) => { const state = stateFor(row); return state ? `${state.last_observed_requests}/${(savedPolicy.value?.continuous ?? policy.continuous).min_samples}` : "—"; };
+const sampleText = (row: ChannelDisplayRow) => { const state = stateFor(row); return state ? `${state.last_observed_requests}/${(savedPolicy.value?.continuous ?? policy.continuous).min_samples}` : "—"; };
 const rateText = (value?: number) => value == null ? "—" : Math.round(value).toLocaleString("zh-CN");
 const currentRates = ref(new Map<number, { rpm: number; tpm: number }>());
 const ratesReady = ref(false), ratesError = ref("");
 const ratesAsOf = ref(""), ratesWindowStart = ref("");
 const ratesDelay = ref(0);
 let ratesLoading = false;
-const currentRateFor = (row: ChannelBaseValue) => ratesReady.value ? (currentRates.value.get(row.channel_id) ?? {rpm: 0, tpm: 0}) : undefined;
-const currentlyLimited = (row: ChannelBaseValue) => {
+const currentRateFor = (row: ChannelDisplayRow) => ratesReady.value ? (currentRates.value.get(row.channel_id) ?? {rpm: 0, tpm: 0}) : undefined;
+const currentlyLimited = (row: ChannelDisplayRow) => {
+  if (isDirectoryOnlyRow(row)) return false;
   const rate = currentRateFor(row);
   return !!rate && ((row.max_rpm > 0 && rate.rpm >= row.max_rpm) || (row.max_tpm > 0 && rate.tpm >= row.max_tpm));
 };
@@ -256,7 +322,8 @@ async function refreshCurrentRates() {
       : "实时负载请求失败，请检查网络连接，正在重试";
   } finally { ratesLoading = false; }
 }
-const evaluationText = (row: ChannelBaseValue) => {
+const evaluationText = (row: ChannelDisplayRow) => {
+  if (isDirectoryOnlyRow(row)) return "渠道没有调权基础值，未参与调权";
   const state = stateFor(row), requests = state?.last_observed_requests ?? 0;
   if ((row.models?.length ?? 1) > 1 || state?.paused_reason === "mixed_channel") return "多模型渠道，安全暂停";
   if (modelMode(row.model_name) === "off") return "该模型调权已关闭，渠道未参与调权；此设置不代表模型或渠道停用";
@@ -271,7 +338,8 @@ const evaluationText = (row: ChannelBaseValue) => {
   if (!state?.metric_ready) return state.otps_ready && state.otps_stats_version === 1 ? "TTFT 样本不足，使用本轮输出系数" : `TTFT 样本不足 ${state.speed_sample_count ?? 0}/${policy.continuous.min_samples}，输出不可用，本轮不调权`;
   return state.baseline_ready ? "已参与本轮计算" : state.otps_ready && state.otps_stats_version === 1 ? "TTFT 基线不足，使用本轮输出系数" : "TTFT 与输出基线不足，本轮不调权";
 };
-const displayedSpeedFactor = (row: ChannelBaseValue): number | null => {
+const displayedSpeedFactor = (row: ChannelDisplayRow): number | null => {
+  if (isDirectoryOnlyRow(row)) return null;
   const state = stateFor(row), params = savedPolicy.value?.continuous ?? policy.continuous;
   if (!state || modelMode(row.model_name) === 'off' || row.base_weight <= 0 || state.phase !== 'normal' || state.paused_reason || (row.models?.length ?? 1) > 1) return null;
   if (state.speed_stats_version !== 1 || state.last_observed_requests < params.min_samples) return null;
@@ -281,12 +349,13 @@ const displayedSpeedFactor = (row: ChannelBaseValue): number | null => {
   if (!ttftReady && state.k_speed !== state.k_otps) return null;
   return Number.isFinite(state.k_speed) ? state.k_speed : null;
 };
-const speedLabel = (row: ChannelBaseValue) => {
+const speedLabel = (row: ChannelDisplayRow) => {
   const state = stateFor(row);
   return displayedSpeedFactor(row) !== null && state && (!state.metric_ready || !state.baseline_ready) ? "速度（输出替代）" : "速度";
 };
 const coefficientColumns = [{key:'speed',label:'速度'}, {key:'cache',label:'缓存'}, {key:'otps',label:'输出'}, {key:'error',label:'错误'}] as const;
-const coefficientCell = (row: ChannelBaseValue, key: 'speed' | 'cache' | 'otps' | 'error') => {
+const coefficientCell = (row: ChannelDisplayRow, key: 'speed' | 'cache' | 'otps' | 'error') => {
+  if (isDirectoryOnlyRow(row)) return {value:null, status:'未参与调权', detail:evaluationText(row)};
   const state = stateFor(row);
   if (!state) return {value:null, status:'等待评估', detail:'尚无评估数据'};
   const value = key === 'speed' ? displayedSpeedFactor(row) : state[`k_${key}`];
@@ -305,17 +374,12 @@ const coefficientCell = (row: ChannelBaseValue, key: 'speed' | 'cache' | 'otps' 
   return result(state.otps_ready ? '有效' : value === 1 ? '中性回退' : '保留值', state.otps_ready ? '输出样本与基线有效' : '输出样本或基线不足');
 };
 // 分组筛选只匹配渠道实际拥有的完整分组名，不按子串误命中。
-const channelQuery = ref(""), groupFilterSearch = ref(""), channelStatusFilter = ref("");
+const channelSwitchFilter = ref("");
 const groupFilterOpen = ref(false);
 const selectedGroupFilter = ref<{ kind: "all" } | { kind: "group"; name: string } | null>(null);
 const selectedGroupName = computed(() => {
   const selected = selectedGroupFilter.value;
   return selected?.kind === "group" ? selected.name : null;
-});
-const groupFilterLabel = computed(() => selectedGroupFilter.value?.kind === "all" ? "所有分组" : selectedGroupName.value || "");
-const filteredGroupOptions = computed(() => {
-  const query = groupFilterSearch.value.trim().toLowerCase();
-  return groupOptions.value.filter(group => !query || group.toLowerCase().includes(query));
 });
 const toggleGroupFilter = (group: string | null) => {
   const current = selectedGroupFilter.value;
@@ -324,7 +388,8 @@ const toggleGroupFilter = (group: string | null) => {
 };
 const eventDateRange = ref<[string, string] | null>(null);
 const settingsSection = ref("basic"), helpSection = ref("calculation");
-const capacityStatus = (row: ChannelBaseValue) => {
+const capacityStatus = (row: ChannelDisplayRow) => {
+  if (isDirectoryOnlyRow(row)) return '';
   if (modelMode(row.model_name) === 'off' || row.base_weight <= 0 || (row.models?.length ?? 1) > 1) return '';
   const c = stateFor(row)?.capacity;
   if (!c?.initialized || c.phase === 'normal') return '';
@@ -342,7 +407,8 @@ const capacityStatus = (row: ChannelBaseValue) => {
   };
   return (label[c.phase] || '') + (c.reason === 'peer_capacity_unconfigured' ? '；替代渠道未配置上限，余量待观察' : '');
 };
-const limitReason = (row: ChannelBaseValue) => {
+const limitReason = (row: ChannelDisplayRow) => {
+  if (isDirectoryOnlyRow(row)) return "";
   const rate = currentRateFor(row);
   if (!rate) return row.max_rpm > 0 || row.max_tpm > 0 ? "实时负载不可用，有容量上限的渠道暂停上调" : "";
   const exceeded = [row.max_rpm > 0 && rate.rpm >= row.max_rpm ? "RPM" : "", row.max_tpm > 0 && rate.tpm >= row.max_tpm ? "TPM" : ""].filter(Boolean);
@@ -350,7 +416,8 @@ const limitReason = (row: ChannelBaseValue) => {
   const detail = capacityStatus(row);
   return exceeded.length ? `${exceeded.join(" / ")} 已达到上限；${detail || '保持限升，等待容量策略评估'}` : detail;
 };
-const rowStatus = (row: ChannelBaseValue) => {
+const rowStatus = (row: ChannelDisplayRow) => {
+  if (isDirectoryOnlyRow(row)) return { kind: "muted", icon: "", label: "未参与调权" };
   const state = stateFor(row), text = evaluationText(row);
   if (text === "该模型调权已关闭，渠道未参与调权；此设置不代表模型或渠道停用") return { kind: "muted", icon: "—", label: "未参与调权" };
   if (state?.phase === "circuit") return { kind: "danger", icon: "", label: "熔断" };
@@ -364,12 +431,13 @@ const rowStatus = (row: ChannelBaseValue) => {
   if (speedLabel(row).includes("替代")) return { kind: "accent", icon: "⇄", label: "" };
   return { kind: "muted", icon: "", label: "—" };
 };
-const overallEvaluationStatus = (row: ChannelBaseValue) => {
+const overallEvaluationStatus = (row: ChannelDisplayRow) => {
+  if (isDirectoryOnlyRow(row)) return "未参与调权";
   const state = stateFor(row);
   const overall = !state || modelMode(row.model_name) === 'off' || row.base_weight <= 0 || state.phase !== 'normal' || !!effectivePause(state) || (row.models?.length ?? 1) > 1 || evaluationText(row).startsWith('窗口样本不足');
   return overall ? rowStatus(row).label : '';
 };
-const coefficientEmptyText = (row: ChannelBaseValue) => {
+const coefficientEmptyText = (row: ChannelDisplayRow) => {
   const status = overallEvaluationStatus(row);
   if (status.startsWith('窗口样本不足')) return '窗口样本不足';
   return ['未参与', '未参与调权', '已暂停'].includes(status) ? '未参与调权' : '';
@@ -379,17 +447,15 @@ const coefficientSpan = ({column}: {column: {property?: string}}) => {
   if (column.property?.startsWith('coefficient_')) return [0,0];
   return [1,1];
 };
-const displayedRows = computed(() => activeRows.value.filter(row => {
-  const query = channelQuery.value.trim().toLowerCase();
-  if (query && !`${row.channel_name} ${row.channel_id} ${row.group_name}`.toLowerCase().includes(query)) return false;
+const displayedRows = computed<ChannelDisplayRow[]>(() => modelChannelRows.value.filter(row => {
   if (!matchesChannelGroup(row.group_name, selectedGroupName.value)) return false;
-  if (channelStatusFilter.value === "limited") return !!limitReason(row);
-  if (channelStatusFilter.value === "attention") return ["danger", "warning"].includes(rowStatus(row).kind) || !!limitReason(row);
-  if (channelStatusFilter.value === "changed") return !!stateFor(row) && stateFor(row)!.proposed_weight !== row.current_weight;
+  const channelStatus = channelStatusFor(row);
+  if (channelSwitchFilter.value === "enabled" && channelStatus !== "enabled") return false;
+  if (channelSwitchFilter.value === "not_enabled" && channelStatus === "enabled") return false;
   return true;
 }));
 const priorityDrafts = reactive(new Map<number, number>());
-watch([activeModel, channelQuery, selectedGroupFilter, channelStatusFilter], () => { mobileRowCount.value = 20; });
+watch([activeModel, selectedGroupFilter, channelSwitchFilter], () => { mobileRowCount.value = 20; });
 watch(siteID, () => { mobileEditRow.value = null; mobileSaveOpen.value = false; mobileRowCount.value = 20; });
 watch(mobile, value => { if (!value) { mobileEditRow.value = null; mobileSaveOpen.value = false; } });
 const mobileChanges = computed(() => bases.value.flatMap(row => {
@@ -444,26 +510,29 @@ function stageMobileEdit(value:{base_weight:number;priority:number;max_rpm:numbe
   if (value.priority !== displayedPriority(row)) editPriority(row, value.priority);
   dirty.value = true; mobileEditRow.value = null; mobileSaveOpen.value = true;
 }
+const openMobileEdit = (row: ChannelDisplayRow) => { if (!isDirectoryOnlyRow(row)) mobileEditRow.value = row; };
 async function saveMobileChanges() { await save(); if (!dirty.value) mobileSaveOpen.value = false; }
 // Base priority remains editable during circuit breaking; the server controls online recovery.
-const priorityLocked = (_row: ChannelBaseValue) => false;
-const displayedPriority = (row: ChannelBaseValue) => priorityDrafts.get(row.channel_id) ?? row.base_priority;
+const priorityLocked = (_row: ChannelDisplayRow) => false;
+const displayedPriority = (row: ChannelDisplayRow) => priorityDrafts.get(row.channel_id) ?? (isDirectoryOnlyRow(row) ? row.current_priority : row.base_priority);
 const editPriority = (row: ChannelBaseValue, value: number | undefined) => {
   if (value == null || !Number.isSafeInteger(value) || value < 0) return;
   priorityDrafts.set(row.channel_id, value);
   for (const item of bases.value) if (item.channel_id === row.channel_id) item.base_priority = value;
   dirty.value = true;
 };
-const fieldChanged = (row: ChannelBaseValue, key: "base_weight" | "base_priority" | "max_rpm" | "max_tpm") => {
+const fieldChanged = (row: ChannelDisplayRow, key: "base_weight" | "base_priority" | "max_rpm" | "max_tpm") => {
+  if (isDirectoryOnlyRow(row)) return false;
   const saved = savedBases.value.find(item => channelRowKey(item) === channelRowKey(row));
   return !!saved && saved[key] !== row[key];
 };
-const originalBase = (row: ChannelBaseValue) => stateFor(row)?.base_weight ?? savedBases.value.find(item => channelRowKey(item) === channelRowKey(row))?.base_weight ?? row.base_weight;
-const calculatedWeight = (row: ChannelBaseValue): number | null => {
+const originalBase = (row: ChannelDisplayRow) => isDirectoryOnlyRow(row) ? null : stateFor(row)?.base_weight ?? savedBases.value.find(item => channelRowKey(item) === channelRowKey(row))?.base_weight ?? row.base_weight;
+const calculatedWeight = (row: ChannelDisplayRow): number | null => {
+  if (isDirectoryOnlyRow(row)) return null;
   const state = stateFor(row), params = savedPolicy.value?.continuous ?? policy.continuous;
   if ((state?.last_observed_requests ?? 0) < params.min_samples || row.base_weight <= 0) return null;
   const base = originalBase(row);
-  if (base <= 0) return null;
+  if (base == null || base <= 0) return null;
   // Display the latest coefficient snapshot as a reference; execution eligibility is separate.
   const factors = [state?.k_speed, state?.k_cache, state?.k_otps, state?.k_error].map(value => value ?? 1);
   return Math.max(1, Math.round(base * clampNumber(factors.reduce((a, b) => a * b, 1), params.combined_min_factor, params.combined_max_factor)));
@@ -573,8 +642,11 @@ async function loadChannelDirectory(site: string) {
   const groupGeneration = groupWriteGeneration;
   if (!site) {
     channels.value = [];
+    channelDirectorySite.value = "";
+    channelDirectoryLoading.value = false;
     return;
   }
+  if (site === siteID.value) channelDirectoryLoading.value = true;
   try {
     const result = await dashboard.tuningChannels(site);
     if (site !== siteID.value || generation !== channelDirectoryGeneration) return;
@@ -586,6 +658,9 @@ async function loadChannelDirectory(site: string) {
       items = items.map(row => localGroups.has(row.channel_id) ? { ...row, group_name: localGroups.get(row.channel_id)! } : row);
     }
     channels.value = items;
+    channelDirectorySite.value = site;
+    for (const model of models.value) policy.dispatch_modes[model] ||= "off";
+    if (!models.value.includes(activeModel.value)) activeModel.value = models.value[0] || "";
     const pending = new Map(pendingGroups.value);
     const errors = new Map(groupErrors.value);
     for (const row of channels.value) {
@@ -600,6 +675,9 @@ async function loadChannelDirectory(site: string) {
   } catch {
     if (site !== siteID.value || generation !== channelDirectoryGeneration) return;
     channels.value = [];
+    channelDirectorySite.value = "";
+  } finally {
+    if (site === siteID.value && generation === channelDirectoryGeneration) channelDirectoryLoading.value = false;
   }
 }
 // 读取站点完整分组；旧 Server 不提供该接口时保留渠道快照兜底，不阻断分组编辑。
@@ -956,7 +1034,7 @@ async function save() {
     ElMessage.error(error instanceof Error ? error.message : "保存失败");
   } finally { saving.value = false; }
 }
-watch(() => filters.site_id, () => { groupDialogOpen.value = false; groupManagerOpen.value = false; groupFilterOpen.value = false; selectedGroupFilter.value = null; groupFilterSearch.value = ""; cancelGroupPolls(); channels.value = []; availableGroups.value = []; pendingGroups.value = new Map(); groupErrors.value = new Map(); channelDirectoryGeneration++; groupDirectoryGeneration++; void load(true); void watchChannelChanges(); });
+watch(() => filters.site_id, () => { groupDialogOpen.value = false; groupManagerOpen.value = false; groupFilterOpen.value = false; selectedGroupFilter.value = null; channelSwitchFilter.value = ""; cancelGroupPolls(); channels.value = []; channelDirectorySite.value = ""; channelDirectoryLoading.value = false; availableGroups.value = []; pendingGroups.value = new Map(); groupErrors.value = new Map(); channelDirectoryGeneration++; groupDirectoryGeneration++; void load(true); void watchChannelChanges(); });
 watch(siteID, () => { ratesReady.value = false; ratesError.value = ""; currentRates.value.clear(); void refreshCurrentRates(); });
 watch([eventModelFilter, eventRuleFilter, eventChannelQuery, eventDateRange, activeModel], () => { eventPage.value = 1; });
 onMounted(() => { void load(true); void watchChannelChanges(); void refreshCurrentRates(); refreshTimer = setInterval(() => void refreshRuntime(), 30000); ratesTimer = setInterval(() => { if (!document.hidden) void refreshCurrentRates(); }, 5000); });
@@ -970,37 +1048,86 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
   <el-tabs v-model="activeTab" class="tabs">
     <el-tab-pane label="运行概览" name="overview">
       <el-card shadow="never" class="workspace-card"><template v-if="mobile" #header><div class="head"><div class="title-line"><b v-if="!mobile">模型与渠道</b><div class="inline-metrics"><span>自动 <b>{{ counts.auto }}</b></span><span>观察 <b>{{ counts.observe }}</b></span><span>关闭 <b>{{ counts.off }}</b></span></div></div><el-dropdown v-if="mobile" trigger="click" placement="bottom-end"><el-button class="mobile-tuning-actions" aria-label="调权更多操作">操作 ···</el-button><template #dropdown><el-dropdown-menu><el-dropdown-item :disabled="!siteID" @click="groupManagerOpen = true">分组组合</el-dropdown-item><el-dropdown-item @click="helpOpen = true">使用说明</el-dropdown-item><el-dropdown-item :disabled="saving || channelsRefreshing" @click="refreshChannelsNow">刷新渠道信息</el-dropdown-item><el-dropdown-item divided :disabled="saving" @click="sync('weight')">初始化/刷新基础值</el-dropdown-item></el-dropdown-menu></template></el-dropdown><div v-else class="tools"><el-button :disabled="!siteID" @click="groupManagerOpen = true">分组组合</el-button><el-button @click="helpOpen=true">使用说明</el-button><el-button :loading="channelsRefreshing" :disabled="saving" @click="refreshChannelsNow">刷新渠道信息</el-button><el-button :loading="saving" @click="sync('weight')">初始化/刷新基础值</el-button></div></div></template>
-        <el-empty v-if="!models.length" description="还没有渠道基础值"><el-button type="primary" @click="sync('weight')">立即从 new-api 读取</el-button></el-empty>
+        <el-empty v-if="!models.length && !channelDirectoryLoading" description="还没有渠道基础值"><el-button type="primary" @click="sync('weight')">立即从 new-api 读取</el-button></el-empty>
+        <div v-else-if="!models.length" class="channel-directory-loading" role="status">正在读取渠道目录…</div>
         <div v-else class="model-workspace" :class="{'nav-collapsed':modelNavCollapsed}">
           <div v-if="mobile" class="mobile-model-picker"><el-select v-model="activeModel" filterable aria-label="选择模型" placeholder="选择模型"><el-option v-for="model in models" :key="model" :label="`${model} · ${modelChannelCount(model)} 个渠道`" :value="model" /></el-select></div>
           <aside class="model-nav">
             <div class="model-nav-tools"><el-input v-if="!modelNavCollapsed" v-model="modelQuery" clearable placeholder="搜索模型" aria-label="搜索模型"/><button type="button" class="model-nav-toggle" :aria-label="modelNavCollapsed ? '展开模型列表' : '收起模型列表'" :title="modelNavCollapsed ? '展开模型列表' : '收起模型列表'" :aria-expanded="!modelNavCollapsed" @click="modelNavCollapsed=!modelNavCollapsed"><el-icon aria-hidden="true"><ArrowRight v-if="modelNavCollapsed"/><ArrowLeft v-else/></el-icon></button></div>
             <div v-if="!modelNavCollapsed" class="model-mode-summary" aria-label="模型运行统计"><span>自动 <b>{{ counts.auto }}</b></span><span>观察 <b>{{ counts.observe }}</b></span><span>关闭 <b>{{ counts.off }}</b></span></div>
             <button v-if="modelNavCollapsed" class="model-nav-rail" type="button" :title="'当前模型：' + activeModel" aria-label="展开模型列表" @click="modelNavCollapsed=false">模型</button>
-            <div v-show="!modelNavCollapsed" class="model-list"><button v-for="model in visibleModels" :key="model" :class="{active:activeModel===model}" :title="model + ' · ' + modeText(model)" :aria-label="model + '，' + modeText(model)" @click="selectModel(model)"><span><b>{{ model }}</b><span class="model-secondary"><small>{{ bases.filter(x=>x.model_name===model).length }} 个渠道</small><span class="model-mode-text" :class="modelMode(model)">{{ modelMode(model) === 'auto' ? '自动' : modelMode(model) === 'observe' ? '观察' : '关闭' }}</span></span></span></button><el-empty v-if="!visibleModels.length" :image-size="48" description="没有匹配模型"/></div>
+            <div v-show="!modelNavCollapsed" class="model-list"><button v-for="model in visibleModels" :key="model" :class="{active:activeModel===model}" :title="model + ' · ' + modeText(model)" :aria-label="model + '，' + modeText(model)" @click="selectModel(model)"><span><b>{{ model }}</b><span class="model-secondary"><small>{{ modelChannelCount(model) }} 个渠道</small><span class="model-mode-text" :class="modelMode(model)">{{ modelMode(model) === 'auto' ? '自动' : modelMode(model) === 'observe' ? '观察' : '关闭' }}</span></span></span></button><el-empty v-if="!visibleModels.length" :image-size="48" description="没有匹配模型"/></div>
           </aside>
-          <section ref="detailElement" class="model-detail"><div class="model-head"><div><b v-if="!mobile">{{ activeModel }}</b><small v-if="!mobile">{{ activeRows.length }} 个渠道</small><small v-if="refreshError" class="stale">刷新失败：{{ refreshError }}</small><small v-else-if="evaluationStalled" class="stale">评估已停滞：最后成功于 {{ formatTime(lastEvaluationAt!) }}</small><small v-else-if="lastEvaluationAt">{{ mobile ? '评估 ' + formatTime(lastEvaluationAt).split(' ').pop() : '最近评估 ' + formatTime(lastEvaluationAt) + ' · 每 30 秒自动刷新' }}</small><small v-else-if="mobile">等待首次评估</small><TuningInfo label="实时负载统计"><p>负载更新：{{ ratesAsOf ? formatTime(ratesAsOf) : '—' }}</p><p>已覆盖的 60 秒负载，每 5 秒刷新；Agent 保持 30 秒采集。</p><p>统计区间：{{ ratesWindowStart ? formatTime(ratesWindowStart) : '—' }} 至 {{ ratesAsOf ? formatTime(ratesAsOf) : '—' }}（不含结束秒）</p><p>数据延迟 {{ ratesDelay }} 秒。容量输入 0 表示不限制。</p></TuningInfo></div><div class="channel-toolbar model-filter"><div class="channel-filters"><el-popover v-model:visible="groupFilterOpen" trigger="click" placement="bottom-start" role="dialog" aria-label="分组筛选" :width="360" popper-class="tuning-group-filter-popper"><template #reference><button type="button" class="group-filter-trigger" :class="{ active: selectedGroupFilter }" aria-label="按分组筛选" aria-haspopup="dialog" :aria-expanded="groupFilterOpen"><el-icon aria-hidden="true"><CirclePlus /></el-icon><span>分组</span><template v-if="groupFilterLabel"><span class="group-filter-divider" aria-hidden="true"></span><span class="group-filter-value">{{ groupFilterLabel }}</span></template></button></template><div class="group-filter-panel"><el-input v-model="groupFilterSearch" clearable placeholder="分组" aria-label="搜索分组"/><div class="group-filter-options" role="group" aria-label="分组筛选选项"><div class="group-filter-option"><el-checkbox :model-value="selectedGroupFilter?.kind === 'all'" @change="toggleGroupFilter(null)">所有分组</el-checkbox></div><div v-for="group in filteredGroupOptions" :key="group" class="group-filter-option"><el-checkbox :model-value="selectedGroupFilter?.kind === 'group' && selectedGroupFilter.name === group" @change="toggleGroupFilter(group)">{{ group }}</el-checkbox></div></div><p v-if="groupFilterSearch.trim() && !filteredGroupOptions.length" class="group-filter-empty">没有匹配分组</p><div v-if="selectedGroupFilter" class="group-filter-footer"><button type="button" @click="selectedGroupFilter = null">清除筛选</button></div></div></el-popover></div><span v-if="selectedGroupFilter" class="channel-filter-summary">匹配 {{ displayedRows.length }} / {{ activeRows.length }} 个渠道</span></div><el-radio-group v-if="activeModel" v-model="policy.dispatch_modes[activeModel]" size="small" @change="dirty=true"><el-radio-button value="off">关闭</el-radio-button><el-radio-button value="observe">只观察</el-radio-button><el-radio-button value="auto">自动执行</el-radio-button></el-radio-group></div>
+          <section ref="detailElement" class="model-detail">
+            <div class="model-head">
+              <div>
+                <b v-if="!mobile">{{ activeModel }}</b>
+                <small v-if="!mobile">{{ activeRows.length }} 个渠道</small>
+                <small v-if="refreshError" class="stale">刷新失败：{{ refreshError }}</small>
+                <small v-else-if="evaluationStalled" class="stale">评估已停滞：最后成功于 {{ formatTime(lastEvaluationAt!) }}</small>
+                <small v-else-if="lastEvaluationAt">{{ mobile ? '评估 ' + formatTime(lastEvaluationAt).split(' ').pop() : '最近评估 ' + formatTime(lastEvaluationAt) + ' · 每 30 秒自动刷新' }}</small>
+                <small v-else-if="mobile">等待首次评估</small>
+                <TuningInfo label="实时负载统计">
+                  <p>负载更新：{{ ratesAsOf ? formatTime(ratesAsOf) : '—' }}</p>
+                  <p>已覆盖的 60 秒负载，每 5 秒刷新；Agent 保持 30 秒采集。</p>
+                  <p>统计区间：{{ ratesWindowStart ? formatTime(ratesWindowStart) : '—' }} 至 {{ ratesAsOf ? formatTime(ratesAsOf) : '—' }}（不含结束秒）</p>
+                  <p>数据延迟 {{ ratesDelay }} 秒。容量输入 0 表示不限制。</p>
+                </TuningInfo>
+              </div>
+              <div class="channel-toolbar model-filter">
+                <el-radio-group v-if="activeModel" v-model="policy.dispatch_modes[activeModel]" size="small" @change="dirty=true">
+                  <el-radio-button value="off">关闭</el-radio-button>
+                  <el-radio-button value="observe">只观察</el-radio-button>
+                  <el-radio-button value="auto">自动执行</el-radio-button>
+                </el-radio-group>
+              </div>
+            </div>
             <el-alert v-if="ratesError" :title="ratesError" type="warning" :closable="false"/>
+            <div v-if="!mobile" class="desktop-channel-filters" role="group" aria-label="渠道筛选">
+              <TuningGroupFilter
+                v-model:open="groupFilterOpen"
+                :model-value="selectedGroupFilter"
+                :groups="groupOptions"
+                @select="toggleGroupFilter"
+                @clear="selectedGroupFilter = null"
+              />
+              <el-select v-model="channelSwitchFilter" aria-label="渠道开关状态筛选" placeholder="全部开关状态" class="channel-status-filter">
+                <el-option value="" label="全部开关状态"/>
+                <el-option value="enabled" label="已启用"/>
+                <el-option value="not_enabled" label="未启用"/>
+              </el-select>
+              <span class="channel-filter-summary">{{ selectedGroupFilter ? '匹配 ' : '' }}{{ displayedRows.length }} / {{ modelChannelRows.length }} 个渠道</span>
+            </div>
             <div v-if="mobile" class="mobile-tuning-list">
-              <div class="mobile-channel-filters"><el-input v-model="channelQuery" clearable aria-label="搜索渠道或分组" placeholder="搜索渠道 / ID / 分组" /><el-select v-model="channelStatusFilter" aria-label="渠道筛选" placeholder="全部渠道"><el-option value="" label="全部渠道"/><el-option value="attention" label="需关注"/><el-option value="changed" label="待调整"/></el-select></div>
+              <div class="mobile-channel-filters" role="group" aria-label="渠道筛选">
+                <TuningGroupFilter
+                  v-model:open="groupFilterOpen"
+                  :model-value="selectedGroupFilter"
+                  :groups="groupOptions"
+                  @select="toggleGroupFilter"
+                  @clear="selectedGroupFilter = null"
+                />
+                <el-select v-model="channelSwitchFilter" aria-label="渠道开关状态筛选" placeholder="全部开关状态"><el-option value="" label="全部开关状态"/><el-option value="enabled" label="已启用"/><el-option value="not_enabled" label="未启用"/></el-select>
+                <span v-if="selectedGroupFilter" class="channel-filter-summary">匹配 {{ displayedRows.length }} / {{ activeRows.length }} 个渠道</span>
+              </div>
               <el-empty v-if="!displayedRows.length" description="没有匹配渠道" />
               <article v-for="row in displayedRows.slice(0,mobileRowCount)" :key="channelRowKey(row)" class="mobile-tuning-card">
-                <header><b>{{ row.channel_name }} <small>#{{ row.channel_id }}</small></b><span :class="rowStatus(row).kind">{{ rowStatus(row).label || '参与评估' }}</span></header>
-                <button class="priority-line" type="button" :disabled="saving || priorityLocked(row)" @click="mobileEditRow = row"><span>线上优先级 <b>{{ row.current_priority }}</b><small v-if="priorityDrafts.has(row.channel_id)"> → {{ displayedPriority(row) }} 待保存</small></span><span>编辑 ›</span></button>
+                <header><b>{{ row.channel_name }} <small>#{{ row.channel_id }}</small><small class="channel-switch-badge" :class="channelStatusClass(row)" :title="channelStatusTitle(row)">{{ channelStatusLabel(row) }}</small></b><span :class="rowStatus(row).kind">{{ rowStatus(row).label || '参与评估' }}</span></header>
+                <button class="priority-line" type="button" :disabled="saving || isDirectoryOnlyRow(row) || priorityLocked(row)" @click="openMobileEdit(row)"><span>线上优先级 <b>{{ row.current_priority }}</b><small v-if="priorityDrafts.has(row.channel_id)"> → {{ displayedPriority(row) }} 待保存</small></span><span>{{ isDirectoryOnlyRow(row) ? '只读' : '编辑 ›' }}</span></button>
                 <button class="mobile-groups" type="button" :disabled="groupSaving" @click="openGroupEditor(groupEditorRowFor(row))"><span>分组</span><span class="group-tags"><span v-for="group in visibleChannelGroups(row.group_name)" :key="group">{{ group }}</span><span v-if="hiddenChannelGroupCount(row.group_name)">+{{ hiddenChannelGroupCount(row.group_name) }}</span><span v-if="!row.group_name">未设置</span></span><span>编辑 ›</span></button>
                 <p v-if="pendingGroups.has(row.channel_id) || groupErrors.has(row.channel_id)" class="warning">{{ groupErrors.get(row.channel_id) || '分组等待执行' }}</p>
-                <dl class="mobile-weight-grid"><div><dt>基础权重</dt><dd>{{ row.base_weight }}</dd></div><div><dt>计算参考</dt><dd>{{ calculatedWeight(row) ?? '—' }}</dd></div><div><dt>线上权重</dt><dd>{{ row.current_weight }}</dd></div></dl>
-                <div class="mobile-capacity"><TuningCapacityMetric metric="TPM" :channel="row.channel_name" :model-value="row.max_tpm" :disabled="saving || loading || !siteID" :persist="value => saveCapacity(row, 'max_tpm', value)" :current="currentRateFor(row)?.tpm" :modified="fieldChanged(row,'max_tpm')"/><TuningCapacityMetric metric="RPM" :channel="row.channel_name" :model-value="row.max_rpm" :disabled="saving || loading || !siteID" :persist="value => saveCapacity(row, 'max_rpm', value)" :current="currentRateFor(row)?.rpm" :modified="fieldChanged(row,'max_rpm')"/></div>
+                <dl class="mobile-weight-grid"><div><dt>基础权重</dt><dd>{{ isDirectoryOnlyRow(row) ? '—' : row.base_weight }}</dd></div><div><dt>计算参考</dt><dd>{{ calculatedWeight(row) ?? '—' }}</dd></div><div><dt>线上权重</dt><dd>{{ row.current_weight }}</dd></div></dl>
+                <div v-if="!isDirectoryOnlyRow(row)" class="mobile-capacity"><TuningCapacityMetric metric="TPM" :channel="row.channel_name" :model-value="row.max_tpm" :disabled="saving || loading || !siteID" :persist="value => saveCapacity(row, 'max_tpm', value)" :current="currentRateFor(row)?.tpm" :modified="fieldChanged(row,'max_tpm')"/><TuningCapacityMetric metric="RPM" :channel="row.channel_name" :model-value="row.max_rpm" :disabled="saving || loading || !siteID" :persist="value => saveCapacity(row, 'max_rpm', value)" :current="currentRateFor(row)?.rpm" :modified="fieldChanged(row,'max_rpm')"/></div><div v-else class="mobile-capacity read-only-capacity">TPM — · RPM —</div>
                 <details><summary>查看计算与状态</summary><p>{{ evaluationText(row) }}</p><p>安全限制后拟执行：{{ stateFor(row)?.proposed_weight ?? '—' }}</p><p v-if="limitReason(row)">{{ limitReason(row) }}</p><pre>{{ factorExplanation(row) }}</pre></details>
-                <el-button type="primary" plain :disabled="saving" @click="mobileEditRow = row">编辑基础值与优先级</el-button>
+                <el-button v-if="!isDirectoryOnlyRow(row)" type="primary" plain :disabled="saving" @click="mobileEditRow = row">编辑基础值与优先级</el-button>
               </article>
               <ScrollLoadMore :loading="loading" :has-more="mobileRowCount < displayedRows.length" @load="mobileRowCount += 20" />
             </div>
             <el-table class="channel-table" scrollbar-always-on :span-method="coefficientSpan" :data="displayedRows" :row-key="channelRowKey" size="small" height="100%" empty-text="没有匹配渠道">
               <el-table-column label="渠道" :width="tableColumns.channel" align="left" fixed><template #default="{row}">
 
-                <div class="channel-heading"><span class="channel-key">#{{ row.channel_id }} ·</span><b class="channel-name" :title="row.channel_name">{{ row.channel_name }}</b></div>
-                <div class="channel-meta"><TuningCapacityMetric metric="TPM" :channel="row.channel_name" :model-value="row.max_tpm" :disabled="saving || loading || !siteID" :persist="value => saveCapacity(row, 'max_tpm', value)" :current="currentRateFor(row)?.tpm" :modified="fieldChanged(row,'max_tpm')"/><TuningCapacityMetric metric="RPM" :channel="row.channel_name" :model-value="row.max_rpm" :disabled="saving || loading || !siteID" :persist="value => saveCapacity(row, 'max_rpm', value)" :current="currentRateFor(row)?.rpm" :modified="fieldChanged(row,'max_rpm')"/></div>
+                <div class="channel-heading"><span class="channel-key">#{{ row.channel_id }} ·</span><b class="channel-name" :title="row.channel_name">{{ row.channel_name }}</b><small class="channel-switch-badge" :class="channelStatusClass(row)" :title="channelStatusTitle(row)">{{ channelStatusLabel(row) }}</small></div>
+                <div v-if="!isDirectoryOnlyRow(row)" class="channel-meta"><TuningCapacityMetric metric="TPM" :channel="row.channel_name" :model-value="row.max_tpm" :disabled="saving || loading || !siteID" :persist="value => saveCapacity(row, 'max_tpm', value)" :current="currentRateFor(row)?.tpm" :modified="fieldChanged(row,'max_tpm')"/><TuningCapacityMetric metric="RPM" :channel="row.channel_name" :model-value="row.max_rpm" :disabled="saving || loading || !siteID" :persist="value => saveCapacity(row, 'max_rpm', value)" :current="currentRateFor(row)?.rpm" :modified="fieldChanged(row,'max_rpm')"/></div><div v-else class="channel-meta read-only-capacity">TPM — · RPM —</div>
                 <small v-if="pendingGroups.has(row.channel_id) && !groupErrors.has(row.channel_id)" class="warning">分组等待执行</small><small v-if="groupErrors.has(row.channel_id)" class="danger" :title="groupErrors.get(row.channel_id)">分组执行失败</small>
               </template></el-table-column>
               <el-table-column label="分组" :width="tableColumns.groups" align="center"><template #default="{row}"><button type="button" class="group-cell-trigger" :aria-label="'编辑 ' + row.channel_name + ' 的分组'" :title="groupCellTitle(row.group_name)" @click="openGroupEditor(groupEditorRowFor(row))"><span class="group-tags"><span v-for="group in splitChannelGroups(row.group_name)" :key="group">{{ group }}</span><span v-if="!splitChannelGroups(row.group_name).length">设置分组</span></span></button></template></el-table-column>
@@ -1014,13 +1141,13 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
                 </template></el-table-column>
               </el-table-column>
               <el-table-column label="权重" align="center">
-                <el-table-column label="基础" :width="tableColumns.input" align="center"><template #default="{row}"><el-input-number v-model="row.base_weight" :class="{modified:fieldChanged(row,'base_weight')}" :aria-label="row.channel_name + ' 基础权重'" :min="0" :controls="false" size="small" @change="dirty=true"/></template></el-table-column>
-                <el-table-column label="计算" :width="tableColumns.number" align="center"><template #default="{row}"><div class="weight-calculated"><TuningInfo :trigger-text="String(calculatedWeight(row) ?? '—')" :class="{accent: calculatedWeight(row) !== null && calculatedWeight(row) !== row.current_weight}" :key="channelRowKey(row)" :label="'本轮计算 · ' + row.channel_name" :width="500">
+                <el-table-column label="基础" :width="tableColumns.input" align="center"><template #default="{row}"><el-input-number v-if="!isDirectoryOnlyRow(row)" v-model="row.base_weight" :class="{modified:fieldChanged(row,'base_weight')}" :aria-label="row.channel_name + ' 基础权重'" :min="0" :controls="false" size="small" @change="dirty=true"/><span v-else class="tuning-readonly-value">—</span></template></el-table-column>
+                <el-table-column label="计算" :width="tableColumns.number" align="center"><template #default="{row}"><div class="weight-calculated"><TuningInfo v-if="!isDirectoryOnlyRow(row)" :trigger-text="String(calculatedWeight(row) ?? '—')" :class="{accent: calculatedWeight(row) !== null && calculatedWeight(row) !== row.current_weight}" :key="channelRowKey(row)" :label="'本轮计算 · ' + row.channel_name" :width="500">
                     <template v-if="stateFor(row)"><p class="calculation-formula">{{ originalBase(row) }} × {{ factor(stateFor(row)?.k_speed) }} × {{ factor(stateFor(row)?.k_otps) }} × {{ factor(stateFor(row)?.k_cache) }} × {{ factor(stateFor(row)?.k_error) }}</p><p class="formula-caption">基础 × {{ speedLabel(row) }} × 输出 × 缓存 × 错误</p><p>{{ evaluationText(row) }}</p><p v-if="displayedSpeedFactor(row) === null && calculatedWeight(row) !== null" class="formula-caption">参考值使用接口最近保留的系数；速度当前不可用于本轮评估，此处不代表本轮重新测得。</p><p v-if="speedLabel(row).includes('替代')">TTFT 不足，使用本轮 OTPS；输出系数参与两次。</p><div class="evidence-pairs"><span>窗口样本 <b>{{ sampleText(row) }}</b></span><span>TTFT 有效 <b>{{ stateFor(row)?.speed_sample_count ?? 0 }}</b></span><span>输出有效 <b>{{ stateFor(row)?.otps_sample_count ?? 0 }}</b></span><span>重试排除 <b>{{ stateFor(row)?.speed_retry_count ?? 0 }}</b></span></div><p>公式目标：<b>{{ calculatedWeight(row) ?? '—' }}</b><small>（按最近返回系数与已保存倍率边界推算；仅窗口不足或基础权重为0时不展示，不代表会执行）</small></p><p>安全限制后拟执行：<b>{{ stateFor(row)?.proposed_weight }}</b> · 当前：{{ row.current_weight }}</p><p v-if="fieldChanged(row, 'base_weight')" class="warning">基础值有未保存修改；本轮结果仍对应上次评估。</p><p v-if="limitReason(row)" class="limit-note">{{ limitReason(row) }}</p><details class="full-evidence"><summary>完整指标与计算依据</summary><pre class="factor-explanation">{{ factorExplanation(row) }}</pre></details></template><p v-else>等待首次评估，尚无计算数据。</p>
-                  </TuningInfo><el-tooltip v-if="limitReason(row)" :content="limitReason(row)" placement="top"><button class="status-icon warning limit-icon" :aria-label="limitReason(row)"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 3h12M10 17V7m-4 4 4-4 4 4"/></svg></button></el-tooltip></div></template></el-table-column>
+                  </TuningInfo><span v-else class="tuning-readonly-value">未参与调权</span><el-tooltip v-if="limitReason(row)" :content="limitReason(row)" placement="top"><button class="status-icon warning limit-icon" :aria-label="limitReason(row)"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 3h12M10 17V7m-4 4 4-4 4 4"/></svg></button></el-tooltip></div></template></el-table-column>
                 <el-table-column label="线上" :width="tableColumns.number" align="center"><template #default="{row}"><span class="current-weight">{{ row.current_weight }}</span></template></el-table-column>
               </el-table-column>
-              <el-table-column label="优先级" :width="tableColumns.priority" align="center"><template #default="{row}"><span :title="'调权中心保存的优先级；线上当前为 ' + row.current_priority + '。自动模式会纠正线上差异，修改后保存同步。'"><el-input-number :model-value="displayedPriority(row)" :class="{modified:priorityDrafts.has(row.channel_id)}" :aria-label="row.channel_name + ' 优先级'" :disabled="saving" :min="0" :precision="0" :controls="false" size="small" @update:model-value="editPriority(row, $event)"/></span></template></el-table-column>
+              <el-table-column label="优先级" :width="tableColumns.priority" align="center"><template #default="{row}"><span v-if="!isDirectoryOnlyRow(row)" :title="'调权中心保存的优先级；线上当前为 ' + row.current_priority + '。自动模式会纠正线上差异，修改后保存同步。'"><el-input-number :model-value="displayedPriority(row)" :class="{modified:priorityDrafts.has(row.channel_id)}" :aria-label="row.channel_name + ' 优先级'" :disabled="saving" :min="0" :precision="0" :controls="false" size="small" @update:model-value="editPriority(row, $event)"/></span><span v-else class="tuning-readonly-value">{{ row.current_priority }}</span></template></el-table-column>
 
             </el-table>
             <div class="channel-footer">{{ displayedRows.length }} 个渠道<span>点击 TPM / RPM 编辑上限</span></div>
@@ -1081,7 +1208,7 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
 
 .page{--tuning-ink:var(--ct-ink);--tuning-muted:var(--ct-ink-3);color:var(--tuning-ink);display:grid;gap:14px;padding-bottom:0}
 .tabs>.el-tabs__header{margin:0}
-.head,.title-line,.tools,.model-head,.channel-toolbar,.channel-filters{display:flex;align-items:center;gap:12px}
+.head,.title-line,.tools,.model-head,.channel-toolbar{display:flex;align-items:center;gap:12px}
 .head,.model-head,.channel-toolbar{justify-content:space-between}
 .head>div:first-child{display:flex;align-items:center;gap:8px}
 .head b{font-size:14px}
@@ -1108,32 +1235,28 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
 .model-head small{font-size:11px;color:var(--ct-ink-3)}
 .model-head .stale{color:var(--ct-crit)}
 .channel-toolbar{padding:8px 10px;gap:10px;flex-wrap:wrap}
-.channel-filters{gap:8px}
-.group-filter-trigger{display:inline-flex;align-items:center;gap:6px;min-height:32px;padding:0 10px;border:1px dashed var(--ct-line-strong);border-radius:5px;background:var(--ct-surface);color:var(--ct-ink-2);font:inherit;font-size:12px;cursor:pointer}
-.group-filter-trigger:hover,.group-filter-trigger.active{background:var(--ct-surface-2);color:var(--ct-ink)}
-.group-filter-trigger:focus-visible{outline:2px solid var(--ct-accent);outline-offset:2px}
-.group-filter-divider{height:16px;border-left:1px solid var(--ct-line-strong);margin:0 2px}
-.group-filter-value{max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:1px 5px;border-radius:3px;background:var(--ct-surface-2);font-size:11px}
 .channel-filter-summary{font-size:11px;color:var(--ct-ink-3);white-space:nowrap}
-:global(.tuning-group-filter-popper.el-popover){max-width:calc(100vw - 24px);padding:10px;border-color:var(--ct-line);background:var(--ct-surface);color:var(--ct-ink);box-shadow:0 8px 24px rgb(0 0 0 / 18%)}
-:global(.tuning-group-filter-popper .group-filter-panel){display:grid;gap:8px}
-:global(.tuning-group-filter-popper .el-input__wrapper){background:var(--ct-surface-2);box-shadow:0 0 0 1px var(--ct-line) inset}
-:global(.tuning-group-filter-popper .group-filter-options){max-height:min(288px,calc(100vh - 160px));overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain;padding:2px 0}
-:global(.tuning-group-filter-popper .group-filter-option){display:flex;align-items:center;min-height:36px;padding:0 8px;border-radius:4px;cursor:pointer}
-:global(.tuning-group-filter-popper .group-filter-option:hover){background:var(--ct-surface-2)}
-:global(.tuning-group-filter-popper .group-filter-option .el-checkbox){width:100%;height:auto;margin:0}
-:global(.tuning-group-filter-popper .group-filter-option .el-checkbox__label){min-width:0;overflow-wrap:anywhere;color:var(--ct-ink-2);font-size:13px}
-:global(.tuning-group-filter-popper .group-filter-empty){margin:4px 0;text-align:center;color:var(--ct-ink-3);font-size:12px}
-:global(.tuning-group-filter-popper .group-filter-footer){border-top:1px solid var(--ct-line);padding-top:6px;text-align:center}
-:global(.tuning-group-filter-popper .group-filter-footer button){border:0;background:transparent;color:var(--ct-ink-3);font:inherit;font-size:12px;cursor:pointer}
-:global(.tuning-group-filter-popper .group-filter-footer button:hover){color:var(--ct-accent)}
+.desktop-channel-filters{display:flex;min-width:0;align-items:center;gap:8px;flex-wrap:wrap;padding:12px 10px 8px}
+.desktop-channel-filters .channel-status-filter{width:188px}
+.desktop-channel-filters :deep(.tuning-group-filter){width:210px}
+.mobile-channel-filters{display:grid;grid-template-columns:minmax(0,1fr);align-items:center;gap:8px}
+.mobile-channel-filters :deep(.el-select){width:100%;min-width:0}
+.mobile-channel-filters :deep(.tuning-group-filter){width:100%;max-width:100%}
+.channel-directory-loading{display:flex;min-height:180px;align-items:center;justify-content:center;color:var(--ct-ink-3);font-size:13px}
 .load-time{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--ct-ink-3)}
 .channel-table{flex:1;min-height:0;width:100%;font-variant-numeric:tabular-nums}
 .channel-table :deep(th.el-table__cell),.event-history-card :deep(th.el-table__cell){background:var(--ct-surface);color:var(--ct-ink-3);font-weight:500;height:38px;border-bottom:1px solid var(--ct-line)}
 .channel-table :deep(td.el-table__cell){padding:8px 0;border-bottom-color:var(--ct-line)}
 .channel-table :deep(.cell){padding:0 10px}
 .channel-name{line-height:20px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px;color:var(--ct-ink-2);font-weight:400}
-.channel-heading{display:flex;align-items:baseline;gap:6px;min-width:0;line-height:20px}.channel-heading .channel-name{min-width:0}.channel-key{flex-shrink:0;font-size:12px;line-height:20px;color:var(--ct-ink-3)}
+.channel-heading{display:flex;align-items:baseline;gap:6px;min-width:0;line-height:20px}.channel-heading .channel-name{min-width:0;flex:1 1 auto}.channel-key{flex-shrink:0;font-size:12px;line-height:20px;color:var(--ct-ink-3)}
+.channel-switch-badge{display:inline-flex;flex:0 0 auto;align-items:center;min-height:18px;padding:0 5px;border-radius:4px;font-size:10px;font-weight:500;line-height:16px;white-space:nowrap}
+.channel-switch-badge.is-enabled{background:var(--ct-ok-weak);color:var(--ct-ok)}
+.channel-switch-badge.is-disabled{background:var(--ct-surface-2);color:var(--ct-ink-3)}
+.channel-switch-badge.is-auto-disabled{background:var(--ct-warn-weak);color:var(--ct-warn)}
+.channel-switch-badge.is-unknown{background:var(--ct-surface-2);color:var(--ct-ink-3)}
+.read-only-capacity{color:var(--ct-ink-3);font-size:11px;line-height:18px}
+.tuning-readonly-value{display:inline-block;min-width:44px;color:var(--ct-ink-2);font-variant-numeric:tabular-nums}
 .channel-meta{display:flex;align-items:center;gap:10px;white-space:nowrap;font-size:11px;color:var(--ct-ink-3);margin-top:3px}
 .group-cell-trigger{width:100%;max-width:100%;min-width:0;border:1px solid transparent;border-radius:4px;padding:0 3px;background:transparent;cursor:pointer;color:var(--ct-ink-3)}
 .group-cell-trigger:hover{background:var(--ct-accent-weak);border-color:var(--ct-line)}
@@ -1385,7 +1508,6 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
 .model-head .evaluation-time{flex-basis:auto;padding-left:10px;border-left:1px solid var(--ct-line);white-space:normal}
 .model-head>div:first-child{flex:1 1 460px;gap:6px 10px}
 .model-head .model-filter{flex:0 1 auto;min-width:0;padding:0;gap:8px;justify-content:flex-end}
-.model-head .model-filter .channel-filters{min-width:0}
 .model-head :deep(.el-radio-group){flex-shrink:0;margin-left:auto}
 @container(max-width:680px){
  .overview-actions{position:static;justify-content:flex-end;padding:8px 10px;background:var(--ct-surface);border:1px solid var(--ct-line);border-bottom:0;border-radius:8px 8px 0 0;flex-wrap:wrap}

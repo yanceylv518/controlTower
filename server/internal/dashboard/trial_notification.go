@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"context"
+	"controltower/internal/notificationtime"
 	"controltower/server/internal/storage"
 	"controltower/server/internal/voicealert"
 	"fmt"
@@ -39,7 +40,7 @@ func TrialMessageSender(store NotificationStore) func(context.Context, voicealer
 			if e.Log.Type != 2 {
 				result = "失败调用，请关注接入情况"
 			}
-			alert := storage.Alert{ID: e.ID, InstanceID: e.Site, RuleKey: "trial_started", Severity: "info", Status: "firing", Title: e.Customer + "已开始接口测试", Summary: fmt.Sprintf("站点：%s；客户：%s；账户：#%d；Key：#%d；模型：%s；调用结果：%s；调用时间：%s；请进入测试跟进查看。", e.SiteName, e.Customer, e.Log.UserID, e.Log.TokenID, e.Log.Model, result, e.Log.CreatedAt.Local().Format("2006-01-02 15:04:05")), LastSeenAt: e.DetectedAt}
+			alert := storage.Alert{ID: e.ID, InstanceID: e.Site, RuleKey: "trial_started", Severity: "info", Status: "firing", Title: e.Customer + "已开始接口测试", Summary: fmt.Sprintf("站点：%s；客户：%s；账户：#%d；Key：#%d；模型：%s；调用结果：%s；调用时间：%s；请进入测试跟进查看。", e.SiteName, e.Customer, e.Log.UserID, e.Log.TokenID, e.Log.Model, result, notificationtime.Format(e.Log.CreatedAt)), LastSeenAt: e.DetectedAt}
 			delivery := sendWebhookNotificationAttempt(http.Client{Timeout: 3 * time.Second}, alert, ch, time.Now().UTC(), 1, 1)
 			if delivery.Status == "sent" {
 				sent++

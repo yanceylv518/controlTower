@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -9,8 +10,69 @@ import (
 	"testing"
 	"time"
 
+	"controltower/server/internal/ingest"
 	"controltower/server/internal/storage"
+	"controltower/server/internal/voicealert"
 )
+
+func TestRobotNotificationTimesUseBeijingTimezone(t *testing.T) {
+	previous := time.Local
+	t.Cleanup(func() { time.Local = previous })
+	at := time.Date(2026, 12, 31, 18, 30, 0, 0, time.UTC)
+	for _, local := range []*time.Location{time.UTC, time.FixedZone("host", -7*60*60)} {
+		time.Local = local
+		for _, source := range []*time.Location{time.UTC, time.FixedZone("source", 8*60*60)} {
+			for _, channel := range []string{"wecom", "dingtalk"} {
+				for _, rule := range []string{"high_cpu", "high_memory", "high_disk", "agent_offline", "recent_errors", "user_low_balance"} {
+					alert := testAlert()
+					alert.RuleKey, alert.LastSeenAt = rule, at.In(source)
+					content := notificationPayload(alert, storage.NotificationChannel{ChannelType: channel})["text"].(map[string]string)["content"]
+					if !strings.Contains(content, "2027-01-01 02:30:00（北京时间 UTC+8）") {
+						t.Fatalf("%s/%s host=%s source=%s: wrong notification time: %s", rule, channel, local, source, content)
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestTrialNotificationUsesBeijingCallAndDetectionTimes(t *testing.T) {
+	previous := time.Local
+	time.Local = time.UTC
+	t.Cleanup(func() { time.Local = previous })
+	for _, channel := range []string{"wecom", "dingtalk"} {
+		t.Run(channel, func(t *testing.T) {
+			var content string
+			hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var payload struct {
+					Text struct{ Content string } `json:"text"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+					t.Error(err)
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				content = payload.Text.Content
+				_, _ = w.Write([]byte(`{"errcode":0}`))
+			}))
+			defer hook.Close()
+			store := ingest.NewMemoryStore()
+			if err := store.UpsertNotificationChannel(storage.NotificationChannel{ID: "trial", SiteID: "site", ChannelType: channel, WebhookURL: hook.URL, RuleKeys: []string{"trial_started"}, Enabled: true}); err != nil {
+				t.Fatal(err)
+			}
+			at := time.Date(2026, 12, 31, 18, 30, 0, 0, time.UTC)
+			status, err := TrialMessageSender(store)(context.Background(), voicealert.TrialEvent{ID: "event", Site: "site", Customer: "客户", Log: voicealert.TrialLog{Type: 2, CreatedAt: at}, DetectedAt: at.Add(time.Minute)})
+			if err != nil || status != "sent" {
+				t.Fatalf("send status=%s error=%v", status, err)
+			}
+			for _, want := range []string{"调用时间：2027-01-01 02:30:00（北京时间 UTC+8）", "时间: 2027-01-01 02:31:00（北京时间 UTC+8）"} {
+				if !strings.Contains(content, want) {
+					t.Fatalf("missing %q in %s", want, content)
+				}
+			}
+		})
+	}
+}
 
 func testAlert() storage.Alert {
 	return storage.Alert{
@@ -103,6 +165,9 @@ func TestSendGenericWebhookNotificationKeepsJSONPayload(t *testing.T) {
 	}
 	if received["alert_id"] != "alert-1" || received["rule_key"] != "recent_errors" {
 		t.Fatalf("unexpected webhook payload: %v", received)
+	}
+	if received["last_seen_at"] != testAlert().LastSeenAt.Format(time.RFC3339) {
+		t.Fatalf("generic webhook timestamp changed: %v", received["last_seen_at"])
 	}
 }
 

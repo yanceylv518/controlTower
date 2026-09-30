@@ -14,6 +14,7 @@ import (
 
 	"controltower/agent/internal/errorclass"
 	"controltower/agent/internal/logcollector"
+	"controltower/internal/notificationtime"
 )
 
 const (
@@ -359,18 +360,18 @@ func (n *Notifier) alertContent(state *dimensionState, rule string, matches, win
 	if state.lastErrorSummary != "" {
 		content += "\n最新错误: " + state.lastErrorSummary
 	}
-	content += "\n时间: " + now.Local().Format("2006-01-02 15:04:05")
+	content += "\n时间: " + notificationtime.Format(now)
 	return content
 }
 
 func (n *Notifier) remindContent(state *dimensionState, rule string, matches, windowCount int, rs *ruleState, now time.Time) string {
 	title := strings.TrimSuffix(state.title, "激增") + "持续"
 	content := fmt.Sprintf("[\u544a\u8b66] 【Control Tower 告警】%s\n实例: %s\n%s 自 %s 起持续异常，累计 %d 条错误，最近 %d 条请求中 %d 条失败",
-		title, n.instanceID, state.label, rs.episodeStartAt.Local().Format("01-02 15:04"), rs.episodeTotal, windowCount, matches)
+		title, n.instanceID, state.label, notificationtime.Format(rs.episodeStartAt), rs.episodeTotal, windowCount, matches)
 	if state.lastErrorSummary != "" {
 		content += "\n最新错误: " + state.lastErrorSummary
 	}
-	content += "\n时间: " + now.Local().Format("2006-01-02 15:04:05")
+	content += "\n时间: " + notificationtime.Format(now)
 	return content
 }
 
