@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"math/big"
 	"strings"
 	"time"
@@ -53,6 +54,11 @@ type UserPageSource interface {
 }
 type UpstreamPageSource interface {
 	DetailedChannelsLogsPage(context.Context, string, []int64, time.Time, time.Time, LogCursor, int) ([]PagedLogRecord, error)
+}
+// UpstreamModelPageSource can apply the job's frozen channel/model bindings
+// before fetching full log records. Sources without it retain local filtering.
+type UpstreamModelPageSource interface {
+	DetailedChannelsModelsLogsPage(context.Context, string, []int64, map[int64][]string, time.Time, time.Time, LogCursor, int) ([]PagedLogRecord, error)
 }
 type statementDiscountStore interface {
 	ListBillingStatementDiscounts(context.Context, string) ([]StatementDiscount, error)
@@ -407,20 +413,28 @@ func (r JobRunner) Run(ctx context.Context) error {
 }
 
 func (r JobRunner) RunOnce(ctx context.Context) (bool, error) {
-	job, step, ok, err := r.Store.ClaimBillingStep(ctx)
+	// Publish a finished day before reading another day's source data. This
+	// bounds staged files and makes completed bills available immediately.
+	job, ok, err := r.Store.ClaimBillingPublish(ctx)
 	if err != nil {
 		return false, err
 	}
-	if !ok {
-		job, ok, err = r.Store.ClaimBillingPublish(ctx)
-		if err != nil || !ok {
-			return ok, err
+	if ok {
+		if job.Status != "no_data" {
+			if err = r.publishJob(ctx, job); err != nil {
+				_ = r.Store.FailBillingPublish(ctx, job, err)
+			}
 		}
-		if err = r.publishJob(ctx, job); err != nil {
-			_ = r.Store.FailBillingPublish(ctx, job, err)
+		if err == nil && r.OnIdle != nil {
+			r.OnIdle()
 		}
 		return true, nil
 	}
+	job, step, ok, err := r.Store.ClaimBillingStep(ctx)
+	if err != nil || !ok {
+		return ok, err
+	}
+
 	if err = r.processStep(ctx, job, step); err != nil {
 		_ = r.Store.FailBillingStep(ctx, job, step, err)
 		return true, nil
@@ -429,6 +443,13 @@ func (r JobRunner) RunOnce(ctx context.Context) (bool, error) {
 }
 
 func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error {
+	started := time.Now()
+	var sourceTime time.Duration
+	var readCalls, readRows int64
+	defer func() {
+		log.Printf("billing stage=read_settle job=%s site=%s calls=%d rows=%d source_wait_read_ms=%d elapsed_ms=%d", job.ID, job.InstanceID, readCalls, readRows, sourceTime.Milliseconds(), time.Since(started).Milliseconds())
+	}()
+
 	if source, ok := r.Source.(interface{ ForBillingJob(Job) PageSource }); ok {
 		r.Source = source.ForBillingJob(job)
 	}
@@ -505,6 +526,10 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 	}
 	for {
 		logs, e := ReadPageWithRetry(ctx, fmt.Sprintf("site=%s page=generate", job.InstanceID), cursor, func() ([]PagedLogRecord, error) {
+			readCalls++
+			readStarted := time.Now()
+			defer func() { sourceTime += time.Since(readStarted) }()
+
 			if job.UserID > 0 {
 				source, ok := r.Source.(UserPageSource)
 				if !ok {
@@ -513,6 +538,9 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 				return source.DetailedLogsPage(ctx, job.InstanceID, job.UserID, step.From, step.To, cursor, BillingPageSize)
 			}
 			if job.JobType == "upstream_statement" {
+				if source, ok := r.Source.(UpstreamModelPageSource); ok && len(upstreamModels) > 0 {
+					return source.DetailedChannelsModelsLogsPage(ctx, job.InstanceID, upstreamChannelIDs, upstreamModels, step.From, step.To, cursor, BillingPageSize)
+				}
 				source, ok := r.Source.(UpstreamPageSource)
 				if !ok {
 					return nil, fmt.Errorf("billing upstream page source unavailable")
@@ -521,6 +549,7 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 			}
 			return r.Source.LogsPage(ctx, job.InstanceID, step.From, step.To, cursor, BillingPageSize)
 		})
+		readRows += int64(len(logs))
 		if e != nil {
 			return e
 		}
@@ -584,6 +613,7 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 			}
 			displayPrompt, displayCompletion, media := statementDisplayUsage(log)
 			attachHistoricalPrices(job, log, quotaPerUnit, &verification.Charge)
+			attachSimplePrices(job, log, quotaPerUnit, &verification.Charge)
 			if job.UsageVersion == 0 {
 				displayPrompt, displayCompletion = nullableInt64(log.PromptTokens), nullableInt64(log.CompletionTokens)
 			}
@@ -693,6 +723,11 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 }
 
 func (r JobRunner) publishJob(ctx context.Context, job Job) error {
+	started := time.Now()
+	defer func() {
+		log.Printf("billing stage=publish job=%s site=%s elapsed_ms=%d", job.ID, job.InstanceID, time.Since(started).Milliseconds())
+	}()
+
 	money, moneyErr := r.jobMoneySnapshot(ctx, job)
 	if moneyErr != nil {
 		return moneyErr

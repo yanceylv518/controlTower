@@ -129,7 +129,7 @@ func TestSettlementLegacyDetailsPreserveCurrencyAndEmptyRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = WriteUserDailyWorkbook(original, job, UserDailyFile{}, []RequestDetail{{CreatedUnix: time.Now().Unix(), RequestID: "=1+1", ModelName: "m", TokenName: "t", CompletionTokens: 0, MultimediaUsage: MultimediaUsage{ImageInputTokens: 513, ImageOutputTokens: 7, AudioInputTokens: 31, AudioOutputTokens: 11}, EmptyOutput: true, Charge: LogCharge{Total: "1.25"}}})
+	err = WriteUserDailyWorkbook(original, job, UserDailyFile{}, []RequestDetail{{CreatedUnix: time.Now().Unix(), RequestID: "=1+1", ModelName: "m", TokenName: "t", CompletionTokens: 0, MultimediaUsage: MultimediaUsage{ImageInputTokens: 513, ImageOutputTokens: 7, AudioInputTokens: 31, AudioOutputTokens: 11}, EmptyOutput: true, Charge: LogCharge{Total: "1.25", UnitPrices: UnitPrices{"输入|2": true, "输出|8": true}}}})
 	original.Close()
 	if err != nil {
 		t.Fatal(err)
@@ -149,7 +149,7 @@ func TestSettlementLegacyDetailsPreserveCurrencyAndEmptyRows(t *testing.T) {
 	}
 	defer reader.Close()
 	rows, _, err := reader.Page(context.Background(), SettlementDetailFilter{}, 0, 100)
-	if err != nil || len(rows) != 1 || rows[0].Amount != "9.000000000000" || rows[0].Output != "0" || rows[0].ImageInput != "513" || rows[0].ImageOutput != "7" || rows[0].AudioInput != "31" || rows[0].AudioOutput != "11" {
+	if err != nil || len(rows) != 1 || rows[0].UnitPrice != "输入 14.4；输出 57.6" || rows[0].Amount != "9.000000000000" || rows[0].Output != "0" || rows[0].ImageInput != "513" || rows[0].ImageOutput != "7" || rows[0].AudioInput != "31" || rows[0].AudioOutput != "11" {
 		t.Fatal("reconverted currency or removed empty output", rows, err)
 	}
 	var output bytes.Buffer
@@ -218,13 +218,13 @@ func TestOldSettlementDetailMediaUnknown(t *testing.T) {
 func TestSettlementDetailUsageBeforePrices(t *testing.T) {
 	h := detailHeaders("CNY")
 	cells := detailCells(SettlementDetailRow{ImageInput: "513", ImageOutput: "7", AudioInput: "31", AudioOutput: "11", BeforeAmount: "2", Discount: "0.5", Amount: "1"})
-	want := []string{"513", "7", "31", "11", "2", "5 折", "1"}
+	want := []string{"513", "7", "31", "11", "未记录", "2", "5 折", "1"}
 	for i, v := range want {
 		if cells[i+9].Value != v {
 			t.Fatalf("column %s value %s", h[i+9], cells[i+9].Value)
 		}
 	}
-	if h[9] != "图像输入 Token" || h[13] != "原价金额 CNY" {
+	if h[9] != "图像输入 Token" || h[14] != "原价金额 CNY" || h[13] != UnitPriceHeader("CNY") {
 		t.Fatal(h)
 	}
 	old := []string{"时间", "渠道", "原价金额 CNY", "折扣", "折后金额 CNY", "图像输入 Token", "图像输出 Token", "音频输入 Token", "音频输出 Token"}

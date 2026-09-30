@@ -177,7 +177,7 @@ func (s Store) BillingGenerationProgress(ctx context.Context, t billing.Automati
 			p.Outcome = "no_consumption"
 		}
 	}
-	if !t.To.After(end) && !(p.Empty == p.TotalDays) {
+	if p.Complete > 0 {
 		m := billing.GenerationDay{Day: t.From.In(billing.BusinessLocation).Format("2006-01"), Status: "waiting"}
 		var updated time.Time
 		e := s.db.QueryRowContext(ctx, `SELECT j.id,j.status,j.error_message,j.updated_at FROM billing_jobs j JOIN billing_statement_jobs st ON st.job_id=j.id WHERE j.instance_id=? AND st.statement_type=? AND st.subject_id=? AND j.usage_version>=3 AND j.status<>'superseded' AND NOT EXISTS (SELECT 1 FROM billing_generation_ranges retry WHERE retry.instance_id=j.instance_id AND retry.kind=j.job_type AND retry.subject_id=st.subject_id AND retry.cancelled=0 AND j.status='failed' AND j.updated_at<retry.generation_started_at AND j.range_from>=CONVERT_TZ(retry.range_from,'+08:00','+00:00') AND j.range_to<=CONVERT_TZ(retry.range_to,'+08:00','+00:00')) AND j.bill_period='monthly' AND j.range_from=? AND j.range_to=? `+billingCurrentGenerationSQL+` ORDER BY FIELD(j.status,'complete','publishing','running','pending','failed'),j.created_at DESC LIMIT 1`, t.InstanceID, t.Kind, t.SubjectID, t.From.UTC(), t.To.UTC()).Scan(&m.JobID, &m.Status, &m.Error, &updated)

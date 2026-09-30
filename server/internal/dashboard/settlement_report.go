@@ -24,6 +24,11 @@ func (h SettlementReportHandler) Calculate(ctx context.Context, site string, fro
 		return billing.ReportDocument{}, fmt.Errorf("billing_config_unavailable")
 	}
 	source := h.Source.ForBillingJob(billing.Job{DataSource: sourceName})
+	if indexed, ok := source.(billing.BillingIndexSource); ok {
+		if err = indexed.ValidateBillingIndexes(ctx, site, false); err != nil {
+			return billing.ReportDocument{}, fmt.Errorf("report_source_index_unavailable: %w", err)
+		}
+	}
 	money, err := captureBillingMoney(ctx, h.Source, site)
 	if err != nil {
 		return billing.ReportDocument{}, fmt.Errorf("billing_money_snapshot_unavailable")
@@ -155,6 +160,9 @@ func (h SettlementReportHandler) Calculate(ctx context.Context, site string, fro
 					return billing.ReportDocument{}, e
 				}
 			}
+			if len(logs) < billing.BillingPageSize && sourceName != "archive" {
+				break
+			}
 			pause := time.NewTimer(500 * time.Millisecond)
 			select {
 			case <-ctx.Done():
@@ -199,7 +207,14 @@ func (h *PassthroughHandler) BillingFailedRequestCount(ctx context.Context, site
 	if err != nil || !configured {
 		return 0, fmt.Errorf("source unavailable")
 	}
+	release, err := sourceBillingBudget.acquire(ctx, site)
+	if err != nil {
+		return 0, err
+	}
+	defer release()
+	queryCtx, cancel := context.WithTimeout(ctx, readonlyQueryTimeout)
+	defer cancel()
 	var n int64
-	err = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM logs WHERE type=5 AND created_at>=? AND created_at<?`, from.Unix(), to.Unix()).Scan(&n)
+	err = db.QueryRowContext(queryCtx, `SELECT COUNT(*) FROM logs WHERE type=5 AND created_at>=? AND created_at<?`, from.Unix(), to.Unix()).Scan(&n)
 	return n, err
 }

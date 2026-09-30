@@ -271,18 +271,21 @@ func (g UserDailyFileGenerator) publishSpooledUsers(ctx context.Context, root, d
 			return err
 		}
 		var columns optionalWorkbookColumns
-		if err = visitJSONDetails(path, func(row RequestDetail) error {
-			generic := row.CacheWriteTokens - row.CacheWrite5mTokens - row.CacheWrite1hTokens
-			columns.genericWrite = columns.genericWrite || generic > 0 || decimalNonZero(row.Charge.CacheWritePrice)
-			columns.write5m = columns.write5m || row.CacheWrite5mTokens > 0 || decimalNonZero(row.Charge.CacheWrite5mPrice)
-			columns.write1h = columns.write1h || row.CacheWrite1hTokens > 0 || decimalNonZero(row.Charge.CacheWrite1hPrice)
-			columns.perRequest = columns.perRequest || hasPerRequestPrice(row.Charge)
-			return nil
-		}); err != nil {
-			_ = tmp.Close()
-			_ = os.Remove(tmp.Name())
-			return err
+		if job.UsageVersion < SettlementUsageVersion {
+			if err = visitJSONDetails(path, func(row RequestDetail) error {
+				generic := row.CacheWriteTokens - row.CacheWrite5mTokens - row.CacheWrite1hTokens
+				columns.genericWrite = columns.genericWrite || generic > 0 || decimalNonZero(row.Charge.CacheWritePrice)
+				columns.write5m = columns.write5m || row.CacheWrite5mTokens > 0 || decimalNonZero(row.Charge.CacheWrite5mPrice)
+				columns.write1h = columns.write1h || row.CacheWrite1hTokens > 0 || decimalNonZero(row.Charge.CacheWrite1hPrice)
+				columns.perRequest = columns.perRequest || hasPerRequestPrice(row.Charge)
+				return nil
+			}); err != nil {
+				_ = tmp.Close()
+				_ = os.Remove(tmp.Name())
+				return err
+			}
 		}
+
 		iterate := func(visit func(RequestDetail) error) error { return visitJSONDetails(path, visit) }
 		if job.UsageVersion >= SettlementUsageVersion && job.JobType == "user_statement" && job.BillPeriod == "daily" {
 			err = WriteSettlementSavedDetails(ctx, target+".details.zip", job, iterate)

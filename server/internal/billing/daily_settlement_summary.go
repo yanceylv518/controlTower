@@ -9,8 +9,9 @@ import (
 	"time"
 )
 
-func writeDailySettlementSummary(wb *xlsxwriter.Workbook, currency, metadata string, iterate func(func(RequestDetail) error) error) error {
+func writeDailySettlementSummary(wb *xlsxwriter.Workbook, currency, metadata string, rate *big.Rat, iterate func(func(RequestDetail) error) error) error {
 	type totals struct {
+		prices UnitPrices
 		MultimediaUsage
 		requests, input, output, cache, write int64
 		amount                                *big.Rat
@@ -33,6 +34,7 @@ func writeDailySettlementSummary(wb *xlsxwriter.Workbook, currency, metadata str
 				g.discount = MergeDiscount(g.discount, discount)
 			}
 			g.requests++
+			g.prices.Merge(v.Charge.UnitPrices)
 			g.Add(v.MultimediaUsage)
 			g.input += v.PromptTokens
 			g.output += v.CompletionTokens
@@ -47,12 +49,12 @@ func writeDailySettlementSummary(wb *xlsxwriter.Workbook, currency, metadata str
 		return err
 	}
 	for i, name := range []string{"每日统计", "按模型统计", "按令牌统计"} {
-		sheet, err := wb.AddReportSheet(name, name, metadata, []float64{48, 14, 17, 17, 17, 17, 18, 18, 18, 18, 20, 16, 20})
+		sheet, err := wb.AddReportSheet(name, name, metadata, []float64{48, 14, 17, 17, 17, 17, 18, 18, 18, 18, 48, 20, 16, 20})
 		if err != nil {
 			return err
 		}
 		headers := []xlsxwriter.Cell{}
-		for _, h := range []string{"统计对象", "请求数", "普通输入 Token", "普通输出 Token", "缓存读取 Token", "缓存写入 Token", "图像输入 Token", "图像输出 Token", "音频输入 Token", "音频输出 Token", "原价金额 " + currency, "折扣", "折后金额 " + currency} {
+		for _, h := range []string{"统计对象", "请求数", "普通输入 Token", "普通输出 Token", "缓存读取 Token", "缓存写入 Token", "图像输入 Token", "图像输出 Token", "音频输入 Token", "音频输出 Token", UnitPriceHeader(currency), "原价金额 " + currency, "折扣", "折后金额 " + currency} {
 			headers = append(headers, xlsxwriter.Cell{Value: h, Style: 1})
 		}
 		if err = sheet.Row(headers); err != nil {
@@ -65,7 +67,11 @@ func writeDailySettlementSummary(wb *xlsxwriter.Workbook, currency, metadata str
 		sort.Strings(keys)
 		for _, key := range keys {
 			v := groups[i][key]
-			if err = sheet.Row([]xlsxwriter.Cell{{Value: key}, numberCell(v.requests, 3), numberCell(v.input, 3), numberCell(v.output, 3), numberCell(v.cache, 3), numberCell(v.write, 3), numberCell(v.ImageInputTokens, 3), numberCell(v.ImageOutputTokens, 3), numberCell(v.AudioInputTokens, 3), numberCell(v.AudioOutputTokens, 3), originalAmountCell(v.before), {Value: DiscountLabel(v.discount)}, decimalCell(v.amount.FloatString(12))}); err != nil {
+			priceLabel := UnitPriceLabel(v.prices, rate)
+			if i == 0 {
+				priceLabel = "—"
+			}
+			if err = sheet.Row([]xlsxwriter.Cell{{Value: key}, numberCell(v.requests, 3), numberCell(v.input, 3), numberCell(v.output, 3), numberCell(v.cache, 3), numberCell(v.write, 3), numberCell(v.ImageInputTokens, 3), numberCell(v.ImageOutputTokens, 3), numberCell(v.AudioInputTokens, 3), numberCell(v.AudioOutputTokens, 3), xlsxwriter.Cell{Value: priceLabel, Style: xlsxwriter.WrappedTextStyle}, originalAmountCell(v.before), {Value: DiscountLabel(v.discount)}, decimalCell(v.amount.FloatString(12))}); err != nil {
 				return err
 			}
 		}
@@ -95,7 +101,7 @@ func writeSettlementDailyWorkbookMode(out io.Writer, job Job, rawIterate func(fu
 	}
 	wb := xlsxwriter.New()
 	defer wb.Discard()
-	if err := writeDailySettlementSummary(wb, currency, SettlementSheetMetadata(job), iterate); err != nil {
+	if err := writeDailySettlementSummary(wb, currency, SettlementSheetMetadata(job), rate, iterate); err != nil {
 		return err
 	}
 	if summaryOnly {
@@ -110,12 +116,12 @@ func writeSettlementDailyWorkbookMode(out io.Writer, job Job, rawIterate func(fu
 			name = fmt.Sprintf("账单明细-%d", part)
 		}
 		var err error
-		sheet, err = wb.AddReportSheet(name, name, SettlementSheetMetadata(job), []float64{24, 48, 34, 30, 15, 15, 15, 15, 18, 18, 18, 18, 20, 16, 20})
+		sheet, err = wb.AddReportSheet(name, name, SettlementSheetMetadata(job), []float64{24, 48, 34, 30, 15, 15, 15, 15, 18, 18, 18, 18, 48, 20, 16, 20})
 		if err != nil {
 			return err
 		}
 		cells := []xlsxwriter.Cell{}
-		for _, label := range []string{"时间", "请求 ID", "模型", "令牌", "普通输入 Token", "普通输出 Token", "缓存读取", "缓存写入", "图像输入 Token", "图像输出 Token", "音频输入 Token", "音频输出 Token", "原价金额 " + currency, "折扣", "折后金额 " + currency} {
+		for _, label := range []string{"时间", "请求 ID", "模型", "令牌", "普通输入 Token", "普通输出 Token", "缓存读取", "缓存写入", "图像输入 Token", "图像输出 Token", "音频输入 Token", "音频输出 Token", UnitPriceHeader(currency), "原价金额 " + currency, "折扣", "折后金额 " + currency} {
 			cells = append(cells, xlsxwriter.Cell{Value: label, Style: 1})
 		}
 		count = 0
@@ -132,7 +138,7 @@ func writeSettlementDailyWorkbookMode(out io.Writer, job Job, rawIterate func(fu
 		}
 		count++
 		before, discount := ChargeOriginal(v.Charge)
-		return sheet.Row([]xlsxwriter.Cell{{Value: time.Unix(v.CreatedUnix, 0).In(BusinessLocation).Format("2006-01-02 15:04:05")}, {Value: v.RequestID}, {Value: v.ModelName}, {Value: v.TokenName}, numberCell(v.PromptTokens, 3), numberCell(v.CompletionTokens, 3), numberCell(v.CacheReadTokens, 3), numberCell(v.CacheWriteTokens, 3), numberCell(v.ImageInputTokens, 3), numberCell(v.ImageOutputTokens, 3), numberCell(v.AudioInputTokens, 3), numberCell(v.AudioOutputTokens, 3), originalAmountCell(before), {Value: DiscountLabel(discount)}, decimalCell(v.Charge.Total)})
+		return sheet.Row([]xlsxwriter.Cell{{Value: time.Unix(v.CreatedUnix, 0).In(BusinessLocation).Format("2006-01-02 15:04:05")}, {Value: v.RequestID}, {Value: v.ModelName}, {Value: v.TokenName}, numberCell(v.PromptTokens, 3), numberCell(v.CompletionTokens, 3), numberCell(v.CacheReadTokens, 3), numberCell(v.CacheWriteTokens, 3), numberCell(v.ImageInputTokens, 3), numberCell(v.ImageOutputTokens, 3), numberCell(v.AudioInputTokens, 3), numberCell(v.AudioOutputTokens, 3), xlsxwriter.Cell{Value: UnitPriceLabel(v.Charge.UnitPrices, rate), Style: xlsxwriter.WrappedTextStyle}, originalAmountCell(before), {Value: DiscountLabel(discount)}, decimalCell(v.Charge.Total)})
 	}); err != nil {
 		return err
 	}

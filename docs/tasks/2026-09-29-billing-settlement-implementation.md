@@ -389,3 +389,24 @@ vue-tsc 通过，verify-user-discounts.cjs 改用模型 API 422、渠道正常�
 - git archive 导出精确源码到 local/releases/v2.0.0-rc148/source 后运行 package.sh，本机嵌套 pnpm 命中非项目版本，使用仅该次进程的本地 shim 指向缓存 pnpm 10.28.1 后成功。Windows tar 缺失执行权限，已将本地产物二进制/安装脚本规范为 0755 并重新计算 SHA256；不修改源码打包脚本或远程包。
 - 本地包 source/dist/release、远程正式附件 remote 均逐包验证 SHA256、ELF amd64/arm64 与执行位、Agent 内嵌版本、安装脚本 LF。Server 包包含前端、既有 097_archive_read_connections 和 114_persistent_settlement_reports，未包含 097_error_statistics。正式更新优先使用 remote 附件；本机与 CI 工具链不同，包哈希不要求相同。
 - 需更新 Server/Web 和 Agent 并执行 Server 数据库迁移。尚未生产部署、Linux 实机安装或生产负载验收。本地未提交主副图配套代码保持保留。
+
+
+## 2026-09-30 源库减压与部分月账单
+
+用户确认保持用户账单与上游账单独立计算，优化重复查询、限速与文件处理；月账单有已完成日账单即可汇总。
+
+实现：
+- BillingAutomation 不再为未知日期调用 ActiveBillingDays，直接排入日任务，首次 2,000 条明细读取兼作判空。已有 CT 无消费记录仍复用。空任务由 ClaimBillingPublish 标记 no_data，Runner 不调用文件生成器；此次没有引入首批数据内存缓存。
+- dashboard 全局按站点共用源库读槽，覆盖账单和报表分页及旧账单明细入口，页间冷却沿用 CT_BILLING_PAGE_PAUSE_MILLISECONDS（默认 500ms）；等待可取消，查询超时从取得槽后计算。该限制是单 CT 进程内，不是跨部署副本的分布式限流。
+- 已成功的索引检查按当前 *sql.DB 缓存 5 分钟，换连接不沿用，失败不缓存。分页筛选/游标/计价/折扣规则不变，没有创建或强制选择源库索引。
+- Runner 优先发布已读完的日任务，再读下一个日任务，发布/空日完成唤醒生产者。避免先把整批都读取完而留下多个 running，降低暂存积压。
+- 新版固定列工作簿不再提前全扫 gzip 明细探测旧计价列。仍保留兼容下载所需日统计文件和上游文件结构；此次未贸然删除它们。增加每步 read_settle 的查询尝试次数、返回行数、源读取含等待耗时、总耗时，以及 publish 耗时日志。
+- MissingBillingMonths 包含未结束月份，月份创建只复制已完成的日快照，不要求其余日期先校验。新增日账单完成后依据月/日来源关联使旧月汇总失效，避免旧的 created_at 比较漏掉早排队晚完成的日任务；后续原请求键可生成新月快照，旧快照内容保留。月汇总先于下一批日任务入队进行，不查源库；页面预览展示已汇总天数。
+- 手动月账单接口允许当前月份，仍拒绝完全未来月份；进度会包含当前月汇总项。
+
+验证：
+- go test ./server/internal/billing ./server/internal/dashboard ./server/internal/mysqlstore ./server/cmd/control-tower-server 通过。
+- pnpm -C webapp typecheck 通过。
+- 使用 outputs/commit-validation 的隔离源码（不带主副图/独立错误统计迁移）和本机 CT_MYSQL_TEST_DSN：TestBillingDailyOnceAndMonthlyReuse（用户和上游）及 TestPartialMonthRefreshUsesCompletedDailySnapshots 通过。部分月测试验证 1.25 → 3.75、旧快照仍 1.25、重复请求不累加、当前月份能发现及早排队晚完成的日账单正确刷新。
+- 本机 newapi_test 使用同一时间范围/游标/用户或渠道筛选的 EXPLAIN：用户、上游都为 range 扫描，渠道名称连接为主键 eq_ref，仍有 filesort。仅本机计划，不代表生产站点；没有执行生产 EXPLAIN 或压测，没有量化性能提升。
+- git diff --check 通过。未重启本地后端、未提交/打包/发布；本次 Agent 无修改。保留会话前主副图/独立错误统计工作区修改。

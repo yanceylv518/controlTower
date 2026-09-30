@@ -72,28 +72,6 @@ func (s Store) createBillingMonthFromDays(ctx context.Context, tx *sql.Tx, job b
 	if err != nil {
 		return err
 	}
-	checks, err := tx.QueryContext(ctx, `SELECT bill_day FROM billing_day_checks WHERE instance_id=? AND kind=? AND subject_id=? AND has_consumption=0 AND bill_day>=? AND bill_day<?`, job.InstanceID, job.JobType, subject, job.From.In(billing.BusinessLocation).Format("2006-01-02"), job.To.In(billing.BusinessLocation).Format("2006-01-02"))
-	if err != nil {
-		return err
-	}
-	for checks.Next() {
-		var d time.Time
-		if err = checks.Scan(&d); err != nil {
-			checks.Close()
-			return err
-		}
-		covered[d.Format("2006-01-02")] = true
-	}
-	err = checks.Err()
-	checks.Close()
-	if err != nil {
-		return err
-	}
-	for day := job.From.In(billing.BusinessLocation); day.Before(job.To); day = day.AddDate(0, 0, 1) {
-		if !covered[day.Format("2006-01-02")] {
-			return billing.ErrDailyBillsIncomplete
-		}
-	}
 	if len(ids) == 0 {
 		return billing.ErrStatementNoData
 	}
@@ -106,7 +84,7 @@ func (s Store) createBillingMonthFromDays(ctx context.Context, tx *sql.Tx, job b
 	if _, err = tx.ExecContext(ctx, `INSERT INTO billing_statement_jobs(job_id,statement_type,subject_id,subject_name,created_at) VALUES(?,?,?,?,?)`, job.ID, job.JobType, subject, name, job.CreatedAt); err != nil {
 		return err
 	}
-	const columns = "instance_id,bill_day,user_id,username,token_id,token_name,channel_id,channel_name,model_name,request_count,prompt_tokens,completion_tokens,cache_read_tokens,cache_write_tokens,cache_write_5m_tokens,cache_write_1h_tokens,calculated_quota,total_amount,updated_at,image_input_tokens,image_output_tokens,audio_input_tokens,audio_output_tokens,empty_output_count,empty_output_amount,before_amount,before_known_count,settlement_discount"
+	const columns = "instance_id,bill_day,user_id,username,token_id,token_name,channel_id,channel_name,model_name,request_count,prompt_tokens,completion_tokens,cache_read_tokens,cache_write_tokens,cache_write_5m_tokens,cache_write_1h_tokens,calculated_quota,total_amount,updated_at,image_input_tokens,image_output_tokens,audio_input_tokens,audio_output_tokens,empty_output_count,empty_output_amount,before_amount,before_known_count,settlement_discount,unit_prices"
 	args := []any{job.ID}
 	for _, id := range ids {
 		args = append(args, id)

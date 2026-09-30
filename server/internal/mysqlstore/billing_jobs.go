@@ -4,6 +4,7 @@ import (
 	"context"
 	"controltower/server/internal/billing"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"math/big"
 	"strings"
@@ -278,7 +279,8 @@ func (s Store) ClaimBillingPublish(ctx context.Context) (billing.Job, bool, erro
 			if err = supersedeBillingStatement(ctx, tx, j); err != nil {
 				return billing.Job{}, false, err
 			}
-			return billing.Job{}, false, tx.Commit()
+			j.Status = "no_data"
+			return j, true, tx.Commit()
 		}
 	}
 	now := time.Now().UTC()
@@ -385,6 +387,7 @@ func (s Store) AppendBillingHour(ctx context.Context, j billing.Job, st billing.
 		model                      string
 	}
 	type compactValue struct {
+		prices                           billing.UnitPrices
 		beforeKnown                      int64
 		discount                         string
 		emptyCount                       int64
@@ -402,6 +405,7 @@ func (s Store) AppendBillingHour(ctx context.Context, j billing.Job, st billing.
 		value := compact[key]
 		value.username, value.tokenName, value.channelName = v.Username, v.TokenName, v.ChannelName
 		value.requests++
+		value.prices.Merge(v.Charge.UnitPrices)
 		value.media.Add(v.MultimediaUsage)
 		value.prompt += v.PromptTokens
 		value.completion += v.CompletionTokens
@@ -440,15 +444,19 @@ func (s Store) AppendBillingHour(ctx context.Context, j billing.Job, st billing.
 		}
 		compact[key] = value
 	}
-	const compactColumns = 29
+	const compactColumns = 30
 	compactPlaceholder := "(" + strings.TrimRight(strings.Repeat("?,", compactColumns), ",") + ")"
 	values, args := make([]string, 0, len(compact)), make([]any, 0, len(compact)*compactColumns)
 	for key, value := range compact {
+		prices, err := json.Marshal(value.prices)
+		if err != nil {
+			return err
+		}
 		values = append(values, compactPlaceholder)
-		args = append(args, j.ID, j.InstanceID, key.day, key.userID, value.username, key.tokenID, value.tokenName, key.channelID, value.channelName, key.model, value.requests, value.prompt, value.completion, value.cacheRead, value.cacheWrite, value.write5m, value.write1h, value.quota, value.amount.FloatString(12), now, value.media.ImageInputTokens, value.media.ImageOutputTokens, value.media.AudioInputTokens, value.media.AudioOutputTokens, value.emptyCount, value.emptyAmount.FloatString(12), value.beforeAmount.FloatString(12), value.beforeKnown, value.discount)
+		args = append(args, j.ID, j.InstanceID, key.day, key.userID, value.username, key.tokenID, value.tokenName, key.channelID, value.channelName, key.model, value.requests, value.prompt, value.completion, value.cacheRead, value.cacheWrite, value.write5m, value.write1h, value.quota, value.amount.FloatString(12), now, value.media.ImageInputTokens, value.media.ImageOutputTokens, value.media.AudioInputTokens, value.media.AudioOutputTokens, value.emptyCount, value.emptyAmount.FloatString(12), value.beforeAmount.FloatString(12), value.beforeKnown, value.discount, string(prices))
 	}
 	if len(values) > 0 {
-		query := `INSERT INTO billing_compact_daily_totals(job_id,instance_id,bill_day,user_id,username,token_id,token_name,channel_id,channel_name,model_name,request_count,prompt_tokens,completion_tokens,cache_read_tokens,cache_write_tokens,cache_write_5m_tokens,cache_write_1h_tokens,calculated_quota,total_amount,updated_at,image_input_tokens,image_output_tokens,audio_input_tokens,audio_output_tokens,empty_output_count,empty_output_amount,before_amount,before_known_count,settlement_discount) VALUES ` + strings.Join(values, ",") + ` ON DUPLICATE KEY UPDATE before_known_count=before_known_count+VALUES(before_known_count),settlement_discount=CASE WHEN settlement_discount='' OR VALUES(settlement_discount)='' THEN '' WHEN settlement_discount=VALUES(settlement_discount) THEN settlement_discount ELSE 'mixed' END,empty_output_count=empty_output_count+VALUES(empty_output_count),empty_output_amount=empty_output_amount+VALUES(empty_output_amount),before_amount=before_amount+VALUES(before_amount),username=VALUES(username),token_name=VALUES(token_name),channel_name=VALUES(channel_name),request_count=request_count+VALUES(request_count),prompt_tokens=prompt_tokens+VALUES(prompt_tokens),completion_tokens=completion_tokens+VALUES(completion_tokens),cache_read_tokens=cache_read_tokens+VALUES(cache_read_tokens),cache_write_tokens=cache_write_tokens+VALUES(cache_write_tokens),cache_write_5m_tokens=cache_write_5m_tokens+VALUES(cache_write_5m_tokens),cache_write_1h_tokens=cache_write_1h_tokens+VALUES(cache_write_1h_tokens),calculated_quota=calculated_quota+VALUES(calculated_quota),total_amount=total_amount+VALUES(total_amount),image_input_tokens=image_input_tokens+VALUES(image_input_tokens),image_output_tokens=image_output_tokens+VALUES(image_output_tokens),audio_input_tokens=audio_input_tokens+VALUES(audio_input_tokens),audio_output_tokens=audio_output_tokens+VALUES(audio_output_tokens),updated_at=VALUES(updated_at)`
+		query := `INSERT INTO billing_compact_daily_totals(job_id,instance_id,bill_day,user_id,username,token_id,token_name,channel_id,channel_name,model_name,request_count,prompt_tokens,completion_tokens,cache_read_tokens,cache_write_tokens,cache_write_5m_tokens,cache_write_1h_tokens,calculated_quota,total_amount,updated_at,image_input_tokens,image_output_tokens,audio_input_tokens,audio_output_tokens,empty_output_count,empty_output_amount,before_amount,before_known_count,settlement_discount,unit_prices) VALUES ` + strings.Join(values, ",") + ` ON DUPLICATE KEY UPDATE unit_prices=JSON_MERGE_PATCH(COALESCE(unit_prices,JSON_OBJECT('unknown|未记录',JSON_EXTRACT('true','$'))),VALUES(unit_prices)),before_known_count=before_known_count+VALUES(before_known_count),settlement_discount=CASE WHEN settlement_discount='' OR VALUES(settlement_discount)='' THEN '' WHEN settlement_discount=VALUES(settlement_discount) THEN settlement_discount ELSE 'mixed' END,empty_output_count=empty_output_count+VALUES(empty_output_count),empty_output_amount=empty_output_amount+VALUES(empty_output_amount),before_amount=before_amount+VALUES(before_amount),username=VALUES(username),token_name=VALUES(token_name),channel_name=VALUES(channel_name),request_count=request_count+VALUES(request_count),prompt_tokens=prompt_tokens+VALUES(prompt_tokens),completion_tokens=completion_tokens+VALUES(completion_tokens),cache_read_tokens=cache_read_tokens+VALUES(cache_read_tokens),cache_write_tokens=cache_write_tokens+VALUES(cache_write_tokens),cache_write_5m_tokens=cache_write_5m_tokens+VALUES(cache_write_5m_tokens),cache_write_1h_tokens=cache_write_1h_tokens+VALUES(cache_write_1h_tokens),calculated_quota=calculated_quota+VALUES(calculated_quota),total_amount=total_amount+VALUES(total_amount),image_input_tokens=image_input_tokens+VALUES(image_input_tokens),image_output_tokens=image_output_tokens+VALUES(image_output_tokens),audio_input_tokens=audio_input_tokens+VALUES(audio_input_tokens),audio_output_tokens=audio_output_tokens+VALUES(audio_output_tokens),updated_at=VALUES(updated_at)`
 		if _, e = tx.ExecContext(ctx, query, args...); e != nil {
 			return e
 		}

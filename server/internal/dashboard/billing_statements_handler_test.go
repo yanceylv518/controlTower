@@ -2,9 +2,11 @@ package dashboard
 
 import (
 	"context"
+	"fmt"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"controltower/server/internal/billing"
 )
@@ -68,5 +70,20 @@ func TestBillingStatementsHandlerMapsDuplicate(t *testing.T) {
 	h.ServeHTTP(w, r)
 	if w.Code != 409 || !strings.Contains(w.Body.String(), "billing_statement_duplicate") {
 		t.Fatalf("code=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestBillingMonthlyRequestAllowsOpenMonth(t *testing.T) {
+	now := time.Now().In(billing.BusinessLocation)
+	from := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, billing.BusinessLocation)
+	if !from.Before(billing.CompleteDayBoundary(now)) {
+		t.Skip("no completed days in current month")
+	}
+	s := &statementStoreStub{}
+	body := fmt.Sprintf(`{"instance_id":"site-a","statement_type":"user","user_id":7,"new_edition":true,"period":"monthly","from":%q,"to":%q}`, from.Format("2006-01-02 15:04:05"), from.AddDate(0, 1, 0).Format("2006-01-02 15:04:05"))
+	w := httptest.NewRecorder()
+	BillingStatementsHandler{Store: s}.ServeHTTP(w, httptest.NewRequest("POST", "/", strings.NewReader(body)))
+	if w.Code != 202 || s.job.BillPeriod != "monthly" {
+		t.Fatal(w.Code, w.Body.String())
 	}
 }

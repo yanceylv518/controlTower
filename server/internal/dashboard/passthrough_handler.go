@@ -37,6 +37,12 @@ func (h *PassthroughHandler) LogsForBilling(ctx context.Context, site string, st
 	if !configured {
 		return nil, fmt.Errorf("readonly database is not configured for %s", site)
 	}
+	release, err := sourceBillingBudget.acquire(ctx, site)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
 	queryCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	rows, err := db.QueryContext(queryCtx, `SELECT user_id,COALESCE(username,''),COALESCE(model_name,''),COALESCE(`+"`group`"+`,''),prompt_tokens,completion_tokens,quota,COALESCE(other,'') FROM logs WHERE created_at>=? AND created_at<? AND type=2 ORDER BY id`, start.Unix(), end.Unix())
@@ -72,6 +78,12 @@ func (h *PassthroughHandler) DetailedLogsForBilling(ctx context.Context, site st
 	if !configured {
 		return nil, fmt.Errorf("readonly database is not configured for %s", site)
 	}
+	release, err := sourceBillingBudget.acquire(ctx, site)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
 	queryCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	rows, err := db.QueryContext(queryCtx, `SELECT id,created_at,COALESCE(request_id,''),user_id,COALESCE(username,''),COALESCE(model_name,''),COALESCE(`+"`group`"+`,''),prompt_tokens,completion_tokens,quota,COALESCE(other,'') FROM logs WHERE created_at>=? AND created_at<? AND type=2 AND user_id=? ORDER BY id`, start.Unix(), end.Unix(), userID)
@@ -122,7 +134,15 @@ func (h *PassthroughHandler) DetailedChannelsLogsPageForBilling(ctx context.Cont
 	if len(channelIDs) == 0 {
 		return []billing.PagedLogRecord{}, nil
 	}
-	return h.logsPageForBillingChannels(ctx, site, channelIDs, start, end, cursor, limit)
+	return h.logsPageForBillingChannels(ctx, site, channelIDs, nil, start, end, cursor, limit)
+}
+
+func (h *PassthroughHandler) DetailedChannelsModelsLogsPageForBilling(ctx context.Context, site string, channelIDs []int64, models map[int64][]string, start, end time.Time, cursor billing.LogCursor, limit int) ([]billing.PagedLogRecord, error) {
+	channelIDs = uniquePositiveIDs(channelIDs)
+	if len(channelIDs) == 0 {
+		return []billing.PagedLogRecord{}, nil
+	}
+	return h.logsPageForBillingChannels(ctx, site, channelIDs, models, start, end, cursor, limit)
 }
 
 func uniquePositiveIDs(ids []int64) []int64 {
@@ -149,6 +169,24 @@ func (h *PassthroughHandler) ValidateBillingIndexes(ctx context.Context, site st
 	if !configured {
 		return fmt.Errorf("readonly database is not configured for %s", site)
 	}
+	h.mu.Lock()
+	valid := time.Now().Before(h.billingIndexes[db])
+	h.mu.Unlock()
+	if valid {
+		return nil
+	}
+	release, err := sourceBillingBudget.acquire(ctx, site)
+	if err != nil {
+		return err
+	}
+	defer release()
+	h.mu.Lock()
+	valid = time.Now().Before(h.billingIndexes[db])
+	h.mu.Unlock()
+	if valid {
+		return nil
+	}
+
 	queryCtx, cancel := context.WithTimeout(ctx, readonlyQueryTimeout)
 	defer cancel()
 	rows, err := db.QueryContext(queryCtx, `SELECT INDEX_NAME,SEQ_IN_INDEX,COLUMN_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='logs' ORDER BY INDEX_NAME,SEQ_IN_INDEX`)
@@ -186,7 +224,16 @@ func (h *PassthroughHandler) ValidateBillingIndexes(ctx context.Context, site st
 	if !hasPrefix("created_at") {
 		return fmt.Errorf("newapi logs requires an existing index beginning with created_at")
 	}
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	h.mu.Lock()
+	if h.billingIndexes == nil {
+		h.billingIndexes = map[*sql.DB]time.Time{}
+	}
+	h.billingIndexes[db] = time.Now().Add(5 * time.Minute)
+	h.mu.Unlock()
+	return nil
 }
 
 const billingLogsPageTimeout = 2 * time.Minute
@@ -199,6 +246,12 @@ func (h *PassthroughHandler) logsPageForBilling(ctx context.Context, site string
 	if !configured {
 		return nil, fmt.Errorf("readonly database is not configured for %s", site)
 	}
+	release, err := sourceBillingBudget.acquire(ctx, site)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
 	if limit <= 0 || limit > 5000 {
 		limit = billing.BillingPageSize
 	}
@@ -206,8 +259,7 @@ func (h *PassthroughHandler) logsPageForBilling(ctx context.Context, site string
 	// cache-usage fields below, so project a compact JSON value inside MySQL
 	// instead of transferring the complete payload over the RDS connection.
 	query, _ := billingLogsPageQuery(userID, channelID, tokenID)
-	args := []any{start.Unix(), end.Unix()}
-	args = append(args, cursor.CreatedUnix, cursor.CreatedUnix, cursor.ID)
+	args := billingPageRangeArgs(start, end, cursor)
 	if userID > 0 {
 		args = append(args, userID)
 	}
@@ -233,7 +285,7 @@ func (h *PassthroughHandler) logsPageForBilling(ctx context.Context, site string
 	return scanBillingLogRows(rows, out)
 }
 
-func (h *PassthroughHandler) logsPageForBillingChannels(ctx context.Context, site string, channelIDs []int64, start, end time.Time, cursor billing.LogCursor, limit int) ([]billing.PagedLogRecord, error) {
+func (h *PassthroughHandler) logsPageForBillingChannels(ctx context.Context, site string, channelIDs []int64, models map[int64][]string, start, end time.Time, cursor billing.LogCursor, limit int) ([]billing.PagedLogRecord, error) {
 	db, configured, err := h.database(site)
 	if err != nil {
 		return nil, err
@@ -241,15 +293,17 @@ func (h *PassthroughHandler) logsPageForBillingChannels(ctx context.Context, sit
 	if !configured {
 		return nil, fmt.Errorf("readonly database is not configured for %s", site)
 	}
+	release, err := sourceBillingBudget.acquire(ctx, site)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
 	if limit <= 0 || limit > 5000 {
 		limit = billing.BillingPageSize
 	}
-	query := billingChannelsLogsPageQuery(len(channelIDs))
-	args := make([]any, 0, 6+len(channelIDs))
-	args = append(args, start.Unix(), end.Unix(), cursor.CreatedUnix, cursor.CreatedUnix, cursor.ID)
-	for _, id := range channelIDs {
-		args = append(args, id)
-	}
+	query, filters := billingChannelsModelsPageQuery(channelIDs, models)
+	args := append(billingPageRangeArgs(start, end, cursor), filters...)
 	args = append(args, limit)
 	queryCtx, cancel := context.WithTimeout(ctx, billingLogsPageTimeout)
 	rows, err := db.QueryContext(queryCtx, query, args...)
@@ -327,29 +381,31 @@ func normalizedBillingPromptTokens(rawPrompt int64, usage billingCacheUsage) (in
 	return prompt, contextTokens
 }
 
+// Limit the narrow identity page before joining channel names or projecting the
+// potentially large JSON evidence. LIMIT keeps this derived table materialized.
+const billingLogColumns = "SELECT l.id,l.created_at,COALESCE(l.request_id,''),COALESCE(l.upstream_request_id,''),l.user_id,COALESCE(l.username,''),COALESCE(l.token_id,0),COALESCE(l.token_name,''),COALESCE(l.channel_id,0),COALESCE(c.name,''),COALESCE(l.model_name,''),COALESCE(l.`group`,''),l.prompt_tokens,l.completion_tokens,l.quota,"
+
+func billingPageFromFilter(filter string) string {
+	return billingLogColumns + billingOtherProjection +
+		` FROM (SELECT l.id,l.created_at FROM logs l WHERE l.type=2 AND l.created_at>=? AND l.created_at<? AND (l.created_at>? OR (l.created_at=? AND l.id>?))` + filter +
+		` ORDER BY l.created_at,l.id LIMIT ?) page JOIN logs l ON l.id=page.id LEFT JOIN channels c ON c.id=l.channel_id ORDER BY page.created_at,page.id`
+}
 func billingLogsPageQuery(userID, channelID, tokenID int64) (string, bool) {
-	from := ` FROM logs l`
-	query := `SELECT l.id,l.created_at,COALESCE(l.request_id,''),COALESCE(l.upstream_request_id,''),l.user_id,COALESCE(l.username,''),COALESCE(l.token_id,0),COALESCE(l.token_name,''),COALESCE(l.channel_id,0),COALESCE(c.name,''),COALESCE(l.model_name,''),COALESCE(l.` + "`group`" + `,''),l.prompt_tokens,l.completion_tokens,l.quota,` + billingOtherProjection + from + ` LEFT JOIN channels c ON c.id=l.channel_id WHERE l.type=2 AND l.created_at>=? AND l.created_at<?`
-	// Keep pagination aligned with the date range and NewAPI's existing
-	// created_at-leading index. Paging by user_id/id alone makes the first page
-	// scan a user's entire history before reaching the requested billing period.
-	query += ` AND (l.created_at>? OR (l.created_at=? AND l.id>?))`
+	filter := ""
 	if userID > 0 {
-		query += ` AND l.user_id=?`
+		filter += ` AND l.user_id=?`
 	}
 	if channelID > 0 {
-		query += ` AND l.channel_id=?`
+		filter += ` AND l.channel_id=?`
 	}
 	if tokenID >= 0 {
-		query += ` AND COALESCE(l.token_id,0)=?`
+		filter += ` AND COALESCE(l.token_id,0)=?`
 	}
-	return query + ` ORDER BY l.created_at,l.id LIMIT ?`, false
+	return billingPageFromFilter(filter), false
 }
-
 func billingChannelsLogsPageQuery(channelCount int) string {
 	placeholders := strings.TrimSuffix(strings.Repeat("?,", channelCount), ",")
-	return `SELECT l.id,l.created_at,COALESCE(l.request_id,''),COALESCE(l.upstream_request_id,''),l.user_id,COALESCE(l.username,''),COALESCE(l.token_id,0),COALESCE(l.token_name,''),COALESCE(l.channel_id,0),COALESCE(c.name,''),COALESCE(l.model_name,''),COALESCE(l.` + "`group`" + `,''),l.prompt_tokens,l.completion_tokens,l.quota,` + billingOtherProjection +
-		` FROM logs l LEFT JOIN channels c ON c.id=l.channel_id WHERE l.type=2 AND l.created_at>=? AND l.created_at<? AND (l.created_at>? OR (l.created_at=? AND l.id>?)) AND l.channel_id IN (` + placeholders + `) ORDER BY l.created_at,l.id LIMIT ?`
+	return billingPageFromFilter(` AND l.channel_id IN (` + placeholders + `)`)
 }
 
 const billingOtherProjection = `CASE WHEN JSON_VALID(l.other) THEN JSON_OBJECT(` +
@@ -392,6 +448,9 @@ const billingOtherProjection = `CASE WHEN JSON_VALID(l.other) THEN JSON_OBJECT(`
 	`'audio_output',JSON_EXTRACT(l.other,'$.audio_output')) ELSE '{}' END`
 
 func (h *PassthroughHandler) RatioSnapshotForBilling(ctx context.Context, site string) (string, error) {
+	return h.billingOptions(ctx, site, false)
+}
+func (h *PassthroughHandler) billingOptions(ctx context.Context, site string, moneyOnly bool) (string, error) {
 	db, configured, err := h.database(site)
 	if err != nil {
 		return "", err
@@ -399,7 +458,14 @@ func (h *PassthroughHandler) RatioSnapshotForBilling(ctx context.Context, site s
 	if !configured {
 		return "", fmt.Errorf("readonly database is not configured for %s", site)
 	}
-	rows, err := db.QueryContext(ctx, "SELECT `key`,value FROM options WHERE `key` IN ('ModelRatio','CompletionRatio','CacheRatio','CreateCacheRatio','GroupRatio','QuotaPerUnit','USDExchangeRate','DisplayInCurrencyEnabled','general_setting','general_setting.quota_display_type','general_setting.custom_currency_symbol','general_setting.custom_currency_exchange_rate')")
+	query := "SELECT `key`,value FROM options WHERE `key` IN ('QuotaPerUnit','USDExchangeRate','DisplayInCurrencyEnabled','general_setting','general_setting.quota_display_type','general_setting.custom_currency_symbol','general_setting.custom_currency_exchange_rate'"
+	if !moneyOnly {
+		query += ",'ModelRatio','CompletionRatio','CacheRatio','CreateCacheRatio','GroupRatio'"
+	}
+	query += ")"
+	queryCtx, cancel := context.WithTimeout(ctx, readonlyQueryTimeout)
+	defer cancel()
+	rows, err := db.QueryContext(queryCtx, query)
 	if err != nil {
 		return "", err
 	}
@@ -573,6 +639,9 @@ func (s BillingReadonlySource) ChannelLogsPage(ctx context.Context, site string,
 func (s BillingReadonlySource) DetailedChannelsLogsPage(ctx context.Context, site string, channelIDs []int64, start, end time.Time, cursor billing.LogCursor, limit int) ([]billing.PagedLogRecord, error) {
 	return s.Handler.DetailedChannelsLogsPageForBilling(ctx, site, channelIDs, start, end, cursor, limit)
 }
+func (s BillingReadonlySource) DetailedChannelsModelsLogsPage(ctx context.Context, site string, channelIDs []int64, models map[int64][]string, start, end time.Time, cursor billing.LogCursor, limit int) ([]billing.PagedLogRecord, error) {
+	return s.Handler.DetailedChannelsModelsLogsPageForBilling(ctx, site, channelIDs, models, start, end, cursor, limit)
+}
 
 func (s BillingReadonlySource) Logs(ctx context.Context, site string, start, end time.Time) ([]billing.LogRecord, error) {
 	return s.Handler.LogsForBilling(ctx, site, start, end)
@@ -580,6 +649,10 @@ func (s BillingReadonlySource) Logs(ctx context.Context, site string, start, end
 func (s BillingReadonlySource) DetailedLogs(ctx context.Context, site string, userID int64, start, end time.Time) ([]billing.DetailedLogRecord, error) {
 	return s.Handler.DetailedLogsForBilling(ctx, site, userID, start, end)
 }
+func (s BillingReadonlySource) MoneyOptionsSnapshot(ctx context.Context, site string) (string, error) {
+	return s.Handler.billingOptions(ctx, site, true)
+}
+
 func (s BillingReadonlySource) RatioSnapshot(ctx context.Context, site string) (string, error) {
 	return s.Handler.RatioSnapshotForBilling(ctx, site)
 }
@@ -780,16 +853,17 @@ func configureReadonlyDB(db *sql.DB) {
 }
 
 type PassthroughHandler struct {
-	Config       ReadonlyConfigStore
-	Audit        PassthroughAuditStore
-	Rollups      ReadonlyLogRollupStore
-	SecretKey    string
-	mu           sync.Mutex
-	pools        map[string]passthroughPool
-	summaryCache *readonlyQueryCache
-	rawSummaries readonlyRawSummaryGroup
-	summarySlots map[*sql.DB]chan struct{}
-	channelNames map[readonlyChannelKey]readonlyChannelName
+	Config         ReadonlyConfigStore
+	Audit          PassthroughAuditStore
+	Rollups        ReadonlyLogRollupStore
+	SecretKey      string
+	mu             sync.Mutex
+	pools          map[string]passthroughPool
+	summaryCache   *readonlyQueryCache
+	rawSummaries   readonlyRawSummaryGroup
+	summarySlots   map[*sql.DB]chan struct{}
+	channelNames   map[readonlyChannelKey]readonlyChannelName
+	billingIndexes map[*sql.DB]time.Time
 }
 
 type PassthroughUser struct {

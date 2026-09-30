@@ -43,25 +43,6 @@ func (a BillingAutomation) Fill(ctx context.Context, target billing.AutomaticTar
 		}
 	}()
 
-	if target.Kind == "user_statement" && target.To.IsZero() {
-		reader, ok := a.Source.(interface {
-			BillingUserRole(context.Context, string, int64) (int, error)
-		})
-		if !ok {
-			return fmt.Errorf("billing user role reader unavailable")
-		}
-		role, err := reader.BillingUserRole(ctx, target.InstanceID, target.SubjectID)
-		if err == sql.ErrNoRows {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		// NewAPI roles: ordinary user 1, administrator 10, root 100.
-		if role >= 10 {
-			return nil
-		}
-	}
 	// Explicit manual ranges continue even when future automatic billing is off.
 	if target.Kind == "upstream_statement" && target.To.IsZero() {
 		upstream, err := a.Store.BillingStatementUpstream(ctx, target.InstanceID, target.SubjectID)
@@ -88,10 +69,63 @@ func (a BillingAutomation) Fill(ctx context.Context, target billing.AutomaticTar
 	if err != nil {
 		return err
 	}
+	var months []time.Time
+	if store, ok := a.Store.(interface {
+		MissingBillingMonths(context.Context, billing.AutomaticTarget, time.Time) ([]time.Time, error)
+	}); ok {
+		months, err = store.MissingBillingMonths(ctx, target, end)
+		if err != nil {
+			return err
+		}
+	}
+	// Completed/pending targets need no source metadata checks on every wake.
+	if len(days) == 0 && len(months) == 0 {
+		return nil
+	}
+	if target.Kind == "user_statement" && target.To.IsZero() {
+		reader, ok := a.Source.(interface {
+			BillingUserRole(context.Context, string, int64) (int, error)
+		})
+		if !ok {
+			return fmt.Errorf("billing user role reader unavailable")
+		}
+		role, err := reader.BillingUserRole(ctx, target.InstanceID, target.SubjectID)
+		if err == sql.ErrNoRows {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		// NewAPI roles: ordinary user 1, administrator 10, root 100.
+		if role >= 10 {
+			return nil
+		}
+	}
 	source, err := a.Store.BillingDataSource(ctx)
 	if err != nil {
 		return err
 	}
+	var fillMoney *billing.MoneySnapshot
+	observeMoney := func() (*billing.MoneySnapshot, error) {
+		if fillMoney == nil {
+			var err error
+			fillMoney, err = captureBillingMoney(ctx, a.Source, target.InstanceID)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return fillMoney, nil
+	}
+	for _, month := range months {
+		if e := a.enqueue(ctx, target, month, month.AddDate(0, 1, 0), "monthly", source, observeMoney); errors.Is(e, billing.ErrStatementQueueFull) {
+			return nil
+		} else if errors.Is(e, billing.ErrDailyBillsIncomplete) || errors.Is(e, billing.ErrStatementNoData) {
+			continue
+		} else if e != nil {
+			return e
+		}
+	}
+
 	for _, day := range days {
 		checked := billing.AutomaticTarget{InstanceID: target.InstanceID, Kind: target.Kind, SubjectID: target.SubjectID, From: day, To: day.AddDate(0, 0, 1)}
 		if controller, ok := a.Store.(interface {
@@ -103,88 +137,37 @@ func (a BillingAutomation) Fill(ctx context.Context, target billing.AutomaticTar
 				return e
 			}
 		}
-		active, known := true, false
+		active := true
 		cache, cached := a.Store.(interface {
 			BillingDayActivity(context.Context, billing.AutomaticTarget) (bool, bool, error)
 			RecordBillingDayActivity(context.Context, billing.AutomaticTarget, bool) error
 		})
 		if cached {
+			var known bool
 			active, known, err = cache.BillingDayActivity(ctx, checked)
+			if !known {
+				active = true
+			}
 			if err != nil {
 				return err
 			}
 		}
-		if !known {
-			if activity, ok := a.Source.(interface {
-				ActiveBillingDays(context.Context, billing.AutomaticTarget, []int64, time.Time) ([]time.Time, error)
-			}); ok {
-				var channels []int64
-				if target.Kind == "upstream_statement" {
-					up, e := a.Store.BillingStatementUpstream(ctx, target.InstanceID, target.SubjectID)
-					if e != nil {
-						return e
-					}
-					for _, c := range up.Channels {
-						channels = append(channels, c.ChannelID)
-					}
-				}
-				if source == "source" {
-					dates, e := activity.ActiveBillingDays(ctx, checked, channels, checked.To)
-					if e != nil {
-						return e
-					}
-					active = len(dates) > 0
-				} else {
-					reader, ok := a.Archive.(BillingArchiveReader)
-					if !ok {
-						return fmt.Errorf("archive activity reader unavailable")
-					}
-					user := int64(0)
-					if target.Kind == "user_statement" {
-						user = target.SubjectID
-					}
-					logs, e := reader.BillingPage(ctx, target.InstanceID, "", day, checked.To, billing.LogCursor{}, user, channels, 1)
-					if e != nil {
-						return e
-					}
-					active = len(logs) > 0
-				}
-				if cached {
-					if err = cache.RecordBillingDayActivity(ctx, checked, active); err != nil {
-						return err
-					}
-				}
-			}
-		}
+		// Unknown days are checked by the job's first detail page. Empty jobs
+		// become no_data before file publication, without a second source query.
+
 		if !active {
 			continue
 		}
-		if err = a.enqueue(ctx, target, day, checked.To, "daily", source); errors.Is(err, billing.ErrStatementQueueFull) {
+		if err = a.enqueue(ctx, target, day, checked.To, "daily", source, observeMoney); errors.Is(err, billing.ErrStatementQueueFull) {
 			return nil
 		} else if err != nil {
 			return err
 		}
 	}
-	if store, ok := a.Store.(interface {
-		MissingBillingMonths(context.Context, billing.AutomaticTarget, time.Time) ([]time.Time, error)
-	}); ok {
-		months, e := store.MissingBillingMonths(ctx, target, end)
-		if e != nil {
-			return e
-		}
-		for _, month := range months {
-			if e = a.enqueue(ctx, target, month, month.AddDate(0, 1, 0), "monthly", source); errors.Is(e, billing.ErrStatementQueueFull) {
-				return nil
-			} else if errors.Is(e, billing.ErrDailyBillsIncomplete) || errors.Is(e, billing.ErrStatementNoData) {
-				continue
-			} else if e != nil {
-				return e
-			}
-		}
-	}
+
 	return nil
 }
-func (a BillingAutomation) enqueue(ctx context.Context, target billing.AutomaticTarget, day, end time.Time, period, source string) error {
+func (a BillingAutomation) enqueue(ctx context.Context, target billing.AutomaticTarget, day, end time.Time, period, source string, observeMoney func() (*billing.MoneySnapshot, error)) error {
 	job, steps, err := billing.NewJob(target.InstanceID, day, end, "system:billing")
 	if err != nil {
 		return err
@@ -229,6 +212,19 @@ func (a BillingAutomation) enqueue(ctx context.Context, target billing.Automatic
 		}
 		return err
 	}
+	// This is an advisory CT-only check. The insertion transaction still
+	// enforces capacity, but a full queue must not trigger source options reads.
+	if queue, ok := a.Store.(interface {
+		BillingStatementQueueFull(context.Context) (bool, error)
+	}); ok {
+		full, e := queue.BillingStatementQueueFull(ctx)
+		if e != nil {
+			return e
+		}
+		if full {
+			return billing.ErrStatementQueueFull
+		}
+	}
 	if snapshots, ok := a.Store.(interface {
 		FailedStatementMoneySnapshot(context.Context, string) (*billing.MoneySnapshot, error)
 	}); ok {
@@ -238,7 +234,7 @@ func (a BillingAutomation) enqueue(ctx context.Context, target billing.Automatic
 		}
 	}
 	if job.MoneySnapshot == nil {
-		job.MoneySnapshot, err = captureBillingMoney(ctx, a.Source, target.InstanceID)
+		job.MoneySnapshot, err = observeMoney()
 		if err != nil {
 			return err
 		}
@@ -418,6 +414,11 @@ func (s BillingReadonlySource) ActiveBillingDays(ctx context.Context, t billing.
 	if err != nil || !ok {
 		return nil, fmt.Errorf("billing source unavailable")
 	}
+	release, err := sourceBillingBudget.acquire(ctx, t.InstanceID)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	q := `SELECT created_at FROM logs WHERE type=2 AND created_at>=? AND created_at<?`
 	args := []any{t.From.Unix(), end.Unix()}
 	if t.Kind == "user_statement" {
