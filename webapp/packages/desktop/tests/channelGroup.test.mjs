@@ -51,15 +51,17 @@ test('group targets are selected from the complete site option list', () => {
   assert.doesNotMatch(readFileSync(new URL('../src/components/ChannelGroupEditor.vue', import.meta.url), 'utf8'), /allow-create/)
 })
 
+const groupFilterSource = readFileSync(new URL('../src/components/TuningGroupFilter.vue', import.meta.url), 'utf8')
 test('tuning group filter exposes searchable single-select group options', () => {
-  assert.match(viewSource, /<el-popover v-model:visible="groupFilterOpen"/)
-  assert.match(viewSource, /v-model="groupFilterSearch"/)
-  assert.match(viewSource, /所有分组/)
-  assert.match(viewSource, /toggleGroupFilter\(group\)/)
-  assert.match(viewSource, /<div class="channel-toolbar model-filter">/)
+  assert.match(viewSource, /<TuningGroupFilter/)
+  assert.match(viewSource, /@select="toggleGroupFilter"/)
+  assert.match(groupFilterSource, /@input="updateSearch"/)
+  assert.match(groupFilterSource, /所有分组/)
+  assert.match(groupFilterSource, /emit\("select", option.value\)/)
   assert.doesNotMatch(viewSource, /按分组筛选，如 vip/)
 })
-
-test('tuning group options scroll locally at the NewAPI list height limit', () => {
-  assert.match(viewSource, /group-filter-options\)\{max-height:min\(288px,calc\(100vh - 160px\)\);overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain/)
+test('tuning group options use a bounded locally scrollable list', () => {
+  assert.match(groupFilterSource, /max-height:\s*min\(320px, calc\(100vh - 140px\)\)/)
+  assert.match(groupFilterSource, /overflow-x:\s*hidden/)
+  assert.match(groupFilterSource, /overflow-y:\s*auto/)
 })

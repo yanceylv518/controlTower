@@ -378,3 +378,5 @@ vue-tsc 通过，verify-user-discounts.cjs 改用模型 API 422、渠道正常�
 
 用户授权本地改动提交推送，并明确排除主副图代码。暂存排除 agent 独立错误统计采集/分类、internal errorstats、server error_statistics handlers/store/097 迁移、监控组件及专项测试；main、mux、permissions 共用文件按内容排除关联片段，工作区原实现保留。
 本次包含账单/报表功能、容量单位修正、归档查询交互和交接文档。发现报表 worker 重复注册，保留单次；上游管理测试补新增折扣 API mock，菜单测试保留旧 URL 兼容检查。基于 index 导出的独立副本 Go agent/server/internal 全量测试、504 项前端测试、类型检查通过；源工作区构建通过，隔离构建继续核验。真实库专项此前已通过；全量默认未配置真实库的集成项跳过，不代表生产验收。未发布或部署。
+
+- 提交 3b9f1ea8f，合并 origin/main 671baaf78 为 5ec484e76；仅 PROJECT_PROGRESS 文档冲突，保留双方记录。暂存的本地 erroralert 改动已恢复，其余监控代码原样保留。隔离构建通过；合并后远端分组组件重构留下两项旧源代码断言，更新为新组件检查，509 项前端回归、类型、erroralert/dashboard/notificationtime Go 回归通过。准备推送 origin/main，未发布部署。
