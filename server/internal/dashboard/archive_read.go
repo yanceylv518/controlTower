@@ -15,7 +15,10 @@ type ArchiveJobReader interface {
 	ReadJob(context.Context, archivereader.JobQuery) (archivereader.JobPage, error)
 }
 
-type ArchiveReadHandler struct{ Reader ArchiveJobReader }
+type ArchiveReadHandler struct {
+	Reader      ArchiveJobReader
+	OptionNames func(string, map[string]map[string]bool) map[string]map[string]string
+}
 
 func (h ArchiveReadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	u, ok := auth.CurrentUser(r)
@@ -72,6 +75,13 @@ func (h ArchiveReadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		writeDashboardError(w, status, code)
 		return
+	}
+	if q.Kind == "overview" && h.OptionNames != nil {
+		for _, item := range page.Items {
+			if options, ok := item["options"].(map[string]map[string]bool); ok {
+				item["option_names"] = h.OptionNames(q.Site, options)
+			}
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(page)
