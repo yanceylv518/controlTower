@@ -34,12 +34,12 @@ func TestAlertAndReminderTimesUseBeijingTimezone(t *testing.T) {
 		for _, source := range []*time.Location{time.UTC, time.FixedZone("source", 8*60*60)} {
 			start := at.In(source)
 			alert := notifier.alertContent(state, "error", 3, 10, start)
-			if !strings.Contains(alert, "时间: 2027-01-01 02:30:00（北京时间 UTC+8）") {
+			if !strings.Contains(alert, "时间: 2027-01-01 02:30:00") || strings.Contains(alert, "UTC+8") {
 				t.Fatalf("wrong alert time: %s", alert)
 			}
 			reminder := notifier.remindContent(state, "error", 4, 10, &ruleState{episodeStartAt: start, episodeTotal: 4}, start.Add(time.Hour))
-			for _, want := range []string{"自 2027-01-01 02:30:00（北京时间 UTC+8） 起", "时间: 2027-01-01 03:30:00（北京时间 UTC+8）"} {
-				if !strings.Contains(reminder, want) {
+			for _, want := range []string{"自 2027-01-01 02:30:00 起", "时间: 2027-01-01 03:30:00"} {
+				if !strings.Contains(reminder, want) || strings.Contains(reminder, "UTC+8") {
 					t.Fatalf("missing %q in %s", want, reminder)
 				}
 			}

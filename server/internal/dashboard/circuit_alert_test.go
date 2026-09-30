@@ -22,7 +22,7 @@ func TestCircuitNotificationTimeUsesBeijingTimezone(t *testing.T) {
 				at := time.Date(2026, 9, 28, 18, 30, 0, 0, time.UTC).In(location)
 				payload := notificationPayload(storage.Alert{RuleKey: rule, FirstSeenAt: at, LastSeenAt: at.Add(time.Hour)}, storage.NotificationChannel{ChannelType: channel})
 				content := payload["text"].(map[string]string)["content"]
-				if !strings.Contains(content, "事件时间：2026-09-29 02:30:00（北京时间 UTC+8）") {
+				if !strings.Contains(content, "事件时间：2026-09-29 02:30:00") || strings.Contains(content, "UTC+8") {
 					t.Fatalf("%s/%s/%s: wrong event time: %s", rule, channel, location, content)
 				}
 			}

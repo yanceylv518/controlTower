@@ -27,7 +27,7 @@ func TestRobotNotificationTimesUseBeijingTimezone(t *testing.T) {
 					alert := testAlert()
 					alert.RuleKey, alert.LastSeenAt = rule, at.In(source)
 					content := notificationPayload(alert, storage.NotificationChannel{ChannelType: channel})["text"].(map[string]string)["content"]
-					if !strings.Contains(content, "2027-01-01 02:30:00（北京时间 UTC+8）") {
+					if !strings.Contains(content, "2027-01-01 02:30:00") || strings.Contains(content, "UTC+8") {
 						t.Fatalf("%s/%s host=%s source=%s: wrong notification time: %s", rule, channel, local, source, content)
 					}
 				}
@@ -65,8 +65,8 @@ func TestTrialNotificationUsesBeijingCallAndDetectionTimes(t *testing.T) {
 			if err != nil || status != "sent" {
 				t.Fatalf("send status=%s error=%v", status, err)
 			}
-			for _, want := range []string{"调用时间：2027-01-01 02:30:00（北京时间 UTC+8）", "时间: 2027-01-01 02:31:00（北京时间 UTC+8）"} {
-				if !strings.Contains(content, want) {
+			for _, want := range []string{"调用时间：2027-01-01 02:30:00", "时间: 2027-01-01 02:31:00"} {
+				if !strings.Contains(content, want) || strings.Contains(content, "UTC+8") {
 					t.Fatalf("missing %q in %s", want, content)
 				}
 			}
