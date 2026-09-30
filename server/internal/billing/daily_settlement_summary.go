@@ -10,6 +10,7 @@ import (
 )
 
 func writeDailySettlementSummary(wb *xlsxwriter.Workbook, currency, metadata string, rate *big.Rat, iterate func(func(RequestDetail) error) error) error {
+	type groupKey struct{ name, discount string }
 	type totals struct {
 		prices UnitPrices
 		MultimediaUsage
@@ -17,15 +18,20 @@ func writeDailySettlementSummary(wb *xlsxwriter.Workbook, currency, metadata str
 		amount                                *big.Rat
 		before, discount                      string
 	}
-	groups := []map[string]*totals{{"合计": {amount: new(big.Rat)}}, {}, {}}
+	groups := []map[groupKey]*totals{{{name: "合计"}: {amount: new(big.Rat)}}, {}, {}}
 	if err := iterate(func(v RequestDetail) error {
-		for i, key := range []string{"合计", v.ModelName, fmt.Sprintf("%s (#%d)", v.TokenName, v.TokenID)} {
+		before, discount := ChargeOriginal(v.Charge)
+		discount = DiscountGroupKey(discount)
+		for i, name := range []string{"合计", v.ModelName, fmt.Sprintf("%s (#%d)", v.TokenName, v.TokenID)} {
+			key := groupKey{name: name, discount: discount}
+			if i == 0 {
+				key.discount = ""
+			}
 			g := groups[i][key]
 			if g == nil {
 				g = &totals{amount: new(big.Rat)}
 				groups[i][key] = g
 			}
-			before, discount := ChargeOriginal(v.Charge)
 			if g.requests == 0 {
 				g.before = before
 				g.discount = discount
@@ -60,18 +66,27 @@ func writeDailySettlementSummary(wb *xlsxwriter.Workbook, currency, metadata str
 		if err = sheet.Row(headers); err != nil {
 			return err
 		}
-		keys := []string{}
+		keys := []groupKey{}
 		for key := range groups[i] {
 			keys = append(keys, key)
 		}
-		sort.Strings(keys)
+		sort.Slice(keys, func(i, j int) bool {
+			if keys[i].name != keys[j].name {
+				return keys[i].name < keys[j].name
+			}
+			return keys[i].discount < keys[j].discount
+		})
 		for _, key := range keys {
 			v := groups[i][key]
 			priceLabel := UnitPriceLabel(v.prices, rate)
+			discountLabel := DiscountGroupLabel(v.discount)
 			if i == 0 {
 				priceLabel = "—"
+				if v.discount == "mixed" {
+					discountLabel = "见分项"
+				}
 			}
-			if err = sheet.Row([]xlsxwriter.Cell{{Value: key}, numberCell(v.requests, 3), numberCell(v.input, 3), numberCell(v.output, 3), numberCell(v.cache, 3), numberCell(v.write, 3), numberCell(v.ImageInputTokens, 3), numberCell(v.ImageOutputTokens, 3), numberCell(v.AudioInputTokens, 3), numberCell(v.AudioOutputTokens, 3), xlsxwriter.Cell{Value: priceLabel, Style: xlsxwriter.WrappedTextStyle}, originalAmountCell(v.before), {Value: DiscountLabel(v.discount)}, decimalCell(v.amount.FloatString(12))}); err != nil {
+			if err = sheet.Row([]xlsxwriter.Cell{{Value: key.name}, numberCell(v.requests, 3), numberCell(v.input, 3), numberCell(v.output, 3), numberCell(v.cache, 3), numberCell(v.write, 3), numberCell(v.ImageInputTokens, 3), numberCell(v.ImageOutputTokens, 3), numberCell(v.AudioInputTokens, 3), numberCell(v.AudioOutputTokens, 3), xlsxwriter.Cell{Value: priceLabel, Style: xlsxwriter.WrappedTextStyle}, originalAmountCell(v.before), {Value: discountLabel}, decimalCell(v.amount.FloatString(12))}); err != nil {
 				return err
 			}
 		}
@@ -159,6 +174,9 @@ func SettlementSheetMetadata(job Job) string {
 	period := job.From.In(BusinessLocation).Format("2006-01-02 15:04") + " 至 " + job.To.In(BusinessLocation).Format("2006-01-02 15:04")
 	if job.BillPeriod == "daily" {
 		period = job.From.In(BusinessLocation).Format("2006-01-02")
+	}
+	if job.BillPeriod == "monthly" {
+		period = job.MonthlyCoverage.Description()
 	}
 	return subject + "    " + period
 }

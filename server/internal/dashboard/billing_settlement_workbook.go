@@ -11,6 +11,9 @@ import (
 )
 
 func settlementWorkbook(job billing.Job, rows []billing.StatementAggregateRow, store BillingStatementResultStore) ([]byte, error) {
+	if job.BillPeriod == "monthly" {
+		job.MonthlyCoverage = billing.MonthlyCoverageFromRows(job, rows)
+	}
 	display, rate, err := billing.SettlementDisplay(job.MoneySnapshot)
 	if err != nil {
 		return nil, err
@@ -32,12 +35,12 @@ func settlementWorkbook(job billing.Job, rows []billing.StatementAggregateRow, s
 	defer wb.Discard()
 	addSheet := func(name string, widths []float64) (*xlsxwriter.Sheet, error) {
 		if job.JobType == "user_statement" && job.BillPeriod == "monthly" {
-			from, to := job.From.In(billing.BusinessLocation), job.To.In(billing.BusinessLocation).AddDate(0, 0, -1)
+			from := job.From.In(billing.BusinessLocation)
 			customer := job.UserName
 			if customer == "" {
 				customer = fmt.Sprintf("用户 #%d", job.UserID)
 			}
-			return wb.AddReconciliationSheet(name, fmt.Sprintf("%d年%d月对账汇总单", from.Year(), int(from.Month())), customer, "", from.Format("2006-01-02")+" 至 "+to.Format("2006-01-02"), job.InstanceID, widths)
+			return wb.AddReconciliationSheet(name, fmt.Sprintf("%d年%d月对账汇总单", from.Year(), int(from.Month())), customer, "", job.MonthlyCoverage.Description(), job.InstanceID, widths)
 		}
 		return wb.AddReportSheet(name, name, billing.SettlementSheetMetadata(job), widths)
 	}
@@ -67,7 +70,7 @@ func settlementWorkbook(job billing.Job, rows []billing.StatementAggregateRow, s
 			if daily {
 				date = v.Day.Format("2006-01-02")
 			}
-			if err = sheet.Row(userColumns([]xlsxwriter.Cell{t(date), t(v.ModelName), t(v.ChannelName), n64(v.RequestCount), n64(v.PromptTokens), n64(v.CompletionTokens), n64(v.CacheTokens), n64(v.CacheWriteTokens), n64(v.ImageInputTokens), n64(v.ImageOutputTokens), n64(v.AudioInputTokens), n64(v.AudioOutputTokens), xlsxwriter.Cell{Value: billing.UnitPriceLabel(v.UnitPrices, rate), Style: xlsxwriter.WrappedTextStyle}, settlementOriginalCell(billing.DisplaySettlementAmount(v.BeforeAmount, rate)), t(billing.DiscountLabel(v.SettlementDiscount)), d(billing.DisplaySettlementAmount(v.Amount, rate))})); err != nil {
+			if err = sheet.Row(userColumns([]xlsxwriter.Cell{t(date), t(v.ModelName), t(v.ChannelName), n64(v.RequestCount), n64(v.PromptTokens), n64(v.CompletionTokens), n64(v.CacheTokens), n64(v.CacheWriteTokens), n64(v.ImageInputTokens), n64(v.ImageOutputTokens), n64(v.AudioInputTokens), n64(v.AudioOutputTokens), xlsxwriter.Cell{Value: billing.UnitPriceLabel(v.UnitPrices, rate), Style: xlsxwriter.WrappedTextStyle}, settlementOriginalCell(billing.DisplaySettlementAmount(v.BeforeAmount, rate)), t(billing.DiscountGroupLabel(v.SettlementDiscount)), d(billing.DisplaySettlementAmount(v.Amount, rate))})); err != nil {
 				return nil, err
 			}
 		}
@@ -89,7 +92,7 @@ func settlementWorkbook(job billing.Job, rows []billing.StatementAggregateRow, s
 			return nil, err
 		}
 		for _, v := range tokens {
-			if err = sheet.Row([]xlsxwriter.Cell{t(v.Day.Format("2006-01-02")), t(v.TokenName), t(v.ModelName), n64(v.RequestCount), n64(v.PromptTokens), n64(v.CompletionTokens), n64(v.CacheTokens), n64(v.CacheWriteTokens), n64(v.ImageInputTokens), n64(v.ImageOutputTokens), n64(v.AudioInputTokens), n64(v.AudioOutputTokens), xlsxwriter.Cell{Value: billing.UnitPriceLabel(v.UnitPrices, rate), Style: xlsxwriter.WrappedTextStyle}, settlementOriginalCell(billing.DisplaySettlementAmount(v.BeforeAmount, rate)), t(billing.DiscountLabel(v.SettlementDiscount)), d(billing.DisplaySettlementAmount(v.Amount, rate))}); err != nil {
+			if err = sheet.Row([]xlsxwriter.Cell{t(v.Day.Format("2006-01-02")), t(v.TokenName), t(v.ModelName), n64(v.RequestCount), n64(v.PromptTokens), n64(v.CompletionTokens), n64(v.CacheTokens), n64(v.CacheWriteTokens), n64(v.ImageInputTokens), n64(v.ImageOutputTokens), n64(v.AudioInputTokens), n64(v.AudioOutputTokens), xlsxwriter.Cell{Value: billing.UnitPriceLabel(v.UnitPrices, rate), Style: xlsxwriter.WrappedTextStyle}, settlementOriginalCell(billing.DisplaySettlementAmount(v.BeforeAmount, rate)), t(billing.DiscountGroupLabel(v.SettlementDiscount)), d(billing.DisplaySettlementAmount(v.Amount, rate))}); err != nil {
 				return nil, err
 			}
 		}
@@ -145,7 +148,7 @@ func dailySettlementSummaryWorkbook(job billing.Job, rows []billing.StatementAgg
 			amount.Add(amount, a)
 		}
 	}
-	if err = summary.Row([]xlsxwriter.Cell{t("合计"), n64(count), n64(input), n64(output), n64(read), n64(write), n64(media.ImageInputTokens), n64(media.ImageOutputTokens), n64(media.AudioInputTokens), n64(media.AudioOutputTokens), t("—"), settlementOriginalCell(billing.DisplaySettlementAmount(before, rate)), t(billing.DiscountLabel(discount)), d(billing.DisplaySettlementAmount(amount.FloatString(12), rate))}); err != nil {
+	if err = summary.Row([]xlsxwriter.Cell{t("合计"), n64(count), n64(input), n64(output), n64(read), n64(write), n64(media.ImageInputTokens), n64(media.ImageOutputTokens), n64(media.AudioInputTokens), n64(media.AudioOutputTokens), t("—"), settlementOriginalCell(billing.DisplaySettlementAmount(before, rate)), t(summaryDiscountLabel(discount)), d(billing.DisplaySettlementAmount(amount.FloatString(12), rate))}); err != nil {
 		return nil, err
 	}
 	models, err := add("模型统计", headers, []float64{40, 14, 18, 18, 18, 18, 18, 18, 18, 18, 48, 20, 16, 20})
@@ -154,7 +157,7 @@ func dailySettlementSummaryWorkbook(job billing.Job, rows []billing.StatementAgg
 	}
 	for _, g := range groupStatementRows(job, rows, nil, false) {
 		v := g.Row
-		if err = models.Row([]xlsxwriter.Cell{t(v.ModelName), n64(v.RequestCount), n64(v.PromptTokens), n64(v.CompletionTokens), n64(v.CacheTokens), n64(v.CacheWriteTokens), n64(v.ImageInputTokens), n64(v.ImageOutputTokens), n64(v.AudioInputTokens), n64(v.AudioOutputTokens), xlsxwriter.Cell{Value: billing.UnitPriceLabel(v.UnitPrices, rate), Style: xlsxwriter.WrappedTextStyle}, settlementOriginalCell(billing.DisplaySettlementAmount(v.BeforeAmount, rate)), t(billing.DiscountLabel(v.SettlementDiscount)), d(billing.DisplaySettlementAmount(v.Amount, rate))}); err != nil {
+		if err = models.Row([]xlsxwriter.Cell{t(v.ModelName), n64(v.RequestCount), n64(v.PromptTokens), n64(v.CompletionTokens), n64(v.CacheTokens), n64(v.CacheWriteTokens), n64(v.ImageInputTokens), n64(v.ImageOutputTokens), n64(v.AudioInputTokens), n64(v.AudioOutputTokens), xlsxwriter.Cell{Value: billing.UnitPriceLabel(v.UnitPrices, rate), Style: xlsxwriter.WrappedTextStyle}, settlementOriginalCell(billing.DisplaySettlementAmount(v.BeforeAmount, rate)), t(billing.DiscountGroupLabel(v.SettlementDiscount)), d(billing.DisplaySettlementAmount(v.Amount, rate))}); err != nil {
 			return nil, err
 		}
 	}
@@ -167,13 +170,20 @@ func dailySettlementSummaryWorkbook(job billing.Job, rows []billing.StatementAgg
 		return nil, err
 	}
 	for _, v := range tokens {
-		if err = sheet.Row([]xlsxwriter.Cell{t(v.TokenName), t(strconv.FormatInt(v.TokenID, 10)), t(v.ModelName), n64(v.RequestCount), n64(v.PromptTokens), n64(v.CompletionTokens), n64(v.CacheTokens), n64(v.CacheWriteTokens), n64(v.ImageInputTokens), n64(v.ImageOutputTokens), n64(v.AudioInputTokens), n64(v.AudioOutputTokens), xlsxwriter.Cell{Value: billing.UnitPriceLabel(v.UnitPrices, rate), Style: xlsxwriter.WrappedTextStyle}, settlementOriginalCell(billing.DisplaySettlementAmount(v.BeforeAmount, rate)), t(billing.DiscountLabel(v.SettlementDiscount)), d(billing.DisplaySettlementAmount(v.Amount, rate))}); err != nil {
+		if err = sheet.Row([]xlsxwriter.Cell{t(v.TokenName), t(strconv.FormatInt(v.TokenID, 10)), t(v.ModelName), n64(v.RequestCount), n64(v.PromptTokens), n64(v.CompletionTokens), n64(v.CacheTokens), n64(v.CacheWriteTokens), n64(v.ImageInputTokens), n64(v.ImageOutputTokens), n64(v.AudioInputTokens), n64(v.AudioOutputTokens), xlsxwriter.Cell{Value: billing.UnitPriceLabel(v.UnitPrices, rate), Style: xlsxwriter.WrappedTextStyle}, settlementOriginalCell(billing.DisplaySettlementAmount(v.BeforeAmount, rate)), t(billing.DiscountGroupLabel(v.SettlementDiscount)), d(billing.DisplaySettlementAmount(v.Amount, rate))}); err != nil {
 			return nil, err
 		}
 	}
 	var out bytes.Buffer
 	err = wb.Write(&out)
 	return out.Bytes(), err
+}
+
+func summaryDiscountLabel(discount string) string {
+	if discount == "mixed" {
+		return "见分项"
+	}
+	return billing.DiscountLabel(discount)
 }
 
 func settlementOriginalCell(v string) xlsxwriter.Cell {

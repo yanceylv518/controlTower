@@ -868,6 +868,7 @@ type PassthroughHandler struct {
 
 type PassthroughUser struct {
 	ID          int64  `json:"id"`
+	Role        int    `json:"role"`
 	Username    string `json:"username"`
 	DisplayName string `json:"display_name"`
 	Quota       int64  `json:"quota"`
@@ -1851,6 +1852,14 @@ func (h *PassthroughHandler) Users(w http.ResponseWriter, r *http.Request) {
 		writeDashboardError(w, 400, err.Error())
 		return
 	}
+	excludeAdmins := false
+	if raw := strings.TrimSpace(r.URL.Query().Get("exclude_admin")); raw != "" {
+		excludeAdmins, err = strconv.ParseBool(raw)
+		if err != nil {
+			writeDashboardError(w, 400, "invalid_exclude_admin")
+			return
+		}
+	}
 	db, configured, err := h.database(site)
 	if err != nil {
 		writeDashboardError(w, 502, "readonly_connection_failed")
@@ -1863,6 +1872,9 @@ func (h *PassthroughHandler) Users(w http.ResponseWriter, r *http.Request) {
 	limit, offset := queryPage(r, 200)
 	args := make([]any, 0, len(ids)+4)
 	where := " WHERE 1=1"
+	if excludeAdmins {
+		where += " AND role < 10"
+	}
 	if len(ids) > 0 {
 		where += " AND id IN (" + placeholders(len(ids)) + ")"
 		for _, id := range ids {
@@ -1897,7 +1909,7 @@ func (h *PassthroughHandler) Users(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pageArgs := append(append([]any{}, args...), limit, offset)
-	rows, err := tx.QueryContext(ctx, `SELECT id,username,COALESCE(display_name,''),quota,used_quota,status,COALESCE(created_at,0),COALESCE(last_login_at,0) FROM users`+where+` ORDER BY id LIMIT ? OFFSET ?`, pageArgs...)
+	rows, err := tx.QueryContext(ctx, `SELECT id,username,COALESCE(display_name,''),quota,used_quota,status,COALESCE(created_at,0),COALESCE(last_login_at,0),role FROM users`+where+` ORDER BY id LIMIT ? OFFSET ?`, pageArgs...)
 	if err != nil {
 		writeDashboardError(w, 502, "readonly_query_failed")
 		return
@@ -1906,7 +1918,7 @@ func (h *PassthroughHandler) Users(w http.ResponseWriter, r *http.Request) {
 	items := []PassthroughUser{}
 	for rows.Next() {
 		var v PassthroughUser
-		if rows.Scan(&v.ID, &v.Username, &v.DisplayName, &v.Quota, &v.UsedQuota, &v.Status, &v.CreatedAt, &v.LastLoginAt) != nil {
+		if rows.Scan(&v.ID, &v.Username, &v.DisplayName, &v.Quota, &v.UsedQuota, &v.Status, &v.CreatedAt, &v.LastLoginAt, &v.Role) != nil {
 			writeDashboardError(w, 502, "readonly_query_failed")
 			return
 		}

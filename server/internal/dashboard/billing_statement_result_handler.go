@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"io"
 	"math/big"
@@ -291,6 +292,14 @@ type statementGroupedRow struct {
 }
 
 func statementSummaryKey(job billing.Job, row billing.StatementAggregateRow, discount string) string {
+	if job.UsageVersion >= billing.SettlementUsageVersion {
+		channel := int64(0)
+		if job.JobType == "upstream_statement" {
+			channel = row.ChannelID
+		}
+		key, _ := json.Marshal([]any{channel, row.ModelName, billing.DiscountGroupKey(row.SettlementDiscount)})
+		return string(key)
+	}
 	if job.JobType == "upstream_statement" {
 		return fmt.Sprintf("%d|%s|%s", row.ChannelID, row.ModelName, discount)
 	}
@@ -300,6 +309,9 @@ func statementSummaryKey(job billing.Job, row billing.StatementAggregateRow, dis
 func groupStatementRows(job billing.Job, rows []billing.StatementAggregateRow, discounts []billing.StatementDiscount, daily bool) []statementGroupedRow {
 	grouped := map[string]statementGroupedRow{}
 	for _, row := range rows {
+		if job.UsageVersion >= billing.SettlementUsageVersion {
+			row.SettlementDiscount = billing.DiscountGroupKey(row.SettlementDiscount)
+		}
 		discount := "1.000000"
 		if job.JobType == "upstream_statement" && job.UsageVersion < billing.SettlementUsageVersion {
 			discount = billing.DiscountForDay(discounts, job.JobType, row.ChannelID, row.ModelName, row.Day)
@@ -329,7 +341,14 @@ func groupStatementRows(job billing.Job, rows []billing.StatementAggregateRow, d
 		item.Row.CompletionTokens += row.CompletionTokens
 		item.Row.CacheTokens += row.CacheTokens
 		item.Row.CacheWriteTokens += row.CacheWriteTokens
-		item.Row.Amount = addDecimal(item.Row.Amount, row.Amount)
+		if job.UsageVersion >= billing.SettlementUsageVersion {
+			if item.Row.Amount == "" {
+				item.Row.Amount = "0"
+			}
+			item.Row.Amount = billing.MergeBefore(item.Row.Amount, row.Amount)
+		} else {
+			item.Row.Amount = addDecimal(item.Row.Amount, row.Amount)
+		}
 		grouped[key] = item
 	}
 	keys := make([]string, 0, len(grouped))

@@ -8,13 +8,13 @@ import (
 
 func (s Store) QueryBillingTokenRows(ctx context.Context, jobID string, userID, tokenID int64, from, to time.Time) ([]billing.TokenDailyRow, error) {
 	dayFrom, dayTo := billingDayBounds(from, to)
-	query := `SELECT instance_id,user_id,token_id,MAX(token_name),MAX(username),model_name,'' group_name,0 tier_from,bill_day,SUM(request_count),SUM(prompt_tokens),SUM(completion_tokens),SUM(image_input_tokens),SUM(image_output_tokens),SUM(audio_input_tokens),SUM(audio_output_tokens),SUM(cache_read_tokens),SUM(cache_write_tokens),SUM(cache_write_5m_tokens),SUM(cache_write_1h_tokens),SUM(calculated_quota),CAST(SUM(total_amount) AS CHAR),CASE WHEN SUM(CASE WHEN before_known_count=request_count OR settlement_discount IN ('','1','1.000000') THEN 0 ELSE 1 END)=0 THEN CAST(SUM(CASE WHEN before_known_count=request_count THEN before_amount ELSE total_amount END) AS CHAR) ELSE '' END,CASE WHEN MIN(COALESCE(NULLIF(settlement_discount,''),'1.000000'))=MAX(COALESCE(NULLIF(settlement_discount,''),'1.000000')) THEN MIN(COALESCE(NULLIF(settlement_discount,''),'1.000000')) ELSE 'mixed' END,MAX(updated_at),JSON_ARRAYAGG(unit_prices) FROM billing_compact_daily_totals WHERE job_id=? AND user_id=? AND bill_day>=? AND bill_day<?`
+	query := `SELECT instance_id,user_id,token_id,MAX(token_name),MAX(username),BINARY model_name,'' group_name,0 tier_from,bill_day,SUM(request_count),SUM(prompt_tokens),SUM(completion_tokens),SUM(image_input_tokens),SUM(image_output_tokens),SUM(audio_input_tokens),SUM(audio_output_tokens),SUM(cache_read_tokens),SUM(cache_write_tokens),SUM(cache_write_5m_tokens),SUM(cache_write_1h_tokens),SUM(calculated_quota),CAST(SUM(total_amount) AS CHAR),CASE WHEN SUM(CASE WHEN before_known_count=request_count OR settlement_discount IN ('','1','1.000000') THEN 0 ELSE 1 END)=0 THEN CAST(SUM(CASE WHEN before_known_count=request_count THEN before_amount ELSE total_amount END) AS CHAR) ELSE '' END,` + billingDiscountGroupSQL + `,MAX(updated_at),JSON_ARRAYAGG(unit_prices) FROM billing_compact_daily_totals WHERE job_id=? AND user_id=? AND bill_day>=? AND bill_day<?`
 	args := []any{jobID, userID, dayFrom, dayTo}
 	if tokenID >= 0 {
 		query += ` AND token_id=?`
 		args = append(args, tokenID)
 	}
-	query += ` GROUP BY instance_id,user_id,token_id,model_name,bill_day ORDER BY bill_day DESC,model_name`
+	query += ` GROUP BY instance_id,user_id,token_id,BINARY model_name,bill_day,` + billingDiscountGroupSQL + ` ORDER BY bill_day DESC,BINARY model_name,token_id,` + billingDiscountGroupSQL
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err

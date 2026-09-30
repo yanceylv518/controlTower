@@ -42,7 +42,7 @@ func (h BillingStatementResultHandler) writeMonthlyPreview(w http.ResponseWriter
 		if before == "" {
 			before = "—"
 		}
-		data = append(data, append(prefix, billing.UnitPriceLabel(prices, rate), before, billing.DiscountLabel(discount), billing.DisplaySettlementAmount(amount, rate)))
+		data = append(data, append(prefix, billing.UnitPriceLabel(prices, rate), before, billing.DiscountGroupLabel(discount), billing.DisplaySettlementAmount(amount, rate)))
 	}
 	if dimension == "token" {
 		tokens, e := h.Store.QueryBillingTokenRows(r.Context(), job.ID, job.UserID, -1, job.From, job.To)
@@ -65,6 +65,12 @@ func (h BillingStatementResultHandler) writeMonthlyPreview(w http.ResponseWriter
 				prefix = append(prefix, v.ChannelName)
 			}
 			appendRow(prefix, v.RequestCount, v.PromptTokens, v.CompletionTokens, v.CacheTokens, v.CacheWriteTokens, v.MultimediaUsage, v.BeforeAmount, v.SettlementDiscount, v.Amount, v.UnitPrices)
+		}
+	}
+	legacyMixed := false
+	for _, row := range data {
+		if row[len(headers)-2] == billing.DiscountGroupLabel("mixed") {
+			legacyMixed = true
 		}
 	}
 	totals := make([]string, len(headers))
@@ -106,5 +112,5 @@ func (h BillingStatementResultHandler) writeMonthlyPreview(w http.ResponseWriter
 	if hi > len(data) {
 		hi = len(data)
 	}
-	writeDashboardJSON(w, 200, map[string]any{"covered_days": len(coveredDays), "headers": headers, "rows": data[lo:hi], "totals": totals, "total": len(data), "page_size": size, "currency": currency, "numeric_start": start})
+	writeDashboardJSON(w, 200, map[string]any{"coverage": billing.MonthlyCoverageFromRows(job, rows), "legacy_mixed_discounts": legacyMixed, "covered_days": len(coveredDays), "headers": headers, "rows": data[lo:hi], "totals": totals, "total": len(data), "page_size": size, "currency": currency, "numeric_start": start})
 }

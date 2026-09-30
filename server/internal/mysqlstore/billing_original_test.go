@@ -59,7 +59,16 @@ func TestBillingOriginalAggregation(t *testing.T) {
 	check := func(before, discount string) {
 		t.Helper()
 		rows, e := s.QueryBillingStatementAggregates(ctx, job.ID)
-		if e != nil || len(rows) != 1 || rows[0].BeforeAmount != before || rows[0].SettlementDiscount != discount {
+		gotBefore, gotDiscount := "", ""
+		for i, row := range rows {
+			if i == 0 {
+				gotBefore, gotDiscount = row.BeforeAmount, row.SettlementDiscount
+			} else {
+				gotBefore = billing.MergeBefore(gotBefore, row.BeforeAmount)
+				gotDiscount = billing.MergeDiscount(gotDiscount, row.SettlementDiscount)
+			}
+		}
+		if e != nil || len(rows) == 0 || gotBefore != before || gotDiscount != discount {
 			t.Fatalf("rows=%+v error=%v", rows, e)
 		}
 	}
@@ -73,7 +82,7 @@ func TestBillingOriginalAggregation(t *testing.T) {
 		t.Fatalf("workspace media: %+v %v", workspace, e)
 	}
 	// Historical bills did not record discount metadata; use full-price fallback.
-	if _, e = db.Exec("UPDATE billing_compact_daily_totals SET before_known_count=0,settlement_discount='' WHERE job_id=?", job.ID); e != nil {
+	if _, e = db.Exec("UPDATE billing_compact_daily_totals SET channel_id=CASE WHEN settlement_discount='1.000000' THEN 99 ELSE channel_id END,before_known_count=0,settlement_discount='' WHERE job_id=?", job.ID); e != nil {
 		t.Fatal(e)
 	}
 	check("16.000000000000", "1.000000")
@@ -94,10 +103,14 @@ func TestBillingOriginalAggregation(t *testing.T) {
 	}
 	write("5", "1")
 	rows, e := s.QueryBillingStatementAggregates(ctx, job.ID)
-	if e != nil || len(rows) != 1 {
+	if e != nil || len(rows) != 2 {
 		t.Fatal(rows, e)
 	}
-	if got := billing.UnitPriceLabel(rows[0].UnitPrices, big.NewRat(1, 1)); got != "输入 5；输出 8；部分未记录" {
+	var prices billing.UnitPrices
+	for _, row := range rows {
+		prices.Merge(row.UnitPrices)
+	}
+	if got := billing.UnitPriceLabel(prices, big.NewRat(1, 1)); got != "输入 5；输出 8；部分未记录" {
 		t.Fatal(got)
 	}
 

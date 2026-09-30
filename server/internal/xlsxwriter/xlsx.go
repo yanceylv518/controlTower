@@ -78,6 +78,10 @@ func (s *Sheet) Row(cells []Cell) error {
 			} else if s.row == s.headerRow {
 				height = 34
 			}
+			if s.row == 4 && len(cells) == 1 {
+				// Long coverage ranges use the full masthead width and wrap.
+				height = 60
+			}
 		} else if s.row == 1 {
 			height = 32
 		} else if s.row == 2 {
@@ -369,8 +373,15 @@ func (w *Workbook) AddReconciliationSheet(name, title, customer, issuer, period,
 		return nil, e
 	}
 	last := column(len(widths))
-	s.merges = append(s.merges, "A1:"+last+"1", "A2:"+last+"2", "A3:"+last+"3", "A4:B4", "C4:"+last+"4")
-	for _, row := range [][]Cell{{{Value: title, Style: 12}}, {{Value: "客户(甲方)：" + customer, Style: 13}}, {{Value: "出账方(乙方)：" + issuer, Style: 13}}, {{Value: "账期：" + period, Style: 13}, {}, {Value: "服务站点：" + site, Style: 13}}} {
+	s.merges = append(s.merges, "A1:"+last+"1", "A2:"+last+"2", "A3:"+last+"3")
+	periodRow := []Cell{{Value: "账期：" + period, Style: 13}, {}, {Value: "服务站点：" + site, Style: 13}}
+	if len(period) > 40 {
+		s.merges = append(s.merges, "A4:"+last+"4")
+		periodRow = []Cell{{Value: "账期：" + period + "    服务站点：" + site, Style: WrappedTextStyle}}
+	} else {
+		s.merges = append(s.merges, "A4:B4", "C4:"+last+"4")
+	}
+	for _, row := range [][]Cell{{{Value: title, Style: 12}}, {{Value: "客户(甲方)：" + customer, Style: 13}}, {{Value: "出账方(乙方)：" + issuer, Style: 13}}, periodRow} {
 		if e = s.Row(row); e != nil {
 			return nil, e
 		}

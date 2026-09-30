@@ -617,7 +617,16 @@ export interface BillingModelItem {
   effective_from: string;
   price_source: "ct" | "newapi" | "";
 }
+export interface BillingMonthlyCoverage {
+  ranges: {from:string;to:string}[];
+  missing: {from:string;to:string}[];
+  covered_days:number;
+  empty_days:number;
+  total_days:number;
+  complete:boolean;
+}
 export interface BillingJob {
+  monthly_coverage?: BillingMonthlyCoverage;
   id: string;
   bill_no?: string;
   instance_id: string;

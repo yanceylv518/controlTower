@@ -30,14 +30,14 @@ func (s Store) createBillingMonthFromDays(ctx context.Context, tx *sql.Tx, job b
 			rows.Close()
 			return err
 		}
-		if !from.Equal(billing.CompleteDayBoundary(from)) || !to.Equal(from.AddDate(0, 0, 1)) {
+		if !from.Equal(billing.CompleteDayBoundary(from)) || !to.Equal(from.AddDate(0, 0, 1)) || to.After(billing.CompleteDayBoundary(job.CreatedAt)) {
 			continue
 		}
 		key := from.In(billing.BusinessLocation).Format("2006-01-02")
-		if covered[key] {
+		if _, exists := covered[key]; exists {
 			continue
 		}
-		covered[key] = true
+		covered[key] = status == "no_data"
 		if status == "no_data" {
 			continue
 		}
@@ -99,6 +99,9 @@ func (s Store) createBillingMonthFromDays(ctx context.Context, tx *sql.Tx, job b
 		}
 	}
 	if err = recordStandaloneBillingTask(ctx, tx, job); err != nil {
+		return err
+	}
+	if err = snapshotBillingMonthCoverage(ctx, tx, job, covered); err != nil {
 		return err
 	}
 	return s.finalizeBillingStatement(ctx, tx, job, time.Now().UTC())

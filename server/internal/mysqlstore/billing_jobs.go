@@ -307,6 +307,9 @@ func (s Store) BillingJob(ctx context.Context, id string) (billing.Job, error) {
 	if e == nil {
 		j.MoneySnapshot, e = s.BillingJobMoneySnapshot(ctx, id)
 	}
+	if e == nil && j.BillPeriod == "monthly" && j.UsageVersion >= 3 {
+		j.MonthlyCoverage, e = s.billingMonthlyCoverage(ctx, j)
+	}
 	return j, e
 }
 
@@ -384,7 +387,7 @@ func (s Store) AppendBillingHour(ctx context.Context, j billing.Job, st billing.
 	type compactKey struct {
 		day                        string
 		userID, tokenID, channelID int64
-		model                      string
+		model, discount            string
 	}
 	type compactValue struct {
 		prices                           billing.UnitPrices
@@ -401,7 +404,9 @@ func (s Store) AppendBillingHour(ctx context.Context, j billing.Job, st billing.
 	}
 	compact := map[compactKey]compactValue{}
 	for _, v := range details {
-		key := compactKey{v.BillDay.In(billing.BusinessLocation).Format("2006-01-02"), v.UserID, v.TokenID, v.ChannelID, v.ModelName}
+		before, discount := billing.ChargeOriginal(v.Charge)
+		discount = billing.DiscountGroupKey(discount)
+		key := compactKey{v.BillDay.In(billing.BusinessLocation).Format("2006-01-02"), v.UserID, v.TokenID, v.ChannelID, v.ModelName, discount}
 		value := compact[key]
 		value.username, value.tokenName, value.channelName = v.Username, v.TokenName, v.ChannelName
 		value.requests++
@@ -430,15 +435,10 @@ func (s Store) AppendBillingHour(ctx context.Context, j billing.Job, st billing.
 				value.emptyAmount.Add(value.emptyAmount, amount)
 			}
 		}
-		before, discount := billing.ChargeOriginal(v.Charge)
 		if before != "" {
 			value.beforeKnown++
 		}
-		if value.requests == 1 {
-			value.discount = discount
-		} else {
-			value.discount = billing.MergeDiscount(value.discount, discount)
-		}
+		value.discount = discount
 		if amount, ok := new(big.Rat).SetString(decimalValue(before)); ok {
 			value.beforeAmount.Add(value.beforeAmount, amount)
 		}
@@ -456,7 +456,7 @@ func (s Store) AppendBillingHour(ctx context.Context, j billing.Job, st billing.
 		args = append(args, j.ID, j.InstanceID, key.day, key.userID, value.username, key.tokenID, value.tokenName, key.channelID, value.channelName, key.model, value.requests, value.prompt, value.completion, value.cacheRead, value.cacheWrite, value.write5m, value.write1h, value.quota, value.amount.FloatString(12), now, value.media.ImageInputTokens, value.media.ImageOutputTokens, value.media.AudioInputTokens, value.media.AudioOutputTokens, value.emptyCount, value.emptyAmount.FloatString(12), value.beforeAmount.FloatString(12), value.beforeKnown, value.discount, string(prices))
 	}
 	if len(values) > 0 {
-		query := `INSERT INTO billing_compact_daily_totals(job_id,instance_id,bill_day,user_id,username,token_id,token_name,channel_id,channel_name,model_name,request_count,prompt_tokens,completion_tokens,cache_read_tokens,cache_write_tokens,cache_write_5m_tokens,cache_write_1h_tokens,calculated_quota,total_amount,updated_at,image_input_tokens,image_output_tokens,audio_input_tokens,audio_output_tokens,empty_output_count,empty_output_amount,before_amount,before_known_count,settlement_discount,unit_prices) VALUES ` + strings.Join(values, ",") + ` ON DUPLICATE KEY UPDATE unit_prices=JSON_MERGE_PATCH(COALESCE(unit_prices,JSON_OBJECT('unknown|未记录',JSON_EXTRACT('true','$'))),VALUES(unit_prices)),before_known_count=before_known_count+VALUES(before_known_count),settlement_discount=CASE WHEN settlement_discount='' OR VALUES(settlement_discount)='' THEN '' WHEN settlement_discount=VALUES(settlement_discount) THEN settlement_discount ELSE 'mixed' END,empty_output_count=empty_output_count+VALUES(empty_output_count),empty_output_amount=empty_output_amount+VALUES(empty_output_amount),before_amount=before_amount+VALUES(before_amount),username=VALUES(username),token_name=VALUES(token_name),channel_name=VALUES(channel_name),request_count=request_count+VALUES(request_count),prompt_tokens=prompt_tokens+VALUES(prompt_tokens),completion_tokens=completion_tokens+VALUES(completion_tokens),cache_read_tokens=cache_read_tokens+VALUES(cache_read_tokens),cache_write_tokens=cache_write_tokens+VALUES(cache_write_tokens),cache_write_5m_tokens=cache_write_5m_tokens+VALUES(cache_write_5m_tokens),cache_write_1h_tokens=cache_write_1h_tokens+VALUES(cache_write_1h_tokens),calculated_quota=calculated_quota+VALUES(calculated_quota),total_amount=total_amount+VALUES(total_amount),image_input_tokens=image_input_tokens+VALUES(image_input_tokens),image_output_tokens=image_output_tokens+VALUES(image_output_tokens),audio_input_tokens=audio_input_tokens+VALUES(audio_input_tokens),audio_output_tokens=audio_output_tokens+VALUES(audio_output_tokens),updated_at=VALUES(updated_at)`
+		query := `INSERT INTO billing_compact_daily_totals(job_id,instance_id,bill_day,user_id,username,token_id,token_name,channel_id,channel_name,model_name,request_count,prompt_tokens,completion_tokens,cache_read_tokens,cache_write_tokens,cache_write_5m_tokens,cache_write_1h_tokens,calculated_quota,total_amount,updated_at,image_input_tokens,image_output_tokens,audio_input_tokens,audio_output_tokens,empty_output_count,empty_output_amount,before_amount,before_known_count,settlement_discount,unit_prices) VALUES ` + strings.Join(values, ",") + ` ON DUPLICATE KEY UPDATE unit_prices=JSON_MERGE_PATCH(COALESCE(unit_prices,JSON_OBJECT('unknown|未记录',JSON_EXTRACT('true','$'))),VALUES(unit_prices)),before_known_count=before_known_count+VALUES(before_known_count),empty_output_count=empty_output_count+VALUES(empty_output_count),empty_output_amount=empty_output_amount+VALUES(empty_output_amount),before_amount=before_amount+VALUES(before_amount),username=VALUES(username),token_name=VALUES(token_name),channel_name=VALUES(channel_name),request_count=request_count+VALUES(request_count),prompt_tokens=prompt_tokens+VALUES(prompt_tokens),completion_tokens=completion_tokens+VALUES(completion_tokens),cache_read_tokens=cache_read_tokens+VALUES(cache_read_tokens),cache_write_tokens=cache_write_tokens+VALUES(cache_write_tokens),cache_write_5m_tokens=cache_write_5m_tokens+VALUES(cache_write_5m_tokens),cache_write_1h_tokens=cache_write_1h_tokens+VALUES(cache_write_1h_tokens),calculated_quota=calculated_quota+VALUES(calculated_quota),total_amount=total_amount+VALUES(total_amount),image_input_tokens=image_input_tokens+VALUES(image_input_tokens),image_output_tokens=image_output_tokens+VALUES(image_output_tokens),audio_input_tokens=audio_input_tokens+VALUES(audio_input_tokens),audio_output_tokens=audio_output_tokens+VALUES(audio_output_tokens),updated_at=VALUES(updated_at)`
 		if _, e = tx.ExecContext(ctx, query, args...); e != nil {
 			return e
 		}

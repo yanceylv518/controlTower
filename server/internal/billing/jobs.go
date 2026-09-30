@@ -55,6 +55,7 @@ type UserPageSource interface {
 type UpstreamPageSource interface {
 	DetailedChannelsLogsPage(context.Context, string, []int64, time.Time, time.Time, LogCursor, int) ([]PagedLogRecord, error)
 }
+
 // UpstreamModelPageSource can apply the job's frozen channel/model bindings
 // before fetching full log records. Sources without it retain local filtering.
 type UpstreamModelPageSource interface {
@@ -118,6 +119,8 @@ type Job struct {
 	UpdatedAt         time.Time      `json:"updated_at"`
 	PricingSource     string         `json:"pricing_source"`
 	UsageVersion      int            `json:"usage_version"`
+
+	MonthlyCoverage *MonthlyCoverage `json:"monthly_coverage,omitempty"`
 }
 
 type JobStep struct {

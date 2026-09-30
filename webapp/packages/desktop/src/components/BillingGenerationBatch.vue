@@ -4,19 +4,23 @@ import {ElMessage,ElMessageBox} from 'element-plus';
 import type {BillingGenerationBatch,BillingGenerationProgress} from '@ct/shared';
 import {dashboard,passthrough} from '../api';
 import {billingTaskErrorMessage} from '../utils/httpError';
-const props=defineProps<{site:string;kind?:string;month:string;selected?:number;subjects:{id:number;name:string}[];busy?:boolean}>();
+type Subject={id:number;name:string;role?:number};
+const props=defineProps<{site:string;kind?:string;month:string;selected?:number;subjects:Subject[];busy?:boolean}>();
 const statementKind=computed(()=>props.kind||'user_statement');
 const subjectLabel=computed(()=>statementKind.value==='upstream_statement'?'上游':'用户');
 const unit=computed(()=>statementKind.value==='upstream_statement'?'个':'位');
 const emit=defineEmits<{submitted:[month:string]}>();
-const dialog=ref(false),progress=ref(false),draftMonth=ref(''),selectedUsers=ref<number[]>([]),saving=ref(false),searching=ref(false),queryResults=ref<{id:number;name:string}[]>([]),names=ref<Record<number,string>>({});
+const dialog=ref(false),progress=ref(false),draftMonth=ref(''),selectedUsers=ref<number[]>([]),saving=ref(false),searching=ref(false),queryResults=ref<Subject[]>([]),names=ref<Record<number,string>>({});
+const excludeAdmins=ref(true),searchKeyword=ref(''),roles=ref<Record<number,number|undefined>>({});
+const canSelect=(id:number)=>statementKind.value==='upstream_statement'||!excludeAdmins.value||(roles.value[id] ?? 10) < 10;
+function filterAdmins(){selectedUsers.value=selectedUsers.value.filter(canSelect);void searchUsers(searchKeyword.value);}
 const recovered=ref<{instance_id:string;kind:string;subject_id:number;from:string;to:string}[]>([]);
 const otherBatches=computed(()=>{const groups=new Map<string,{month:string;from:string;count:number}>();for(const t of recovered.value){if(t.kind!==statementKind.value||t.from===batch.value?.from)continue;const g=groups.get(t.from)||{from:t.from,month:new Date(t.from).toLocaleDateString('sv-SE',{timeZone:'Asia/Shanghai'}).slice(0,7),count:0};g.count++;groups.set(t.from,g);}return [...groups.values()];});
 function viewOther(from:string){batch.value=undefined;items.value=[];restore([...recovered.value.filter(t=>t.from===from),...recovered.value.filter(t=>t.from!==from)]);progress.value=true;}
 const overwrite=ref(false),cancelling=ref(false);
 const batch=ref<BillingGenerationBatch>(),batchMonth=ref(''),items=ref<BillingGenerationProgress[]>([]),refreshing=ref(false),error=ref('');
 let searchRevision=0,progressRevision=0,disposed=false;
-const options=computed(()=>{const found=new Map(queryResults.value.map(u=>[u.id,u]));for(const id of selectedUsers.value){if(!found.has(id))found.set(id,{id,name:names.value[id]||`${subjectLabel.value} #${id}`});}return [...found.values()];});
+const options=computed(()=>{const found=new Map(queryResults.value.map(u=>[u.id,u]));for(const id of selectedUsers.value){if(!found.has(id))found.set(id,{id,name:names.value[id]||`${subjectLabel.value} #${id}`});}return [...found.values()].filter(u=>canSelect(u.id));});
 const terminal=(s:string)=>['complete','no_consumption','failed','cancelled'].includes(s);
 const hasBatch=computed(()=>!!batch.value);
 const active=computed(()=>!!batch.value&&(items.value.length===0||items.value.some(v=>!terminal(v.outcome))));
@@ -29,9 +33,9 @@ const percentage=computed(()=>{if(succeeded.value)return 100;const months=items.
 const labels:Record<string,string>={cancelled:'已取消',superseded:'已被覆盖',registered:'等待检查',unchecked:'待检查',queued:'等待生成',waiting:'等待生成',pending:'排队中',generating:'生成中',running:'生成中',publishing:'写入账单文件',complete:'已完成',no_data:'无消费，已跳过',no_consumption:'无消费，无需出账',failed:'失败',awaiting_monthly:'等待汇总月账单'};
 const local=(v?:string)=>v?new Date(v).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false}):'—';
 function monthRange(value:string){const [y,m]=value.split('-').map(Number);const next=m===12?`${y+1}-01`:`${y}-${String(m+1).padStart(2,'0')}`;return {from:`${value}-01T00:00:00+08:00`,to:`${next}-01T00:00:00+08:00`};}
-async function searchUsers(keyword='') {const n=++searchRevision;searching.value=true;try{let values:{id:number;name:string}[];if(statementKind.value==='upstream_statement'){const r=await dashboard.billingUpstreams(props.site);values=r.items.map(u=>({id:u.id,name:u.name})).filter(u=>`${u.name} ${u.id}`.toLowerCase().includes(keyword.toLowerCase()));}else{const r=await passthrough.users({site:props.site,keyword,limit:200});values=r.items.map(u=>({id:u.id,name:u.display_name||u.username}));}if(n!==searchRevision||disposed)return;queryResults.value=values;for(const u of queryResults.value)names.value[u.id]=u.name;}catch(e){ElMessage.error(billingTaskErrorMessage(e,subjectLabel.value+'加载失败'));}finally{if(n===searchRevision)searching.value=false;}}
-function open(){if(active.value||saving.value||props.busy)return;overwrite.value=false;draftMonth.value=props.month;selectedUsers.value=props.selected?[props.selected]:[];for(const u of props.subjects)names.value[u.id]=u.name;queryResults.value=[...props.subjects];dialog.value=true;void searchUsers();}
-async function submit(){if(active.value||props.busy)return;if(!draftMonth.value||selectedUsers.value.length===0)return;saving.value=true;try{
+async function searchUsers(keyword='') {searchKeyword.value=keyword;const n=++searchRevision;searching.value=true;try{let values:Subject[];if(statementKind.value==='upstream_statement'){const r=await dashboard.billingUpstreams(props.site);values=r.items.map(u=>({id:u.id,name:u.name})).filter(u=>`${u.name} ${u.id}`.toLowerCase().includes(keyword.toLowerCase()));}else{const r=await passthrough.users({site:props.site,keyword,limit:200,exclude_admin:excludeAdmins.value?1:0});values=r.items.map(u=>({id:u.id,name:u.display_name||u.username,role:u.role}));}if(n!==searchRevision||disposed)return;queryResults.value=values;for(const u of queryResults.value){names.value[u.id]=u.name;roles.value[u.id]=u.role;}selectedUsers.value=selectedUsers.value.filter(canSelect);}catch(e){ElMessage.error(billingTaskErrorMessage(e,subjectLabel.value+'加载失败'));}finally{if(n===searchRevision)searching.value=false;}}
+function open(){if(active.value||saving.value||props.busy)return;overwrite.value=false;draftMonth.value=props.month;for(const u of props.subjects){names.value[u.id]=u.name;roles.value[u.id]=u.role;}selectedUsers.value=props.selected&&canSelect(props.selected)?[props.selected]:[];queryResults.value=[...props.subjects];dialog.value=true;void searchUsers();}
+async function submit(){if(active.value||props.busy)return;selectedUsers.value=selectedUsers.value.filter(canSelect);if(!draftMonth.value||selectedUsers.value.length===0)return;saving.value=true;try{
  const request={kind:statementKind.value,instance_id:props.site,subject_ids:[...selectedUsers.value],overwrite:overwrite.value,...monthRange(draftMonth.value)};
  const r=await dashboard.generateBillingBatch(request);if(disposed||props.site!==request.instance_id||statementKind.value!==request.kind)return;batch.value=request;batchMonth.value=draftMonth.value;items.value=r.items;error.value='';dialog.value=false;progress.value=true;emit('submitted',draftMonth.value);
  if(r.items.every(v=>v.outcome==='no_consumption'))ElMessage.info(`所选${subjectLabel.value}在该范围内均无消费记录，无需生成账单`);else if(r.items.every(v=>['complete','no_consumption'].includes(v.outcome)))ElMessage.info('所选范围账单已齐全');else ElMessage.success(`已提交 ${request.subject_ids.length} ${unit.value}${subjectLabel.value}的账单生成任务`);
@@ -41,7 +45,7 @@ async function cancelTask(){if(!batch.value||cancelling.value)return;
  cancelling.value=true;try{await dashboard.cancelBillingBatch(batch.value);await refresh();ElMessage.success('任务已取消，已完成的日账单已保留');}catch(e){ElMessage.error(billingTaskErrorMessage(e,'取消失败'));}finally{cancelling.value=false;}
 }
 async function refresh(){if(!batch.value||refreshing.value)return;const n=++progressRevision;refreshing.value=true;try{const r=await dashboard.billingBatchProgress(batch.value);if(n===progressRevision&&!disposed){items.value=r.items;if(batch.value&&r.subject_ids)batch.value.subject_ids=r.subject_ids;error.value='';}}catch(e){if(n===progressRevision)error.value=billingTaskErrorMessage(e,'进度读取失败');}finally{if(n===progressRevision)refreshing.value=false;}}
-watch(()=>[props.site,props.kind],()=>{searchRevision++;progressRevision++;refreshing.value=false;dialog.value=false;progress.value=false;batch.value=undefined;items.value=[];names.value={};recovered.value=[];});
+watch(()=>[props.site,props.kind],()=>{searchRevision++;progressRevision++;refreshing.value=false;dialog.value=false;progress.value=false;batch.value=undefined;items.value=[];names.value={};roles.value={};selectedUsers.value=[];queryResults.value=[];searchKeyword.value='';searching.value=false;recovered.value=[];});
 const timer=setInterval(()=>{if(active.value||progress.value)void refresh();},4000);
 onBeforeUnmount(()=>{disposed=true;searchRevision++;progressRevision++;clearInterval(timer);});
 function restore(targets:{instance_id:string;kind:string;subject_id:number;from:string;to:string}[]){
@@ -61,6 +65,7 @@ defineExpose({open,active,hasBatch,saving,restore});
 <div v-if="otherBatches.length" class="other-batches"><el-button v-for="b in otherBatches" :key="b.from" link type="primary" @click="viewOther(b.from)">{{b.month}} · {{b.count}} {{unit}}{{subjectLabel}} · 查看生成进度</el-button></div>
 <el-dialog v-model="dialog" title="生成账单" width="min(640px,95vw)" :close-on-click-modal="!saving" :close-on-press-escape="!saving" :show-close="!saving">
  <el-form label-position="top"><el-form-item label="账单月份"><span>{{draftMonth}}</span></el-form-item>
+ <el-form-item v-if="statementKind==='user_statement'"><el-checkbox v-model="excludeAdmins" :disabled="saving" @change="filterAdmins">过滤管理员</el-checkbox><span class="admin-filter-note">同时过滤超级管理员</span></el-form-item>
  <el-form-item :label="`选择${subjectLabel}${selectedUsers.length?' · 已选 '+selectedUsers.length+' '+unit:''}`"><el-select v-model="selectedUsers" multiple filterable remote reserve-keyword :remote-method="searchUsers" :loading="searching" :disabled="saving" :multiple-limit="50" collapse-tags collapse-tags-tooltip :max-collapse-tags="4" :placeholder="`搜索${subjectLabel}名称或 ID，可多选`" style="width:100%"><el-option v-for="u in options" :key="u.id" :label="`${u.name} · #${u.id}`" :value="u.id"/></el-select></el-form-item><el-form-item><el-checkbox v-model="overwrite" :disabled="saving">覆盖已有账单</el-checkbox></el-form-item></el-form>
  <template #footer><el-button :disabled="saving" @click="dialog=false">取消</el-button><el-button type="primary" :loading="saving" :disabled="active||busy||!selectedUsers.length||!draftMonth" @click="submit">生成账单{{selectedUsers.length?'（'+selectedUsers.length+' '+unit+subjectLabel+'）':''}}</el-button></template>
 </el-dialog>
@@ -83,6 +88,7 @@ defineExpose({open,active,hasBatch,saving,restore});
 </el-dialog>
 </template>
 <style scoped>
+.admin-filter-note{margin-left:12px;font-size:12px;color:var(--el-text-color-secondary)}
 .batch-status.is-success>button:first-child{border-color:var(--el-color-success-light-7);background:var(--el-color-success-light-9);color:var(--el-color-success)}.batch-status.is-failed>button:first-child{border-color:var(--el-color-danger-light-7);background:var(--el-color-danger-light-9);color:var(--el-color-danger)}
 .batch-status{display:flex;align-items:center;gap:8px;margin:10px 0}.batch-status>button:first-child{display:flex;flex:1;min-width:0;align-items:center;gap:14px;border:1px solid var(--el-color-primary-light-7);background:var(--el-color-primary-light-9);color:var(--el-color-primary);border-radius:8px;padding:11px 14px;cursor:pointer;text-align:left}.batch-status .el-progress{width:180px}.batch-status b{margin-left:auto;font-size:12px;font-weight:500}.batch-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:16px}.batch-metrics>div{padding:12px 14px;border:1px solid var(--el-border-color-light);border-radius:8px;display:grid;gap:7px}.batch-metrics small,.batch-metrics span,.id{font-size:12px;color:var(--el-text-color-secondary)}.batch-metrics b{font-size:22px;font-variant-numeric:tabular-nums}.batch-overall{display:flex;gap:18px;align-items:center;margin-bottom:14px}.batch-overall .el-progress{flex:1}.batch-days{padding:12px 18px;background:var(--el-fill-color-lighter)}.monthly-status{padding:8px 0}.id{display:block;margin-top:3px}@media(max-width:700px){.batch-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.batch-status>button:first-child{flex-wrap:wrap}.batch-status .el-progress{flex:1}.batch-days{padding:8px}}
 </style>

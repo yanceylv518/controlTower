@@ -6,6 +6,26 @@ import (
 	"strings"
 )
 
+// DiscountGroupKey keeps full-price and each recorded discount in separate
+// aggregates. Historical mixed rows have no recoverable per-rate allocation.
+func DiscountGroupKey(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "1.000000"
+	}
+	if n, ok := new(big.Rat).SetString(value); ok && n.Sign() >= 0 {
+		return n.FloatString(6)
+	}
+	return value
+}
+
+func DiscountGroupLabel(value string) string {
+	if value == "mixed" {
+		return "旧账单未拆分"
+	}
+	return DiscountLabel(value)
+}
+
 // Empty means unknown, not zero. Mixed rates are never averaged.
 func MergeDiscount(a, b string) string {
 	if a == "" || b == "" {
