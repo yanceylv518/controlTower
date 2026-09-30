@@ -4,6 +4,7 @@ import {ElMessage} from 'element-plus';
 import type {BillingJob,BillingDetailRow,BillingDetailFilter,BillingDetailTask} from '@ct/shared';
 import {dashboard} from '../api';
 import {billingTaskErrorMessage,startBillingFileDownload} from '../utils/httpError';
+import {formatBillingDiscount} from '../utils/billingDiscount';
 const visible=ref(false),job=ref<BillingJob>(),intent=ref(false),rows=ref<BillingDetailRow[]>([]),loading=ref(false),error=ref('');
 const models=ref<string[]>([]),tokens=ref<string[]>([]),model=ref(''),token=ref(''),range=ref<[string,string]|null>(null),currency=ref(''),total=ref(0);
 const preparation=ref<BillingDetailTask>(),ready=ref(false),next=ref(0),cursors=ref<number[]>([0]),page=ref(0),applied=ref<BillingDetailFilter>({});
@@ -20,7 +21,7 @@ async function load(retry=false){if(!job.value)return;const n=++revision;loading
  if(r.preparing){rows.value=[];return;}
  rows.value=r.items||[];next.value=r.next_cursor||0;total.value=r.total||0;currency.value=r.currency||'';models.value=r.models||[];tokens.value=r.tokens||[];
  }catch(e){if(n===revision)error.value=billingTaskErrorMessage(e,'明细加载失败');}finally{if(n===revision)loading.value=false;}}
-function open(v:BillingJob,forExport=false){job.value=v;intent.value=forExport;model.value='';token.value='';range.value=null;rows.value=[];models.value=[];tokens.value=[];ready.value=false;preparation.value=undefined;applied.value={};cursors.value=[0];page.value=0;next.value=0;visible.value=true;void load();}
+function open(v:BillingJob,forExport=false,initialModel=''){job.value=v;intent.value=forExport;model.value=initialModel;token.value='';range.value=null;rows.value=[];models.value=[];tokens.value=[];ready.value=false;preparation.value=undefined;applied.value=initialModel?{model:initialModel}:{};cursors.value=[0];page.value=0;next.value=0;visible.value=true;void load();}
 function search(){applied.value=currentFilter();cursors.value=[0];page.value=0;void load();}
 function changePage(forward:boolean){if(forward){cursors.value=cursors.value.slice(0,page.value+1);cursors.value.push(next.value);page.value++;}else{page.value--;}void load();}
 async function startExport(all:boolean){if(!job.value)return;exporting.value=true;try{
@@ -76,7 +77,7 @@ defineExpose({open});
   <el-table-column prop="cache_read" label="缓存读" width="85" align="right"/><el-table-column prop="cache_write" label="缓存写" width="85" align="right"/>
   <el-table-column v-for="col in [{key:'image_input_tokens',label:'图像输入'},{key:'image_output_tokens',label:'图像输出'},{key:'audio_input_tokens',label:'音频输入'},{key:'audio_output_tokens',label:'音频输出'}]" :key="col.key" :label="col.label" width="95" align="right"><template #default="s">{{s.row[col.key]!==undefined&&s.row[col.key]!==''?Number(s.row[col.key]).toLocaleString('zh-CN'):'0'}}</template></el-table-column>
   <el-table-column :label="`模型单价（${currency}/百万 Token；按次另标）`" min-width="320"><template #default="s">{{s.row.unit_price||'未记录'}}</template></el-table-column>
-  <el-table-column label="原价金额" min-width="115" align="right"><template #default="s">{{s.row.before_amount?Number(s.row.before_amount).toLocaleString('zh-CN',{maximumFractionDigits:6}):'—'}}</template></el-table-column><el-table-column label="折扣" min-width="90"><template #default="s">{{!s.row.discount?.trim()?'原价':Number(s.row.discount)===1?'原价':`${Number(s.row.discount)*10} 折`}}</template></el-table-column><el-table-column label="折后金额" min-width="115" align="right"><template #default="s">{{Number(s.row.amount).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:6})}}</template></el-table-column>
+  <el-table-column label="原价金额" min-width="115" align="right"><template #default="s">{{s.row.before_amount?Number(s.row.before_amount).toLocaleString('zh-CN',{maximumFractionDigits:6}):'—'}}</template></el-table-column><el-table-column label="折扣" min-width="90"><template #default="s">{{formatBillingDiscount(s.row.discount)}}</template></el-table-column><el-table-column label="折后金额" min-width="115" align="right"><template #default="s">{{Number(s.row.amount).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:6})}}</template></el-table-column>
  </el-table>
  <div class="detail-pagination"><span>{{filtered?'筛选结果 · ':''}}第 {{page+1}} 页 · 本页 {{rows.length}} 条</span><el-button :disabled="page===0||loading" @click="changePage(false)">上一页</el-button><el-button :disabled="!next||loading" @click="changePage(true)">下一页</el-button></div>
  </template>

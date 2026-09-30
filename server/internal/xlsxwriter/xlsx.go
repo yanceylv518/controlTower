@@ -126,7 +126,7 @@ func (s *Sheet) Row(cells []Cell) error {
 					}
 				}
 				if cells[i].Number {
-					if i == len(cells)-1 || (s.reconciliation && s.moneyColumns[i]) {
+					if i == len(cells)-1 || s.moneyColumns[i] {
 						cells[i].Style = 17
 					} else {
 						cells[i].Style = 16

@@ -128,3 +128,106 @@ func TestReportPriceTextIsWrappedButNotSummed(t *testing.T) {
 		t.Fatal(xml)
 	}
 }
+
+func TestReportMoneyColumnsKeepFractionalAmounts(t *testing.T) {
+	for _, reconciliation := range []bool{false, true} {
+		name := "report"
+		if reconciliation {
+			name = "reconciliation"
+		}
+		t.Run(name, func(t *testing.T) {
+			w := New()
+			defer w.Discard()
+			widths := []float64{16, 20, 16, 20}
+			var sheet *Sheet
+			var err error
+			if reconciliation {
+				sheet, err = w.AddReconciliationSheet("金额", "金额", "", "", "", "", widths)
+			} else {
+				sheet, err = w.AddReportSheet("金额", "金额", "", widths)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = sheet.Row([]Cell{{Value: "请求数"}, {Value: "原价金额 CNY"}, {Value: "折扣"}, {Value: "折后金额 CNY"}}); err != nil {
+				t.Fatal(err)
+			}
+			rows := [][]Cell{
+				{{Value: "1", Number: true}, {Value: "0.026696", Number: true}, {Value: "4.6 折"}, {Value: "0.012280", Number: true}},
+				{{Value: "2", Number: true}, {Value: "1234.567890", Number: true}, {Value: "原价"}, {Value: "1234.567890", Number: true}},
+				{{Value: "1", Number: true}, {Value: "0", Number: true}, {Value: "原价"}, {Value: "0", Number: true}},
+				{{Value: "1", Number: true}, {Value: "—"}, {Value: "4.6 折"}, {Value: "0.012280", Number: true}},
+			}
+			for _, row := range rows {
+				if err = sheet.Row(append([]Cell(nil), row...)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var out bytes.Buffer
+			if err = w.Write(&out); err != nil {
+				t.Fatal(err)
+			}
+			book, err := zip.NewReader(bytes.NewReader(out.Bytes()), int64(out.Len()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			readXML := func(path string, value any) {
+				t.Helper()
+				file, err := book.Open(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer file.Close()
+				if err = xml.NewDecoder(file).Decode(value); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var styles struct {
+				Formats []struct {
+					ID   int    `xml:"numFmtId,attr"`
+					Code string `xml:"formatCode,attr"`
+				} `xml:"numFmts>numFmt"`
+				Cells []struct {
+					ID int `xml:"numFmtId,attr"`
+				} `xml:"cellXfs>xf"`
+			}
+			readXML("xl/styles.xml", &styles)
+			formats := map[int]string{}
+			for _, f := range styles.Formats {
+				formats[f.ID] = f.Code
+			}
+			var data struct {
+				Rows []struct {
+					Cells []struct {
+						Style int    `xml:"s,attr"`
+						Value string `xml:"v"`
+						Text  string `xml:"is>t"`
+					} `xml:"c"`
+				} `xml:"sheetData>row"`
+			}
+			readXML("xl/worksheets/sheet1.xml", &data)
+			for i, row := range rows {
+				actual := data.Rows[sheet.headerRow+i].Cells
+				for j, want := range row {
+					got := actual[j]
+					if !want.Number {
+						if got.Text != want.Value || got.Value != "" {
+							t.Fatalf("text changed: %+v", got)
+						}
+						continue
+					}
+					if got.Value != want.Value {
+						t.Fatalf("amount/count changed: got %s, want %s", got.Value, want.Value)
+					}
+					format := "#,##0.000000"
+					if j == 0 {
+						format = "#,##0"
+					}
+					if code := formats[styles.Cells[got.Style].ID]; code != format {
+						t.Errorf("row %d column %d value %s: format %q, want %q", i, j, got.Value, code, format)
+					}
+				}
+			}
+		})
+	}
+}

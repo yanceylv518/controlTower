@@ -46,6 +46,12 @@ func (h BillingWorkspaceHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 		rows[i].Amount = billing.DisplaySettlementAmount(rows[i].Amount, rate)
 		rows[i].BeforeAmount = billing.DisplaySettlementAmount(rows[i].BeforeAmount, rate)
 		rows[i].EmptyAmount = billing.DisplaySettlementAmount(rows[i].EmptyAmount, rate)
+		for j := range rows[i].Models {
+			model := &rows[i].Models[j]
+			model.Amount = billing.DisplaySettlementAmount(model.Amount, rate)
+			model.BeforeAmount = billing.DisplaySettlementAmount(model.BeforeAmount, rate)
+			model.EmptyAmount = billing.DisplaySettlementAmount(model.EmptyAmount, rate)
+		}
 	}
 	remaining := 0
 	if store, ok := h.Store.(interface {

@@ -91,7 +91,7 @@ func TestSettlementDailyExportConvertsSnapshotCNY(t *testing.T) {
 			t.Fatal(e)
 		}
 		text := string(b)
-		if !strings.Contains(text, "折后金额 CNY") || !strings.Contains(text, "9.000000000000") || !strings.Contains(text, "18.000000000000") || !strings.Contains(text, "5 折") || strings.Contains(text, "折后金额 USD") {
+		if !strings.Contains(text, "折后金额 CNY") || !strings.Contains(text, `s="17"><v>9.000000000000</v>`) || !strings.Contains(text, `s="17"><v>18.000000000000</v>`) || !strings.Contains(text, "5 折") || strings.Contains(text, "折后金额 USD") {
 			t.Fatalf("sheet not converted: %s", f.Name)
 		}
 	}
@@ -110,7 +110,7 @@ func TestSettlementRestylePreservesAmountsAndLayout(t *testing.T) {
 	}
 	job := Job{UsageVersion: 3, MoneySnapshot: snapshot, UserID: 4}
 	var original, styled bytes.Buffer
-	rows := []RequestDetail{{RequestID: "long-request-id-to-preserve", Charge: LogCharge{Total: "1.25"}}}
+	rows := []RequestDetail{{RequestID: "long-request-id-to-preserve", Charge: LogCharge{Total: "1.25", Settlement: &Settlement{BeforeAmount: "2.5", Discount: "0.5"}}}}
 	if err = WriteUserDailyWorkbook(&original, job, UserDailyFile{}, rows); err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestSettlementRestylePreservesAmountsAndLayout(t *testing.T) {
 			t.Fatal(e)
 		}
 		s := string(b)
-		for _, want := range []string{"9.000000000000", `topLeftCell="A5"`, `<autoFilter ref="A4:`, `orientation="landscape"`, `用户 #4`} {
+		for _, want := range []string{`s="17"><v>9.000000000000</v>`, `s="17"><v>18.000000000000</v>`, `topLeftCell="A5"`, `<autoFilter ref="A4:`, `orientation="landscape"`, `用户 #4`} {
 			if !strings.Contains(s, want) {
 				t.Fatal("missing formatting or amount", f.Name, want)
 			}

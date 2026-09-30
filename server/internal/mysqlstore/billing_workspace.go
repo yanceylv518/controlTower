@@ -32,11 +32,41 @@ func (s Store) BillingWorkspace(ctx context.Context, site, kind string, id int64
 		if err != nil {
 			return nil, err
 		}
-		err = s.db.QueryRowContext(ctx, `SELECT COALESCE(SUM(request_count),0),COALESCE(SUM(prompt_tokens),0),COALESCE(SUM(completion_tokens),0),COALESCE(SUM(cache_read_tokens),0),COALESCE(SUM(cache_write_tokens),0),CAST(COALESCE(SUM(total_amount),0) AS CHAR),CASE WHEN SUM(CASE WHEN before_known_count=request_count OR settlement_discount IN ('','1','1.000000') THEN 0 ELSE 1 END)=0 THEN CAST(SUM(CASE WHEN before_known_count=request_count THEN before_amount ELSE total_amount END) AS CHAR) ELSE '' END,CASE WHEN COUNT(*)=0 THEN '' WHEN MIN(COALESCE(NULLIF(settlement_discount,''),'1.000000'))=MAX(COALESCE(NULLIF(settlement_discount,''),'1.000000')) THEN MIN(COALESCE(NULLIF(settlement_discount,''),'1.000000')) ELSE 'mixed' END,COALESCE(SUM(empty_output_count),0),CAST(COALESCE(SUM(empty_output_amount),0) AS CHAR),COALESCE(SUM(image_input_tokens),0),COALESCE(SUM(image_output_tokens),0),COALESCE(SUM(audio_input_tokens),0),COALESCE(SUM(audio_output_tokens),0) FROM billing_compact_daily_totals WHERE job_id=?`, id).Scan(&v.Requests, &v.Input, &v.Output, &v.CacheRead, &v.CacheWrite, &v.Amount, &v.BeforeAmount, &v.Discount, &v.EmptyCount, &v.EmptyAmount, &v.ImageInputTokens, &v.ImageOutputTokens, &v.AudioInputTokens, &v.AudioOutputTokens)
+		if v.Job.JobType == "user_statement" && v.Job.BillPeriod == "daily" && v.Job.Status == "complete" {
+			v.Models, err = s.billingWorkspaceModels(ctx, id)
+			if err != nil {
+				return nil, err
+			}
+			v.WorkspaceTotals = billing.SumWorkspaceModels(v.Models)
+			out = append(out, v)
+			continue
+		}
+		err = s.db.QueryRowContext(ctx, `SELECT `+workspaceTotalsSQL+` FROM billing_compact_daily_totals WHERE job_id=?`, id).Scan(&v.Requests, &v.Input, &v.Output, &v.CacheRead, &v.CacheWrite, &v.Amount, &v.BeforeAmount, &v.Discount, &v.EmptyCount, &v.EmptyAmount, &v.ImageInputTokens, &v.ImageOutputTokens, &v.AudioInputTokens, &v.AudioOutputTokens)
 		if err != nil {
 			return nil, err
 		}
 		out = append(out, v)
 	}
 	return out, nil
+}
+
+// Shared expressions keep model rows and bill totals on the same historical fallback rules.
+const workspaceTotalsSQL = `COALESCE(SUM(request_count),0),COALESCE(SUM(prompt_tokens),0),COALESCE(SUM(completion_tokens),0),COALESCE(SUM(cache_read_tokens),0),COALESCE(SUM(cache_write_tokens),0),CAST(COALESCE(SUM(total_amount),0) AS CHAR),CASE WHEN SUM(CASE WHEN before_known_count=request_count OR settlement_discount IN ('','1','1.000000') THEN 0 ELSE 1 END)=0 THEN CAST(SUM(CASE WHEN before_known_count=request_count THEN before_amount ELSE total_amount END) AS CHAR) ELSE '' END,CASE WHEN COUNT(*)=0 THEN '' WHEN MIN(COALESCE(NULLIF(settlement_discount,''),'1.000000'))=MAX(COALESCE(NULLIF(settlement_discount,''),'1.000000')) THEN MIN(COALESCE(NULLIF(settlement_discount,''),'1.000000')) ELSE 'mixed' END,COALESCE(SUM(empty_output_count),0),CAST(COALESCE(SUM(empty_output_amount),0) AS CHAR),COALESCE(SUM(image_input_tokens),0),COALESCE(SUM(image_output_tokens),0),COALESCE(SUM(audio_input_tokens),0),COALESCE(SUM(audio_output_tokens),0)`
+
+func (s Store) billingWorkspaceModels(ctx context.Context, jobID string) ([]billing.WorkspaceModel, error) {
+	// Binary grouping preserves distinct model names, including case and trailing spaces.
+	rows, err := s.db.QueryContext(ctx, `SELECT BINARY model_name, `+workspaceTotalsSQL+` FROM billing_compact_daily_totals WHERE job_id=? GROUP BY BINARY model_name ORDER BY BINARY model_name`, jobID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	models := []billing.WorkspaceModel{}
+	for rows.Next() {
+		var v billing.WorkspaceModel
+		if err = rows.Scan(&v.Model, &v.Requests, &v.Input, &v.Output, &v.CacheRead, &v.CacheWrite, &v.Amount, &v.BeforeAmount, &v.Discount, &v.EmptyCount, &v.EmptyAmount, &v.ImageInputTokens, &v.ImageOutputTokens, &v.AudioInputTokens, &v.AudioOutputTokens); err != nil {
+			return nil, err
+		}
+		models = append(models, v)
+	}
+	return models, rows.Err()
 }

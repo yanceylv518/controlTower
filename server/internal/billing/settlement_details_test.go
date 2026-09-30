@@ -117,6 +117,80 @@ func TestSettlementDetailShardsPaginationAndExport(t *testing.T) {
 		t.Fatal("cancel ignored")
 	}
 }
+
+func TestSettlementDetailExportKeepsOriginalAmountDecimals(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "details.zip")
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := []SettlementDetailRow{
+		{RequestID: "small", BeforeAmount: "0.026696", Discount: "0.460000", Amount: "0.012280"},
+		{RequestID: "zero", BeforeAmount: "0", Discount: "1", Amount: "0"},
+		{RequestID: "unknown", BeforeAmount: "", Discount: "0.46", Amount: "0.012280"},
+	}
+	err = WriteSettlementDetailArchive(context.Background(), file, "CNY", func(visit func(SettlementDetailRow) error) error {
+		for _, row := range rows {
+			if err := visit(row); err != nil {
+				return err
+			}
+		}
+		return nil
+	}, nil)
+	file.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, err := OpenSettlementDetails(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	var out bytes.Buffer
+	n, err := reader.Export(context.Background(), &out, Job{}, SettlementDetailFilter{}, nil)
+	if err != nil || n != int64(len(rows)) {
+		t.Fatal(n, err)
+	}
+	bundle, err := zip.NewReader(bytes.NewReader(out.Bytes()), int64(out.Len()))
+	if err != nil || len(bundle.File) != 1 {
+		t.Fatal("invalid detail bundle", err)
+	}
+	entry, err := bundle.File[0].Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bookBytes, err := io.ReadAll(entry)
+	entry.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	book, err := zip.NewReader(bytes.NewReader(bookBytes), int64(len(bookBytes)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sheet, err := book.Open("xl/worksheets/sheet1.xml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := io.ReadAll(sheet)
+	sheet.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`r="O5" s="17"><v>0.026696</v>`, `r="Q5" s="17"><v>0.012280</v>`, `r="O6" s="17"><v>0</v>`, `r="O7" t="inlineStr" s="17"><is><t xml:space="preserve">—</t>`} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("missing amount value/format: %s", want)
+		}
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("export changed the issued detail archive", err)
+	}
+}
 func TestSettlementLegacyDetailsPreserveCurrencyAndEmptyRows(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "old.xlsx")
