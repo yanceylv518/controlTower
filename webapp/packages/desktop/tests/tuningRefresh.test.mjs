@@ -49,7 +49,7 @@ function page() {
     tuningChannels: async () => { throw new Error('channel directory unavailable') },
   }
   const names = ['computed', 'reactive', 'ref', 'watch', 'onMounted', 'onBeforeUnmount', 'useFiltersStore', 'dashboard', 'formatTime', 'ApiError', 'ElMessage', 'ElMessageBox', 'useMobileViewport', 'hiddenChannelGroupCount', 'matchesChannelGroup', 'MAX_VISIBLE_CHANNEL_GROUPS', 'normalizeChannelGroups', 'splitChannelGroups', 'visibleChannelGroups']
-  const create = new Function(...names, `${compiled}\nreturn { refreshCurrentRates, ratesError, saveCapacity, saving, mobileEditRow, stageMobileEdit, mobileChanges, mobilePriorityChanges, mobileRuleChanges, mobileSaveOpen, load, refreshRuntime, loadChannelDirectory, applyGroupLocally, acceptStates, stateFor, sampleText, evaluationText, states, refreshError, bases, channels, channelDirectorySite, channelDirectoryLoading, policy, channelSwitchFilter, selectedGroupFilter, toggleGroupFilter, selectedGroupName, displayedRows, activeRows, modelChannelRows, models, modelChannelCount, activeModel, dirty, selectModel, fieldChanged, savedBases, originalBase, calculatedWeight, displayedSpeedFactor, coefficientCell, overallEvaluationStatus, coefficientEmptyText, coefficientSpan, displayedPriority, editPriority, priorityLocked, cancelChanges, limitReason, currentRates, ratesReady, rowStatus, channelStatusFor, channelStatusLabel, isDirectoryOnlyRow, eventResult, eventResultClass, events, filteredEvents, eventDateRange };`)
+  const create = new Function(...names, `${compiled}\nreturn { refreshCurrentRates, ratesError, saveCapacity, saving, mobileEditRow, stageMobileEdit, mobileChanges, mobilePriorityChanges, mobileRuleChanges, mobileSaveOpen, load, refreshRuntime, loadChannelDirectory, applyGroupLocally, acceptStates, stateFor, sampleText, evaluationText, states, refreshError, bases, channels, channelDirectorySite, channelDirectoryLoading, policy, channelSwitchFilter, selectedGroupFilter, toggleGroupFilter, selectedGroupName, displayedRows, activeRows, modelChannelRows, models, modelChannelCount, modelChannelCountLabel, activeModel, dirty, selectModel, fieldChanged, savedBases, originalBase, calculatedWeight, displayedSpeedFactor, coefficientCell, overallEvaluationStatus, coefficientEmptyText, coefficientSpan, displayedPriority, editPriority, priorityLocked, cancelChanges, limitReason, currentRates, ratesReady, rowStatus, channelStatusFor, channelStatusLabel, isDirectoryOnlyRow, eventResult, eventResultClass, events, filteredEvents, eventDateRange };`)
   const view = create(computed, reactive, ref, () => {}, () => {}, () => {}, () => filters, dashboard, String, ApiError, {info() {}, success() {}}, {}, () => ref(false), groupUtils.hiddenChannelGroupCount, groupUtils.matchesChannelGroup, groupUtils.MAX_VISIBLE_CHANNEL_GROUPS, groupUtils.normalizeChannelGroups, groupUtils.splitChannelGroups, groupUtils.visibleChannelGroups)
   return { ...view, filters, dashboard }
 }
@@ -403,6 +403,40 @@ test('channel switch status filters compose with the group filter without tuning
   assert.deepEqual(p.displayedRows.value, [])
   p.channelSwitchFilter.value = ''
   assert.deepEqual(p.displayedRows.value.map(item => item.channel_id), [4, 3])
+})
+
+test('model counts show status totals only for the selected model and update on selection or channel refresh', () => {
+  const p = page()
+  p.channels.value = [
+    { channel_id: 1, channel_name: 'shared', status: '1', weight: 0, priority: 1, models: ['m', 'n'], group_name: 'alpha' },
+    { channel_id: 2, channel_name: 'closed', status: 'disabled', weight: 0, priority: 1, models: ['m'], group_name: 'beta' },
+    { channel_id: 3, channel_name: 'auto-closed', status: 'auto_disabled', weight: 0, priority: 1, models: ['m', 'n'], group_name: 'beta' },
+    { channel_id: 4, channel_name: 'active', status: 'enabled', weight: 80, priority: 1, models: ['n'], group_name: 'alpha' },
+    { channel_id: 5, channel_name: 'unknown', status: 'other', weight: 0, priority: 1, models: ['m'], group_name: 'beta' },
+  ]
+  p.channelDirectorySite.value = 'a'
+  p.activeModel.value = 'm'
+  assert.equal(p.modelChannelCountLabel('m'), '已启用 1 个渠道')
+  assert.equal(p.modelChannelCountLabel('n'), '共 3 个渠道')
+  p.selectModel('n')
+  assert.equal(p.modelChannelCountLabel('m'), '共 4 个渠道')
+  assert.equal(p.modelChannelCountLabel('n'), '已启用 2 个渠道')
+  p.channelSwitchFilter.value = 'not_enabled'
+  assert.equal(p.modelChannelCountLabel('n'), '未启用 1 个渠道')
+  assert.equal(p.modelChannelCountLabel('m'), '共 4 个渠道')
+  p.selectModel('m')
+  assert.equal(p.modelChannelCountLabel('m'), '未启用 3 个渠道')
+  assert.equal(p.modelChannelCountLabel('n'), '共 3 个渠道')
+  p.selectedGroupFilter.value = { kind: 'group', name: 'missing' }
+  assert.equal(p.modelChannelCountLabel('m'), '未启用 3 个渠道')
+  p.channels.value = p.channels.value.map(item => item.channel_id === 1 ? { ...item, status: 'disabled' } : item)
+  assert.equal(p.modelChannelCountLabel('m'), '未启用 4 个渠道')
+  p.channelSwitchFilter.value = 'enabled'
+  assert.equal(p.modelChannelCountLabel('m'), '已启用 0 个渠道')
+  p.channelSwitchFilter.value = ''
+  assert.equal(p.modelChannelCountLabel('m'), '共 4 个渠道')
+  assert.equal(p.modelChannelCount('m'), 4)
+  assert.doesNotMatch(sfc, /<small v-if="!mobile">\{\{ activeRows\.length \}\} 个渠道<\/small>/)
 })
 
 test('recorded events are not presented as successful writes and dates include the last day', async () => {

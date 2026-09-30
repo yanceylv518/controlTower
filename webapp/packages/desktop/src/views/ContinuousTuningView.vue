@@ -375,6 +375,13 @@ const coefficientCell = (row: ChannelDisplayRow, key: 'speed' | 'cache' | 'otps'
 };
 // 分组筛选只匹配渠道实际拥有的完整分组名，不按子串误命中。
 const channelSwitchFilter = ref("enabled");
+const activeModelEnabledCount = computed(() => modelChannelRows.value.filter(row => channelStatusFor(row) === "enabled").length);
+const modelChannelCountLabel = (model: string) => {
+  if (model !== activeModel.value || !channelSwitchFilter.value) return `共 ${modelChannelCount(model)} 个渠道`;
+  const enabled = channelSwitchFilter.value === "enabled";
+  const count = enabled ? activeModelEnabledCount.value : modelChannelRows.value.length - activeModelEnabledCount.value;
+  return `${enabled ? "已启用" : "未启用"} ${count} 个渠道`;
+};
 const groupFilterOpen = ref(false);
 const selectedGroupFilter = ref<{ kind: "all" } | { kind: "group"; name: string } | null>(null);
 const selectedGroupName = computed(() => {
@@ -1051,18 +1058,17 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
         <el-empty v-if="!models.length && !channelDirectoryLoading" description="还没有渠道基础值"><el-button type="primary" @click="sync('weight')">立即从 new-api 读取</el-button></el-empty>
         <div v-else-if="!models.length" class="channel-directory-loading" role="status">正在读取渠道目录…</div>
         <div v-else class="model-workspace" :class="{'nav-collapsed':modelNavCollapsed}">
-          <div v-if="mobile" class="mobile-model-picker"><el-select v-model="activeModel" filterable aria-label="选择模型" placeholder="选择模型"><el-option v-for="model in models" :key="model" :label="`${model} · ${modelChannelCount(model)} 个渠道`" :value="model" /></el-select></div>
+          <div v-if="mobile" class="mobile-model-picker"><el-select v-model="activeModel" filterable aria-label="选择模型" placeholder="选择模型"><el-option v-for="model in models" :key="model" :label="`${model} · ${modelChannelCountLabel(model)}`" :value="model" /></el-select></div>
           <aside class="model-nav">
             <div class="model-nav-tools"><el-input v-if="!modelNavCollapsed" v-model="modelQuery" clearable placeholder="搜索模型" aria-label="搜索模型"/><button type="button" class="model-nav-toggle" :aria-label="modelNavCollapsed ? '展开模型列表' : '收起模型列表'" :title="modelNavCollapsed ? '展开模型列表' : '收起模型列表'" :aria-expanded="!modelNavCollapsed" @click="modelNavCollapsed=!modelNavCollapsed"><el-icon aria-hidden="true"><ArrowRight v-if="modelNavCollapsed"/><ArrowLeft v-else/></el-icon></button></div>
             <div v-if="!modelNavCollapsed" class="model-mode-summary" aria-label="模型运行统计"><span>自动 <b>{{ counts.auto }}</b></span><span>观察 <b>{{ counts.observe }}</b></span><span>关闭 <b>{{ counts.off }}</b></span></div>
             <button v-if="modelNavCollapsed" class="model-nav-rail" type="button" :title="'当前模型：' + activeModel" aria-label="展开模型列表" @click="modelNavCollapsed=false">模型</button>
-            <div v-show="!modelNavCollapsed" class="model-list"><button v-for="model in visibleModels" :key="model" :class="{active:activeModel===model}" :title="model + ' · ' + modeText(model)" :aria-label="model + '，' + modeText(model)" @click="selectModel(model)"><span><b>{{ model }}</b><span class="model-secondary"><small>{{ modelChannelCount(model) }} 个渠道</small><span class="model-mode-text" :class="modelMode(model)">{{ modelMode(model) === 'auto' ? '自动' : modelMode(model) === 'observe' ? '观察' : '关闭' }}</span></span></span></button><el-empty v-if="!visibleModels.length" :image-size="48" description="没有匹配模型"/></div>
+            <div v-show="!modelNavCollapsed" class="model-list"><button v-for="model in visibleModels" :key="model" :class="{active:activeModel===model}" :title="model + ' · ' + modelChannelCountLabel(model) + ' · ' + modeText(model)" :aria-label="model + '，' + modelChannelCountLabel(model) + '，' + modeText(model)" @click="selectModel(model)"><span><b>{{ model }}</b><span class="model-secondary"><small>{{ modelChannelCountLabel(model) }}</small><span class="model-mode-text" :class="modelMode(model)">{{ modelMode(model) === 'auto' ? '自动' : modelMode(model) === 'observe' ? '观察' : '关闭' }}</span></span></span></button><el-empty v-if="!visibleModels.length" :image-size="48" description="没有匹配模型"/></div>
           </aside>
           <section ref="detailElement" class="model-detail">
             <div class="model-head">
               <div>
                 <b v-if="!mobile">{{ activeModel }}</b>
-                <small v-if="!mobile">{{ activeRows.length }} 个渠道</small>
                 <small v-if="refreshError" class="stale">刷新失败：{{ refreshError }}</small>
                 <small v-else-if="evaluationStalled" class="stale">评估已停滞：最后成功于 {{ formatTime(lastEvaluationAt!) }}</small>
                 <small v-else-if="lastEvaluationAt">{{ mobile ? '评估 ' + formatTime(lastEvaluationAt).split(' ').pop() : '最近评估 ' + formatTime(lastEvaluationAt) + ' · 每 30 秒自动刷新' }}</small>
