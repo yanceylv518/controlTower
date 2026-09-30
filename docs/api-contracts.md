@@ -212,6 +212,8 @@ Instance tokens are stored only as `SHA-256(pepper + token)` hashes. A token may
 
 通知渠道必须绑定单个有效站点，已绑定渠道不能跨站点更新（409）。站点和 `rule_keys` 同时匹配才投递；空 `rule_keys` 表示该站点全部告警类型，未知类型返回 400。多渠道匹配则分别投递，未匹配不回退到其他站点。前端按余额、系统、请求三类选择，保存时展开成具体规则。旧的部分规则选择保持原样直到编辑保存，并明确标为“部分规则”。
 
+企微、钉钉通知中的所有可读时间统一为固定 UTC+8，格式为 `YYYY-MM-DD HH:mm:ss（北京时间 UTC+8）`，不依赖 Server 或 Agent 的主机时区及镜像 tzdata。范围包括熔断/恢复事件、CPU/内存/磁盘/离线等系统告警、余额和请求告警、测试跟进调用/检测时间，以及 Agent 独立企微告警和持续提醒的异常起始时间。数据库时戳、内部计算和通用 Webhook 的结构化时间字段保持原语义；通知中心页面仍使用浏览器本地时区。服务端消息生效需升级 Server，独立告警消息需升级 Agent，无新增迁移或容器时区配置要求。
+
 三个全局开关 CT_NOTIFICATIONS_ENABLED、CT_NOTIFY_BALANCE_ONLY、CT_BALANCE_ALERT_ENABLED 已退役，数据库和环境中的旧值不再影响告警。余额仍仅为显式启用的用户计算，通知由各站点渠道启用状态和类型决定。
 
 金额显示不再使用 CT_QUOTA_PER_UNIT、CT_CURRENCY_SYMBOL。GET `/api/dashboard/passthrough/currency?site=...` 读取 NewAPI 站点配置，返回有效 `quota_per_unit`（已含站点显示汇率）、`price_multiplier`（美元单价转站点显示单位）、`symbol`、`type`。viewer 固定到授权站点。失败返回 503，前端金额显示“—”；余额通知回退明确标识的原始 quota。历史账单继续使用其定价快照。需同步升级前后端，无新增迁移。

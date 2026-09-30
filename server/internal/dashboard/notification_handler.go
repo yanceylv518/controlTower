@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"controltower/internal/notificationtime"
 	"controltower/server/internal/storage"
 )
 
@@ -393,7 +394,7 @@ func dingTalkSignedURL(raw, secret string, now time.Time) string {
 
 func notificationPayload(alert storage.Alert, channel storage.NotificationChannel) map[string]any {
 	if isCircuitAlert(alert.RuleKey) && (channel.ChannelType == "wecom" || channel.ChannelType == "dingtalk") {
-		content := fmt.Sprintf("【%s】\n%s\n事件时间：%s（北京时间 UTC+8）", alert.Title, alert.Summary, alert.FirstSeenAt.In(time.FixedZone("UTC+8", 8*60*60)).Format("2006-01-02 15:04:05"))
+		content := fmt.Sprintf("【%s】\n%s\n事件时间：%s", alert.Title, alert.Summary, notificationtime.Format(alert.FirstSeenAt))
 		return map[string]any{"msgtype": "text", "text": map[string]string{"content": content}}
 	}
 	if alert.RuleKey == "user_low_balance" && (channel.ChannelType == "wecom" || channel.ChannelType == "dingtalk") {
@@ -401,19 +402,19 @@ func notificationPayload(alert storage.Alert, channel storage.NotificationChanne
 		if alert.Severity == "critical" {
 			level = "严重"
 		}
-		content := fmt.Sprintf("【余额%s告警】\n\n站点：%s\n%s\n告警时间：%s\n\n请及时联系用户充值。", level, alert.InstanceID, alert.Summary, alert.LastSeenAt.Local().Format("2006-01-02 15:04:05"))
+		content := fmt.Sprintf("【余额%s告警】\n\n站点：%s\n%s\n告警时间：%s\n\n请及时联系用户充值。", level, alert.InstanceID, alert.Summary, notificationtime.Format(alert.LastSeenAt))
 		if channel.ChannelType == "wecom" {
 			return map[string]any{"msgtype": "text", "text": map[string]string{"content": content}}
 		}
 		return map[string]any{"msgtype": "text", "text": map[string]string{"content": content}}
 	}
 	if channel.ChannelType == "wecom" {
-		content := fmt.Sprintf("[告警] %s\n级别: %s\n实例: %s\n详情: %s\n时间: %s", alert.Title, alert.Severity, alert.InstanceID, alert.Summary, alert.LastSeenAt.Local().Format("2006-01-02 15:04:05"))
+		content := fmt.Sprintf("[告警] %s\n级别: %s\n实例: %s\n详情: %s\n时间: %s", alert.Title, alert.Severity, alert.InstanceID, alert.Summary, notificationtime.Format(alert.LastSeenAt))
 		return map[string]any{"msgtype": "text", "text": map[string]string{"content": content}}
 	}
 	if channel.ChannelType == "dingtalk" {
 		content := fmt.Sprintf("【Control Tower 告警】%s\n级别: %s\n实例: %s\n详情: %s\n时间: %s",
-			alert.Title, alert.Severity, alert.InstanceID, alert.Summary, alert.LastSeenAt.Local().Format("2006-01-02 15:04:05"))
+			alert.Title, alert.Severity, alert.InstanceID, alert.Summary, notificationtime.Format(alert.LastSeenAt))
 		return map[string]any{"msgtype": "text", "text": map[string]string{"content": content}}
 	}
 	return map[string]any{"alert_id": alert.ID, "instance_id": alert.InstanceID, "rule_key": alert.RuleKey, "severity": alert.Severity, "status": alert.Status, "title": alert.Title, "summary": alert.Summary, "last_seen_at": alert.LastSeenAt}

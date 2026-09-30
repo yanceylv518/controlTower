@@ -3,6 +3,8 @@
 <!-- AI_CURRENT_START -->
 ## 当前总览
 
+- **通知时间统一 UTC+8（2026-09-30）**：Server 企微/钉钉全部告警、测试跟进调用/检测时间，以及 Agent 独立告警/持续提醒的时间共用固定 UTC+8 格式并标注北京时间，不依赖主机时区或 tzdata。数据库及通用 Webhook 结构化时间保持原语义，通知中心页面保留浏览器本地时间。新增回归先复现旧实现失败，修正后定向测试、dashboard/erroralert 及两个程序入口完整测试、相关 Go vet 和 diff 检查通过；覆盖 CPU/内存/磁盘/离线/余额、跨时区、跨年及本地 HTTP 投递。服务端需升级 Server，独立告警需升级 Agent，无迁移；按用户授权仅提交推送本项修复，结果以 Git 记录为准，未发布、部署或真实机器人验收。
+
 - **模型广场复制按钮修复（2026-09-29）**：模型广场复制模型名称改为复用共享 `copyText`，支持剪贴板 API 不可用、权限拒绝及非安全上下文下的选区复制回退；新增复制入口回归断言。定向复制测试、Vue 类型检查和生产构建通过，未提交或部署。
 
 - **调权中心精简渠道筛选（2026-09-28）**：移除渠道名称/ID/分组通用搜索框及其行过滤逻辑；桌面与移动端均按“分组、渠道开关状态、数量”顺序显示，数量在筛选行末尾。保留分组控件的文本匹配、勾选状态保持行为和开关状态筛选；事件记录搜索不受影响。更新回归断言；按用户要求未运行测试、类型检查或构建，未做浏览器验收。详见[筛选控件](webapp/packages/desktop/src/components/TuningGroupFilter.vue)、[页面](webapp/packages/desktop/src/views/ContinuousTuningView.vue)与[回归](webapp/packages/desktop/tests/tuningRefresh.test.mjs)。
