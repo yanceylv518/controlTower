@@ -26,7 +26,7 @@ function todayTimeRange(): [Date, Date] {
 }
 const draftTimeRange = ref<[Date, Date] | null>(todayTimeRange());
 const appliedTimeRange = ref<[Date, Date] | null>(draftTimeRange.value!.map(date => new Date(date)) as [Date, Date]);
-const draft = reactive({ q: "", search_mode: "text", actor: "", operation_type: "", status: "" });
+const draft = reactive({ q: "", actor: "", operation_type: "", status: "" });
 const applied = ref({ ...draft });
 const appliedTimeParams = computed(() => {
   if (!appliedTimeRange.value) return {};
@@ -40,7 +40,8 @@ const appliedTimeParams = computed(() => {
 const timeRangeResetEnabled = computed(() => draftTimeRange.value !== null || appliedTimeRange.value !== null);
 
 const history = useAuditHistory(() => ({
-    ...(applied.value.search_mode === 'request' ? { request_id: applied.value.q.trim() || undefined } : { q: applied.value.q.trim() || undefined }),
+    q: applied.value.q.trim() || undefined,
+    search_mode: "smart" as const,
     actor: applied.value.actor.trim() || undefined,
     actor_exact: applied.value.actor ? true : undefined,
     operation_type: applied.value.operation_type.trim() || undefined,
@@ -68,7 +69,7 @@ function searchActors(value: string) {
     actorSearchController = controller;
     const timeout = setTimeout(() => controller.abort(), 8_000);
     try {
-      const response = await dashboard.operationAudits({ actor_options: true, actor: value.trim() || undefined, ...appliedTimeParams.value }, controller.signal);
+      const response = await dashboard.operationAudits({ actor_options: true, actor: value.trim() || undefined, operation_type: applied.value.operation_type || undefined, ...appliedTimeParams.value }, controller.signal);
       if (version === actorSearchVersion) actorOptions.value = response.actors || [];
     } catch {
       if (version === actorSearchVersion) { actorOptions.value = []; actorError.value = true; }
@@ -79,7 +80,7 @@ function searchActors(value: string) {
   }, 250);
 }
 onBeforeUnmount(() => { ++actorSearchVersion; clearTimeout(actorSearchTimer); actorSearchController?.abort(); history.cancel(); });
-watch(appliedTimeParams, () => {
+watch([appliedTimeParams, () => applied.value.operation_type], () => {
   ++actorSearchVersion;
   clearTimeout(actorSearchTimer);
   actorSearchController?.abort();
@@ -96,11 +97,38 @@ useAutoRefresh((silent) => {
 });
 
 function applyFilters() {
+  if (new TextEncoder().encode(draft.q.trim()).length > 256) {
+    ElMessage.warning("搜索内容过长，请缩短关键词");
+    return;
+  }
+  if (!validSearchTerms(draft.q)) {
+    ElMessage.warning('最多输入8个关键词，双引号需成对');
+    return;
+  }
   expandedRows.value = [];
   applied.value = { ...draft };
   appliedTimeRange.value = draftTimeRange.value
     ? [new Date(draftTimeRange.value[0]), new Date(draftTimeRange.value[1])]
     : null;
+  void history.reset();
+}
+
+function validSearchTerms(value: string) {
+  let quoted = false;
+  let count = 0;
+  let term = false;
+  for (const char of value.trim()) {
+    if (char === '"') quoted = !quoted;
+    else if (/\s/u.test(char) && !quoted) { if (term) count++; term = false; }
+    else term = true;
+  }
+  return !quoted && count + Number(term) <= 8 && (!value.trim() || count + Number(term) > 0);
+}
+
+function applyOperationType() {
+  // 类型先收窄已查询范围，保留尚未提交的其他输入，避免误触发内容查询。
+  expandedRows.value = [];
+  applied.value = { ...applied.value, operation_type: draft.operation_type };
   void history.reset();
 }
 
@@ -112,7 +140,7 @@ function resetTimeRange() {
 }
 
 function clearFilters() {
-  Object.assign(draft, { q: "", search_mode: "text", actor: "", operation_type: "", status: "" });
+  Object.assign(draft, { q: "", actor: "", operation_type: "", status: "" });
   draftTimeRange.value = todayTimeRange();
   applyFilters();
 }
@@ -452,16 +480,12 @@ function httpStatus(item: OperationAuditItem) {
           class="audit-time-range"
           @reset="resetTimeRange"
         />
-        <el-select v-model="draft.search_mode" class="audit-select" aria-label="搜索方式">
-          <el-option label="内容搜索" value="text" />
-          <el-option label="请求ID精确" value="request" />
+        <el-select v-model="draft.operation_type" clearable filterable placeholder="全部操作类型" aria-label="操作类型" class="audit-operation" @change="applyOperationType">
+          <el-option v-for="operationType in operationTypes" :key="operationType" :label="operationTypeOptionLabel(operationType)" :value="operationType" />
         </el-select>
-        <el-input v-model="draft.q" clearable :placeholder="draft.search_mode === 'request' ? '完整请求ID' : '目标ID / 错误信息'" class="audit-search" @keyup.enter="applyFilters" />
+        <el-input v-model="draft.q" clearable placeholder="ID / 模型 / 内容 / 错误 / IP" aria-label="审计搜索内容" :maxlength="256" class="audit-search" @keyup.enter="applyFilters" />
         <el-select v-model="draft.actor" clearable filterable remote :remote-method="searchActors" :loading="actorLoading" :no-data-text="actorError ? '加载失败，请重新搜索' : '无匹配操作人'" placeholder="搜索操作人" class="audit-actor" @visible-change="(visible: boolean) => { if (visible) searchActors(''); }">
           <el-option v-for="actor in actorOptions" :key="actor" :label="actor === 'unknown' ? '未验证身份' : actor" :value="actor" />
-        </el-select>
-        <el-select v-model="draft.operation_type" clearable filterable placeholder="操作类型" class="audit-operation">
-          <el-option v-for="operationType in operationTypes" :key="operationType" :label="operationTypeOptionLabel(operationType)" :value="operationType" />
         </el-select>
         <el-select v-model="draft.status" clearable placeholder="结果" class="audit-select">
           <el-option label="成功" value="succeeded" />

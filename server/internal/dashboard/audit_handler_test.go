@@ -63,11 +63,43 @@ func TestAuditsServerPaginationSiteFilterAndDetails(t *testing.T) {
 func TestAuditsRejectsMalformedTimeAndStatus(t *testing.T) {
 	store := ingest.NewMemoryStore()
 	handler := CommandHandler{Store: store}
-	for _, query := range []string{"?from=not-a-date", "?status=made-up"} {
+	for _, query := range []string{"?from=not-a-date", "?status=made-up", "?search_mode=made-up", "?search_mode=smart&q=%22unclosed", "?search_mode=smart&q=a+b+c+d+e+f+g+h+i"} {
 		w := httptest.NewRecorder()
 		handler.Audits(w, httptest.NewRequest("GET", "/api/dashboard/operation-audits"+query, nil))
 		if w.Code != 400 {
 			t.Fatalf("query %q status=%d body=%s", query, w.Code, w.Body.String())
+		}
+	}
+}
+
+func TestAuditsSmartSearchTypeAndCount(t *testing.T) {
+	store := ingest.NewMemoryStore()
+	for _, item := range []storage.OperationAudit{
+		{ID: "match", OperationType: "tuning.base_update", TargetID: "7", ActorID: "admin", Status: "succeeded", BeforeSummary: `{"model":"GPT-4","weight":7}`, AfterSummary: `{"name":"香港主线"}`},
+		{ID: "wrong-type", OperationType: "billing.price_update", TargetID: "7", ActorID: "admin", Status: "succeeded", AfterSummary: `{"model":"GPT-4","name":"香港主线"}`},
+		{ID: "partial", OperationType: "tuning.base_update", TargetID: "17", ActorID: "admin", Status: "succeeded", AfterSummary: `{"model":"GPT-4","name":"香港主线","weight":70}`},
+	} {
+		if err := store.InsertOperationAudit(item); err != nil {
+			t.Fatal(err)
+		}
+	}
+	handler := CommandHandler{Store: store}
+	for _, suffix := range []string{"", "&list_only=true", "&count_only=true"} {
+		w := httptest.NewRecorder()
+		handler.Audits(w, httptest.NewRequest("GET", "/api/dashboard/operation-audits?search_mode=smart&q=GPT-4+7&operation_type=tuning.base_update"+suffix, nil))
+		var response struct {
+			Items []operationAuditItem `json:"items"`
+			Total int64                `json:"total"`
+		}
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &response) != nil {
+			t.Fatalf("response: %d %s", w.Code, w.Body.String())
+		}
+		if suffix == "&count_only=true" {
+			if response.Total != 1 || len(response.Items) != 0 {
+				t.Fatalf("count: %+v", response)
+			}
+		} else if len(response.Items) != 1 || response.Items[0].ID != "match" {
+			t.Fatalf("list: %+v", response)
 		}
 	}
 }

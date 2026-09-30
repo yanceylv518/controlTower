@@ -135,6 +135,10 @@ func (s *MemoryStore) QueryOperationAudits(q storage.OperationAuditQuery) (stora
 }
 
 func (s *MemoryStore) QueryOperationAuditsContext(ctx context.Context, q storage.OperationAuditQuery) (storage.OperationAuditPage, error) {
+	terms, err := storage.ParseAuditSearch(q.SearchMode, q.Search)
+	if err != nil {
+		return storage.OperationAuditPage{}, err
+	}
 	if err := ctx.Err(); err != nil {
 		return storage.OperationAuditPage{}, err
 	}
@@ -187,11 +191,8 @@ func (s *MemoryStore) QueryOperationAuditsContext(ctx context.Context, q storage
 		if !q.To.IsZero() && !v.CreatedAt.Before(q.To) {
 			continue
 		}
-		if q.Search != "" {
-			needle := strings.ToLower(q.Search)
-			if !strings.Contains(strings.ToLower(v.OperationType+" "+v.TargetType+" "+v.TargetID+" "+v.ActorID+" "+v.ErrorSummary+" "+v.RequestID+" "+v.CorrelationID), needle) {
-				continue
-			}
+		if !storage.OperationAuditMatchesSearch(v, q.SearchMode, terms) {
+			continue
 		}
 		all = append(all, v)
 	}

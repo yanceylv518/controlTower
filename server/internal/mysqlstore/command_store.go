@@ -352,6 +352,10 @@ func (s Store) QueryOperationAudits(q storage.OperationAuditQuery) (storage.Oper
 }
 
 func (s Store) QueryOperationAuditsContext(ctx context.Context, q storage.OperationAuditQuery) (storage.OperationAuditPage, error) {
+	terms, err := storage.ParseAuditSearch(q.SearchMode, q.Search)
+	if err != nil {
+		return storage.OperationAuditPage{}, err
+	}
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
 	limit, offset := storage.NormalizeCommandPagination(q.Limit, q.Offset)
@@ -412,11 +416,9 @@ func (s Store) QueryOperationAuditsContext(ctx context.Context, q storage.Operat
 		where = append(where, "a.created_at<?")
 		args = append(args, q.To)
 	}
-	if q.Search != "" {
-		where = append(where, "(a.operation_type LIKE ? ESCAPE '!' OR a.target_type LIKE ? ESCAPE '!' OR a.target_id LIKE ? ESCAPE '!' OR a.actor_id LIKE ? ESCAPE '!' OR a.error_summary LIKE ? ESCAPE '!' OR a.request_id LIKE ? ESCAPE '!' OR a.correlation_id LIKE ? ESCAPE '!')")
-		pattern := "%" + strings.NewReplacer("!", "!!", "%", "!%", "_", "!_").Replace(q.Search) + "%"
-		args = append(args, pattern, pattern, pattern, pattern, pattern, pattern, pattern)
-	}
+	searchWhere, searchArgs := auditSearchWhere(q.SearchMode, terms)
+	where = append(where, searchWhere...)
+	args = append(args, searchArgs...)
 	whereSQL := ""
 	if len(where) > 0 {
 		whereSQL = " WHERE " + strings.Join(where, " AND ")

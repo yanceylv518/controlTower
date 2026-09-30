@@ -39,6 +39,7 @@ type OperationAuditQuery struct {
 	Source        string
 	Trigger       string
 	Search        string
+	SearchMode    string
 	From          time.Time
 	To            time.Time
 	Limit         int

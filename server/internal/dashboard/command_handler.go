@@ -209,6 +209,10 @@ func (h CommandHandler) Audits(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if _, err := storage.ParseAuditSearch(q.Get("search_mode"), q.Get("q")); err != nil {
+		writeDashboardError(w, http.StatusBadRequest, "invalid_audit_search")
+		return
+	}
 	switch q.Get("status") {
 	case "", "success", "succeeded", "failed", "submitted", "pending", "expired", "timed_out", "unknown":
 	default:
@@ -251,7 +255,7 @@ func (h CommandHandler) Audits(w http.ResponseWriter, r *http.Request) {
 		ActorExact:   q.Get("actor_exact") == "true",
 		InstanceID:   q.Get("instance_id"), SiteID: q.Get("site_id"), OperationType: q.Get("operation_type"), Actor: q.Get("actor"),
 		RequestID: q.Get("request_id"), CorrelationID: q.Get("correlation_id"),
-		Status: q.Get("status"), Source: q.Get("source"), Trigger: q.Get("trigger"), Search: q.Get("q"),
+		Status: q.Get("status"), Source: q.Get("source"), Trigger: q.Get("trigger"), Search: q.Get("q"), SearchMode: q.Get("search_mode"),
 		From: from, To: to, Limit: limit, Offset: offset,
 	})
 	if e != nil {

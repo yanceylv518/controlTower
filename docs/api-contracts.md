@@ -232,6 +232,16 @@ Instance tokens are stored only as `SHA-256(pepper + token)` hashes. A token may
 | `GET /api/dashboard/channel-commands` | Query `instance_id,status,limit,offset` | `{"items":[{"id":"...","status":"succeeded","payload":{"status":2}}]}` |
 | `GET /api/dashboard/operation-audits` | Query `instance_id,site_id,actor,operation_type,status,q,from,to,limit,offset`；`from,to` 为 RFC3339，时间范围左闭右开；`actor_options=true` 时仅返回最多 100 个按 `actor` 模糊匹配的去重操作人；需管理员的 `audits.read` 权限 | `{"items":[],"total":0,"operation_types":["settings.update","auth.login","auth.logout"],"actors":null}`；操作类型由固定目录返回，不依赖当前记录；候选查询返回 `actors` 数组 |
 
+操作审计搜索新增可选 `search_mode`（2026-09-30）：
+
+- 不传或传 `text`：兼容旧版 `q` 的整句元数据模糊搜索。
+- `smart`：页面统一搜索框使用此模式，不再选择搜索方式。`q` 按空白分为最多 8 个关键词，双引号保留短语；所有词必须在同一条记录中命中，但可分别命中目标ID、操作人、请求ID、关联ID、客户端IP、错误摘要或变更前后 JSON 的标量值（包含嵌套对象、数组及请求内容）。目标ID、请求ID、关联ID和客户端IP列按完整值匹配；其余文本忽略大小写按包含关系匹配。纯 JSON 数字、有效IP、32/64位十六进制ID和标准UUID在快照中按完整文本值匹配；不会按数值或IP等价形式换算。错误摘要中的数字使用词边界，输入 `429` 不误匹配 `4290`；`status_code=429` 也支持错误中的等号空白，并对错误摘要及快照文本保留状态码边界。JSON 键名、对象序列化、`null`、`[redacted]` 和历史非 JSON 快照不参与智能内容匹配；没有新增索引或重写历史数据。多类匹配取并集，并不猜测数字只代表目标ID或只代表错误码。
+- `target` / `ip`：`q` 分别精确匹配目标ID / 客户端IP，不做模糊匹配或 IP 地址格式等价转换。
+- `error`：只匹配错误摘要，多词同时命中；数字在错误信息内仍按子串匹配。
+- `request_id`、`target`、`ip`、`error` 保留给原有接口调用者；页面仅发送 `q` 与 `search_mode=smart`，完整请求ID可直接粘贴至统一搜索框。
+- `q` 最多 256 字节；未知模式、未配对引号、超过词数限制或只含空引号返回 HTTP 400 `invalid_audit_search`（原有过长参数检查仍返回 `invalid_filter`）。
+- 所有模式与操作类型、时间、操作人及结果筛选取交集，列表和独立计数采用同一条件；继续沿用游标分页、30 秒计数缓存、请求取消与 8 秒查询预算。页面选操作类型即时更新已应用类型，保留其他未提交输入；操作人候选也受该类型及已应用时间限制。结构化内容搜索需要解析匹配范围内的快照，不承诺全历史搜索性能；默认当天、先收窄操作类型再搜索。
+
 调权中心分组操作使用以下站点级接口：
 
 操作审计的 `actor_exact=true` 可与 `actor` 配合精确匹配账号；默认仍保持模糊匹配兼容。关键词 `q` 和操作人模糊匹配中的 `%`、`_` 不作为 SQL 通配符。

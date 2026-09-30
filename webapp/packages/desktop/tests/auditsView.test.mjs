@@ -9,6 +9,47 @@ const compiled = ts.transpileModule(functions, { compilerOptions: { target: ts.S
 const { actorLabel, targetLabel } = new Function(`${compiled}; return { actorLabel, targetLabel };`)();
 const row = (overrides = {}) => ({ operation_type: '', target_type: '', target_id: '', actor_id: '', instance_id: '', instance_name: '', before_summary: '', after_summary: '', source_component: '', ...overrides });
 
+test('type filter precedes intelligent search and applies without submitting other drafts', () => {
+  const template = source.slice(source.indexOf('<template>'));
+  assert.ok(template.indexOf('v-model="draft.operation_type"') < template.indexOf('v-model="draft.q"'));
+  assert.doesNotMatch(template, /draft\.search_mode|aria-label="搜索方式"/);
+  assert.match(template, /@change="applyOperationType"/);
+  assert.match(source, /applied\.value = \{ \.\.\.applied\.value, operation_type: draft\.operation_type \}/);
+  assert.match(source, /search_mode: "smart" as const/);
+  assert.match(source, /actor_options: true, actor: value\.trim\(\) \|\| undefined, operation_type: applied\.value\.operation_type/);
+});
+
+test('intelligent keywords validate phrases and bound search complexity', () => {
+  const block = source.slice(source.indexOf('function validSearchTerms('), source.indexOf('function applyOperationType('));
+  const compiled = ts.transpileModule(block, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  const valid = new Function(`${compiled}; return validSearchTerms;`)();
+  assert.equal(valid('gpt-4 香港 7'), true);
+  assert.equal(valid('"香港 备用" gpt-4'), true);
+  assert.equal(valid('"未闭合'), false);
+  assert.equal(valid('""'), false);
+  assert.equal(valid('a b c d e f g h i'), false);
+  assert.equal(valid(''), true);
+});
+
+test('selecting a type resets history but preserves unapplied inputs and applied search', () => {
+  const block = source.slice(source.indexOf('function applyOperationType('), source.indexOf('function resetTimeRange('));
+  const compiled = ts.transpileModule(block, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  const expanded = { value: ['old-row'] };
+  const applied = { value: { q: 'gpt-4', operation_type: '', actor: 'alice' } };
+  const draft = { q: 'new input', operation_type: 'billing.price_update', actor: 'bob' };
+  let resets = 0;
+  const apply = new Function('expandedRows', 'applied', 'draft', 'history', `${compiled}; return applyOperationType;`)(expanded, applied, draft, { reset() { resets++; } });
+  apply();
+  assert.deepEqual(applied.value, { q: 'gpt-4', operation_type: 'billing.price_update', actor: 'alice' });
+  assert.equal(draft.q, 'new input');
+  assert.deepEqual(expanded.value, []);
+  assert.equal(resets, 1);
+  draft.operation_type = '';
+  apply();
+  assert.equal(applied.value.operation_type, '');
+  assert.equal(resets, 2);
+});
+
 test('actor roles omit manual prefix without claiming an unverified identity', () => {
   assert.equal(actorLabel({ actor_type: 'human', actor_role: 'admin' }), '管理员');
   assert.equal(actorLabel({ actor_type: 'human', actor_role: 'viewer' }), '查看账号');
