@@ -290,6 +290,8 @@ test('channel tuning status remains visible without the removed channel text sea
     {...row, channel_id:1, channel_name:'north', max_rpm:0,max_tpm:0},
     {...row, channel_id:2, channel_name:'south', max_rpm:0,max_tpm:0},
   ];
+  p.channels.value = p.bases.value.map(item => ({ ...item, status: 'enabled', models: ['m'] }));
+  p.channelDirectorySite.value = 'a';
   p.acceptStates('a',[
     {...state(100), channel_id:1, phase:'circuit',otps_ready:true,otps_stats_version:1,metric_ready:false},
     {...state(100), channel_id:2, phase:'normal',otps_ready:true,otps_stats_version:1,metric_ready:true},
@@ -307,6 +309,8 @@ test('runtime overview filters channels by a matching group item', async () => {
     { ...row, channel_id: 1, channel_name: 'primary', group_name: 'default,vip' },
     { ...row, channel_id: 2, channel_name: 'fast', group_name: 'default,fast' },
   ];
+  p.channels.value = p.bases.value.map(item => ({ ...item, status: 'enabled', models: ['m'] }));
+  p.channelDirectorySite.value = 'a';
   p.toggleGroupFilter('vip');
   assert.deepEqual(p.displayedRows.value.map(item => item.channel_id), [1]);
   p.selectedGroupFilter.value = {kind:'group',name:'fast'};
@@ -387,6 +391,9 @@ test('channel switch status filters compose with the group filter without tuning
   p.channelDirectorySite.value = 'a'
   p.activeModel.value = 'm'
 
+  assert.equal(p.channelSwitchFilter.value, 'enabled')
+  assert.deepEqual(p.displayedRows.value.map(item => item.channel_id), [1])
+  assert.match(script, /watch\(\(\) => filters\.site_id, \(\) => \{[^\n]*channelSwitchFilter\.value = "enabled"/)
   p.channelSwitchFilter.value = 'not_enabled'
   assert.deepEqual(p.displayedRows.value.map(item => item.channel_id), [4, 3, 2])
   p.channelSwitchFilter.value = 'enabled'
