@@ -26,6 +26,7 @@ var factTable = regexp.MustCompile(`^billing_facts_[0-9]{6}$`)
 var selectGrant = regexp.MustCompile("^GRANT SELECT ON `([^`]+)`\\.`([^`]+)` TO ")
 
 type Reader struct {
+	BillingVersions BillingVersionStore
 	ConnectionsFile string
 	Connections     ConnectionStore
 	SecretKey       string

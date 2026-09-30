@@ -13,8 +13,8 @@ const groupDefinitions = [
   { label: '总览与分析', keys: ['overview.read', 'monitor.samples', 'monitor.latency'] },
   { label: '监控分析', keys: ['monitor.customers', 'monitor.channels', 'monitor.models', 'monitor.runtime'] },
   { label: '数据查询', keys: ['data.usage', 'data.users', 'data.logs', 'logs.query'] },
-  { label: '账单管理', keys: ['billing.users', 'billing.channels', 'billing.tasks', 'discounts.manage'] },
-  { label: '系统管理', keys: ['tuning.manage', 'alerts.manage', 'notifications.manage', 'instances.manage', 'archive.manage', 'accounts.manage', 'models.manage', 'upstreams.manage', 'settings.manage', 'audits.read'] },
+  { label: '账单管理', keys: ['billing.users', 'billing.channels', 'upstreams.manage', 'billing.tasks', 'discounts.manage'] },
+  { label: '系统管理', keys: ['tuning.manage', 'alerts.manage', 'notifications.manage', 'instances.manage', 'archive.manage', 'accounts.manage', 'models.manage', 'settings.manage', 'audits.read'] },
 ]
 const groups = computed(() => {
   const options = new Map(props.options.map(option => [option.key, option]))

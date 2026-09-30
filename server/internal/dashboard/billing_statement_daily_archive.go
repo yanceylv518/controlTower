@@ -86,7 +86,19 @@ func (h BillingStatementResultHandler) writeDailyArchive(w http.ResponseWriter, 
 		}
 		entry, err := z.Create(statementDailyMemberFilename(job, item))
 		if err == nil {
-			_, err = io.Copy(entry, in)
+			if job.UsageVersion >= billing.SettlementUsageVersion {
+				var info os.FileInfo
+				info, err = in.Stat()
+				if err == nil {
+					copy := job
+					copy.From = day
+					copy.To = day.AddDate(0, 0, 1)
+					copy.BillPeriod = "daily"
+					err = billing.RestyleSettlementDailyFile(r.Context(), entry, in, info.Size(), copy)
+				}
+			} else {
+				_, err = io.Copy(entry, in)
+			}
 		}
 		in.Close()
 		if err != nil {

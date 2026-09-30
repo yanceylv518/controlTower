@@ -52,7 +52,7 @@ func DiscountForDay(items []StatementDiscount, jobType string, channelID int64, 
 		if jobType == "upstream_statement" && (item.DiscountType != DiscountUpstreamChannel || item.ChannelID != channelID) {
 			continue
 		}
-		if dayKey < item.EffectiveFrom.Format("2006-01-02") || (item.EffectiveTo != nil && dayKey >= item.EffectiveTo.Format("2006-01-02")) {
+		if dayKey < item.EffectiveFrom.In(BusinessLocation).Format("2006-01-02") || (item.EffectiveTo != nil && dayKey >= item.EffectiveTo.In(BusinessLocation).Format("2006-01-02")) {
 			continue
 		}
 		return item.Discount

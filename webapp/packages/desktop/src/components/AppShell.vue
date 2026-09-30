@@ -78,8 +78,10 @@ const nav = [
     items: [
       ["/billing", "用户账单", Coin],
       ["/billing/channels", "上游账单", Coin],
-      ["/billing/tasks", "账单任务", Operation],
-      ["/billing/discounts", "渠道折扣", SetUp],
+      ["/billing/upstreams", "上游管理", Connection],
+      ["/billing/new", "新版用户账单", Operation],
+      ["/billing/reports", "报表中心", Operation],
+      ["/billing/user-discounts", "用户折扣补录", SetUp],
     ],
   },
   {
@@ -93,7 +95,6 @@ const nav = [
       ["/access-users", "账号管理", User],
       ["/audits", "操作审计", Document],
       ["/models/manage", "模型广场", SetUp],
-      ["/billing/upstreams", "上游管理", Connection],
       ["/settings", "系统设置", SetUp],
     ],
   },

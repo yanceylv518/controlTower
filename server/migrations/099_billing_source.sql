@@ -1,0 +1,2 @@
+ALTER TABLE billing_jobs ADD COLUMN data_source VARCHAR(16) NOT NULL DEFAULT '';
+CREATE TABLE IF NOT EXISTS billing_configuration (id TINYINT PRIMARY KEY, data_source VARCHAR(16) NOT NULL, updated_by VARCHAR(128) NOT NULL, updated_at DATETIME(6) NOT NULL) ENGINE=InnoDB;

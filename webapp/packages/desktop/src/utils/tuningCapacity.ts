@@ -17,7 +17,7 @@ export function parseCapacity(text: string): number | null {
   return value <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(value) : null;
 }
 
-// Editor values use ten-thousands; transport values remain integer counts.
+// TPM editor values use ten-thousands; transport values remain integer counts.
 export function capacityInWan(value: number): string {
   if (!Number.isSafeInteger(value) || value < 0) return '';
   const count = BigInt(value);
@@ -29,4 +29,11 @@ export function parseCapacityWan(text: string): number | null {
   if (!value) return 0;
   if (!/^\d+(?:\.\d{1,4})?$/.test(value)) return null;
   return parseCapacity(value + '万');
+}
+
+export function parseCapacityRpm(text: string): number | null {
+  const value = text.trim();
+  if (!value) return 0;
+  if (!/^\d+$/.test(value)) return null;
+  return parseCapacity(value);
 }

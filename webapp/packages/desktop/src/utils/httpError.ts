@@ -17,8 +17,18 @@ export function billingReadErrorMessage(error: unknown, fallback = "数据加载
 }
 
 export function billingTaskErrorMessage(error: unknown, fallback = "创建后台任务失败"): string {
+  if (error instanceof ApiError && error.code === "billing_generation_in_progress") return "当前有账单任务正在进行，请完成后再生成";
+  if (error instanceof ApiError && error.code === "invalid_users") return "请选择 1 至 50 个有效的账单对象";
+  if (error instanceof ApiError && error.code === "invalid_billing_month") return "请选择已有完整日期的账单月份";
+  if (error instanceof ApiError && error.code === "billing_export_busy") return "当前有其他明细正在处理，请稍后重试";
+  if (error instanceof ApiError && error.code === "invalid_detail_filter") return "请选择账单当天范围内的有效起止时间";
+  if (error instanceof ApiError && error.code === "billing_details_preparing") return "正在整理明细，请完成后再导出";
+  if (error instanceof ApiError && error.code === "billing_daily_bills_incomplete") return "该月日账单尚未齐全，请先点击生成账单，完成后会自动汇总月账单";
+  if (error instanceof ApiError && error.code === "billing_period_no_consumption") return "该月没有消费记录，无需生成账单";
+  if (error instanceof ApiError && error.code === "billing_daily_currency_mismatch") return "该月日账单的币种或汇率不一致，暂时无法合并，请分别下载日账单";
   if (error instanceof ApiError && error.code === "billing_statement_duplicate") return "相同站点、账单类型、对象和账期的任务或账单已经存在，不能重复创建";
   if (error instanceof ApiError && error.code === "billing_statement_queue_full") return "等待队列已满，最多允许 5 个任务排队";
+  if (error instanceof ApiError && error.code === "upstream_not_found_or_empty") return "所选上游已不存在或尚未关联渠道，请先检查上游管理";
   if (error instanceof ApiError && error.code === "upstream_channels_missing") return "所选上游没有关联渠道，无法生成账单";
   if (error instanceof ApiError && error.code === "billing_job_busy") {
     const active = error.details.active_job as { completed_steps?: number; total_steps?: number } | undefined;

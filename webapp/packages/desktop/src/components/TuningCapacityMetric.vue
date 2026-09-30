@@ -1,16 +1,21 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue';
 import { EditPen } from '@element-plus/icons-vue';
-import { compactCapacity, capacityInWan, parseCapacityWan } from '../utils/tuningCapacity';
+import { compactCapacity, capacityInWan, parseCapacityWan, parseCapacityRpm } from '../utils/tuningCapacity';
 
 const props = defineProps<{ modelValue: number; current?: number; metric: 'TPM' | 'RPM'; channel: string; modified?: boolean; disabled?: boolean; persist: (value: number) => Promise<void> }>();
 const submitting = ref(false);
 const open = ref(false), draft = ref(''), error = ref('');
 const input = ref<{ focus: () => void; select: () => void }>();
+const unit = computed(() => props.metric === 'RPM' ? '次/分钟' : '万');
+function display(value?: number) {
+  if (props.metric === 'TPM') return compactCapacity(value);
+  return value != null && Number.isFinite(value) ? value.toLocaleString('zh-CN', { maximumFractionDigits: 0 }) : '—';
+}
 const exceeded = computed(() => props.modelValue > 0 && props.current != null && props.current >= props.modelValue);
 const exact = computed(() => `${props.metric} 当前 ${props.current?.toLocaleString('zh-CN') ?? '—'}${props.modelValue > 0 ? ` / 上限 ${props.modelValue.toLocaleString('zh-CN')}` : ''}；点击编辑上限`);
 async function start() {
-  draft.value = props.modelValue > 0 ? capacityInWan(props.modelValue) : '';
+  draft.value = props.modelValue > 0 ? (props.metric === 'RPM' ? String(props.modelValue) : capacityInWan(props.modelValue)) : '';
   error.value = '';
   await nextTick();
   input.value?.focus();
@@ -28,8 +33,8 @@ async function apply(value: number) {
   } finally { submitting.value = false; }
 }
 function confirm() {
-  const value = parseCapacityWan(draft.value);
-  if (value === null) { error.value = '请输入非负数，最多 4 位小数，单位为万'; return; }
+  const value = props.metric === 'RPM' ? parseCapacityRpm(draft.value) : parseCapacityWan(draft.value);
+  if (value === null) { error.value = props.metric === 'RPM' ? '请输入有效的非负整数，单位为次/分钟' : '请输入非负数，最多 4 位小数，单位为万'; return; }
   apply(value);
 }
 </script>
@@ -38,12 +43,12 @@ function confirm() {
   <el-popover v-model:visible="open" trigger="click" :disabled="disabled || submitting" placement="bottom-start" :width="270" @show="start">
     <template #reference>
       <button type="button" class="capacity-metric" :disabled="disabled || submitting" :class="{ exceeded, modified }" :title="exact" :aria-label="`${channel} ${metric}，编辑上限`" :aria-expanded="open" @keydown.esc="open = false">
-        <span>{{ metric }}</span> <span>{{ compactCapacity(current) }}</span><template v-if="modelValue > 0"><span class="slash">/</span><span>{{ compactCapacity(modelValue) }}</span></template><el-icon class="edit-icon"><EditPen /></el-icon>
+        <span>{{ metric }}</span> <span>{{ display(current) }}</span><template v-if="modelValue > 0"><span class="slash">/</span><span>{{ display(modelValue) }}</span></template><el-icon class="edit-icon"><EditPen /></el-icon>
       </button>
     </template>
     <div class="capacity-editor" @keydown.esc.stop="open = false">
-      <b>{{ metric }} 上限（万）</b>
-      <el-input ref="input" v-model="draft" :disabled="disabled || submitting" :aria-label="`${channel} ${metric}上限`" placeholder="例如 20 表示 20 万" :maxlength="32" @input="error = ''" @keydown.enter.prevent="confirm"><template #append>万</template></el-input>
+      <b>{{ metric }} 上限（{{ unit }}）</b>
+      <el-input ref="input" v-model="draft" :disabled="disabled || submitting" :aria-label="`${channel} ${metric}上限`" :placeholder="metric === 'RPM' ? '例如 100 表示每分钟 100 次' : '例如 20 表示 20 万'" :maxlength="32" @input="error = ''" @keydown.enter.prevent="confirm"><template #append>{{ unit }}</template></el-input>
       <small v-if="error" class="error" role="alert">{{ error }}</small>
       <small v-else>留空或填 0 可清除。点击确认直接保存生效。</small>
       <div class="editor-actions"><el-button text :disabled="!modelValue || disabled || submitting" @click="apply(0)">清除上限</el-button><el-button type="primary" :loading="submitting" :disabled="disabled" @click="confirm">确认</el-button></div>

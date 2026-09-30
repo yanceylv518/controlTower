@@ -269,28 +269,34 @@ func scanBillingLogRows(rows *sql.Rows, out []billing.PagedLogRecord) ([]billing
 		if err := rows.Scan(&v.ID, &v.CreatedUnix, &v.RequestID, &v.UpstreamRequestID, &v.UserID, &v.Username, &v.TokenID, &v.TokenName, &v.ChannelID, &v.ChannelName, &v.ModelName, &v.GroupName, &v.PromptTokens, &v.CompletionTokens, &v.Quota, &other); err != nil {
 			return nil, err
 		}
-		cache := normalizeChannelTestBillingUsage(v.TokenName, parseBillingCacheUsage(other))
-		v.SourcePromptTokens = v.PromptTokens
-		if v.PromptTokens.Valid {
-			cache = resolveBillingCacheSemantic(cache, v.PromptTokens.Int64)
-		}
-		v.CacheTokens, v.CacheWriteTokens = cache.Read, cache.Write
-		v.CacheWrite5mTokens, v.CacheWrite1hTokens = cache.Write5m, cache.Write1h
-		v.UsageSemantic = cache.Semantic
-		v.ModelPrice, v.ModelRatio, v.CompletionRatio = cache.ModelPrice, cache.ModelRatio, cache.CompletionRatio
-		v.CacheRatio, v.CacheCreationRatio, v.GroupRatio = cache.CacheRatio, cache.CacheCreationRatio, cache.GroupRatio
-		v.CacheCreationRatio5m, v.CacheCreationRatio1h = cache.CacheCreationRatio5m, cache.CacheCreationRatio1h
-		v.ImageRatio = cache.ImageRatio
-		v.BillingMode, v.ExprBase64, v.MatchedTier, v.RequestRules = cache.BillingMode, cache.ExprBase64, cache.MatchedTier, cache.RequestRules
-		v.ToolSurcharges = cache.ToolSurcharges
-		v.ImageInputTokens, v.ImageOutputTokens = cache.ImageInput, cache.ImageOutput
-		v.AudioInputTokens, v.AudioOutputTokens = cache.AudioInput, cache.AudioOutput
-		if v.PromptTokens.Valid {
-			v.PromptTokens.Int64, v.ContextTokens = normalizedBillingPromptTokens(v.PromptTokens.Int64, cache)
-		}
+		v = normalizeBillingLog(v, other)
 		out = append(out, v)
 	}
 	return out, rows.Err()
+}
+
+func normalizeBillingLog(v billing.PagedLogRecord, other string) billing.PagedLogRecord {
+	cache := normalizeChannelTestBillingUsage(v.TokenName, parseBillingCacheUsage(other))
+	v.SourcePromptTokens = v.PromptTokens
+	if v.PromptTokens.Valid {
+		cache = resolveBillingCacheSemantic(cache, v.PromptTokens.Int64)
+	}
+	v.CacheTokens, v.CacheWriteTokens = cache.Read, cache.Write
+	v.CacheWrite5mTokens, v.CacheWrite1hTokens = cache.Write5m, cache.Write1h
+	v.UsageSemantic = cache.Semantic
+	v.ModelPrice, v.ModelRatio, v.CompletionRatio = cache.ModelPrice, cache.ModelRatio, cache.CompletionRatio
+	v.CacheRatio, v.CacheCreationRatio, v.GroupRatio = cache.CacheRatio, cache.CacheCreationRatio, cache.GroupRatio
+	v.CacheCreationRatio5m, v.CacheCreationRatio1h = cache.CacheCreationRatio5m, cache.CacheCreationRatio1h
+	v.QuotaBeforeDiscount, v.UserModelDiscount = cache.QuotaBeforeDiscount, cache.UserModelDiscount
+	v.ImageRatio = cache.ImageRatio
+	v.BillingMode, v.ExprBase64, v.MatchedTier, v.RequestRules = cache.BillingMode, cache.ExprBase64, cache.MatchedTier, cache.RequestRules
+	v.ToolSurcharges = cache.ToolSurcharges
+	v.ImageInputTokens, v.ImageOutputTokens = cache.ImageInput, cache.ImageOutput
+	v.AudioInputTokens, v.AudioOutputTokens = cache.AudioInput, cache.AudioOutput
+	if v.PromptTokens.Valid {
+		v.PromptTokens.Int64, v.ContextTokens = normalizedBillingPromptTokens(v.PromptTokens.Int64, cache)
+	}
+	return v
 }
 
 // NewAPI's channel-test controller records provider cache diagnostics in the
@@ -361,6 +367,8 @@ const billingOtherProjection = `CASE WHEN JSON_VALID(l.other) THEN JSON_OBJECT(`
 	`'claude_cache_creation_5_m_tokens',JSON_EXTRACT(l.other,'$.claude_cache_creation_5_m_tokens'),` +
 	`'cache_creation_tokens_1h',JSON_EXTRACT(l.other,'$.cache_creation_tokens_1h'),` +
 	`'claude_cache_creation_1_h_tokens',JSON_EXTRACT(l.other,'$.claude_cache_creation_1_h_tokens'),` +
+	`'quota_before_discount',JSON_EXTRACT(l.other,'$.quota_before_discount'),` +
+	`'user_model_discount',JSON_EXTRACT(l.other,'$.user_model_discount'),` +
 	`'model_price',JSON_EXTRACT(l.other,'$.model_price'),` +
 	`'model_ratio',JSON_EXTRACT(l.other,'$.model_ratio'),` +
 	`'completion_ratio',JSON_EXTRACT(l.other,'$.completion_ratio'),` +
@@ -591,6 +599,7 @@ func billingCacheTokens(other string) int64 {
 }
 
 type billingCacheUsage struct {
+	QuotaBeforeDiscount, UserModelDiscount                                  string
 	Read, Write, Write5m, Write1h                                           int64
 	ImageInput, ImageOutput, AudioInput, AudioOutput                        int64
 	Semantic                                                                string
@@ -605,7 +614,9 @@ func parseBillingCacheUsage(other string) billingCacheUsage {
 		return billingCacheUsage{Semantic: "openai"}
 	}
 	var values map[string]any
-	if json.Unmarshal([]byte(other), &values) != nil {
+	decoder := json.NewDecoder(strings.NewReader(other))
+	decoder.UseNumber()
+	if decoder.Decode(&values) != nil {
 		return billingCacheUsage{Semantic: "openai"}
 	}
 	number := func(keys ...string) int64 {
@@ -671,6 +682,15 @@ func parseBillingCacheUsage(other string) billingCacheUsage {
 		}
 		return ""
 	}
+	settlementDecimal := func(key string) string {
+		if value, exists := values[key]; !exists || value == nil {
+			return ""
+		}
+		if value := decimal(key); value != "" {
+			return value
+		}
+		return "invalid"
+	}
 	usageBillingPath := ""
 	if raw, ok := values["usage_billing_path"].(string); ok {
 		usageBillingPath = strings.ToLower(strings.TrimSpace(raw))
@@ -692,6 +712,7 @@ func parseBillingCacheUsage(other string) billingCacheUsage {
 		imageInput = number("image_output")
 	}
 	return billingCacheUsage{
+		QuotaBeforeDiscount: settlementDecimal("quota_before_discount"), UserModelDiscount: settlementDecimal("user_model_discount"),
 		Read: read, Write: write, Write5m: write5m, Write1h: write1h, Semantic: semantic,
 		ImageInput: imageInput, ImageOutput: imageOutput,
 		AudioInput: number("audio_input", "audio_input_token_count"), AudioOutput: number("audio_output"),

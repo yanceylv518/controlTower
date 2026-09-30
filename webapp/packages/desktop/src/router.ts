@@ -27,12 +27,14 @@ import UsersView from './views/UsersView.vue'
 import ReadonlyUsersView from './views/ReadonlyUsersView.vue'
 import ReadonlyLogsView from './views/ReadonlyLogsView.vue'
 import BillingView from './views/BillingView.vue'
-import ChannelBillingView from './views/ChannelBillingV4View.vue'
 import BillingPricingView from './views/ModelSquareView.vue'
 import BillingReconciliationView from './views/BillingReconciliationView.vue'
 import BillingTasksView from './views/BillingTasksView.vue'
 import BillingUpstreamsView from './views/BillingUpstreamsView.vue'
 import BillingDiscountsView from './views/BillingDiscountsView.vue'
+import SettlementReportsView from './views/SettlementReportsView.vue'
+import BillingWorkspaceView from './views/BillingWorkspaceView.vue'
+import UserDiscountSupplementsView from './views/UserDiscountSupplementsView.vue'
 export const router = createRouter({ history: createWebHistory('/'), routes: [
   { path:'/trial-followup',component:TrialFollowupView,meta:{title:'测试跟进',adminOnly:true} },
   { path: '/log-archives', component: LogArchiveView, meta: { title: '日志归档' } },
@@ -40,9 +42,13 @@ export const router = createRouter({ history: createWebHistory('/'), routes: [
   { path: '/readonly-users', component: ReadonlyUsersView, meta: { title: '用户管理' } },
   { path: '/readonly-logs', component: ReadonlyLogsView, meta: { title: '使用日志' } },
   { path: '/billing', alias: ['/billing/overview', '/billing/generated'], component: BillingView, meta: { title: '用户账单' } },
+  { path: '/billing/reports', component: SettlementReportsView, meta:{title:'报表中心',adminOnly:true} },
+  { path: '/billing/new', component: BillingWorkspaceView, meta: {title:'新版用户账单',adminOnly:true} },
+  { path: '/billing/upstream-new', component: BillingWorkspaceView, props:{kind:'upstream'}, meta:{title:'上游账单',adminOnly:true} },
   { path: '/billing/tasks', component: BillingTasksView, meta: { title: '账单任务', adminOnly: true } },
-  { path: '/billing/channels', component: ChannelBillingView, meta: { title: '上游账单', adminOnly: true } },
+  { path: '/billing/channels', component: BillingWorkspaceView, props:{kind:'upstream'}, meta: { title: '上游账单', adminOnly: true } },
   { path: '/billing/upstreams', component: BillingUpstreamsView, meta: { title: '上游管理', adminOnly: true } },
+  { path: '/billing/user-discounts', component: UserDiscountSupplementsView, meta: {title:'用户折扣补录',adminOnly:true} },
   { path: '/billing/discounts', component: BillingDiscountsView, meta: { title: '渠道折扣', adminOnly: true } },
   { path: '/billing/anomalies', alias: '/billing-reconciliation', component: BillingReconciliationView, meta: { title: '账单核对', adminOnly: true } },
   { path: '/models/manage', alias: '/billing/pricing', component: BillingPricingView, meta: { title: '模型广场', adminOnly: true } },

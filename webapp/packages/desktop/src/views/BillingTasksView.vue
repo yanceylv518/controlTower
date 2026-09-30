@@ -49,7 +49,7 @@ const visibleItems = computed(() => items.value.filter((job) => activeTab.value 
 const typeLabel = (value?: string) => ({ user_statement: "用户账单", upstream_statement: "上游账单" }[value || ""] || value || "账单任务");
 const statusMeta = (job: BillingJob) => isCancelled(job) ? { label: "已取消", type: "info" as const } : ({
   pending: { label: "等待中", type: "warning" as const }, running: { label: "计算中", type: "primary" as const }, publishing: { label: "生成文件", type: "primary" as const },
-  complete: { label: "已完成", type: "success" as const }, failed: { label: "失败", type: "danger" as const },
+  no_data: { label: "无消费，已跳过", type: "info" as const }, complete: { label: "已完成", type: "success" as const }, failed: { label: "失败", type: "danger" as const },
 }[job.status]);
 const progress = (job: BillingJob) => job.total_steps ? Math.min(100, Math.round(job.completed_steps * 100 / job.total_steps)) : 0;
 const queuePosition = (job: BillingJob) => items.value.filter((item) => item.status === "pending").findIndex((item) => item.id === job.id) + 1;

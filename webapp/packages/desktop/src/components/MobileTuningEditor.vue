@@ -13,7 +13,7 @@ const valid = () => Object.values(draft).every(value => Number.isSafeInteger(val
     <el-form label-position="top">
       <el-form-item label="基础权重"><el-input-number v-model="draft.base_weight" aria-label="基础权重" :min="0" :precision="0" /></el-form-item>
       <el-form-item label="优先级（保存后同步线上）"><el-input-number v-model="draft.priority" aria-label="线上优先级" :disabled="priorityLocked" :min="0" :precision="0" /><small v-if="priorityLocked">熔断或探测中，暂不可修改优先级</small></el-form-item>
-      <el-form-item label="RPM 上限（0 表示不限）"><el-input-number v-model="draft.max_rpm" aria-label="RPM 上限" :min="0" :precision="0" /></el-form-item>
+      <el-form-item label="RPM 上限（次/分钟，0 表示不限）"><el-input-number v-model="draft.max_rpm" aria-label="RPM 上限" :min="0" :precision="0" /></el-form-item>
       <el-form-item label="TPM 上限（0 表示不限）"><el-input-number v-model="draft.max_tpm" aria-label="TPM 上限" :min="0" :precision="0" /></el-form-item>
     </el-form>
     <p class="explanation">基础权重用于后续计算，不等于当前线上权重。优先级保存会同步线上；分组独立提交。</p>

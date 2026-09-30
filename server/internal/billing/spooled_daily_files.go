@@ -178,6 +178,34 @@ func (g UserDailyFileGenerator) generateSpooledFiles(ctx context.Context, job Jo
 			}
 		}
 	}
+	if job.UsageVersion >= SettlementUsageVersion {
+		for day := CompleteDayBoundary(job.From); day.Before(job.To); day = day.AddDate(0, 0, 1) {
+			dir := filepath.Join(derived, "users", day.Format("2006-01-02"))
+			paths, e := filepath.Glob(filepath.Join(dir, "*.jsonl.gz"))
+			if e != nil {
+				return e
+			}
+			if len(paths) > 0 {
+				continue
+			}
+			if e = os.MkdirAll(dir, 0o755); e != nil {
+				return e
+			}
+			file, e := os.Create(filepath.Join(dir, strconv.FormatInt(job.UserID, 10)+".jsonl.gz"))
+			if e != nil {
+				return e
+			}
+			zipper := gzip.NewWriter(file)
+			e = zipper.Close()
+			closeErr := file.Close()
+			if e != nil {
+				return e
+			}
+			if closeErr != nil {
+				return closeErr
+			}
+		}
+	}
 	if err = g.publishSpooledUsers(ctx, root, derived, job); err != nil {
 		return err
 	}
@@ -255,7 +283,16 @@ func (g UserDailyFileGenerator) publishSpooledUsers(ctx context.Context, root, d
 			_ = os.Remove(tmp.Name())
 			return err
 		}
-		if err = writeUserDailyWorkbook(tmp, job, group, columns, func(visit func(RequestDetail) error) error { return visitJSONDetails(path, visit) }); err == nil {
+		iterate := func(visit func(RequestDetail) error) error { return visitJSONDetails(path, visit) }
+		if job.UsageVersion >= SettlementUsageVersion && job.JobType == "user_statement" && job.BillPeriod == "daily" {
+			err = WriteSettlementSavedDetails(ctx, target+".details.zip", job, iterate)
+			if err == nil {
+				err = writeSettlementDailyWorkbookMode(tmp, job, iterate, true)
+			}
+		} else {
+			err = writeUserDailyWorkbook(tmp, job, group, columns, iterate)
+		}
+		if err == nil {
 			err = tmp.Sync()
 		}
 		if closeErr := tmp.Close(); err == nil {

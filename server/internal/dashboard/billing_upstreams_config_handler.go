@@ -96,6 +96,28 @@ func (h BillingUpstreamConfigHandler) ServeHTTP(w http.ResponseWriter, r *http.R
 				return
 			}
 			item.Channels[i].ChannelName = channel.ChannelName
+			allowed := map[string]bool{}
+			for _, model := range strings.Split(channel.Models, ",") {
+				if model = strings.TrimSpace(model); model != "" {
+					allowed[model] = true
+				}
+			}
+			if len(allowed) == 1 {
+				for model := range allowed {
+					item.Channels[i].Models = []string{model}
+				}
+			} else {
+				if len(allowed) > 1 && item.Channels[i].Models != nil && len(item.Channels[i].Models) == 0 {
+					writeDashboardError(w, 400, "channel_model_required")
+					return
+				}
+				for _, model := range item.Channels[i].Models {
+					if !allowed[model] {
+						writeDashboardError(w, 400, "invalid_channel_model")
+						return
+					}
+				}
+			}
 		}
 		item.UpdatedBy = ctauth.Actor(r)
 		if item.UpdatedBy == "" {

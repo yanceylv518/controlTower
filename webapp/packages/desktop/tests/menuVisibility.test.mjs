@@ -30,7 +30,7 @@ test('global visibility defaults on after load; explicit false applies to every 
   assert.match(shell,/menuVisibility\.visible\(item\[0\]\) && canVisit/)
   const backend = readFileSync(new URL('../../../../server/internal/dashboard/menu_visibility.go',import.meta.url),'utf8')
   const backendPaths = [...backend.matchAll(/"(\/[^"\s]*)":\s*true/g)].map(m => m[1])
-  assert.deepEqual([...paths].sort(), backendPaths.sort())
+  assert.deepEqual([...paths].sort(), backendPaths.filter(p => !['/billing/tasks','/billing/discounts'].includes(p)).sort())
 })
 test('failed initial load does not expose menus; unsupported backend is explicit', async () => {
   const failure = harness(async () => {throw new ApiError(500)}).store

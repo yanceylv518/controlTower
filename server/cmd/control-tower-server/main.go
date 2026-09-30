@@ -111,7 +111,7 @@ func run() error {
 	}
 	var fastCircuitSink tuning.FastCircuitSink
 	if cfg.APIOnly {
-		log.Printf("API-only mode enabled; operational runners are disabled (billing job worker remains enabled)")
+		log.Printf("API-only mode enabled; operational runners are disabled (billing job worker and registered-target scheduling remain enabled)")
 	} else {
 		workers.Go(func(ctx context.Context) {
 			authManager.CleanupLoop(ctx)
@@ -245,13 +245,23 @@ func startBillingFileCleanup(workers *workerGroup, store mysqlstore.Store) {
 
 func startBillingJobRunner(workers *workerGroup, store mysqlstore.Store, secretKey string, pagePause time.Duration) {
 	readonly := &dashboard.PassthroughHandler{Config: store, SecretKey: secretKey}
+	wakeBilling := make(chan struct{}, 1)
 	runner := billing.JobRunner{
-		Source:    dashboard.BillingReadonlySource{Handler: readonly},
+		OnIdle: func() {
+			select {
+			case wakeBilling <- struct{}{}:
+			default:
+			}
+		},
+		Source:    dashboard.BillingSources{BillingReadonlySource: dashboard.BillingReadonlySource{Handler: readonly}, Archive: archivereader.Reader{Connections: store, SecretKey: secretKey, BillingVersions: store}},
 		Store:     store,
 		Spool:     billing.FileDetailSpool{},
 		Files:     billing.UserDailyFileGenerator{Store: store, Spool: billing.FileDetailSpool{}},
 		PagePause: pagePause,
 	}
+	workers.Go(dashboard.SettlementReportWorker{Store: store, Calculator: dashboard.SettlementReportHandler{Store: store, Source: dashboard.BillingSources{BillingReadonlySource: dashboard.BillingReadonlySource{Handler: readonly}, Archive: archivereader.Reader{Connections: store, SecretKey: secretKey, BillingVersions: store}}}}.Run)
+	// Billing continuation is part of the enabled billing worker, including API-only mode.
+	workers.Go(dashboard.BillingAutomation{Wake: wakeBilling, Store: store, Source: dashboard.BillingReadonlySource{Handler: readonly}, Archive: archivereader.Reader{Connections: store, SecretKey: secretKey, BillingVersions: store}}.Run)
 	workers.Go(func(ctx context.Context) {
 		if err := runner.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("billing job runner stopped: %v", err)

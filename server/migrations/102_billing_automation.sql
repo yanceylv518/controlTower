@@ -1,0 +1,1 @@
+CREATE TABLE IF NOT EXISTS billing_automatic_targets(instance_id VARCHAR(64) NOT NULL,kind VARCHAR(32) NOT NULL,subject_id BIGINT NOT NULL,start_day DATE NOT NULL,created_at DATETIME(6) NOT NULL,PRIMARY KEY(instance_id,kind,subject_id)) ENGINE=InnoDB;

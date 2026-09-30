@@ -1,0 +1,145 @@
+package dashboard
+
+import (
+	"context"
+	"controltower/server/internal/billing"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+type batchStoreTest struct {
+	saved     []billing.AutomaticTarget
+	cancelled []billing.AutomaticTarget
+	failure   error
+}
+
+func (s *batchStoreTest) PutBillingAutomaticTargets(_ context.Context, v []billing.AutomaticTarget) error {
+	if s.failure != nil {
+		return s.failure
+	}
+	s.saved = v
+	return nil
+}
+func (s *batchStoreTest) BillingGenerationProgress(_ context.Context, v billing.AutomaticTarget) (billing.GenerationProgress, error) {
+	return billing.GenerationProgress{SubjectID: v.SubjectID, Outcome: "registered"}, nil
+}
+func TestBillingBatchUsersAndMonth(t *testing.T) {
+	for _, tc := range []struct {
+		ids, from   string
+		code, count int
+	}{
+		{"[7,8,7]", "2025-09-01", 202, 2}, {"[]", "2025-09-01", 400, 0}, {"[7,0]", "2025-09-01", 400, 0}, {"[7,8]", "2025-09-02", 400, 0},
+		{"[" + strings.Repeat("7,", 50) + "8]", "2025-09-01", 400, 0},
+	} {
+		s := &batchStoreTest{}
+		w := httptest.NewRecorder()
+		body := `{"instance_id":"site","subject_ids":` + tc.ids + `,"from":"` + tc.from + `T00:00:00+08:00","to":"2025-10-01T00:00:00+08:00"}`
+		(BillingBatchGenerationHandler{Store: s}).ServeHTTP(w, httptest.NewRequest("POST", "/", strings.NewReader(body)))
+		if w.Code != tc.code || len(s.saved) != tc.count {
+			t.Fatal(tc, w.Code, w.Body.String(), s.saved)
+		}
+	}
+	s := &batchStoreTest{}
+	w := httptest.NewRecorder()
+	(BillingBatchGenerationHandler{Store: s}).ServeHTTP(w, httptest.NewRequest("GET", "/?instance_id=site&subject_ids=7,8&from=2025-09-01T00:00:00%2B08:00&to=2025-10-01T00:00:00%2B08:00", nil))
+	if w.Code != 200 || len(s.saved) != 0 || !strings.Contains(w.Body.String(), `"subject_id":8`) {
+		t.Fatal(w.Code, w.Body.String())
+	}
+}
+
+func (s *batchStoreTest) CancelBillingGeneration(_ context.Context, v []billing.AutomaticTarget) error {
+	s.cancelled = v
+	return nil
+}
+func TestBillingBatchCancellationAndBusy(t *testing.T) {
+	body := `{"instance_id":"site","subject_ids":[7,8],"from":"2025-09-01T00:00:00+08:00","to":"2025-10-01T00:00:00+08:00","overwrite":true}`
+	s := &batchStoreTest{}
+	w := httptest.NewRecorder()
+	(BillingBatchGenerationHandler{Store: s}).ServeHTTP(w, httptest.NewRequest("POST", "/?action=cancel", strings.NewReader(body)))
+	if w.Code != 200 || len(s.cancelled) != 2 || len(s.saved) != 0 {
+		t.Fatal(w.Code, s)
+	}
+	s = &batchStoreTest{failure: billing.ErrGenerationInProgress}
+	w = httptest.NewRecorder()
+	(BillingBatchGenerationHandler{Store: s}).ServeHTTP(w, httptest.NewRequest("POST", "/", strings.NewReader(body)))
+	if w.Code != 409 || len(s.saved) != 0 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	s = &batchStoreTest{}
+	w = httptest.NewRecorder()
+	(BillingBatchGenerationHandler{Store: s}).ServeHTTP(w, httptest.NewRequest("POST", "/", strings.NewReader(body)))
+	if w.Code != 202 || len(s.saved) != 2 || !s.saved[0].Overwrite {
+		t.Fatal(w.Code, s)
+	}
+}
+
+type historyStoreTest struct {
+	batchStoreTest
+	limit, offset int
+}
+
+func (s *historyStoreTest) ListBillingGenerationTasks(_ context.Context, site, kind string, limit, offset int) ([]billing.GenerationTask, int, error) {
+	s.limit = limit
+	s.offset = offset
+	v, _ := s.BillingGenerationTask(context.Background(), site, "task")
+	return []billing.GenerationTask{v}, 21, nil
+}
+func (s *historyStoreTest) BillingGenerationTask(_ context.Context, site, id string) (billing.GenerationTask, error) {
+	return billing.GenerationTask{ID: id, InstanceID: site, Kind: "user_statement", SubjectIDs: []int64{7, 8}, Items: []billing.GenerationProgress{{SubjectID: 7}, {SubjectID: 8}}}, nil
+}
+func TestBillingGenerationHistoryGroupedAndPaged(t *testing.T) {
+	s := &historyStoreTest{}
+	h := BillingBatchGenerationHandler{Store: s}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/?instance_id=site&action=history&page=2", nil))
+	if w.Code != 200 || s.limit != 20 || s.offset != 20 || strings.Count(w.Body.String(), `"id":"task"`) != 1 || strings.Contains(w.Body.String(), `"subject_id":7`) {
+		t.Fatal(w.Code, w.Body.String(), s)
+	}
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/?instance_id=site&action=history-detail&id=task", nil))
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"subject_id":7`) || !strings.Contains(w.Body.String(), `"subject_id":8`) {
+		t.Fatal(w.Code, w.Body.String())
+	}
+}
+
+func TestBillingBatchUpstreamKind(t *testing.T) {
+	for _, kind := range []string{"upstream_statement", "invalid"} {
+		s := &batchStoreTest{}
+		w := httptest.NewRecorder()
+		body := `{"kind":"` + kind + `","instance_id":"site","subject_ids":[7,8],"from":"2025-09-01T00:00:00+08:00","to":"2025-10-01T00:00:00+08:00"}`
+		(BillingBatchGenerationHandler{Store: s}).ServeHTTP(w, httptest.NewRequest("POST", "/", strings.NewReader(body)))
+		if kind == "invalid" {
+			if w.Code != 400 || len(s.saved) != 0 {
+				t.Fatal(w.Code, s.saved)
+			}
+			continue
+		}
+		if w.Code != 202 || len(s.saved) != 2 || s.saved[0].Kind != kind {
+			t.Fatal(w.Code, w.Body.String(), s.saved)
+		}
+		w = httptest.NewRecorder()
+		(BillingBatchGenerationHandler{Store: s}).ServeHTTP(w, httptest.NewRequest("POST", "/?action=cancel", strings.NewReader(body)))
+		if w.Code != 200 || len(s.cancelled) != 2 || s.cancelled[0].Kind != kind {
+			t.Fatal(w.Code, s.cancelled)
+		}
+	}
+}
+
+func TestBillingBatchKindPermissions(t *testing.T) {
+	for _, tc := range []struct {
+		permission, kind string
+		code             int
+	}{
+		{"billing.channels", "upstream_statement", 200},
+		{"billing.users", "upstream_statement", 403},
+		{"billing.channels", "user_statement", 403},
+		{"billing.users", "user_statement", 200},
+	} {
+		path := "/api/dashboard/billing/generation-batch?instance_id=site&kind=" + tc.kind + "&subject_ids=7&from=2025-09-01T00:00:00%2B08:00&to=2025-10-01T00:00:00%2B08:00"
+		w := menuRequest(t, tc.permission, "GET", path, BillingBatchGenerationHandler{Store: &batchStoreTest{}})
+		if w.Code != tc.code {
+			t.Fatal(tc, w.Code, w.Body.String())
+		}
+	}
+}

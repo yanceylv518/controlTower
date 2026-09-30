@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	ac "controltower/internal/archivecontrol"
 	"net/http"
 	"os"
@@ -249,6 +250,7 @@ func NewMux(options Options) *http.ServeMux {
 	mux.Handle("PUT /api/dashboard/instances/{id}", protect(http.HandlerFunc(instances.Update)))
 	mux.Handle("DELETE /api/dashboard/instances/{id}", protect(http.HandlerFunc(instances.Delete)))
 	mux.Handle("POST /api/dashboard/instances/{id}/rotate-token", protect(http.HandlerFunc(instances.Rotate)))
+	mux.Handle("GET /api/dashboard/billing/current-discounts", protect(http.HandlerFunc(passthrough.BillingCurrentDiscounts)))
 	mux.Handle("GET /api/dashboard/passthrough/users", protect(http.HandlerFunc(passthrough.Users)))
 	mux.Handle("GET /api/dashboard/passthrough/currency", protect(http.HandlerFunc(passthrough.Currency)))
 	mux.Handle("GET /api/dashboard/passthrough/logs", protect(http.HandlerFunc(passthrough.Logs)))
@@ -267,14 +269,34 @@ func NewMux(options Options) *http.ServeMux {
 		billingRollup := billing.RollupService{Source: dashboard.BillingReadonlySource{Handler: passthrough}, Store: billingStore}
 		mux.Handle("POST /api/dashboard/billing/backfill", protect(dashboard.BillingBackfillHandler{Rollup: billingRollup, Audit: options.Store}))
 	}
+	if reports, ok := any(options.Store).(billing.ReportStore); ok {
+		mux.Handle("GET /api/dashboard/billing/reports", protect(dashboard.SavedReportHandler{Store: reports}))
+		mux.Handle("/api/dashboard/billing/report-tasks", protect(dashboard.ReportTasksHandler{Store: reports}))
+	}
+	if workspace, ok := any(options.Store).(dashboard.BillingWorkspaceStore); ok {
+		mux.Handle("GET /api/dashboard/billing/workspace", protect(dashboard.BillingWorkspaceHandler{Store: workspace}))
+	}
+	if automatic, ok := any(options.Store).(dashboard.AutomaticBillingStore); ok {
+		archive, _ := options.ArchiveReader.(interface {
+			FirstBillingDay(context.Context, string) (time.Time, error)
+		})
+		mux.Handle("POST /api/dashboard/billing/generate-missing", protect(dashboard.BillingAutomation{Store: automatic, Source: dashboard.BillingReadonlySource{Handler: passthrough}, Archive: archive}))
+		if batch, ok := any(options.Store).(dashboard.BillingBatchGenerationStore); ok {
+			mux.Handle("/api/dashboard/billing/generation-batch", protect(dashboard.BillingBatchGenerationHandler{Store: batch, Automation: dashboard.BillingAutomation{Store: automatic, Source: dashboard.BillingReadonlySource{Handler: passthrough}, Archive: archive}}))
+		}
+	}
 	if statements, ok := any(options.Store).(dashboard.BillingStatementsStore); ok {
 		mux.Handle("POST /api/dashboard/billing/statements", protect(dashboard.BillingStatementsHandler{Store: statements, Source: dashboard.BillingReadonlySource{Handler: passthrough}}))
 	}
+	if config, ok := any(options.Store).(dashboard.BillingSourceConfigStore); ok {
+		mux.Handle("/api/dashboard/billing/configuration", protect(dashboard.BillingConfigHandler{Store: config}))
+	}
 	if discounts, ok := any(options.Store).(dashboard.BillingDiscountStore); ok {
-		mux.Handle("/api/dashboard/billing/discounts", protect(dashboard.BillingDiscountHandler{Store: discounts}))
+		mux.Handle("/api/dashboard/billing/discounts", protect(dashboard.BillingDiscountHandler{Store: discounts, CurrentDiscount: passthrough.HasCurrentModelDiscount}))
 	}
 	if results, ok := any(options.Store).(dashboard.BillingStatementResultStore); ok {
 		mux.Handle("/api/dashboard/billing/statements/result", protect(dashboard.BillingStatementResultHandler{Store: results}))
+		mux.Handle("/api/dashboard/billing/statements/details", protect(&dashboard.BillingDetailsHandler{Store: results}))
 	}
 	if settingsStore, ok := any(options.Store).(dashboard.BillingUserSettingsStore); ok {
 		mux.Handle("/api/dashboard/billing/user-settings", protect(dashboard.BillingUserSettingsHandler{Store: settingsStore}))

@@ -50,3 +50,45 @@ func TestWorkbookProducesReadableOpenXML(t *testing.T) {
 		}
 	}
 }
+func TestReconciliationMasthead(t *testing.T) {
+	w := New()
+	defer w.Discard()
+	s, e := w.AddReconciliationSheet("月统计", "2026年8月对账汇总单", "客户甲", "", "2026-08-01 至 2026-08-31", "site-a", []float64{16, 36, 16, 20})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e = s.Row([]Cell{{Value: "日期"}, {Value: "模型"}, {Value: "原价金额 CNY"}, {Value: "折后金额 CNY"}}); e != nil {
+		t.Fatal(e)
+	}
+	if e = s.Row([]Cell{{Value: "2026-08"}, {Value: "model"}, {Value: "12.3456", Number: true}, {Value: "6.1728", Number: true}}); e != nil {
+		t.Fatal(e)
+	}
+	var out bytes.Buffer
+	if e = w.Write(&out); e != nil {
+		t.Fatal(e)
+	}
+	z, e := zip.NewReader(bytes.NewReader(out.Bytes()), int64(out.Len()))
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, f := range z.File {
+		if f.Name != "xl/worksheets/sheet1.xml" && f.Name != "xl/workbook.xml" {
+			continue
+		}
+		r, _ := f.Open()
+		b, _ := io.ReadAll(r)
+		r.Close()
+		text := string(b)
+		if f.Name == "xl/workbook.xml" {
+			if !strings.Contains(text, "$1:$5") {
+				t.Fatal("print header incorrect")
+			}
+			continue
+		}
+		for _, want := range []string{`r="C7" s="20"><f>SUM(C6:C6)</f><v>12.345600</v>`, `r="D7" s="20"><f>SUM(D6:D6)</f><v>6.172800</v>`, "合计", `ySplit="5"`, `topLeftCell="A6"`, `autoFilter ref="A5:D6"`, `r="C6" s="17"`, `r="A5" t="inlineStr" s="14"`, "客户(甲方)：客户甲", "出账方(乙方)：", "服务站点：site-a", "2026年8月对账汇总单"} {
+			if !strings.Contains(text, want) {
+				t.Fatalf("missing %s", want)
+			}
+		}
+	}
+}

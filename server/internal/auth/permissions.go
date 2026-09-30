@@ -182,27 +182,41 @@ func allowAdminRequest(u storage.User, r *http.Request) bool {
 		return read
 	}
 	if path == "passthrough/users" {
-		return read && any("data.users", "accounts.manage", "billing.users", "billing.tasks", "alerts.manage")
+		return read && any("data.users", "accounts.manage", "billing.users", "billing.tasks", "discounts.manage", "alerts.manage")
 	}
 	if strings.HasPrefix(path, "passthrough/logs") {
 		return read && any("data.logs", "billing.users")
 	}
 	if strings.HasPrefix(path, "billing/") {
 		switch strings.TrimPrefix(path, "billing/") {
-		case "models", "prices", "group-ratios", "import-prices":
+		case "models":
+			return any("models.manage") || (read && any("billing.users", "billing.channels", "billing.tasks", "tuning.manage", "discounts.manage"))
+		case "prices", "group-ratios", "import-prices":
 			return any("models.manage") || (read && any("billing.users", "billing.channels", "billing.tasks", "tuning.manage"))
 		case "upstreams":
 			return any("upstreams.manage") || (read && any("billing.channels", "billing.tasks", "discounts.manage"))
+		case "configuration":
+			return any("settings.manage")
+		case "current-discounts":
+			return read && any("discounts.manage")
+		case "report-tasks":
+			return any("billing.channels")
+		case "reports":
+			return read && any("billing.channels")
+		case "generation-batch":
+			return any("billing.users", "billing.channels", "billing.tasks")
+		case "workspace", "generate-missing", "jobs/steps":
+			return any("billing.users", "billing.channels", "billing.tasks")
 		case "discounts":
-			return any("discounts.manage") || (read && any("billing.users", "billing.channels", "billing.tasks"))
+			return any("discounts.manage") || (read && any("billing.users", "billing.channels", "billing.tasks", "upstreams.manage"))
 		case "jobs":
 			if r.Method == http.MethodPost {
 				return any("billing.tasks")
 			}
 			return any("billing.users", "billing.channels", "billing.tasks")
-		case "statements", "statements/result":
+		case "statements", "statements/result", "statements/details":
 			return any("billing.users", "billing.channels", "billing.tasks") // Job type checked by the handler.
-		case "jobs/steps", "backfill":
+		case "backfill":
 			return any("billing.tasks")
 		case "upstream-channels", "upstream-channels/detail", "upstream-channels/requests", "channels":
 			return any("billing.channels")
