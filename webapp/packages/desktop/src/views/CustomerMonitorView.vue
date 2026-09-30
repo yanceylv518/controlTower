@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, shallowRef, watch } from "vue";
-import { Refresh, Search } from "@element-plus/icons-vue";
+import { Refresh } from "@element-plus/icons-vue";
 import { siteOf, type MetricItem } from "@ct/shared";
 import { dashboard } from "../api";
 import AppShell from "../components/AppShell.vue";
@@ -11,6 +11,8 @@ import CustomerCompareChart from "../components/CustomerCompareChart.vue";
 import CustomerTrafficCard from "../components/CustomerTrafficCard.vue";
 import MonitorNameButton from "../components/MonitorNameButton.vue";
 import MonitorCopyButton from "../components/MonitorCopyButton.vue";
+import MonitorSearch from "../components/MonitorSearch.vue";
+import { filterMonitorOptions, monitorSearchOptions } from "../utils/monitorSearch";
 import MiniSparkline from "../components/MiniSparkline.vue";
 import { latestCustomerMinute, verifiedCustomerBuckets } from "../utils/customerTraffic";
 import { useAutoRefresh } from "../composables/useAutoRefresh";
@@ -32,6 +34,7 @@ const ttftThresholds = computed(() => [
   { name: "P95", value: prefs.ttftP95Threshold, color: "#7357d8" },
 ]);
 const search = ref("");
+const searchKey = ref("");
 const selectedKeys = ref<string[]>([]);
 const page = ref(1);
 const pageSize = ref(50);
@@ -124,6 +127,7 @@ function ttftStatus(value: number | null | undefined) {
 }
 
 const allRows = computed(() => state.data.value || []);
+const searchOptions = computed(() => monitorSearchOptions(allRows.value, "customers"));
 const grandTotal = computed(() => allRows.value.reduce((sum, item) => sum + totalTokens(item), 0));
 const totalPrompt = computed(() => allRows.value.reduce((sum, item) => sum + item.prompt_tokens, 0));
 const totalCompletion = computed(() => allRows.value.reduce((sum, item) => sum + item.completion_tokens, 0));
@@ -167,12 +171,13 @@ const weightedTTFT = computed(() => {
 });
 const overThreshold = computed(() => allRows.value.filter(item => (item.ttft_p95_ms || 0) >= ttftP95ThresholdMs.value).length);
 const filteredRows = computed(() => {
-  const keyword = search.value.trim().toLowerCase();
-  return allRows.value.filter(item => !keyword || `${customerName(item)} ${item.dimension_key}`.toLowerCase().includes(keyword));
+  const keys = new Set(filterMonitorOptions(searchOptions.value, search.value, searchKey.value).map(option => option.key));
+  return allRows.value.filter(item => keys.has(item.dimension_key));
 });
 const pagedRows = computed(() => filteredRows.value.slice((page.value - 1) * pageSize.value, page.value * pageSize.value));
 const mobileRows = computed(() => filteredRows.value.slice(0, mobileCount.value));
-watch([search, hours, () => filters.site_id], () => { mobileCount.value = 20; });
+watch([search, searchKey, hours, () => filters.site_id], () => { page.value = 1; mobileCount.value = 20; });
+watch(() => filters.site_id, () => { search.value = ""; searchKey.value = ""; });
 const minuteByKey = computed(() => {
   const groups = new Map<string, MetricItem[]>();
   recentHistory.value.forEach(item => { const items = groups.get(item.dimension_key) || []; items.push(item); groups.set(item.dimension_key, items); });
@@ -209,7 +214,13 @@ function customerSeries(key: string, field: "ttft_p50_ms" | "ttft_p90_ms" | "ttf
     .map(item => [item.bucket_time, item[field] == null ? null : Number(item[field]) / scale] as [string, number | null]);
   return [{ name: seriesName || (row ? customerName(row) : key), data }];
 }
-const selectedTrendGroups = computed(() => selectedKeys.value.map(key => {
+const visibleTrendKeys = computed(() => {
+  if (!search.value.trim() && !searchKey.value) return selectedKeys.value;
+  const available = new Set(filteredRows.value.map(item => item.dimension_key));
+  const kept = selectedKeys.value.filter(key => available.has(key));
+  return kept.length ? kept : filteredRows.value.slice(0, 8).map(item => item.dimension_key);
+});
+const selectedTrendGroups = computed(() => visibleTrendKeys.value.map(key => {
   const row = allRows.value.find(item => item.dimension_key === key);
   return {
     key,
@@ -236,7 +247,7 @@ function openDetail(row: MetricItem) {
     <template #tools>
       <div class="customer-top-controls">
       <el-segmented v-model="hours" :options="[{ label: '1小时', value: 1 }, { label: '6小时', value: 6 }, { label: '24小时', value: 24 }]" size="small" />
-      <el-input v-model="search" :prefix-icon="Search" placeholder="搜索客户名称或 ID" clearable size="small" class="customer-search" @input="page = 1" />
+      <MonitorSearch :key="`${filters.site_id}:${hours}`" v-model="search" v-model:selected-key="searchKey" :options="searchOptions" :loading="state.loading.value" placeholder="搜索客户名称或 ID" class="customer-search" />
       <el-button :icon="Refresh" circle size="small" :loading="state.loading.value" title="刷新" @click="state.reload" />
       </div>
     </template>

@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { siteOf, type ChannelSnapshot, type MetricItem } from "@ct/shared";
-import { FullScreen, Refresh, Search } from "@element-plus/icons-vue";
+import { FullScreen, Refresh } from "@element-plus/icons-vue";
 import { dashboard } from "../api";
 import { useFiltersStore } from "../stores/filters";
 import { useAsyncData } from "../composables/useAsyncData";
@@ -21,6 +21,8 @@ import CustomerTokenChart from "../components/CustomerTokenChart.vue";
 import MiniSparkline from "../components/MiniSparkline.vue";
 import MonitorNameButton from "../components/MonitorNameButton.vue";
 import MonitorCopyButton from "../components/MonitorCopyButton.vue";
+import MonitorSearch from "../components/MonitorSearch.vue";
+import { filterMonitorOptions, monitorSearchOptions } from "../utils/monitorSearch";
 import { closedMonitorBuckets } from "../utils/monitorBuckets";
 
 const props = defineProps<{ kind: "channels" | "models" }>();
@@ -30,6 +32,7 @@ void prefs.load();
 const route = useRoute();
 const router = useRouter();
 const search = ref("");
+const searchKey = ref("");
 const hours = ref(1);
 const activeTab = ref<"charts" | "ranking">("charts");
 const activeMetric = ref<"ttft" | "tpm" | "otps" | "cache">("tpm");
@@ -111,6 +114,7 @@ watch(
       // 渠道和模型共用组件，切换维度时不能沿用上一页的筛选与选中项。
       activeKinds.value = [];
       search.value = "";
+      searchKey.value = "";
       selectedKeys.value = [];
     }
     state.cancel();
@@ -123,6 +127,7 @@ watch(
   },
 );
 useAutoRefresh(state.reload);
+watch(() => filters.site_id, () => { search.value = ""; searchKey.value = ""; });
 onBeforeUnmount(state.cancel);
 
 type DimRow = MetricItem & { channelStatus?: string };
@@ -202,13 +207,11 @@ const kindLabels: Record<string, string> = {
   idle: "无流量",
   disabled: "已禁用",
 };
-const searched = computed(() =>
-  rows.value.filter((item) =>
-    `${item.display_name || ""} ${item.display_key} ${item.dimension_key}`
-      .toLowerCase()
-      .includes(search.value.toLowerCase()),
-  ),
-);
+const searchOptions = computed(() => monitorSearchOptions(rows.value, props.kind));
+const searched = computed(() => {
+  const keys = new Set(filterMonitorOptions(searchOptions.value, search.value, searchKey.value).map(option => option.key));
+  return rows.value.filter(item => keys.has(item.dimension_key));
+});
 const counts = computed(() =>
   Object.fromEntries(
     Object.keys(kindLabels).map((key) => [
@@ -222,7 +225,7 @@ const visibleRows = computed(() =>
     .filter((item) =>
       activeKinds.value.length
         ? activeKinds.value.includes(rowKind(item))
-        : !["idle", "disabled"].includes(rowKind(item)),
+        : item.dimension_key === searchKey.value || !["idle", "disabled"].includes(rowKind(item)),
     )
     .sort((a, b) => totalTokens(b) - totalTokens(a)),
 );
@@ -368,13 +371,15 @@ function rowClass({ row }: { row: DimRow }) {
   <AppShell :title="title">
     <template #tools>
       <el-segmented v-model="hours" :options="[{ label: '1小时', value: 1 }, { label: '6小时', value: 6 }, { label: '24小时', value: 24 }]" size="small" />
-      <el-input
+      <MonitorSearch
+        :key="`${kind}:${filters.site_id}:${hours}`"
         v-model="search"
-        :prefix-icon="Search"
-        placeholder="搜索名称或 ID"
-        clearable
-        size="small"
+        v-model:selected-key="searchKey"
+        :options="searchOptions"
+        :loading="state.loading.value"
+        :placeholder="kind === 'channels' ? '搜索渠道名称或 ID' : '搜索模型名称'"
         style="width: 170px"
+        @select="activeKinds = []"
       />
       <span class="status-chips">
         <span
