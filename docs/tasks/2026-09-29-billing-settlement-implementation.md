@@ -380,3 +380,12 @@ vue-tsc 通过，verify-user-discounts.cjs 改用模型 API 422、渠道正常�
 本次包含账单/报表功能、容量单位修正、归档查询交互和交接文档。发现报表 worker 重复注册，保留单次；上游管理测试补新增折扣 API mock，菜单测试保留旧 URL 兼容检查。基于 index 导出的独立副本 Go agent/server/internal 全量测试、504 项前端测试、类型检查通过；源工作区构建通过，隔离构建继续核验。真实库专项此前已通过；全量默认未配置真实库的集成项跳过，不代表生产验收。未发布或部署。
 
 - 提交 3b9f1ea8f，合并 origin/main 671baaf78 为 5ec484e76；仅 PROJECT_PROGRESS 文档冲突，保留双方记录。暂存的本地 erroralert 改动已恢复，其余监控代码原样保留。隔离构建通过；合并后远端分组组件重构留下两项旧源代码断言，更新为新组件检查，509 项前端回归、类型、erroralert/dashboard/notificationtime Go 回归通过。准备推送 origin/main，未发布部署。
+
+
+### rc148 打包与远程发布（2026-09-30）
+
+- 用户授权本地与远程打包。v2.0.0-rc148 明确指向 836b283f9b02e6465e565e6b1351561b9cb318b7；git merge-base 验证包含 rc147、0418042a9 与 671baaf78，不按版本号推断修复包含关系。标签不随本记录提交移动。
+- CI https://github.com/yanceylv518/controlTower/actions/runs/36668651406 成功；release https://github.com/yanceylv518/controlTower/actions/runs/36671827143 成功。发布 https://github.com/yanceylv518/controlTower/releases/tag/v2.0.0-rc148 ，三 Linux 包及 SHA256SUMS 已上传，GHCR controltower-server:v2.0.0-rc148/latest 构建推送步骤成功。
+- git archive 导出精确源码到 local/releases/v2.0.0-rc148/source 后运行 package.sh，本机嵌套 pnpm 命中非项目版本，使用仅该次进程的本地 shim 指向缓存 pnpm 10.28.1 后成功。Windows tar 缺失执行权限，已将本地产物二进制/安装脚本规范为 0755 并重新计算 SHA256；不修改源码打包脚本或远程包。
+- 本地包 source/dist/release、远程正式附件 remote 均逐包验证 SHA256、ELF amd64/arm64 与执行位、Agent 内嵌版本、安装脚本 LF。Server 包包含前端、既有 097_archive_read_connections 和 114_persistent_settlement_reports，未包含 097_error_statistics。正式更新优先使用 remote 附件；本机与 CI 工具链不同，包哈希不要求相同。
+- 需更新 Server/Web 和 Agent 并执行 Server 数据库迁移。尚未生产部署、Linux 实机安装或生产负载验收。本地未提交主副图配套代码保持保留。
