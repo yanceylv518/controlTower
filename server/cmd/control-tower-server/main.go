@@ -135,6 +135,7 @@ func run() error {
 		fastCircuitSink = startTuningRunner(workers, controlStore)
 		workers.Go(controlStore.RunReadonlyChannelSync)
 	}
+	dashboard.SetBillingSourceReadPause(time.Duration(cfg.BillingPagePauseMilliseconds)*time.Millisecond)
 	startBillingJobRunner(workers, store, cfg.SecretKey, time.Duration(cfg.BillingPagePauseMilliseconds)*time.Millisecond)
 	startBillingFileCleanup(workers, store)
 	startReadonlyLogRollupRunner(workers, store, cfg.SecretKey)

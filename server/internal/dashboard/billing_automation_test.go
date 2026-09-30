@@ -45,7 +45,7 @@ func TestAutomaticDailyAndClosedMonthJobs(t *testing.T) {
 	if len(s.jobs) != 2 {
 		t.Fatal(s.jobs)
 	}
-	d, m := s.jobs[0], s.jobs[1]
+	m, d := s.jobs[0], s.jobs[1]
 	if d.BillPeriod != "daily" || m.BillPeriod != "monthly" || m.To.In(billing.BusinessLocation).Format("2006-01-02") != "2025-09-01" {
 		t.Fatal(d, m)
 	}
@@ -57,7 +57,7 @@ func TestAutomaticDailyAndClosedMonthJobs(t *testing.T) {
 	if err := a.Fill(context.Background(), target); err != nil {
 		t.Fatal(err)
 	}
-	if s.jobs[2].RequestKey != d.RequestKey || s.jobs[3].RequestKey != m.RequestKey || d.RequestKey == m.RequestKey {
+	if s.jobs[3].RequestKey != d.RequestKey || s.jobs[2].RequestKey != m.RequestKey || d.RequestKey == m.RequestKey {
 		t.Fatal("unstable period identity")
 	}
 }
@@ -79,24 +79,18 @@ type activitySourceTest struct {
 func (s activitySourceTest) ActiveBillingDays(context.Context, billing.AutomaticTarget, []int64, time.Time) ([]time.Time, error) {
 	return s.days, nil
 }
-func TestAutomaticSkipsDatesWithoutConsumption(t *testing.T) {
-	s := &automaticStoreTest{}
-	// Source mode is supplied by a wrapper to exercise real activity discovery.
-	store := &sourceActivityStore{automaticStoreTest: s}
-	a := BillingAutomation{Store: store, Source: activitySourceTest{days: []time.Time{}}}
+func TestAutomaticUnknownDaysUseFirstJobPage(t *testing.T) {
+	base := &automaticStoreTest{}
+	source := &countedActivitySource{}
+	a := BillingAutomation{Store: &sourceActivityStore{base}, Source: source}
 	if err := a.Fill(context.Background(), billing.AutomaticTarget{InstanceID: "site", Kind: "user_statement", SubjectID: 7}); err != nil {
 		t.Fatal(err)
 	}
-	if len(s.jobs) != 0 {
-		t.Fatal("empty dates produced invoices")
+	if source.calls != 0 || len(base.jobs) != 1 || base.jobs[0].BillPeriod != "daily" {
+		t.Fatal("generation performed an extra activity query", source.calls, base.jobs)
 	}
-	a.Source = activitySourceTest{days: []time.Time{time.Date(2025, 9, 28, 0, 0, 0, 0, billing.BusinessLocation)}}
-	if err := a.Fill(context.Background(), billing.AutomaticTarget{InstanceID: "site", Kind: "user_statement", SubjectID: 7}); err != nil {
-		t.Fatal(err)
-	}
-	if len(s.jobs) != 1 || s.jobs[0].BillPeriod != "daily" {
-		t.Fatal("inactive month was generated", s.jobs)
-	}
+	// This is a pending job, not a published invoice. The runner will mark an
+	// empty first page no_data and will never generate an empty workbook.
 }
 
 type sourceActivityStore struct{ *automaticStoreTest }
@@ -196,7 +190,7 @@ func (s *countedActivitySource) ActiveBillingDays(_ context.Context, t billing.A
 func TestAutomaticCachesEmptyAndActiveDays(t *testing.T) {
 	for _, active := range []bool{false, true} {
 		base := &automaticStoreTest{}
-		store := &cachedActivityStore{sourceActivityStore: &sourceActivityStore{base}, checks: map[int64]bool{}}
+		store := &cachedActivityStore{sourceActivityStore: &sourceActivityStore{base}, checks: map[int64]bool{time.Date(2025, 9, 28, 0, 0, 0, 0, billing.BusinessLocation).Unix(): active}}
 		source := &countedActivitySource{active: active}
 		a := BillingAutomation{Store: store, Source: source}
 		target := billing.AutomaticTarget{InstanceID: "site", Kind: "user_statement", SubjectID: 7}
@@ -205,7 +199,7 @@ func TestAutomaticCachesEmptyAndActiveDays(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		if source.calls != 1 {
+		if source.calls != 0 {
 			t.Fatalf("active=%v: repeated source checks: %d", active, source.calls)
 		}
 		if !active && len(base.jobs) != 0 {

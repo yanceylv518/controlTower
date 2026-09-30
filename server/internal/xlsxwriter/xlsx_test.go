@@ -92,3 +92,39 @@ func TestReconciliationMasthead(t *testing.T) {
 		}
 	}
 }
+
+func TestReportPriceTextIsWrappedButNotSummed(t *testing.T) {
+	w := New()
+	s, err := w.AddReconciliationSheet("统计", "单价", "", "", "", "", []float64{20, 48, 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Row([]Cell{{Value: "模型"}, {Value: "模型单价（CNY/百万 Token；按次另标）"}, {Value: "折后金额"}}); err != nil {
+		t.Fatal(err)
+	}
+	text := "输入 2 / 3；输出 8 / 12；缓存读取 0.2 / 0.3；缓存写入 1 / 2；1h写入 4 / 5"
+	if err = s.Row([]Cell{{Value: "m"}, {Value: text}, {Value: "5", Number: true}}); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err = w.Write(&out); err != nil {
+		t.Fatal(err)
+	}
+	z, err := zip.NewReader(bytes.NewReader(out.Bytes()), int64(out.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := z.Open("xl/worksheets/sheet1.xml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := io.ReadAll(r)
+	r.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	xml := string(raw)
+	if strings.Contains(xml, "SUM(B") || !strings.Contains(xml, "SUM(C6:C6)") || !strings.Contains(xml, text) || strings.Contains(xml, `<row r="6" ht="30"`) {
+		t.Fatal(xml)
+	}
+}

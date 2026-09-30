@@ -92,7 +92,7 @@ func NewMux(options Options) *http.ServeMux {
 	}
 	a := ctauth.Handlers{M: options.AuthManager, Limiter: ctauth.NewIPLimiter(), Audit: options.Store}
 	jobReader, _ := options.ArchiveReader.(dashboard.ArchiveJobReader)
-	mux.Handle("GET /api/dashboard/log-archive-read/{kind}", protect(dashboard.ArchiveReadHandler{Reader: jobReader}))
+	mux.Handle("GET /api/dashboard/log-archive-read/{kind}", protect(dashboard.ArchiveReadHandler{Reader: jobReader, OptionNames: dashboardHandler.ArchiveOptionNames}))
 	if connectionStore, ok := any(options.Store).(archivereader.ConnectionStore); ok {
 		h := dashboard.ArchiveConnectionHandler{Store: connectionStore, SecretKey: options.SecretKey}
 		mux.Handle("GET /api/dashboard/log-archive-connection", protect(h))

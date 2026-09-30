@@ -4,6 +4,7 @@ import (
 	"context"
 	"controltower/server/internal/billing"
 	"fmt"
+	"math/big"
 	"os"
 	"testing"
 	"time"
@@ -48,7 +49,7 @@ func TestBillingOriginalAggregation(t *testing.T) {
 	}
 	write := func(before, discount string) {
 		t.Helper()
-		e := s.AppendBillingHour(ctx, job, billing.JobStep{}, nil, nil, nil, []billing.RequestDetail{{BillDay: day, UserID: 7, ModelName: "m", MultimediaUsage: billing.MultimediaUsage{ImageInputTokens: 513, ImageOutputTokens: 7, AudioInputTokens: 31, AudioOutputTokens: 11}, Charge: billing.LogCharge{Total: "4", Settlement: &billing.Settlement{BeforeAmount: before, Discount: discount}}}}, nil, nil, billing.LogCursor{}, 1)
+		e := s.AppendBillingHour(ctx, job, billing.JobStep{}, nil, nil, nil, []billing.RequestDetail{{BillDay: day, UserID: 7, ModelName: "m", MultimediaUsage: billing.MultimediaUsage{ImageInputTokens: 513, ImageOutputTokens: 7, AudioInputTokens: 31, AudioOutputTokens: 11}, Charge: billing.LogCharge{Total: "4", UnitPrices: billing.SimpleUnitPrices(billing.LogCharge{InputPrice: before, OutputPrice: "8"}), Settlement: &billing.Settlement{BeforeAmount: before, Discount: discount}}}}, nil, nil, billing.LogCursor{}, 1)
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -83,6 +84,21 @@ func TestBillingOriginalAggregation(t *testing.T) {
 	tokens, e := s.QueryBillingTokenRows(ctx, job.ID, 7, -1, day, day.AddDate(0, 0, 1))
 	if e != nil || len(tokens) != 1 || tokens[0].BeforeAmount != "16.000000000000" || tokens[0].SettlementDiscount != "1.000000" {
 		t.Fatalf("token fallback: %+v %v", tokens, e)
+	}
+	if got := billing.UnitPriceLabel(tokens[0].UnitPrices, big.NewRat(1, 1)); got != "输入 4 / 5 / 未记录；输出 8" {
+		t.Fatal("cross-page price union:", got)
+	}
+	// A pre-migration row mixed with new data must preserve missing evidence.
+	if _, e = db.Exec("UPDATE billing_compact_daily_totals SET unit_prices=NULL WHERE job_id=?", job.ID); e != nil {
+		t.Fatal(e)
+	}
+	write("5", "1")
+	rows, e := s.QueryBillingStatementAggregates(ctx, job.ID)
+	if e != nil || len(rows) != 1 {
+		t.Fatal(rows, e)
+	}
+	if got := billing.UnitPriceLabel(rows[0].UnitPrices, big.NewRat(1, 1)); got != "输入 5；输出 8；部分未记录" {
+		t.Fatal(got)
 	}
 
 }

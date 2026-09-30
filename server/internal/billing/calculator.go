@@ -81,6 +81,7 @@ type DailyRow struct {
 }
 
 type TokenDailyRow struct {
+	UnitPrices                       UnitPrices
 	BeforeAmount, SettlementDiscount string
 	MultimediaUsage
 	InstanceID, Username, TokenName, ModelName, GroupName string

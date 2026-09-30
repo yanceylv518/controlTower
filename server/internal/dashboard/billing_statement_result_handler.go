@@ -323,6 +323,7 @@ func groupStatementRows(job billing.Job, rows []billing.StatementAggregateRow, d
 			item.Row.SettlementDiscount = billing.MergeDiscount(item.Row.SettlementDiscount, row.SettlementDiscount)
 		}
 		item.Row.RequestCount += row.RequestCount
+		item.Row.UnitPrices.Merge(row.UnitPrices)
 		item.Row.MultimediaUsage.Add(row.MultimediaUsage)
 		item.Row.PromptTokens += row.PromptTokens
 		item.Row.CompletionTokens += row.CompletionTokens

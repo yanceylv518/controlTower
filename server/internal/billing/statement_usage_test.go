@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -91,7 +92,7 @@ func TestSourceModeRunnerSpoolAndWorkbook(t *testing.T) {
 		t.Fatalf("pages=%v err=%v", pages, err)
 	}
 	if err = pages[0].Read(func(got RequestDetail) error {
-		if got.MultimediaUsage != d.MultimediaUsage || got.Charge != d.Charge {
+		if got.MultimediaUsage != d.MultimediaUsage || !reflect.DeepEqual(got.Charge, d.Charge) {
 			t.Fatalf("spool=%+v", got)
 		}
 		return nil

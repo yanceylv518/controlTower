@@ -9,6 +9,10 @@ import (
 
 // Monthly preview reads the same saved aggregates and currency snapshot as XLSX.
 func (h BillingStatementResultHandler) writeMonthlyPreview(w http.ResponseWriter, r *http.Request, job billing.Job, rows []billing.StatementAggregateRow) {
+	coveredDays := map[string]bool{}
+	for _, row := range rows {
+		coveredDays[row.Day.In(billing.BusinessLocation).Format("2006-01-02")] = true
+	}
 	dimension := r.URL.Query().Get("dimension")
 	if job.BillPeriod != "monthly" || job.UsageVersion < 3 || (dimension != "month" && dimension != "daily" && dimension != "token") || (dimension == "token" && job.JobType != "user_statement") {
 		writeDashboardError(w, 400, "invalid_query")
@@ -25,12 +29,12 @@ func (h BillingStatementResultHandler) writeMonthlyPreview(w http.ResponseWriter
 		headers = append(headers, "渠道")
 	}
 	if dimension == "token" {
-		headers = []string{"日期", "令牌", "令牌 ID", "模型"}
+		headers = []string{"日期", "令牌", "模型"}
 	}
 	start := len(headers)
-	headers = append(headers, "请求数", "普通输入 Token", "普通输出 Token", "缓存读取 Token", "缓存写入 Token", "图像输入 Token", "图像输出 Token", "音频输入 Token", "音频输出 Token", "原价金额", "折扣", "折后金额")
+	headers = append(headers, "请求数", "普通输入 Token", "普通输出 Token", "缓存读取 Token", "缓存写入 Token", "图像输入 Token", "图像输出 Token", "音频输入 Token", "音频输出 Token", billing.UnitPriceHeader(currency), "原价金额", "折扣", "折后金额")
 	data := [][]string{}
-	appendRow := func(prefix []string, count, input, output, read, write int64, media billing.MultimediaUsage, before, discount, amount string) {
+	appendRow := func(prefix []string, count, input, output, read, write int64, media billing.MultimediaUsage, before, discount, amount string, prices billing.UnitPrices) {
 		for _, v := range []int64{count, input, output, read, write, media.ImageInputTokens, media.ImageOutputTokens, media.AudioInputTokens, media.AudioOutputTokens} {
 			prefix = append(prefix, strconv.FormatInt(v, 10))
 		}
@@ -38,7 +42,7 @@ func (h BillingStatementResultHandler) writeMonthlyPreview(w http.ResponseWriter
 		if before == "" {
 			before = "—"
 		}
-		data = append(data, append(prefix, before, billing.DiscountLabel(discount), billing.DisplaySettlementAmount(amount, rate)))
+		data = append(data, append(prefix, billing.UnitPriceLabel(prices, rate), before, billing.DiscountLabel(discount), billing.DisplaySettlementAmount(amount, rate)))
 	}
 	if dimension == "token" {
 		tokens, e := h.Store.QueryBillingTokenRows(r.Context(), job.ID, job.UserID, -1, job.From, job.To)
@@ -47,7 +51,7 @@ func (h BillingStatementResultHandler) writeMonthlyPreview(w http.ResponseWriter
 			return
 		}
 		for _, v := range tokens {
-			appendRow([]string{v.Day.Format("2006-01-02"), v.TokenName, strconv.FormatInt(v.TokenID, 10), v.ModelName}, v.RequestCount, v.PromptTokens, v.CompletionTokens, v.CacheTokens, v.CacheWriteTokens, v.MultimediaUsage, v.BeforeAmount, v.SettlementDiscount, v.Amount)
+			appendRow([]string{v.Day.Format("2006-01-02"), v.TokenName, v.ModelName}, v.RequestCount, v.PromptTokens, v.CompletionTokens, v.CacheTokens, v.CacheWriteTokens, v.MultimediaUsage, v.BeforeAmount, v.SettlementDiscount, v.Amount, v.UnitPrices)
 		}
 	} else {
 		for _, g := range groupStatementRows(job, rows, nil, dimension == "daily") {
@@ -60,13 +64,13 @@ func (h BillingStatementResultHandler) writeMonthlyPreview(w http.ResponseWriter
 			if job.JobType == "upstream_statement" {
 				prefix = append(prefix, v.ChannelName)
 			}
-			appendRow(prefix, v.RequestCount, v.PromptTokens, v.CompletionTokens, v.CacheTokens, v.CacheWriteTokens, v.MultimediaUsage, v.BeforeAmount, v.SettlementDiscount, v.Amount)
+			appendRow(prefix, v.RequestCount, v.PromptTokens, v.CompletionTokens, v.CacheTokens, v.CacheWriteTokens, v.MultimediaUsage, v.BeforeAmount, v.SettlementDiscount, v.Amount, v.UnitPrices)
 		}
 	}
 	totals := make([]string, len(headers))
 	totals[0] = "合计"
 	for col := start; col < len(headers); col++ {
-		if col == len(headers)-2 {
+		if col == len(headers)-2 || col == len(headers)-4 {
 			continue
 		}
 		sum := new(big.Rat)
@@ -102,5 +106,5 @@ func (h BillingStatementResultHandler) writeMonthlyPreview(w http.ResponseWriter
 	if hi > len(data) {
 		hi = len(data)
 	}
-	writeDashboardJSON(w, 200, map[string]any{"headers": headers, "rows": data[lo:hi], "totals": totals, "total": len(data), "page_size": size, "currency": currency, "numeric_start": start})
+	writeDashboardJSON(w, 200, map[string]any{"covered_days": len(coveredDays), "headers": headers, "rows": data[lo:hi], "totals": totals, "total": len(data), "page_size": size, "currency": currency, "numeric_start": start})
 }

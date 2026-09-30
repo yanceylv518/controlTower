@@ -5,6 +5,7 @@ import (
 	"controltower/server/internal/billing"
 	"errors"
 	"fmt"
+	"math/big"
 	"os"
 	"sync"
 	"testing"
@@ -83,7 +84,7 @@ func testBillingDailyOnceAndMonthlyReuse(t *testing.T, kind string) {
 		t.Fatal(err)
 	}
 
-	if _, err = db.ExecContext(ctx, `UPDATE billing_compact_daily_totals SET before_amount=2.5,before_known_count=2,settlement_discount='0.500000' WHERE job_id=?`, daily.ID); err != nil {
+	if _, err = db.ExecContext(ctx, `UPDATE billing_compact_daily_totals SET unit_prices='{"输入|2":true,"输入|3":true,"输出|8":true}',before_amount=2.5,before_known_count=2,settlement_discount='0.500000' WHERE job_id=?`, daily.ID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -145,8 +146,8 @@ func testBillingDailyOnceAndMonthlyReuse(t *testing.T, kind string) {
 	month.BillPeriod = "monthly"
 	month.DataSource = "source"
 	month.RequestKey = "test:" + month.ID
-	if err = s.CreateBillingStatementJob(ctx, month, nil, ""); !errors.Is(err, billing.ErrDailyBillsIncomplete) {
-		t.Fatalf("incomplete month published: %v", err)
+	if err = s.CreateBillingStatementJob(ctx, month, nil, ""); err != nil {
+		t.Fatalf("partial month not published: %v", err)
 	}
 	for day := from.AddDate(0, 0, 1); day.Before(to); day = day.AddDate(0, 0, 1) {
 		v := target
@@ -160,8 +161,8 @@ func testBillingDailyOnceAndMonthlyReuse(t *testing.T, kind string) {
 	if err != nil || len(missing) != 0 {
 		t.Fatalf("checked empty dates remained missing: %v %v", missing, err)
 	}
-	if err = s.CreateBillingStatementJob(ctx, month, nil, ""); err != nil {
-		t.Fatal(err)
+	if err = s.CreateBillingStatementJob(ctx, month, nil, ""); !errors.Is(err, billing.ErrStatementDuplicate) {
+		t.Fatal("unchanged month should be reused", err)
 	}
 	result, err := s.BillingJob(ctx, month.ID)
 	if err != nil || result.Status != "complete" || result.MoneySnapshot.ID != money.ID {
@@ -170,6 +171,9 @@ func testBillingDailyOnceAndMonthlyReuse(t *testing.T, kind string) {
 	aggregates, e := s.QueryBillingStatementAggregates(ctx, month.ID)
 	if e != nil || len(aggregates) != 1 || aggregates[0].BeforeAmount != "2.500000000000" || aggregates[0].SettlementDiscount != "0.500000" {
 		t.Fatalf("monthly originals lost: %+v %v", aggregates, e)
+	}
+	if got := billing.UnitPriceLabel(aggregates[0].UnitPrices, big.NewRat(1, 1)); got != "输入 2 / 3；输出 8" {
+		t.Fatal("monthly price snapshot:", got)
 	}
 	tokenRows, e := s.QueryBillingTokenRows(ctx, month.ID, 7, -1, from, to)
 	if e != nil || len(tokenRows) != 1 || tokenRows[0].BeforeAmount != "2.500000000000" {

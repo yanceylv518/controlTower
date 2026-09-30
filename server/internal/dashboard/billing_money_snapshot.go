@@ -9,7 +9,15 @@ import (
 func captureBillingMoney(ctx context.Context, source BillingRatioSource, site string) (*billing.MoneySnapshot, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	raw, err := source.RatioSnapshot(ctx, site)
+	var raw string
+	var err error
+	if narrow, ok := source.(interface {
+		MoneyOptionsSnapshot(context.Context, string) (string, error)
+	}); ok {
+		raw, err = narrow.MoneyOptionsSnapshot(ctx, site)
+	} else {
+		raw, err = source.RatioSnapshot(ctx, site)
+	}
 	if err != nil {
 		return nil, err
 	}

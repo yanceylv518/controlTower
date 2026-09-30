@@ -21,6 +21,7 @@ const SettlementDetailPartRows = 50_000
 
 // These are the exported bill columns, not a second copy of source-order data.
 type SettlementDetailRow struct {
+	UnitPrice   string `json:"unit_price"`
 	ImageInput  string `json:"image_input_tokens"`
 	ImageOutput string `json:"image_output_tokens"`
 	AudioInput  string `json:"audio_input_tokens"`
@@ -156,7 +157,7 @@ func WriteSettlementSavedDetails(ctx context.Context, path string, job Job, iter
 	err = WriteSettlementDetailArchive(ctx, tmp, SettlementCurrencyLabel(display), func(visit func(SettlementDetailRow) error) error {
 		return iterate(func(v RequestDetail) error {
 			before, discount := ChargeOriginal(v.Charge)
-			return visit(SettlementDetailRow{ImageInput: strconv.FormatInt(v.ImageInputTokens, 10), ImageOutput: strconv.FormatInt(v.ImageOutputTokens, 10), AudioInput: strconv.FormatInt(v.AudioInputTokens, 10), AudioOutput: strconv.FormatInt(v.AudioOutputTokens, 10), BeforeAmount: DisplaySettlementAmount(before, rate), Discount: discount, Time: time.Unix(v.CreatedUnix, 0).In(BusinessLocation).Format("2006-01-02 15:04:05"), RequestID: v.RequestID, Model: v.ModelName, Token: v.TokenName, TokenID: strconv.FormatInt(v.TokenID, 10), Input: strconv.FormatInt(v.PromptTokens, 10), Output: strconv.FormatInt(v.CompletionTokens, 10), CacheRead: strconv.FormatInt(v.CacheReadTokens, 10), CacheWrite: strconv.FormatInt(v.CacheWriteTokens, 10), Amount: DisplaySettlementAmount(v.Charge.Total, rate)})
+			return visit(SettlementDetailRow{UnitPrice: UnitPriceLabel(v.Charge.UnitPrices, rate), ImageInput: strconv.FormatInt(v.ImageInputTokens, 10), ImageOutput: strconv.FormatInt(v.ImageOutputTokens, 10), AudioInput: strconv.FormatInt(v.AudioInputTokens, 10), AudioOutput: strconv.FormatInt(v.AudioOutputTokens, 10), BeforeAmount: DisplaySettlementAmount(before, rate), Discount: discount, Time: time.Unix(v.CreatedUnix, 0).In(BusinessLocation).Format("2006-01-02 15:04:05"), RequestID: v.RequestID, Model: v.ModelName, Token: v.TokenName, TokenID: strconv.FormatInt(v.TokenID, 10), Input: strconv.FormatInt(v.PromptTokens, 10), Output: strconv.FormatInt(v.CompletionTokens, 10), CacheRead: strconv.FormatInt(v.CacheReadTokens, 10), CacheWrite: strconv.FormatInt(v.CacheWriteTokens, 10), Amount: DisplaySettlementAmount(v.Charge.Total, rate)})
 		})
 	}, nil)
 	if err != nil {
@@ -274,20 +275,20 @@ func (d *SettlementDetailReader) Page(ctx context.Context, f SettlementDetailFil
 	return rows, next, err
 }
 func detailHeaders(currency string) []string {
-	return []string{"时间", "请求 ID", "模型", "令牌", "令牌 ID", "普通输入 Token", "普通输出 Token", "缓存读取", "缓存写入", "图像输入 Token", "图像输出 Token", "音频输入 Token", "音频输出 Token", "原价金额 " + currency, "折扣", "折后金额 " + currency}
+	return []string{"时间", "请求 ID", "模型", "令牌", "令牌 ID", "普通输入 Token", "普通输出 Token", "缓存读取", "缓存写入", "图像输入 Token", "图像输出 Token", "音频输入 Token", "音频输出 Token", UnitPriceHeader(currency), "原价金额 " + currency, "折扣", "折后金额 " + currency}
 }
 func detailCells(v SettlementDetailRow) []xlsxwriter.Cell {
 	v.BeforeAmount, v.Discount = DefaultSettlementPrice(v.BeforeAmount, v.Discount, v.Amount)
-	values := []string{v.Time, v.RequestID, v.Model, v.Token, v.TokenID, v.Input, v.Output, v.CacheRead, v.CacheWrite, v.ImageInput, v.ImageOutput, v.AudioInput, v.AudioOutput, v.BeforeAmount, DiscountLabel(v.Discount), v.Amount}
+	values := []string{v.Time, v.RequestID, v.Model, v.Token, v.TokenID, v.Input, v.Output, v.CacheRead, v.CacheWrite, v.ImageInput, v.ImageOutput, v.AudioInput, v.AudioOutput, unitPriceOrUnknown(v.UnitPrice), v.BeforeAmount, DiscountLabel(v.Discount), v.Amount}
 	out := make([]xlsxwriter.Cell, len(values))
 	for i, x := range values {
-		if i == 13 && x == "" {
+		if i == 14 && x == "" {
 			x = "—"
 		}
 		if i >= 9 && i < 13 && x == "" {
 			x = "0"
 		}
-		out[i] = xlsxwriter.Cell{Value: x, Number: i >= 5 && i != 14 && x != "" && x != "—" && x != "未记录"}
+		out[i] = xlsxwriter.Cell{Value: x, Number: i >= 5 && i != 13 && i != 15 && x != "" && x != "—" && x != "未记录"}
 	}
 	return out
 }
@@ -323,7 +324,7 @@ func (d *SettlementDetailReader) Export(ctx context.Context, out io.Writer, job 
 		count = 0
 		wb = xlsxwriter.New()
 		var e error
-		sheet, e = wb.AddReportSheet("请求明细", "日账单明细", SettlementSheetMetadata(job), []float64{24, 48, 34, 30, 16, 16, 16, 16, 16, 18, 18, 18, 18, 20, 16, 20})
+		sheet, e = wb.AddReportSheet("请求明细", "日账单明细", SettlementSheetMetadata(job), []float64{24, 48, 34, 30, 16, 16, 16, 16, 16, 18, 18, 18, 18, 48, 20, 16, 20})
 		if e != nil {
 			return e
 		}
@@ -396,6 +397,7 @@ func ConvertSettlementDetails(ctx context.Context, out io.Writer, path string, c
 			dec := xml.NewDecoder(r)
 			started := false
 			mediaFirst := false
+			priceColumn := -1
 			for {
 				if e = ctx.Err(); e != nil {
 					r.Close()
@@ -438,8 +440,21 @@ func ConvertSettlementDetails(ctx context.Context, out io.Writer, path string, c
 					if values[0] == "时间" {
 						started = true
 						mediaFirst = len(values) > 8 && values[8] == "图像输入 Token"
+						for i, label := range values {
+							if strings.HasPrefix(label, "模型单价") {
+								priceColumn = i
+							}
+						}
 					}
 					continue
+				}
+				unitPrice := ""
+				if priceColumn >= 0 {
+					if priceColumn >= len(values) {
+						return fmt.Errorf("missing unit price cell")
+					}
+					unitPrice = values[priceColumn]
+					values = append(values[:priceColumn], values[priceColumn+1:]...)
 				}
 				if len(values) != 9 && len(values) != 11 && len(values) != 15 {
 					r.Close()
@@ -449,7 +464,7 @@ func ConvertSettlementDetails(ctx context.Context, out io.Writer, path string, c
 				if len(values) == 15 && mediaFirst {
 					values = append(append(append([]string{}, values[:8]...), values[12:15]...), values[8:12]...)
 				}
-				v := SettlementDetailRow{Time: values[0], RequestID: values[1], Model: values[2], Token: values[3], Input: values[4], Output: values[5], CacheRead: values[6], CacheWrite: values[7], Amount: values[8]}
+				v := SettlementDetailRow{UnitPrice: unitPrice, Time: values[0], RequestID: values[1], Model: values[2], Token: values[3], Input: values[4], Output: values[5], CacheRead: values[6], CacheWrite: values[7], Amount: values[8]}
 				if len(values) >= 11 {
 					v.BeforeAmount = values[8]
 					if v.BeforeAmount == "—" {

@@ -32,6 +32,8 @@ type Sheet struct {
 	headerRow      int
 	reconciliation bool
 	moneyColumns   map[int]bool
+	priceColumns   map[int]bool
+	widths         []float64
 	totals         map[int]*big.Rat
 	unknownTotals  map[int]bool
 	writingTotal   bool
@@ -51,7 +53,7 @@ func (w *Workbook) addSheetAt(name string, widths []float64, report bool, header
 	if e != nil {
 		return nil, e
 	}
-	s := &Sheet{name: name, file: f, report: report, columns: len(widths), headerRow: headerRow, reconciliation: headerRow == 5, moneyColumns: map[int]bool{}, totals: map[int]*big.Rat{}, unknownTotals: map[int]bool{}}
+	s := &Sheet{name: name, file: f, report: report, columns: len(widths), headerRow: headerRow, reconciliation: headerRow == 5, moneyColumns: map[int]bool{}, priceColumns: map[int]bool{}, widths: widths, totals: map[int]*big.Rat{}, unknownTotals: map[int]bool{}}
 	w.sheets = append(w.sheets, s)
 	io.WriteString(f, `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">`)
 	if report {
@@ -85,14 +87,34 @@ func (s *Sheet) Row(cells []Cell) error {
 		} else if s.row == 4 {
 			height = 34
 		}
+		if s.row > s.headerRow {
+			for i := range s.priceColumns {
+				if i >= len(cells) || i >= len(s.widths) {
+					continue
+				}
+				units := 0
+				for _, r := range cells[i].Value {
+					if r > 127 {
+						units += 2
+					} else {
+						units++
+					}
+				}
+				width := max(1, int(s.widths[i])-2)
+				height = max(height, min(409, ((units+width-1)/width)*16+8))
+			}
+		}
 		fmt.Fprintf(s.file, `<row r="%d" ht="%d" customHeight="1">`, s.row, height)
 		for i := range cells {
 			if s.row == s.headerRow {
+				if strings.HasPrefix(cells[i].Value, "模型单价") {
+					s.priceColumns[i] = true
+				}
 				if strings.Contains(cells[i].Value, "金额") {
 					s.moneyColumns[i] = true
 				}
 				cells[i].Style = 14
-				if s.reconciliation && (cells[i].Value == "请求数" || strings.Contains(cells[i].Value, "Token") || strings.Contains(cells[i].Value, "金额")) {
+				if s.reconciliation && !strings.HasPrefix(cells[i].Value, "模型单价") && (cells[i].Value == "请求数" || strings.Contains(cells[i].Value, "Token") || strings.Contains(cells[i].Value, "金额")) {
 					s.totals[i] = new(big.Rat)
 				}
 			} else if s.row > s.headerRow && !s.writingTotal {

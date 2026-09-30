@@ -37,3 +37,24 @@ func TestRunnerWakesProducerOnceWhenBatchDrains(t *testing.T) {
 		t.Fatal(err, calls, store.claims)
 	}
 }
+
+type completedDayStore struct {
+	JobStore
+	claimed bool
+}
+
+func (s *completedDayStore) ClaimBillingPublish(context.Context) (Job, bool, error) {
+	return Job{Status: "no_data"}, true, nil
+}
+func (s *completedDayStore) ClaimBillingStep(context.Context) (Job, JobStep, bool, error) {
+	s.claimed = true
+	return Job{}, JobStep{}, false, nil
+}
+func TestRunnerFinishesEmptyDayBeforeReadingNextDay(t *testing.T) {
+	store := &completedDayStore{}
+	wakes := 0
+	worked, err := (JobRunner{Store: store, OnIdle: func() { wakes++ }}).RunOnce(context.Background())
+	if err != nil || !worked || store.claimed || wakes != 1 {
+		t.Fatal(worked, err, store.claimed, wakes)
+	}
+}

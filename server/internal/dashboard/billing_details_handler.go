@@ -266,7 +266,7 @@ func (h *BillingDetailsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 	}
 	if r.Method == "POST" {
 		raw, _ := json.Marshal(filter)
-		key := detailKey(job.ID, "export-defaults-v5", string(raw))
+		key := detailKey(job.ID, "export-unit-prices-v6", string(raw))
 		dir := filepath.Join(root, "detail-exports", job.ID)
 		if err = os.MkdirAll(dir, 0o755); err != nil {
 			writeDashboardError(w, 500, "billing_export_unavailable")

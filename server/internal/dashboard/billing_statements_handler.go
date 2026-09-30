@@ -75,7 +75,7 @@ func (h BillingStatementsHandler) ServeHTTP(w http.ResponseWriter, r *http.Reque
 		job.BillPeriod = "temporary"
 		if req.Period == "monthly" {
 			local := from.In(billing.BusinessLocation)
-			if !from.Equal(billing.CompleteDayBoundary(from)) || local.Day() != 1 || !to.Equal(from.AddDate(0, 1, 0)) || to.After(billing.CompleteDayBoundary(time.Now())) {
+			if !from.Equal(billing.CompleteDayBoundary(from)) || local.Day() != 1 || !to.Equal(from.AddDate(0, 1, 0)) || !from.Before(billing.CompleteDayBoundary(time.Now())) {
 				writeDashboardError(w, 400, "month_not_complete")
 				return
 			}
@@ -84,7 +84,7 @@ func (h BillingStatementsHandler) ServeHTTP(w http.ResponseWriter, r *http.Reque
 			writeDashboardError(w, 400, "invalid_bill_period")
 			return
 		}
-		if to.After(time.Now()) {
+		if job.BillPeriod != "monthly" && to.After(time.Now()) {
 			writeDashboardError(w, 400, "billing_range_in_future")
 			return
 		}

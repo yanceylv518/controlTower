@@ -33,9 +33,9 @@ func RestyleSettlementDailyFile(ctx context.Context, out io.Writer, in io.Reader
 	}
 	wb := xlsxwriter.New()
 	for i, meta := range book.Sheets {
-		widths := []float64{48, 14, 17, 17, 17, 17, 18, 18, 18, 18, 20, 16, 20}
+		widths := []float64{48, 14, 17, 17, 17, 17, 18, 18, 18, 18, 48, 20, 16, 20}
 		if strings.HasPrefix(meta.Name, "账单明细") {
-			widths = []float64{24, 48, 34, 30, 15, 15, 15, 15, 18, 18, 18, 18, 20, 16, 20}
+			widths = []float64{24, 48, 34, 30, 15, 15, 15, 15, 18, 18, 18, 18, 48, 20, 16, 20}
 		}
 		sheet, err := wb.AddReportSheet(meta.Name, meta.Name, SettlementSheetMetadata(job), widths)
 		if err != nil {
@@ -158,7 +158,7 @@ func settlementDisplayOrder(headers []string, hideChannel bool) []int {
 		if isMedia {
 			continue
 		}
-		if !inserted && strings.HasPrefix(h, "原价金额") {
+		if !inserted && (strings.HasPrefix(h, "原价金额") || strings.HasPrefix(h, "模型单价")) {
 			out = append(out, media...)
 			inserted = true
 		}

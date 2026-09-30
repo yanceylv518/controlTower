@@ -132,11 +132,11 @@ func (s Store) BillingRemainingDays(ctx context.Context, site, kind string, id i
 	return count, nil
 }
 
-// Discover closed months; publication separately verifies every daily outcome.
+// Include open months; publication copies only the completed daily snapshots.
 func (s Store) MissingBillingMonths(ctx context.Context, t billing.AutomaticTarget, to time.Time) ([]time.Time, error) {
 	local := t.From.In(billing.BusinessLocation)
 	first := time.Date(local.Year(), local.Month(), 1, 0, 0, 0, 0, billing.BusinessLocation)
-	rows, err := s.db.QueryContext(ctx, `SELECT j.range_from,j.range_to FROM billing_jobs j JOIN billing_statement_jobs st ON st.job_id=j.id WHERE j.instance_id=? AND st.statement_type=? AND st.subject_id=? AND j.usage_version>=3 AND j.bill_period='monthly' AND (j.status IN ('pending','running','publishing','complete','no_data') OR (j.status='failed' AND (j.error_message='cancelled manually' OR j.updated_at>DATE_SUB(UTC_TIMESTAMP(6),INTERVAL 1 HOUR)))) AND j.range_from>=? AND j.range_to<=? `+billingCurrentGenerationSQL, t.InstanceID, t.Kind, t.SubjectID, first.UTC(), to.UTC())
+	rows, err := s.db.QueryContext(ctx, `SELECT j.range_from,j.range_to FROM billing_jobs j JOIN billing_statement_jobs st ON st.job_id=j.id WHERE j.instance_id=? AND st.statement_type=? AND st.subject_id=? AND j.usage_version>=3 AND j.bill_period='monthly' AND (j.status IN ('pending','running','publishing','complete','no_data') OR (j.status='failed' AND (j.error_message='cancelled manually' OR j.updated_at>DATE_SUB(UTC_TIMESTAMP(6),INTERVAL 1 HOUR)))) AND j.range_from>=? AND j.range_to<=? `+billingCurrentGenerationSQL, t.InstanceID, t.Kind, t.SubjectID, first.UTC(), to.In(billing.BusinessLocation).AddDate(0, 1, 0).UTC())
 	if err != nil {
 		return nil, err
 	}
@@ -155,7 +155,7 @@ func (s Store) MissingBillingMonths(ctx context.Context, t billing.AutomaticTarg
 		return nil, err
 	}
 	result := []time.Time{}
-	for month := first; !month.AddDate(0, 1, 0).After(to); month = month.AddDate(0, 1, 0) {
+	for month := first; month.Before(to); month = month.AddDate(0, 1, 0) {
 		if !covered[month.Unix()] {
 			result = append(result, month)
 		}

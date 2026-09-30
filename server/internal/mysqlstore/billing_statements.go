@@ -317,3 +317,10 @@ func (s Store) finalizeBillingStatement(ctx context.Context, tx *sql.Tx, job bil
 	_, err = tx.ExecContext(ctx, `UPDATE billing_jobs SET status='complete',finished_at=?,updated_at=? WHERE id=? AND completed_steps>=total_steps`, now, now, job.ID)
 	return err
 }
+
+// Capacity is rechecked under the queue lock when inserting a statement.
+func (s Store) BillingStatementQueueFull(ctx context.Context) (bool, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM (SELECT 1 FROM billing_jobs WHERE job_type IN ('user_statement','upstream_statement') AND status='pending' LIMIT 5) pending`).Scan(&n)
+	return n >= 5, err
+}
