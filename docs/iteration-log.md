@@ -1,5 +1,9 @@
 # Control Tower 迭代记录
 
+## v2.0.0-rc152（2026-10-01）
+
+用户及上游已生成账单目录、日/月/临时分类、服务端历史分页及单文件 XLSX 下载已远程发布。标签固定 c3919fb255d828abe217e1644ea20f88b52e5578，逐一核对包含 rc143–rc151；未夹带本地归档页面改动。CI 36867979383 与 release 36868442743 成功，三安装包、SHA256SUMS 和 GHCR 版本/latest 镜像齐全；正式包哈希、ELF/版本/提交、迁移和 Web 内容核验通过，镜像摘要一致。此次需更新 Server/Web，Agent 无业务变化；未生产部署，实库待验收。详见[发布记录](ai-tasks/2026-10-01-billing-catalog-design.md)。
+
 ## v2.0.0-rc145
 
 **rc145布局修复远程发布完成（2026-09-27）**：4ba787936ba3ef88fb2c605cc8f0a6a28c5d5890已推送main，v2.0.0-rc145固定同一提交；CI36322400250与release36322403092成功，Linux附件、SHA256SUMS及GHCR镜像已发布。正式包下载release/v2.0.0-rc145，校验和、ELF架构/执行位、脚本LF、版本及打包CSS修复核验通过。沿用修复轮Web typecheck/build与真实组件合成数据浏览器布局验证；未生产部署。本次仅更新Server/Web，Agent保持现有版本，勿替换现有rc143 Agent（其大记录修复仍在独立分支）。

@@ -2,7 +2,7 @@
 
 - 标识：2026-10-01-billing-catalog-design
 - 更新时间：2026-10-01，Asia/Shanghai。
-- 状态：用户及上游代码已提交并推送 main（7ed899bb），本地质量门通过；未发布部署，待实库和用户验收。
+- 状态：用户及上游代码已随 v2.0.0-rc152 远程发布，固定 c3919fb2；安装包与镜像核验通过，未部署生产，待实库和用户验收。
 - 目标与验收条件：解决新版用户账单必须先选用户及月份才能发现已生成账单的问题；用户明确要求先看“账单列表”和“用户分组”两版设计图。
 - 工作范围：main 的用户/上游账单目录、共享工作台、日明细下载及相关接口/测试；设计阶段记录保留在下方，保留并行归档与其他文档改动。
 - 设计前现状：BillingWorkspaceView 自动选择第一个用户和当前月份；BillingWorkspace API 必须指定 subject_id/from/to，CT 查询最多 500 条。现有生成记录按任务呈现，不能替代完整的已生成账单目录。旧账单页前端取最近 200 条后筛选，也不能直接当作新版全历史查询。
@@ -64,3 +64,12 @@
 - 用户要求“提交推进”，本轮精确提交并推送账单相关源码、测试、接口契约和此交接记录。main 与本次 fetch 的 origin/main 均为 cfea9731，无远程分歧；保留其他归档功能及历史文档的未提交改动。
 - 提交前重新执行 Go 全量 vet/test（测试缓存命中）、Web typecheck/build 和 30 项账单前端回归，全部通过；保留既有构建大包提示，MySQL 集成仍未实际执行。提交/推送状态见后续交付核验。本轮不打标签、不打包、不部署远程。
 - 交付核验：功能提交 `7ed899bb` 已成功推送 `origin/main`（cfea9731 → 7ed899bb），共 20 个账单相关文件。进度文件仅提交本任务的两条记录，其他归档代码、规则及历史文档改动保留本地。此前“未提交/推送”的实施阶段状态由本条更新；未发布或部署，Workspace 仍未获授权、未上传。
+
+## rc152 远程发布完成（2026-10-01）
+
+- 用户要求远程打包；标签 `v2.0.0-rc152` 固定 `c3919fb255d828abe217e1644ea20f88b52e5578`，后续记录提交不移动标签。已逐一验证 rc143–rc151 均为祖先，包含历次已发布修复；不包含本地未提交归档页面等其他功能。
+- [CI 36867979383](https://github.com/yanceylv518/controlTower/actions/runs/36867979383) 全部通过后推送标签；[release 36868442743](https://github.com/yanceylv518/controlTower/actions/runs/36868442743) 成功，head_sha 与固定提交一致。
+- [正式 Release](https://github.com/yanceylv518/controlTower/releases/tag/v2.0.0-rc152)：Server/Web linux/amd64、Agent linux/amd64 与 linux/arm64、SHA256SUMS 均已发布；说明列明升级范围、历史修复包含关系和实库验证缺口。
+- 附件下载到 `local/releases/v2.0.0-rc152/remote/`；三包 SHA256、所有程序 ELF 架构/执行位/内嵌提交、Agent 版本、脚本 LF、完整迁移逐字节对照及新账单目录后端/前端内容验证通过，结果保存于 `VALIDATION.json`。验证脚本 `local/runtime/verify-billing-release.py`。
+- GHCR 版本标签和 `latest` 均发布并只读核验，OCI 摘要一致为 `sha256:486e7f584410265f0c554a2e6746af334b1ffaa69bfbb8030881f5dfbd6b6fd9`，运行镜像 linux/amd64。
+- 本次需要更新 Server/Web；Agent 无业务变更，无新增迁移。未生产部署、未实际执行 MySQL 目录集成或真实页面验收，不把远程构建通过当作生产验收。Workspace 未获本次同意，未推送。
