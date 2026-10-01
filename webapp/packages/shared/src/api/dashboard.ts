@@ -19,6 +19,10 @@ export interface BillingWorkspaceModel extends BillingWorkspaceTotals { model:st
 export interface BillingWorkspaceBill extends BillingWorkspaceTotals {
   job:BillingJob; currency?:BillingCurrencyDisplay; models?:BillingWorkspaceModel[];
 }
+export interface BillingCatalogPage {
+  items:(BillingWorkspaceBill & {generated_at:string})[]; total:number; subjects:number;
+  counts:Record<'daily'|'monthly'|'temporary',number>; page:number; page_size:number;
+}
 export interface BillingDetailTask {key:string;kind:'prepare'|'export';status:'running'|'complete'|'failed';processed:number;total:number;matched:number;error?:string}
 export interface BillingDetailPage {preparing?:boolean;task?:BillingDetailTask;items?:BillingDetailRow[];next_cursor?:number;total?:number;currency?:string;models?:string[];tokens?:string[]}
 
@@ -1058,6 +1062,7 @@ export const dashboardApi = (client: ApiClient) => ({
   cancelReportTask:(instance_id:string,id:string)=>client.request<{ok:boolean}>('/api/dashboard/billing/report-tasks?action=cancel',{method:'POST',body:JSON.stringify({instance_id,id})}),
   settlementReport:(params:{instance_id:string;from:string;to:string},signal?:AbortSignal)=>client.request<{items:{user_id:number;user:string;model:string;channel_id:number;channel:string;upstream:string;discount:string;requests:number;input:number;output:number;cache:number;empty:number;amount:string;cost:string;raw_amount:string;raw_cost:string;base_fallback?:number;cost_discount:string;unknown_cost:number}[];failed_requests:number|null;expected_days:number;generated_days:number;missing_days:string[];complete:boolean;currency?:BillingCurrencyDisplay}>(`/api/dashboard/billing/reports${query(params)}`,{signal}),
   billingWorkspace:(params:{instance_id:string;kind:string;subject_id:number;from:string;to:string})=>client.request<{items:BillingWorkspaceBill[];remaining_days:number}>(`/api/dashboard/billing/workspace${query(params)}`),
+  billingCatalog:(params:{instance_id:string;kind:string;period:string;month?:string;q?:string;page?:number;page_size?:number},signal?:AbortSignal)=>client.request<BillingCatalogPage>(`/api/dashboard/billing/catalog${query(params)}`,{signal}),
   billingDetailPage:(id:string,params:BillingDetailFilter&{cursor?:number;retry?:number})=>client.request<BillingDetailPage>(`/api/dashboard/billing/statements/details${query({id,...params})}`),
   exportBillingDetails:(id:string,filter:BillingDetailFilter)=>client.request<BillingDetailTask>(`/api/dashboard/billing/statements/details${query({id,action:'export'})}`,{method:'POST',body:JSON.stringify(filter)}),
   billingDetailTask:(id:string,key:string)=>client.request<BillingDetailTask>(`/api/dashboard/billing/statements/details${query({id,key,action:'status'})}`),

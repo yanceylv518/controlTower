@@ -45,7 +45,7 @@ defineExpose({open});
   <span>{{task.label}}</span><el-progress v-if="task.status==='running'" :percentage="percent(task)" :stroke-width="5"/>
   <span v-if="task.status==='running'">已处理 {{task.processed.toLocaleString()}} / {{task.total.toLocaleString()}}</span>
   <span v-else-if="task.status==='complete'">{{task.matched.toLocaleString()}} 条 · 已就绪</span><span v-else class="failed">{{task.error}}</span>
-  <el-button v-if="task.status==='complete'" link type="primary" @click="download(task)">下载 ZIP</el-button>
+  <el-button v-if="task.status==='complete'" link type="primary" @click="download(task)">下载文件</el-button>
   <el-button v-if="task.status==='failed'" link @click="open(task.job,true)">重新导出</el-button>
   <el-button v-if="task.status!=='running'" link @click="exports=exports.filter(t=>t.key!==task.key)">关闭</el-button>
  </div>
@@ -60,12 +60,12 @@ defineExpose({open});
   <el-select v-model="token" filterable clearable placeholder="全部令牌"><el-option v-for="v in tokens" :key="v" :label="v" :value="v"/></el-select>
   <el-button type="primary" :loading="loading" @click="search">查询</el-button>
  </div>
- <div class="detail-toolbar"><span>当日共 {{total.toLocaleString()}} 条 · {{currency}}</span><div><el-button :loading="exporting" @click="startExport(false)">按条件导出</el-button><el-button type="primary" :loading="exporting" @click="startExport(true)">下载全部明细</el-button></div></div>
+ <p class="download-hint">单个文件直接下载 Excel，多个分片文件自动打包 ZIP。</p><div class="detail-toolbar"><span>当日共 {{total.toLocaleString()}} 条 · {{currency}}</span><div><el-button :loading="exporting" @click="startExport(false)">按条件导出</el-button><el-button type="primary" :loading="exporting" @click="startExport(true)">下载全部明细</el-button></div></div>
  <div v-if="exports.some(t=>t.jobId===job?.id)" class="detail-export-tasks" aria-label="明细导出任务">
   <div v-for="task in exports.filter(t=>t.jobId===job?.id)" :key="task.key" class="detail-export-task">
    <span>{{task.label}}</span>
    <template v-if="task.status==='running'"><el-progress :percentage="percent(task)" :stroke-width="5"/><span>已处理 {{task.processed.toLocaleString()}} / {{task.total.toLocaleString()}}</span></template>
-   <template v-else-if="task.status==='complete'"><span>{{task.matched.toLocaleString()}} 条 · 文件已就绪</span><el-button link type="primary" @click="download(task)">下载 ZIP</el-button></template>
+   <template v-else-if="task.status==='complete'"><span>{{task.matched.toLocaleString()}} 条 · 文件已就绪</span><el-button link type="primary" @click="download(task)">下载文件</el-button></template>
    <template v-else><span class="failed">{{task.error}}</span><span>请重新导出</span></template>
   </div>
  </div>
@@ -85,5 +85,6 @@ defineExpose({open});
 </el-dialog>
 </template>
 <style scoped>
+.download-hint{font-size:12px;color:var(--el-text-color-secondary);margin:0 0 12px}
 .detail-export-tasks{display:grid;gap:8px;margin:10px 0}.detail-export-task{display:flex;align-items:center;gap:12px;padding:10px 14px;border:1px solid var(--el-border-color-light);border-radius:8px;font-size:12px;background:var(--el-fill-color-lighter)}.detail-export-task .el-progress{width:160px}.failed{color:var(--el-color-danger)}.detail-filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}.detail-filters :deep(.el-date-editor){max-width:360px;flex:1;min-width:280px}.detail-filters .el-select{width:190px}.detail-toolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px;color:var(--el-text-color-secondary);font-size:12px}.detail-pagination{display:flex;gap:8px;align-items:center;justify-content:flex-end;margin-top:12px}.detail-pagination>span{margin-right:auto;color:var(--el-text-color-secondary);font-size:12px}.detail-preparing{padding:20px 0;display:grid;gap:12px}small{color:var(--el-text-color-secondary)}@media(max-width:700px){.detail-toolbar,.detail-export-task{flex-wrap:wrap}.detail-filters .el-select{flex:1;min-width:140px}}
 </style>

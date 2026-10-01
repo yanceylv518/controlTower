@@ -6,10 +6,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -182,11 +180,8 @@ func (h *BillingDetailsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 			writeDashboardError(w, 409, "billing_export_not_ready")
 			return
 		}
-		name := job.From.In(billing.BusinessLocation).Format("2006-01-02") + "-日账单明细.zip"
-		w.Header().Set("Content-Type", "application/zip")
-		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="billing-details.zip"; filename*=UTF-8''%s`, url.PathEscape(name)))
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		http.ServeFile(w, r, task.Path)
+		name := job.From.In(billing.BusinessLocation).Format("2006-01-02") + "-日账单明细"
+		serveBillingDetailDownload(w, r, task.Path, name)
 		return
 	}
 	archive := path + ".details.zip"

@@ -205,6 +205,8 @@ func allowAdminRequest(u storage.User, r *http.Request) bool {
 			return read && any("billing.channels")
 		case "generation-batch":
 			return any("billing.users", "billing.channels", "billing.tasks")
+		case "catalog":
+			return read && any("billing.users", "billing.channels", "billing.tasks")
 		case "workspace", "generate-missing", "jobs/steps":
 			return any("billing.users", "billing.channels", "billing.tasks")
 		case "discounts":

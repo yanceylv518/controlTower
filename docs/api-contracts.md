@@ -400,3 +400,17 @@ An insufficient total request window, or absence of both usable current TTFT and
 - count/stat 的审计集中在每次 HTTP 请求返回处，冷查询、缓存命中、合并等待者各记录一次，使用原操作类型。按实际 HTTP 状态记录 succeeded/failed，取消记 failed/http_status=499；后台共享计算不重复记录审计。
 - 小时汇总每轮最多两个站点并行，同站点仍去重并保留 10 秒稳定等待和每轮 10×5000 条预算；一轮完成后再等 30 秒，不重叠执行。未修改 NewAPI 表、计数口径或 Agent。
 - 游标分页不提供跨页数据库快照；历史记录删除或迟到写入时页码/短时总数可能变化。生产执行计划与性能收益需现场验证。
+
+## 新版用户 / 上游已生成账单目录（2026-10-01）
+
+- `GET /api/dashboard/billing/catalog`：管理员会话或既有 Token 鉴权；按 `kind` 再校验 `billing.users` / `billing.channels`（`billing.tasks` 可访问两类）。必填 `instance_id` 和 `kind=user_statement|upstream_statement`。
+- 可选 `period=monthly|daily|temporary`，默认 monthly，不支持全部混排；`month=YYYY-MM` 默认不限，按上海时间与账期相交筛选；`q` 默认空，匹配冻结对象名、对象 ID（可带 #）、任务 ID 或账单编号，LIKE 通配符按字面处理。`page` 默认 1，`page_size` 默认 20、范围 1–100。
+- 响应 `{items,total,subjects,counts,page,page_size}`；`total` / `subjects` 是当前类型与筛选下的账单数/对象数；`counts` 提供同一站点/名称/月筛选下三类数量。`items` 沿用 workspace 的已存金额、币种与 Job/月覆盖快照，另含 `generated_at`，按生成时间、ID 降序。只展示完整状态 complete、usage_version>=3 的账单，排除旧版、失败及 superseded；未限制最近 200/500 条，不读取源日志。
+- 计数与查询均在 CT 执行，只补齐所请求页的快照与汇总，不加载全站账单到前端。翻页不是跨请求数据库快照，生成或覆盖发生后数量可能变化；生产查询性能仍需实库验收。
+- 页面提供“已生成账单 / 按用户或上游查看 · 日/月”，默认目录月账单，用户/月份不限；查看自动带入对象/月份/类型，返回保留目录筛选和页码。目录关闭或切站时取消请求，忽略过期结果；错误与正常空结果区分。
+
+### 日明细下载格式
+
+- `GET /api/dashboard/billing/statements/details?id=...&action=download&key=...` 按实际导出 ZIP 成员数量返回：一个 XLSX 直接返回工作簿及 `.xlsx` 文件名/MIME；多个 XLSX 返回 ZIP。判定基于筛选后导出产物，内部缓存及历史缓存仍可保持 ZIP，不改账单数据或重算金额。
+- 单文件先在临时文件中完整解包、校验后响应，避免把坏文件当成功下载；使用磁盘临时文件，不将大工作簿完整载入内存。
+- 上游日账单继续走 `statements/result?export=daily&day=YYYY-MM-DD`，沿用按所选日期实际文件数量直接 XLSX / 多文件 ZIP 的既有行为，包含全部对应用户文件。

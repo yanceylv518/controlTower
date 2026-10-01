@@ -1,8 +1,11 @@
 package dashboard
 
 import (
+	"archive/zip"
+	"bytes"
 	"controltower/server/internal/billing"
 	"encoding/json"
+	"io"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -20,7 +23,7 @@ func TestBillingDetailsHandlerSavedFilesOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = billing.WriteUserDailyWorkbook(file, job, billing.UserDailyFile{}, []billing.RequestDetail{{CreatedUnix: day.Unix(), RequestID: "saved-order", ModelName: "model", TokenName: "token", Charge: billing.LogCharge{Total: "0.5"}}})
+	err = billing.WriteUserDailyWorkbook(file, job, billing.UserDailyFile{}, []billing.RequestDetail{{CreatedUnix: day.Unix(), RequestID: "saved-order", ModelName: "model", TokenName: "token", Charge: billing.LogCharge{Total: "0.5"}}, {CreatedUnix: day.Unix(), RequestID: "excluded-order", ModelName: "other-model", Charge: billing.LogCharge{Total: "1"}}})
 	file.Close()
 	if err != nil {
 		t.Fatal(err)
@@ -79,8 +82,21 @@ func TestBillingDetailsHandlerSavedFilesOnly(t *testing.T) {
 		t.Fatal(task)
 	}
 	download := call("GET", "/?id=daily&action=download&key="+task.Key, "")
-	if download.Code != 200 || !strings.HasPrefix(download.Body.String(), "PK") {
+	if download.Code != 200 || !strings.HasPrefix(download.Body.String(), "PK") || !strings.Contains(download.Header().Get("Content-Type"), "spreadsheetml") || !strings.Contains(download.Header().Get("Content-Disposition"), ".xlsx") {
 		t.Fatal(download.Code)
+	}
+	book, err := zip.NewReader(bytes.NewReader(download.Body.Bytes()), int64(download.Body.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sheet, err := book.Open("xl/worksheets/sheet1.xml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents, err := io.ReadAll(sheet)
+	sheet.Close()
+	if err != nil || !bytes.Contains(contents, []byte("saved-order")) || bytes.Contains(contents, []byte("excluded-order")) {
+		t.Fatal("filtered XLSX content mismatch", err)
 	}
 	h.Store = statementDownloadStore{job: billing.Job{ID: "other", UserID: 7, JobType: "user_statement", UsageVersion: 3, BillPeriod: "daily", Status: "complete", From: day, To: day.AddDate(0, 0, 1)}, statementPriceTestStore: store.statementPriceTestStore}
 	if denied := call("GET", "/?id=other&action=download&key="+task.Key, ""); denied.Code != 404 {

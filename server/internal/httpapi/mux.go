@@ -276,6 +276,9 @@ func NewMux(options Options) *http.ServeMux {
 	if workspace, ok := any(options.Store).(dashboard.BillingWorkspaceStore); ok {
 		mux.Handle("GET /api/dashboard/billing/workspace", protect(dashboard.BillingWorkspaceHandler{Store: workspace}))
 	}
+	if catalog, ok := any(options.Store).(dashboard.BillingCatalogStore); ok {
+		mux.Handle("GET /api/dashboard/billing/catalog", protect(dashboard.BillingCatalogHandler{Store: catalog}))
+	}
 	if automatic, ok := any(options.Store).(dashboard.AutomaticBillingStore); ok {
 		archive, _ := options.ArchiveReader.(interface {
 			FirstBillingDay(context.Context, string) (time.Time, error)
