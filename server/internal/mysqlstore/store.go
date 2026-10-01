@@ -15,8 +15,10 @@ import (
 )
 
 type Store struct {
-	db          *sql.DB
-	auditCounts *auditCountCache
+	db             *sql.DB
+	auditCounts    *auditCountCache
+	generationSite string
+	generationJob  string
 }
 
 // A channel snapshot owns the channel's model assignment, but it must not

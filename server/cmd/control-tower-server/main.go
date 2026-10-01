@@ -135,7 +135,7 @@ func run() error {
 		fastCircuitSink = startTuningRunner(workers, controlStore)
 		workers.Go(controlStore.RunReadonlyChannelSync)
 	}
-	dashboard.SetBillingSourceReadPause(time.Duration(cfg.BillingPagePauseMilliseconds)*time.Millisecond)
+	dashboard.SetBillingSourceReadPause(time.Duration(cfg.BillingPagePauseMilliseconds) * time.Millisecond)
 	startBillingJobRunner(workers, store, cfg.SecretKey, time.Duration(cfg.BillingPagePauseMilliseconds)*time.Millisecond)
 	startBillingFileCleanup(workers, store)
 	startReadonlyLogRollupRunner(workers, store, cfg.SecretKey)
@@ -260,22 +260,32 @@ func startBillingJobRunner(workers *workerGroup, store mysqlstore.Store, secretK
 		Files:     billing.UserDailyFileGenerator{Store: store, Spool: billing.FileDetailSpool{}},
 		PagePause: pagePause,
 	}
-	workers.Go(dashboard.SettlementReportWorker{Store: store, Calculator: dashboard.SettlementReportHandler{Store: store, Source: dashboard.BillingSources{BillingReadonlySource: dashboard.BillingReadonlySource{Handler: readonly}, Archive: archivereader.Reader{Connections: store, SecretKey: secretKey, BillingVersions: store}}}}.Run)
+	reports := dashboard.SettlementReportWorker{Store: store, Calculator: dashboard.SettlementReportHandler{Store: store, Source: dashboard.BillingSources{BillingReadonlySource: dashboard.BillingReadonlySource{Handler: readonly}, Archive: archivereader.Reader{Connections: store, SecretKey: secretKey, BillingVersions: store}}}}
+	workers.Go(reports.Schedule)
 	// Billing continuation is part of the enabled billing worker, including API-only mode.
 	workers.Go(dashboard.BillingAutomation{Wake: wakeBilling, Store: store, Source: dashboard.BillingReadonlySource{Handler: readonly}, Archive: archivereader.Reader{Connections: store, SecretKey: secretKey, BillingVersions: store}}.Run)
-	workers.Go(func(ctx context.Context) {
-		if err := runner.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			log.Printf("billing job runner stopped: %v", err)
-		}
-	})
+	workers.Go(dashboard.SiteGenerationWorker{
+		Store: store,
+		Recover: func(ctx context.Context, site string) error {
+			return store.ForGeneration(site, "").RecoverReportTasks(ctx)
+		},
+		RunTask: func(ctx context.Context, site string, task billing.QueuedGeneration) (bool, error) {
+			scoped := store.ForGeneration(site, task.ID)
+			if task.Kind == "report" {
+				worker := reports
+				worker.Store = scoped
+				return worker.RunOnce(ctx)
+			}
+			worker := runner
+			worker.Store = scoped
+			return worker.RunOnce(ctx)
+		},
+	}.Run)
 }
 
 func startDailyBillingScheduler(workers *workerGroup, store mysqlstore.Store) {
 	runOnce := func(ctx context.Context, now time.Time, startup bool) {
 		localNow := now.In(billing.BusinessLocation)
-		if _, err := store.ActiveBillingJob(ctx); err == nil {
-			return
-		}
 		instances, err := store.ListInstances()
 		if err != nil {
 			log.Printf("daily billing scheduler list instances: %v", err)
@@ -292,6 +302,9 @@ func startDailyBillingScheduler(workers *workerGroup, store mysqlstore.Store) {
 				continue
 			}
 			seen[site] = true
+			if _, err := store.ActiveBillingJobForSite(ctx, site); err == nil {
+				continue
+			}
 			lookbackDays := 30
 			if earliest, earliestErr := store.EarliestCompletedBillingDay(ctx, site); earliestErr == nil && !earliest.IsZero() {
 				lookbackDays = int(today.Sub(earliest.In(billing.BusinessLocation)).Hours() / 24)

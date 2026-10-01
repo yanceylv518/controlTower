@@ -2,6 +2,7 @@ package archivereader
 
 import (
 	"context"
+	"controltower/server/internal/billing"
 	"controltower/server/internal/secrets"
 	"crypto/rand"
 	"database/sql"
@@ -88,6 +89,45 @@ func TestJobReaderMySQL(t *testing.T) {
 	}
 	reader := Reader{ConnectionsFile: file}
 	ctx := context.Background()
+	t.Run("report version guard uses page snapshot and protects empty reads", func(t *testing.T) {
+		exec(db, `ALTER TABLE logs_202607 ADD COLUMN other TEXT NULL`)
+		defer exec(db, `ALTER TABLE logs_202607 DROP COLUMN other`)
+		defer exec(db, `UPDATE log_archive_days SET version_id=? WHERE log_date='2026-07-04'`, version)
+		defer exec(db, `UPDATE logs_202607 SET quota=5 WHERE id=1`)
+		from := time.Unix(start, 0)
+		to := from.AddDate(0, 0, 1)
+		changed := strings.Repeat("f", 32)
+		rows, e := reader.BillingPageChecked(ctx, "site", from, to, billing.LogCursor{}, 2000, func(source, seen string) error {
+			if source != hash || seen != version {
+				t.Fatal(source, seen)
+			}
+			// Mutate through a separate admin connection after validation. The
+			// page must still come from the same repeatable-read snapshot.
+			exec(db, `UPDATE log_archive_days SET version_id=? WHERE log_date='2026-07-04'`, changed)
+			exec(db, `UPDATE logs_202607 SET quota=999 WHERE id=1`)
+			return nil
+		})
+		if e != nil || len(rows) != 3 || rows[0].Log.Quota != 5 {
+			t.Fatal("page mixed archive versions", rows, e)
+		}
+		mismatch := errors.New("test archive changed")
+		guard := func(source, seen string) error {
+			if source != hash || seen != version {
+				return mismatch
+			}
+			return nil
+		}
+		if _, e = reader.BillingPageChecked(ctx, "site", from, to, billing.LogCursor{CreatedUnix: start, ID: 99}, 2000, guard); !errors.Is(e, mismatch) {
+			t.Fatal("empty tail skipped guard", e)
+		}
+		if _, e = reader.BillingFailedRequestsChecked(ctx, "site", from, to, guard); !errors.Is(e, mismatch) {
+			t.Fatal("failed count skipped guard", e)
+		}
+		exec(db, `UPDATE log_archive_days SET version_id=? WHERE log_date='2026-07-04'`, version)
+		if n, e := reader.BillingFailedRequestsChecked(ctx, "site", from, to, guard); e != nil || n != 1 {
+			t.Fatal(n, e)
+		}
+	})
 	t.Run("overview chooses one snapshot and retains partial coverage", func(t *testing.T) {
 		live := strings.Repeat("e", 32)
 		exec(db, `INSERT INTO log_archive_live_stats(log_date,version_id,ready,updated_at) VALUES('2026-07-04',?,1,NOW(6)),('2026-07-05',?,0,NOW(6))`, strings.Repeat("c", 32), live)

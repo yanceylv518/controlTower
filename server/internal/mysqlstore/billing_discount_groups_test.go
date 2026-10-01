@@ -37,7 +37,7 @@ func TestBillingDiscountGroupsSurvivePagesAndMonthlyCopy(t *testing.T) {
 	job, _, _ := billing.NewJob(site, day, day.AddDate(0, 0, 1), "test")
 	job.JobType, job.UserID, job.UsageVersion, job.BillPeriod, job.Status, job.RequestKey = "user_statement", 7, 3, "daily", "complete", job.ID
 	job.MoneySnapshot, _ = billing.NewMoneySnapshot(site, `{"QuotaPerUnit":"500000"}`, time.Now())
-	if err = s.CreateBillingStatementJob(ctx, job, nil, ""); err != nil {
+	if err = createStatementAndPublishTestMonth(t, s, ctx, job, nil, ""); err != nil {
 		t.Fatal(err)
 	}
 	row := func(rate, before, amount string) billing.RequestDetail {
@@ -92,7 +92,7 @@ func TestBillingDiscountGroupsSurvivePagesAndMonthlyCopy(t *testing.T) {
 	daily := check(job.ID)
 	month, _, _ := billing.NewJob(site, day, day.AddDate(0, 1, 0), "test")
 	month.JobType, month.UserID, month.UsageVersion, month.BillPeriod, month.RequestKey = "user_statement", 7, 3, "monthly", month.ID
-	if err = s.CreateBillingStatementJob(ctx, month, nil, ""); err != nil {
+	if err = createStatementAndPublishTestMonth(t, s, ctx, month, nil, ""); err != nil {
 		t.Fatal(err)
 	}
 	if monthly := check(month.ID); !reflect.DeepEqual(monthly, daily) {

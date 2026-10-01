@@ -42,7 +42,7 @@ func TestBillingMonthlyCoverageSnapshotAndHistoricalFallback(t *testing.T) {
 		}
 		j, _, _ := billing.NewJob(site, day, to, "test")
 		j.JobType, j.UserID, j.UsageVersion, j.BillPeriod, j.Status, j.RequestKey, j.MoneySnapshot = "user_statement", 7, 3, period, status, j.ID, money
-		if err := s.CreateBillingStatementJob(ctx, j, nil, "test"); err != nil {
+		if err := createStatementAndPublishTestMonth(t, s, ctx, j, nil, "test"); err != nil {
 			t.Fatal(err)
 		}
 		return j

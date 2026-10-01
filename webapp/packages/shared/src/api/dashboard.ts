@@ -1,11 +1,11 @@
-export type SettlementReportTask = {id:string;instance_id:string;from:string;to:string;status:string;overwrite:boolean;automatic:boolean;created_at:string;updated_at:string;days:{day:string;status:string;processed:number;error:string;updated_at:string}[]};
+export type SettlementReportTask = {waiting_for?:string;id:string;instance_id:string;from:string;to:string;status:string;overwrite:boolean;automatic:boolean;created_at:string;updated_at:string;days:{day:string;status:string;processed:number;error:string;updated_at:string}[]};
 import type { ApiClient } from "../client";
 
 export interface ChannelGroupPreset { id: string; name: string; groups: string[] }
 export interface ChannelGroupPresets { items: ChannelGroupPreset[]; revision: number }
 
 export interface BillingGenerationDay {day:string;status:string;job_id?:string;processed:number;error?:string;updated_at?:string}
-export interface BillingGenerationProgress {subject_id:number;outcome:string;total_days:number;checked:number;complete:number;empty:number;pending:number;running:number;failed:number;processed:number;error?:string;last_attempt?:string;days:BillingGenerationDay[];monthly?:BillingGenerationDay}
+export interface BillingGenerationProgress {waiting_for?:string;subject_id:number;outcome:string;total_days:number;checked:number;complete:number;empty:number;pending:number;running:number;failed:number;processed:number;error?:string;last_attempt?:string;days:BillingGenerationDay[];monthly?:BillingGenerationDay}
 export interface BillingGenerationTask {id:string;instance_id:string;kind:string;from:string;to:string;work_until:string;source:string;overwrite:boolean;subject_ids:number[];created_at:string;outcome:string;percentage:number;completed_users:number;failed_users:number;complete_days:number;empty_days:number;items?:BillingGenerationProgress[]}
 export interface BillingGenerationBatch {kind?:string;instance_id:string;subject_ids:number[];from:string;to:string;overwrite?:boolean}
 export interface BillingDetailRow {unit_price?:string;image_input_tokens?:string;image_output_tokens?:string;audio_input_tokens?:string;audio_output_tokens?:string;time:string;request_id:string;model:string;token:string;token_id:string;input:string;output:string;cache_read:string;cache_write:string;amount:string;before_amount?:string;discount?:string}
@@ -1059,6 +1059,7 @@ export const dashboardApi = (client: ApiClient) => ({
   deleteBillingUpstream:(instance_id:string,id:number)=>client.request<{deleted:boolean}>(`/api/dashboard/billing/upstreams${query({instance_id,id})}`,{method:"DELETE"}),
   reportTasks:(instance_id:string)=>client.request<{items:SettlementReportTask[]}>(`/api/dashboard/billing/report-tasks${query({instance_id})}`),
   createReportTask:(input:{instance_id:string;from:string;to:string;overwrite:boolean})=>client.request<SettlementReportTask>('/api/dashboard/billing/report-tasks',{method:'POST',body:JSON.stringify(input)}),
+  retryReportTask:(instance_id:string,id:string)=>client.request<{ok:boolean}>('/api/dashboard/billing/report-tasks?action=retry',{method:'POST',body:JSON.stringify({instance_id,id})}),
   cancelReportTask:(instance_id:string,id:string)=>client.request<{ok:boolean}>('/api/dashboard/billing/report-tasks?action=cancel',{method:'POST',body:JSON.stringify({instance_id,id})}),
   settlementReport:(params:{instance_id:string;from:string;to:string},signal?:AbortSignal)=>client.request<{items:{user_id:number;user:string;model:string;channel_id:number;channel:string;upstream:string;discount:string;requests:number;input:number;output:number;cache:number;empty:number;amount:string;cost:string;raw_amount:string;raw_cost:string;base_fallback?:number;cost_discount:string;unknown_cost:number}[];failed_requests:number|null;expected_days:number;generated_days:number;missing_days:string[];complete:boolean;currency?:BillingCurrencyDisplay}>(`/api/dashboard/billing/reports${query(params)}`,{signal}),
   billingWorkspace:(params:{instance_id:string;kind:string;subject_id:number;from:string;to:string})=>client.request<{items:BillingWorkspaceBill[];remaining_days:number}>(`/api/dashboard/billing/workspace${query(params)}`),

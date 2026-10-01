@@ -262,7 +262,7 @@ func (h BillingJobsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if active, activeErr := h.Store.ActiveBillingJob(r.Context()); activeErr == nil {
+	if active, activeErr := activeBillingJobForSite(r.Context(), h.Store, req.InstanceID); activeErr == nil {
 		writeDashboardJSON(w, http.StatusConflict, map[string]any{"error": "billing_job_busy", "active_job": active})
 		return
 	} else if activeErr != sql.ErrNoRows {
@@ -457,4 +457,15 @@ func billingSiteAllowed(r *http.Request, site string, userID int64) bool {
 		return false
 	}
 	return userID == 0 || containsBillingUser(user.ScopeUserIDs, userID)
+}
+
+func activeBillingJobForSite(ctx context.Context, store interface {
+	ActiveBillingJob(context.Context) (billing.Job, error)
+}, site string) (billing.Job, error) {
+	if scoped, ok := store.(interface {
+		ActiveBillingJobForSite(context.Context, string) (billing.Job, error)
+	}); ok {
+		return scoped.ActiveBillingJobForSite(ctx, site)
+	}
+	return store.ActiveBillingJob(ctx)
 }

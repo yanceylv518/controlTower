@@ -25,6 +25,15 @@ func TestReadPageWithRetryRecoversAfterTwoFailures(t *testing.T) {
 		t.Fatalf("rows=%v attempts=%d err=%v", rows, attempts, err)
 	}
 }
+
+func TestReadPageWithRetryStopsOnPermanentError(t *testing.T) {
+	cause := errors.New("frozen source changed")
+	attempts := 0
+	_, err := ReadPageWithRetry(context.Background(), "permanent", LogCursor{}, func() ([]int, error) { attempts++; return nil, PermanentPageError{Err: cause} })
+	if attempts != 1 || !errors.Is(err, cause) {
+		t.Fatal(attempts, err)
+	}
+}
 func TestReadPageWithRetryBudgetIncludesCursor(t *testing.T) {
 	oldD, oldB := BillingPageRetryDelays, BillingPageRetryBudget
 	BillingPageRetryDelays = []time.Duration{time.Second}

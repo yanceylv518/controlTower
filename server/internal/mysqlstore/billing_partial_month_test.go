@@ -33,8 +33,9 @@ func TestPartialMonthRefreshUsesCompletedDailySnapshots(t *testing.T) {
 			}
 		}
 	}()
-	now := time.Now().In(billing.BusinessLocation)
-	from := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, billing.BusinessLocation)
+	// Both fixture days must be closed, including when the test runs on the
+	// first or second day of a month. The explicit boundary simulates a partial month.
+	from := time.Date(2025, 9, 1, 0, 0, 0, 0, billing.BusinessLocation)
 	to := from.AddDate(0, 1, 0)
 	money, _ := billing.NewMoneySnapshot(site, `{"QuotaPerUnit":500000}`, time.Now())
 	makeDay := func(day int) billing.Job {
@@ -50,7 +51,7 @@ func TestPartialMonthRefreshUsesCompletedDailySnapshots(t *testing.T) {
 		j.TotalSteps = 0
 		j.RequestKey = j.ID
 		j.MoneySnapshot = money
-		if e = s.CreateBillingStatementJob(ctx, j, nil, ""); e != nil {
+		if e = createStatementAndPublishTestMonth(t, s, ctx, j, nil, ""); e != nil {
 			t.Fatal(e)
 		}
 		return j
@@ -88,7 +89,7 @@ func TestPartialMonthRefreshUsesCompletedDailySnapshots(t *testing.T) {
 		return j
 	}
 	m1 := makeMonth()
-	if e = s.CreateBillingStatementJob(ctx, m1, nil, ""); e != nil {
+	if e = createStatementAndPublishTestMonth(t, s, ctx, m1, nil, ""); e != nil {
 		t.Fatal(e)
 	}
 	check := func(id, want string) {
@@ -105,12 +106,12 @@ func TestPartialMonthRefreshUsesCompletedDailySnapshots(t *testing.T) {
 		t.Fatal("stale month retained", old.Status, e)
 	}
 	m2 := makeMonth()
-	if e = s.CreateBillingStatementJob(ctx, m2, nil, ""); e != nil {
+	if e = createStatementAndPublishTestMonth(t, s, ctx, m2, nil, ""); e != nil {
 		t.Fatal(e)
 	}
 	check(m2.ID, "3.750000000000")
 	check(m1.ID, "1.250000000000")
-	if e = s.CreateBillingStatementJob(ctx, makeMonth(), nil, ""); !errors.Is(e, billing.ErrStatementDuplicate) {
+	if e = createStatementAndPublishTestMonth(t, s, ctx, makeMonth(), nil, ""); !errors.Is(e, billing.ErrStatementDuplicate) {
 		t.Fatal("duplicate refresh", e)
 	}
 	months, e = s.MissingBillingMonths(ctx, target, from.AddDate(0, 0, 2))

@@ -61,7 +61,7 @@ func (h BillingVerificationHandler) create(w http.ResponseWriter, r *http.Reques
 		writeDashboardError(w, http.StatusInternalServerError, "billing_verification_query_failed")
 		return
 	}
-	if active, activeErr := h.Store.ActiveBillingJob(r.Context()); activeErr == nil {
+	if active, activeErr := activeBillingJobForSite(r.Context(), h.Store, source.InstanceID); activeErr == nil {
 		writeDashboardJSON(w, http.StatusConflict, map[string]any{"error": "billing_job_busy", "active_job": active})
 		return
 	} else if activeErr != sql.ErrNoRows {

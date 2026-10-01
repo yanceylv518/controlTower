@@ -41,6 +41,7 @@ type GenerationDay struct {
 	UpdatedAt *time.Time `json:"updated_at,omitempty"`
 }
 type GenerationProgress struct {
+	WaitingFor  string          `json:"waiting_for,omitempty"`
 	SubjectID   int64           `json:"subject_id"`
 	Outcome     string          `json:"outcome"`
 	TotalDays   int             `json:"total_days"`

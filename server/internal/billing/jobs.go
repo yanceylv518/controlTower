@@ -423,6 +423,22 @@ func (r JobRunner) RunOnce(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	if ok {
+		if job.UsageVersion >= SettlementUsageVersion && job.BillPeriod == "monthly" {
+			if monthly, supported := r.Store.(interface {
+				CompleteBillingMonth(context.Context, Job) error
+			}); supported {
+				err = monthly.CompleteBillingMonth(ctx, job)
+			} else {
+				err = fmt.Errorf("monthly billing publisher unavailable")
+			}
+			if err != nil {
+				_ = r.Store.FailBillingPublish(ctx, job, err)
+			}
+			if r.OnIdle != nil {
+				r.OnIdle()
+			}
+			return true, nil
+		}
 		if job.Status != "no_data" {
 			if err = r.publishJob(ctx, job); err != nil {
 				_ = r.Store.FailBillingPublish(ctx, job, err)

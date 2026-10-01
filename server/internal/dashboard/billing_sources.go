@@ -18,21 +18,34 @@ type BillingSources struct {
 
 func (s BillingSources) ForBillingJob(job billing.Job) billing.PageSource {
 	if job.DataSource == "archive" {
-		return archiveBillingSource{s.Archive, job.ID}
+		return archiveBillingSource{reader: s.Archive, jobID: job.ID}
 	}
 	return s.BillingReadonlySource
 }
 
 type archiveBillingSource struct {
-	reader BillingArchiveReader
-	jobID  string
+	reader       BillingArchiveReader
+	jobID        string
+	versionCheck func(string, string) error
 }
 
 func (s archiveBillingSource) page(ctx context.Context, site string, user int64, channels []int64, from, to time.Time, c billing.LogCursor, n int) ([]billing.PagedLogRecord, error) {
 	if s.reader == nil {
 		return nil, fmt.Errorf("archive billing reader unavailable")
 	}
-	raw, err := s.reader.BillingPage(ctx, site, s.jobID, from, to, c, user, channels, n)
+	var raw []archivereader.BillingRawLog
+	var err error
+	if s.versionCheck != nil {
+		reader, ok := s.reader.(interface {
+			BillingPageChecked(context.Context, string, time.Time, time.Time, billing.LogCursor, int, func(string, string) error) ([]archivereader.BillingRawLog, error)
+		})
+		if !ok {
+			return nil, billing.PermanentPageError{Err: fmt.Errorf("report_archive_version_unavailable")}
+		}
+		raw, err = reader.BillingPageChecked(ctx, site, from, to, c, n, s.versionCheck)
+	} else {
+		raw, err = s.reader.BillingPage(ctx, site, s.jobID, from, to, c, user, channels, n)
+	}
 	if err != nil {
 		return nil, err
 	}

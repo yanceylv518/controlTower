@@ -103,9 +103,12 @@ func (s Store) BillingJobByRequestKey(ctx context.Context, key string) (billing.
 	return j, e
 }
 
+func (s Store) ActiveBillingJobForSite(ctx context.Context, site string) (billing.Job, error) {
+	return s.ForGeneration(site, "").ActiveBillingJob(ctx)
+}
 func (s Store) ActiveBillingJob(ctx context.Context) (billing.Job, error) {
 	var j billing.Job
-	err := s.db.QueryRowContext(ctx, `SELECT id,instance_id,job_type,user_id,range_from,range_to,status,total_steps,completed_steps,abnormal_rows,error_message,output_path,requested_by,created_at,updated_at FROM billing_jobs WHERE status IN ('pending','running','publishing') ORDER BY created_at LIMIT 1`).Scan(&j.ID, &j.InstanceID, &j.JobType, &j.UserID, &j.From, &j.To, &j.Status, &j.TotalSteps, &j.CompletedSteps, &j.AbnormalRows, &j.ErrorMessage, &j.OutputPath, &j.RequestedBy, &j.CreatedAt, &j.UpdatedAt)
+	err := s.db.QueryRowContext(ctx, `SELECT id,instance_id,job_type,user_id,range_from,range_to,status,total_steps,completed_steps,abnormal_rows,error_message,output_path,requested_by,created_at,updated_at FROM billing_jobs WHERE status IN ('pending','running','publishing') AND (?='' OR instance_id=?) ORDER BY created_at LIMIT 1`, s.generationSite, s.generationSite).Scan(&j.ID, &j.InstanceID, &j.JobType, &j.UserID, &j.From, &j.To, &j.Status, &j.TotalSteps, &j.CompletedSteps, &j.AbnormalRows, &j.ErrorMessage, &j.OutputPath, &j.RequestedBy, &j.CreatedAt, &j.UpdatedAt)
 	return j, err
 }
 
@@ -229,7 +232,7 @@ func (s Store) ClaimBillingStep(ctx context.Context) (billing.Job, billing.JobSt
 	defer tx.Rollback()
 	var j billing.Job
 	var st billing.JobStep
-	e = tx.QueryRowContext(ctx, `SELECT j.id,j.instance_id,j.job_type,j.user_id,j.exclude_zero_output,j.pricing_source,j.usage_version,j.data_source,j.bill_period,j.range_from,j.range_to,j.status,j.total_steps,j.completed_steps,j.abnormal_rows,j.error_message,j.output_path,j.requested_by,j.created_at,j.updated_at,s.step_no,s.range_from,s.range_to,s.cursor_created_at,s.cursor_id FROM billing_jobs j JOIN billing_job_steps s ON s.job_id=j.id WHERE j.status IN ('pending','running') AND s.status IN ('pending','running') ORDER BY j.created_at,s.step_no LIMIT 1 FOR UPDATE`).Scan(&j.ID, &j.InstanceID, &j.JobType, &j.UserID, &j.ExcludeZeroOutput, &j.PricingSource, &j.UsageVersion, &j.DataSource, &j.BillPeriod, &j.From, &j.To, &j.Status, &j.TotalSteps, &j.CompletedSteps, &j.AbnormalRows, &j.ErrorMessage, &j.OutputPath, &j.RequestedBy, &j.CreatedAt, &j.UpdatedAt, &st.StepNo, &st.From, &st.To, &st.Cursor.CreatedUnix, &st.Cursor.ID)
+	e = tx.QueryRowContext(ctx, `SELECT j.id,j.instance_id,j.job_type,j.user_id,j.exclude_zero_output,j.pricing_source,j.usage_version,j.data_source,j.bill_period,j.range_from,j.range_to,j.status,j.total_steps,j.completed_steps,j.abnormal_rows,j.error_message,j.output_path,j.requested_by,j.created_at,j.updated_at,s.step_no,s.range_from,s.range_to,s.cursor_created_at,s.cursor_id FROM billing_jobs j JOIN billing_job_steps s ON s.job_id=j.id WHERE j.status IN ('pending','running') AND s.status IN ('pending','running') AND (?='' OR j.instance_id=?) AND (?='' OR j.id=?) ORDER BY j.created_at,s.step_no LIMIT 1 FOR UPDATE`, s.generationSite, s.generationSite, s.generationJob, s.generationJob).Scan(&j.ID, &j.InstanceID, &j.JobType, &j.UserID, &j.ExcludeZeroOutput, &j.PricingSource, &j.UsageVersion, &j.DataSource, &j.BillPeriod, &j.From, &j.To, &j.Status, &j.TotalSteps, &j.CompletedSteps, &j.AbnormalRows, &j.ErrorMessage, &j.OutputPath, &j.RequestedBy, &j.CreatedAt, &j.UpdatedAt, &st.StepNo, &st.From, &st.To, &st.Cursor.CreatedUnix, &st.Cursor.ID)
 	if e == sql.ErrNoRows {
 		return j, st, false, nil
 	}
@@ -259,14 +262,14 @@ func (s Store) ClaimBillingPublish(ctx context.Context) (billing.Job, bool, erro
 	}
 	defer tx.Rollback()
 	var j billing.Job
-	err = tx.QueryRowContext(ctx, `SELECT id,instance_id,job_type,user_id,exclude_zero_output,pricing_source,usage_version,data_source,bill_period,range_from,range_to,status,total_steps,completed_steps,abnormal_rows,error_message,output_path,requested_by,created_at,updated_at FROM billing_jobs WHERE job_type IN ('generate','user_statement','upstream_statement') AND status IN ('running','publishing') AND completed_steps>=total_steps ORDER BY created_at LIMIT 1 FOR UPDATE`).Scan(&j.ID, &j.InstanceID, &j.JobType, &j.UserID, &j.ExcludeZeroOutput, &j.PricingSource, &j.UsageVersion, &j.DataSource, &j.BillPeriod, &j.From, &j.To, &j.Status, &j.TotalSteps, &j.CompletedSteps, &j.AbnormalRows, &j.ErrorMessage, &j.OutputPath, &j.RequestedBy, &j.CreatedAt, &j.UpdatedAt)
+	err = tx.QueryRowContext(ctx, `SELECT id,instance_id,job_type,user_id,exclude_zero_output,pricing_source,usage_version,data_source,bill_period,range_from,range_to,status,total_steps,completed_steps,abnormal_rows,error_message,output_path,requested_by,created_at,updated_at FROM billing_jobs WHERE job_type IN ('generate','user_statement','upstream_statement') AND (status IN ('running','publishing') OR (status='pending' AND usage_version>=3 AND bill_period='monthly')) AND completed_steps>=total_steps AND (?='' OR instance_id=?) AND (?='' OR id=?) ORDER BY created_at LIMIT 1 FOR UPDATE`, s.generationSite, s.generationSite, s.generationJob, s.generationJob).Scan(&j.ID, &j.InstanceID, &j.JobType, &j.UserID, &j.ExcludeZeroOutput, &j.PricingSource, &j.UsageVersion, &j.DataSource, &j.BillPeriod, &j.From, &j.To, &j.Status, &j.TotalSteps, &j.CompletedSteps, &j.AbnormalRows, &j.ErrorMessage, &j.OutputPath, &j.RequestedBy, &j.CreatedAt, &j.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return billing.Job{}, false, nil
 	}
 	if err != nil {
 		return billing.Job{}, false, err
 	}
-	if j.UsageVersion >= billing.SettlementUsageVersion {
+	if j.UsageVersion >= billing.SettlementUsageVersion && j.BillPeriod != "monthly" {
 		var count int64
 		if err = tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(processed_rows),0) FROM billing_job_steps WHERE job_id=?`, j.ID).Scan(&count); err != nil {
 			return billing.Job{}, false, err

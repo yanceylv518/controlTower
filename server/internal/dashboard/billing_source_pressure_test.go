@@ -34,7 +34,7 @@ type pressureFillStore struct {
 	fullQueue bool
 }
 
-func (s *pressureFillStore) BillingStatementQueueFull(context.Context) (bool, error) {
+func (s *pressureFillStore) BillingStatementQueueFull(context.Context, string) (bool, error) {
 	return s.fullQueue, nil
 }
 func (s *pressureFillStore) FailedStatementMoneySnapshot(context.Context, string) (*billing.MoneySnapshot, error) {

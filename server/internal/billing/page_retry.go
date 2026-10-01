@@ -2,6 +2,7 @@ package billing
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -9,6 +10,13 @@ import (
 
 var BillingPageRetryDelays = []time.Duration{2 * time.Second, 10 * time.Second, 30 * time.Second, 60 * time.Second, 120 * time.Second}
 var BillingPageRetryBudget = 10 * time.Minute
+
+// PermanentPageError stops retries that cannot recover without a new task,
+// such as a frozen archive identity no longer matching the source.
+type PermanentPageError struct{ Err error }
+
+func (e PermanentPageError) Error() string { return e.Err.Error() }
+func (e PermanentPageError) Unwrap() error { return e.Err }
 
 func ReadPageWithRetry[T any](ctx context.Context, label string, cursor LogCursor, read func() ([]T, error)) ([]T, error) {
 	started := time.Now()
@@ -22,6 +30,10 @@ func ReadPageWithRetry[T any](ctx context.Context, label string, cursor LogCurso
 		}
 		if err == nil {
 			return rows, nil
+		}
+		var permanent PermanentPageError
+		if errors.As(err, &permanent) {
+			return nil, err
 		}
 		if ctx.Err() != nil {
 			return nil, ctx.Err()

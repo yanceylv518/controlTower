@@ -109,7 +109,14 @@ func (s Store) ListReportTasks(ctx context.Context, site string, limit int) ([]b
 	if e != nil {
 		return nil, e
 	}
+	waiting, e := s.GenerationWaitingFor(ctx, site, "report")
+	if e != nil {
+		return nil, e
+	}
 	for i := range out {
+		if out[i].Status == "pending" {
+			out[i].WaitingFor = waiting
+		}
 		r, e := s.db.QueryContext(ctx, `SELECT DATE_FORMAT(bill_day,'%Y-%m-%d'),status,processed,error_message,updated_at FROM settlement_report_task_days WHERE task_id=? ORDER BY bill_day`, out[i].ID)
 		if e != nil {
 			return nil, e
@@ -219,7 +226,7 @@ func (s Store) LockReportWorker(ctx context.Context) (context.Context, func(), e
 	}, nil
 }
 func (s Store) RecoverReportTasks(ctx context.Context) error {
-	_, e := s.db.ExecContext(ctx, `UPDATE settlement_report_task_days d JOIN settlement_report_tasks t ON t.id=d.task_id SET d.status='pending',d.processed=0 WHERE d.status='running' AND t.status IN ('pending','running')`)
+	_, e := s.db.ExecContext(ctx, `UPDATE settlement_report_task_days d JOIN settlement_report_tasks t ON t.id=d.task_id LEFT JOIN settlement_report_checkpoints c ON c.task_id=d.task_id AND c.bill_day=d.bill_day SET d.status='pending',d.processed=COALESCE(c.processed,0) WHERE d.status='running' AND t.status IN ('pending','running') AND (?='' OR t.instance_id=?)`, s.generationSite, s.generationSite)
 	return e
 }
 func (s Store) NextReportTaskDay(ctx context.Context) (billing.ReportTask, billing.ReportTaskDay, error) {
@@ -230,14 +237,14 @@ func (s Store) NextReportTaskDay(ctx context.Context) (billing.ReportTask, billi
 		return t, d, e
 	}
 	defer tx.Rollback()
-	e = tx.QueryRowContext(ctx, `SELECT t.id,t.instance_id,t.overwrite_existing,DATE_FORMAT(d.bill_day,'%Y-%m-%d') FROM settlement_report_tasks t JOIN settlement_report_task_days d ON d.task_id=t.id WHERE t.status IN ('pending','running') AND d.status='pending' ORDER BY t.automatic,t.created_at,d.bill_day LIMIT 1 FOR UPDATE`).Scan(&t.ID, &t.Site, &t.Overwrite, &d.Day)
+	e = tx.QueryRowContext(ctx, `SELECT t.id,t.instance_id,t.overwrite_existing,DATE_FORMAT(d.bill_day,'%Y-%m-%d'),d.processed FROM settlement_report_tasks t JOIN settlement_report_task_days d ON d.task_id=t.id WHERE t.status IN ('pending','running') AND d.status='pending' AND (?='' OR t.instance_id=?) AND (?='' OR t.id=?) ORDER BY t.automatic,t.created_at,d.bill_day LIMIT 1 FOR UPDATE`, s.generationSite, s.generationSite, s.generationJob, s.generationJob).Scan(&t.ID, &t.Site, &t.Overwrite, &d.Day, &d.Processed)
 	if e != nil {
 		return t, d, e
 	}
 	if _, e = tx.ExecContext(ctx, `UPDATE settlement_report_tasks SET status='running',updated_at=UTC_TIMESTAMP(6) WHERE id=?`, t.ID); e != nil {
 		return t, d, e
 	}
-	if _, e = tx.ExecContext(ctx, `UPDATE settlement_report_task_days SET status='running',processed=0,updated_at=UTC_TIMESTAMP(6) WHERE task_id=? AND bill_day=?`, t.ID, d.Day); e != nil {
+	if _, e = tx.ExecContext(ctx, `UPDATE settlement_report_task_days SET status='running',updated_at=UTC_TIMESTAMP(6) WHERE task_id=? AND bill_day=?`, t.ID, d.Day); e != nil {
 		return t, d, e
 	}
 	return t, d, tx.Commit()
@@ -287,6 +294,11 @@ func (s Store) FinishReportTaskDay(ctx context.Context, t billing.ReportTask, d 
 			return e
 		}
 		status = "complete"
+	}
+	if doc != nil || status == "reused" {
+		if _, e = tx.ExecContext(ctx, `DELETE FROM settlement_report_checkpoints WHERE task_id=? AND bill_day=?`, t.ID, d.Day); e != nil {
+			return e
+		}
 	}
 	if _, e = tx.ExecContext(ctx, `UPDATE settlement_report_task_days SET status=?,error_message=?,updated_at=UTC_TIMESTAMP(6) WHERE task_id=? AND bill_day=?`, status, message, t.ID, d.Day); e != nil {
 		return e

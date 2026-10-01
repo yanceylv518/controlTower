@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -21,7 +22,7 @@ type BillingBatchGenerationHandler struct {
 	Automation BillingAutomation
 }
 
-var billingBatchWake = make(chan struct{}, 1)
+var billingBatchWake sync.Map
 
 func (h BillingBatchGenerationHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !billingAdminAllowed(r) {
@@ -176,10 +177,9 @@ func (h BillingBatchGenerationHandler) ServeHTTP(w http.ResponseWriter, r *http.
 		}
 		// The persistent scheduler remains the recovery path if another batch is running.
 		if h.Automation.Store != nil {
-			select {
-			case billingBatchWake <- struct{}{}:
+			if _, busy := billingBatchWake.LoadOrStore(req.InstanceID, true); !busy {
 				go func() {
-					defer func() { <-billingBatchWake }()
+					defer billingBatchWake.Delete(req.InstanceID)
 					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 					defer cancel()
 					for _, t := range targets {
@@ -191,7 +191,6 @@ func (h BillingBatchGenerationHandler) ServeHTTP(w http.ResponseWriter, r *http.
 						}
 					}
 				}()
-			default:
 			}
 		}
 	}
@@ -221,6 +220,20 @@ func (h BillingBatchGenerationHandler) ServeHTTP(w http.ResponseWriter, r *http.
 			return
 		}
 		items = append(items, p)
+	}
+	if queue, ok := h.Store.(interface {
+		GenerationWaitingFor(context.Context, string, string) (string, error)
+	}); ok {
+		waiting, e := queue.GenerationWaitingFor(r.Context(), req.InstanceID, "billing")
+		if e != nil {
+			writeDashboardError(w, 500, "billing_progress_unavailable")
+			return
+		}
+		for i := range items {
+			if items[i].Running == 0 && items[i].Outcome != "complete" && items[i].Outcome != "no_consumption" && items[i].Outcome != "failed" && items[i].Outcome != "cancelled" {
+				items[i].WaitingFor = waiting
+			}
+		}
 	}
 	status := 200
 	if r.Method == "POST" {

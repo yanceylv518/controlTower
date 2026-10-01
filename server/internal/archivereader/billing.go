@@ -21,6 +21,16 @@ type BillingRawLog struct {
 // BillingPage reads a sealed day's original records, not today's price config
 // or daily aggregates. The fixed projection excludes keys and client IPs.
 func (r Reader) BillingPage(ctx context.Context, site string, jobID string, from, to time.Time, cursor billing.LogCursor, user int64, channels []int64, limit int) ([]BillingRawLog, error) {
+	return r.billingPage(ctx, site, jobID, from, to, cursor, user, channels, limit, nil)
+}
+
+// The identity check runs in the same read snapshot as the page, including an
+// empty final page. A resumed report must never join different archive versions.
+func (r Reader) BillingPageChecked(ctx context.Context, site string, from, to time.Time, cursor billing.LogCursor, limit int, check func(string, string) error) ([]BillingRawLog, error) {
+	return r.billingPage(ctx, site, "", from, to, cursor, 0, nil, limit, check)
+}
+
+func (r Reader) billingPage(ctx context.Context, site string, jobID string, from, to time.Time, cursor billing.LogCursor, user int64, channels []int64, limit int, check func(string, string) error) ([]BillingRawLog, error) {
 	if site == "" || !to.After(from) || to.Sub(from) > 24*time.Hour || limit < 1 || limit > 5000 {
 		return nil, ErrQuery
 	}
@@ -57,6 +67,11 @@ func (r Reader) BillingPage(ctx context.Context, site string, jobID string, from
 	if err = tx.QueryRowContext(ctx, `SELECT version_id FROM log_archive_days WHERE log_date=?`, day.Format("2006-01-02")).Scan(&version); err != nil || version == "" {
 		return nil, ErrVersion
 	}
+	if check != nil {
+		if err = check(source, version); err != nil {
+			return nil, err
+		}
+	}
 	if jobID != "" {
 		if r.BillingVersions == nil {
 			return nil, fmt.Errorf("archive billing version store unavailable")
@@ -67,7 +82,9 @@ func (r Reader) BillingPage(ctx context.Context, site string, jobID string, from
 	}
 	table := "logs_" + day.Format("200601")
 	var timeIndex string
-	if err=tx.QueryRowContext(ctx,`SELECT index_name FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name=? AND seq_in_index=1 AND column_name='created_at' AND index_type='BTREE' LIMIT 1`,table).Scan(&timeIndex);err!=nil{return nil,ErrIndex}
+	if err = tx.QueryRowContext(ctx, `SELECT index_name FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name=? AND seq_in_index=1 AND column_name='created_at' AND index_type='BTREE' LIMIT 1`, table).Scan(&timeIndex); err != nil {
+		return nil, ErrIndex
+	}
 	cols, err := tx.QueryContext(ctx, `SELECT column_name FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name=?`, table)
 	if err != nil {
 		return nil, err
@@ -163,13 +180,24 @@ func (r Reader) FirstBillingDay(ctx context.Context, site string) (time.Time, er
 }
 
 func (r Reader) BillingFailedRequests(ctx context.Context, site string, from, to time.Time) (int64, error) {
+	return r.BillingFailedRequestsChecked(ctx, site, from, to, nil)
+}
+
+func (r Reader) BillingFailedRequestsChecked(ctx context.Context, site string, from, to time.Time, check func(string, string) error) (int64, error) {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
 	db, expected, err := r.openJob(ctx, site)
 	if err != nil {
 		return 0, err
 	}
 	defer db.Close()
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
 	var source string
-	if err = db.QueryRowContext(ctx, `SELECT source_hash FROM log_archive_meta WHERE singleton_id=1`).Scan(&source); err != nil || source != expected {
+	if err = tx.QueryRowContext(ctx, `SELECT source_hash FROM log_archive_meta WHERE singleton_id=1`).Scan(&source); err != nil || source != expected {
 		return 0, ErrIdentity
 	}
 	var count int64
@@ -178,13 +206,18 @@ func (r Reader) BillingFailedRequests(ctx context.Context, site string, from, to
 		if end.After(to) {
 			end = to
 		}
-		var state string
-		if err = db.QueryRowContext(ctx, `SELECT state FROM log_archive_days WHERE log_date=?`, day.In(billing.BusinessLocation).Format("2006-01-02")).Scan(&state); err != nil || state != "sealed" {
+		var state, version string
+		if err = tx.QueryRowContext(ctx, `SELECT state,version_id FROM log_archive_days WHERE log_date=?`, day.In(billing.BusinessLocation).Format("2006-01-02")).Scan(&state, &version); err != nil || state != "sealed" {
 			return 0, ErrVersion
+		}
+		if check != nil {
+			if err = check(source, version); err != nil {
+				return 0, err
+			}
 		}
 		table := "logs_" + day.In(billing.BusinessLocation).Format("200601")
 		var n int64
-		if err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM `"+table+"` WHERE type=5 AND created_at>=? AND created_at<?", day.Unix(), end.Unix()).Scan(&n); err != nil {
+		if err = tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM `"+table+"` WHERE type=5 AND created_at>=? AND created_at<?", day.Unix(), end.Unix()).Scan(&n); err != nil {
 			return 0, err
 		}
 		count += n

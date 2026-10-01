@@ -50,16 +50,17 @@ type ReportTaskDay struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 type ReportTask struct {
-	ID        string          `json:"id"`
-	Site      string          `json:"instance_id"`
-	From      string          `json:"from"`
-	To        string          `json:"to"`
-	Status    string          `json:"status"`
-	Overwrite bool            `json:"overwrite"`
-	Automatic bool            `json:"automatic"`
-	CreatedAt time.Time       `json:"created_at"`
-	UpdatedAt time.Time       `json:"updated_at"`
-	Days      []ReportTaskDay `json:"days"`
+	WaitingFor string          `json:"waiting_for,omitempty"`
+	ID         string          `json:"id"`
+	Site       string          `json:"instance_id"`
+	From       string          `json:"from"`
+	To         string          `json:"to"`
+	Status     string          `json:"status"`
+	Overwrite  bool            `json:"overwrite"`
+	Automatic  bool            `json:"automatic"`
+	CreatedAt  time.Time       `json:"created_at"`
+	UpdatedAt  time.Time       `json:"updated_at"`
+	Days       []ReportTaskDay `json:"days"`
 }
 type ReportStore interface {
 	CreateReportTask(context.Context, ReportTask) (ReportTask, error)

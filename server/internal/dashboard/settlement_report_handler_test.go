@@ -4,7 +4,9 @@ import (
 	"context"
 	"controltower/server/internal/billing"
 	"encoding/json"
+	"errors"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -12,6 +14,35 @@ import (
 type savedReportsFake struct {
 	billing.ReportStore
 	docs []billing.ReportDocument
+}
+
+type reportRetryFake struct {
+	billing.ReportStore
+	billing.ReportCheckpointStore
+	site, id string
+	err      error
+}
+
+func (s *reportRetryFake) RetryReportTask(_ context.Context, site, id string) error {
+	s.site, s.id = site, id
+	return s.err
+}
+func TestReportRetryEndpoint(t *testing.T) {
+	for _, tc := range []struct {
+		err    error
+		status int
+		code   string
+	}{
+		{nil, 202, ""}, {billing.ErrReportBusy, 409, "report_task_busy"}, {errors.New("report_retry_obsolete"), 409, "report_retry_obsolete"},
+	} {
+		store := &reportRetryFake{err: tc.err}
+		req := httptest.NewRequest("POST", "/api/dashboard/billing/report-tasks?action=retry", strings.NewReader(`{"id":"existing","instance_id":"site"}`))
+		response := httptest.NewRecorder()
+		ReportTasksHandler{Store: store}.ServeHTTP(response, req)
+		if response.Code != tc.status || store.id != "existing" || store.site != "site" || !strings.Contains(response.Body.String(), tc.code) {
+			t.Fatal(response.Code, response.Body.String(), store)
+		}
+	}
 }
 
 func (s savedReportsFake) ReadReportDays(context.Context, string, string, string) ([]billing.ReportDocument, error) {

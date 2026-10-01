@@ -77,7 +77,7 @@ func testBillingDailyOnceAndMonthlyReuse(t *testing.T, kind string) {
 	daily.Status = "complete"
 	daily.TotalSteps = 0
 	daily.RequestKey = "test:" + daily.ID
-	if err = s.CreateBillingStatementJob(ctx, daily, nil, ""); err != nil {
+	if err = createStatementAndPublishTestMonth(t, s, ctx, daily, nil, ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = db.ExecContext(ctx, `INSERT INTO billing_compact_daily_totals(job_id,instance_id,bill_day,user_id,username,model_name,request_count,prompt_tokens,completion_tokens,total_amount,empty_output_count,empty_output_amount,updated_at) VALUES(?,?,?,?,?,?,2,120,30,1.25,1,0.25,UTC_TIMESTAMP(6))`, daily.ID, site, "2025-09-01", 7, "test user", "model-a"); err != nil {
@@ -111,7 +111,7 @@ func testBillingDailyOnceAndMonthlyReuse(t *testing.T, kind string) {
 				other.UpstreamID = 0
 				other.UserID = target.SubjectID
 			}
-			if e = s.CreateBillingStatementJob(ctx, other, nil, "sentinel"); e != nil {
+			if e = createStatementAndPublishTestMonth(t, s, ctx, other, nil, "sentinel"); e != nil {
 				t.Fatal(e)
 			}
 			if _, e = db.ExecContext(ctx, `INSERT INTO billing_compact_daily_totals(job_id,instance_id,bill_day,user_id,username,model_name,request_count,total_amount,updated_at) VALUES(?,?,?,0,'sentinel','model-a',1,999,UTC_TIMESTAMP(6))`, other.ID, site, "2025-09-01"); e != nil {
@@ -132,7 +132,7 @@ func testBillingDailyOnceAndMonthlyReuse(t *testing.T, kind string) {
 	clone.ID += "x"
 	clone.RequestKey += "x"
 	clone.DataSource = "archive"
-	if err = s.CreateBillingStatementJob(ctx, clone, nil, ""); !errors.Is(err, billing.ErrStatementDuplicate) {
+	if err = createStatementAndPublishTestMonth(t, s, ctx, clone, nil, ""); !errors.Is(err, billing.ErrStatementDuplicate) {
 		t.Fatalf("cross-source duplicate allowed: %v", err)
 	}
 	month, _, err := billing.NewJob(site, from, to, "test")
@@ -146,7 +146,7 @@ func testBillingDailyOnceAndMonthlyReuse(t *testing.T, kind string) {
 	month.BillPeriod = "monthly"
 	month.DataSource = "source"
 	month.RequestKey = "test:" + month.ID
-	if err = s.CreateBillingStatementJob(ctx, month, nil, ""); err != nil {
+	if err = createStatementAndPublishTestMonth(t, s, ctx, month, nil, ""); err != nil {
 		t.Fatalf("partial month not published: %v", err)
 	}
 	for day := from.AddDate(0, 0, 1); day.Before(to); day = day.AddDate(0, 0, 1) {
@@ -161,7 +161,7 @@ func testBillingDailyOnceAndMonthlyReuse(t *testing.T, kind string) {
 	if err != nil || len(missing) != 0 {
 		t.Fatalf("checked empty dates remained missing: %v %v", missing, err)
 	}
-	if err = s.CreateBillingStatementJob(ctx, month, nil, ""); !errors.Is(err, billing.ErrStatementDuplicate) {
+	if err = createStatementAndPublishTestMonth(t, s, ctx, month, nil, ""); !errors.Is(err, billing.ErrStatementDuplicate) {
 		t.Fatal("unchanged month should be reused", err)
 	}
 	result, err := s.BillingJob(ctx, month.ID)
@@ -206,7 +206,7 @@ func testBillingDailyOnceAndMonthlyReuse(t *testing.T, kind string) {
 	if steps != 0 || lineage != 1 {
 		t.Fatalf("month created source-reading steps: %d, lineage %d", steps, lineage)
 	}
-	if err = s.CreateBillingStatementJob(ctx, month, nil, ""); !errors.Is(err, billing.ErrStatementDuplicate) {
+	if err = createStatementAndPublishTestMonth(t, s, ctx, month, nil, ""); !errors.Is(err, billing.ErrStatementDuplicate) {
 		t.Fatalf("monthly duplicate allowed: %v", err)
 	}
 	// An entirely empty month produces no invoice.
@@ -229,7 +229,7 @@ func testBillingDailyOnceAndMonthlyReuse(t *testing.T, kind string) {
 	}
 	emptyMonth.ID += "e"
 	emptyMonth.RequestKey += "e"
-	if err = s.CreateBillingStatementJob(ctx, emptyMonth, nil, ""); !errors.Is(err, billing.ErrStatementNoData) {
+	if err = createStatementAndPublishTestMonth(t, s, ctx, emptyMonth, nil, ""); !errors.Is(err, billing.ErrStatementNoData) {
 		t.Fatalf("empty monthly invoice created: %v", err)
 	}
 
@@ -371,7 +371,7 @@ func testBillingDailyOnceAndMonthlyReuse(t *testing.T, kind string) {
 	replacement.CreatedAt = time.Now().UTC()
 	replacement.UpdatedAt = replacement.CreatedAt
 	replacement.Status = "pending"
-	if err = s.CreateBillingStatementJob(ctx, replacement, nil, ""); err != nil {
+	if err = createStatementAndPublishTestMonth(t, s, ctx, replacement, nil, ""); err != nil {
 		t.Fatal(err)
 	}
 	previous, err := s.BillingJob(ctx, daily.ID)
@@ -427,7 +427,7 @@ func testBillingDailyOnceAndMonthlyReuse(t *testing.T, kind string) {
 	stale := replacement
 	stale.ID += "stale"
 	stale.RequestKey += "stale"
-	if err = s.CreateBillingStatementJob(ctx, stale, nil, ""); !errors.Is(err, billing.ErrGenerationCancelled) {
+	if err = createStatementAndPublishTestMonth(t, s, ctx, stale, nil, ""); !errors.Is(err, billing.ErrGenerationCancelled) {
 		t.Fatal("stale scheduler queued after cancel", err)
 	}
 	if err = s.PutBillingAutomaticTargets(ctx, []billing.AutomaticTarget{target}); err != nil {
@@ -441,7 +441,7 @@ func testBillingDailyOnceAndMonthlyReuse(t *testing.T, kind string) {
 	replacement.RequestKey = "replacement:" + version
 	replacement.CreatedAt = time.Now().UTC()
 	replacement.UpdatedAt = replacement.CreatedAt
-	if err = s.CreateBillingStatementJob(ctx, replacement, nil, ""); err != nil {
+	if err = createStatementAndPublishTestMonth(t, s, ctx, replacement, nil, ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = db.ExecContext(ctx, `INSERT INTO billing_compact_daily_totals(job_id,instance_id,bill_day,user_id,username,model_name,request_count,prompt_tokens,completion_tokens,total_amount,updated_at) VALUES(?,?,?,?,?,?,2,120,30,2.5,UTC_TIMESTAMP(6))`, replacement.ID, site, "2025-09-01", 7, "test user", "model-a"); err != nil {
@@ -466,7 +466,7 @@ func testBillingDailyOnceAndMonthlyReuse(t *testing.T, kind string) {
 	month.RequestKey = "month:" + version
 	month.CreatedAt = time.Now().UTC()
 	month.UpdatedAt = month.CreatedAt
-	if err = s.CreateBillingStatementJob(ctx, month, nil, ""); err != nil {
+	if err = createStatementAndPublishTestMonth(t, s, ctx, month, nil, ""); err != nil {
 		t.Fatal(err)
 	}
 	p, err = s.BillingGenerationProgress(ctx, target)
@@ -507,7 +507,7 @@ func testBillingDailyOnceAndMonthlyReuse(t *testing.T, kind string) {
 	emptyReplacement.ID += "z"
 	emptyReplacement.RequestKey += "z"
 	emptyReplacement.CreatedAt = time.Now().UTC()
-	if err = s.CreateBillingStatementJob(ctx, emptyReplacement, nil, ""); !errors.Is(err, billing.ErrStatementNoData) {
+	if err = createStatementAndPublishTestMonth(t, s, ctx, emptyReplacement, nil, ""); !errors.Is(err, billing.ErrStatementNoData) {
 		t.Fatal("empty replacement invoice", err)
 	}
 	p, err = s.BillingGenerationProgress(ctx, target)
@@ -527,7 +527,7 @@ func testBillingDailyOnceAndMonthlyReuse(t *testing.T, kind string) {
 	temporary.Status = "failed"
 	temporary.CreatedAt = time.Now().UTC()
 	temporary.UpdatedAt = temporary.CreatedAt
-	if err = s.CreateBillingStatementJob(ctx, temporary, nil, ""); err != nil {
+	if err = createStatementAndPublishTestMonth(t, s, ctx, temporary, nil, ""); err != nil {
 		t.Fatal(err)
 	}
 	if err = s.DeleteFailedBillingJob(ctx, temporary.ID); err != nil {

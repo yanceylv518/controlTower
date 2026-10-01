@@ -96,7 +96,7 @@ func (s Store) CreateBillingStatementJob(ctx context.Context, job billing.Job, s
 		return tx.Commit()
 	}
 	var queued int
-	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM billing_jobs WHERE job_type IN ('user_statement','upstream_statement') AND status='pending'`).Scan(&queued); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM billing_jobs WHERE instance_id=? AND job_type IN ('user_statement','upstream_statement') AND status='pending'`, job.InstanceID).Scan(&queued); err != nil {
 		return err
 	}
 	if queued >= 5 {
@@ -319,8 +319,8 @@ func (s Store) finalizeBillingStatement(ctx context.Context, tx *sql.Tx, job bil
 }
 
 // Capacity is rechecked under the queue lock when inserting a statement.
-func (s Store) BillingStatementQueueFull(ctx context.Context) (bool, error) {
+func (s Store) BillingStatementQueueFull(ctx context.Context, site string) (bool, error) {
 	var n int
-	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM (SELECT 1 FROM billing_jobs WHERE job_type IN ('user_statement','upstream_statement') AND status='pending' LIMIT 5) pending`).Scan(&n)
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM (SELECT 1 FROM billing_jobs WHERE instance_id=? AND job_type IN ('user_statement','upstream_statement') AND status='pending' LIMIT 5) pending`, site).Scan(&n)
 	return n >= 5, err
 }

@@ -15,11 +15,18 @@ function create(t,kind='user_statement') {
  const dashboard={billingUpstreams:async()=>({items:[{id:1,name:'上游'}]}),generateBillingBatch:async q=>{requests.push(q);return {items:[{subject_id:3,outcome:'complete'}]}}}
  const scope=effectScope();t.after(()=>scope.stop())
  const names=['computed','ref','watch','onBeforeUnmount','defineProps','defineEmits','defineExpose','setInterval','clearInterval','ElMessage','ElMessageBox','dashboard','passthrough','billingTaskErrorMessage']
- const init=new Function(...names,compiled+'\nreturn {open,options,selectedUsers,excludeAdmins,filterAdmins,searchUsers,submit,queryResults,roles};')
+ const init=new Function(...names,compiled+'\nreturn {open,options,selectedUsers,excludeAdmins,filterAdmins,searchUsers,submit,queryResults,roles,batch,items,waitingForReport,resultLabel};')
  const view=scope.run(()=>init(computed,ref,watch,()=>{},()=>props,()=>()=>{},()=>{},()=>1,()=>{}, {error:()=>{},info:()=>{},success:()=>{}},{},dashboard,passthrough,String))
  return {...view,props,passthrough,queries,requests}
 }
 const flush=()=>new Promise(resolve=>setImmediate(resolve))
+
+test('billing explains report wait and resets that state when switching sites',async t=>{
+ const v=create(t)
+ v.batch.value={subject_ids:[3]};v.items.value=[{subject_id:3,outcome:'queued',waiting_for:'report'}]
+ assert.equal(v.waitingForReport.value,true);assert.equal(v.resultLabel.value,'等待报表完成')
+ v.props.site='b';await flush();assert.equal(v.waitingForReport.value,false)
+})
 
 test('default excludes admins/root and an admin preselection; normal selections survive searches',async t=>{
  const v=create(t);v.open();await flush()

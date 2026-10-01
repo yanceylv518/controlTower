@@ -30,7 +30,7 @@ type BillingAutomation struct {
 	}
 }
 
-var billingFillMu sync.Mutex
+var billingFillSites sync.Map
 
 func (a BillingAutomation) Fill(ctx context.Context, target billing.AutomaticTarget) (result error) {
 	defer func() {
@@ -53,8 +53,14 @@ func (a BillingAutomation) Fill(ctx context.Context, target billing.AutomaticTar
 			return nil
 		}
 	}
-	billingFillMu.Lock()
-	defer billingFillMu.Unlock()
+	slot, _ := billingFillSites.LoadOrStore(target.InstanceID, make(chan struct{}, 1))
+	gate := slot.(chan struct{})
+	select {
+	case gate <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	defer func() { <-gate }()
 	end := billing.CompleteDayBoundary(time.Now())
 	if !target.To.IsZero() && target.To.Before(end) {
 		end = target.To
@@ -215,9 +221,9 @@ func (a BillingAutomation) enqueue(ctx context.Context, target billing.Automatic
 	// This is an advisory CT-only check. The insertion transaction still
 	// enforces capacity, but a full queue must not trigger source options reads.
 	if queue, ok := a.Store.(interface {
-		BillingStatementQueueFull(context.Context) (bool, error)
+		BillingStatementQueueFull(context.Context, string) (bool, error)
 	}); ok {
-		full, e := queue.BillingStatementQueueFull(ctx)
+		full, e := queue.BillingStatementQueueFull(ctx, target.InstanceID)
 		if e != nil {
 			return e
 		}
@@ -250,19 +256,43 @@ func (a BillingAutomation) enqueue(ctx context.Context, target billing.Automatic
 }
 
 func (a BillingAutomation) Run(ctx context.Context) {
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	var mu sync.Mutex
+	active := map[string]bool{}
 	run := func() {
 		targets, err := a.Store.ListBillingAutomaticTargets(ctx)
 		if err != nil {
-			log.Printf("billing automation targets: %v", err)
+			if ctx.Err() == nil {
+				log.Printf("billing automation targets: %v", err)
+			}
 			return
 		}
+		groups := map[string][]billing.AutomaticTarget{}
 		for _, t := range targets {
-			if ctx.Err() != nil {
-				return
+			groups[t.InstanceID] = append(groups[t.InstanceID], t)
+		}
+		for site, targets := range groups {
+			mu.Lock()
+			if active[site] {
+				mu.Unlock()
+				continue
 			}
-			if err = a.Fill(ctx, t); err != nil {
-				log.Printf("billing automation site=%s subject=%d: %v", t.InstanceID, t.SubjectID, err)
-			}
+			active[site] = true
+			mu.Unlock()
+			wg.Add(1)
+			go func(site string, targets []billing.AutomaticTarget) {
+				defer wg.Done()
+				defer func() { mu.Lock(); delete(active, site); mu.Unlock() }()
+				for _, t := range targets {
+					if ctx.Err() != nil {
+						return
+					}
+					if err := a.Fill(ctx, t); err != nil {
+						log.Printf("billing automation site=%s subject=%d: %v", site, t.SubjectID, err)
+					}
+				}
+			}(site, targets)
 		}
 	}
 	run()

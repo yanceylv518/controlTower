@@ -120,6 +120,30 @@ func (h ReportTasksHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeDashboardJSON(w, 200, map[string]bool{"ok": true})
 		return
 	}
+	if r.URL.Query().Get("action") == "retry" {
+		store, ok := h.Store.(billing.ReportCheckpointStore)
+		if !ok || v.ID == "" {
+			writeDashboardError(w, 400, "report_retry_unavailable")
+			return
+		}
+		if e := store.RetryReportTask(r.Context(), v.Site, v.ID); e != nil {
+			code := "report_retry_failed"
+			if errors.Is(e, billing.ErrReportBusy) {
+				code = "report_task_busy"
+			}
+			if e.Error() == "report_retry_obsolete" {
+				code = "report_retry_obsolete"
+			}
+			writeDashboardError(w, 409, code)
+			return
+		}
+		writeDashboardJSON(w, 202, map[string]bool{"ok": true})
+		return
+	}
+	if r.URL.Query().Get("action") != "" {
+		writeDashboardError(w, 400, "invalid_request")
+		return
+	}
 	a, b, ok := reportRange(v.From, v.To)
 	today := billing.CompleteDayBoundary(time.Now())
 	if b.After(today) {
