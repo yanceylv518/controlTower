@@ -10,10 +10,10 @@
 - 验证：node --test webapp/packages/desktop/tests/archiveData.test.mjs webapp/packages/desktop/tests/archiveJobs.test.mjs，30项通过；webapp下pnpm typecheck、pnpm build通过，保留既有大chunk警告；git diff检查通过。测试props改用Vue reactive，以真实模拟查询key随站点变化，否则非响应式替身会掩盖竞态。
 - 未验证与阻塞：生产浏览器已登录，只读确认统计页面可显示已有8月数据；工具无法获取Resource Timing，未获得请求时间瀑布图、DB慢查询或前后耗时对照。每次归档读请求重新连接及权限检查仍存在，不能未经测量就认为这是根因；本轮不放宽安全检查。当前截图10月0/0是数据状态，不能当加载持续中的证据。
 - 下一步：按用户后续授权发布Server/Web，Agent保留原版本；生产首次进入测量overview、jobs、currency接口和JS加载耗时，必要时针对实际最慢段继续优化。
-- 交付状态：未提交、未推送、未发布、未部署。其余工作区改动保持原状。
+- 交付状态：2026-10-04修复提交cebc1338已推送main并回读确认；未发布、未部署。其余工作区改动保持原状。
 
 ## 提交验证（2026-10-04）
 
 - 本次重新运行30项归档组件回归、`pnpm typecheck`、`pnpm build`，全部通过；构建仍有既有大chunk提示。未修改Go代码，未重跑Go检查或生产性能验收。
 - 精确提交两个Vue页面、两份组件测试及本记录/当前总览；旧接口预览脚本logArchive-preview-server.mjs留在本地，其他任务文档和缓存/发布目录未纳入。
-- 正在提交推送main；本轮不发布或部署，仅Web需要后续更新。
+- 修复提交`cebc1338d80c7ba5fe7e1d4bce13d2112d60f9a9`已推送main，远端回读一致；本轮不发布或部署，仅Web需要后续更新。
