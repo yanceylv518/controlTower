@@ -56,6 +56,28 @@ func TestRunCollectorLoopStopsAfterContextCancellation(t *testing.T) {
 	}
 }
 
+func TestCollectorCadenceIncludesProcessingTime(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	started := time.Now()
+	calls := 0
+	err := runCollectorLoop(ctx, config.Config{LogPollIntervalSeconds: 1, LogQueryTimeoutSeconds: 2, ReportTimeoutSeconds: 2}, func(context.Context) error {
+		calls++
+		if calls == 1 {
+			time.Sleep(800 * time.Millisecond)
+		} else {
+			cancel()
+		}
+		return nil
+	})
+	if err != nil || calls != 2 {
+		t.Fatalf("calls=%d err=%v", calls, err)
+	}
+	if elapsed := time.Since(started); elapsed > 1600*time.Millisecond {
+		t.Fatalf("processing was added on top of interval: %s", elapsed)
+	}
+}
+
 func TestCollectPassTimeoutCombinesQueryAndReportTimeouts(t *testing.T) {
 	timeout := collectPassTimeout(config.Config{
 		LogQueryTimeoutSeconds: 4,

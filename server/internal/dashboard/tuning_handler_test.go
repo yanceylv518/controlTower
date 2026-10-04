@@ -122,6 +122,29 @@ func TestTuningPolicyNoOpDoesNotPersistOrAudit(t *testing.T) {
 	}
 }
 
+func TestPolicySaveRejectsStaleDraftAndAcceptsImplicitOffModels(t *testing.T) {
+	for _, stale := range []bool{true, false} {
+		current, expected, next := tuning.DefaultPolicy(), tuning.DefaultPolicy(), tuning.DefaultPolicy()
+		current.Continuous.Sensitivity = 1.5
+		if !stale {
+			expected.Continuous.Sensitivity = 1.5
+		}
+		expected.DispatchModes = map[string]string{"newly-discovered": "off"}
+		next.Continuous.Sensitivity = 2
+		s := &tuningStub{policyExists: true, policy: tuning.PolicyRecord{InstanceID: "s", Policy: current, Mode: "observe"}}
+		body, _ := json.Marshal(map[string]any{"mode": "observe", "policy": next, "expected_policy": expected, "expected_mode": "observe"})
+		rr := httptest.NewRecorder()
+		NewHandler(nil).WithTuningStore(s).HandleTuningPolicy(rr, httptest.NewRequest("PUT", "/api/dashboard/tuning/policy?site_id=s", bytes.NewReader(body)))
+		if stale {
+			if rr.Code != 409 || s.putPolicyCalls != 0 {
+				t.Fatalf("stale draft replaced remote policy: %d %s", rr.Code, rr.Body.String())
+			}
+		} else if rr.Code != 200 || s.putPolicyCalls != 1 {
+			t.Fatalf("implicit off is not a conflict: %d %s", rr.Code, rr.Body.String())
+		}
+	}
+}
+
 func TestTuningPolicyChangeIsPersistedAndAuditedOnce(t *testing.T) {
 	policy := tuning.DefaultPolicy()
 	policy.Continuous.Sensitivity = 1.5

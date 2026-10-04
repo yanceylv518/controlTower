@@ -9,12 +9,13 @@ import (
 )
 
 type AgentHeartbeatRequest struct {
-	InstanceID   string    `json:"instance_id"`
-	AgentID      string    `json:"agent_id"`
-	AgentVersion string    `json:"agent_version"`
-	ReportedAt   time.Time `json:"reported_at"`
-	Sequence     int64     `json:"sequence"`
-	LastLogID    int64     `json:"last_log_id"`
+	SupportsCommandReconcile bool      `json:"supports_command_reconcile,omitempty"`
+	InstanceID               string    `json:"instance_id"`
+	AgentID                  string    `json:"agent_id"`
+	AgentVersion             string    `json:"agent_version"`
+	ReportedAt               time.Time `json:"reported_at"`
+	Sequence                 int64     `json:"sequence"`
+	LastLogID                int64     `json:"last_log_id"`
 }
 
 type AgentHeartbeatResponse struct {
@@ -37,14 +38,19 @@ type ChannelCommand struct {
 }
 
 type ChannelCommandResult struct {
-	ID              string    `json:"id"`
-	ChannelID       int64     `json:"channel_id"`
-	Status          string    `json:"status"`
-	Error           string    `json:"error,omitempty"`
-	AppliedAt       time.Time `json:"applied_at"`
-	DurationSeconds float64   `json:"duration_seconds,omitempty"`
-	Attempts        int       `json:"attempts,omitempty"`
-	Successes       int       `json:"successes,omitempty"`
+	Reconciled       bool      `json:"reconciled,omitempty"`
+	ObservedWeight   *uint     `json:"observed_weight,omitempty"`
+	ObservedStatus   *int      `json:"observed_status,omitempty"`
+	ObservedPriority *int64    `json:"observed_priority,omitempty"`
+	ObservedGroup    *string   `json:"observed_group,omitempty"`
+	ID               string    `json:"id"`
+	ChannelID        int64     `json:"channel_id"`
+	Status           string    `json:"status"`
+	Error            string    `json:"error,omitempty"`
+	AppliedAt        time.Time `json:"applied_at"`
+	DurationSeconds  float64   `json:"duration_seconds,omitempty"`
+	Attempts         int       `json:"attempts,omitempty"`
+	Successes        int       `json:"successes,omitempty"`
 }
 type AgentReportRequest struct {
 	InstanceID              string                     `json:"instance_id"`

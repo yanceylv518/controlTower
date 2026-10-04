@@ -98,6 +98,17 @@ func (s Service) SaveHeartbeatWithCommands(req agentgateway.AgentHeartbeatReques
 	if err != nil {
 		return 0, nil, err
 	}
+	if req.SupportsCommandReconcile {
+		if reconciler, ok := s.store.(interface {
+			CommandsToReconcile(string, time.Time) ([]storage.ChannelCommand, error)
+		}); ok {
+			stale, readErr := reconciler.CommandsToReconcile(req.InstanceID, now.Add(-2*time.Minute))
+			if readErr != nil {
+				return 0, nil, readErr
+			}
+			stored = append(stale, stored...)
+		}
+	}
 	commands := make([]agentgateway.ChannelCommand, 0, len(stored))
 	for _, v := range stored {
 		var p struct {
@@ -139,11 +150,29 @@ func (s Service) SaveReport(req agentgateway.AgentReportRequest) error {
 		return err
 	}
 	for _, result := range req.CommandResults {
+		if result.Status == "unconfirmed" {
+			continue
+		}
 		status := "failed"
 		if result.Status == "succeeded" {
 			status = "succeeded"
 		}
-		command, changed, err := s.store.CompleteChannelCommand(result.ID, status, result.Error, time.Now().UTC())
+		var command storage.ChannelCommand
+		var changed bool
+		var err error
+		if result.Reconciled {
+			if reconciler, ok := s.store.(interface {
+				CompleteReconciledCommand(string, agentgateway.ChannelCommandResult, time.Time) (storage.ChannelCommand, bool, error)
+			}); ok {
+				command, changed, err = reconciler.CompleteReconciledCommand(req.InstanceID, result, time.Now().UTC())
+				status = command.Status
+				result.Error = command.ErrorSummary
+			} else {
+				continue
+			}
+		} else {
+			command, changed, err = s.store.CompleteChannelCommand(result.ID, status, result.Error, time.Now().UTC())
+		}
 		if err != nil {
 			return err
 		}
@@ -370,8 +399,14 @@ func (s Service) SaveReport(req agentgateway.AgentReportRequest) error {
 
 func fastCircuitBatch(req agentgateway.AgentReportRequest) tuning.FastCircuitBatch {
 	byChannel := map[int64]tuning.FastCircuitMetric{}
+	cutoff := time.Now().UTC().Add(-2 * time.Minute)
 	for _, payload := range req.AggregatedMetrics {
 		if payload.DimensionType != "instance_channel" {
+			continue
+		}
+		// A fresh report can contain a backlog. Only recent minute evidence
+		// may trigger the fast path; historical buckets remain in normal metrics.
+		if payload.BucketTime.Before(cutoff) || payload.BucketTime.Before(req.ReportedAt.Add(-2*time.Minute)) || payload.BucketTime.After(req.ReportedAt) {
 			continue
 		}
 		const marker = ":channel:"

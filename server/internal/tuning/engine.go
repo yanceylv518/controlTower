@@ -4,6 +4,8 @@ import (
 	"context"
 	"log"
 	"math"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -22,6 +24,12 @@ type Store interface {
 type Engine struct {
 	store       Store
 	fastCircuit chan FastCircuitBatch
+	// Runtime workers share channel guards. Synchronous Tick remains useful for
+	// one-shot callers; Run uses a separate engine with bounded parallelism.
+	parallelism int
+	ctx         context.Context
+	guards      sync.Map
+	version     atomic.Uint64
 }
 
 func NewEngine(s Store) *Engine {
@@ -29,18 +37,28 @@ func NewEngine(s Store) *Engine {
 }
 
 func (e *Engine) Run(ctx context.Context) error {
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case now := <-ticker.C:
-			e.Tick(now.UTC())
-		case batch := <-e.fastCircuit:
-			e.evaluateFastCircuit(batch, time.Now().UTC())
-		}
+	runtime := &Engine{store: e.store, fastCircuit: e.fastCircuit, parallelism: 4, ctx: ctx}
+	var workers sync.WaitGroup
+	workers.Add(1)
+	go func() { defer workers.Done(); runtime.runSites(ctx, 30*time.Second) }()
+	// Reserve workers for urgent reports: a full normal write pool cannot
+	// starve circuit breaking. A channel's in-flight write is still serialized.
+	for i := 0; i < 4; i++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case batch := <-runtime.fastCircuit:
+					runtime.evaluateFastCircuit(batch, time.Now().UTC())
+				}
+			}
+		}()
 	}
+	workers.Wait()
+	return ctx.Err()
 }
 
 // SubmitFastCircuitBatch never blocks the Agent report request. A full queue
@@ -62,25 +80,29 @@ func (e *Engine) Tick(now time.Time) {
 		log.Printf("tuning list sites failed: %v", err)
 		return
 	}
+	for _, id := range ids {
+		e.evaluateSite(id, now)
+	}
+}
+
+func (e *Engine) evaluateSite(id string, now time.Time) {
 	cs, ok := e.store.(ContinuousStore)
 	if !ok {
 		log.Printf("tuning continuous store unavailable")
 		return
 	}
-	for _, id := range ids {
-		siteStarted := time.Now()
-		p, found, err := e.store.GetPolicy(id)
-		if err != nil {
-			log.Printf("tuning continuous evaluation site=%s stage=policy failed duration=%s error=%v", id, time.Since(siteStarted), err)
-			continue
-		}
-		if !found {
-			p = PolicyRecord{InstanceID: id, Policy: DefaultPolicy(), Mode: "observe"}
-		}
-		e.runAutoSentinel(&p, now)
-		n, c := e.evaluateContinuous(id, p, now, cs)
-		log.Printf("tuning continuous evaluation site=%s active_channels=%d writes=%d duration=%s", id, c, n, time.Since(siteStarted))
+	siteStarted := time.Now()
+	p, found, err := e.store.GetPolicy(id)
+	if err != nil {
+		log.Printf("tuning continuous evaluation site=%s stage=policy failed duration=%s error=%v", id, time.Since(siteStarted), err)
+		return
 	}
+	if !found {
+		p = PolicyRecord{InstanceID: id, Policy: DefaultPolicy(), Mode: "observe"}
+	}
+	e.runAutoSentinel(&p, now)
+	n, c := e.evaluateContinuous(id, p, now, cs)
+	log.Printf("tuning continuous evaluation site=%s active_channels=%d writes=%d duration=%s", id, c, n, time.Since(siteStarted))
 }
 
 // runAutoSentinel pauses only per-model continuous auto modes. The global

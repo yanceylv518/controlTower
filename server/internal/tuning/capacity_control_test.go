@@ -27,6 +27,109 @@ func capacityFixture() (*capacityFake, *Engine, time.Time) {
 	return f, NewEngine(f), now
 }
 
+func TestCapacityHealthyPerformanceWritesDoNotLimitIncrease(t *testing.T) {
+	f, e, start := capacityFixture()
+	f.rates[0].TPM = 200
+	f.bases[0].CurrentWeight = 50
+	addNeutralPerformanceEvidence(&f.continuousFake)
+	// Every 30s evaluation may raise by 10%; ordinary writes must not impose
+	// an extra 60s capacity cooldown or leave a perpetual feedback indicator.
+	for i, want := range []int64{55, 60, 66, 72, 79, 86, 94, 100} {
+		f.asOf = start.Add(time.Duration(i) * 30 * time.Second)
+		e.evaluateContinuous("i", autoPolicy(), f.asOf, f)
+		s := f.states[1]
+		if s.ProposedWeight != want || s.Capacity.ConfirmedWeight != want || s.CapacityLimited || s.Capacity.Active || s.Capacity.Phase != "normal" {
+			t.Fatalf("tick %d: want healthy weight %d, got %+v", i, want, s)
+		}
+	}
+}
+
+func TestCapacityHealthyRepeatedDecreasesAndLegacyFeedback(t *testing.T) {
+	_, _, start := capacityFixture()
+	b := ChannelBaseValue{BaseWeight: 100, CurrentWeight: 100, MaxTPM: 1000}
+	s := ContinuousState{MetricTPM: 200}
+	updateCapacity(b, &s, start, start, true)
+	for i := 0; i < 6; i++ {
+		now := start.Add(time.Duration(i) * 30 * time.Second)
+		confirmCapacityWrite(&s, 90-int64(i), now)
+		// Persisted false-positive states from older versions clear on the
+		// next fresh evaluation without requiring the user to remove a cap.
+		s.Capacity.Phase, s.CapacityLimited = "waiting_feedback", true
+		updateCapacity(b, &s, now, now, true)
+		if s.CapacityLimited || s.Capacity.Active || s.Capacity.Phase != "normal" {
+			t.Fatalf("ordinary decrease must not latch capacity: %+v", s.Capacity)
+		}
+	}
+}
+
+func TestCapacityHealthyQueuedWriteStillWaitsForAcknowledgement(t *testing.T) {
+	f, e, start := capacityFixture()
+	f.rates[0].TPM, f.bases[0].CurrentWeight = 200, 50
+	f.commandStatus = "pending"
+	addNeutralPerformanceEvidence(&f.continuousFake)
+	for i := 0; i < 3; i++ {
+		f.asOf = start.Add(time.Duration(i) * 30 * time.Second)
+		e.evaluateContinuous("i", autoPolicy(), f.asOf, f)
+		s := f.states[1]
+		if s.Capacity.Phase != "awaiting_write" || !s.CapacityLimited || s.Capacity.ConfirmedWeight != 50 || s.ProposedWeight != 55 || len(f.writes) != 1 {
+			t.Fatalf("pending writes must not stack: %+v", s)
+		}
+	}
+	f.commandStatus = "succeeded"
+	f.asOf = start.Add(90 * time.Second)
+	e.evaluateContinuous("i", autoPolicy(), f.asOf, f)
+	s := f.states[1]
+	if s.Capacity.Phase != "normal" || s.CapacityLimited || s.ProposedWeight != 60 {
+		t.Fatalf("healthy acknowledgement must allow next ordinary increase: %+v", s)
+	}
+}
+
+func TestCapacityConfirmedWritePreservesActualProtection(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		active, fresh bool
+		phase         string
+		limited       bool
+	}{
+		{"healthy", false, true, "normal", false},
+		{"overload", true, true, "waiting_feedback", true},
+		{"missing_load", false, false, "unavailable", true},
+		{"overload_missing_load", true, false, "unavailable", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := ContinuousState{Capacity: CapacityControl{Initialized: true, Active: tc.active, Fresh: tc.fresh, PendingCommandID: "cmd"}, CapacityLimited: true}
+			confirmCapacityWrite(&s, 50, time.Now().UTC())
+			if s.Capacity.Phase != tc.phase || s.CapacityLimited != tc.limited || s.Capacity.PendingCommandID != "" {
+				t.Fatalf("confirmed write protection: %+v", s)
+			}
+		})
+	}
+}
+
+type capacityDirectFake struct{ *capacityFake }
+
+func (f *capacityDirectFake) CreateContinuousWeightChange(r Recommendation, _ string, _ time.Time) (string, error) {
+	f.writes = append(f.writes, r)
+	return "", nil
+}
+
+func TestCapacityDirectWriteOnlyWaitsForFeedbackDuringProtection(t *testing.T) {
+	for _, active := range []bool{false, true} {
+		f, e, now := capacityFixture()
+		s := ContinuousState{MetricTPM: 200}
+		updateCapacity(f.bases[0], &s, now, now, true)
+		s.Capacity.Active = active
+		_, err := e.createTrackedWeightChange(&capacityDirectFake{f}, Recommendation{InstanceID: "i", ChannelID: 1, ProposedWeight: 75}, f.bases[0], &s, now)
+		wantPhase := "normal"
+		if active {
+			wantPhase = "waiting_feedback"
+		}
+		if err != nil || s.Capacity.Phase != wantPhase || s.CapacityLimited != active || s.Capacity.ConfirmedWeight != 75 || s.Capacity.PendingCommandID != "" {
+			t.Fatalf("direct write active=%v: err=%v state=%+v", active, err, s)
+		}
+	}
+}
+
 func TestCapacityTargetAndIntegerFloor(t *testing.T) {
 	for _, test := range []struct {
 		w            int64

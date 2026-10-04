@@ -115,6 +115,9 @@ VALUES('upgrade',7,'model',75,80,?,'normal',0,?),('upgrade',8,'model',0,0,?,'cir
 		var nullCount int
 		require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM tuning_continuous_states WHERE capacity_control_json IS NULL`).Scan(&nullCount))
 		require.Equal(t, 2, nullCount)
+		// The current reader also needs the later evaluation snapshot column.
+		// Verify the 096 upgrade first, then advance to today's reader schema.
+		require.NoError(t, ApplyDir(ctx, db, "../../migrations"))
 		states, err := New(db).ListContinuousStates("upgrade")
 		require.NoError(t, err)
 		require.Len(t, states, 2)

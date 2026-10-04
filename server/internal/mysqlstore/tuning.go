@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -70,6 +71,46 @@ func (s Store) PutPolicy(r tuning.PolicyRecord) error {
 	b, _ := json.Marshal(r.Policy)
 	_, e := s.db.ExecContext(context.Background(), `INSERT INTO tuning_policies(instance_id,policy_json,mode,updated_at,updated_by) VALUES(?,?,?,?,?) ON DUPLICATE KEY UPDATE policy_json=VALUES(policy_json),mode=VALUES(mode),updated_at=VALUES(updated_at),updated_by=VALUES(updated_by)`, r.InstanceID, string(b), r.Mode, r.UpdatedAt, r.UpdatedBy)
 	return e
+}
+
+func (s Store) PutPolicyIfCurrent(next, expected tuning.PolicyRecord, expectedExists bool) (bool, error) {
+	tx, err := s.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	var raw, mode string
+	var updated time.Time
+	err = tx.QueryRow(`SELECT policy_json,mode,updated_at FROM tuning_policies WHERE instance_id=? FOR UPDATE`, next.InstanceID).Scan(&raw, &mode, &updated)
+	if err != nil && err != sql.ErrNoRows {
+		return false, err
+	}
+	exists := err == nil
+	if exists != expectedExists {
+		return false, nil
+	}
+	if exists {
+		policy, err := tuning.DecodePolicyJSON([]byte(raw))
+		if err != nil {
+			return false, err
+		}
+		if mode != expected.Mode || !updated.Equal(expected.UpdatedAt) || !reflect.DeepEqual(policy, expected.Policy) {
+			return false, nil
+		}
+	}
+	encoded, err := json.Marshal(next.Policy)
+	if err != nil {
+		return false, err
+	}
+	if exists {
+		_, err = tx.Exec(`UPDATE tuning_policies SET policy_json=?,mode=?,updated_at=?,updated_by=? WHERE instance_id=?`, string(encoded), next.Mode, next.UpdatedAt, next.UpdatedBy, next.InstanceID)
+	} else {
+		_, err = tx.Exec(`INSERT INTO tuning_policies(instance_id,policy_json,mode,updated_at,updated_by) VALUES(?,?,?,?,?)`, next.InstanceID, string(encoded), next.Mode, next.UpdatedAt, next.UpdatedBy)
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, tx.Commit()
 }
 
 func (s Store) ListChannelBaseValues(instanceID, model string) ([]tuning.ChannelBaseValue, error) {
@@ -359,7 +400,7 @@ func (s Store) QueryCurrentChannelRates(id string, now time.Time) ([]tuning.Chan
 }
 
 func (s Store) ListContinuousStates(id string) ([]tuning.ContinuousState, error) {
-	rows, err := s.db.QueryContext(context.Background(), `SELECT instance_id,channel_id,model_name,k_error,k_speed,k_cache,k_otps,multiplier,proposed_weight,last_written_weight,last_write_at,last_observed_requests,last_observed_errors,metric_rpm,metric_tpm,capacity_limited,metric_ready,baseline_ready,metric_ttft_p50,metric_ttft_p90,metric_ttft_p95,baseline_ttft_p50,baseline_ttft_p90,baseline_ttft_p95,metric_cache,baseline_cache,cache_ready,metric_otps,baseline_otps,otps_ready,smoothed_error_rate,last_bucket_at,paused_reason,phase,circuit_opened_at,next_probe_at,probe_command_id,probe_attempts,probe_successes,probe_duration_sum,original_priority,soft_start_pending,write_failure_streak,last_write_failure_at,last_write_error,last_observed_weight,updated_at,speed_sample_count,speed_retry_count,speed_unknown_count,speed_legacy_count,speed_stats_version,otps_sample_count,otps_retry_count,otps_unknown_count,otps_stats_version,circuit_disabled,circuit_status_target,circuit_status_command_id,COALESCE(capacity_control_json,'{}') FROM tuning_continuous_states WHERE instance_id=?`, id)
+	rows, err := s.db.QueryContext(context.Background(), `SELECT instance_id,channel_id,model_name,k_error,k_speed,k_cache,k_otps,multiplier,proposed_weight,last_written_weight,last_write_at,last_observed_requests,last_observed_errors,metric_rpm,metric_tpm,capacity_limited,metric_ready,baseline_ready,metric_ttft_p50,metric_ttft_p90,metric_ttft_p95,baseline_ttft_p50,baseline_ttft_p90,baseline_ttft_p95,metric_cache,baseline_cache,cache_ready,metric_otps,baseline_otps,otps_ready,smoothed_error_rate,last_bucket_at,paused_reason,phase,circuit_opened_at,next_probe_at,probe_command_id,probe_attempts,probe_successes,probe_duration_sum,original_priority,soft_start_pending,write_failure_streak,last_write_failure_at,last_write_error,last_observed_weight,updated_at,speed_sample_count,speed_retry_count,speed_unknown_count,speed_legacy_count,speed_stats_version,otps_sample_count,otps_retry_count,otps_unknown_count,otps_stats_version,circuit_disabled,circuit_status_target,circuit_status_command_id,COALESCE(capacity_control_json,'{}'),COALESCE(evaluation_json,'null') FROM tuning_continuous_states WHERE instance_id=?`, id)
 	if err != nil {
 		return nil, err
 	}
@@ -367,16 +408,19 @@ func (s Store) ListContinuousStates(id string) ([]tuning.ContinuousState, error)
 	var out []tuning.ContinuousState
 	for rows.Next() {
 		var v tuning.ContinuousState
-		var capacityJSON string
+		var capacityJSON, evaluationJSON string
 		var written, observed sql.NullInt64
 		var writeAt, bucketAt, openedAt, nextProbeAt, writeFailAt sql.NullTime
 		var probeID sql.NullString
 		var originalPriority sql.NullInt64
-		if err = rows.Scan(&v.InstanceID, &v.ChannelID, &v.ModelName, &v.KError, &v.KSpeed, &v.KCache, &v.KOTPS, &v.Multiplier, &v.ProposedWeight, &written, &writeAt, &v.LastObservedRequests, &v.LastObservedErrors, &v.MetricRPM, &v.MetricTPM, &v.CapacityLimited, &v.MetricReady, &v.BaselineReady, &v.MetricTTFTP50, &v.MetricTTFTP90, &v.MetricTTFTP95, &v.BaselineTTFTP50, &v.BaselineTTFTP90, &v.BaselineTTFTP95, &v.MetricCache, &v.BaselineCache, &v.CacheReady, &v.MetricOTPS, &v.BaselineOTPS, &v.OTPSReady, &v.SmoothedErrorRate, &bucketAt, &v.PausedReason, &v.Phase, &openedAt, &nextProbeAt, &probeID, &v.ProbeAttempts, &v.ProbeSuccesses, &v.ProbeDurationSum, &originalPriority, &v.SoftStartPending, &v.WriteFailureStreak, &writeFailAt, &v.LastWriteError, &observed, &v.UpdatedAt, &v.SpeedSamples, &v.SpeedRetries, &v.SpeedUnknown, &v.SpeedLegacy, &v.SpeedStatsVersion, &v.OTPSSamples, &v.OTPSRetries, &v.OTPSUnknown, &v.OTPSStatsVersion, &v.CircuitDisabled, &v.CircuitStatusTarget, &v.CircuitStatusCommandID, &capacityJSON); err != nil {
+		if err = rows.Scan(&v.InstanceID, &v.ChannelID, &v.ModelName, &v.KError, &v.KSpeed, &v.KCache, &v.KOTPS, &v.Multiplier, &v.ProposedWeight, &written, &writeAt, &v.LastObservedRequests, &v.LastObservedErrors, &v.MetricRPM, &v.MetricTPM, &v.CapacityLimited, &v.MetricReady, &v.BaselineReady, &v.MetricTTFTP50, &v.MetricTTFTP90, &v.MetricTTFTP95, &v.BaselineTTFTP50, &v.BaselineTTFTP90, &v.BaselineTTFTP95, &v.MetricCache, &v.BaselineCache, &v.CacheReady, &v.MetricOTPS, &v.BaselineOTPS, &v.OTPSReady, &v.SmoothedErrorRate, &bucketAt, &v.PausedReason, &v.Phase, &openedAt, &nextProbeAt, &probeID, &v.ProbeAttempts, &v.ProbeSuccesses, &v.ProbeDurationSum, &originalPriority, &v.SoftStartPending, &v.WriteFailureStreak, &writeFailAt, &v.LastWriteError, &observed, &v.UpdatedAt, &v.SpeedSamples, &v.SpeedRetries, &v.SpeedUnknown, &v.SpeedLegacy, &v.SpeedStatsVersion, &v.OTPSSamples, &v.OTPSRetries, &v.OTPSUnknown, &v.OTPSStatsVersion, &v.CircuitDisabled, &v.CircuitStatusTarget, &v.CircuitStatusCommandID, &capacityJSON, &evaluationJSON); err != nil {
 			return nil, err
 		}
 		if err = json.Unmarshal([]byte(capacityJSON), &v.Capacity); err != nil {
 			return nil, fmt.Errorf("decode capacity state: %w", err)
+		}
+		if err = json.Unmarshal([]byte(evaluationJSON), &v.Evaluation); err != nil {
+			return nil, fmt.Errorf("decode evaluation: %w", err)
 		}
 		if written.Valid {
 			x := written.Int64
@@ -432,7 +476,11 @@ func (s Store) PutContinuousState(v tuning.ContinuousState) error {
 	if marshalErr != nil {
 		return marshalErr
 	}
-	_, err := s.db.ExecContext(context.Background(), `INSERT INTO tuning_continuous_states(instance_id,channel_id,model_name,k_error,k_speed,k_cache,k_otps,multiplier,proposed_weight,last_written_weight,last_write_at,last_observed_requests,last_observed_errors,metric_ready,baseline_ready,metric_ttft_p50,metric_ttft_p90,metric_ttft_p95,baseline_ttft_p50,baseline_ttft_p90,baseline_ttft_p95,metric_cache,baseline_cache,cache_ready,metric_otps,baseline_otps,otps_ready,smoothed_error_rate,last_bucket_at,paused_reason,phase,circuit_opened_at,next_probe_at,probe_command_id,probe_attempts,probe_successes,probe_duration_sum,original_priority,soft_start_pending,write_failure_streak,last_write_failure_at,last_write_error,last_observed_weight,updated_at,speed_sample_count,speed_retry_count,speed_unknown_count,speed_legacy_count,speed_stats_version,otps_sample_count,otps_retry_count,otps_unknown_count,otps_stats_version,circuit_disabled,circuit_status_target,circuit_status_command_id,capacity_control_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE model_name=VALUES(model_name),k_error=VALUES(k_error),k_speed=VALUES(k_speed),k_cache=VALUES(k_cache),k_otps=VALUES(k_otps),multiplier=VALUES(multiplier),proposed_weight=VALUES(proposed_weight),last_written_weight=VALUES(last_written_weight),last_write_at=VALUES(last_write_at),last_observed_requests=VALUES(last_observed_requests),last_observed_errors=VALUES(last_observed_errors),metric_ready=VALUES(metric_ready),baseline_ready=VALUES(baseline_ready),metric_ttft_p50=VALUES(metric_ttft_p50),metric_ttft_p90=VALUES(metric_ttft_p90),metric_ttft_p95=VALUES(metric_ttft_p95),baseline_ttft_p50=VALUES(baseline_ttft_p50),baseline_ttft_p90=VALUES(baseline_ttft_p90),baseline_ttft_p95=VALUES(baseline_ttft_p95),metric_cache=VALUES(metric_cache),baseline_cache=VALUES(baseline_cache),cache_ready=VALUES(cache_ready),metric_otps=VALUES(metric_otps),baseline_otps=VALUES(baseline_otps),otps_ready=VALUES(otps_ready),smoothed_error_rate=VALUES(smoothed_error_rate),last_bucket_at=VALUES(last_bucket_at),paused_reason=VALUES(paused_reason),phase=VALUES(phase),circuit_opened_at=VALUES(circuit_opened_at),next_probe_at=VALUES(next_probe_at),probe_command_id=IF(@keep_probe:=(VALUES(probe_command_id) IS NOT NULL AND VALUES(probe_command_id)=last_probe_command_id),probe_command_id,VALUES(probe_command_id)),probe_attempts=IF(@keep_probe,probe_attempts,VALUES(probe_attempts)),probe_successes=IF(@keep_probe,probe_successes,VALUES(probe_successes)),probe_duration_sum=IF(@keep_probe,probe_duration_sum,VALUES(probe_duration_sum)),original_priority=VALUES(original_priority),soft_start_pending=VALUES(soft_start_pending),write_failure_streak=VALUES(write_failure_streak),last_write_failure_at=VALUES(last_write_failure_at),last_write_error=VALUES(last_write_error),last_observed_weight=VALUES(last_observed_weight),updated_at=VALUES(updated_at),speed_sample_count=VALUES(speed_sample_count),speed_retry_count=VALUES(speed_retry_count),speed_unknown_count=VALUES(speed_unknown_count),speed_legacy_count=VALUES(speed_legacy_count),speed_stats_version=VALUES(speed_stats_version),otps_sample_count=VALUES(otps_sample_count),otps_retry_count=VALUES(otps_retry_count),otps_unknown_count=VALUES(otps_unknown_count),otps_stats_version=VALUES(otps_stats_version),circuit_disabled=VALUES(circuit_disabled),circuit_status_target=VALUES(circuit_status_target),circuit_status_command_id=VALUES(circuit_status_command_id),capacity_control_json=VALUES(capacity_control_json)`, v.InstanceID, v.ChannelID, v.ModelName, v.KError, v.KSpeed, v.KCache, v.KOTPS, v.Multiplier, v.ProposedWeight, v.LastWrittenWeight, v.LastWriteAt, v.LastObservedRequests, v.LastObservedErrors, v.MetricReady, v.BaselineReady, v.MetricTTFTP50, v.MetricTTFTP90, v.MetricTTFTP95, v.BaselineTTFTP50, v.BaselineTTFTP90, v.BaselineTTFTP95, v.MetricCache, v.BaselineCache, v.CacheReady, v.MetricOTPS, v.BaselineOTPS, v.OTPSReady, v.SmoothedErrorRate, v.LastBucketAt, v.PausedReason, v.Phase, v.CircuitOpenedAt, v.NextProbeAt, v.ProbeCommandID, v.ProbeAttempts, v.ProbeSuccesses, v.ProbeDurationSum, v.OriginalPriority, v.SoftStartPending, v.WriteFailureStreak, v.LastWriteFailureAt, v.LastWriteError, v.LastObservedWeight, v.UpdatedAt, v.SpeedSamples, v.SpeedRetries, v.SpeedUnknown, v.SpeedLegacy, v.SpeedStatsVersion, v.OTPSSamples, v.OTPSRetries, v.OTPSUnknown, v.OTPSStatsVersion, v.CircuitDisabled, v.CircuitStatusTarget, v.CircuitStatusCommandID, string(capacityJSON))
+	evaluationJSON, err := json.Marshal(v.Evaluation)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(context.Background(), `INSERT INTO tuning_continuous_states(instance_id,channel_id,model_name,k_error,k_speed,k_cache,k_otps,multiplier,proposed_weight,last_written_weight,last_write_at,last_observed_requests,last_observed_errors,metric_ready,baseline_ready,metric_ttft_p50,metric_ttft_p90,metric_ttft_p95,baseline_ttft_p50,baseline_ttft_p90,baseline_ttft_p95,metric_cache,baseline_cache,cache_ready,metric_otps,baseline_otps,otps_ready,smoothed_error_rate,last_bucket_at,paused_reason,phase,circuit_opened_at,next_probe_at,probe_command_id,probe_attempts,probe_successes,probe_duration_sum,original_priority,soft_start_pending,write_failure_streak,last_write_failure_at,last_write_error,last_observed_weight,updated_at,speed_sample_count,speed_retry_count,speed_unknown_count,speed_legacy_count,speed_stats_version,otps_sample_count,otps_retry_count,otps_unknown_count,otps_stats_version,circuit_disabled,circuit_status_target,circuit_status_command_id,capacity_control_json,evaluation_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE model_name=VALUES(model_name),k_error=VALUES(k_error),k_speed=VALUES(k_speed),k_cache=VALUES(k_cache),k_otps=VALUES(k_otps),multiplier=VALUES(multiplier),proposed_weight=VALUES(proposed_weight),last_written_weight=VALUES(last_written_weight),last_write_at=VALUES(last_write_at),last_observed_requests=VALUES(last_observed_requests),last_observed_errors=VALUES(last_observed_errors),metric_ready=VALUES(metric_ready),baseline_ready=VALUES(baseline_ready),metric_ttft_p50=VALUES(metric_ttft_p50),metric_ttft_p90=VALUES(metric_ttft_p90),metric_ttft_p95=VALUES(metric_ttft_p95),baseline_ttft_p50=VALUES(baseline_ttft_p50),baseline_ttft_p90=VALUES(baseline_ttft_p90),baseline_ttft_p95=VALUES(baseline_ttft_p95),metric_cache=VALUES(metric_cache),baseline_cache=VALUES(baseline_cache),cache_ready=VALUES(cache_ready),metric_otps=VALUES(metric_otps),baseline_otps=VALUES(baseline_otps),otps_ready=VALUES(otps_ready),smoothed_error_rate=VALUES(smoothed_error_rate),last_bucket_at=VALUES(last_bucket_at),paused_reason=VALUES(paused_reason),phase=VALUES(phase),circuit_opened_at=VALUES(circuit_opened_at),next_probe_at=VALUES(next_probe_at),probe_command_id=IF(@keep_probe:=(VALUES(probe_command_id) IS NOT NULL AND VALUES(probe_command_id)=last_probe_command_id),probe_command_id,VALUES(probe_command_id)),probe_attempts=IF(@keep_probe,probe_attempts,VALUES(probe_attempts)),probe_successes=IF(@keep_probe,probe_successes,VALUES(probe_successes)),probe_duration_sum=IF(@keep_probe,probe_duration_sum,VALUES(probe_duration_sum)),original_priority=VALUES(original_priority),soft_start_pending=VALUES(soft_start_pending),write_failure_streak=VALUES(write_failure_streak),last_write_failure_at=VALUES(last_write_failure_at),last_write_error=VALUES(last_write_error),last_observed_weight=VALUES(last_observed_weight),updated_at=VALUES(updated_at),speed_sample_count=VALUES(speed_sample_count),speed_retry_count=VALUES(speed_retry_count),speed_unknown_count=VALUES(speed_unknown_count),speed_legacy_count=VALUES(speed_legacy_count),speed_stats_version=VALUES(speed_stats_version),otps_sample_count=VALUES(otps_sample_count),otps_retry_count=VALUES(otps_retry_count),otps_unknown_count=VALUES(otps_unknown_count),otps_stats_version=VALUES(otps_stats_version),circuit_disabled=VALUES(circuit_disabled),circuit_status_target=VALUES(circuit_status_target),circuit_status_command_id=VALUES(circuit_status_command_id),capacity_control_json=VALUES(capacity_control_json),evaluation_json=VALUES(evaluation_json)`, v.InstanceID, v.ChannelID, v.ModelName, v.KError, v.KSpeed, v.KCache, v.KOTPS, v.Multiplier, v.ProposedWeight, v.LastWrittenWeight, v.LastWriteAt, v.LastObservedRequests, v.LastObservedErrors, v.MetricReady, v.BaselineReady, v.MetricTTFTP50, v.MetricTTFTP90, v.MetricTTFTP95, v.BaselineTTFTP50, v.BaselineTTFTP90, v.BaselineTTFTP95, v.MetricCache, v.BaselineCache, v.CacheReady, v.MetricOTPS, v.BaselineOTPS, v.OTPSReady, v.SmoothedErrorRate, v.LastBucketAt, v.PausedReason, v.Phase, v.CircuitOpenedAt, v.NextProbeAt, v.ProbeCommandID, v.ProbeAttempts, v.ProbeSuccesses, v.ProbeDurationSum, v.OriginalPriority, v.SoftStartPending, v.WriteFailureStreak, v.LastWriteFailureAt, v.LastWriteError, v.LastObservedWeight, v.UpdatedAt, v.SpeedSamples, v.SpeedRetries, v.SpeedUnknown, v.SpeedLegacy, v.SpeedStatsVersion, v.OTPSSamples, v.OTPSRetries, v.OTPSUnknown, v.OTPSStatsVersion, v.CircuitDisabled, v.CircuitStatusTarget, v.CircuitStatusCommandID, string(capacityJSON), string(evaluationJSON))
 	if err == nil {
 		_, err = s.db.ExecContext(context.Background(), `UPDATE tuning_continuous_states SET metric_rpm=?,metric_tpm=?,capacity_limited=? WHERE instance_id=? AND channel_id=?`, v.MetricRPM, v.MetricTPM, v.CapacityLimited, v.InstanceID, v.ChannelID)
 	}
@@ -968,20 +1016,33 @@ func (s Store) ListRecommendations(q tuning.RecommendationQuery) ([]tuning.Recom
 	if q.Limit <= 0 {
 		q.Limit = 50
 	}
-	if q.Limit > 200 {
-		q.Limit = 200
+	if q.Limit > 300 {
+		q.Limit = 300
 	}
 	before := q.Before
 	if before.IsZero() {
 		before = time.Now().UTC().Add(time.Hour)
 	}
-	query := `SELECT ` + recommendationColumns + ` FROM tuning_recommendations WHERE instance_id=? AND created_at<?`
+	columns := strings.Split(recommendationColumns, ",")
+	for i, column := range columns {
+		switch column {
+		case "status":
+			columns[i] = "CASE WHEN r.command_id IS NOT NULL AND r.command_id<>'' THEN COALESCE(c.status,'unknown') WHEN r.status='auto_executed' THEN 'unknown' ELSE r.status END"
+		case "outcome_json":
+			columns[i] = "CASE WHEN c.id IS NULL THEN r.outcome_json ELSE JSON_MERGE_PATCH(COALESCE(r.outcome_json,'{}'),JSON_OBJECT('command_error',c.error_summary,'command_updated_at',c.updated_at)) END"
+		case "outcome_at":
+			columns[i] = "CASE WHEN c.status IN ('succeeded','failed','expired') THEN c.updated_at ELSE r.outcome_at END"
+		default:
+			columns[i] = "r." + column
+		}
+	}
+	query := `SELECT ` + strings.Join(columns, ",") + ` FROM tuning_recommendations r LEFT JOIN channel_commands c ON c.id=r.command_id WHERE r.instance_id=? AND r.created_at<?`
 	args := []any{q.InstanceID, before}
 	if q.Rule != "" {
-		query += ` AND rule=?`
+		query += ` AND r.rule=?`
 		args = append(args, q.Rule)
 	}
-	query += ` ORDER BY created_at DESC LIMIT ?`
+	query += ` ORDER BY r.created_at DESC LIMIT ?`
 	args = append(args, q.Limit)
 	rows, e := s.db.QueryContext(context.Background(), query, args...)
 	if e != nil {

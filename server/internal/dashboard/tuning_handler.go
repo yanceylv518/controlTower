@@ -351,9 +351,11 @@ func (h Handler) HandleTuningPolicy(w http.ResponseWriter, r *http.Request) {
 		writeDashboardJSON(w, 200, PolicyResponse{InstanceID: id, SiteID: id, Policy: rec.Policy, Mode: rec.Mode, UpdatedAt: &rec.UpdatedAt, UpdatedBy: rec.UpdatedBy})
 	case http.MethodPut:
 		var req struct {
-			Policy             tuning.Policy `json:"policy"`
-			Mode               string        `json:"mode"`
-			PreflightCommandID string        `json:"preflight_command_id"`
+			Policy             tuning.Policy  `json:"policy"`
+			Mode               string         `json:"mode"`
+			PreflightCommandID string         `json:"preflight_command_id"`
+			ExpectedPolicy     *tuning.Policy `json:"expected_policy"`
+			ExpectedMode       *string        `json:"expected_mode"`
 		}
 		if json.NewDecoder(r.Body).Decode(&req) != nil {
 			writeDashboardError(w, 400, "invalid_json")
@@ -379,6 +381,10 @@ func (h Handler) HandleTuningPolicy(w http.ResponseWriter, r *http.Request) {
 		if currentPolicy.DispatchModes == nil {
 			currentPolicy.DispatchModes = map[string]string{}
 		}
+		if req.ExpectedPolicy != nil && (!sameTuningPolicy(*req.ExpectedPolicy, currentPolicy) || req.ExpectedMode == nil || *req.ExpectedMode != currentMode) {
+			writeDashboardError(w, 409, "tuning_policy_changed")
+			return
+		}
 		if req.Policy.DispatchModes == nil {
 			req.Policy.DispatchModes = map[string]string{}
 		}
@@ -400,7 +406,7 @@ func (h Handler) HandleTuningPolicy(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		if reflect.DeepEqual(currentPolicy, req.Policy) && currentMode == req.Mode {
+		if sameTuningPolicy(currentPolicy, req.Policy) && currentMode == req.Mode {
 			auditmeta.MarkAuditHandledWithoutRecord(r)
 			response := PolicyResponse{InstanceID: id, SiteID: id, Policy: currentPolicy, Mode: currentMode, IsDefault: !exists}
 			if exists {
@@ -412,7 +418,20 @@ func (h Handler) HandleTuningPolicy(w http.ResponseWriter, r *http.Request) {
 		}
 		now := time.Now().UTC()
 		rec := tuning.PolicyRecord{InstanceID: id, Policy: req.Policy, Mode: req.Mode, UpdatedAt: now, UpdatedBy: ctauth.Actor(r)}
-		if h.tuningStore.PutPolicy(rec) != nil {
+		var saveErr error
+		if writer, ok := h.tuningStore.(interface {
+			PutPolicyIfCurrent(tuning.PolicyRecord, tuning.PolicyRecord, bool) (bool, error)
+		}); ok {
+			var saved bool
+			saved, saveErr = writer.PutPolicyIfCurrent(rec, current, exists)
+			if saveErr == nil && !saved {
+				writeDashboardError(w, 409, "tuning_policy_changed")
+				return
+			}
+		} else {
+			saveErr = h.tuningStore.PutPolicy(rec)
+		}
+		if saveErr != nil {
 			writeDashboardError(w, 500, "query_failed")
 			return
 		}
@@ -439,6 +458,22 @@ func (h Handler) HandleTuningPolicy(w http.ResponseWriter, r *http.Request) {
 }
 func recommendationItem(r tuning.Recommendation) RecommendationItem {
 	return RecommendationItem{r.ID, r.InstanceID, r.ChannelName, r.Rule, r.ChannelID, r.CreatedAt, r.Evidence, r.CurrentWeight, r.ProposedWeight, r.CurrentPriority, r.ProposedPriority, r.ModeAtCreation, r.Status, r.CommandID, r.Outcome, r.OutcomeAt, r.Hit, r.ActedBy, r.ActedAt}
+}
+
+func sameTuningPolicy(a, b tuning.Policy) bool {
+	// The editor materializes off for newly discovered models; absence has
+	// the same server meaning and must not cause a false version conflict.
+	normalize := func(p tuning.Policy) tuning.Policy {
+		modes := map[string]string{}
+		for model, mode := range p.DispatchModes {
+			if mode != "" && mode != "off" {
+				modes[model] = mode
+			}
+		}
+		p.DispatchModes = modes
+		return p
+	}
+	return reflect.DeepEqual(normalize(a), normalize(b))
 }
 
 func (h Handler) HandleTuningRecommendations(w http.ResponseWriter, r *http.Request) {

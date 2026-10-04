@@ -456,6 +456,7 @@ export interface TuningReport {
   total: number; by_rule: Record<string, number>;
 }
 export interface TuningContinuousState {
+  evaluation?: {performance_evaluated?: boolean; base_weight: number; base_updated_at: string; policy_updated_at: string; evaluated_at: string; params: TuningPolicy["continuous"]};
   instance_id: string;
   channel_id: number;
   channel_name: string;
@@ -988,8 +989,8 @@ export const dashboardApi = (client: ApiClient) => ({
     ),
   tuningPolicy: (site_id: string) =>
     client.request<TuningPolicyResponse>(`/api/dashboard/tuning/policy${query({ site_id })}`),
-  saveTuningPolicy: (site_id: string, policy: TuningPolicy, mode: "observe" | "confirm" | "auto", preflight_command_id?: string) =>
-    client.request<TuningPolicyResponse>(`/api/dashboard/tuning/policy${query({ site_id })}`, { method: "PUT", body: JSON.stringify({ policy, mode, preflight_command_id }) }),
+  saveTuningPolicy: (site_id: string, policy: TuningPolicy, mode: "observe" | "confirm" | "auto", preflight_command_id?: string, expected_policy?: TuningPolicy, expected_mode?: "observe" | "confirm" | "auto") =>
+    client.request<TuningPolicyResponse>(`/api/dashboard/tuning/policy${query({ site_id })}`, { method: "PUT", body: JSON.stringify({ policy, mode, preflight_command_id, expected_policy, expected_mode }) }),
   startTuningPreflight: (site_id: string, channel_id: number) =>
     client.request<{ command_id: string; status: string; error?: string }>(`/api/dashboard/tuning/preflight${query({ site_id })}`, { method: "POST", body: JSON.stringify({ channel_id }) }),
   tuningPreflight: (site_id: string, command_id: string) =>

@@ -1,9 +1,13 @@
 package tuning
 
 import (
+	"errors"
 	"log"
 	"math"
+	"sync/atomic"
 	"time"
+
+	"controltower/server/internal/channelupdates"
 )
 
 type ContinuousStore interface {
@@ -123,6 +127,7 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 		}
 	}
 	stageStarted = time.Now()
+	snapshotVersion := e.version.Load()
 	states, err := cs.ListContinuousStates(id)
 	statesDuration := time.Since(stageStarted)
 	if err != nil {
@@ -159,9 +164,8 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 	for _, v := range values {
 		groups[v.ModelName] = append(groups[v.ModelName], v)
 	}
-	writes := 0
-	evaluated := 0
-	preserved := 0
+	var writes, evaluated, preserved atomic.Int64
+	var jobs []func()
 	for model, rows := range groups {
 		mode := pr.Policy.DispatchModes[model]
 		if mode == "" {
@@ -177,470 +181,490 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 		}
 		baseline, healthy := buildContinuousBaseline(baselineRows, metricByID, p.MinSamples)
 		for _, base := range rows {
-			previous, exists := stateByID[base.ChannelID]
-			// Preserve normal evaluations during a site-wide evidence gap. Do
-			// not skip circuit/probe/soft-start processing: zero-weight channels
-			// naturally stop producing traffic and must recover without it.
-			// Explicit exclusion settings still take effect without samples.
-			if len(metrics) == 0 && exists && previous.ModelName == model && previous.LastObservedRequests > 0 &&
-				(previous.Phase == "normal" || previous.Phase == "") && base.BaseWeight > 0 && len(base.Models) <= 1 &&
-				!capacityConfigured(base) && !previous.Capacity.Initialized {
-				preserved++
-				continue
-			}
-			state := previous
-			state.InstanceID, state.ChannelID, state.ModelName = id, base.ChannelID, model
-			if !exists || state.KError <= 0 {
-				state.KError = 1
-			}
-			if state.Phase == "" {
-				state.Phase = "normal"
-			}
-			state.KSpeed, state.KCache, state.KOTPS = 1, 1, 1
-			// Every performance factor belongs to this window. Missing TTFT
-			// uses this window's output factor, never a historical speed score.
-			state.SpeedStatsVersion = 1
-			// manual_override is obsolete in authoritative auto tuning. Clear any
-			// legacy state before the early-return branches below (mixed channel,
-			// zero baseline, circuit and probing), so an old pause can never remain
-			// visible or influence execution merely because the channel is not in
-			// the normal phase.
-			if state.PausedReason == "manual_override" {
-				state.PausedReason = ""
-			}
-			// A write_failed pause is only meaningful while auto writes can
-			// run; on observe/off models nothing could ever clear it, so the
-			// stale label would stick until the mode flips back.
-			if mode != "auto" && state.PausedReason == "write_failed" {
-				e.noteWriteSuccess(&state)
-			}
-			m := metricByID[base.ChannelID]
-			// Operator-facing sample progress describes the complete current
-			// evaluation window, not only error buckets folded since the last pass.
-			state.LastObservedRequests = m.RequestCount
-			state.LastObservedErrors = max(m.ErrorCount-m.UserErrorCount, 0)
-			current := currentMetricByID[base.ChannelID]
-			divisor := 1.0
-			if currentRatesAreWindowTotals {
-				divisor = math.Max(float64(p.WindowMinutes), 1)
-			}
-			state.MetricRPM = float64(current.RequestCount) / divisor
-			state.MetricTPM = float64(current.TPM) / divisor
-			state.CapacityLimited = (base.MaxRPM > 0 && state.MetricRPM >= float64(base.MaxRPM)) || (base.MaxTPM > 0 && state.MetricTPM >= float64(base.MaxTPM))
-			if currentRatesUnavailable && (base.MaxRPM > 0 || base.MaxTPM > 0) {
-				state.CapacityLimited = true
-			}
-			if hasRateSnapshot || state.Capacity.Initialized {
-				e.settleCapacityWrite(cs, id, base, &state, now)
-				updateCapacity(base, &state, ratesAsOf, now, !currentRatesUnavailable)
-				if state.Capacity.Fresh && (state.Capacity.Phase == "reducing" || state.Capacity.PendingCommandID != "") {
-					canDivert, reason := capacityDiversion(base, rows, stateByID, currentMetricByID, p)
-					state.Capacity.Reason = reason
-					if !canDivert && state.Capacity.PendingCommandID == "" {
-						state.Capacity.Phase = "no_headroom"
+			jobs = append(jobs, func() {
+				evaluatedAt := now
+				now := now
+				guard := e.guard(id, base.ChannelID)
+				guard.Lock()
+				defer guard.Unlock()
+				// A fast circuit may have completed since the snapshot was read.
+				// Never overwrite it with this older normal evaluation.
+				if guard.version > snapshotVersion || e.context().Err() != nil {
+					return
+				}
+				if e.parallelism > 1 {
+					now = time.Now().UTC()
+				}
+				defer func() { guard.version = e.version.Add(1) }()
+				var err error
+				changed := false
+				defer func() {
+					if changed {
+						channelupdates.Notify(id)
 					}
+				}()
+				persistState := func(state ContinuousState) error {
+					err := cs.PutContinuousState(state)
+					if err == nil {
+						changed = true
+					}
+					return err
 				}
-			}
-			state.MetricReady = speedEvidenceReady(m, p.MinSamples)
-			state.SpeedSamples, state.SpeedRetries, state.SpeedUnknown, state.SpeedLegacy = m.SpeedSamples, m.SpeedRetries, m.SpeedUnknown, m.SpeedLegacy
-			state.BaselineReady = baseline.speedReady
-			state.MetricTTFTP50, state.MetricTTFTP90, state.MetricTTFTP95 = m.SpeedTTFTP50, m.SpeedTTFTP90, m.SpeedTTFTP95
-			state.BaselineTTFTP50, state.BaselineTTFTP90, state.BaselineTTFTP95 = baseline.ttft50, baseline.ttft90, baseline.ttft95
-			state.MetricCache, state.BaselineCache = m.CacheHitRate, baseline.cache
-			state.CacheReady = baseline.cacheReady && m.CachePromptTokens >= cacheEvidenceTokens
-			state.MetricOTPS, state.BaselineOTPS = m.OTPS, baseline.otps
-			state.OTPSReady = baseline.otpsReady && outputEvidenceReady(m, p.MinSamples)
-			state.OTPSSamples, state.OTPSRetries, state.OTPSUnknown = m.OTPSSamples, m.OTPSRetries, m.OTPSUnknown
-			state.OTPSStatsVersion = m.OTPSStatsVersion
-
-			// An operator exclusion suspends an owned circuit without erasing
-			// its recovery evidence or changing a queued status write's weight.
-			if state.CircuitDisabled && (base.BaseWeight <= 0 || len(base.Models) > 1) {
-				continue
-			}
-			// Mixed-channel fuse (design §4): the weight knob is channel-wide,
-			// so a channel serving several models must never be auto-tuned on
-			// one model's metrics.
-			if len(base.Models) > 1 {
-				state.Multiplier = 1
-				state.ProposedWeight = base.BaseWeight
-				if state.PausedReason != "mixed_channel" {
-					state.PausedReason = "mixed_channel"
-					_ = e.store.InsertRecommendation(continuousEvent(id, base, state, "mixed_channel", mode, now))
+				previous, exists := stateByID[base.ChannelID]
+				// Preserve normal evaluations during a site-wide evidence gap. Do
+				// not skip circuit/probe/soft-start processing: zero-weight channels
+				// naturally stop producing traffic and must recover without it.
+				// Explicit exclusion settings still take effect without samples.
+				if len(metrics) == 0 && exists && previous.ModelName == model && previous.LastObservedRequests > 0 &&
+					(previous.Phase == "normal" || previous.Phase == "") && base.BaseWeight > 0 && len(base.Models) <= 1 &&
+					!capacityConfigured(base) && previous.Capacity.PendingCommandID == "" {
+					preserved.Add(1)
+					return
 				}
-				state.UpdatedAt = now
-				_ = cs.PutContinuousState(state)
-				continue
-			}
-			if state.PausedReason == "mixed_channel" {
-				state.PausedReason = ""
-			}
-			// A zero base weight is an explicit no-traffic baseline. It cannot
-			// produce a meaningful recovery weight, so exclude it from the
-			// circuit state machine instead of recording "recovered to zero".
-			if base.BaseWeight <= 0 {
-				state.Phase = "normal"
-				state.Multiplier, state.ProposedWeight = 1, 0
-				state.CircuitOpenedAt, state.NextProbeAt, state.ProbeCommandID, state.OriginalPriority = nil, nil, nil, nil
-				state.ProbeAttempts, state.ProbeSuccesses, state.ProbeDurationSum = 0, 0, 0
-				state.SoftStartPending = false
-				if state.PausedReason == "write_failed" {
+				state := previous
+				state.Evaluation = &EvaluationContext{BaseWeight: base.BaseWeight, BaseUpdatedAt: base.UpdatedAt, PolicyUpdatedAt: pr.UpdatedAt, EvaluatedAt: evaluatedAt, Params: p}
+				state.InstanceID, state.ChannelID, state.ModelName = id, base.ChannelID, model
+				if !exists || state.KError <= 0 {
+					state.KError = 1
+				}
+				if state.Phase == "" {
+					state.Phase = "normal"
+				}
+				state.KSpeed, state.KCache, state.KOTPS = 1, 1, 1
+				// Every performance factor belongs to this window. Missing TTFT
+				// uses this window's output factor, never a historical speed score.
+				state.SpeedStatsVersion = 1
+				// manual_override is obsolete in authoritative auto tuning. Clear any
+				// legacy state before the early-return branches below (mixed channel,
+				// zero baseline, circuit and probing), so an old pause can never remain
+				// visible or influence execution merely because the channel is not in
+				// the normal phase.
+				if state.PausedReason == "manual_override" {
+					state.PausedReason = ""
+				}
+				// A write_failed pause is only meaningful while auto writes can
+				// run; on observe/off models nothing could ever clear it, so the
+				// stale label would stick until the mode flips back.
+				if mode != "auto" && state.PausedReason == "write_failed" {
 					e.noteWriteSuccess(&state)
 				}
-				state.UpdatedAt = now
-				_ = cs.PutContinuousState(state)
-				evaluated++
-				continue
-			}
-
-			wasCircuit := state.Phase == "circuit"
-			if state.CircuitDisabled && mode != "auto" {
-				// Observation must not consume the evidence needed to re-enable a real disabled channel.
-				continue
-			}
-			if state.CircuitStatusTarget != 0 {
-				if mode == "auto" {
-					writes += e.advanceCircuitStatus(cs, id, base, &state, p, now)
+				m := metricByID[base.ChannelID]
+				// Operator-facing sample progress describes the complete current
+				// evaluation window, not only error buckets folded since the last pass.
+				state.LastObservedRequests = m.RequestCount
+				state.LastObservedErrors = max(m.ErrorCount-m.UserErrorCount, 0)
+				current := currentMetricByID[base.ChannelID]
+				divisor := 1.0
+				if currentRatesAreWindowTotals {
+					divisor = math.Max(float64(p.WindowMinutes), 1)
 				}
-				state.UpdatedAt = now
-				_ = cs.PutContinuousState(state)
-				evaluated++
-				continue
-			}
-			foldedRequests, foldedErrors := e.foldErrorDecayWithBuckets(id, base.ChannelID, &state, now, recentBuckets, p)
-			// In observe mode, settled production traffic is the passive probe.
-			// Keep its evidence independent from the larger performance-ranking
-			// sample threshold so a low-traffic channel can still prove recovery.
-			if wasCircuit && mode == "observe" && foldedRequests > 0 {
-				state.ProbeAttempts += int(foldedRequests)
-				state.ProbeSuccesses += int(max(foldedRequests-foldedErrors, 0))
-			}
-			recoveredNow := false
-
-			// A completed probe round is folded before normal factor evaluation.
-			if state.Phase == "probing" && state.ProbeCommandID == nil && state.ProbeAttempts > 0 {
-				completeFailure := false
-				if mode == "auto" && state.ProbeSuccesses == 0 && !state.CircuitDisabled {
-					// The configured count may change while a round is in flight.
-					// Judge completeness against that command, not today's policy.
-					expected, err := cs.CompletedProbeCount(id, base.ChannelID)
-					if err != nil {
-						continue
+				state.MetricRPM = float64(current.RequestCount) / divisor
+				state.MetricTPM = float64(current.TPM) / divisor
+				state.CapacityLimited = (base.MaxRPM > 0 && state.MetricRPM >= float64(base.MaxRPM)) || (base.MaxTPM > 0 && state.MetricTPM >= float64(base.MaxTPM))
+				if currentRatesUnavailable && (base.MaxRPM > 0 || base.MaxTPM > 0) {
+					state.CapacityLimited = true
+				}
+				if hasRateSnapshot || state.Capacity.Initialized {
+					e.settleCapacityWrite(cs, id, base, &state, now)
+					updateCapacity(base, &state, ratesAsOf, now, !currentRatesUnavailable)
+					if state.Capacity.Fresh && (state.Capacity.Phase == "reducing" || state.Capacity.PendingCommandID != "") {
+						canDivert, reason := capacityDiversion(base, rows, stateByID, currentMetricByID, p)
+						state.Capacity.Reason = reason
+						if !canDivert && state.Capacity.PendingCommandID == "" {
+							state.Capacity.Phase = "no_headroom"
+						}
 					}
-					completeFailure = expected > 0 && state.ProbeAttempts >= expected
 				}
-				if completeFailure {
-					state.CircuitDisabled, state.CircuitStatusTarget = true, 2
-					state.ProposedWeight = 0
-					// Persist ownership before disabling: disabled channels must remain eligible after a restart.
-					if err := cs.PutContinuousState(state); err == nil {
-						writes += e.advanceCircuitStatus(cs, id, base, &state, p, now)
+				state.MetricReady = speedEvidenceReady(m, p.MinSamples)
+				state.SpeedSamples, state.SpeedRetries, state.SpeedUnknown, state.SpeedLegacy = m.SpeedSamples, m.SpeedRetries, m.SpeedUnknown, m.SpeedLegacy
+				state.BaselineReady = baseline.speedReady
+				state.MetricTTFTP50, state.MetricTTFTP90, state.MetricTTFTP95 = m.SpeedTTFTP50, m.SpeedTTFTP90, m.SpeedTTFTP95
+				state.BaselineTTFTP50, state.BaselineTTFTP90, state.BaselineTTFTP95 = baseline.ttft50, baseline.ttft90, baseline.ttft95
+				state.MetricCache, state.BaselineCache = m.CacheHitRate, baseline.cache
+				state.CacheReady = baseline.cacheReady && m.CachePromptTokens >= cacheEvidenceTokens
+				state.MetricOTPS, state.BaselineOTPS = m.OTPS, baseline.otps
+				state.OTPSReady = baseline.otpsReady && outputEvidenceReady(m, p.MinSamples)
+				state.OTPSSamples, state.OTPSRetries, state.OTPSUnknown = m.OTPSSamples, m.OTPSRetries, m.OTPSUnknown
+				state.OTPSStatsVersion = m.OTPSStatsVersion
+
+				// An operator exclusion suspends an owned circuit without erasing
+				// its recovery evidence or changing a queued status write's weight.
+				if state.CircuitDisabled && (base.BaseWeight <= 0 || len(base.Models) > 1) {
+					return
+				}
+				// Mixed-channel fuse (design §4): the weight knob is channel-wide,
+				// so a channel serving several models must never be auto-tuned on
+				// one model's metrics.
+				if len(base.Models) > 1 {
+					state.Multiplier = 1
+					state.ProposedWeight = base.BaseWeight
+					if state.PausedReason != "mixed_channel" {
+						state.PausedReason = "mixed_channel"
+						_ = e.store.InsertRecommendation(continuousEvent(id, base, state, "mixed_channel", mode, now))
 					}
 					state.UpdatedAt = now
-					_ = cs.PutContinuousState(state)
-					evaluated++
-					continue
+					_ = persistState(state)
+					return
 				}
-				successRatio := float64(state.ProbeSuccesses) / float64(state.ProbeAttempts)
-				probeSpeed := 1.0
-				if state.ProbeSuccesses > 0 && healthy && baseline.probeTTFT95 > 0 {
-					avg := state.ProbeDurationSum / float64(state.ProbeSuccesses)
-					if avg > 0 {
-						probeSpeed = clamp(math.Sqrt(baseline.probeTTFT95/avg), .1, 1)
-					}
+				if state.PausedReason == "mixed_channel" {
+					state.PausedReason = ""
 				}
-				probeMultiplier := successRatio * probeSpeed
-				if probeMultiplier >= p.RecoveryThreshold {
-					if capacityRecoveryBlocked(base, state) {
-						state.UpdatedAt = now
-						_ = cs.PutContinuousState(state)
-						evaluated++
-						continue
+				// A zero base weight is an explicit no-traffic baseline. It cannot
+				// produce a meaningful recovery weight, so exclude it from the
+				// circuit state machine instead of recording "recovered to zero".
+				if base.BaseWeight <= 0 {
+					state.Phase = "normal"
+					state.Multiplier, state.ProposedWeight = 1, 0
+					state.CircuitOpenedAt, state.NextProbeAt, state.ProbeCommandID, state.OriginalPriority = nil, nil, nil, nil
+					state.ProbeAttempts, state.ProbeSuccesses, state.ProbeDurationSum = 0, 0, 0
+					state.SoftStartPending = false
+					if state.PausedReason == "write_failed" {
+						e.noteWriteSuccess(&state)
 					}
-					if mode == "auto" && state.CircuitDisabled {
-						state.CircuitStatusTarget = 1
-						state.ProposedWeight = max(int64(1), int64(math.Round(float64(base.BaseWeight)*p.SoftStartMultiplier)))
-						if err := cs.PutContinuousState(state); err == nil {
-							writes += e.advanceCircuitStatus(cs, id, base, &state, p, now)
+					state.UpdatedAt = now
+					_ = persistState(state)
+					evaluated.Add(1)
+					return
+				}
+
+				wasCircuit := state.Phase == "circuit"
+				if state.CircuitDisabled && mode != "auto" {
+					// Observation must not consume the evidence needed to re-enable a real disabled channel.
+					return
+				}
+				if state.CircuitStatusTarget != 0 {
+					if mode == "auto" {
+						writes.Add(int64(e.advanceCircuitStatus(cs, id, base, &state, p, now)))
+					}
+					state.UpdatedAt = now
+					_ = persistState(state)
+					evaluated.Add(1)
+					return
+				}
+				// A queued zero/recovery is not yet an applied circuit transition.
+				// Wait for its outcome before consuming probes or advancing phases.
+				if state.Capacity.PendingCommandID != "" && state.Phase != "normal" {
+					state.UpdatedAt = now
+					_ = persistState(state)
+					return
+				}
+				foldedRequests, foldedErrors := e.foldErrorDecayWithBuckets(id, base.ChannelID, &state, now, recentBuckets, p)
+				// In observe mode, settled production traffic is the passive probe.
+				// Keep its evidence independent from the larger performance-ranking
+				// sample threshold so a low-traffic channel can still prove recovery.
+				if wasCircuit && mode == "observe" && foldedRequests > 0 {
+					state.ProbeAttempts += int(foldedRequests)
+					state.ProbeSuccesses += int(max(foldedRequests-foldedErrors, 0))
+				}
+				recoveredNow := false
+
+				// A completed probe round is folded before normal factor evaluation.
+				if state.Phase == "probing" && state.ProbeCommandID == nil && state.ProbeAttempts > 0 {
+					completeFailure := false
+					if mode == "auto" && state.ProbeSuccesses == 0 && !state.CircuitDisabled {
+						// The configured count may change while a round is in flight.
+						// Judge completeness against that command, not today's policy.
+						expected, err := cs.CompletedProbeCount(id, base.ChannelID)
+						if err != nil {
+							return
+						}
+						completeFailure = expected > 0 && state.ProbeAttempts >= expected
+					}
+					if completeFailure {
+						state.CircuitDisabled, state.CircuitStatusTarget = true, 2
+						state.ProposedWeight = 0
+						// Persist ownership before disabling: disabled channels must remain eligible after a restart.
+						if err := persistState(state); err == nil {
+							writes.Add(int64(e.advanceCircuitStatus(cs, id, base, &state, p, now)))
 						}
 						state.UpdatedAt = now
-						_ = cs.PutContinuousState(state)
-						evaluated++
-						continue
+						_ = persistState(state)
+						evaluated.Add(1)
+						return
 					}
-					// The probes just proved the channel serves again, but KError
-					// still carries the crushed pre-circuit value. Without a floor
-					// the first normal cycle after soft start recomputes
-					// M ≈ KError < circuit threshold and re-opens the circuit in a
-					// probe/recover loop. Ten successful probes are success
-					// evidence; floor the decay state at the recovery bar.
-					state.SmoothedErrorRate = math.Min(state.SmoothedErrorRate, p.RecoveryErrorRate)
-					state.KError = reliabilityFactorWithPolicy(state.SmoothedErrorRate, p)
-					state.Phase, state.SoftStartPending = "soft_start", true
-					state.Multiplier = p.SoftStartMultiplier
-					state.ProposedWeight = max(int64(1), int64(math.Round(float64(base.BaseWeight)*state.Multiplier)))
-					rec := continuousEvent(id, base, state, "circuit_recovered", mode, now)
+					successRatio := float64(state.ProbeSuccesses) / float64(state.ProbeAttempts)
+					probeSpeed := 1.0
+					if state.ProbeSuccesses > 0 && healthy && baseline.probeTTFT95 > 0 {
+						avg := state.ProbeDurationSum / float64(state.ProbeSuccesses)
+						if avg > 0 {
+							probeSpeed = clamp(math.Sqrt(baseline.probeTTFT95/avg), .1, 1)
+						}
+					}
+					probeMultiplier := successRatio * probeSpeed
+					if probeMultiplier >= p.RecoveryThreshold {
+						if capacityRecoveryBlocked(base, state) {
+							state.UpdatedAt = now
+							_ = persistState(state)
+							evaluated.Add(1)
+							return
+						}
+						if mode == "auto" && state.CircuitDisabled {
+							state.CircuitStatusTarget = 1
+							state.ProposedWeight = max(int64(1), int64(math.Round(float64(base.BaseWeight)*p.SoftStartMultiplier)))
+							if err := persistState(state); err == nil {
+								writes.Add(int64(e.advanceCircuitStatus(cs, id, base, &state, p, now)))
+							}
+							state.UpdatedAt = now
+							_ = persistState(state)
+							evaluated.Add(1)
+							return
+						}
+						// The probes just proved the channel serves again, but KError
+						// still carries the crushed pre-circuit value. Without a floor
+						// the first normal cycle after soft start recomputes
+						// M ≈ KError < circuit threshold and re-opens the circuit in a
+						// probe/recover loop. Ten successful probes are success
+						// evidence; floor the decay state at the recovery bar.
+						state.SmoothedErrorRate = math.Min(state.SmoothedErrorRate, p.RecoveryErrorRate)
+						state.KError = reliabilityFactorWithPolicy(state.SmoothedErrorRate, p)
+						state.Phase, state.SoftStartPending = "soft_start", true
+						state.Multiplier = p.SoftStartMultiplier
+						state.ProposedWeight = max(int64(1), int64(math.Round(float64(base.BaseWeight)*state.Multiplier)))
+						rec := continuousEvent(id, base, state, "circuit_recovered", mode, now)
+						rec.ProposedPriority = nil
+						if mode == "auto" {
+							if _, err = e.createTrackedWeightChange(cs, rec, base, &state, now); err == nil {
+								recoveredNow = true
+								writes.Add(1)
+							} else {
+								state.Phase, state.SoftStartPending = "circuit", false
+								next := now.Add(time.Duration(p.SilentMinutes) * time.Minute)
+								state.NextProbeAt = &next
+								e.noteWriteFailure(id, base, &state, mode, err, now)
+							}
+						} else {
+							recoveredNow = true
+							_ = e.store.InsertRecommendation(rec)
+						}
+					} else {
+						state.Phase = "circuit"
+						next := now.Add(time.Duration(p.SilentMinutes) * time.Minute)
+						state.NextProbeAt = &next
+						_ = e.store.InsertRecommendation(continuousEvent(id, base, state, "probe_failed", mode, now))
+					}
+					state.ProbeAttempts, state.ProbeSuccesses, state.ProbeDurationSum = 0, 0, 0
+				}
+				if recoveredNow {
+					state.UpdatedAt = now
+					_ = persistState(state)
+					evaluated.Add(1)
+					return
+				}
+				// Observe mode never removes traffic from the real channel, so normal
+				// production requests remain valid recovery evidence. Re-evaluate an
+				// observed circuit from those passive samples instead of waiting for an
+				// active probe that is intentionally only available in auto mode.
+				if state.Phase == "circuit" && mode == "observe" && state.ProbeAttempts >= p.ProbeCount {
+					passiveErrors := state.ProbeAttempts - state.ProbeSuccesses
+					passiveErrorRate := float64(passiveErrors) / float64(state.ProbeAttempts)
+					if passiveErrorRate <= p.RecoveryErrorRate {
+						state.SmoothedErrorRate = passiveErrorRate
+						state.KError = reliabilityFactorWithPolicy(passiveErrorRate, p)
+						if (healthy || baseline.otpsReady) && m.RequestCount >= p.MinSamples {
+							applyPerformanceFactors(&state, m, baseline, p)
+						}
+						passiveMultiplier := combinedFactor(state, p)
+						state.Phase = "normal"
+						state.Multiplier = passiveMultiplier
+						state.ProposedWeight = int64(math.Round(float64(base.BaseWeight) * passiveMultiplier))
+						if state.ProposedWeight < 1 && base.BaseWeight > 0 {
+							state.ProposedWeight = 1
+						}
+						state.CircuitOpenedAt, state.NextProbeAt, state.OriginalPriority = nil, nil, nil
+						state.SoftStartPending = false
+						state.ProbeAttempts, state.ProbeSuccesses = 0, 0
+						_ = e.store.InsertRecommendation(continuousEvent(id, base, state, "circuit_recovered", mode, now))
+						state.UpdatedAt = now
+						_ = persistState(state)
+						evaluated.Add(1)
+						return
+					}
+					// A failed passive recovery round starts a fresh evidence batch;
+					// otherwise an old failure would poison a quiet channel forever.
+					state.ProbeAttempts, state.ProbeSuccesses = 0, 0
+				}
+				if state.Phase == "circuit" {
+					if mode == "auto" && state.NextProbeAt != nil && !now.Before(*state.NextProbeAt) {
+						// The probe counters are shared with observe-mode passive
+						// accumulation. An active round must start from zero so a
+						// mode switch cannot dilute the probe success ratio with
+						// leftover passive evidence.
+						state.ProbeAttempts, state.ProbeSuccesses, state.ProbeDurationSum = 0, 0, 0
+						rec := continuousEvent(id, base, state, "probe_started", mode, now)
+						if commandID, probeErr := cs.CreateContinuousProbe(rec, model, p.ProbeCount, p.ProbeIntervalSeconds, now); probeErr == nil {
+							state.Phase = "probing"
+							state.ProbeCommandID = &commandID
+						}
+					}
+					state.UpdatedAt = now
+					_ = persistState(state)
+					evaluated.Add(1)
+					return
+				}
+				if state.Phase == "probing" {
+					// Do not strand a channel forever when a probe command is lost or
+					// expires before an Agent reports it.
+					if state.NextProbeAt != nil && now.After(state.NextProbeAt.Add(10*time.Minute)) {
+						state.Phase, state.ProbeCommandID = "circuit", nil
+						next := now.Add(time.Duration(p.SilentMinutes) * time.Minute)
+						state.NextProbeAt = &next
+					}
+					state.UpdatedAt = now
+					_ = persistState(state)
+					evaluated.Add(1)
+					return
+				}
+				if state.Phase == "soft_start" && state.SoftStartPending {
+					state.SoftStartPending = false
+					state.UpdatedAt = now
+					_ = persistState(state)
+					evaluated.Add(1)
+					return
+				} else if state.Phase == "soft_start" {
+					state.Phase = "normal"
+					state.CircuitOpenedAt = nil
+					state.NextProbeAt = nil
+				}
+				if (healthy || baseline.otpsReady) && mode != "off" && m.RequestCount >= p.MinSamples {
+					applyPerformanceFactors(&state, m, baseline, p)
+				}
+				state.Multiplier = combinedFactor(state, p)
+				if mode == "off" || (!healthy && !baseline.otpsReady) {
+					state.Multiplier = 1
+				}
+				state.ProposedWeight = int64(math.Round(float64(base.BaseWeight) * state.Multiplier))
+				if state.ProposedWeight < 1 && base.BaseWeight > 0 {
+					state.ProposedWeight = 1
+				}
+				// Capacity limits are a one-way guard: once the channel reaches either
+				// configured rate, performance factors may keep or reduce its effective
+				// weight but may not increase it. Prefer our last successful write over
+				// the slower channel snapshot when determining the live upper bound.
+				if state.CapacityLimited {
+					currentWeight := effectiveCurrentWeight(base, state)
+					if state.ProposedWeight > currentWeight {
+						state.ProposedWeight = currentWeight
+						state.Multiplier = float64(state.ProposedWeight) / float64(base.BaseWeight)
+					}
+				}
+				if mode == "auto" {
+					currentWeight := effectiveCurrentWeight(base, state)
+					state.ProposedWeight = limitWeightIncrease(state.ProposedWeight, currentWeight, p.MaxIncreasePercent)
+					state.Multiplier = float64(state.ProposedWeight) / float64(base.BaseWeight)
+				}
+				// In auto mode entering circuit means "the zeroing write happened";
+				// during a write_failed pause the transition must wait for the slow
+				// retry window and only commit once the real write succeeds —
+				// otherwise CT would show a circuit (and run recovery probes) while
+				// new-api still serves the channel at full weight.
+				if mode != "off" && state.Phase == "normal" && m.RequestCount >= p.MinSamples && state.SmoothedErrorRate >= p.CircuitErrorRate &&
+					(mode != "auto" || writeAttemptAllowed(state, now)) {
+					state.Phase = "circuit"
+					state.Multiplier = 0
+					state.ProposedWeight = 0
+					opened := now
+					next := now.Add(time.Duration(p.SilentMinutes) * time.Minute)
+					original := base.BasePriority
+					state.CircuitOpenedAt = &opened
+					state.NextProbeAt = &next
+					state.OriginalPriority = &original
+					state.ProbeAttempts, state.ProbeSuccesses, state.ProbeDurationSum = 0, 0, 0
+					rec := continuousEvent(id, base, state, "circuit_opened", mode, now)
 					rec.ProposedPriority = nil
 					if mode == "auto" {
 						if _, err = e.createTrackedWeightChange(cs, rec, base, &state, now); err == nil {
-							recoveredNow = true
-							w := state.ProposedWeight
-							at := now
-							if !state.Capacity.Initialized {
-								state.LastWrittenWeight = &w
-								state.LastWriteAt = &at
-								e.noteWriteSuccess(&state)
-							}
-							writes++
+							writes.Add(1)
 						} else {
-							state.Phase, state.SoftStartPending = "circuit", false
-							next := now.Add(time.Duration(p.SilentMinutes) * time.Minute)
-							state.NextProbeAt = &next
+							state.Phase = "normal"
+							state.Multiplier = combinedFactor(state, p)
+							state.ProposedWeight = max(int64(1), int64(math.Round(float64(base.BaseWeight)*state.Multiplier)))
+							state.CircuitOpenedAt, state.NextProbeAt, state.OriginalPriority = nil, nil, nil
 							e.noteWriteFailure(id, base, &state, mode, err, now)
 						}
 					} else {
-						recoveredNow = true
 						_ = e.store.InsertRecommendation(rec)
 					}
-				} else {
-					state.Phase = "circuit"
-					next := now.Add(time.Duration(p.SilentMinutes) * time.Minute)
-					state.NextProbeAt = &next
-					_ = e.store.InsertRecommendation(continuousEvent(id, base, state, "probe_failed", mode, now))
-				}
-				state.ProbeAttempts, state.ProbeSuccesses, state.ProbeDurationSum = 0, 0, 0
-			}
-			if recoveredNow {
-				state.UpdatedAt = now
-				_ = cs.PutContinuousState(state)
-				evaluated++
-				continue
-			}
-			// Observe mode never removes traffic from the real channel, so normal
-			// production requests remain valid recovery evidence. Re-evaluate an
-			// observed circuit from those passive samples instead of waiting for an
-			// active probe that is intentionally only available in auto mode.
-			if state.Phase == "circuit" && mode == "observe" && state.ProbeAttempts >= p.ProbeCount {
-				passiveErrors := state.ProbeAttempts - state.ProbeSuccesses
-				passiveErrorRate := float64(passiveErrors) / float64(state.ProbeAttempts)
-				if passiveErrorRate <= p.RecoveryErrorRate {
-					state.SmoothedErrorRate = passiveErrorRate
-					state.KError = reliabilityFactorWithPolicy(passiveErrorRate, p)
-					if (healthy || baseline.otpsReady) && m.RequestCount >= p.MinSamples {
-						applyPerformanceFactors(&state, m, baseline, p)
-					}
-					passiveMultiplier := combinedFactor(state, p)
-					state.Phase = "normal"
-					state.Multiplier = passiveMultiplier
-					state.ProposedWeight = int64(math.Round(float64(base.BaseWeight) * passiveMultiplier))
-					if state.ProposedWeight < 1 && base.BaseWeight > 0 {
-						state.ProposedWeight = 1
-					}
-					state.CircuitOpenedAt, state.NextProbeAt, state.OriginalPriority = nil, nil, nil
-					state.SoftStartPending = false
-					state.ProbeAttempts, state.ProbeSuccesses = 0, 0
-					_ = e.store.InsertRecommendation(continuousEvent(id, base, state, "circuit_recovered", mode, now))
 					state.UpdatedAt = now
-					_ = cs.PutContinuousState(state)
-					evaluated++
-					continue
+					_ = persistState(state)
+					evaluated.Add(1)
+					return
 				}
-				// A failed passive recovery round starts a fresh evidence batch;
-				// otherwise an old failure would poison a quiet channel forever.
-				state.ProbeAttempts, state.ProbeSuccesses = 0, 0
-			}
-			if state.Phase == "circuit" {
-				if mode == "auto" && state.NextProbeAt != nil && !now.Before(*state.NextProbeAt) {
-					// The probe counters are shared with observe-mode passive
-					// accumulation. An active round must start from zero so a
-					// mode switch cannot dilute the probe success ratio with
-					// leftover passive evidence.
-					state.ProbeAttempts, state.ProbeSuccesses, state.ProbeDurationSum = 0, 0, 0
-					rec := continuousEvent(id, base, state, "probe_started", mode, now)
-					if commandID, probeErr := cs.CreateContinuousProbe(rec, model, p.ProbeCount, p.ProbeIntervalSeconds, now); probeErr == nil {
-						state.Phase = "probing"
-						state.ProbeCommandID = &commandID
+
+				// Circuit/probe/recovery decisions above take precedence. A sparse
+				// normal window must not reset or rewrite the already applied weight.
+				if m.RequestCount < p.MinSamples || (!state.MetricReady || !state.BaselineReady) && !state.OTPSReady {
+					state.ProposedWeight = effectiveCurrentWeight(base, state)
+					state.Multiplier = float64(state.ProposedWeight) / float64(base.BaseWeight)
+					if !state.Capacity.Initialized {
+						state.UpdatedAt = now
+						_ = persistState(state)
+						evaluated.Add(1)
+						return
 					}
 				}
-				state.UpdatedAt = now
-				_ = cs.PutContinuousState(state)
-				evaluated++
-				continue
-			}
-			if state.Phase == "probing" {
-				// Do not strand a channel forever when a probe command is lost or
-				// expires before an Agent reports it.
-				if state.NextProbeAt != nil && now.After(state.NextProbeAt.Add(10*time.Minute)) {
-					state.Phase, state.ProbeCommandID = "circuit", nil
-					next := now.Add(time.Duration(p.SilentMinutes) * time.Minute)
-					state.NextProbeAt = &next
-				}
-				state.UpdatedAt = now
-				_ = cs.PutContinuousState(state)
-				evaluated++
-				continue
-			}
-			if state.Phase == "soft_start" && state.SoftStartPending {
-				state.SoftStartPending = false
-				state.UpdatedAt = now
-				_ = cs.PutContinuousState(state)
-				evaluated++
-				continue
-			} else if state.Phase == "soft_start" {
-				state.Phase = "normal"
-				state.CircuitOpenedAt = nil
-				state.NextProbeAt = nil
-			}
-			if (healthy || baseline.otpsReady) && mode != "off" && m.RequestCount >= p.MinSamples {
-				applyPerformanceFactors(&state, m, baseline, p)
-			}
-			state.Multiplier = combinedFactor(state, p)
-			if mode == "off" || (!healthy && !baseline.otpsReady) {
-				state.Multiplier = 1
-			}
-			state.ProposedWeight = int64(math.Round(float64(base.BaseWeight) * state.Multiplier))
-			if state.ProposedWeight < 1 && base.BaseWeight > 0 {
-				state.ProposedWeight = 1
-			}
-			// Capacity limits are a one-way guard: once the channel reaches either
-			// configured rate, performance factors may keep or reduce its effective
-			// weight but may not increase it. Prefer our last successful write over
-			// the slower channel snapshot when determining the live upper bound.
-			if state.CapacityLimited {
-				currentWeight := effectiveCurrentWeight(base, state)
-				if state.ProposedWeight > currentWeight {
-					state.ProposedWeight = currentWeight
+				capacityReduction := false
+				if state.Capacity.Initialized {
+					capacityReduction = applyCapacityTarget(&state)
 					state.Multiplier = float64(state.ProposedWeight) / float64(base.BaseWeight)
 				}
-			}
-			if mode == "auto" {
-				currentWeight := effectiveCurrentWeight(base, state)
-				state.ProposedWeight = limitWeightIncrease(state.ProposedWeight, currentWeight, p.MaxIncreasePercent)
-				state.Multiplier = float64(state.ProposedWeight) / float64(base.BaseWeight)
-			}
-			// In auto mode entering circuit means "the zeroing write happened";
-			// during a write_failed pause the transition must wait for the slow
-			// retry window and only commit once the real write succeeds —
-			// otherwise CT would show a circuit (and run recovery probes) while
-			// new-api still serves the channel at full weight.
-			if mode != "off" && state.Phase == "normal" && m.RequestCount >= p.MinSamples && state.SmoothedErrorRate >= p.CircuitErrorRate &&
-				(mode != "auto" || writeAttemptAllowed(state, now)) {
-				state.Phase = "circuit"
-				state.Multiplier = 0
-				state.ProposedWeight = 0
-				opened := now
-				next := now.Add(time.Duration(p.SilentMinutes) * time.Minute)
-				original := base.BasePriority
-				state.CircuitOpenedAt = &opened
-				state.NextProbeAt = &next
-				state.OriginalPriority = &original
-				state.ProbeAttempts, state.ProbeSuccesses, state.ProbeDurationSum = 0, 0, 0
-				rec := continuousEvent(id, base, state, "circuit_opened", mode, now)
-				rec.ProposedPriority = nil
-				if mode == "auto" {
-					if _, err = e.createTrackedWeightChange(cs, rec, base, &state, now); err == nil {
-						w := int64(0)
-						at := now
-						if !state.Capacity.Initialized {
-							state.LastWrittenWeight = &w
-							state.LastWriteAt = &at
-							e.noteWriteSuccess(&state)
-						}
-						writes++
-					} else {
-						state.Phase = "normal"
-						state.Multiplier = combinedFactor(state, p)
-						state.ProposedWeight = max(int64(1), int64(math.Round(float64(base.BaseWeight)*state.Multiplier)))
-						state.CircuitOpenedAt, state.NextProbeAt, state.OriginalPriority = nil, nil, nil
-						e.noteWriteFailure(id, base, &state, mode, err, now)
+
+				// Preserve useful observation evidence without adding one event per
+				// channel every minute: only record a proposal outside the write
+				// deadband RELATIVE TO THE LAST RECORDED EVENT. Anchoring on the
+				// previous tick instead would rate-filter — a slow drift never
+				// exceeds the threshold per step and would stay unrecorded no
+				// matter how far it travels.
+				if mode == "observe" && (capacityReduction || (healthy || baseline.otpsReady) && m.RequestCount >= p.MinSamples) &&
+					(state.LastObservedWeight == nil || weightChangeOutsideDeadband(state.ProposedWeight, *state.LastObservedWeight, base.BaseWeight, observeEventDeadbandPercent)) {
+					_ = e.store.InsertRecommendation(continuousEvent(id, base, state, "weight_observed", mode, now))
+					anchor := state.ProposedWeight
+					state.LastObservedWeight = &anchor
+				}
+
+				// Auto mode is authoritative: a confirmed external change is written
+				// back to the current calculated weight instead of permanently pausing
+				// the channel. The snapshot must postdate our write plus apply grace;
+				// otherwise it is merely the expected stale snapshot after our own write.
+				confirmedExternalChange := state.LastWrittenWeight != nil && state.LastWriteAt != nil &&
+					base.CurrentWeight != *state.LastWrittenWeight && base.SnapshotAt.After(state.LastWriteAt.Add(2*time.Minute))
+				// Recalculate every minute and write every integer target change. Keep
+				// only exact-value deduplication so a stale channel snapshot does not
+				// cause the same command to be sent repeatedly before it refreshes.
+				needsWrite := state.ProposedWeight != writeReference(state, base) || confirmedExternalChange
+				if state.Capacity.Initialized {
+					needsWrite = state.ProposedWeight != state.Capacity.ConfirmedWeight
+				}
+				retryingWriteFailure := state.PausedReason == "write_failed" && writeAttemptAllowed(state, now)
+				// A due retry with no write left has nothing useful to test.
+				// Clear the pause; the next real change will exercise the path again.
+				if mode == "auto" && retryingWriteFailure && !needsWrite {
+					e.noteWriteSuccess(&state)
+					retryingWriteFailure = false
+				}
+				if mode == "auto" && writeAttemptAllowed(state, now) && needsWrite && state.Capacity.PendingCommandID == "" {
+					rule := "weight_write"
+					if capacityReduction {
+						rule = "capacity_reduce"
 					}
-				} else {
-					_ = e.store.InsertRecommendation(rec)
+					rec := continuousEvent(id, base, state, rule, mode, now)
+					if _, err = e.createTrackedWeightChange(cs, rec, base, &state, now); err == nil {
+						writes.Add(1)
+					} else {
+						e.noteWriteFailure(id, base, &state, mode, err, now)
+						if state.Capacity.Initialized && !errors.Is(err, ErrDecisionSuperseded) {
+							state.Capacity.Phase = "write_failed"
+						}
+					}
 				}
 				state.UpdatedAt = now
-				_ = cs.PutContinuousState(state)
-				evaluated++
-				continue
-			}
-
-			// Circuit/probe/recovery decisions above take precedence. A sparse
-			// normal window must not reset or rewrite the already applied weight.
-			if m.RequestCount < p.MinSamples || (!state.MetricReady || !state.BaselineReady) && !state.OTPSReady {
-				state.ProposedWeight = effectiveCurrentWeight(base, state)
-				state.Multiplier = float64(state.ProposedWeight) / float64(base.BaseWeight)
-				if !state.Capacity.Initialized {
-					state.UpdatedAt = now
-					_ = cs.PutContinuousState(state)
-					evaluated++
-					continue
-				}
-			}
-			capacityReduction := false
-			if state.Capacity.Initialized {
-				capacityReduction = applyCapacityTarget(&state)
-				state.Multiplier = float64(state.ProposedWeight) / float64(base.BaseWeight)
-			}
-
-			// Preserve useful observation evidence without adding one event per
-			// channel every minute: only record a proposal outside the write
-			// deadband RELATIVE TO THE LAST RECORDED EVENT. Anchoring on the
-			// previous tick instead would rate-filter — a slow drift never
-			// exceeds the threshold per step and would stay unrecorded no
-			// matter how far it travels.
-			if mode == "observe" && (capacityReduction || (healthy || baseline.otpsReady) && m.RequestCount >= p.MinSamples) &&
-				(state.LastObservedWeight == nil || weightChangeOutsideDeadband(state.ProposedWeight, *state.LastObservedWeight, base.BaseWeight, observeEventDeadbandPercent)) {
-				_ = e.store.InsertRecommendation(continuousEvent(id, base, state, "weight_observed", mode, now))
-				anchor := state.ProposedWeight
-				state.LastObservedWeight = &anchor
-			}
-
-			// Auto mode is authoritative: a confirmed external change is written
-			// back to the current calculated weight instead of permanently pausing
-			// the channel. The snapshot must postdate our write plus apply grace;
-			// otherwise it is merely the expected stale snapshot after our own write.
-			confirmedExternalChange := state.LastWrittenWeight != nil && state.LastWriteAt != nil &&
-				base.CurrentWeight != *state.LastWrittenWeight && base.SnapshotAt.After(state.LastWriteAt.Add(2*time.Minute))
-			// Recalculate every minute and write every integer target change. Keep
-			// only exact-value deduplication so a stale channel snapshot does not
-			// cause the same command to be sent repeatedly before it refreshes.
-			needsWrite := state.ProposedWeight != writeReference(state, base) || confirmedExternalChange
-			if state.Capacity.Initialized {
-				needsWrite = state.ProposedWeight != state.Capacity.ConfirmedWeight
-			}
-			retryingWriteFailure := state.PausedReason == "write_failed" && writeAttemptAllowed(state, now)
-			// A due retry with no write left has nothing useful to test.
-			// Clear the pause; the next real change will exercise the path again.
-			if mode == "auto" && retryingWriteFailure && !needsWrite {
-				e.noteWriteSuccess(&state)
-				retryingWriteFailure = false
-			}
-			if mode == "auto" && writeAttemptAllowed(state, now) && needsWrite && state.Capacity.PendingCommandID == "" {
-				rule := "weight_write"
-				if capacityReduction {
-					rule = "capacity_reduce"
-				}
-				rec := continuousEvent(id, base, state, rule, mode, now)
-				if _, err = e.createTrackedWeightChange(cs, rec, base, &state, now); err == nil {
-					if !state.Capacity.Initialized {
-						written, at := state.ProposedWeight, now
-						state.LastWrittenWeight, state.LastWriteAt = &written, &at
-						e.noteWriteSuccess(&state)
-					}
-					writes++
-				} else {
-					e.noteWriteFailure(id, base, &state, mode, err, now)
-					if state.Capacity.Initialized {
-						state.Capacity.Phase = "write_failed"
-					}
-				}
-			}
-			state.UpdatedAt = now
-			_ = cs.PutContinuousState(state)
-			evaluated++
+				_ = persistState(state)
+				evaluated.Add(1)
+			})
 		}
 	}
-	log.Printf("tuning continuous evaluation site=%s stage=channel_loop duration=%s total_duration=%s preserved_empty_metrics=%d", id, time.Since(channelLoopStarted), time.Since(evaluationStarted), preserved)
-	return writes, evaluated
+	e.runChannels(jobs)
+	log.Printf("tuning continuous evaluation site=%s stage=channel_loop duration=%s total_duration=%s preserved_empty_metrics=%d", id, time.Since(channelLoopStarted), time.Since(evaluationStarted), preserved.Load())
+	return int(writes.Load()), int(evaluated.Load())
 }
 
 // foldErrorDecay advances KError over the complete metric buckets newer than
@@ -669,7 +693,7 @@ func (e *Engine) foldErrorDecayWithBuckets(id string, channelID int64, state *Co
 		var err error
 		buckets, err = e.store.QueryRecentChannelBuckets(id, channelID, since, 240)
 		if err != nil {
-			return state.LastObservedRequests, state.LastObservedErrors
+			return 0, 0
 		}
 	}
 	settled := now.Add(-90 * time.Second)
@@ -713,6 +737,9 @@ func buildContinuousBaseline(rows []ChannelBaseValue, metrics map[int64]ChannelM
 		if outputEvidenceReady(m, minSamples) {
 			otps = append(otps, m.OTPS)
 		}
+		if m.RequestCount >= minSamples && m.CachePromptTokens >= cacheEvidenceTokens {
+			caches = append(caches, m.CacheHitRate)
+		}
 		if m.RequestCount < minSamples || m.TTFTP50 <= 0 || m.TTFTP90 <= 0 || m.TTFTP95 <= 0 {
 			continue
 		}
@@ -721,12 +748,12 @@ func buildContinuousBaseline(rows []ChannelBaseValue, metrics map[int64]ChannelM
 		if speedEvidenceReady(m, minSamples) {
 			ttft50, ttft90, ttft95 = append(ttft50, m.SpeedTTFTP50), append(ttft90, m.SpeedTTFTP90), append(ttft95, m.SpeedTTFTP95)
 		}
-		if m.CachePromptTokens >= cacheEvidenceTokens {
-			caches = append(caches, m.CacheHitRate)
-		}
 	}
 	if len(otps) >= 2 {
 		b.otps, b.otpsReady = average(otps), true
+	}
+	if len(caches) >= 2 {
+		b.cache, b.cacheReady = average(caches), true
 	}
 	if monitorEligible < 2 {
 		return b, false
@@ -735,9 +762,6 @@ func buildContinuousBaseline(rows []ChannelBaseValue, metrics map[int64]ChannelM
 	if len(ttft50) >= 2 {
 		b.ttft50, b.ttft90, b.ttft95 = average(ttft50), average(ttft90), average(ttft95)
 		b.speedReady = true
-	}
-	if len(caches) >= 2 {
-		b.cache, b.cacheReady = average(caches), true
 	}
 	return b, true
 }
@@ -858,6 +882,9 @@ func (e *Engine) noteWriteSuccess(state *ContinuousState) {
 // threshold pauses the channel and surfaces one auto_paused event carrying
 // the transport error.
 func (e *Engine) noteWriteFailure(id string, base ChannelBaseValue, state *ContinuousState, mode string, writeErr error, now time.Time) {
+	if errors.Is(writeErr, ErrDecisionSuperseded) {
+		return
+	}
 	state.WriteFailureStreak++
 	at := now
 	state.LastWriteFailureAt = &at
@@ -917,7 +944,8 @@ func continuousEvent(id string, base ChannelBaseValue, state ContinuousState, ru
 	}
 	return Recommendation{ID: NewID(now, id, base.ChannelID, rule), InstanceID: id, ChannelID: base.ChannelID, ChannelName: base.ChannelName, CreatedAt: now, Rule: rule,
 		Evidence: map[string]any{
-			"capacity": state.Capacity, "capacity_managed": state.Capacity.Initialized && (rule == "weight_write" || rule == "capacity_reduce" || rule == "circuit_opened" || rule == "circuit_recovered"),
+			"evaluation": state.Evaluation,
+			"capacity":   state.Capacity, "capacity_managed": state.Capacity.Initialized && (rule == "weight_write" || rule == "capacity_reduce" || rule == "circuit_opened" || rule == "circuit_recovered"),
 			"metric_rpm": state.MetricRPM, "metric_tpm": state.MetricTPM, "max_rpm": base.MaxRPM, "max_tpm": base.MaxTPM,
 			"model": base.ModelName, "phase": state.Phase, "multiplier": state.Multiplier,
 			"k_speed": state.KSpeed, "k_cache": state.KCache, "k_otps": state.KOTPS, "k_error": state.KError,
@@ -936,6 +964,9 @@ func speedEvidenceReady(m ChannelMetric, minSamples int64) bool {
 	return m.SpeedSamples >= minSamples && m.SpeedTTFTP50 > 0 && m.SpeedTTFTP90 > 0 && m.SpeedTTFTP95 > 0
 }
 func applyPerformanceFactors(state *ContinuousState, m ChannelMetric, b continuousBaseline, p ContinuousDispatchParams) {
+	if state.Evaluation != nil {
+		state.Evaluation.PerformanceEvaluated = true
+	}
 	speed, cache, otps := performanceFactors(m, b, p, state.CacheReady, state.OTPSReady)
 	state.KSpeed = speed
 	state.KCache, state.KOTPS = cache, otps

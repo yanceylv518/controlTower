@@ -1,6 +1,7 @@
 package tuning
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -253,6 +254,17 @@ type ChannelMetric struct {
 	OTPSStatsVersion                                      int
 }
 
+// EvaluationContext travels with the measured coefficients, so later policy
+// edits cannot change the meaning of a saved evaluation or queued decision.
+type EvaluationContext struct {
+	PerformanceEvaluated bool                     `json:"performance_evaluated"`
+	BaseWeight           int64                    `json:"base_weight"`
+	BaseUpdatedAt        time.Time                `json:"base_updated_at"`
+	PolicyUpdatedAt      time.Time                `json:"policy_updated_at"`
+	EvaluatedAt          time.Time                `json:"evaluated_at"`
+	Params               ContinuousDispatchParams `json:"params"`
+}
+
 type ContinuousState struct {
 	SpeedSamples         int64      `json:"speed_sample_count"`
 	SpeedRetries         int64      `json:"speed_retry_count"`
@@ -325,7 +337,8 @@ type ContinuousState struct {
 	LastObservedWeight *int64    `json:"last_observed_weight,omitempty"`
 	UpdatedAt          time.Time `json:"updated_at"`
 
-	Capacity CapacityControl `json:"capacity"`
+	Capacity   CapacityControl    `json:"capacity"`
+	Evaluation *EvaluationContext `json:"evaluation,omitempty"`
 }
 
 type RecentChannelBucket struct {
@@ -384,5 +397,12 @@ type Report struct {
 }
 
 func NewID(now time.Time, instance string, channel int64, rule string) string {
-	return fmt.Sprintf("tun-%d-%s-%d-%s", now.UnixNano(), instance, channel, rule)
+	id := fmt.Sprintf("tun-%d-%s-%d-%s", now.UnixNano(), instance, channel, rule)
+	if len(id) > 64 {
+		// IDs share a VARCHAR(64) contract with persisted recommendations.
+		// Hash all identity fields, rather than truncating a site or rule.
+		sum := sha256.Sum256([]byte(id))
+		return fmt.Sprintf("tun-%x", sum[:30])
+	}
+	return id
 }

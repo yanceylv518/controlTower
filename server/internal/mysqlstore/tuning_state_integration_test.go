@@ -241,5 +241,7 @@ func (s *retryIntegrationStore) QueryMetrics(string, time.Time, time.Time) ([]tu
 
 func (s *retryIntegrationStore) CreateContinuousWeightChange(tuning.Recommendation, string, time.Time) (string, error) {
 	s.attempts++
-	return "test-command", s.writeErr
+	// This fixture models a synchronous write, so nil means confirmed. A
+	// nonempty queued id now requires an actual terminal command receipt.
+	return "", s.writeErr
 }

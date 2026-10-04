@@ -260,12 +260,14 @@ func runCollectorLoop(ctx context.Context, cfg config.Config, collect func(conte
 	interval := time.Duration(cfg.LogPollIntervalSeconds) * time.Second
 	failures := 0
 	for {
+		started := time.Now()
 		passCtx, cancel := context.WithTimeout(ctx, collectPassTimeout(cfg))
 		err := collect(passCtx)
 		cancel()
-		wait := interval
+		wait := max(time.Duration(0), interval-time.Since(started))
 		if err != nil {
 			failures++
+			wait = interval
 			if backoff := reporter.BackoffDelay(failures); backoff > wait {
 				wait = backoff
 			}
@@ -361,7 +363,7 @@ func collectAndReportFullPass(ctx context.Context, client controlTowerReporter, 
 	if flushed && flushedLastLogID > current.LastLogID {
 		current.LastLogID = flushedLastLogID
 	}
-	heartbeat, err := client.Heartbeat(ctx, reporter.AgentHeartbeatRequest{InstanceID: cfg.InstanceID, AgentID: cfg.AgentID, AgentVersion: agentVersion, ReportedAt: now, Sequence: sequence, LastLogID: current.LastLogID})
+	heartbeat, err := client.Heartbeat(ctx, reporter.AgentHeartbeatRequest{SupportsCommandReconcile: true, InstanceID: cfg.InstanceID, AgentID: cfg.AgentID, AgentVersion: agentVersion, ReportedAt: now, Sequence: sequence, LastLogID: current.LastLogID})
 	if err != nil {
 		return bufferFailedPass(bufferStore, stateStore, &current, report, lastLogID, now, cfg.MaxLocalBufferEvents, collectorFailure("heartbeat", err))
 	}

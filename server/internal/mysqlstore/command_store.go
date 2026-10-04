@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"controltower/server/internal/agentgateway"
 	"controltower/server/internal/channelupdates"
 	"controltower/server/internal/storage"
 	"github.com/go-sql-driver/mysql"
@@ -29,7 +30,11 @@ func (s Store) ClaimPendingCommands(instanceID string, now time.Time) ([]storage
 	}
 	defer tx.Rollback()
 	rows, err := tx.QueryContext(ctx, `SELECT id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at
-FROM channel_commands WHERE instance_id=? AND status='pending' ORDER BY created_at FOR UPDATE`, instanceID)
+FROM channel_commands c WHERE instance_id=? AND status='pending'
+AND (NOT EXISTS (SELECT 1 FROM tuning_recommendations pending_rec WHERE pending_rec.command_id=c.id AND pending_rec.mode_at_creation='auto')
+OR NOT EXISTS (SELECT 1 FROM channel_commands delivered JOIN tuning_recommendations delivered_rec ON delivered_rec.command_id=delivered.id AND delivered_rec.mode_at_creation='auto'
+WHERE delivered.instance_id=c.instance_id AND delivered.channel_id=c.channel_id AND delivered.command_type='channel.update' AND delivered.status='delivered'))
+ORDER BY created_at FOR UPDATE`, instanceID)
 	if err != nil {
 		return nil, err
 	}
@@ -133,6 +138,37 @@ FROM channel_commands WHERE instance_id=? AND status='pending' ORDER BY created_
 }
 
 func (s Store) CompleteChannelCommand(id, status, errorSummary string, now time.Time) (storage.ChannelCommand, bool, error) {
+	return s.completeChannelCommand(id, status, errorSummary, now, "", nil)
+}
+
+// Reconcile only reads delivered automatic writes. It never replays an old
+// control operation, including after the operator has turned auto mode off.
+func (s Store) CommandsToReconcile(instanceID string, before time.Time) ([]storage.ChannelCommand, error) {
+	rows, err := s.db.QueryContext(context.Background(), `SELECT c.id,c.instance_id,c.channel_id,c.payload_json FROM channel_commands c WHERE c.instance_id=? AND c.status='delivered' AND c.command_type='channel.update' AND c.updated_at<? AND EXISTS (SELECT 1 FROM tuning_recommendations r WHERE r.command_id=c.id AND r.mode_at_creation='auto') ORDER BY c.updated_at LIMIT 100`, instanceID, before)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var commands []storage.ChannelCommand
+	for rows.Next() {
+		var command storage.ChannelCommand
+		if err := rows.Scan(&command.ID, &command.InstanceID, &command.ChannelID, &command.PayloadJSON); err != nil {
+			return nil, err
+		}
+		command.CommandType = "channel.reconcile"
+		commands = append(commands, command)
+	}
+	return commands, rows.Err()
+}
+
+func (s Store) CompleteReconciledCommand(instanceID string, result agentgateway.ChannelCommandResult, now time.Time) (storage.ChannelCommand, bool, error) {
+	if result.Status != "observed" || result.ObservedWeight == nil || result.ObservedStatus == nil || result.ObservedPriority == nil || result.ObservedGroup == nil {
+		return storage.ChannelCommand{}, false, nil
+	}
+	return s.completeChannelCommand(result.ID, "", "", now, instanceID, &result)
+}
+
+func (s Store) completeChannelCommand(id, status, errorSummary string, now time.Time, instanceID string, observed *agentgateway.ChannelCommandResult) (storage.ChannelCommand, bool, error) {
 	ctx := context.Background()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -150,6 +186,35 @@ func (s Store) CompleteChannelCommand(id, status, errorSummary string, now time.
 	if v.Status != "delivered" {
 		return v, false, nil
 	}
+	if observed != nil {
+		if v.InstanceID != instanceID || v.ChannelID != observed.ChannelID || v.CommandType != "channel.update" {
+			return v, false, nil
+		}
+		var target struct {
+			Weight   *uint   `json:"weight"`
+			Status   *int    `json:"status"`
+			Priority *int64  `json:"priority"`
+			Group    *string `json:"group"`
+		}
+		if err := json.Unmarshal([]byte(v.PayloadJSON), &target); err != nil {
+			return v, false, err
+		}
+		status = "succeeded"
+		errorSummary = "readback matches current target; original execution acknowledgement unavailable"
+		if target.Weight != nil && *target.Weight != *observed.ObservedWeight || target.Status != nil && *target.Status != *observed.ObservedStatus || target.Priority != nil && *target.Priority != *observed.ObservedPriority || target.Group != nil && *target.Group != *observed.ObservedGroup {
+			status, errorSummary = "failed", "readback differs from command target; old write was not replayed"
+		}
+		// Refresh the live baseline even on mismatch, in the same transaction.
+		payload, err := json.Marshal(map[string]any{"weight": observed.ObservedWeight, "status": observed.ObservedStatus, "priority": observed.ObservedPriority, "group": observed.ObservedGroup})
+		if err != nil {
+			return v, false, err
+		}
+		readback := v
+		readback.PayloadJSON = string(payload)
+		if err := applyCompletedChannelWrite(tx, readback, now); err != nil {
+			return v, false, err
+		}
+	}
 	_, err = tx.ExecContext(ctx, "UPDATE channel_commands SET status=?,error_summary=?,updated_at=? WHERE id=? AND status='delivered'", status, errorSummary, now, id)
 	if err != nil {
 		return storage.ChannelCommand{}, false, err
@@ -158,7 +223,7 @@ func (s Store) CompleteChannelCommand(id, status, errorSummary string, now time.
 	v.ErrorSummary = errorSummary
 	v.UpdatedAt = now
 	siteID := siteIDForInstance(tx, v.InstanceID)
-	if status == "succeeded" && v.CommandType == "channel.update" {
+	if observed == nil && status == "succeeded" && v.CommandType == "channel.update" {
 		if err = applyCompletedChannelWrite(tx, v, now); err != nil {
 			return storage.ChannelCommand{}, false, err
 		}

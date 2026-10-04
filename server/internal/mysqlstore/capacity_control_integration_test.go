@@ -44,7 +44,13 @@ func TestCapacityStateAndCommandLifecycle(t *testing.T) {
 	state := tuning.ContinuousState{InstanceID: site, ChannelID: 7, ModelName: "m", Phase: "normal", ProposedWeight: 75, CapacityLimited: true, MetricTPM: 1500, UpdatedAt: now,
 		Capacity: tuning.CapacityControl{Initialized: true, Active: true, Fresh: true, Phase: "reducing", MaxTPM: 1000, Utilization: 1.5, SampleAt: now, OverSince: now.Add(-time.Minute), ConfirmedWeight: 100, RawTarget: 60, BoundWeight: 75}}
 	makeRec := func(suffix string) tuning.Recommendation {
-		return tuning.Recommendation{ID: site + suffix, InstanceID: site, ChannelID: 7, Rule: "capacity_reduce", ModeAtCreation: "auto", CreatedAt: now, CurrentWeight: 100, ProposedWeight: 75, Evidence: map[string]any{"capacity_managed": true, "capacity": state.Capacity, "model": "m"}}
+		bases, err := s.ListChannelBaseValues(site, "m")
+		require.NoError(t, err)
+		require.NotEmpty(t, bases)
+		savedPolicy, _, err := s.GetPolicy(site)
+		require.NoError(t, err)
+		state.Evaluation = &tuning.EvaluationContext{BaseWeight: bases[0].BaseWeight, BaseUpdatedAt: bases[0].UpdatedAt, PolicyUpdatedAt: savedPolicy.UpdatedAt, Params: savedPolicy.Policy.Continuous, EvaluatedAt: now}
+		return tuning.Recommendation{ID: site + suffix, InstanceID: site, ChannelID: 7, Rule: "capacity_reduce", ModeAtCreation: "auto", CreatedAt: now, CurrentWeight: 100, ProposedWeight: 75, Evidence: map[string]any{"capacity_managed": true, "capacity": state.Capacity, "model": "m", "evaluation": state.Evaluation}}
 	}
 	require.NoError(t, s.PutContinuousState(state))
 	loaded, err := s.ListContinuousStates(site)
@@ -72,6 +78,10 @@ func TestCapacityStateAndCommandLifecycle(t *testing.T) {
 
 	for _, reason := range []string{"stale", "mode", "config", "circuit", "peer"} {
 		t.Run(reason, func(t *testing.T) {
+			// Each independent scenario starts from the same confirmed online
+			// baseline, not the preceding scenario's applied weight of 75.
+			_, err = db.Exec(`UPDATE channel_current SET weight=100,captured_at=? WHERE instance_id=?`, now, site)
+			require.NoError(t, err)
 			policy.DispatchModes["m"] = "auto"
 			require.NoError(t, s.PutPolicy(tuning.PolicyRecord{InstanceID: site, Policy: policy, Mode: "observe", UpdatedAt: now}))
 			_, err = db.Exec(`UPDATE channel_base_values SET max_tpm=1000 WHERE instance_id=?`, site)
@@ -141,6 +151,8 @@ func TestCapacityStateAndCommandLifecycle(t *testing.T) {
 	state.Capacity.PendingCommandID = ""
 	state.Capacity.ConfirmedWeight = 100
 	state.ProposedWeight = 110
+	_, err = db.Exec(`UPDATE channel_current SET weight=100,captured_at=? WHERE instance_id=?`, now, site)
+	require.NoError(t, err)
 	require.NoError(t, s.PutContinuousState(state))
 	rec = makeRec("increase")
 	rec.Rule = "weight_write"
@@ -159,6 +171,8 @@ func TestCapacityStateAndCommandLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	// Direct writes persist the same terminal marker even if the process exits
 	// before the engine updates its in-memory state.
+	_, err = db.Exec(`UPDATE channel_current SET weight=100,captured_at=? WHERE instance_id=?`, now, site)
+	require.NoError(t, err)
 	require.NoError(t, s.PutContinuousState(state))
 	rec = makeRec("direct")
 	rec.Rule = "weight_write"

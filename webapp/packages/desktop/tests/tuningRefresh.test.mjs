@@ -14,8 +14,20 @@ const groupUtilsSource = readFileSync(new URL('../src/utils/channelGroup.ts', im
 const groupUtilsCode = ts.transpileModule(groupUtilsSource, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText
 const groupUtils = new Function('exports', `${groupUtilsCode}\nreturn exports;`)({})
 const row = { channel_id: 1, model_name: 'm', base_weight: 100, base_priority: 1, current_weight: 80, current_priority: 1, group_name: 'default,vip', models: ['m'] }
-const state = (requests, weight = 80) => ({ channel_id: 1, model_name: 'm', last_observed_requests: requests, proposed_weight: weight, speed_stats_version: 1, phase: 'normal', metric_ready: true, baseline_ready: true, updated_at: '2026-09-14T00:00:00Z' })
+const state = (requests, weight = 80) => ({ channel_id: 1, model_name: 'm', last_observed_requests: requests, proposed_weight: weight, speed_stats_version: 1, phase: 'normal', metric_ready: true, baseline_ready: true, updated_at: '2026-09-14T00:00:00Z', evaluation: {base_weight:100, evaluated_at:'2026-09-14T00:00:00Z', params:{min_samples:20,combined_min_factor:0.1,combined_max_factor:1.5}} })
+const cloneFixture = value => JSON.parse(JSON.stringify(value));
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no }); return { promise, resolve, reject } }
+
+test('healthy performance writes with a configured cap have no capacity warning', async () => {
+  const p = page(); await p.load(); p.ratesReady.value = true;
+  const limited = { ...row, max_tpm: 1000 };
+  p.currentRates.value.set(1, { rpm: 0, tpm: 200 });
+  for (const weight of [55, 60, 66, 72]) {
+    p.states.value = [{ ...state(100, weight), capacity_limited: false, capacity: { initialized: true, active: false, phase: 'normal', applied_at: '2026-10-02T00:00:00Z' } }];
+    assert.equal(p.limitReason(limited), '');
+    assert.doesNotMatch(p.evaluationText(limited), /限升|等待.*反馈/);
+  }
+});
 
 test('capacity feedback and hysteresis remain visible below the live limit and without performance samples', async () => {
   const p = page(); await p.load(); p.ratesReady.value = true;
@@ -49,9 +61,12 @@ function page() {
     tuningChannels: async () => { throw new Error('channel directory unavailable') },
   }
   const names = ['computed', 'reactive', 'ref', 'watch', 'onMounted', 'onBeforeUnmount', 'useFiltersStore', 'dashboard', 'formatTime', 'ApiError', 'ElMessage', 'ElMessageBox', 'useMobileViewport', 'hiddenChannelGroupCount', 'matchesChannelGroup', 'MAX_VISIBLE_CHANNEL_GROUPS', 'normalizeChannelGroups', 'splitChannelGroups', 'visibleChannelGroups']
-  const create = new Function(...names, `${compiled}\nreturn { refreshCurrentRates, ratesError, saveCapacity, saving, mobileEditRow, stageMobileEdit, mobileChanges, mobilePriorityChanges, mobileRuleChanges, mobileSaveOpen, load, refreshRuntime, loadChannelDirectory, applyGroupLocally, acceptStates, stateFor, sampleText, evaluationText, states, refreshError, bases, channels, channelDirectorySite, channelDirectoryLoading, policy, channelSwitchFilter, selectedGroupFilter, toggleGroupFilter, selectedGroupName, displayedRows, activeRows, modelChannelRows, models, modelChannelCount, modelChannelCountLabel, activeModel, dirty, selectModel, fieldChanged, savedBases, originalBase, calculatedWeight, displayedSpeedFactor, coefficientCell, overallEvaluationStatus, coefficientEmptyText, coefficientSpan, displayedPriority, editPriority, priorityLocked, cancelChanges, limitReason, currentRates, ratesReady, rowStatus, channelStatusFor, channelStatusLabel, isDirectoryOnlyRow, eventResult, eventResultClass, events, filteredEvents, eventDateRange };`)
-  const view = create(computed, reactive, ref, () => {}, () => {}, () => {}, () => filters, dashboard, String, ApiError, {info() {}, success() {}}, {}, () => ref(false), groupUtils.hiddenChannelGroupCount, groupUtils.matchesChannelGroup, groupUtils.MAX_VISIBLE_CHANNEL_GROUPS, groupUtils.normalizeChannelGroups, groupUtils.splitChannelGroups, groupUtils.visibleChannelGroups)
-  return { ...view, filters, dashboard }
+  const create = new Function(...names, `${compiled}\nreturn { watchChannelChanges, stopWatching: () => changesAbort?.abort(), sync, save, savedPolicy, mode, policyConflict, factorExplanation, refreshCurrentRates, ratesError, saveCapacity, saving, mobileEditRow, stageMobileEdit, mobileChanges, mobilePriorityChanges, mobileRuleChanges, mobileSaveOpen, load, refreshRuntime, loadChannelDirectory, applyGroupLocally, acceptStates, stateFor, sampleText, evaluationText, states, refreshError, bases, channels, channelDirectorySite, channelDirectoryLoading, policy, channelSwitchFilter, selectedGroupFilter, toggleGroupFilter, selectedGroupName, displayedRows, activeRows, modelChannelRows, models, modelChannelCount, modelChannelCountLabel, activeModel, dirty, selectModel, fieldChanged, savedBases, originalBase, calculatedWeight, displayedSpeedFactor, coefficientCell, overallEvaluationStatus, coefficientEmptyText, coefficientSpan, displayedPriority, editPriority, priorityLocked, cancelChanges, limitReason, currentRates, ratesReady, rowStatus, channelStatusFor, channelStatusLabel, isDirectoryOnlyRow, eventResult, eventResultClass, events, filteredEvents, eventDateRange };`)
+  const messages = [];
+  const view = create(computed, reactive, ref, () => {}, () => {}, () => {}, () => filters, dashboard, String, ApiError, {info() {}, success() {}, error(message) {messages.push(message)}}, {confirm: async () => {}}, () => ref(false), groupUtils.hiddenChannelGroupCount, groupUtils.matchesChannelGroup, groupUtils.MAX_VISIBLE_CHANNEL_GROUPS, groupUtils.normalizeChannelGroups, groupUtils.splitChannelGroups, groupUtils.visibleChannelGroups)
+  const initialPolicy = JSON.parse(JSON.stringify({...view.policy, dispatch_modes:{m:'auto'}}));
+  dashboard.tuningPolicy = async () => ({mode:'observe', policy: JSON.parse(JSON.stringify(initialPolicy))});
+  return { ...view, filters, dashboard, messages }
 }
 
 test('rate failures distinguish transport, permissions and server availability; recovery clears the warning', async () => {
@@ -465,7 +480,7 @@ test('formula target is independent of execution limits and unsaved base edits',
   assert.equal(p.calculatedWeight(row), 150);
   Object.assign(p.states.value[0], {metric_ready:false,baseline_ready:false,paused_reason:'mixed_channel',speed_stats_version:0});
   assert.equal(p.calculatedWeight(row), 150);
-  assert.equal(p.calculatedWeight({...row, base_weight:0}), null);
+  assert.equal(p.calculatedWeight({...row, base_weight:0}), 150, 'an unsaved zero base cannot rewrite the past evaluation');
 });
 
 test('priority editor shows saved target and allows editing during circuit', async () => {
@@ -616,4 +631,113 @@ test('capacity save ignores a result after switching sites', async () => {
   await Promise.resolve(); p.filters.site_id = 'b';
   pending.resolve({ items: [{ ...row, max_tpm: 500 }] }); await request;
   assert.notEqual(p.bases.value[0].max_tpm, 500);
+});
+
+
+test('syncing base values preserves the unsaved policy and its subsequent save', async () => {
+  const p = page(); await p.load();
+  p.policy.dispatch_modes.m = 'off'; p.policy.continuous.sensitivity = 1.25; p.dirty.value = true;
+  p.dashboard.refreshTuningChannels = async () => ({});
+  p.dashboard.syncTuningBaseValues = async () => ({items:[{...row}]});
+  p.dashboard.saveTuningBaseValues = async (_site, rows) => ({items:rows.map(x=>({...x}))});
+  await p.sync('weight');
+  assert.equal(p.dirty.value,true);
+  assert.equal(p.savedPolicy.value.dispatch_modes.m,'auto');
+  assert.equal(p.policy.dispatch_modes.m,'off');
+  let saved;
+  p.dashboard.saveTuningPolicy = async (_site, policy, mode, _preflight, expected) => {
+    saved={policy:cloneFixture(policy), mode, expected:cloneFixture(expected)};
+    p.dashboard.tuningPolicy=async()=>saved;
+    return saved;
+  };
+  await p.save();
+  assert.equal(saved.policy.dispatch_modes.m,'off');
+  assert.equal(saved.policy.continuous.sensitivity,1.25);
+  assert.equal(saved.expected.dispatch_modes.m,'auto');
+  assert.equal(p.dirty.value,false);
+});
+
+test('runtime refresh adopts external policy changes and preserves conflicting drafts', async () => {
+  const p = page(); await p.load();
+  const remote=cloneFixture(p.savedPolicy.value); remote.dispatch_modes.m='observe';
+  p.dashboard.tuningPolicy=async()=>({mode:'observe',policy:cloneFixture(remote)});
+  await p.refreshRuntime();
+  assert.equal(p.policy.dispatch_modes.m,'observe');
+  assert.equal(p.savedPolicy.value.dispatch_modes.m,'observe');
+  p.policy.continuous.sensitivity=1.75; p.dirty.value=true;
+  remote.dispatch_modes.m='off'; remote.continuous.min_samples=60;
+  await p.refreshRuntime();
+  assert.equal(p.policy.continuous.sensitivity,1.75);
+  assert.equal(p.policyConflict.value,true);
+  let writes=0; p.dashboard.saveTuningPolicy=async()=>{writes++};
+  await p.save(); assert.equal(writes,0);
+  p.cancelChanges();
+  assert.equal(p.policy.dispatch_modes.m,'off');
+  assert.equal(p.policy.continuous.min_samples,60);
+  assert.equal(p.policyConflict.value,false);
+});
+
+test('explanation and calculated target use the evaluation snapshot despite drafts or saved policy changes', async () => {
+  const p = page(); await p.load();
+  const params=cloneFixture(p.savedPolicy.value.continuous);
+  p.states.value=[{...state(100), evaluation:{base_weight:100, evaluated_at:'2026-10-02T00:00:00Z',params},
+    k_speed:1.2,k_otps:1,k_cache:1,k_error:1,metric_ttft_p50:1,metric_ttft_p90:1,metric_ttft_p95:1,
+    baseline_ttft_p50:2,baseline_ttft_p90:2,baseline_ttft_p95:2,smoothed_error_rate:0}];
+  const explanation=p.factorExplanation(row), target=p.calculatedWeight(row);
+  p.policy.continuous.sensitivity=2; p.policy.continuous.speed_p50_weight=.9;
+  p.savedPolicy.value.continuous.combined_max_factor=1;
+  assert.equal(p.factorExplanation(row),explanation);
+  assert.equal(p.calculatedWeight(row),target);
+  assert.match(explanation,/当轮已保存参数/);
+  p.policy.dispatch_modes.m='off';
+  assert.equal(p.factorExplanation({...row,base_weight:0}),explanation);
+  p.states.value[0].evaluation.performance_evaluated=false;
+  assert.match(p.factorExplanation(row),/本轮未重新计算性能系数/);
+  delete p.states.value[0].evaluation;
+  assert.equal(p.calculatedWeight(row),null);
+  assert.match(p.factorExplanation(row),/缺少参数快照/);
+});
+
+test('event outcomes distinguish dispatch, confirmation and unavailable legacy receipts', async () => {
+  const p=page(); await p.load();
+  assert.equal(p.eventResult({status:'pending'}),'等待执行');
+  assert.equal(p.eventResult({status:'delivered'}),'已下发，待确认');
+  assert.equal(p.eventResult({status:'succeeded'}),'执行成功');
+  assert.equal(p.eventResult({status:'failed'}),'执行失败');
+  assert.equal(p.eventResult({status:'unknown'}),'结果未知');
+  assert.equal(p.eventResult({status:'auto_executed'}),'结果未知');
+});
+
+
+test('queued circuit zero is displayed as awaiting confirmation', async () => {
+  const p=page(); await p.load();
+  p.states.value=[{...state(100,0),phase:'circuit',capacity:{initialized:true,phase:'awaiting_write',pending_command_id:'queued-zero',confirmed_weight:50,pending_weight:0}}];
+  assert.equal(p.rowStatus(row).label,'等待执行确认');
+  assert.match(p.evaluationText(row),/等待执行回执/);
+  assert.doesNotMatch(p.evaluationText(row),/已熔断/);
+});
+
+
+test('channel notification refreshes evaluation and execution result without the periodic timer', async () => {
+  const p = page(); await p.load();
+  p.policy.dispatch_modes.m = 'off'; p.dirty.value = true;
+  p.dashboard.tuningContinuousStates = async () => ({items:[state(99, 0)]});
+  p.dashboard.tuningRecommendations = async () => ({items:[{id:'circuit',status:'succeeded',channel_id:1}]});
+  p.dashboard.tuningBaseValues = async () => ({items:[{...row,current_weight:0}]});
+  const refreshed = deferred(); let polls = 0;
+  p.dashboard.tuningChannelChanges = async (_site, revision, signal) => {
+    if (++polls === 1) return {revision:'new-result'};
+    assert.equal(revision, 'new-result');
+    refreshed.resolve();
+    return new Promise((_resolve,reject) => signal.addEventListener('abort', () => reject(new Error('aborted')), {once:true}));
+  };
+  const watching = p.watchChannelChanges();
+  try {
+    await refreshed.promise;
+    assert.equal(p.states.value[0].last_observed_requests, 99);
+    assert.equal(p.bases.value[0].current_weight, 0);
+    assert.equal(p.events.value[0].status, 'succeeded');
+    assert.equal(p.policy.dispatch_modes.m, 'off');
+    assert.equal(p.dirty.value, true);
+  } finally { p.stopWatching(); await watching; }
 });

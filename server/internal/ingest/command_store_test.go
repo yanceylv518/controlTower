@@ -66,6 +66,50 @@ func TestHeartbeatClaimsCommandsAndReportAuditsOnce(t *testing.T) {
 	}
 }
 
+type reconcileMemoryStore struct {
+	*MemoryStore
+	reads, completions int
+}
+
+func (s *reconcileMemoryStore) CommandsToReconcile(_ string, _ time.Time) ([]storage.ChannelCommand, error) {
+	s.reads++
+	return []storage.ChannelCommand{{ID: "lost", ChannelID: 9, CommandType: "channel.reconcile", PayloadJSON: `{"weight":55}`}}, nil
+}
+func (s *reconcileMemoryStore) CompleteReconciledCommand(instance string, result agentgateway.ChannelCommandResult, now time.Time) (storage.ChannelCommand, bool, error) {
+	s.completions++
+	return s.CompleteChannelCommand(result.ID, "succeeded", "", now)
+}
+func TestReconciliationRequiresCapabilityAndReadFailureDoesNotSettle(t *testing.T) {
+	s := &reconcileMemoryStore{MemoryStore: NewMemoryStore()}
+	now := time.Now().UTC()
+	_ = s.CreateChannelCommand(storage.ChannelCommand{ID: "lost", InstanceID: "inst", ChannelID: 9, CommandType: "channel.update", PayloadJSON: `{"weight":55}`, Status: "delivered", CreatedAt: now.Add(-time.Hour)})
+	svc := NewService(s)
+	request := agentgateway.AgentHeartbeatRequest{InstanceID: "inst", AgentID: "a", ReportedAt: now}
+	_, commands, err := svc.SaveHeartbeatWithCommands(request)
+	if err != nil || len(commands) != 0 || s.reads != 0 {
+		t.Fatalf("old Agent received unknown command: %v %v", commands, err)
+	}
+	request.SupportsCommandReconcile = true
+	_, commands, err = svc.SaveHeartbeatWithCommands(request)
+	if err != nil || len(commands) != 1 || commands[0].Type != "channel.reconcile" {
+		t.Fatalf("missing reconciliation: %v %v", commands, err)
+	}
+	report := agentgateway.AgentReportRequest{InstanceID: "inst", AgentID: "a", ReportedAt: now, CommandResults: []agentgateway.ChannelCommandResult{{ID: "lost", ChannelID: 9, Reconciled: true, Status: "unconfirmed"}}}
+	if err = svc.SaveReport(report); err != nil {
+		t.Fatal(err)
+	}
+	if s.completions != 0 {
+		t.Fatal("unavailable readback must remain unresolved")
+	}
+	report.CommandResults[0].Status = "observed"
+	if err = svc.SaveReport(report); err != nil {
+		t.Fatal(err)
+	}
+	if s.completions != 1 {
+		t.Fatal("observed result did not use the reconciliation path")
+	}
+}
+
 func TestOperationAuditSkipsAutomaticAndKeepsManualServiceToken(t *testing.T) {
 	s := NewMemoryStore()
 	now := time.Now().UTC()

@@ -7,8 +7,68 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
+
+func TestParallelChannelReadsShareOneCredentialBootstrap(t *testing.T) {
+	var logins atomic.Int32
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/user/login":
+			logins.Add(1)
+			_, _ = w.Write([]byte(`{"success":true,"data":{"id":7}}`))
+		case "/api/user/self/token":
+			_, _ = w.Write([]byte(`{"success":true,"data":"test-token"}`))
+		default:
+			if r.Header.Get("Authorization") != "Bearer test-token" {
+				t.Error("missing initialized token")
+			}
+			_, _ = w.Write([]byte(`{"success":true,"data":{"id":1,"weight":55,"status":1,"priority":0,"group":"default"}}`))
+		}
+	}))
+	defer api.Close()
+	c := NewWithCredentials(api.URL, "", "test-user", "test-password", 7, nil, api.Client())
+	start := make(chan struct{})
+	results := make(chan error, 12)
+	for i := 0; i < 12; i++ {
+		go func() { <-start; _, err := c.Read(context.Background(), 1); results <- err }()
+	}
+	close(start)
+	for i := 0; i < 12; i++ {
+		if err := <-results; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if logins.Load() != 1 {
+		t.Fatalf("parallel workers created %d login sessions", logins.Load())
+	}
+}
+
+func TestReadChannelIsStrictlyReadOnly(t *testing.T) {
+	for _, data := range []string{`{"id":12,"weight":55,"status":1,"priority":11,"group":"default"}`, `{"id":12,"status":1}`} {
+		calls := 0
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			if r.Method != http.MethodGet || r.URL.Path != "/api/channel/12" {
+				t.Errorf("unexpected write during reconciliation: %s %s", r.Method, r.URL.Path)
+			}
+			_, _ = w.Write([]byte(`{"success":true,"data":` + data + `}`))
+		}))
+		result, err := New(server.URL, "test-token", 7, server.Client()).Read(context.Background(), 12)
+		server.Close()
+		if calls != 1 {
+			t.Fatalf("calls=%d", calls)
+		}
+		if strings.Contains(data, "weight") {
+			if err != nil || result.Weight == nil || *result.Weight != 55 {
+				t.Fatalf("read: %+v %v", result, err)
+			}
+		} else if err == nil {
+			t.Fatal("incomplete response must not confirm a lost write")
+		}
+	}
+}
 
 func TestUpdatePreservesChannelFieldsWithoutSendingKey(t *testing.T) {
 	var putBody map[string]any

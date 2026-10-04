@@ -12,6 +12,7 @@ import (
 	neturl "net/url"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // ErrChannelNotFound 表示 New API 已确认目标渠道不存在，调用方可据此
@@ -88,6 +89,7 @@ type TokenStore interface {
 }
 
 type Client struct {
+	tokenMu     sync.Mutex
 	baseURL     string
 	accessToken string
 	username    string
@@ -111,6 +113,27 @@ func NewWithCredentials(baseURL, accessToken, username, password string, adminUs
 		}
 	}
 	return &Client{baseURL: strings.TrimRight(baseURL, "/"), accessToken: accessToken, username: username, password: password, adminUserID: adminUserID, tokenStore: tokenStore, httpClient: httpClient}
+}
+
+// Read observes a channel without issuing PUT/POST control operations.
+func (c *Client) Read(ctx context.Context, channelID int64) (Result, error) {
+	if channelID <= 0 {
+		return Result{}, fmt.Errorf("channel id must be positive")
+	}
+	if err := c.ensureToken(ctx); err != nil {
+		return Result{}, err
+	}
+	channel, err := c.get(ctx, channelID)
+	if err != nil {
+		return Result{}, err
+	}
+	// An incomplete response cannot confirm a lost write acknowledgement.
+	for _, field := range []string{"weight", "status", "priority", "group"} {
+		if channel[field] == nil {
+			return Result{}, fmt.Errorf("channel read missing %s", field)
+		}
+	}
+	return Result{ChannelID: channelID, Status: intPointer(channelNumber(channel["status"])), Weight: uintPointer(channelNumber(channel["weight"])), Priority: int64Pointer(channelNumber(channel["priority"])), Group: channelString(channel["group"])}, nil
 }
 
 func (c *Client) Update(ctx context.Context, update UpdateRequest) (Result, error) {
@@ -194,6 +217,8 @@ func (c *Client) Update(ctx context.Context, update UpdateRequest) (Result, erro
 }
 
 func (c *Client) ensureToken(ctx context.Context) error {
+	c.tokenMu.Lock()
+	defer c.tokenMu.Unlock()
 	if c.accessToken != "" {
 		return nil
 	}

@@ -150,8 +150,36 @@ func TestDirectControlIntegration(t *testing.T) {
 		t.Fatalf("preflight PUT leaked channel key: %#v", put)
 	}
 
+	// All automatic decisions now carry a confirmed baseline and evaluation.
+	prepareDecision := func(rec *tuning.Recommendation, capacity tuning.CapacityControl) {
+		pr, found, err := inner.GetPolicy(rec.InstanceID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !found {
+			policy := tuning.DefaultPolicy()
+			policy.DispatchModes = map[string]string{"m": "auto"}
+			if err := inner.PutPolicy(tuning.PolicyRecord{InstanceID: rec.InstanceID, Policy: policy, Mode: "observe", UpdatedAt: now}); err != nil {
+				t.Fatal(err)
+			}
+			pr, _, err = inner.GetPolicy(rec.InstanceID)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		bases, err := inner.ListChannelBaseValues(rec.InstanceID, "m")
+		if err != nil || len(bases) == 0 {
+			t.Fatalf("bases: %v %v", bases, err)
+		}
+		evaluation := &tuning.EvaluationContext{BaseWeight: bases[0].BaseWeight, BaseUpdatedAt: bases[0].UpdatedAt, PolicyUpdatedAt: pr.UpdatedAt, EvaluatedAt: now, Params: pr.Policy.Continuous}
+		rec.Evidence = map[string]any{"model": "m", "capacity_managed": true, "capacity": capacity, "evaluation": evaluation}
+		if err := inner.PutContinuousState(tuning.ContinuousState{InstanceID: rec.InstanceID, ChannelID: rec.ChannelID, ModelName: "m", Phase: "normal", UpdatedAt: now, Capacity: capacity, Evaluation: evaluation}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	// 2. Direct weight write hits new-api and leaves the full paper trail.
 	rec := tuning.Recommendation{ID: "smoke-rec-1-" + runID, InstanceID: site, ChannelID: 9, ChannelName: "smoke", CreatedAt: now, Rule: "weight_write", Evidence: map[string]any{"model": "m"}, CurrentWeight: 10, ProposedWeight: 25, ModeAtCreation: "auto"}
+	prepareDecision(&rec, tuning.CapacityControl{Initialized: true, Fresh: true, Phase: "normal", ConfirmedWeight: 10})
 	commandID, err := store.CreateContinuousWeightChange(rec, "system:auto", now)
 	if err != nil {
 		t.Fatalf("direct weight change: %v", err)
@@ -254,6 +282,7 @@ func TestDirectControlIntegration(t *testing.T) {
 
 	// 5. A site without direct config keeps the agent queue path untouched.
 	queueRec := tuning.Recommendation{ID: "smoke-rec-3-" + runID, InstanceID: plainSite, ChannelID: 5, ChannelName: "queued", CreatedAt: now, Rule: "weight_write", Evidence: map[string]any{}, CurrentWeight: 1, ProposedWeight: 2, ModeAtCreation: "auto"}
+	prepareDecision(&queueRec, tuning.CapacityControl{Initialized: true, Fresh: true, Phase: "normal", ConfirmedWeight: 1})
 	queueID, err := store.CreateContinuousWeightChange(queueRec, "system:auto", now)
 	if err != nil {
 		t.Fatalf("queue fallback: %v", err)
@@ -288,6 +317,7 @@ func TestDirectControlIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	capRec := tuning.Recommendation{ID: "smoke-cap-" + runID, InstanceID: site, ChannelID: 9, CreatedAt: now, Rule: "capacity_reduce", ModeAtCreation: "auto", CurrentWeight: 25, ProposedWeight: 19, Evidence: map[string]any{"model": "m", "capacity_managed": true, "capacity": capState.Capacity}}
+	prepareDecision(&capRec, capState.Capacity)
 	beforeWrite := time.Now().UTC()
 	capID, err := store.CreateContinuousWeightChange(capRec, "system:auto", now)
 	if err != nil {

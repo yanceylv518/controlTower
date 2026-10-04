@@ -1,6 +1,7 @@
 package tuning
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -8,6 +9,9 @@ import (
 )
 
 const capacityWindow = time.Minute
+
+// Changing an operator setting invalidates a decision, not the control link.
+var ErrDecisionSuperseded = errors.New("automatic decision or configuration changed")
 
 // CapacityControl is persisted separately from performance scores. All clocks
 // describing evidence use the Agent's common coverage cutoff, not tick time.
@@ -67,6 +71,25 @@ func confirmCapacityWrite(s *ContinuousState, weight int64, now time.Time) {
 	s.Capacity.PendingCommandID = ""
 	s.Capacity.UnderSince = time.Time{}
 	s.LastWrittenWeight, s.LastWriteAt = &weight, &now
+	if s.Phase == "circuit" && weight == 0 {
+		p := DefaultPolicy().Continuous
+		if s.Evaluation != nil {
+			p = s.Evaluation.Params
+		}
+		next := now.Add(time.Duration(p.SilentMinutes) * time.Minute)
+		s.CircuitOpenedAt, s.NextProbeAt = &now, &next
+	}
+	// Track every confirmed write, but only an overload latch needs a new
+	// feedback window. Ordinary performance changes must not activate it.
+	s.CapacityLimited = s.Capacity.Active || !s.Capacity.Fresh
+	switch {
+	case !s.Capacity.Fresh:
+		s.Capacity.Phase = "unavailable"
+	case s.Capacity.Active:
+		s.Capacity.Phase = "waiting_feedback"
+	default:
+		s.Capacity.Phase = "normal"
+	}
 }
 
 func (e *Engine) settleCapacityWrite(cs ContinuousStore, site string, b ChannelBaseValue, s *ContinuousState, now time.Time) {
@@ -79,7 +102,7 @@ func (e *Engine) settleCapacityWrite(cs ContinuousStore, site string, b ChannelB
 	if resultStore, ok := cs.(continuousCommandResultStore); ok {
 		var completedAt time.Time
 		status, completedAt, err = resultStore.ContinuousCommandResult(s.Capacity.PendingCommandID)
-		if completedAt.After(appliedAt) {
+		if !completedAt.IsZero() {
 			appliedAt = completedAt
 		}
 	} else {
@@ -89,8 +112,8 @@ func (e *Engine) settleCapacityWrite(cs ContinuousStore, site string, b ChannelB
 		return
 	}
 	if status == "succeeded" {
-		// Observing the acknowledgement is a conservative upper bound on the
-		// actual apply time, including across a server restart.
+		// The persisted Server confirmation is already an upper bound on apply
+		// time. A later engine tick must not restart the feedback/silent clock.
 		confirmCapacityWrite(s, s.Capacity.PendingWeight, appliedAt)
 		e.noteWriteSuccess(s)
 	} else if status == "superseded" {
@@ -99,7 +122,7 @@ func (e *Engine) settleCapacityWrite(cs ContinuousStore, site string, b ChannelB
 	} else {
 		s.Capacity.PendingCommandID = ""
 		e.resetUnappliedCapacityTransition(site, s, now)
-		e.noteWriteFailure(site, b, s, "auto", fmt.Errorf("capacity-managed command %s", status), now)
+		e.noteWriteFailure(site, b, s, "auto", fmt.Errorf("automatic weight command %s", status), now)
 		s.Capacity.Phase = "write_failed"
 	}
 }
@@ -121,9 +144,18 @@ func (e *Engine) resetUnappliedCapacityTransition(site string, s *ContinuousStat
 // confirmation, but not the latch or a confirmed write's feedback deadline.
 func updateCapacity(b ChannelBaseValue, s *ContinuousState, asOf, now time.Time, available bool) {
 	c := &s.Capacity
-	if !capacityConfigured(b) && c.PendingCommandID == "" {
-		*c = CapacityControl{}
-		s.CapacityLimited = false
+	if !capacityConfigured(b) {
+		// Keep command acknowledgement tracking even without a capacity cap.
+		// Traffic evidence is only required for capacity decisions.
+		c.Active, c.Fresh, c.MaxRPM, c.MaxTPM = false, true, 0, 0
+		c.OverSince, c.UnderSince, c.Reason = time.Time{}, time.Time{}, ""
+		c.Phase = "normal"
+		s.CapacityLimited = c.PendingCommandID != ""
+		if s.CapacityLimited {
+			c.Phase = "awaiting_write"
+		} else if c.Initialized {
+			c.ConfirmedWeight = effectiveCurrentWeight(b, *s)
+		}
 		return
 	}
 	if !c.Initialized {
@@ -184,10 +216,8 @@ func updateCapacity(b ChannelBaseValue, s *ContinuousState, asOf, now time.Time,
 	switch {
 	case c.PendingCommandID != "":
 		c.Phase = "awaiting_write"
-	case !c.AppliedAt.IsZero() && asOf.Add(-capacityWindow).Before(c.AppliedAt):
+	case c.Active && !c.AppliedAt.IsZero() && asOf.Add(-capacityWindow).Before(c.AppliedAt):
 		c.Phase = "waiting_feedback"
-		// Even after a performance decrease, do not immediately cancel it.
-		s.CapacityLimited = true
 	case c.Active && !c.UnderSince.IsZero():
 		c.Phase = "recovering"
 	case c.Active && c.Utilization < 1:
@@ -268,32 +298,43 @@ func applyCapacityTarget(s *ContinuousState) bool {
 }
 
 func capacityRecoveryBlocked(b ChannelBaseValue, s ContinuousState) bool {
-	return capacityConfigured(b) && (s.CapacityLimited || s.Capacity.PendingCommandID != "")
+	return s.Capacity.PendingCommandID != "" || capacityConfigured(b) && s.CapacityLimited
 }
 
 // Use this for weight-only circuit transitions too: their acknowledgements
 // establish the same feedback baseline as normal capacity-managed writes.
 func (e *Engine) createTrackedWeightChange(cs ContinuousStore, rec Recommendation, b ChannelBaseValue, s *ContinuousState, now time.Time) (string, error) {
-	if s.Capacity.Initialized {
-		s.UpdatedAt = now
-		if err := cs.PutContinuousState(*s); err != nil {
-			return "", err
+	if !s.Capacity.Initialized {
+		s.Capacity.Initialized = true
+		s.Capacity.ConfirmedWeight = effectiveCurrentWeight(b, *s)
+		s.Capacity.MaxRPM, s.Capacity.MaxTPM = b.MaxRPM, b.MaxTPM
+		if !capacityConfigured(b) {
+			s.Capacity.Fresh = true
 		}
 	}
+	// The tracker is common to all weight writes, not just capped channels.
+	if rec.Evidence == nil {
+		rec.Evidence = map[string]any{}
+	}
+	rec.Evidence["capacity_managed"], rec.Evidence["capacity"] = true, s.Capacity
+	rec.Evidence["base_weight"], rec.Evidence["base_updated_at"] = b.BaseWeight, b.UpdatedAt
+	rec.CurrentWeight = s.Capacity.ConfirmedWeight
+	s.UpdatedAt = now
+	if err := cs.PutContinuousState(*s); err != nil {
+		return "", err
+	}
 	id, err := cs.CreateContinuousWeightChange(rec, "system:auto", now)
-	if err != nil || !s.Capacity.Initialized {
+	if err != nil {
 		return id, err
 	}
 	s.Capacity.PendingCommandID, s.Capacity.PendingWeight = id, rec.ProposedWeight
 	s.Capacity.Phase = "awaiting_write"
+	s.CapacityLimited = true
 	if id == "" {
 		confirmCapacityWrite(s, rec.ProposedWeight, time.Now().UTC())
 		e.noteWriteSuccess(s)
 	} else {
 		e.settleCapacityWrite(cs, rec.InstanceID, b, s, now)
-	}
-	if s.Capacity.PendingCommandID == "" && s.LastWriteAt != nil && s.Capacity.ConfirmedWeight == rec.ProposedWeight {
-		s.Capacity.Phase = "waiting_feedback"
 	}
 	return id, nil
 }
