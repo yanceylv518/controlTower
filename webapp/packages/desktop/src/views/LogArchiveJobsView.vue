@@ -18,7 +18,7 @@ type Day={date:string;state:string;revision:string;version?:string;rows:string;s
 type Engine={latest?:{id:string;table:string;log_time:string;observed_at:string};protocol:number;collection:Progress;history:Progress;first_date?:string;first_date_source?:string;frontier?:string;cutoff?:string;counts_date?:string;counts_error?:string}
 type Item={site_id:string;config:Config;seen_at?:string;targets:{agent_id:string;instance_id:string;configured:boolean}[];status:{engine?:Engine;applied_version:number;state:string;error:string}}
 const filters=useFiltersStore(),auth=useAuthStore(),tab=ref('data'),mode=ref('calendar'),month=ref(beijingDate().slice(0,7))
-const item=ref<Item>(),reports=ref<Day[]>([]),loading=ref(false),saving=ref(false),error=ref(''),selected=ref<Day>(),initialized=ref(false)
+const item=ref<Item>(),reports=ref<Day[]>([]),loading=ref(false),saving=ref(false),error=ref(''),selected=ref<Day>()
 const form=ref<Config>(),now=ref(Date.now());let sequence=0,disposed=false,timer:ReturnType<typeof setInterval>|undefined
 const unavailable=ref(false)
 const emptyTitle=computed(()=>loading.value?'正在读取归档状态':unavailable.value?'新版归档接口尚未就绪':error.value?error.value:'等待归档数据')
@@ -50,7 +50,6 @@ async function load(){
  if(res.protocol!==1)throw new ApiError(404,'archive_protocol_unavailable')
  item.value=res.items[0];reports.value=res.days;error.value='';unavailable.value=false
  if(selected.value)selected.value=reports.value.find(d=>d.date===selected.value?.date)||days.value.find(d=>d.date===selected.value?.date)
- if(!initialized.value&&engine.value?.first_date){initialized.value=true;const first=engine.value.first_date.slice(0,7);if(first!==month.value){month.value=first;void load()}}
  }catch(e){if(!disposed&&ticket===sequence&&site===filters.site_id){unavailable.value=e instanceof ApiError&&(e.status===404||e.status===410);error.value=unavailable.value?'新版归档接口尚未就绪':apiFailure(e)}}finally{if(ticket===sequence)loading.value=false}
 }
 async function save(config:Config){if(!writable.value||!item.value)return;const site=filters.site_id;saving.value=true
@@ -58,8 +57,8 @@ async function save(config:Config){if(!writable.value||!item.value)return;const 
 function toggle(task:keyof Pick<Tasks,'collection'|'history'>){if(!item.value||!writable.value)return;const c=item.value.config;const tasks={...c.tasks};if(!c.running){tasks.collection=false;tasks.history=false}tasks[task]=!c.running||!c.tasks[task];void save({...c,tasks,running:tasks.collection||tasks.history})}
 function retryToken(){return globalThis.crypto.randomUUID()}
 function edit(){if(!canOpenSettings.value)return;if(item.value){const config:Config=JSON.parse(JSON.stringify(item.value.config));config.tasks.collection_batches ||= 4;config.tasks.history_batches ||= 1;form.value=config}}
-watch(()=>filters.site_id,()=>{sequence++;error.value='';unavailable.value=false;item.value=undefined;reports.value=[];selected.value=undefined;form.value=undefined;initialized.value=false;month.value=beijingDate().slice(0,7);void load()})
-onMounted(async()=>{await filters.loadInstances();await load();timer=setInterval(()=>{now.value=Date.now();if(!document.hidden&&!loading.value&&!saving.value)void load()},15000)})
+watch(()=>filters.site_id,()=>{sequence++;error.value='';unavailable.value=false;item.value=undefined;reports.value=[];selected.value=undefined;form.value=undefined;month.value=beijingDate().slice(0,7);void load()},{immediate:true})
+onMounted(async()=>{await filters.loadInstances();if(disposed)return;timer=setInterval(()=>{now.value=Date.now();if(!document.hidden&&!loading.value&&!saving.value)void load()},15000)})
 onUnmounted(()=>{disposed=true;sequence++;if(timer)clearInterval(timer)})
 </script>
 <template>

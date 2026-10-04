@@ -18,9 +18,11 @@ function quick(value:string){preset.value=value;const today=beijingDate();if(val
 const selected=ref(''),detail=ref(false),view=ref('trend'),metric=ref('requests'),busy=ref(false),error=ref('')
 type Day={date:string;state:string;ready:boolean;version:string;error:string;updated_at:string}
 type Overview={days:Day[];rows:StatRow[];observed_at:string;options?:Record<string,Record<string,boolean>>;option_names?:Record<string,Record<string,string>>}
-const data=ref<Overview>(),cache=overviewCache<Overview>(auth.user)
+const data=ref<Overview>();let cache=overviewCache<Overview>(auth.user)
 const loadedScope=ref(''),loadedQuery=ref('')
 let sequence=0,debounce:ReturnType<typeof setTimeout>|undefined
+let pending:{key:string;controller:AbortController;promise:Promise<void>}|undefined
+function cancelLoad(){sequence++;pending?.controller.abort();pending=undefined;busy.value=false}
 const {money,moneyError,refreshMoney}=useArchiveCurrency(()=>props.siteId)
 const amount=(quota:bigint)=>quotaAmount(quota,money.value)
 const moneyLabel=computed(()=>money.value?.type==='TOKENS'?'额度':`金额 ${currencyUnit(money.value)}`)
@@ -44,21 +46,24 @@ function groupEmpty(name:string){const items=scoped.value.filter(r=>String(r.dim
 
 function state(d:Day){return d.error?'统计失败':!d.version?'待统计':!d.ready?'统计中':d.state==='sealed'?'已校验':'待校验'}
 function restoreData(){const saved=cache.get(query.value);if(saved){data.value=saved.data;loadedScope.value=scope.value;loadedQuery.value=query.value}else if(loadedScope.value!==scope.value){data.value=undefined;loadedQuery.value=''}return saved}
-async function load(force=false){const ticket=++sequence,key=query.value;if(!props.siteId||!month.value)return
+async function load(force=false){const key=query.value;if(!props.siteId||!month.value)return
+ if(debounce){clearTimeout(debounce);debounce=undefined}
+ if(pending?.key===key)return pending.promise
+ cancelLoad();const ticket=sequence,controller=new AbortController()
  const saved=restoreData();error.value='';busy.value=false
  if(saved&&!force&&Date.now()-saved.time<30000)return
  busy.value=true
- try{const result=await client.request<{items:Overview[]}>(`/api/dashboard/log-archive-read/overview?${key}`);if(ticket!==sequence||key!==query.value)return
+ const promise=(async()=>{try{const result=await client.request<{items:Overview[]}>(`/api/dashboard/log-archive-read/overview?${key}`,{signal:controller.signal});if(ticket!==sequence||key!==query.value)return
  const next=result.items[0];if(!next)throw new Error('统计响应为空');totals(next.rows)
  data.value=next;loadedScope.value=scope.value;loadedQuery.value=key;cache.delete(key);cache.set(key,{data:next,time:Date.now()});if(cache.size>8)cache.delete(cache.keys().next().value!)
- }catch(e){if(ticket===sequence)error.value=archiveReadError(e)}finally{if(ticket===sequence)busy.value=false}}
+ }catch(e){if(ticket===sequence&&!controller.signal.aborted)error.value=archiveReadError(e)}finally{if(ticket===sequence){busy.value=false;pending=undefined}}})();pending={key,controller,promise};return promise}
 watch(()=>props.siteId,()=>{void refreshMoney()},{immediate:true})
-watch(query,()=>{sequence++;restoreData();error.value='';busy.value=false;if(debounce)clearTimeout(debounce);debounce=setTimeout(()=>void load(),350)},{immediate:true})
+watch(query,(value,previous)=>{cancelLoad();restoreData();error.value='';if(debounce)clearTimeout(debounce);if(props.active===false)return;const oldSite=previous?new URLSearchParams(previous).get('site_id'):'';if(!previous||oldSite!==props.siteId)void load();else debounce=setTimeout(()=>void load(),350)},{immediate:true})
 watch([month,range,user,model,channel,()=>props.siteId],()=>{selected.value='';detail.value=false})
-watch(()=>auth.user,()=>{cache.clear();data.value=undefined;sequence++;if(auth.user)void load()})
-watch(()=>props.active,active=>{if(active)void load()})
+watch(()=>auth.user,()=>{cache.clear();cache=overviewCache<Overview>(auth.user);data.value=undefined;cancelLoad();if(auth.user&&props.active!==false)void load()})
+watch(()=>props.active,active=>{if(active)void load();else{cancelLoad();if(debounce)clearTimeout(debounce)}})
 const timer=setInterval(()=>{if(props.active!==false&&!document.hidden&&!busy.value)void load(true)},60000)
-onUnmounted(()=>{sequence++;clearInterval(timer);if(debounce)clearTimeout(debounce)})
+onUnmounted(()=>{cancelLoad();clearInterval(timer);if(debounce)clearTimeout(debounce)})
 function select(date:string){selected.value=selected.value===date?'':date;detail.value=false}
 function exportCSV(){const text=[['日期范围','维度','请求次数','输入 Token','输出 Token','Quota',moneyLabel.value,'统计覆盖','数据版本','用户筛选','模型筛选','渠道筛选','金额缺失条数','输入缺失条数','输出缺失条数','缓存缺失条数','币种配置（查询时）'],...groups.value.map(g=>[selected.value||range.value.join(' ~ '),g.name,g.requests,g.prompt_tokens,g.completion_tokens,g.quota,amount(g.quota),`${complete.value}/${days.value.length}`,JSON.stringify(days.value.map(d=>({date:d.date,version:d.version,state:state(d),updated_at:d.updated_at}))),user.value,model.value,channel.value,g.quota_missing,g.prompt_tokens_missing,g.completion_tokens_missing,g.cache_tokens_missing,JSON.stringify(money.value??null)])].map(r=>r.map(csvCell).join(',')).join('\r\n');const url=URL.createObjectURL(new Blob(['\uFEFF'+text],{type:'text/csv;charset=utf-8'}));const a=document.createElement('a');a.href=url;a.download=`archive-${month.value}.csv`;a.click();URL.revokeObjectURL(url)}
 </script>

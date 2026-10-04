@@ -25,7 +25,7 @@ function setup(t) {
 
 function item(site){return {site_id:site,config:{version:1,instance_id:site,agent_id:'a',running:true,batch_size:1000,interval_seconds:2,delay_seconds:300,history_immutable:false,tasks:{collection:true,history:true}},targets:[],seen_at:new Date().toISOString(),status:{applied_version:1,state:'running',error:'',engine:{protocol:1,collection:{after_id:'9007199254740993',rows:'1',step:'collect'},history:{step:'verify_source',after_id:'0',rows:'0'},first_date:'2026-06-15',first_date_source:'archive'}}}}
 const value=(ctx,name)=>ctx.view.get(name)
-async function initial(ctx){value(ctx,'initialized').value=true;value(ctx,'month').value='2026-06';const p=value(ctx,'load')();ctx.requests.at(-1).resolve({protocol:1,items:[item('A')],days:[]});await p}
+async function initial(ctx){value(ctx,'month').value='2026-06';const p=value(ctx,'load')();ctx.requests.at(-1).resolve({protocol:1,items:[item('A')],days:[]});await p}
 test('new control uses only two switches and never sends old pipeline configuration',async t=>{
  const ctx=setup(t);await initial(ctx);value(ctx,'toggle')('history');const req=ctx.requests.at(-1)
  assert.match(req.url,/log-archive-jobs\/A$/);const body=JSON.parse(req.options.body)
@@ -82,4 +82,13 @@ test('settings remain inspectable while offline or refreshing but cannot be save
  value(ctx,'loading').value=true
  assert.equal(value(ctx,'canOpenSettings').value,true)
  assert.match(value(ctx,'settingsBlockReason').value,/刷新/)
+})
+
+
+test('entry loads status once and does not request the earliest archive month',async t=>{
+ const ctx=setup(t);assert.equal(ctx.requests.length,1)
+ const month=value(ctx,'month').value
+ ctx.requests[0].resolve({protocol:1,items:[item('A')],days:[]})
+ await vue.nextTick();await vue.nextTick()
+ assert.equal(ctx.requests.length,1);assert.equal(value(ctx,'month').value,month)
 })

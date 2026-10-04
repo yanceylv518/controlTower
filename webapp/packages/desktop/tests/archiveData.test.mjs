@@ -2,15 +2,15 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {readFileSync} from 'node:fs'
 import ts from 'typescript'
-import {computed,ref} from 'vue'
+import {computed,ref,reactive} from 'vue'
 const compile=source=>ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText
 const analysis={},session={}
 new Function('exports',compile(readFileSync(new URL('../src/utils/archiveAnalysis.ts',import.meta.url),'utf8')))(analysis)
 new Function('exports',compile(readFileSync(new URL('../src/utils/archiveOverviewCache.ts',import.meta.url),'utf8')))(session)
 function setup(identity={}){
- const props={siteId:'a'},requests=[],watchers=[],cleanup=[]
+ const props=reactive({siteId:'a'}),requests=[],watchers=[],cleanup=[]
  const source=readFileSync(new URL('../src/components/ArchiveDataView.vue',import.meta.url),'utf8').split('<script setup lang="ts">')[1].split('</script>')[0].replace(/^import .*$/gm,'')
- const args={computed,ref,watch:(...args)=>watchers.push(args),onUnmounted:f=>cleanup.push(f),defineProps:()=>props,client:{request:url=>new Promise((resolve,reject)=>requests.push({url,resolve,reject}))},useAuthStore:()=>({user:identity}),overviewCache:session.overviewCache,beijingDate:()=> '2026-09-27',archiveReadError:()=> '读取失败',...analysis,useArchiveCurrency:()=>({money:ref(),moneyError:ref(''),refreshMoney:async()=>{}}),quotaAmount:()=> '—',currencyUnit:()=> '额度',setInterval:()=>0,clearInterval:()=>{}}
+ const args={computed,ref,watch:(...args)=>watchers.push(args),onUnmounted:f=>cleanup.push(f),defineProps:()=>props,client:{request:(url,options)=>new Promise((resolve,reject)=>requests.push({url,options,resolve,reject}))},useAuthStore:()=>({user:identity}),overviewCache:session.overviewCache,beijingDate:()=> '2026-09-27',archiveReadError:()=> '读取失败',...analysis,useArchiveCurrency:()=>({money:ref(),moneyError:ref(''),refreshMoney:async()=>{}}),quotaAmount:()=> '—',currencyUnit:()=> '额度',setInterval:()=>0,clearInterval:()=>{}}
  const js=ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ES2022}}).outputText
  const c=new Function(...Object.keys(args),js+';return {load,data,query,total,hasStats,month,selected,dimension,anomalies,cache,quick,range,user,model,channel,options,optionLabel,groups,dimensionPending,error,restoreData}')(...Object.values(args))
  return {...c,props,requests,watchers,dispose:()=>cleanup.forEach(f=>f())}
@@ -104,3 +104,33 @@ for (const [field,param,selected] of [['model','model','gpt-5'],['user','user_id
   })
  }
 }
+
+
+test('overlapping entry and activation loads share one pending request',async()=>{
+ const c=setup();const a=c.load(),b=c.load(true)
+ assert.equal(c.requests.length,1)
+ c.requests[0].resolve({items:[fixture]});await Promise.all([a,b]);c.dispose()
+})
+test('changing query and disposing cancel requests without publishing their results',async()=>{
+ const c=setup();const a=c.load();c.props.siteId='b';const b=c.load()
+ assert.equal(c.requests[0].options.signal.aborted,true)
+ c.dispose();assert.equal(c.requests[1].options.signal.aborted,true)
+ c.requests.forEach(r=>r.resolve({items:[fixture]}));await Promise.all([a,b])
+ assert.equal(c.data.value,undefined)
+})
+test('first entry starts immediately without waiting for the filter debounce',async()=>{
+ const c=setup();const queryWatch=c.watchers.find(w=>w[0]===c.query)
+ queryWatch[1](c.query.value,undefined)
+ assert.equal(c.requests.length,1)
+ c.requests[0].resolve({items:[fixture]});await c.load();c.dispose()
+})
+
+test('inactive tab skips query loads and activation resumes them',async()=>{
+ const c=setup();c.props.active=false
+ c.watchers.find(w=>w[0]===c.query)[1](c.query.value,undefined)
+ assert.equal(c.requests.length,0)
+ c.props.active=true
+ const activeWatch=c.watchers.find(w=>typeof w[0]==='function'&&w[0]()===true)
+ activeWatch[1](true);assert.equal(c.requests.length,1)
+ c.requests[0].resolve({items:[fixture]});await c.load();c.dispose()
+})
