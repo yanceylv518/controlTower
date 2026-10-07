@@ -1,5 +1,9 @@
 # Control Tower 迭代记录
 
+## v2.0.0-rc154（2026-10-07）
+
+账单死锁修复及生成/页面交互优化已远程发布，标签固定d6cbc728并确认包含rc153。CI和release成功，三安装包及校验清单、GHCR版本/latest齐全，正式产物核验通过。相对rc153仅需升级Server/Web，Agent及迁移无变化；未生产部署。详见[发布记录](ai-tasks/2026-10-07-rc154-billing-release.md)。
+
 ## v2.0.0-rc153（2026-10-04）
 
 报表断点恢复和站点队列、调权真实回执/误限升/延迟治理、归档页面首屏请求优化已远程发布。标签固定2a041358，已核验包含rc152。CI及release成功，三Linux安装包和校验清单、GHCR版本/latest齐全；正式附件与镜像核验通过。需Server/Web/Agent配套更新，包含118、119迁移；未生产部署或验收。详见[发布记录](ai-tasks/2026-10-04-rc153-remote-release.md)。
