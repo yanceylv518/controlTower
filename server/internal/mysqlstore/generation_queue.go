@@ -64,11 +64,15 @@ func (s Store) GenerationWaitingFor(ctx context.Context, site, kind string) (str
 	return "", nil
 }
 
+func generationSiteLockKey(site string) string {
+	return fmt.Sprintf("ct:generation:%x", sha256.Sum256([]byte(site)))[:64]
+}
+
 func (s Store) LockGenerationSite(ctx context.Context, site string) (context.Context, func(), error) {
 	if site == "" {
 		return nil, nil, fmt.Errorf("generation site required")
 	}
-	key := fmt.Sprintf("ct:generation:%x", sha256.Sum256([]byte(site)))[:64]
+	key := generationSiteLockKey(site)
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
 		return nil, nil, err

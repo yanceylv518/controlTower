@@ -104,6 +104,10 @@ func (s Store) createBillingMonthFromDays(ctx context.Context, tx *sql.Tx, job b
 // reports. Enqueue freezes lineage/currency; publication copies those exact
 // daily snapshots and preserves the previous bill if anything fails.
 func (s Store) CompleteBillingMonth(ctx context.Context, job billing.Job) error {
+	return retryBillingDeadlock(ctx, func() error { return s.completeBillingMonthAttempt(ctx, job) })
+}
+
+func (s Store) completeBillingMonthAttempt(ctx context.Context, job billing.Job) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err

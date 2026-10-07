@@ -1,0 +1,12 @@
+import {createServer} from 'vite';
+const entry=`import {createApp,ref} from 'vue/dist/vue.esm-bundler.js';
+import ElementPlus from 'element-plus';import 'element-plus/dist/index.css';
+import Batch from '/src/components/BillingGenerationBatch.vue';import {dashboard,passthrough} from '/src/api';
+const subjects=Array.from({length:46},(_,i)=>({id:i+1,name:['杭州科技有限公司','嘉兴电信','杭州服务平台','上海渠道合作方','江苏联通'][i%5]+' '+(i+1),role:1}));
+const writes=[];let fail=false;
+passthrough.users=async q=>({items:subjects.filter(s=>(s.name+' '+s.id).includes(q.keyword||'')).map(s=>({...s,display_name:s.name,username:s.name}))});
+dashboard.billingUpstreams=async()=>({items:subjects});
+dashboard.billingGenerationPreview=async q=>{await new Promise(r=>setTimeout(r,150));if(fail)throw Error('模拟状态读取失败');return {items:q.subject_ids.map(id=>({subject_id:id,outcome:'registered',total_days:30,complete:id%5===1?30:id%5===2?12:0,empty:id%5===3?30:0,failed:id%5===4?1:0,running:0,pending:0,monthly:id%5===1?{status:'complete'}:undefined}))}};
+dashboard.generateBillingBatch=async q=>{writes.push(q);return {items:q.subject_ids.map(id=>({subject_id:id,outcome:'complete',total_days:30,complete:30,empty:0,failed:0,running:0,pending:0,processed:10,days:[],monthly:{status:'complete'}}))}};
+createApp({components:{Batch},setup(){return {kind:ref('user_statement'),batch:ref(),subjects,flip:()=>{fail=!fail}}},template:'<main style="padding:24px"><h2>账单生成交互验收 · 合成数据</h2><el-radio-group v-model="kind"><el-radio-button value="user_statement">用户账单</el-radio-button><el-radio-button value="upstream_statement">上游账单</el-radio-button></el-radio-group><el-button type="primary" @click="batch.open()">生成账单</el-button><el-button @click="flip">切换模拟读取失败</el-button><Batch ref="batch" :kind="kind" site="synthetic" month="2026-09" :subjects="subjects"/></main>'}).use(ElementPlus).mount('#app');`;
+const server=await createServer({configFile:false,root:process.cwd(),plugins:[(await import('@vitejs/plugin-vue')).default(),{name:'qa',resolveId(id){if(id==='/qa-entry.js')return '\0qa-entry'},load(id){if(id==='\0qa-entry')return entry},configureServer(s){s.middlewares.use((req,res,next)=>{if(req.url!=='/')return next();res.setHeader('Content-Type','text/html; charset=utf-8');res.end('<div id="app"></div><script type="module" src="/@vite/client"></script><script type="module" src="/qa-entry.js"></script>')})}}],server:{host:'127.0.0.1',port:5199,strictPort:true}});await server.listen();console.log('Synthetic billing QA http://127.0.0.1:5199');

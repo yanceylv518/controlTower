@@ -609,6 +609,10 @@ func (s Store) FailBillingStep(ctx context.Context, j billing.Job, st billing.Jo
 }
 
 func (s Store) FinalizeBillingJob(ctx context.Context, j billing.Job) error {
+	return retryBillingDeadlock(ctx, func() error { return s.finalizeBillingJobAttempt(ctx, j) })
+}
+
+func (s Store) finalizeBillingJobAttempt(ctx context.Context, j billing.Job) error {
 	tx, e := s.db.BeginTx(ctx, nil)
 	if e != nil {
 		return e

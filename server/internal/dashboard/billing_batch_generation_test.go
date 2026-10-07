@@ -6,12 +6,58 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 type batchStoreTest struct {
 	saved     []billing.AutomaticTarget
 	cancelled []billing.AutomaticTarget
 	failure   error
+}
+
+type batchPreviewStoreTest struct {
+	batchStoreTest
+	resolved bool
+	read     []billing.AutomaticTarget
+}
+
+func (s *batchPreviewStoreTest) BillingBatchMembers(_ context.Context, targets []billing.AutomaticTarget) ([]billing.AutomaticTarget, error) {
+	s.resolved = true
+	return append(targets, billing.AutomaticTarget{SubjectID: 99}), nil
+}
+
+func (s *batchPreviewStoreTest) BillingGenerationProgress(_ context.Context, target billing.AutomaticTarget) (billing.GenerationProgress, error) {
+	s.read = append(s.read, target)
+	return billing.GenerationProgress{SubjectID: target.SubjectID}, nil
+}
+
+func TestBillingSelectionPreviewDoesNotExpandOrRegisterBatch(t *testing.T) {
+	for _, kind := range []string{"user_statement", "upstream_statement"} {
+		s := &batchPreviewStoreTest{}
+		w := httptest.NewRecorder()
+		(BillingBatchGenerationHandler{Store: s}).ServeHTTP(w, httptest.NewRequest("GET", "/?action=preview&instance_id=site&kind="+kind+"&subject_ids=7,8&from=2025-09-01T00:00:00%2B08:00&to=2025-10-01T00:00:00%2B08:00", nil))
+		if w.Code != 200 || s.resolved || len(s.saved) != 0 || len(s.read) != 2 {
+			t.Fatalf("preview changed membership or registered work: %d %+v", w.Code, s)
+		}
+		for _, target := range s.read {
+			if target.Kind != kind || target.InstanceID != "site" || !target.ProgressUntil.Equal(target.To) {
+				t.Fatalf("wrong preview scope: %+v", target)
+			}
+		}
+	}
+	// A preview for this month must not reuse an older batch's frozen cutoff.
+	now := time.Now().In(billing.BusinessLocation)
+	from := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, billing.BusinessLocation)
+	if !from.Before(billing.CompleteDayBoundary(now)) {
+		return
+	}
+	s := &batchPreviewStoreTest{}
+	w := httptest.NewRecorder()
+	path := "/?action=preview&instance_id=site&subject_ids=7&from=" + from.UTC().Format(time.RFC3339) + "&to=" + from.AddDate(0, 1, 0).UTC().Format(time.RFC3339)
+	(BillingBatchGenerationHandler{Store: s}).ServeHTTP(w, httptest.NewRequest("GET", path, nil))
+	if w.Code != 200 || len(s.read) != 1 || !s.read[0].ProgressUntil.Equal(billing.CompleteDayBoundary(now)) {
+		t.Fatalf("current cutoff: %d %+v", w.Code, s.read)
+	}
 }
 
 func (s *batchStoreTest) PutBillingAutomaticTargets(_ context.Context, v []billing.AutomaticTarget) error {
@@ -137,6 +183,10 @@ func TestBillingBatchKindPermissions(t *testing.T) {
 		{"billing.users", "user_statement", 200},
 	} {
 		path := "/api/dashboard/billing/generation-batch?instance_id=site&kind=" + tc.kind + "&subject_ids=7&from=2025-09-01T00:00:00%2B08:00&to=2025-10-01T00:00:00%2B08:00"
+		preview := menuRequest(t, tc.permission, "GET", path+"&action=preview", BillingBatchGenerationHandler{Store: &batchStoreTest{}})
+		if preview.Code != tc.code {
+			t.Fatal("preview permission", tc, preview.Code)
+		}
 		w := menuRequest(t, tc.permission, "GET", path, BillingBatchGenerationHandler{Store: &batchStoreTest{}})
 		if w.Code != tc.code {
 			t.Fatal(tc, w.Code, w.Body.String())

@@ -4,6 +4,7 @@ import (
 	"context"
 	"controltower/server/internal/billing"
 	"database/sql"
+	"strings"
 	"time"
 )
 
@@ -61,15 +62,50 @@ func supersedeBillingStatement(ctx context.Context, tx *sql.Tx, job billing.Job)
 			return err
 		}
 	}
-	_, err := tx.ExecContext(ctx, `UPDATE billing_jobs j JOIN billing_statement_jobs st ON st.job_id=j.id SET j.status='superseded',j.updated_at=? WHERE j.instance_id=? AND j.job_type=? AND st.subject_id=? AND j.bill_period=? AND j.range_from=? AND j.range_to=? AND j.usage_version>=3 AND j.status IN ('complete','no_data') AND j.id<>?`, time.Now().UTC(), job.InstanceID, job.JobType, subject, job.BillPeriod, job.From.UTC(), job.To.UTC(), job.ID)
+	err := supersedeBillingCandidates(ctx, tx, `j.instance_id=? AND j.job_type=? AND st.subject_id=? AND j.bill_period=? AND j.range_from=? AND j.range_to=? AND j.usage_version>=3 AND j.status IN ('complete','no_data') AND j.id<>?`, job.InstanceID, job.JobType, subject, job.BillPeriod, job.From.UTC(), job.To.UTC(), job.ID)
 	if err != nil {
 		return err
 	}
 	if job.BillPeriod == "daily" {
-		_, err = tx.ExecContext(ctx, `UPDATE billing_jobs j JOIN billing_statement_jobs st ON st.job_id=j.id SET j.status='superseded',j.updated_at=? WHERE j.instance_id=? AND j.job_type=? AND st.subject_id=? AND j.bill_period='monthly' AND j.range_from<=? AND j.range_to>=? AND j.usage_version>=3 AND j.status IN ('complete','pending') AND NOT EXISTS (SELECT 1 FROM billing_month_daily_sources src WHERE src.month_job_id=j.id AND src.daily_job_id=?)`, time.Now().UTC(), job.InstanceID, job.JobType, subject, job.From.UTC(), job.To.UTC(), job.ID)
+		err = supersedeBillingCandidates(ctx, tx, `j.instance_id=? AND j.job_type=? AND st.subject_id=? AND j.bill_period='monthly' AND j.range_from<=? AND j.range_to>=? AND j.usage_version>=3 AND j.status IN ('complete','pending') AND NOT EXISTS (SELECT 1 FROM billing_month_daily_sources src WHERE src.month_job_id=j.id AND src.daily_job_id=?)`, job.InstanceID, job.JobType, subject, job.From.UTC(), job.To.UTC(), job.ID)
 	}
 	return err
 }
+
+// Discover candidates with a non-locking read. A joined UPDATE can lock jobs
+// for other subjects while scanning the site index, including their publishing
+// rows. Point updates recheck eligibility using a current read, and never scan
+// or lock unrelated subjects. The caller keeps replacement atomic with publish.
+func supersedeBillingCandidates(ctx context.Context, tx *sql.Tx, predicate string, args ...any) error {
+	rows, err := tx.QueryContext(ctx, `SELECT j.id FROM billing_jobs j JOIN billing_statement_jobs st ON st.job_id=j.id WHERE `+predicate+` ORDER BY j.id`, args...)
+	if err != nil {
+		return err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		ids = append(ids, id)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		// statement ownership is immutable. Its lookup is constrained to this job.
+		updateArgs := append([]any{time.Now().UTC(), id}, args...)
+		_, err = tx.ExecContext(ctx, `UPDATE billing_jobs j FORCE INDEX (PRIMARY) SET j.status='superseded',j.updated_at=? WHERE j.id=? AND `+strings.ReplaceAll(predicate, "st.subject_id", "(SELECT st.subject_id FROM billing_statement_jobs st WHERE st.job_id=j.id)"), updateArgs...)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func billingJobSubject(job billing.Job) int64 {
 	if job.JobType == "upstream_statement" {
 		return job.UpstreamID

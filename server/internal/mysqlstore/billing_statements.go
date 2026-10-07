@@ -3,6 +3,7 @@ package mysqlstore
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
 	"time"
 
@@ -10,6 +11,10 @@ import (
 )
 
 func (s Store) CreateBillingStatementJob(ctx context.Context, job billing.Job, steps []billing.JobStep, subjectName string) error {
+	return retryBillingDeadlock(ctx, func() error { return s.createBillingStatementJobAttempt(ctx, job, steps, subjectName) })
+}
+
+func (s Store) createBillingStatementJobAttempt(ctx context.Context, job billing.Job, steps []billing.JobStep, subjectName string) error {
 	if job.MoneySnapshot == nil && !(job.UsageVersion >= 3 && job.BillPeriod == "monthly") {
 		return fmt.Errorf("billing money snapshot required")
 	}
@@ -23,6 +28,27 @@ func (s Store) CreateBillingStatementJob(ctx context.Context, job billing.Job, s
 		return fmt.Errorf("lock billing statement queue: %w", err)
 	}
 	defer conn.ExecContext(context.Background(), `SELECT RELEASE_LOCK('ct:billing-statement-queue')`)
+	// Monthly enqueue reads completed day snapshots and can invalidate an empty
+	// month without a queued job. Acquire the same site lease before opening its
+	// read view. Never wait for it while holding the queue lock: fill retries later.
+	if job.UsageVersion >= 3 && job.BillPeriod == "monthly" {
+		key := generationSiteLockKey(job.InstanceID)
+		var owns int
+		if e := conn.QueryRowContext(ctx, `SELECT GET_LOCK(?,0)`, key).Scan(&owns); e != nil {
+			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+			return e
+		}
+		if owns != 1 {
+			return billing.ErrStatementQueueFull
+		}
+		defer func() {
+			cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if _, e := conn.ExecContext(cleanup, `DO RELEASE_LOCK(?)`, key); e != nil {
+				_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+			}
+		}()
+	}
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return err

@@ -135,7 +135,16 @@ func (h BillingBatchGenerationHandler) ServeHTTP(w http.ResponseWriter, r *http.
 		}
 		if !seen[id] {
 			seen[id] = true
-			targets = append(targets, billing.AutomaticTarget{InstanceID: req.InstanceID, Kind: req.Kind, SubjectID: id, From: from, To: req.To, Overwrite: req.Overwrite})
+			target := billing.AutomaticTarget{InstanceID: req.InstanceID, Kind: req.Kind, SubjectID: id, From: from, To: req.To, Overwrite: req.Overwrite}
+			if r.Method == "GET" && r.URL.Query().Get("action") == "preview" {
+				// Selection previews cover all currently complete dates, rather
+				// than the frozen cutoff of a previously submitted batch.
+				target.ProgressUntil = billing.CompleteDayBoundary(time.Now())
+				if req.To.Before(target.ProgressUntil) {
+					target.ProgressUntil = req.To
+				}
+			}
+			targets = append(targets, target)
 		}
 	}
 	if r.Method == "POST" && r.URL.Query().Get("action") == "cancel" {
@@ -194,7 +203,7 @@ func (h BillingBatchGenerationHandler) ServeHTTP(w http.ResponseWriter, r *http.
 			}
 		}
 	}
-	if r.Method == "GET" {
+	if r.Method == "GET" && r.URL.Query().Get("action") != "preview" {
 		if resolver, ok := h.Store.(interface {
 			BillingBatchMembers(context.Context, []billing.AutomaticTarget) ([]billing.AutomaticTarget, error)
 		}); ok {
