@@ -168,7 +168,7 @@ void load().then(ok => { if (ok && !disposed) edit(presets.value[0] || null) })
       <div v-if="dirty && selected" class="preset-meta">保存预设后可应用到账号。</div>
     </section>
   </div>
-  <el-dialog v-model="batchOpen" title="按预设批量赋权" width="min(800px, calc(100vw - 24px))" top="5vh" :close-on-click-modal="false" :close-on-press-escape="!batchSaving" :show-close="!batchSaving" :before-close="done => { if (!batchSaving) done() }" class="preset-batch">
+  <el-dialog v-model="batchOpen" title="按预设批量赋权" width="min(800px, calc(100vw - 24px))" top="5vh" :close-on-click-modal="false" :close-on-press-escape="!batchSaving" :show-close="!batchSaving" :before-close="(done: () => void) => { if (!batchSaving) done() }" class="preset-batch">
     <div class="batch-heading"><strong>{{ batchPreset?.name }}</strong><span>{{ batchPreset?.permissions.length }} 项权限</span></div>
     <el-alert v-if="batchError" type="error" :closable="false" class="preset-error"><div role="alert">{{ batchError }}</div><el-button link :disabled="batchSaving || loading" @click="refreshBatch">刷新预设与账号差异</el-button></el-alert>
     <template v-if="!batchReview">
