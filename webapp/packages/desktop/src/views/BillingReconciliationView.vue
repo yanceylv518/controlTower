@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import {useBillingDownload} from '../utils/billingDownload';
+const {pending:downloading,download:downloadFile}=useBillingDownload();
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
 import { useRouter } from "vue-router";
@@ -145,7 +147,7 @@ void report.reload();
       <el-date-picker v-model="range" type="datetimerange" value-format="YYYY-MM-DD HH:mm:ss" format="YYYY-MM-DD HH:mm:ss" range-separator="至" :shortcuts="timeRangeShortcuts" unlink-panels style="width:420px" />
       <el-button type="primary" :loading="report.loading.value" @click="reconcile">核对账单</el-button>
       <el-button v-if="report.data.value?.job.id" :loading="verification.loading.value || ['pending','running'].includes(verification.data.value?.job?.status || '')" @click="startVerification">完整核对</el-button>
-      <el-button v-if="report.data.value" tag="a" :href="csvURL">导出核对 CSV</el-button>
+      <el-button v-if="report.data.value" :loading="downloading.includes(csvURL)" :disabled="downloading.includes(csvURL)" @click="downloadFile(csvURL,csvURL)">导出核对 CSV</el-button>
     </template>
 
     <el-empty v-if="unavailableState" class="bill-empty" :description="unavailableState === 'generating' ? '该区间的账单正在生成，生成完成后即可核对' : '该区间还没有可核对的账单，请先创建账单生成任务'">

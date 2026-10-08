@@ -38,11 +38,17 @@ func (s Store) BillingWorkspace(ctx context.Context, site, kind string, id int64
 				return nil, err
 			}
 			v.WorkspaceTotals = billing.SumWorkspaceModels(v.Models)
+			if err = s.addExcludedOutputDiagnostics(ctx, &v); err != nil {
+				return nil, err
+			}
 			out = append(out, v)
 			continue
 		}
 		err = s.db.QueryRowContext(ctx, `SELECT `+workspaceTotalsSQL+` FROM billing_compact_daily_totals WHERE job_id=?`, id).Scan(&v.Requests, &v.Input, &v.Output, &v.CacheRead, &v.CacheWrite, &v.Amount, &v.BeforeAmount, &v.Discount, &v.EmptyCount, &v.EmptyAmount, &v.ImageInputTokens, &v.ImageOutputTokens, &v.AudioInputTokens, &v.AudioOutputTokens)
 		if err != nil {
+			return nil, err
+		}
+		if err = s.addExcludedOutputDiagnostics(ctx, &v); err != nil {
 			return nil, err
 		}
 		out = append(out, v)

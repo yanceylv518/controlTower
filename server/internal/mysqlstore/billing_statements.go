@@ -293,6 +293,18 @@ func (s Store) enrichBillingStatement(ctx context.Context, job *billing.Job) err
 	if job.JobType != "user_statement" && job.JobType != "upstream_statement" {
 		return nil
 	}
+	job.ZeroOutputPolicy = "included"
+	if job.ExcludeZeroOutput {
+		job.ZeroOutputPolicy = "excluded"
+	}
+	// Derive monthly policy from its frozen daily sources, not current defaults.
+	if job.BillPeriod == "monthly" && job.UsageVersion >= 3 {
+		var total, known, excluded int64
+		if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*),COUNT(j.id),COALESCE(SUM(j.exclude_zero_output),0) FROM billing_month_daily_sources src LEFT JOIN billing_jobs j ON j.id=src.daily_job_id WHERE src.month_job_id=?`, job.ID).Scan(&total, &known, &excluded); err != nil {
+			return err
+		}
+		job.ZeroOutputPolicy = billing.MonthlyZeroOutputPolicy(total, known, excluded)
+	}
 	var kind string
 	var id int64
 	err := s.db.QueryRowContext(ctx, `SELECT statement_type,subject_id,subject_name FROM billing_statement_jobs WHERE job_id=?`, job.ID).Scan(&kind, &id, &job.UpstreamName)
@@ -349,4 +361,21 @@ func (s Store) BillingStatementQueueFull(ctx context.Context, site string) (bool
 	var n int
 	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM (SELECT 1 FROM billing_jobs WHERE instance_id=? AND job_type IN ('user_statement','upstream_statement') AND status='pending' LIMIT 5) pending`, site).Scan(&n)
 	return n >= 5, err
+}
+
+func (s Store) ListBillingStatementChannelFiles(ctx context.Context, jobID string) ([]billing.ChannelDailyFile, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT job_id,instance_id,bill_day,channel_id,relative_path,file_size,sha256,created_at FROM billing_channel_daily_files WHERE job_id=? ORDER BY bill_day,channel_id`, jobID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []billing.ChannelDailyFile{}
+	for rows.Next() {
+		var item billing.ChannelDailyFile
+		if err = rows.Scan(&item.JobID, &item.InstanceID, &item.BillDay, &item.ChannelID, &item.RelativePath, &item.FileSize, &item.SHA256, &item.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
 }

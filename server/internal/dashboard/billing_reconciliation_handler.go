@@ -18,6 +18,7 @@ type BillingReconciliationHandler struct {
 }
 
 func (h BillingReconciliationHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	w = billingDownloadReceipt(w, r)
 	if r.Method != http.MethodGet || !billingReconciliationAdmin(r) {
 		writeDashboardError(w, http.StatusForbidden, "forbidden")
 		return

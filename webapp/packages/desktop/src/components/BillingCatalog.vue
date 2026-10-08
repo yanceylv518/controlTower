@@ -1,11 +1,12 @@
 <script setup lang="ts">
+import BillingZeroOutputTag from '../components/BillingZeroOutputTag.vue';
 import {computed,onBeforeUnmount,ref,watch} from 'vue';
 import type {BillingWorkspaceBill,BillingCatalogPage} from '@ct/shared';
 import {dashboard} from '../api';
 import {billingTaskErrorMessage} from '../utils/httpError';
 import {coverageLabel,coverageStatus,coverageTooltip} from '../utils/billingCoverage';
 
-const props=defineProps<{site:string;kind:'user'|'upstream';active:boolean}>();
+const props=defineProps<{site:string;kind:'user'|'upstream';active:boolean;downloading?:string[]}>();
 const emit=defineEmits<{open:[bill:BillingWorkspaceBill];download:[bill:BillingWorkspaceBill]}>();
 const period=ref('monthly'),month=ref(''),query=ref(''),appliedQuery=ref(''),page=ref(1),size=ref(20);
 const items=ref<BillingCatalogPage['items']>([]),counts=ref<BillingCatalogPage['counts']>({monthly:0,daily:0,temporary:0});
@@ -58,9 +59,10 @@ defineExpose({refresh:load,month});
     <template v-if="period==='monthly'"><b>{{day(s.row.job.range_from).slice(0,7)}}</b><el-tooltip :content="coverageTooltip(s.row.job.monthly_coverage)"><div class="coverage" :class="{partial:!s.row.job.monthly_coverage?.complete}">{{coverageLabel(s.row.job.monthly_coverage)}}<small>{{coverageStatus(s.row.job.monthly_coverage)}}</small></div></el-tooltip></template>
     <b v-else>{{period==='daily'?day(s.row.job.range_from):local(s.row.job.range_from)+' — '+local(s.row.job.range_to)}}</b>
    </template></el-table-column>
+   <el-table-column label="零输出处理" width="140"><template #default="s"><BillingZeroOutputTag :job="s.row.job"/></template></el-table-column>
    <el-table-column label="账单金额" min-width="165" align="right"><template #default="s"><b class="amount">{{money(s.row.amount)}}</b><small>{{currency(s.row)}}</small></template></el-table-column>
    <el-table-column label="生成时间" min-width="168"><template #default="s">{{local(s.row.generated_at)}}</template></el-table-column>
-   <el-table-column label="操作" width="150" fixed="right" align="right"><template #default="s"><el-button link type="primary" @click="emit('open',s.row)">查看</el-button><el-button link @click="emit('download',s.row)">下载</el-button></template></el-table-column>
+   <el-table-column label="操作" width="150" fixed="right" align="right"><template #default="s"><el-button link type="primary" @click="emit('open',s.row)">查看</el-button><el-button link :loading="downloading?.includes(s.row.job.id)" :disabled="downloading?.includes(s.row.job.id)" @click="emit('download',s.row)">{{downloading?.includes(s.row.job.id)?'正在准备':'下载'}}</el-button></template></el-table-column>
   </el-table>
   <footer><span v-if="!error">共 {{total.toLocaleString()}} 份{{labels.find(v=>v.value===period)?.label}} · {{subjects.toLocaleString()}} {{kind==='user'?'位用户':'个上游'}} · {{month||'全部月份'}} · 最近生成优先</span><span v-else>账单加载失败</span><el-pagination v-model:current-page="page" v-model:page-size="size" :page-sizes="[20,50,100]" :total="total" layout="sizes, prev, pager, next" :pager-count="5" small/></footer>
  </section>

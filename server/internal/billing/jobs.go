@@ -99,6 +99,7 @@ type Job struct {
 	JobType           string         `json:"job_type"`
 	UserID            int64          `json:"user_id"`
 	ExcludeZeroOutput bool           `json:"exclude_zero_output"`
+	ZeroOutputPolicy  string         `json:"zero_output_policy,omitempty"`
 	UserName          string         `json:"user_name,omitempty"`
 	UpstreamID        int64          `json:"upstream_id,omitempty"`
 	UpstreamName      string         `json:"upstream_name,omitempty"`
@@ -224,7 +225,8 @@ type ReconciliationOrder struct {
 }
 
 type RequestDetail struct {
-	EmptyOutput bool `json:",omitempty"`
+	DiagnosticOnly bool `json:"-"`
+	EmptyOutput    bool `json:",omitempty"`
 	MultimediaUsage
 	InstanceID, JobID, RequestID, UpstreamRequestID, Username, TokenName, ChannelName, ModelName string
 	SourceLogID, CreatedUnix, UserID, TokenID, ChannelID                                         int64
@@ -237,6 +239,8 @@ type RequestDetail struct {
 }
 
 type UserDailyFile struct {
+	// ChannelID is populated only by the upstream download adapter.
+	ChannelID                               int64
 	JobID, InstanceID, RelativePath, SHA256 string
 	BillDay                                 time.Time
 	UserID, FileSize                        int64
@@ -597,6 +601,7 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 		anomalies := []AnomalyOrder{}
 		mismatches := []ReconciliationOrder{}
 		requestDetails := []RequestDetail{}
+		diagnostics := []RequestDetail{}
 		for _, log := range logs {
 			if models := upstreamModels[log.ChannelID]; len(models) > 0 {
 				matched := false
@@ -611,9 +616,13 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 					continue
 				}
 			}
-			// Explicit zero output is excluded from all settlement aggregates and
-			// saved detail files. Missing output is not assumed to be zero.
+			// Keep diagnostics independently of chargeable detail files.
 			if job.UsageVersion >= SettlementUsageVersion && job.ExcludeZeroOutput && log.CompletionTokens.Valid && log.CompletionTokens.Int64 == 0 {
+				charge, _, err := StatementLogCharge(job, log, quotaPerUnit, settlementRules...)
+				if err != nil {
+					return err
+				}
+				diagnostics = append(diagnostics, RequestDetail{DiagnosticOnly: true, SourceLogID: log.ID, EmptyOutput: true, ModelName: log.ModelName, BillDay: dateOnly(time.Unix(log.CreatedUnix, 0)), Charge: charge.Charge})
 				continue
 			}
 			billDay := dateOnly(time.Unix(log.CreatedUnix, 0))
@@ -724,7 +733,7 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 				return e
 			}
 		}
-		if e = r.Store.AppendBillingHour(ctx, job, step, rows, tokenRows, channelRows, requestDetails, anomalies, mismatches, cursor, pageRows); e != nil {
+		if e = r.Store.AppendBillingHour(ctx, job, step, rows, tokenRows, channelRows, append(requestDetails, diagnostics...), anomalies, mismatches, cursor, pageRows); e != nil {
 			return e
 		}
 		if len(logs) < BillingPageSize && job.DataSource != "archive" {

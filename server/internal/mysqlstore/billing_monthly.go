@@ -24,6 +24,7 @@ func (s Store) createBillingMonthFromDays(ctx context.Context, tx *sql.Tx, job b
 	}
 	covered := map[string]bool{}
 	ids := []string{}
+	emptyIDs := []string{}
 	for rows.Next() {
 		var id, status, source, raw string
 		var from, to time.Time
@@ -40,6 +41,7 @@ func (s Store) createBillingMonthFromDays(ctx context.Context, tx *sql.Tx, job b
 		}
 		covered[key] = status == "no_data"
 		if status == "no_data" {
+			emptyIDs = append(emptyIDs, id)
 			continue
 		}
 		var money billing.MoneySnapshot
@@ -88,6 +90,16 @@ func (s Store) createBillingMonthFromDays(ctx context.Context, tx *sql.Tx, job b
 	// Retain explicit lineage without retaining original orders.
 	for _, id := range ids {
 		if _, err = tx.ExecContext(ctx, `INSERT INTO billing_month_daily_sources(month_job_id,daily_job_id) VALUES(?,?)`, job.ID, id); err != nil {
+			return err
+		}
+	}
+	// Freeze diagnostics of excluded-only days even though no bill file exists.
+	if len(emptyIDs) > 0 {
+		args := []any{job.ID}
+		for _, id := range emptyIDs {
+			args = append(args, id)
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO billing_excluded_output_stats(job_id,model_name,request_count,total_amount) SELECT ?,model_name,SUM(request_count),SUM(total_amount) FROM billing_excluded_output_stats WHERE job_id IN (`+strings.TrimSuffix(strings.Repeat("?,", len(emptyIDs)), ",")+`) GROUP BY model_name`, args...); err != nil {
 			return err
 		}
 	}
@@ -168,6 +180,9 @@ func (s Store) completeBillingMonthAttempt(ctx context.Context, job billing.Job)
 		return err
 	}
 
+	if _, err = tx.ExecContext(ctx, `INSERT INTO billing_excluded_output_stats(job_id,model_name,request_count,total_amount) SELECT ?,model_name,SUM(request_count),SUM(total_amount) FROM billing_excluded_output_stats WHERE job_id IN (`+strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")+`) GROUP BY model_name ON DUPLICATE KEY UPDATE request_count=request_count+VALUES(request_count),total_amount=total_amount+VALUES(total_amount)`, args...); err != nil {
+		return err
+	}
 	if err = s.finalizeBillingStatement(ctx, tx, job, time.Now().UTC()); err != nil {
 		return err
 	}

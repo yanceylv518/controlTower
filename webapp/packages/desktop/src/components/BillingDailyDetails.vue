@@ -3,7 +3,9 @@ import {computed,onBeforeUnmount,ref} from 'vue';
 import {ElMessage} from 'element-plus';
 import type {BillingJob,BillingDetailRow,BillingDetailFilter,BillingDetailTask} from '@ct/shared';
 import {dashboard} from '../api';
-import {billingTaskErrorMessage,startBillingFileDownload} from '../utils/httpError';
+import {billingTaskErrorMessage} from '../utils/httpError';
+import {useBillingDownload} from '../utils/billingDownload';
+const {pending:downloading,download:downloadFile}=useBillingDownload();
 import {formatBillingDiscount} from '../utils/billingDiscount';
 const visible=ref(false),job=ref<BillingJob>(),intent=ref(false),rows=ref<BillingDetailRow[]>([]),loading=ref(false),error=ref('');
 const models=ref<string[]>([]),tokens=ref<string[]>([]),model=ref(''),token=ref(''),range=ref<[string,string]|null>(null),currency=ref(''),total=ref(0);
@@ -24,17 +26,17 @@ async function load(retry=false){if(!job.value)return;const n=++revision;loading
 function open(v:BillingJob,forExport=false,initialModel=''){job.value=v;intent.value=forExport;model.value=initialModel;token.value='';range.value=null;rows.value=[];models.value=[];tokens.value=[];ready.value=false;preparation.value=undefined;applied.value=initialModel?{model:initialModel}:{};cursors.value=[0];page.value=0;next.value=0;visible.value=true;void load();}
 function search(){applied.value=currentFilter();cursors.value=[0];page.value=0;void load();}
 function changePage(forward:boolean){if(forward){cursors.value=cursors.value.slice(0,page.value+1);cursors.value.push(next.value);page.value++;}else{page.value--;}void load();}
-async function startExport(all:boolean){if(!job.value)return;exporting.value=true;try{
+async function startExport(all:boolean){if(!job.value||exporting.value)return;exporting.value=true;try{
  const v=job.value,dayLabel=label.value,r=await dashboard.exportBillingDetails(v.id,all?{}:currentFilter());
  if(disposed)return;
  const existing=exports.value.findIndex(t=>t.key===r.key&&t.jobId===v.id);const task={...r,jobId:v.id,label:`${v.user_name||'用户 #'+v.user_id} · ${dayLabel} · ${all?'全部明细':'筛选明细'}`,job:v};
  if(existing>=0)exports.value[existing]=task;else exports.value.push(task);
- if(r.status==='complete'){download(task);ElMessage.success('已发起下载');}else if(r.status==='failed'){ElMessage.error(r.error||'导出失败，请重试');}else{ElMessage.success('正在导出，完成后自动下载');}
+ if(r.status==='complete'){download(task);}else if(r.status==='failed'){ElMessage.error(r.error||'导出失败，请重试');}else{ElMessage.success('正在导出，完成后自动下载');}
  }catch(e){ElMessage.error(billingTaskErrorMessage(e));}finally{exporting.value=false;}}
-function download(t:BillingDetailTask&{jobId:string}){startBillingFileDownload(`/api/dashboard/billing/statements/details?id=${encodeURIComponent(t.jobId)}&action=download&key=${encodeURIComponent(t.key)}`);}
+function download(t:BillingDetailTask&{jobId:string}){void downloadFile(t.jobId+':'+t.key,`/api/dashboard/billing/statements/details?id=${encodeURIComponent(t.jobId)}&action=download&key=${encodeURIComponent(t.key)}`);}
 const timer=setInterval(async()=>{if(polling||disposed)return;polling=true;try{
  if(visible.value&&preparation.value?.status==='running'&&!loading.value)await load();
- for(const t of exports.value.filter(t=>t.status==='running')){try{const r=await dashboard.billingDetailTask(t.jobId,t.key);if(!disposed){Object.assign(t,r);if(r.status==='complete'){download(t);ElMessage.success('导出完成，已发起下载');}}}catch{t.status='failed';t.error='任务不可用，请重新导出';}}
+ for(const t of exports.value.filter(t=>t.status==='running')){try{const r=await dashboard.billingDetailTask(t.jobId,t.key);if(!disposed){Object.assign(t,r);if(r.status==='complete'){download(t);}}}catch{t.status='failed';t.error='任务不可用，请重新导出';}}
  }finally{polling=false;}},1500);
 onBeforeUnmount(()=>{disposed=true;revision++;clearInterval(timer);});
 defineExpose({open});
@@ -45,7 +47,7 @@ defineExpose({open});
   <span>{{task.label}}</span><el-progress v-if="task.status==='running'" :percentage="percent(task)" :stroke-width="5"/>
   <span v-if="task.status==='running'">已处理 {{task.processed.toLocaleString()}} / {{task.total.toLocaleString()}}</span>
   <span v-else-if="task.status==='complete'">{{task.matched.toLocaleString()}} 条 · 已就绪</span><span v-else class="failed">{{task.error}}</span>
-  <el-button v-if="task.status==='complete'" link type="primary" @click="download(task)">下载文件</el-button>
+  <el-button v-if="task.status==='complete'" link type="primary"  :loading="downloading.includes(task.jobId+':'+task.key)" :disabled="downloading.includes(task.jobId+':'+task.key)" @click="download(task)">下载文件</el-button>
   <el-button v-if="task.status==='failed'" link @click="open(task.job,true)">重新导出</el-button>
   <el-button v-if="task.status!=='running'" link @click="exports=exports.filter(t=>t.key!==task.key)">关闭</el-button>
  </div>
@@ -65,7 +67,7 @@ defineExpose({open});
   <div v-for="task in exports.filter(t=>t.jobId===job?.id)" :key="task.key" class="detail-export-task">
    <span>{{task.label}}</span>
    <template v-if="task.status==='running'"><el-progress :percentage="percent(task)" :stroke-width="5"/><span>已处理 {{task.processed.toLocaleString()}} / {{task.total.toLocaleString()}}</span></template>
-   <template v-else-if="task.status==='complete'"><span>{{task.matched.toLocaleString()}} 条 · 文件已就绪</span><el-button link type="primary" @click="download(task)">下载文件</el-button></template>
+   <template v-else-if="task.status==='complete'"><span>{{task.matched.toLocaleString()}} 条 · 文件已就绪</span><el-button link type="primary"  :loading="downloading.includes(task.jobId+':'+task.key)" :disabled="downloading.includes(task.jobId+':'+task.key)" @click="download(task)">下载文件</el-button></template>
    <template v-else><span class="failed">{{task.error}}</span><span>请重新导出</span></template>
   </div>
  </div>

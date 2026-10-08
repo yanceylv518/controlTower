@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"reflect"
+	"sort"
 	"testing"
 	"time"
 )
@@ -121,6 +122,7 @@ func TestUpstreamModelPushdownPreservesSettlementAndResume(t *testing.T) {
 			if !store.completed || len(store.details) == 0 || store.details[0].Charge.UnitPrices == nil {
 				t.Fatal("missing completed details/prices")
 			}
+			sort.Slice(store.details, func(i, j int) bool { return store.details[i].SourceLogID < store.details[j].SourceLogID })
 			if baseline == nil {
 				baseline = store
 				continue

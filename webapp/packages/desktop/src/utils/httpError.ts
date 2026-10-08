@@ -85,3 +85,27 @@ export function startBillingFileDownload(url: string, filename?: string): void {
   link.click();
   link.remove();
 }
+
+// Resolve when the server starts the attachment response; keep the transfer in
+// the browser, avoiding a potentially multi-GB in-memory Blob.
+export function prepareBillingFileDownload(url: string): Promise<void> {
+  const bytes = new Uint8Array(16); crypto.getRandomValues(bytes);
+  const token = Array.from(bytes, v => v.toString(16).padStart(2, '0')).join('');
+  const cookie = `ct_download_${token}`;
+  return new Promise((resolve, reject) => {
+    let elapsed = 0;
+    const frame = document.createElement('iframe'); frame.style.display = 'none'; frame.title = '账单下载';
+    const removeFrame = () => window.setTimeout(() => frame.remove(), 60_000);
+    const clearCookie = () => { document.cookie = `${cookie}=; Max-Age=0; Path=/; SameSite=Strict`; };
+    const timer = window.setInterval(() => {
+      const receipt = document.cookie.split(';').map(v => v.trim()).find(v => v.startsWith(cookie + '='))?.slice(cookie.length + 1);
+      elapsed += 500;
+      if (!receipt && elapsed < 600_000) return;
+      window.clearInterval(timer); clearCookie(); removeFrame();
+      if (receipt === 'ready') resolve();
+      else reject(new Error(receipt === 'error' ? '账单下载准备失败，请重试' : '未收到下载响应，请先检查浏览器下载列表，避免重复下载'));
+    }, 500);
+    try { frame.src = url + (url.includes('?') ? '&' : '?') + 'download_token=' + token; document.body.appendChild(frame); }
+    catch (e) { window.clearInterval(timer); clearCookie(); removeFrame(); reject(e); }
+  });
+}

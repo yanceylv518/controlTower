@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import {useBillingDownload} from '../utils/billingDownload';
+const {download:downloadFile}=useBillingDownload();
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
@@ -10,7 +12,7 @@ import { dashboard } from "../api";
 import { useAsyncData } from "../composables/useAsyncData";
 import { useFiltersStore } from "../stores/filters";
 import { formatNumber } from "../utils/format";
-import { billingReadErrorMessage, downloadBillingFile, startBillingFileDownload } from "../utils/httpError";
+import { billingReadErrorMessage } from "../utils/httpError";
 
 const props = defineProps<{ billType: "user" | "upstream" }>();
 const recordsElement = ref<HTMLElement | null>(null);
@@ -185,48 +187,26 @@ watch(detailVisible, visible => { if (!visible) previewRequest?.abort(); });
 onBeforeUnmount(() => previewRequest?.abort());
 const safeFilename=(value:string)=>value.replace(/[<>:"/\\|?*\x00-\x1f]/g,"-").trim();
 async function downloadBill(job:BillingJob, archive=false){
-  if(downloadingBillId.value)return;
-  const kind=job.job_type==="upstream_statement"?"上游账单":"用户账单";
-  const filename=`${kind}-${safeFilename(job.bill_no||job.id)}.${archive?"zip":"xlsx"}`;
-  downloadingBillId.value=job.id;
-  const preparing=ElMessage({message:archive?"正在准备完整 ZIP，请等待浏览器完成下载":"正在准备主账单 Excel，请稍候",type:"info",duration:0});
-  try{
-    const url=`/api/dashboard/billing/statements/result?id=${encodeURIComponent(job.id)}&download=1${archive?"":"&export=summary"}`;
-    if(archive) startBillingFileDownload(url,filename);
-    else await downloadBillingFile(url,"主账单下载失败",filename);
-    ElMessage.success(archive?"已提交完整 ZIP 下载请求":"主账单已开始下载");
-  }catch(error){
-    ElMessage.error(billingReadErrorMessage(error,"账单压缩包下载失败"));
-  }finally{
-    preparing.close();
-    downloadingBillId.value="";
-  }
+ if(downloadingBillId.value)return;downloadingBillId.value=job.id;
+ try { await downloadFile(job.id,`/api/dashboard/billing/statements/result?id=${encodeURIComponent(job.id)}&download=1${archive?'':'&export=summary'}`); }
+ finally {downloadingBillId.value='';}
 }
-function downloadDaily(job:BillingJob, day:string){
-  if(downloadingDailyId.value)return;
-  downloadingDailyId.value=day;
-  startBillingFileDownload(`/api/dashboard/billing/statements/result?id=${encodeURIComponent(job.id)}&export=daily&day=${encodeURIComponent(day)}`);
-  ElMessage.info("已提交当日明细下载请求，请等待浏览器完成下载");
-  releaseDownloadState(downloadingDailyId,day);
+async function downloadDaily(job:BillingJob, day:string){
+ if(downloadingDailyId.value)return;downloadingDailyId.value=day;
+ try { await downloadFile(job.id+':'+day,`/api/dashboard/billing/statements/result?id=${encodeURIComponent(job.id)}&export=daily&day=${encodeURIComponent(day)}`); }
+ finally {downloadingDailyId.value='';}
 }
 const dailyFiles=computed(()=>detail.value?.daily_files||[]);
 const queryDate=(value?:string)=>{if(!value)return"";const d=new Date(value);return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`};
-function releaseDownloadState(target:typeof downloadingAnomalyId, jobID:string){window.setTimeout(()=>{if(target.value===jobID)target.value=""},1500)}
-function downloadAnomalies(job:BillingJob){
-  if(downloadingAnomalyId.value)return;
-  const url=`/api/dashboard/billing/anomalies?instance_id=${encodeURIComponent(job.instance_id)}&job_id=${encodeURIComponent(job.id)}&user_id=${job.user_id||0}&from=${queryDate(job.range_from)}&to=${queryDate(job.range_to)}&format=csv`;
-  downloadingAnomalyId.value=job.id;
-  startBillingFileDownload(url,`${safeFilename(job.bill_no||job.id)}-内部异常.csv`);
-  ElMessage.info("异常订单 CSV 已开始生成，数据量较大时请等待浏览器完成下载");
-  releaseDownloadState(downloadingAnomalyId,job.id);
+async function downloadAnomalies(job:BillingJob){
+ if(downloadingAnomalyId.value)return;downloadingAnomalyId.value=job.id;
+ try {await downloadFile(job.id+':anomalies',`/api/dashboard/billing/anomalies?instance_id=${encodeURIComponent(job.instance_id)}&job_id=${encodeURIComponent(job.id)}&user_id=${job.user_id||0}&from=${queryDate(job.range_from)}&to=${queryDate(job.range_to)}&format=csv`);}
+ finally {downloadingAnomalyId.value='';}
 }
-function downloadReconciliation(job:BillingJob){
-  if(downloadingReconciliationId.value)return;
-  const url=`/api/dashboard/billing/statements/result?id=${encodeURIComponent(job.id)}&export=reconciliation`;
-  downloadingReconciliationId.value=job.id;
-  startBillingFileDownload(url,`${safeFilename(job.bill_no||job.id)}-核对差异.csv`);
-  ElMessage.info("核对差异 CSV 已开始生成，请等待浏览器完成下载");
-  releaseDownloadState(downloadingReconciliationId,job.id);
+async function downloadReconciliation(job:BillingJob){
+ if(downloadingReconciliationId.value)return;downloadingReconciliationId.value=job.id;
+ try {await downloadFile(job.id+':reconciliation',`/api/dashboard/billing/statements/result?id=${encodeURIComponent(job.id)}&export=reconciliation`);}
+ finally {downloadingReconciliationId.value='';}
 }
 async function deleteBill(job:BillingJob){try{await ElMessageBox.confirm("删除后将同时清理该账单、生成任务和本地明细文件，且不可恢复。确定删除吗？","删除账单",{type:"warning",confirmButtonText:"删除"});await dashboard.deleteBillingStatement(job.id);if(detail.value?.job.id===job.id){detailVisible.value=false;detail.value=null}ElMessage.success("账单已删除");await state.reload()}catch(error){if(error!=="cancel"&&error!=="close")ElMessage.error(billingReadErrorMessage(error,"账单删除失败"))}}
 watch(() => [filters.site_id, props.billType] as const, () => void state.reload(), { immediate: true });

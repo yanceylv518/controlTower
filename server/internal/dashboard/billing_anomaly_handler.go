@@ -19,6 +19,7 @@ type BillingAnomalyStore interface {
 type BillingAnomalyHandler struct{ Store BillingAnomalyStore }
 
 func (h BillingAnomalyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	w = billingDownloadReceipt(w, r)
 	q := r.URL.Query()
 	site := q.Get("instance_id")
 	uid, _ := strconv.ParseInt(q.Get("user_id"), 10, 64)

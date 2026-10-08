@@ -149,6 +149,20 @@ func (g UserDailyFileGenerator) generateChannelFiles(ctx context.Context, root s
 		if queryErr != nil {
 			return queryErr
 		}
+		if job.JobType == "upstream_statement" && job.UsageVersion >= SettlementUsageVersion {
+			group.JobID, group.InstanceID = job.ID, job.InstanceID
+			if err = g.publishUpstreamChannelWorkbook(ctx, root, job, group, func(visit func(RequestDetail) error) error {
+				for _, row := range rows {
+					if e := visit(row); e != nil {
+						return e
+					}
+				}
+				return nil
+			}); err != nil {
+				return err
+			}
+			continue
+		}
 		anomalies, queryErr := g.Store.ListBillingChannelAnomalyDetails(ctx, job.ID, group.BillDay, group.ChannelID)
 		if queryErr != nil {
 			return queryErr

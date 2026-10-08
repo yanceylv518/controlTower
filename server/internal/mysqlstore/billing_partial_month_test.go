@@ -74,6 +74,13 @@ func TestPartialMonthRefreshUsesCompletedDailySnapshots(t *testing.T) {
 	}
 	d1, d2 := makeDay(0), makeDay(1) // both queued before the first month snapshot
 	finish(d1, "1.25")
+	if _, e := db.Exec(`INSERT INTO billing_excluded_output_stats(job_id,model_name,request_count,total_amount) VALUES(?,'m',3,0.75)`, d1.ID); e != nil {
+		t.Fatal(e)
+	}
+	if _, e := db.Exec(`UPDATE billing_jobs SET exclude_zero_output=1 WHERE id=?`, d1.ID); e != nil {
+		t.Fatal(e)
+	}
+
 	target := billing.AutomaticTarget{InstanceID: site, Kind: "user_statement", SubjectID: 7, From: from, To: to}
 	months, e := s.MissingBillingMonths(ctx, target, from.AddDate(0, 0, 2))
 	if e != nil || len(months) != 1 {
@@ -100,6 +107,16 @@ func TestPartialMonthRefreshUsesCompletedDailySnapshots(t *testing.T) {
 		}
 	}
 	check(m1.ID, "1.250000000000")
+	var excludedCount int64
+	var excludedAmount string
+	if e = db.QueryRow(`SELECT request_count,CAST(total_amount AS CHAR) FROM billing_excluded_output_stats WHERE job_id=?`, m1.ID).Scan(&excludedCount, &excludedAmount); e != nil || excludedCount != 3 || excludedAmount != "0.750000000000" {
+		t.Fatal(excludedCount, excludedAmount, e)
+	}
+	frozen, e := s.BillingJob(ctx, m1.ID)
+	if e != nil || frozen.ZeroOutputPolicy != "excluded" {
+		t.Fatal(frozen.ZeroOutputPolicy, e)
+	}
+
 	finish(d2, "2.5")
 	old, e := s.BillingJob(ctx, m1.ID)
 	if e != nil || old.Status != "superseded" {

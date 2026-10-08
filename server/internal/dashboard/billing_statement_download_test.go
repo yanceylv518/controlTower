@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"controltower/server/internal/billing"
+	"controltower/server/internal/xlsxwriter"
 )
 
 type statementDownloadStore struct {
@@ -154,5 +155,58 @@ func TestUpstreamDailyDownloadsIncludeEveryUser(t *testing.T) {
 	handler.ServeHTTP(w, httptest.NewRequest("GET", "/?id=statement&export=daily&day=2026-08-28", nil))
 	if w.Code != 404 || strings.Contains(w.Header().Get("Content-Type"), "zip") {
 		t.Fatalf("partial success: %d %s", w.Code, w.Body.String())
+	}
+}
+
+type upstreamChannelDownloadStore struct {
+	statementDownloadStore
+	channels []billing.ChannelDailyFile
+}
+
+func (s upstreamChannelDownloadStore) ListBillingStatementChannelFiles(context.Context, string) ([]billing.ChannelDailyFile, error) {
+	return s.channels, nil
+}
+func TestUpstreamDownloadUsesChannelSnapshotFiles(t *testing.T) {
+	root := t.TempDir()
+	day := time.Date(2026, 9, 2, 0, 0, 0, 0, billing.BusinessLocation)
+	files := []billing.ChannelDailyFile{{BillDay: day, ChannelID: 5, RelativePath: "channel5.xlsx"}, {BillDay: day, ChannelID: 10, RelativePath: "channel10.xlsx"}}
+	for _, f := range files {
+		wb := xlsxwriter.New()
+		sheet, e := wb.AddReportSheet("账单明细", "上游日账单明细", "", []float64{24, 30, 20})
+		if e != nil {
+			t.Fatal(e)
+		}
+		if e = sheet.Row([]xlsxwriter.Cell{{Value: "时间"}, {Value: "渠道"}, {Value: "折后金额 CNY"}}); e != nil {
+			t.Fatal(e)
+		}
+		if e = sheet.Row([]xlsxwriter.Cell{{Value: "2026-09-02 12:00:00"}, {Value: f.RelativePath}, {Value: "1.25", Number: true}}); e != nil {
+			t.Fatal(e)
+		}
+		var b bytes.Buffer
+		if e = wb.Write(&b); e != nil {
+			t.Fatal(e)
+		}
+		wb.Discard()
+		if e = os.WriteFile(filepath.Join(root, f.RelativePath), b.Bytes(), 0600); e != nil {
+			t.Fatal(e)
+		}
+	}
+	store := upstreamChannelDownloadStore{statementDownloadStore: statementDownloadStore{job: billing.Job{ID: "job", JobType: "upstream_statement", Status: "complete", UsageVersion: billing.SettlementUsageVersion}, statementPriceTestStore: statementPriceTestStore{files: []billing.UserDailyFile{{BillDay: day, UserID: 9, RelativePath: "must-not-read.xlsx"}}}}, channels: files}
+	w := httptest.NewRecorder()
+	BillingStatementResultHandler{Store: store, Root: root}.ServeHTTP(w, httptest.NewRequest("GET", "/?id=job&export=daily&day=2026-09-02", nil))
+	if w.Code != 200 {
+		t.Fatalf("%d %s", w.Code, w.Body.String())
+	}
+	z, e := zip.NewReader(bytes.NewReader(w.Body.Bytes()), int64(w.Body.Len()))
+	if e != nil {
+		t.Fatal(e)
+	}
+	if len(z.File) != 2 {
+		t.Fatal("missing channel")
+	}
+	for _, f := range z.File {
+		if !strings.Contains(f.Name, "渠道-") || strings.Contains(f.Name, "用户-") {
+			t.Fatal(f.Name)
+		}
 	}
 }

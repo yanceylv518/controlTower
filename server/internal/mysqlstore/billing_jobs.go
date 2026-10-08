@@ -411,7 +411,13 @@ func (s Store) AppendBillingHour(ctx context.Context, j billing.Job, st billing.
 		amount                           *big.Rat
 	}
 	compact := map[compactKey]compactValue{}
+	if e = appendExcludedOutputDiagnostics(ctx, tx, j.ID, details); e != nil {
+		return e
+	}
 	for _, v := range details {
+		if v.DiagnosticOnly {
+			continue
+		}
 		before, discount := billing.ChargeOriginal(v.Charge)
 		discount = billing.DiscountGroupKey(discount)
 		key := compactKey{v.BillDay.In(billing.BusinessLocation).Format("2006-01-02"), v.UserID, v.TokenID, v.ChannelID, v.ModelName, discount}

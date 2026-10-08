@@ -640,6 +640,7 @@ export interface BillingJob {
   user_id?: number;
   user_name?: string;
   exclude_zero_output?: boolean;
+  zero_output_policy?: "included" | "excluded" | "mixed" | "unknown";
   pricing_source?: "newapi" | "recalculate";
   usage_version?: number;
   bill_period?: string;

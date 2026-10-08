@@ -72,21 +72,50 @@ func TestSettlementZeroOutputExclusionKeepsNonzeroAndExistingValidation(t *testi
 				source = sourceModeLogs{logs: logs}
 			}
 			job := Job{ID: "j", InstanceID: "site", JobType: kind, UsageVersion: 3, PricingSource: PricingSourceNewAPI, ExcludeZeroOutput: exclude}
-			if err := (JobRunner{Store: store, Source: source}).processStep(context.Background(), job, JobStep{From: day, To: day.AddDate(0, 0, 1)}); err != nil {
+			spool := FileDetailSpool{Root: t.TempDir()}
+			job.ID = "0123456789abcdef0123456789abcdef"
+			if err := (JobRunner{Store: store, Source: source, Spool: spool}).processStep(context.Background(), job, JobStep{From: day, To: day.AddDate(0, 0, 1)}); err != nil {
 				t.Fatal(err)
+			}
+			if len(store.details) != 2 {
+				t.Fatalf("%s excluded=%v: %+v", kind, exclude, store.details)
+			}
+			pages, err := spool.OpenPages(context.Background(), job)
+			if err != nil {
+				t.Fatal(err)
+			}
+			saved := 0
+			for _, page := range pages {
+				if err = page.Read(func(d RequestDetail) error {
+					saved++
+					if d.DiagnosticOnly || exclude && d.EmptyOutput {
+						t.Fatal("excluded diagnostic entered spool")
+					}
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
 			}
 			want := 2
 			if exclude {
 				want = 1
 			}
-			if len(store.details) != want {
-				t.Fatalf("%s excluded=%v: %+v", kind, exclude, store.details)
+			if saved != want {
+				t.Fatalf("saved=%d want=%d", saved, want)
 			}
+			diagnostics := 0
 			for _, row := range store.details {
-				if exclude && row.SourceLogID == 1 {
-					t.Fatal("zero output in saved details")
+				if row.DiagnosticOnly {
+					diagnostics++
+				}
+				if row.EmptyOutput && row.DiagnosticOnly != exclude {
+					t.Fatal("wrong zero output policy")
 				}
 			}
+			if exclude && diagnostics != 1 || !exclude && diagnostics != 0 {
+				t.Fatal("missing diagnostics")
+			}
+
 		}
 	}
 }

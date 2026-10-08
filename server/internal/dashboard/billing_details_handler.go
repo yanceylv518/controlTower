@@ -113,6 +113,7 @@ func detailKey(values ...string) string {
 	return hex.EncodeToString(sum[:])
 }
 func (h *BillingDetailsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	w = billingDownloadReceipt(w, r)
 	id := r.URL.Query().Get("id")
 	if !requireBillingJobPermission(w, r, h.Store, id) {
 		return

@@ -81,6 +81,16 @@ func TestBillingOriginalAggregation(t *testing.T) {
 	if e != nil || len(workspace) != 1 || workspace[0].ImageInputTokens != 2052 || workspace[0].ImageOutputTokens != 28 || workspace[0].AudioInputTokens != 124 || workspace[0].AudioOutputTokens != 44 {
 		t.Fatalf("workspace media: %+v %v", workspace, e)
 	}
+	// Excluded diagnostics survive without changing bill aggregates or exports.
+	beforeRequests, beforeAmount := workspace[0].Requests, workspace[0].Amount
+	if e = s.AppendBillingHour(ctx, job, billing.JobStep{}, nil, nil, nil, []billing.RequestDetail{{DiagnosticOnly: true, EmptyOutput: true, ModelName: "m", Charge: billing.LogCharge{Total: "0.25"}}}, nil, nil, billing.LogCursor{}, 1); e != nil {
+		t.Fatal(e)
+	}
+	workspace, e = s.BillingWorkspace(ctx, site, "user_statement", 7, day, day.AddDate(0, 0, 1))
+	if e != nil || len(workspace) != 1 || workspace[0].EmptyCount != 1 || workspace[0].EmptyAmount != "0.250000000000" || workspace[0].Requests != beforeRequests || workspace[0].Amount != beforeAmount {
+		t.Fatalf("excluded diagnostics: %+v %v", workspace, e)
+	}
+	check("", "mixed")
 	// Historical bills did not record discount metadata; use full-price fallback.
 	if _, e = db.Exec("UPDATE billing_compact_daily_totals SET channel_id=CASE WHEN settlement_discount='1.000000' THEN 99 ELSE channel_id END,before_known_count=0,settlement_discount='' WHERE job_id=?", job.ID); e != nil {
 		t.Fatal(e)

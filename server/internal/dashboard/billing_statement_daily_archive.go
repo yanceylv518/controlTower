@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"archive/zip"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,6 +18,9 @@ import (
 
 func statementDailyMemberFilename(job billing.Job, file billing.UserDailyFile) string {
 	name := statementDailyFilename(job, file.BillDay)
+	if job.JobType == "upstream_statement" && file.ChannelID > 0 {
+		return strings.TrimSuffix(name, ".xlsx") + fmt.Sprintf("-渠道-%d.xlsx", file.ChannelID)
+	}
 	if job.JobType == "upstream_statement" {
 		return strings.TrimSuffix(name, ".xlsx") + fmt.Sprintf("-用户-%d.xlsx", file.UserID)
 	}
@@ -123,4 +127,29 @@ func (h BillingStatementResultHandler) writeDailyArchive(w http.ResponseWriter, 
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="billing-daily-%s.zip"; filename*=UTF-8''%s`, day.Format("2006-01-02"), url.PathEscape(name)))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	http.ServeContent(w, r, name, info.ModTime(), archive)
+}
+
+// New upstream workbooks are keyed by channel. Older snapshots retain their
+// original user files until explicitly regenerated; no source reads on download.
+func (h BillingStatementResultHandler) statementDownloadFiles(ctx context.Context, job billing.Job) ([]billing.UserDailyFile, error) {
+	if job.JobType == "upstream_statement" && job.UsageVersion >= billing.SettlementUsageVersion {
+		if store, ok := h.Store.(interface {
+			ListBillingStatementChannelFiles(context.Context, string) ([]billing.ChannelDailyFile, error)
+		}); ok {
+			files, err := store.ListBillingStatementChannelFiles(ctx, job.ID)
+			if err != nil {
+				return nil, err
+			}
+			out := []billing.UserDailyFile{}
+			for _, f := range files {
+				if strings.HasSuffix(f.RelativePath, ".xlsx") {
+					out = append(out, billing.UserDailyFile{JobID: f.JobID, InstanceID: f.InstanceID, BillDay: f.BillDay, ChannelID: f.ChannelID, RelativePath: f.RelativePath, FileSize: f.FileSize, SHA256: f.SHA256, CreatedAt: f.CreatedAt})
+				}
+			}
+			if len(out) > 0 {
+				return out, nil
+			}
+		}
+	}
+	return h.Store.ListBillingStatementUserFiles(ctx, job.ID)
 }

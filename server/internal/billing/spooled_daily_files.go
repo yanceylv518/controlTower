@@ -343,6 +343,13 @@ func (g UserDailyFileGenerator) publishSpooledChannels(ctx context.Context, root
 		if err != nil {
 			return err
 		}
+		if job.JobType == "upstream_statement" && job.UsageVersion >= SettlementUsageVersion {
+			group := ChannelDailyFile{JobID: job.ID, InstanceID: job.InstanceID, BillDay: day, ChannelID: channelID}
+			if err = g.publishUpstreamChannelWorkbook(ctx, root, job, group, func(visit func(RequestDetail) error) error { return visitJSONDetails(path, visit) }); err != nil {
+				return err
+			}
+			continue
+		}
 		anomalies, err := g.Store.ListBillingChannelAnomalyDetails(ctx, job.ID, day, channelID)
 		if err != nil {
 			return err

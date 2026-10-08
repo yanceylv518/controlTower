@@ -39,6 +39,7 @@ type BillingStatementResultHandler struct {
 }
 
 func (h BillingStatementResultHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	w = billingDownloadReceipt(w, r)
 	id := strings.TrimSpace(r.URL.Query().Get("id"))
 	if !requireBillingJobPermission(w, r, h.Store, id) {
 		return
@@ -117,7 +118,7 @@ func (h BillingStatementResultHandler) ServeHTTP(w http.ResponseWriter, r *http.
 		if verified < 0 {
 			verified = 0
 		}
-		files, err := h.Store.ListBillingStatementUserFiles(r.Context(), job.ID)
+		files, err := h.statementDownloadFiles(r.Context(), job)
 		if err != nil {
 			writeDashboardError(w, http.StatusInternalServerError, "billing_statement_files_failed")
 			return
@@ -128,7 +129,7 @@ func (h BillingStatementResultHandler) ServeHTTP(w http.ResponseWriter, r *http.
 	}
 	var files []billing.UserDailyFile
 	if r.URL.Query().Get("download") != "1" || r.URL.Query().Get("export") != "summary" {
-		files, err = h.Store.ListBillingStatementUserFiles(r.Context(), job.ID)
+		files, err = h.statementDownloadFiles(r.Context(), job)
 	}
 	if err != nil {
 		writeDashboardError(w, http.StatusInternalServerError, "billing_statement_files_failed")
@@ -201,7 +202,7 @@ func (h BillingStatementResultHandler) writeDailyFile(w http.ResponseWriter, r *
 		writeDashboardError(w, http.StatusBadRequest, "invalid_query")
 		return
 	}
-	files, err := h.Store.ListBillingStatementUserFiles(r.Context(), job.ID)
+	files, err := h.statementDownloadFiles(r.Context(), job)
 	if err != nil {
 		writeDashboardError(w, http.StatusInternalServerError, "billing_statement_files_failed")
 		return
