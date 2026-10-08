@@ -316,7 +316,7 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 					state.Phase = "normal"
 					state.Multiplier, state.ProposedWeight = 1, 0
 					state.CircuitOpenedAt, state.NextProbeAt, state.ProbeCommandID, state.OriginalPriority = nil, nil, nil, nil
-					state.ProbeAttempts, state.ProbeSuccesses, state.ProbeDurationSum = 0, 0, 0
+					state.ProbeAttempts, state.ProbeSuccesses, state.ProbeDurationSum, state.ProbeSlowStreak = 0, 0, 0, 0
 					state.SoftStartPending = false
 					if state.PausedReason == "write_failed" {
 						e.noteWriteSuccess(&state)
@@ -361,7 +361,7 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 				// A completed probe round is folded before normal factor evaluation.
 				if state.Phase == "probing" && state.ProbeCommandID == nil && state.ProbeAttempts > 0 {
 					completeFailure := false
-					if mode == "auto" && state.ProbeSuccesses == 0 && !state.CircuitDisabled {
+					if mode == "auto" && state.ProbeSuccesses == 0 && !state.CircuitDisabled && state.ProbeSlowStreak < 2 {
 						// The configured count may change while a round is in flight.
 						// Judge completeness against that command, not today's policy.
 						expected, err := cs.CompletedProbeCount(id, base.ChannelID)
@@ -370,7 +370,7 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 						}
 						completeFailure = expected > 0 && state.ProbeAttempts >= expected
 					}
-					if completeFailure {
+					if mode == "auto" && !state.CircuitDisabled && (completeFailure || state.ProbeSlowStreak >= 2) {
 						state.CircuitDisabled, state.CircuitStatusTarget = true, 2
 						state.ProposedWeight = 0
 						// Persist ownership before disabling: disabled channels must remain eligible after a restart.
@@ -391,7 +391,7 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 						}
 					}
 					probeMultiplier := successRatio * probeSpeed
-					if probeMultiplier >= p.RecoveryThreshold {
+					if probeMultiplier >= p.RecoveryThreshold && state.ProbeSlowStreak < 2 {
 						if capacityRecoveryBlocked(base, state) {
 							state.UpdatedAt = now
 							_ = persistState(state)
@@ -442,7 +442,7 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 						state.NextProbeAt = &next
 						_ = e.store.InsertRecommendation(continuousEvent(id, base, state, "probe_failed", mode, now))
 					}
-					state.ProbeAttempts, state.ProbeSuccesses, state.ProbeDurationSum = 0, 0, 0
+					state.ProbeAttempts, state.ProbeSuccesses, state.ProbeDurationSum, state.ProbeSlowStreak = 0, 0, 0, 0
 				}
 				if recoveredNow {
 					state.UpdatedAt = now
@@ -489,9 +489,9 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 						// accumulation. An active round must start from zero so a
 						// mode switch cannot dilute the probe success ratio with
 						// leftover passive evidence.
-						state.ProbeAttempts, state.ProbeSuccesses, state.ProbeDurationSum = 0, 0, 0
+						state.ProbeAttempts, state.ProbeSuccesses, state.ProbeDurationSum, state.ProbeSlowStreak = 0, 0, 0, 0
 						rec := continuousEvent(id, base, state, "probe_started", mode, now)
-						if commandID, probeErr := cs.CreateContinuousProbe(rec, model, p.ProbeCount, p.ProbeIntervalSeconds, now); probeErr == nil {
+						if commandID, probeErr := cs.CreateContinuousProbe(rec, model, p.ProbeCount, 0, now); probeErr == nil {
 							state.Phase = "probing"
 							state.ProbeCommandID = &commandID
 						}
@@ -568,7 +568,7 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 					state.CircuitOpenedAt = &opened
 					state.NextProbeAt = &next
 					state.OriginalPriority = &original
-					state.ProbeAttempts, state.ProbeSuccesses, state.ProbeDurationSum = 0, 0, 0
+					state.ProbeAttempts, state.ProbeSuccesses, state.ProbeDurationSum, state.ProbeSlowStreak = 0, 0, 0, 0
 					rec := continuousEvent(id, base, state, "circuit_opened", mode, now)
 					rec.ProposedPriority = nil
 					if mode == "auto" {
@@ -955,7 +955,8 @@ func continuousEvent(id string, base ChannelBaseValue, state ContinuousState, ru
 			"metric_cache": state.MetricCache, "baseline_cache": state.BaselineCache, "cache_ready": state.CacheReady,
 			"metric_otps": state.MetricOTPS, "baseline_otps": state.BaselineOTPS, "otps_ready": state.OTPSReady,
 			"otps_sample_count": state.OTPSSamples, "otps_retry_count": state.OTPSRetries, "otps_unknown_count": state.OTPSUnknown, "otps_stats_version": state.OTPSStatsVersion,
-			"smoothed_error_rate": state.SmoothedErrorRate, "probe_attempts": state.ProbeAttempts, "probe_successes": state.ProbeSuccesses,
+			"smoothed_error_rate": state.SmoothedErrorRate, "probe_attempts": state.ProbeAttempts, "probe_successes": state.ProbeSuccesses, "probe_slow_streak": state.ProbeSlowStreak,
+			"probe_timeout_seconds": 30, "probe_slow_limit": 2,
 		},
 		CurrentWeight: currentWeight, ProposedWeight: state.ProposedWeight, CurrentPriority: &base.CurrentPriority, ProposedPriority: nil, ModeAtCreation: mode, Status: "recorded"}
 }

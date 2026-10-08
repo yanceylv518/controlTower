@@ -1,5 +1,14 @@
 # Agent API Contracts
 
+## 恢复探测时长保护（2026-10-08）
+
+- `channel.probe` 同渠道逐次执行，前一次完成/达到时限后立即开始下一次，不插入间隔；旧 `probe_interval_seconds` 字段兼容读取，但新版执行端忽略。不同渠道后台最多4路请求；Agent常驻探测不占监控采集pass的超时预算。
+- 单次渠道测试HTTP请求独立30秒截止，满30秒无响应立即取消客户端等待并计慢探测，不等待最终成功/失败。认证失败、父级轮次超时/进程取消不算慢探测；返回的NewAPI耗时超过30秒也不计恢复成功。
+- `ChannelCommandResult.probe_slow_streak` 为本轮结束时连续慢探测次数（0–2，可省略）；次数不得超过 attempts 或 attempts-successes。30秒内返回会清零连续慢计数，普通快速失败仍保留原失败语义。
+- 连续2次慢探测提前结束整轮。Server持久化 `TuningContinuousState.probe_slow_streak`，下一次状态评估优先触发status=2禁用，不受早前成功次数/恢复分数放行；禁用需真实回执，已禁用渠道继续既有静默/探针恢复流程。
+- 121迁移新增 `probe_slow_streak`，默认0，旧证据不推断慢探测。完整升级需Server/Web/Agent；旧Agent无新时长规则/新证据，Server不把缺失字段当作“两次慢探测”。只读结果核对等已有能力协商保持。
+- 约60秒指两次连续无响应的探测判断时间，不含排队、认证、Agent后续上报、Server评估或禁用写入确认耗时；取消客户端等待不保证上游停止处理。
+
 
 ## NewAPI model square (2026-09-18)
 

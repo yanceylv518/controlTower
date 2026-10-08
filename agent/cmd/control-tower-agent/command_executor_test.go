@@ -154,3 +154,11 @@ func TestExecuteProbeCommandAggregatesRound(t *testing.T) {
 		t.Fatalf("unexpected probe result: %#v", results)
 	}
 }
+
+func TestExecuteProbeCommandReportsConsecutiveSlowRequests(t *testing.T) {
+	c := &probeController{results: []channelcontrol.ProbeResult{{Success: true, Duration: 1}, {Slow: true}, {Success: true, Duration: 31}, {Success: true}}}
+	results := executeCommands(context.Background(), c, []reporter.ChannelCommand{{ID: "slow", Type: "channel.probe", ChannelID: 7, Model: "m", ProbeCount: 10}})
+	if len(results) != 1 || results[0].Attempts != 3 || results[0].Successes != 1 || results[0].ProbeSlowStreak != 2 || c.calls != 3 {
+		t.Fatalf("slow round: %+v calls=%d", results, c.calls)
+	}
+}

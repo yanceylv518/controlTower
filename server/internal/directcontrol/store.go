@@ -43,9 +43,10 @@ const probeRoundTimeout = 8 * time.Minute
 // exactly as before, so the engine and the dashboard handlers stay unchanged.
 type Store struct {
 	mysqlstore.Store
-	secretKey string
-	factory   Factory
-	sleep     func(context.Context, time.Duration)
+	secretKey  string
+	factory    Factory
+	sleep      func(context.Context, time.Duration)
+	probeSlots chan struct{}
 }
 
 // The engine discovers continuous-dispatch persistence via a runtime type
@@ -54,7 +55,7 @@ type Store struct {
 var _ tuning.ContinuousStore = Store{}
 
 func Wrap(inner mysqlstore.Store, secretKey string) Store {
-	return Store{Store: inner, secretKey: secretKey, factory: DefaultFactory, sleep: sleepContext}
+	return Store{Store: inner, secretKey: secretKey, factory: DefaultFactory, sleep: sleepContext, probeSlots: make(chan struct{}, 4)}
 }
 
 // WithFactory returns a copy using a custom controller factory (tests).
@@ -276,6 +277,15 @@ func (s Store) CreateContinuousProbe(v tuning.Recommendation, model string, coun
 func (s Store) runProbeRound(controller Controller, siteID string, channelID int64, commandID, model string, count, interval int) {
 	ctx, cancel := context.WithTimeout(context.Background(), probeRoundTimeout)
 	defer cancel()
+	if s.probeSlots != nil {
+		select {
+		case s.probeSlots <- struct{}{}:
+			defer func() { <-s.probeSlots }()
+		case <-ctx.Done():
+			_, _, _ = s.Store.CompleteChannelCommand(commandID, "failed", "probe queue wait timed out", time.Now().UTC())
+			return
+		}
+	}
 	// Ordering guard: the engine persists probe_command_id into the state row
 	// only after CreateContinuousProbe returns. A round that finishes before
 	// that (instant connection failures, probe_count=1) would report into an
@@ -285,7 +295,8 @@ func (s Store) runProbeRound(controller Controller, siteID string, channelID int
 		_, _, _ = s.Store.CompleteChannelCommand(commandID, "failed", "probe marker was never persisted", time.Now().UTC())
 		return
 	}
-	attempts, successes, durationSum, lastError := executeProbeRound(ctx, controller, channelID, model, count, interval, s.sleep)
+	round := channelcontrol.RunProbeRound(ctx, controller, channelID, model, count, interval, s.sleep)
+	attempts, successes, durationSum, lastError := round.Attempts, round.Successes, round.DurationSeconds, round.Error
 	now := time.Now().UTC()
 	status := "succeeded"
 	if attempts == 0 {
@@ -294,9 +305,9 @@ func (s Store) runProbeRound(controller Controller, siteID string, channelID int
 	if _, _, err := s.Store.CompleteChannelCommand(commandID, status, lastError, now); err != nil {
 		return
 	}
-	summary, _ := json.Marshal(map[string]any{"result": map[string]any{"status": status, "error": lastError, "attempts": attempts, "successes": successes, "duration_seconds": durationSum, "direct": true}})
+	summary, _ := json.Marshal(map[string]any{"result": map[string]any{"status": status, "error": lastError, "attempts": attempts, "successes": successes, "duration_seconds": durationSum, "probe_slow_streak": round.SlowStreak, "direct": true}})
 	_ = s.Store.InsertOperationAudit(storage.OperationAudit{ID: commandID, InstanceID: siteID, OperationType: "channel.probe", TargetType: "channel", TargetID: fmt.Sprint(channelID), ActorID: "system:auto", AfterSummary: string(summary), Status: status, CreatedAt: now})
-	_ = s.Store.RecordContinuousProbeResult(siteID, channelID, commandID, attempts, successes, durationSum, now)
+	_ = s.Store.RecordContinuousProbeResultWithLatency(siteID, channelID, commandID, attempts, successes, durationSum, round.SlowStreak, now)
 }
 
 type continuousStateLister interface {
@@ -327,29 +338,8 @@ func waitForProbeMarker(ctx context.Context, lister continuousStateLister, siteI
 // executeProbeRound mirrors the agent's probe loop: the whole round reports
 // even when individual probes fail; the engine judges from the counts.
 func executeProbeRound(ctx context.Context, controller Controller, channelID int64, model string, count, interval int, sleep func(context.Context, time.Duration)) (attempts, successes int, durationSum float64, lastError string) {
-	if count < 1 {
-		count = 1
-	}
-	for attempt := 0; attempt < count; attempt++ {
-		if attempt > 0 && interval > 0 {
-			sleep(ctx, time.Duration(interval)*time.Second)
-		}
-		if ctx.Err() != nil {
-			lastError = ctx.Err().Error()
-			break
-		}
-		probe, err := controller.Probe(ctx, channelID, model)
-		attempts++
-		if err == nil && probe.Success {
-			successes++
-			durationSum += probe.Duration
-		} else if err != nil {
-			lastError = err.Error()
-		} else {
-			lastError = probe.Message
-		}
-	}
-	return attempts, successes, durationSum, lastError
+	result := channelcontrol.RunProbeRound(ctx, controller, channelID, model, count, interval, sleep)
+	return result.Attempts, result.Successes, result.DurationSeconds, result.Error
 }
 
 // CreateTuningPreflight verifies the control path synchronously on direct

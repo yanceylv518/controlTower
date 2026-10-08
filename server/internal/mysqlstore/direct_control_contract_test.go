@@ -106,6 +106,7 @@ func TestContinuousStateProbeGuardContract(t *testing.T) {
 		"probe_attempts=IF(@keep_probe,probe_attempts,VALUES(probe_attempts))",
 		"probe_successes=IF(@keep_probe,probe_successes,VALUES(probe_successes))",
 		"probe_duration_sum=IF(@keep_probe,probe_duration_sum,VALUES(probe_duration_sum))",
+		"probe_slow_streak=IF(@keep_probe,probe_slow_streak,VALUES(probe_slow_streak))",
 	} {
 		if !strings.Contains(text, required) {
 			t.Fatalf("missing probe guard contract %q", required)

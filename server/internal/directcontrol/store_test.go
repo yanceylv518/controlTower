@@ -101,7 +101,7 @@ func TestExecuteProbeRoundCountsWholeRound(t *testing.T) {
 	}}
 	slept := 0
 	attempts, successes, durationSum, lastError := executeProbeRound(context.Background(), f, 9, "m", 4, 5, func(context.Context, time.Duration) { slept++ })
-	if attempts != 4 || successes != 2 || durationSum != 3 || slept != 3 {
+	if attempts != 4 || successes != 2 || durationSum != 3 || slept != 0 {
 		t.Fatalf("round accounting wrong: attempts=%d successes=%d duration=%v slept=%d", attempts, successes, durationSum, slept)
 	}
 	if lastError != "upstream 500" {
@@ -111,10 +111,20 @@ func TestExecuteProbeRoundCountsWholeRound(t *testing.T) {
 
 func TestExecuteProbeRoundStopsOnCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cancel()
 	f := &fakeController{results: []channelcontrol.ProbeResult{{Success: true}}}
 	attempts, _, _, lastError := executeProbeRound(ctx, f, 9, "m", 5, 1, func(context.Context, time.Duration) { cancel() })
-	if attempts != 1 || lastError == "" {
+	if attempts != 0 || lastError == "" {
 		t.Fatalf("canceled round must stop early and record the reason: attempts=%d err=%q", attempts, lastError)
+	}
+}
+
+func TestDirectProbeRoundStopsAfterTwoSlowRequests(t *testing.T) {
+	f := &fakeController{results: []channelcontrol.ProbeResult{{Success: true, Duration: 31}, {Slow: true}, {Success: true, Duration: 1}}}
+	attempts, successes, _, message := executeProbeRound(context.Background(), f, 9, "m", 10, 0, func(context.Context, time.Duration) {})
+	if attempts != 2 || successes != 0 || len(f.probes) != 2 || message == "" {
+		t.Fatalf("slow round continued: %d %d %q", attempts, successes, message)
 	}
 }
 

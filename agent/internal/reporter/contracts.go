@@ -48,6 +48,7 @@ type ChannelCommandResult struct {
 	Status           string    `json:"status"`
 	Error            string    `json:"error,omitempty"`
 	AppliedAt        time.Time `json:"applied_at"`
+	ProbeSlowStreak  int       `json:"probe_slow_streak,omitempty"`
 	DurationSeconds  float64   `json:"duration_seconds,omitempty"`
 	Attempts         int       `json:"attempts,omitempty"`
 	Successes        int       `json:"successes,omitempty"`

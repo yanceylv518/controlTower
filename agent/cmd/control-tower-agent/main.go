@@ -141,6 +141,9 @@ func run() error {
 	if cfg.NewAPIControlEnabled {
 		channelControllerClient = channelcontrol.NewWithCredentials(cfg.NewAPIAdminAPIURL, cfg.NewAPIAdminAccessToken, cfg.NewAPIAdminUsername, cfg.NewAPIAdminPassword, cfg.NewAPIAdminUserID, channeltoken.NewFileTokenStore(filepath.Join(cfg.DataDir, "new-api-admin-token")), nil)
 	}
+	if !cfg.RunOnce {
+		ctx = withProbeDispatcher(ctx, channelControllerClient)
+	}
 	var dockerCollector dockerStatusCollector
 	if cfg.DockerEnabled {
 		dockerCollector = dockercollector.New()

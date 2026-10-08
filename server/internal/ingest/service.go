@@ -150,6 +150,9 @@ func (s Service) SaveReport(req agentgateway.AgentReportRequest) error {
 		return err
 	}
 	for _, result := range req.CommandResults {
+		if result.ProbeSlowStreak < 0 || result.ProbeSlowStreak > 2 || result.ProbeSlowStreak > result.Attempts || result.ProbeSlowStreak > result.Attempts-result.Successes {
+			return errors.New("invalid probe slow streak")
+		}
 		if result.Status == "unconfirmed" {
 			continue
 		}
@@ -181,6 +184,12 @@ func (s Service) SaveReport(req agentgateway.AgentReportRequest) error {
 		}
 		if command.CommandType == "channel.probe" {
 			if recorder, ok := s.store.(interface {
+				RecordContinuousProbeResultWithLatency(string, int64, string, int, int, float64, int, time.Time) error
+			}); ok {
+				if err = recorder.RecordContinuousProbeResultWithLatency(command.InstanceID, command.ChannelID, command.ID, result.Attempts, result.Successes, result.DurationSeconds, result.ProbeSlowStreak, time.Now().UTC()); err != nil {
+					return err
+				}
+			} else if recorder, ok := s.store.(interface {
 				RecordContinuousProbeResult(string, int64, string, int, int, float64, time.Time) error
 			}); ok {
 				if err = recorder.RecordContinuousProbeResult(command.InstanceID, command.ChannelID, command.ID, result.Attempts, result.Successes, result.DurationSeconds, time.Now().UTC()); err != nil {
@@ -199,7 +208,7 @@ func (s Service) SaveReport(req agentgateway.AgentReportRequest) error {
 			after, _ := json.Marshal(map[string]any{"group": *groupAudit.Group, "result": map[string]any{"status": status, "error": auditError, "applied_at": result.AppliedAt}})
 			beforeSummary, afterSummary = string(before), string(after)
 		} else {
-			summary, _ := json.Marshal(map[string]any{"payload": json.RawMessage(command.PayloadJSON), "result": map[string]any{"status": status, "error": auditError, "applied_at": result.AppliedAt, "attempts": result.Attempts, "successes": result.Successes, "duration_seconds": result.DurationSeconds}})
+			summary, _ := json.Marshal(map[string]any{"payload": json.RawMessage(command.PayloadJSON), "result": map[string]any{"status": status, "error": auditError, "applied_at": result.AppliedAt, "attempts": result.Attempts, "successes": result.Successes, "duration_seconds": result.DurationSeconds, "probe_slow_streak": result.ProbeSlowStreak}})
 			afterSummary = string(summary)
 		}
 		now := time.Now().UTC()

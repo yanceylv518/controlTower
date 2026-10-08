@@ -11,8 +11,21 @@ import (
 )
 
 func executeCommands(ctx context.Context, controller channelController, commands []reporter.ChannelCommand) []reporter.ChannelCommandResult {
+	var completedProbes []reporter.ChannelCommandResult
+	if dispatcher, ok := ctx.Value(probeDispatcherKey{}).(*probeDispatcher); ok {
+		ordinary := make([]reporter.ChannelCommand, 0, len(commands))
+		for _, command := range commands {
+			if command.Type == "channel.probe" {
+				dispatcher.submit(command)
+			} else {
+				ordinary = append(ordinary, command)
+			}
+		}
+		commands = ordinary
+		completedProbes = dispatcher.drain()
+	}
 	if len(commands) == 0 {
-		return nil
+		return completedProbes
 	}
 	// Keep each channel's command order; a slow probe/write must not delay
 	// unrelated channels. Result positions remain identical to the request.
@@ -43,7 +56,7 @@ func executeCommands(ctx context.Context, controller channelController, commands
 	}
 	close(jobs)
 	workers.Wait()
-	return results
+	return append(results, completedProbes...)
 }
 
 func executeCommand(ctx context.Context, controller channelController, command reporter.ChannelCommand) reporter.ChannelCommandResult {
@@ -83,37 +96,18 @@ func executeCommand(ctx context.Context, controller channelController, command r
 		return result
 	}
 	if command.Type == "channel.probe" {
-		count := command.ProbeCount
-		if count < 1 {
-			count = 1
-		}
-		interval := time.Duration(command.ProbeIntervalSeconds) * time.Second
-		var lastError string
-		for attempt := 0; attempt < count; attempt++ {
-			if attempt > 0 && interval > 0 {
-				select {
-				case <-ctx.Done():
-					lastError = ctx.Err().Error()
-					attempt = count
-					continue
-				case <-time.After(interval):
-				}
+		round := channelcontrol.RunProbeRound(ctx, controller, command.ChannelID, command.Model, command.ProbeCount, command.ProbeIntervalSeconds, func(ctx context.Context, d time.Duration) {
+			timer := time.NewTimer(d)
+			defer timer.Stop()
+			select {
+			case <-ctx.Done():
+			case <-timer.C:
 			}
-			probe, err := controller.Probe(ctx, command.ChannelID, command.Model)
-			result.Attempts++
-			if err == nil && probe.Success {
-				result.Successes++
-				result.DurationSeconds += probe.Duration
-			} else if err != nil {
-				lastError = err.Error()
-			} else {
-				lastError = probe.Message
-			}
-		}
-		// A probe command reports the whole round even when individual probes
-		// fail; the server decides recovery from attempts/successes.
-		result.Status = "succeeded"
-		result.Error = lastError
+		})
+		result.Attempts, result.Successes = round.Attempts, round.Successes
+		result.DurationSeconds, result.ProbeSlowStreak = round.DurationSeconds, round.SlowStreak
+		result.Status, result.Error = "succeeded", round.Error
+		result.AppliedAt = time.Now().UTC()
 		return result
 	}
 	// channel.verify sends no field changes. Update still performs an

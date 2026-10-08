@@ -55,7 +55,7 @@ func (e *Engine) advanceCircuitStatus(cs ContinuousStore, site string, base Chan
 		}
 	}
 	state.CircuitStatusCommandID, state.CircuitStatusTarget = "", 0
-	state.ProbeAttempts, state.ProbeSuccesses, state.ProbeDurationSum = 0, 0, 0
+	state.ProbeAttempts, state.ProbeSuccesses, state.ProbeDurationSum, state.ProbeSlowStreak = 0, 0, 0, 0
 	weight := state.ProposedWeight
 	state.LastWrittenWeight, state.LastWriteAt = &weight, &now
 	e.noteWriteSuccess(state)
@@ -79,7 +79,7 @@ func resetFailedCircuitEnable(state *ContinuousState, p ContinuousDispatchParams
 	state.CircuitStatusTarget, state.CircuitStatusCommandID = 0, ""
 	state.Phase, state.SoftStartPending = "circuit", false
 	state.Multiplier, state.ProposedWeight = 0, 0
-	state.ProbeAttempts, state.ProbeSuccesses, state.ProbeDurationSum = 0, 0, 0
+	state.ProbeAttempts, state.ProbeSuccesses, state.ProbeDurationSum, state.ProbeSlowStreak = 0, 0, 0, 0
 	next := now.Add(time.Duration(p.SilentMinutes) * time.Minute)
 	state.NextProbeAt = &next
 }

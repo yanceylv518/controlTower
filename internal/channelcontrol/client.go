@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // ErrChannelNotFound 表示 New API 已确认目标渠道不存在，调用方可据此
@@ -38,11 +39,16 @@ type Result struct {
 
 type ProbeResult struct {
 	Success  bool
+	Slow     bool
 	Duration float64
 	Message  string
 }
 
 func (c *Client) Probe(ctx context.Context, channelID int64, model string) (ProbeResult, error) {
+	return c.probe(ctx, channelID, model, ProbeRequestTimeout)
+}
+
+func (c *Client) probe(ctx context.Context, channelID int64, model string, timeout time.Duration) (ProbeResult, error) {
 	if channelID <= 0 {
 		return ProbeResult{}, fmt.Errorf("channel id must be positive")
 	}
@@ -58,10 +64,17 @@ func (c *Client) Probe(ctx context.Context, channelID int64, model string) (Prob
 		Message string  `json:"message"`
 		Time    float64 `json:"time"`
 	}
-	if err := c.do(ctx, http.MethodGet, url, nil, &response, true); err != nil {
-		return ProbeResult{}, err
+	// Authentication is outside the channel request latency budget. A timeout
+	// of the parent round/shutdown is not evidence of a slow upstream.
+	requestCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	started := time.Now()
+	if err := c.do(requestCtx, http.MethodGet, url, nil, &response, true); err != nil {
+		slow := ctx.Err() == nil && (errors.Is(requestCtx.Err(), context.DeadlineExceeded) || time.Since(started) > timeout)
+		return ProbeResult{Slow: slow, Duration: time.Since(started).Seconds()}, err
 	}
-	return ProbeResult{Success: response.Success, Duration: response.Time, Message: response.Message}, nil
+	slow := response.Time > ProbeRequestTimeout.Seconds() || time.Since(started) > timeout
+	return ProbeResult{Success: response.Success && !slow, Slow: slow, Duration: response.Time, Message: response.Message}, nil
 }
 
 // Check proves the base URL, credentials and admin identity are valid with a

@@ -78,7 +78,7 @@ func DefaultPolicy() Policy {
 			CombinedMinFactor: .50, CombinedMaxFactor: 1.50, MaxIncreasePercent: 10,
 			CircuitThreshold: .1, RecoveryThreshold: .2,
 			CircuitErrorRate: .30, RecoveryErrorRate: .10,
-			SilentMinutes: 5, ProbeIntervalSeconds: 5, ProbeCount: 10, SoftStartMultiplier: .2,
+			SilentMinutes: 5, ProbeIntervalSeconds: 0, ProbeCount: 10, SoftStartMultiplier: .2,
 			WindowMinutes: 15, MinSamples: 20, SparseLookbackMinutes: 360,
 			FastCircuitEnabled: true, FastCircuitMinSamples: 50, FastCircuitErrorRate: .50,
 		},
@@ -166,7 +166,7 @@ func (p Policy) Validate() map[string]string {
 	if c.SilentMinutes < 1 || c.SilentMinutes > 1440 {
 		e["continuous.silent_minutes"] = "must_be_between_1_and_1440"
 	}
-	if c.ProbeIntervalSeconds < 1 || c.ProbeCount < 1 {
+	if c.ProbeIntervalSeconds < 0 || c.ProbeCount < 1 {
 		e["continuous.probe"] = "must_be_positive"
 	}
 	if c.SoftStartMultiplier <= 0 || c.SoftStartMultiplier > 1 {
@@ -322,6 +322,7 @@ type ContinuousState struct {
 	ProbeAttempts          int        `json:"probe_attempts"`
 	ProbeSuccesses         int        `json:"probe_successes"`
 	ProbeDurationSum       float64    `json:"probe_duration_sum"`
+	ProbeSlowStreak        int        `json:"probe_slow_streak"`
 	OriginalPriority       *int64     `json:"original_priority,omitempty"`
 	SoftStartPending       bool       `json:"soft_start_pending"`
 	// Direct-control write failure accounting: after a streak of failed

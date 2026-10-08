@@ -113,7 +113,7 @@ func (e *Engine) evaluateFastCircuit(batch FastCircuitBatch, now time.Time) {
 			original := base.BasePriority
 			state.CircuitOpenedAt, state.NextProbeAt, state.OriginalPriority = &opened, &next, &original
 			state.ProbeCommandID = nil
-			state.ProbeAttempts, state.ProbeSuccesses, state.ProbeDurationSum = 0, 0, 0
+			state.ProbeAttempts, state.ProbeSuccesses, state.ProbeDurationSum, state.ProbeSlowStreak = 0, 0, 0, 0
 			state.SoftStartPending = false
 			rec := continuousEvent(siteID, base, state, "circuit_opened", "auto", now)
 			rec.ProposedPriority = nil

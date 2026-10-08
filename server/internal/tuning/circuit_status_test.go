@@ -66,6 +66,51 @@ func TestPartialOrInterruptedProbeDoesNotDisable(t *testing.T) {
 	}
 }
 
+func TestTwoSlowProbesDisableWithoutFinishingRound(t *testing.T) {
+	f := failedRound()
+	s := f.states[1]
+	s.ProbeAttempts, s.ProbeSuccesses, s.ProbeDurationSum, s.ProbeSlowStreak = 3, 1, 1, 2
+	f.states[1] = s
+	f.commandStatus = "pending"
+	now := time.Now().UTC()
+	e := NewEngine(f)
+	e.evaluateContinuous("i", autoPolicy(), now, f)
+	s = f.states[1]
+	if len(f.writes) != 1 || f.writes[0].ProposedChannelStatus == nil || *f.writes[0].ProposedChannelStatus != 2 || s.CircuitStatusCommandID == "" {
+		t.Fatalf("partial slow round did not request disable: %+v writes=%+v", s, f.writes)
+	}
+	if s.Phase == "soft_start" {
+		t.Fatal("earlier success incorrectly recovered slow channel")
+	}
+	e.evaluateContinuous("i", autoPolicy(), now.Add(time.Minute), f)
+	if len(f.writes) != 1 || len(f.probes) != 0 {
+		t.Fatal("pending disable duplicated or launched probe")
+	}
+	f.commandStatus = "succeeded"
+	e.evaluateContinuous("i", autoPolicy(), now.Add(2*time.Minute), f)
+	if !f.states[1].CircuitDisabled || f.states[1].Phase != "circuit" || f.states[1].ProbeSlowStreak != 0 {
+		t.Fatalf("disable confirmation/reset: %+v", f.states[1])
+	}
+}
+
+func TestOneSlowProbeDoesNotDisableAndDisabledSlowRoundCannotRecover(t *testing.T) {
+	for _, disabled := range []bool{false, true} {
+		f := failedRound()
+		s := f.states[1]
+		s.ProbeAttempts, s.ProbeSuccesses, s.ProbeSlowStreak = 3, 0, 1
+		s.CircuitDisabled = disabled
+		if disabled {
+			s.ProbeSlowStreak = 2
+			s.ProbeSuccesses = 1
+		}
+		f.states[1] = s
+		NewEngine(f).evaluateContinuous("i", autoPolicy(), time.Now(), f)
+		if len(f.writes) != 0 || f.states[1].CircuitDisabled != disabled {
+			t.Fatalf("unexpected disable/recovery: %+v", f.states[1])
+		}
+	}
+}
+
 func TestCircuitStatusWaitsForAgentAndRetriesFailure(t *testing.T) {
 	f := failedRound()
 	f.commandStatus = "pending"

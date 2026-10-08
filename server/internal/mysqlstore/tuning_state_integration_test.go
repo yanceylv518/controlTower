@@ -89,6 +89,30 @@ func TestContinuousStateRetryFieldsMySQLIntegration(t *testing.T) {
 		require.Empty(t, rows[0].CircuitStatusCommandID)
 	})
 
+	t.Run("slow probe result survives stale tick and resets for new round", func(t *testing.T) {
+		commandID := "slow-probe-old"
+		state := tuning.ContinuousState{InstanceID: site, ChannelID: 199, ModelName: "m", Phase: "probing", ProbeCommandID: &commandID, UpdatedAt: now}
+		require.NoError(t, s.PutContinuousState(state))
+		require.NoError(t, s.RecordContinuousProbeResultWithLatency(site, 199, commandID, 3, 1, 1, 2, now))
+		// Persisting the pre-result snapshot must not erase latency evidence.
+		require.NoError(t, s.PutContinuousState(state))
+		rows, err := s.ListContinuousStates(site)
+		require.NoError(t, err)
+		require.Nil(t, rows[0].ProbeCommandID)
+		require.Equal(t, 2, rows[0].ProbeSlowStreak)
+		require.Equal(t, 3, rows[0].ProbeAttempts)
+		state = rows[0]
+		newID := "slow-probe-new"
+		state.ProbeCommandID, state.ProbeSlowStreak = &newID, 0
+		state.ProbeAttempts, state.ProbeSuccesses, state.ProbeDurationSum = 0, 0, 0
+		require.NoError(t, s.PutContinuousState(state))
+		require.NoError(t, s.RecordContinuousProbeResultWithLatency(site, 199, commandID, 3, 1, 1, 2, now))
+		rows, err = s.ListContinuousStates(site)
+		require.NoError(t, err)
+		require.Equal(t, &newID, rows[0].ProbeCommandID)
+		require.Zero(t, rows[0].ProbeSlowStreak)
+	})
+
 	t.Run("engine retries across database reloads", func(t *testing.T) {
 		for _, legacy := range []bool{false, true} {
 			failedAt := now.Add(-10 * time.Minute)
