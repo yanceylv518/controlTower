@@ -189,6 +189,10 @@ function operationLabel(value: string) {
     "logs.query": "查询使用日志",
     "auth.account_create": "创建管理账号",
     "auth.account_update": "修改管理账号",
+    "auth.permission_preset_create": "创建权限预设",
+    "auth.permission_preset_update": "修改权限预设",
+    "auth.permission_preset_delete": "删除权限预设",
+    "auth.permission_preset_apply": "按预设赋权账号",
     "auth.password_reset": "重置管理账号密码",
     "auth.password_change": "修改账号密码",
     "auth.login": "账号登录",
@@ -353,6 +357,7 @@ function targetTypeLabel(value: string) {
   const labels: Record<string, string> = {
     channel: "渠道",
     ct_user: "账号",
+    permission_preset: "权限预设",
     user: "用户",
     users: "账号",
     channels: "渠道",
@@ -408,7 +413,10 @@ function targetLabel(item: OperationAuditItem) {
 
   let kind = targetTypeLabel(item.target_type) || sourceComponentLabel(item.source_component);
   let name = "";
-  if (item.target_type === "ct_user" || operation.startsWith("auth.") || operation.startsWith("http.identity.")) {
+  if (item.target_type === "permission_preset") {
+    kind = "权限预设";
+    name = nameFrom("name");
+  } else if (item.target_type === "ct_user" || operation.startsWith("auth.") || operation.startsWith("http.identity.")) {
     kind = "账号";
     for (const snapshot of snapshots) {
       const account = object(snapshot.account);

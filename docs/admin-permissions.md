@@ -45,3 +45,35 @@
 ## 个人密码
 
 右上角账号菜单提供修改本人密码和退出登录，所有登录账号均可使用，不依赖系统设置权限。修改密码需校验当前密码、新密码至少 8 位及确认输入；保存成功后重新登录。密码更新与清除会话在同一事务中完成。
+
+## 权限预设
+
+账号管理增加“权限预设”页签。创建或配置管理员时，账号信息横排显示，预设操作位于权限区上方；目标账号由列表确定，编辑器内不再切换账号。应用预设只修改当前草稿，保存账号后生效。“补充权限”保留现有权限，“替换现有权限”移除不在预设中的权限；已有账号默认补充，创建账号默认替换。允许继续逐项调整。
+
+“当前权限另存为预设”在独立小表单中保存名称、备注和具体权限，保留账号草稿及初始密码；密码仅在当前创建流程内存中使用，关闭或成功创建时清除，不写入预设或浏览器持久存储。预设不能包含 `*`，从全部权限另存时只复制当前可授予的具体权限，不包含未来新增功能。账号列表展示权限摘要，点击可展开完整内容；“与某预设一致”只表示当前权限集合匹配，不表示角色绑定或历史来源。
+
+权限编辑器支持搜索和“只看变更”，新增和移除同时用文字标识。搜索或查看变更时，分组复选框仅操作当前匹配的项目。普通保存直接提交，清空账号权限需要确认；保存成功后的列表刷新失败会单独提示，不将其报告为保存失败。
+
+预设支持新建、编辑、复制、删除和批量赋权。修改、删除预设不自动修改任何账号。批量赋权先选账号，再逐账号查看新增/移除明细并确认；当前账号、查看账号、完整权限管理员和超出操作者权限的账号不能批量修改。已停用账号可赋权，但不会因此启用。结果分别报告实际变更和保持不变的账号数。
+
+### 存储与接口
+
+需要配套更新 Server/Web，由正常启动迁移流程执行 `120_permission_presets.sql`。该迁移创建 CT 自有 `permission_presets` 表，不修改 NewAPI 数据库或现有账号权限；之前未发布的草稿编号116已顺延，避免与上游账单迁移混淆。Agent无需更新。
+
+所有接口要求登录管理员拥有 `accounts.manage`；返回的预设及可写权限均受操作者授权范围限制。写操作沿用 `X-Requested-With: XMLHttpRequest` 与 JSON 请求。创建/更新名称最多64个字符、备注最多256个字符，至少一项已知权限；全局最多100个预设，每批最多50个账号。
+
+| 方法与路径 | 请求与响应 |
+| --- | --- |
+| `GET /api/auth/permission-presets` | 返回 `items`、`max_presets`、`max_apply_accounts`；每项包括ID、名称、备注、权限、版本及创建/更新身份与时间 |
+| `POST /api/auth/permission-presets` | 请求 `name`、`description`、`permissions`，返回创建的预设（201） |
+| `PUT /api/auth/permission-presets/{id}` | 请求上述字段及读取时的 `version`，返回版本递增后的预设 |
+| `DELETE /api/auth/permission-presets/{id}` | JSON请求包含读取时的 `version`，返回 `ok` |
+| `POST /api/auth/permission-presets/{id}/apply` | 请求 `version`、`mode`（`merge`或`replace`）、`user_ids`和`expected_permissions`；返回 `ok`、`selected`、`changed` |
+
+`expected_permissions` 是以账号ID字符串为键、预览时权限数组为值的对象，每个选中账号均必须提供，包括空数组。服务端在事务中锁定并重新读取管理员与预设，核对操作者权限、目标可管理范围、预设版本和每个目标的原权限集合，全部通过后才写入；任一写入或审计失败，整批回滚。预设CRUD与对应审计同样使用单个事务。原账号编辑接口的审计流程保留原实现。
+
+版本变化返回409 `permission_preset_conflict`，账号权限变化返回409 `permission_preset_accounts_changed`，重名返回409 `permission_preset_name_exists`，预设上限返回409 `permission_preset_limit`，已删除返回404 `permission_preset_not_found`。参数无效返回400 `invalid_permission_preset`，越权返回403 `forbidden`，不支持预设存储时返回503 `permission_preset_unavailable`，其他存储错误返回500 `permission_preset_failed`。批量冲突保留选择，需刷新预设和账号、重新查看差异后确认；不会自动重试写入。客户端请求中断或超时不能证明写入失败，提示刷新数据确认结果。
+
+审计类型为 `auth.permission_preset_create`、`auth.permission_preset_update`、`auth.permission_preset_delete` 和 `auth.permission_preset_apply`。批量操作按实际变化账号记录前后权限及使用的预设版本，原本一致的账号不生成修改审计；不记录密码或密码哈希。
+
+本功能于2026-10-08完成代码接入，本轮未运行测试、类型检查、构建、实库迁移或浏览器验证。上文历史验证记录不代表权限预设功能已验收。

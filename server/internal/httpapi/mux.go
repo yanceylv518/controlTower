@@ -106,6 +106,10 @@ func NewMux(options Options) *http.ServeMux {
 	mux.Handle("/api/auth/users", auditAuthMutation(a.Users))
 	mux.Handle("PUT /api/auth/users/{id}", auditAuthMutation(a.User))
 	mux.Handle("POST /api/auth/users/{id}/password", auditAuthMutation(a.ResetPassword))
+	mux.Handle("/api/auth/permission-presets", auditAuthMutation(a.PermissionPresets))
+	mux.Handle("PUT /api/auth/permission-presets/{id}", auditAuthMutation(a.PermissionPreset))
+	mux.Handle("DELETE /api/auth/permission-presets/{id}", auditAuthMutation(a.PermissionPreset))
+	mux.Handle("POST /api/auth/permission-presets/{id}/apply", auditAuthMutation(a.ApplyPermissionPreset))
 	controlSections := map[string]http.HandlerFunc{}
 	mux.HandleFunc("POST /api/agent/control/poll", agentHandler.Control(controlSections))
 	if provider, ok := any(options.Store).(interface{ NewArchiveStore() ac.Store }); ok {

@@ -98,6 +98,8 @@ const fieldLabels: Record<string, string> = {
   output_price: "输出价格",
   password_updated: "密码已更新",
   permissions: "权限",
+  permission_preset: "权限预设",
+  apply_mode: "应用方式",
   phone: "联系电话",
   policy: "策略",
   priority: "优先级",

@@ -28,6 +28,8 @@ type MemoryStore struct {
 	metrics5m              map[string]aggregator.Metric
 	metricBatches          map[string]struct{}
 	users                  map[int64]storage.User
+	permissionPresets      map[int64]storage.PermissionPreset
+	nextPermissionPresetID int64
 	sessions               map[string]storage.Session
 	nextUserID             int64
 	instances              map[string]storage.Instance
