@@ -117,7 +117,8 @@ const normalizeChannelStatus = (value: string | number | undefined) => {
   return "unknown";
 };
 const channelStatusFor = (row: ChannelDisplayRow) => normalizeChannelStatus(isDirectoryOnlyRow(row) ? row.status : channelDirectoryByID.value.get(row.channel_id)?.status);
-const channelStatusLabel = (row: ChannelDisplayRow) => ({ enabled: "已启用", disabled: "已关闭", auto_disabled: "自动禁用", unknown: "状态未知" }[channelStatusFor(row)]);
+const channelStatusLabels = { enabled: "已启用", disabled: "手动关闭", auto_disabled: "自动关闭", unknown: "状态未知" };
+const channelStatusLabel = (row: ChannelDisplayRow) => channelStatusLabels[channelStatusFor(row)];
 const channelStatusClass = (row: ChannelDisplayRow) => `is-${channelStatusFor(row).replace("_", "-")}`;
 const channelStatusTitle = (row: ChannelDisplayRow) => {
   const status = isDirectoryOnlyRow(row) ? row.status : channelDirectoryByID.value.get(row.channel_id)?.status;
@@ -288,7 +289,7 @@ const modelMode = (model: string) => policy.dispatch_modes[model] || "off";
 const modeText = (model: string) => ({ off: "已关闭", observe: "只观察", auto: "自动执行" }[modelMode(model)]);
 const modeType = (model: string) => modelMode(model) === "auto" ? "success" : modelMode(model) === "observe" ? "warning" : "info";
 const effectivePause = (s?: TuningContinuousState) => s?.paused_reason === "manual_override" ? "" : s?.paused_reason || "";
-const phaseText = (s?: TuningContinuousState) => !s ? "等待首次评估" : effectivePause(s) === "write_failed" ? `写入 new-api 失败已暂停，每10分钟自动重试${s.last_write_error ? `：${s.last_write_error}` : ""}` : effectivePause(s) ? "安全保护已暂停" : s.capacity?.pending_command_id ? `权重 ${s.capacity.confirmed_weight} → ${s.capacity.pending_weight}，等待执行回执` : s.circuit_status_target ? (s.circuit_status_target === 2 ? "正在禁用渠道，等待执行确认" : "正在启用渠道，等待执行确认") : s.circuit_disabled ? `已禁用，${s.phase === "probing" ? "恢复检测中" : `下次检测 ${s.next_probe_at ? formatTime(s.next_probe_at) : "待定"}`}` : s.phase === "circuit" ? `已熔断，下次检测 ${s.next_probe_at ? formatTime(s.next_probe_at) : "待定"}` : s.phase === "probing" ? `恢复检测 ${s.probe_attempts || 0}/${policy.continuous.probe_count}` : s.phase === "soft_start" ? "恢复中（低权重运行）" : "运行正常";
+const phaseText = (s?: TuningContinuousState) => !s ? "等待首次评估" : effectivePause(s) === "write_failed" ? `写入 new-api 失败已暂停，每10分钟自动重试${s.last_write_error ? `：${s.last_write_error}` : ""}` : effectivePause(s) ? "安全保护已暂停" : s.capacity?.pending_command_id ? `权重 ${s.capacity.confirmed_weight} → ${s.capacity.pending_weight}，等待执行回执` : s.circuit_status_target ? (s.circuit_status_target === 1 ? "正在启用渠道，等待执行确认" : "正在禁用渠道，等待执行确认") : s.circuit_disabled ? `已禁用，${s.phase === "probing" ? "恢复检测中" : `下次检测 ${s.next_probe_at ? formatTime(s.next_probe_at) : "待定"}`}` : s.phase === "circuit" ? `已熔断，下次检测 ${s.next_probe_at ? formatTime(s.next_probe_at) : "待定"}` : s.phase === "probing" ? `恢复检测 ${s.probe_attempts || 0}/${policy.continuous.probe_count}` : s.phase === "soft_start" ? "恢复中（低权重运行）" : "运行正常";
 const phaseType = (s?: TuningContinuousState) => s?.phase === "circuit" ? "danger" : s?.phase === "probing" || s?.phase === "soft_start" || effectivePause(s) ? "warning" : "success";
 const eventName = (rule: string) => ({ weight_observed: "观察到权重变化", weight_write: "自动调整权重", capacity_reduce: "持续超限主动降权", manual_takeover: "检测到人工修改", auto_paused: "安全保护暂停", circuit_opened: "渠道熔断", probe_started: "开始恢复检测", probe_failed: "恢复检测未通过", circuit_disabled: "探针全部失败，禁用渠道", circuit_recovered: "渠道恢复" } as Record<string, string>)[rule] || rule;
 const eventCount = (days: number, rule: string) => events.value.filter(x => validEvent(x) && x.rule === rule && new Date(x.created_at).getTime() >= Date.now() - days * 86400000).length;
@@ -380,13 +381,12 @@ const coefficientCell = (row: ChannelDisplayRow, key: 'speed' | 'cache' | 'otps'
   return result(state.otps_ready ? '有效' : value === 1 ? '中性回退' : '保留值', state.otps_ready ? '输出样本与基线有效' : '输出样本或基线不足');
 };
 // 分组筛选只匹配渠道实际拥有的完整分组名，不按子串误命中。
-const channelSwitchFilter = ref("enabled");
-const activeModelEnabledCount = computed(() => modelChannelRows.value.filter(row => channelStatusFor(row) === "enabled").length);
+const channelSwitchFilter = ref<"" | "enabled" | "disabled" | "auto_disabled">("enabled");
 const modelChannelCountLabel = (model: string) => {
   if (model !== activeModel.value || !channelSwitchFilter.value) return `共 ${modelChannelCount(model)} 个渠道`;
-  const enabled = channelSwitchFilter.value === "enabled";
-  const count = enabled ? activeModelEnabledCount.value : modelChannelRows.value.length - activeModelEnabledCount.value;
-  return `${enabled ? "已启用" : "未启用"} ${count} 个渠道`;
+  const status = channelSwitchFilter.value;
+  const count = modelChannelRows.value.filter(row => channelStatusFor(row) === status).length;
+  return `${channelStatusLabels[status]} ${count} 个渠道`;
 };
 const groupFilterOpen = ref(false);
 const selectedGroupFilter = ref<{ kind: "all" } | { kind: "group"; name: string } | null>(null);
@@ -463,10 +463,7 @@ const coefficientSpan = ({column}: {column: {property?: string}}) => {
 };
 const displayedRows = computed<ChannelDisplayRow[]>(() => modelChannelRows.value.filter(row => {
   if (!matchesChannelGroup(row.group_name, selectedGroupName.value)) return false;
-  const channelStatus = channelStatusFor(row);
-  if (channelSwitchFilter.value === "enabled" && channelStatus !== "enabled") return false;
-  if (channelSwitchFilter.value === "not_enabled" && channelStatus === "enabled") return false;
-  return true;
+  return !channelSwitchFilter.value || channelStatusFor(row) === channelSwitchFilter.value;
 }));
 const priorityDrafts = reactive(new Map<number, number>());
 watch([activeModel, selectedGroupFilter, channelSwitchFilter], () => { mobileRowCount.value = 20; });
@@ -1141,7 +1138,8 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
               <el-select v-model="channelSwitchFilter" aria-label="渠道开关状态筛选" placeholder="全部开关状态" class="channel-status-filter">
                 <el-option value="" label="全部开关状态"/>
                 <el-option value="enabled" label="已启用"/>
-                <el-option value="not_enabled" label="未启用"/>
+                <el-option value="auto_disabled" label="自动关闭"/>
+                <el-option value="disabled" label="手动关闭"/>
               </el-select>
               <span class="channel-filter-summary">{{ selectedGroupFilter ? '匹配 ' : '' }}{{ displayedRows.length }} / {{ modelChannelRows.length }} 个渠道</span>
             </div>
@@ -1154,7 +1152,7 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
                   @select="toggleGroupFilter"
                   @clear="selectedGroupFilter = null"
                 />
-                <el-select v-model="channelSwitchFilter" aria-label="渠道开关状态筛选" placeholder="全部开关状态"><el-option value="" label="全部开关状态"/><el-option value="enabled" label="已启用"/><el-option value="not_enabled" label="未启用"/></el-select>
+                <el-select v-model="channelSwitchFilter" aria-label="渠道开关状态筛选" placeholder="全部开关状态"><el-option value="" label="全部开关状态"/><el-option value="enabled" label="已启用"/><el-option value="auto_disabled" label="自动关闭"/><el-option value="disabled" label="手动关闭"/></el-select>
                 <span v-if="selectedGroupFilter" class="channel-filter-summary">匹配 {{ displayedRows.length }} / {{ activeRows.length }} 个渠道</span>
               </div>
               <el-empty v-if="!displayedRows.length" description="没有匹配渠道" />

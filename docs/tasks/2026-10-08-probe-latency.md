@@ -12,7 +12,7 @@
 
 1. Client在认证完成后，对每次渠道测试HTTP设独立30秒deadline；到点取消客户端等待，输出Slow证据。及时返回但NewAPI报告耗时超过30秒也算慢，成功不进入恢复统计。认证失败、父级截止和进程取消不算慢探测。
 2. Server与Agent复用同一轮次实现；每次结束立即开始下次，旧间隔配置不再执行。30秒内返回打断连续慢计数，连续2次慢时提前停止，无需完成原10次；既有快速失败计数及完整全失败禁用保留。
-3. 本轮早前即使有成功请求，2次连续慢证据也优先触发status=2禁用。仍走既有真实回执链路，失败重试、静默及后续恢复不绕过。已经禁用的慢轮次不得被早前成功率错误启用。
+3. 本轮早前即使有成功请求，2次连续慢证据也优先触发status=3自动禁用（后续自动关闭状态调整）。仍走既有真实回执链路，失败重试、静默及后续恢复不绕过。已经禁用的慢轮次不得被早前成功率错误启用。
 4. Server直连在后台执行，新增4个共享探测名额。Agent常驻模式新增4工作者/64排队槽、命令ID去重和同渠道互斥，独立于默认约5秒采集pass；完成结果在后续正常报告中进入既有缓冲/重试链路。监控采集与其他渠道命令继续执行。
 5. Agent后台任务随根运行context取消；RunOnce保留同步执行与父级预算，中断不作为慢渠道证据。后台结果尚未进入报告缓冲前若进程退出可能丢失，Server沿用探针丢失超时重新开轮，不把无回执当成功。
 6. 新增probe_slow_streak协议/状态/事件证据和121迁移。SQL已完成轮次标记保护同时覆盖慢证据，旧tick不能抹掉结果，旧轮结果不能写入新轮。默认0兼容旧数据，但旧Agent不具备新规则，完整链路须配套升级。
@@ -39,6 +39,6 @@
 - 重新通过channelcontrol、Agent主程序/reporter、directcontrol、tuning、ingest、mysqlstore、agentgateway共8包test/vet。沙箱构建缓存权限阻断后，经工具审批正常运行；race因CGO未启用未执行。数据库门控、真实NewAPI和部署验证限制仍然适用。
 - 二次检查未改其他业务功能，仍未提交、发布或部署。
 
-先配套更新Server/Web及121迁移，再更新Agent。没有发布包或上线动作；生产应检查slow streak事件、status=2真实成功回执、后续探测与status=1软启动恢复，不能仅看命令“succeeded”判探测成功。
+先配套更新Server/Web及121迁移，再更新Agent。没有发布包或上线动作；生产应检查slow streak事件、status=3真实成功回执（后续自动关闭状态调整）、后续探测与status=1软启动恢复，不能仅看命令“succeeded”判探测成功。
 
 主要入口：internal/channelcontrol/client.go、probe.go；Agent probe_dispatcher.go、command_executor.go；Server directcontrol/store.go、tuning/continuous_engine.go、circuit_status.go、model.go、mysqlstore/tuning.go、ingest/service.go；双方contracts；Web ContinuousTuningView及共享状态类型；121迁移、回归与本文档/API文档。

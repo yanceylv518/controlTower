@@ -5,7 +5,7 @@
 - `channel.probe` 同渠道逐次执行，前一次完成/达到时限后立即开始下一次，不插入间隔；旧 `probe_interval_seconds` 字段兼容读取，但新版执行端忽略。不同渠道后台最多4路请求；Agent常驻探测不占监控采集pass的超时预算。
 - 单次渠道测试HTTP请求独立30秒截止，满30秒无响应立即取消客户端等待并计慢探测，不等待最终成功/失败。认证失败、父级轮次超时/进程取消不算慢探测；返回的NewAPI耗时超过30秒也不计恢复成功。
 - `ChannelCommandResult.probe_slow_streak` 为本轮结束时连续慢探测次数（0–2，可省略）；次数不得超过 attempts 或 attempts-successes。30秒内返回会清零连续慢计数，普通快速失败仍保留原失败语义。
-- 连续2次慢探测提前结束整轮。Server持久化 `TuningContinuousState.probe_slow_streak`，下一次状态评估优先触发status=2禁用，不受早前成功次数/恢复分数放行；禁用需真实回执，已禁用渠道继续既有静默/探针恢复流程。
+- 连续2次慢探测提前结束整轮。Server持久化 `TuningContinuousState.probe_slow_streak`，下一次状态评估优先触发status=3自动禁用，不受早前成功次数/恢复分数放行；禁用需真实回执，已禁用渠道继续既有静默/探针恢复流程。
 - 121迁移新增 `probe_slow_streak`，默认0，旧证据不推断慢探测。完整升级需Server/Web/Agent；旧Agent无新时长规则/新证据，Server不把缺失字段当作“两次慢探测”。只读结果核对等已有能力协商保持。
 - 约60秒指两次连续无响应的探测判断时间，不含排队、认证、Agent后续上报、Server评估或禁用写入确认耗时；取消客户端等待不保证上游停止处理。
 
@@ -273,6 +273,8 @@ Instance tokens are stored only as `SHA-256(pepper + token)` hashes. A token may
 分组更新沿用 `tuning.manage` 权限和命令状态机 `pending → delivered → succeeded|failed`。直连写入成功后立即同步 `channel_current`；Agent 只有在成功回报后才同步。队列命令保留 `before_group` 内部值，完成审计包含操作人、旧分组、新分组和执行结果；失败不会覆盖当前分组。`site_id` 必须与渠道的最新快照归属一致，未知渠道返回 `404 channel_not_found`。
 
 Agent 需要与 Server 一起升级到支持 `group` 字段的版本；旧 Agent 会忽略该字段，不应领取新的分组命令。
+
+渠道状态映射：new-api `1` → `enabled`（已启用）、`2` → `disabled`（手动关闭）、`3` → `auto_disabled`（自动关闭）。CT 完整恢复探测全部失败或连续两次慢探测后的自动禁用写入 `status=3` 和权重零，恢复写入 `status=1` 和软启动权重，直连及 Agent 队列保持相同语义。升级前尚未下发的 `status=2` 自动禁用命令在领取时失效，由引擎按 `status=3` 重试；已下发命令继续等待回执，避免重复执行。历史已关闭渠道不会批量改写状态，旧记录的状态 2 仍不能证明由人操作。本次状态调整无需新增 Agent 协议或数据库迁移。
 
 ## v2.9-B2 Duty-Rotation Tuning (observe and confirm)
 

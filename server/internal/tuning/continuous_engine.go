@@ -371,7 +371,7 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 						completeFailure = expected > 0 && state.ProbeAttempts >= expected
 					}
 					if mode == "auto" && !state.CircuitDisabled && (completeFailure || state.ProbeSlowStreak >= 2) {
-						state.CircuitDisabled, state.CircuitStatusTarget = true, 2
+						state.CircuitDisabled, state.CircuitStatusTarget = true, 3
 						state.ProposedWeight = 0
 						// Persist ownership before disabling: disabled channels must remain eligible after a restart.
 						if err := persistState(state); err == nil {

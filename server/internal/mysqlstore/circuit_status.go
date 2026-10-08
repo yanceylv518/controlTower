@@ -19,7 +19,7 @@ func checkCircuitStatus(q priorityQuery, v tuning.Recommendation) error {
 		return nil
 	}
 	target := *v.ProposedChannelStatus
-	if (target != 1 && target != 2) || (target == 1 && v.Rule != "circuit_recovered") || (target == 2 && v.Rule != "circuit_disabled") || v.ModeAtCreation != "auto" {
+	if (target != 1 && target != 3) || (target == 1 && v.Rule != "circuit_recovered") || (target == 3 && v.Rule != "circuit_disabled") || v.ModeAtCreation != "auto" {
 		return ErrCircuitStatusSuperseded
 	}
 	var model, stateModel string
