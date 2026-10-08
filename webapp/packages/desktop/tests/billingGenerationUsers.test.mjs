@@ -15,7 +15,7 @@ function create(t,kind='user_statement') {
  const previews=[];const dashboard={billingGenerationPreview:async(q,signal)=>{previews.push({q,signal});return {items:q.subject_ids.map(id=>({subject_id:id,total_days:30,complete:0,empty:0,failed:0,pending:0,running:0,outcome:'registered'}))}},billingUpstreams:async()=>({items:[{id:1,name:'上游'}]}),generateBillingBatch:async q=>{requests.push(q);return {items:[{subject_id:3,outcome:'complete'}]}}}
  const scope=effectScope();t.after(()=>scope.stop())
  const names=['computed','ref','watch','onBeforeUnmount','defineProps','defineEmits','defineExpose','setInterval','clearInterval','ElMessage','ElMessageBox','dashboard','passthrough','billingTaskErrorMessage']
- const init=new Function(...names,compiled+'\nreturn {open,options,selectedUsers,excludeAdmins,filterAdmins,searchUsers,submit,queryResults,roles,batch,items,waitingForReport,resultLabel,draftMonth,preview,previewLoading,previewError,selectionStatus,monthlyStatus,loadPreview,selectMissing,toggleSubject,selectionPage,visibleOptions,dialog};')
+ const init=new Function(...names,compiled+'\nreturn {excludeZeroOutput,open,options,selectedUsers,excludeAdmins,filterAdmins,searchUsers,submit,queryResults,roles,batch,items,waitingForReport,resultLabel,draftMonth,preview,previewLoading,previewError,selectionStatus,monthlyStatus,loadPreview,selectMissing,toggleSubject,selectionPage,visibleOptions,dialog};')
  const view=scope.run(()=>init(computed,ref,watch,()=>{},()=>props,()=>()=>{},()=>{},()=>1,()=>{}, {error:()=>{},info:()=>{},success:()=>{}},{},dashboard,passthrough,String))
  return {...view,props,passthrough,dashboard,previews,queries,requests}
 }
@@ -83,4 +83,12 @@ test('preview requests are paged, capped, and upstream uses its own scope',async
  assert.equal(v.previews.at(-1).q.subject_ids.length,20);v.selectionPage.value=4;await flush();assert.equal(v.previews.at(-1).q.subject_ids.length,5)
  for(let i=10;i<75;i++)v.toggleSubject(i,true);assert.equal(v.selectedUsers.value.length,50)
  const up=create(t,'upstream_statement');up.open();await flush();assert.equal(up.previews.at(-1).q.kind,'upstream_statement')
+})
+
+test('user includes zero output by default; upstream excludes, with explicit override',async t=>{
+ for(const kind of ['user_statement','upstream_statement']){
+  const v=create(t,kind);v.open();await flush();assert.equal(v.excludeZeroOutput.value,kind==='upstream_statement');
+  v.selectedUsers.value=[kind==='user_statement'?3:1];await v.submit();assert.equal(v.requests[0].exclude_zero_output,kind==='upstream_statement');
+  v.excludeZeroOutput.value=kind!=='upstream_statement';await v.submit();assert.equal(v.requests[1].exclude_zero_output,kind!=='upstream_statement');
+ }
 })

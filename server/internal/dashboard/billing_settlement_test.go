@@ -29,7 +29,7 @@ func TestNewStatementEditionDoesNotReplaceLegacy(t *testing.T) {
 		}
 		keys[newEdition] = store.job.RequestKey
 		if newEdition {
-			if store.job.UsageVersion != 3 || store.job.ExcludeZeroOutput || store.job.BillPeriod != "temporary" {
+			if store.job.UsageVersion != 3 || !store.job.ExcludeZeroOutput || store.job.BillPeriod != "temporary" {
 				t.Fatal(store.job)
 			}
 		} else if store.job.UsageVersion != 2 || !store.job.ExcludeZeroOutput {

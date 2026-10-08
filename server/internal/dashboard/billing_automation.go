@@ -194,6 +194,20 @@ func (a BillingAutomation) enqueue(ctx context.Context, target billing.Automatic
 		job.UpstreamID = target.SubjectID
 		name = up.Name
 	}
+	job.ExcludeZeroOutput = target.ExcludeZeroOutput
+	if target.To.IsZero() {
+		job.ExcludeZeroOutput = target.Kind == "upstream_statement"
+	}
+	if policy, ok := a.Store.(interface {
+		BillingGenerationExcludeZeroOutput(context.Context, billing.AutomaticTarget) (bool, error)
+	}); ok {
+		check := target
+		check.From = day
+		job.ExcludeZeroOutput, err = policy.BillingGenerationExcludeZeroOutput(ctx, check)
+		if err != nil {
+			return err
+		}
+	}
 	version := ""
 	if controller, ok := a.Store.(interface {
 		BillingGenerationVersion(context.Context, billing.AutomaticTarget) (string, error)
@@ -208,6 +222,9 @@ func (a BillingAutomation) enqueue(ctx context.Context, target billing.Automatic
 		if err != nil {
 			return err
 		}
+	}
+	if job.ExcludeZeroOutput {
+		version += "|exclude-zero:true"
 	}
 	hash := sha256.Sum256([]byte(fmt.Sprintf("%s-v3|%s|%s|%d|%s|%s", period, target.InstanceID, target.Kind, target.SubjectID, day.Format("2006-01-02"), source) + version))
 	job.RequestKey = "statement:" + hex.EncodeToString(hash[:16])
@@ -318,8 +335,17 @@ func (a BillingAutomation) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeDashboardError(w, 405, "method_not_allowed")
 		return
 	}
-	var t billing.AutomaticTarget
-	if json.NewDecoder(r.Body).Decode(&t) != nil || t.InstanceID == "" || t.SubjectID <= 0 || (t.Kind != "user_statement" && t.Kind != "upstream_statement") || (!t.From.IsZero() && !t.From.Before(billing.CompleteDayBoundary(time.Now()))) {
+	var request struct {
+		billing.AutomaticTarget
+		ExcludeZeroOutput *bool `json:"exclude_zero_output"`
+	}
+	decodeErr := json.NewDecoder(r.Body).Decode(&request)
+	t := request.AutomaticTarget
+	t.ExcludeZeroOutput = t.Kind == "upstream_statement"
+	if request.ExcludeZeroOutput != nil {
+		t.ExcludeZeroOutput = *request.ExcludeZeroOutput
+	}
+	if decodeErr != nil || t.InstanceID == "" || t.SubjectID <= 0 || (t.Kind != "user_statement" && t.Kind != "upstream_statement") || (!t.From.IsZero() && !t.From.Before(billing.CompleteDayBoundary(time.Now()))) {
 		writeDashboardError(w, 400, "invalid_generation_range")
 		return
 	}

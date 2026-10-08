@@ -112,3 +112,17 @@ func billingJobSubject(job billing.Job) int64 {
 	}
 	return job.UserID
 }
+
+// An explicit manual range wins over the overlapping automatic target. Jobs
+// snapshot this choice at creation; retries never read mutable UI state.
+func (s Store) BillingGenerationExcludeZeroOutput(ctx context.Context, t billing.AutomaticTarget) (bool, error) {
+	var excluded bool
+	err := s.db.QueryRowContext(ctx, `SELECT exclude_zero_output FROM billing_generation_ranges WHERE instance_id=? AND kind=? AND subject_id=? AND range_from<=? AND range_to>? ORDER BY generation_started_at DESC LIMIT 1`, t.InstanceID, t.Kind, t.SubjectID, t.From.In(billing.BusinessLocation).Format("2006-01-02"), t.From.In(billing.BusinessLocation).Format("2006-01-02")).Scan(&excluded)
+	if err == sql.ErrNoRows {
+		if t.To.IsZero() {
+			return t.Kind == "upstream_statement", nil
+		}
+		return t.ExcludeZeroOutput, nil
+	}
+	return excluded, err
+}

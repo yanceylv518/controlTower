@@ -193,3 +193,21 @@ func TestBillingBatchKindPermissions(t *testing.T) {
 		}
 	}
 }
+
+func TestBillingBatchZeroOutputDefaultsAndOverrides(t *testing.T) {
+	for _, kind := range []string{"user_statement", "upstream_statement"} {
+		for _, option := range []string{"", `,"exclude_zero_output":true`, `,"exclude_zero_output":false`} {
+			store := &batchStoreTest{}
+			w := httptest.NewRecorder()
+			body := `{"instance_id":"site","kind":"` + kind + `","subject_ids":[7],"from":"2025-09-01T00:00:00+08:00","to":"2025-10-01T00:00:00+08:00"` + option + `}`
+			(BillingBatchGenerationHandler{Store: store}).ServeHTTP(w, httptest.NewRequest("POST", "/", strings.NewReader(body)))
+			want := kind == "upstream_statement"
+			if option != "" {
+				want = strings.Contains(option, "true")
+			}
+			if w.Code != 202 || len(store.saved) != 1 || store.saved[0].ExcludeZeroOutput != want {
+				t.Fatal(kind, option, w.Code, w.Body.String(), store.saved)
+			}
+		}
+	}
+}

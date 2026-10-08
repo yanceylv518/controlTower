@@ -30,12 +30,13 @@ func (h BillingBatchGenerationHandler) ServeHTTP(w http.ResponseWriter, r *http.
 		return
 	}
 	var req struct {
-		Kind       string    `json:"kind"`
-		InstanceID string    `json:"instance_id"`
-		Overwrite  bool      `json:"overwrite"`
-		SubjectIDs []int64   `json:"subject_ids"`
-		From       time.Time `json:"from"`
-		To         time.Time `json:"to"`
+		Kind              string    `json:"kind"`
+		InstanceID        string    `json:"instance_id"`
+		ExcludeZeroOutput *bool     `json:"exclude_zero_output"`
+		Overwrite         bool      `json:"overwrite"`
+		SubjectIDs        []int64   `json:"subject_ids"`
+		From              time.Time `json:"from"`
+		To                time.Time `json:"to"`
 	}
 	if r.Method == "POST" {
 		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 16*1024)).Decode(&req) != nil {
@@ -135,7 +136,10 @@ func (h BillingBatchGenerationHandler) ServeHTTP(w http.ResponseWriter, r *http.
 		}
 		if !seen[id] {
 			seen[id] = true
-			target := billing.AutomaticTarget{InstanceID: req.InstanceID, Kind: req.Kind, SubjectID: id, From: from, To: req.To, Overwrite: req.Overwrite}
+			target := billing.AutomaticTarget{InstanceID: req.InstanceID, Kind: req.Kind, SubjectID: id, From: from, To: req.To, Overwrite: req.Overwrite, ExcludeZeroOutput: req.Kind == "upstream_statement"}
+			if req.ExcludeZeroOutput != nil {
+				target.ExcludeZeroOutput = *req.ExcludeZeroOutput
+			}
 			if r.Method == "GET" && r.URL.Query().Get("action") == "preview" {
 				// Selection previews cover all currently complete dates, rather
 				// than the frozen cutoff of a previously submitted batch.

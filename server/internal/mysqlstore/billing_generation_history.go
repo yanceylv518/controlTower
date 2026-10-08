@@ -16,7 +16,7 @@ func insertBillingTask(ctx context.Context, tx *sql.Tx, id string, targets []bil
 	}
 	raw, _ := json.Marshal(ids)
 	end := billingActivityBoundary(t)
-	_, err := tx.ExecContext(ctx, `INSERT INTO billing_generation_tasks(id,instance_id,kind,range_from,range_to,work_until,source,overwrite_existing,subject_ids_json,created_at) VALUES(?,?,?,?,?,?,'manual',?,?,UTC_TIMESTAMP(6))`, id, t.InstanceID, t.Kind, t.From.UTC(), t.To.UTC(), end.UTC(), t.Overwrite, string(raw))
+	_, err := tx.ExecContext(ctx, `INSERT INTO billing_generation_tasks(id,instance_id,kind,range_from,range_to,work_until,source,overwrite_existing,exclude_zero_output,subject_ids_json,created_at) VALUES(?,?,?,?,?,?,'manual',?,?,?,UTC_TIMESTAMP(6))`, id, t.InstanceID, t.Kind, t.From.UTC(), t.To.UTC(), end.UTC(), t.Overwrite, t.ExcludeZeroOutput, string(raw))
 	return err
 }
 
@@ -57,7 +57,7 @@ func (s Store) BillingGenerationTask(ctx context.Context, site, id string) (bill
 	var t billing.GenerationTask
 	var ids, job string
 	var frozen sql.NullString
-	err := s.db.QueryRowContext(ctx, `SELECT id,instance_id,kind,range_from,range_to,work_until,source,overwrite_existing,subject_ids_json,job_id,progress_json,created_at FROM billing_generation_tasks WHERE instance_id=? AND id=?`, site, id).Scan(&t.ID, &t.InstanceID, &t.Kind, &t.From, &t.To, &t.WorkUntil, &t.Source, &t.Overwrite, &ids, &job, &frozen, &t.CreatedAt)
+	err := s.db.QueryRowContext(ctx, `SELECT id,instance_id,kind,range_from,range_to,work_until,source,overwrite_existing,exclude_zero_output,subject_ids_json,job_id,progress_json,created_at FROM billing_generation_tasks WHERE instance_id=? AND id=?`, site, id).Scan(&t.ID, &t.InstanceID, &t.Kind, &t.From, &t.To, &t.WorkUntil, &t.Source, &t.Overwrite, &t.ExcludeZeroOutput, &ids, &job, &frozen, &t.CreatedAt)
 	if err != nil {
 		return t, err
 	}
@@ -224,7 +224,7 @@ func recordStandaloneBillingTask(ctx context.Context, tx *sql.Tx, j billing.Job)
 		source = "temporary"
 	}
 	raw, _ := json.Marshal([]int64{billingJobSubject(j)})
-	_, err := tx.ExecContext(ctx, `INSERT IGNORE INTO billing_generation_tasks(id,instance_id,kind,range_from,range_to,work_until,source,subject_ids_json,job_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, "job:"+j.ID, j.InstanceID, j.JobType, j.From.UTC(), j.To.UTC(), j.To.UTC(), source, string(raw), j.ID, time.Now().UTC())
+	_, err := tx.ExecContext(ctx, `INSERT IGNORE INTO billing_generation_tasks(id,instance_id,kind,range_from,range_to,work_until,source,exclude_zero_output,subject_ids_json,job_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, "job:"+j.ID, j.InstanceID, j.JobType, j.From.UTC(), j.To.UTC(), j.To.UTC(), source, j.ExcludeZeroOutput, string(raw), j.ID, time.Now().UTC())
 	return err
 }
 

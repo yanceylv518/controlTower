@@ -7,14 +7,15 @@ import (
 )
 
 type AutomaticTarget struct {
-	ProgressUntil time.Time `json:"-"`
-	BatchID       string    `json:"batch_id,omitempty"`
-	Overwrite     bool      `json:"overwrite,omitempty"`
-	InstanceID    string    `json:"instance_id"`
-	Kind          string    `json:"kind"`
-	SubjectID     int64     `json:"subject_id"`
-	From          time.Time `json:"from"`
-	To            time.Time `json:"to,omitempty"`
+	ProgressUntil     time.Time `json:"-"`
+	BatchID           string    `json:"batch_id,omitempty"`
+	ExcludeZeroOutput bool      `json:"exclude_zero_output"`
+	Overwrite         bool      `json:"overwrite,omitempty"`
+	InstanceID        string    `json:"instance_id"`
+	Kind              string    `json:"kind"`
+	SubjectID         int64     `json:"subject_id"`
+	From              time.Time `json:"from"`
+	To                time.Time `json:"to,omitempty"`
 }
 type AutomationStore interface {
 	PutBillingAutomaticTarget(context.Context, AutomaticTarget) error
@@ -69,21 +70,22 @@ type GenerationState struct {
 var ErrGenerationCancelled = errors.New("billing generation cancelled")
 
 type GenerationTask struct {
-	ID             string               `json:"id"`
-	InstanceID     string               `json:"instance_id"`
-	Kind           string               `json:"kind"`
-	From           time.Time            `json:"from"`
-	To             time.Time            `json:"to"`
-	WorkUntil      time.Time            `json:"work_until"`
-	Source         string               `json:"source"`
-	Overwrite      bool                 `json:"overwrite"`
-	SubjectIDs     []int64              `json:"subject_ids"`
-	CreatedAt      time.Time            `json:"created_at"`
-	Outcome        string               `json:"outcome"`
-	Percentage     int                  `json:"percentage"`
-	CompletedUsers int                  `json:"completed_users"`
-	FailedUsers    int                  `json:"failed_users"`
-	CompleteDays   int                  `json:"complete_days"`
-	EmptyDays      int                  `json:"empty_days"`
-	Items          []GenerationProgress `json:"items,omitempty"`
+	ID                string               `json:"id"`
+	InstanceID        string               `json:"instance_id"`
+	Kind              string               `json:"kind"`
+	From              time.Time            `json:"from"`
+	To                time.Time            `json:"to"`
+	WorkUntil         time.Time            `json:"work_until"`
+	Source            string               `json:"source"`
+	ExcludeZeroOutput bool                 `json:"exclude_zero_output"`
+	Overwrite         bool                 `json:"overwrite"`
+	SubjectIDs        []int64              `json:"subject_ids"`
+	CreatedAt         time.Time            `json:"created_at"`
+	Outcome           string               `json:"outcome"`
+	Percentage        int                  `json:"percentage"`
+	CompletedUsers    int                  `json:"completed_users"`
+	FailedUsers       int                  `json:"failed_users"`
+	CompleteDays      int                  `json:"complete_days"`
+	EmptyDays         int                  `json:"empty_days"`
+	Items             []GenerationProgress `json:"items,omitempty"`
 }

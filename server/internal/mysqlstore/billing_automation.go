@@ -14,7 +14,7 @@ func (s Store) PutBillingAutomaticTarget(ctx context.Context, t billing.Automati
 			return err
 		}
 		defer tx.Rollback()
-		if _, err = tx.ExecContext(ctx, `INSERT IGNORE INTO billing_generation_ranges(instance_id,kind,subject_id,range_from,range_to,created_at) VALUES(?,?,?,?,?,UTC_TIMESTAMP(6))`, t.InstanceID, t.Kind, t.SubjectID, t.From.In(billing.BusinessLocation).Format("2006-01-02"), t.To.In(billing.BusinessLocation).Format("2006-01-02")); err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT IGNORE INTO billing_generation_ranges(instance_id,kind,subject_id,range_from,range_to,created_at,exclude_zero_output) VALUES(?,?,?,?,?,UTC_TIMESTAMP(6),?)`, t.InstanceID, t.Kind, t.SubjectID, t.From.In(billing.BusinessLocation).Format("2006-01-02"), t.To.In(billing.BusinessLocation).Format("2006-01-02"), t.ExcludeZeroOutput); err != nil {
 			return err
 		}
 		// Future daily automation starts today; selecting a historical month does not
@@ -29,7 +29,7 @@ func (s Store) PutBillingAutomaticTarget(ctx context.Context, t billing.Automati
 	return err
 }
 func (s Store) ListBillingAutomaticTargets(ctx context.Context) ([]billing.AutomaticTarget, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT r.instance_id,r.kind,r.subject_id,r.range_from,r.range_to,(SELECT t.work_until FROM billing_generation_tasks t WHERE t.id=r.batch_id) FROM billing_generation_ranges r WHERE r.cancelled=0 UNION ALL SELECT instance_id COLLATE utf8mb4_unicode_ci,kind COLLATE utf8mb4_unicode_ci,subject_id,start_day,DATE('9999-12-31'),NULL FROM billing_automatic_targets a WHERE a.kind<>'upstream_statement' OR EXISTS (SELECT 1 FROM billing_upstreams u WHERE u.instance_id COLLATE utf8mb4_unicode_ci=a.instance_id COLLATE utf8mb4_unicode_ci AND u.id=a.subject_id AND u.enabled=1)`)
+	rows, err := s.db.QueryContext(ctx, `SELECT r.instance_id,r.kind,r.subject_id,r.range_from,r.range_to,(SELECT t.work_until FROM billing_generation_tasks t WHERE t.id=r.batch_id),r.exclude_zero_output FROM billing_generation_ranges r WHERE r.cancelled=0 UNION ALL SELECT instance_id COLLATE utf8mb4_unicode_ci,kind COLLATE utf8mb4_unicode_ci,subject_id,start_day,DATE('9999-12-31'),NULL,(kind='upstream_statement') FROM billing_automatic_targets a WHERE a.kind<>'upstream_statement' OR EXISTS (SELECT 1 FROM billing_upstreams u WHERE u.instance_id COLLATE utf8mb4_unicode_ci=a.instance_id COLLATE utf8mb4_unicode_ci AND u.id=a.subject_id AND u.enabled=1)`)
 	if err != nil {
 		return nil, err
 	}
@@ -39,7 +39,7 @@ func (s Store) ListBillingAutomaticTargets(ctx context.Context) ([]billing.Autom
 		var t billing.AutomaticTarget
 		var d, end time.Time
 		var workUntil sql.NullTime
-		if err = rows.Scan(&t.InstanceID, &t.Kind, &t.SubjectID, &d, &end, &workUntil); err != nil {
+		if err = rows.Scan(&t.InstanceID, &t.Kind, &t.SubjectID, &d, &end, &workUntil, &t.ExcludeZeroOutput); err != nil {
 			return nil, err
 		}
 		t.From, _ = time.ParseInLocation("2006-01-02", d.Format("2006-01-02"), billing.BusinessLocation)

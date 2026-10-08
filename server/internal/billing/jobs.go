@@ -611,6 +611,11 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 					continue
 				}
 			}
+			// Explicit zero output is excluded from all settlement aggregates and
+			// saved detail files. Missing output is not assumed to be zero.
+			if job.UsageVersion >= SettlementUsageVersion && job.ExcludeZeroOutput && log.CompletionTokens.Valid && log.CompletionTokens.Int64 == 0 {
+				continue
+			}
 			billDay := dateOnly(time.Unix(log.CreatedUnix, 0))
 			billDayKey := billDay.Format("2006-01-02")
 			reasons := StatementAnomalyReasons(log, maxByModel[log.ModelName], job.ExcludeZeroOutput)

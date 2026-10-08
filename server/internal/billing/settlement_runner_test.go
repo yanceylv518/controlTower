@@ -56,3 +56,37 @@ func TestArchiveShortPagesDoNotTruncateAndSupplementUsesSnapshot(t *testing.T) {
 		}
 	}
 }
+
+func TestSettlementZeroOutputExclusionKeepsNonzeroAndExistingValidation(t *testing.T) {
+	day := time.Date(2025, 9, 1, 0, 0, 0, 0, BusinessLocation)
+	logs := []PagedLogRecord{
+		{ID: 1, CreatedUnix: day.Unix(), ChannelID: 1, ModelName: "m", Quota: 100, CompletionTokens: sql.NullInt64{Valid: true}},
+		{ID: 2, CreatedUnix: day.Unix(), ChannelID: 1, ModelName: "m", Quota: 200, CompletionTokens: sql.NullInt64{Valid: true, Int64: 2}},
+		{ID: 3, CreatedUnix: day.Unix(), ChannelID: 1, ModelName: "m", Quota: 300},
+	}
+	for _, kind := range []string{"user_statement", "upstream_statement"} {
+		for _, exclude := range []bool{false, true} {
+			store := &upstreamFilterStore{}
+			var source PageSource = &upstreamFilterPages{logs: logs}
+			if kind == "user_statement" {
+				source = sourceModeLogs{logs: logs}
+			}
+			job := Job{ID: "j", InstanceID: "site", JobType: kind, UsageVersion: 3, PricingSource: PricingSourceNewAPI, ExcludeZeroOutput: exclude}
+			if err := (JobRunner{Store: store, Source: source}).processStep(context.Background(), job, JobStep{From: day, To: day.AddDate(0, 0, 1)}); err != nil {
+				t.Fatal(err)
+			}
+			want := 2
+			if exclude {
+				want = 1
+			}
+			if len(store.details) != want {
+				t.Fatalf("%s excluded=%v: %+v", kind, exclude, store.details)
+			}
+			for _, row := range store.details {
+				if exclude && row.SourceLogID == 1 {
+					t.Fatal("zero output in saved details")
+				}
+			}
+		}
+	}
+}

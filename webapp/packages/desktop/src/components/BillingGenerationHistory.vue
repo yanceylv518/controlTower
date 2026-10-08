@@ -28,7 +28,7 @@ defineExpose({open});
   <el-alert v-if="error" :title="error" type="error" :closable="false"/>
   <el-table v-loading="loading" :data="items" row-key="id" size="small" max-height="570" empty-text="暂无生成任务">
    <el-table-column label="提交时间" width="178"><template #default="s">{{local(s.row.created_at)}}</template></el-table-column>
-   <el-table-column label="任务 / 账期" min-width="210"><template #default="s"><b>{{range(s.row)}}</b><small class="task-sub">{{kind(s.row)}}</small></template></el-table-column>
+   <el-table-column label="任务 / 账期" min-width="210"><template #default="s"><b>{{range(s.row)}}</b><small class="task-sub">{{kind(s.row)}} · {{s.row.exclude_zero_output?'排除空输出':'包含空输出'}}</small></template></el-table-column>
    <el-table-column :label="subjectLabel" width="110"><template #default="s">{{s.row.subject_ids.length}} {{unit}}<small class="task-sub">完成 {{s.row.completed_users}} {{unit}}</small></template></el-table-column>
    <el-table-column label="已生成 / 无消费" width="140"><template #default="s">{{s.row.complete_days}} / {{s.row.empty_days}}</template></el-table-column>
    <el-table-column label="进度" width="85"><template #default="s">{{s.row.percentage}}%</template></el-table-column>

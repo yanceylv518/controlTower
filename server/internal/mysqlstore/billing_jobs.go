@@ -274,6 +274,11 @@ func (s Store) ClaimBillingPublish(ctx context.Context) (billing.Job, bool, erro
 		if err = tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(processed_rows),0) FROM billing_job_steps WHERE job_id=?`, j.ID).Scan(&count); err != nil {
 			return billing.Job{}, false, err
 		}
+		if j.ExcludeZeroOutput {
+			if err = tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(request_count),0) FROM billing_compact_daily_totals WHERE job_id=?`, j.ID).Scan(&count); err != nil {
+				return billing.Job{}, false, err
+			}
+		}
 		if count == 0 {
 			_, err = tx.ExecContext(ctx, `UPDATE billing_jobs SET status='no_data',finished_at=UTC_TIMESTAMP(6),updated_at=UTC_TIMESTAMP(6) WHERE id=?`, j.ID)
 			if err != nil {

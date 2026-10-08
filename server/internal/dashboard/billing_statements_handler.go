@@ -45,7 +45,7 @@ func (h BillingStatementsHandler) ServeHTTP(w http.ResponseWriter, r *http.Reque
 		UserID            int64  `json:"user_id"`
 		UpstreamID        int64  `json:"upstream_id"`
 		Recalculate       bool   `json:"recalculate"`
-		ExcludeZeroOutput bool   `json:"exclude_zero_output"`
+		ExcludeZeroOutput *bool  `json:"exclude_zero_output"`
 	}
 	if json.NewDecoder(r.Body).Decode(&req) != nil || !billingSiteAllowed(r, strings.TrimSpace(req.InstanceID), 0) {
 		writeDashboardError(w, 400, "invalid_request")
@@ -65,7 +65,10 @@ func (h BillingStatementsHandler) ServeHTTP(w http.ResponseWriter, r *http.Reque
 		writeDashboardError(w, 400, "invalid_range")
 		return
 	}
-	job.ExcludeZeroOutput = req.ExcludeZeroOutput
+	job.ExcludeZeroOutput = req.StatementType == "upstream"
+	if req.ExcludeZeroOutput != nil {
+		job.ExcludeZeroOutput = *req.ExcludeZeroOutput
+	}
 	job.PricingSource = billing.PricingSourceNewAPI
 	if req.Recalculate {
 		job.PricingSource = billing.PricingSourceRecalculate
@@ -90,7 +93,6 @@ func (h BillingStatementsHandler) ServeHTTP(w http.ResponseWriter, r *http.Reque
 		}
 		job.UsageVersion = billing.SettlementUsageVersion
 		job.PricingSource = billing.PricingSourceNewAPI
-		job.ExcludeZeroOutput = false
 	}
 	if req.NewEdition {
 		if guard, ok := h.Store.(interface {

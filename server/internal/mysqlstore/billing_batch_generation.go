@@ -37,7 +37,7 @@ func (s Store) PutBillingAutomaticTargets(ctx context.Context, targets []billing
 		return err
 	}
 	for _, t := range targets {
-		if _, err = tx.ExecContext(ctx, `INSERT INTO billing_generation_ranges(instance_id,kind,subject_id,range_from,range_to,created_at,overwrite_existing,generation_started_at,batch_id) VALUES(?,?,?,?,?,UTC_TIMESTAMP(6),?,UTC_TIMESTAMP(6),?) ON DUPLICATE KEY UPDATE last_error=NULL,cancelled=0,batch_id=VALUES(batch_id),overwrite_existing=VALUES(overwrite_existing),generation_started_at=VALUES(generation_started_at)`, t.InstanceID, t.Kind, t.SubjectID, t.From.In(billing.BusinessLocation).Format("2006-01-02"), t.To.In(billing.BusinessLocation).Format("2006-01-02"), t.Overwrite, batchID); err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO billing_generation_ranges(instance_id,kind,subject_id,range_from,range_to,created_at,overwrite_existing,generation_started_at,batch_id,exclude_zero_output) VALUES(?,?,?,?,?,UTC_TIMESTAMP(6),?,UTC_TIMESTAMP(6),?,?) ON DUPLICATE KEY UPDATE last_error=NULL,cancelled=0,exclude_zero_output=VALUES(exclude_zero_output),batch_id=VALUES(batch_id),overwrite_existing=VALUES(overwrite_existing),generation_started_at=VALUES(generation_started_at)`, t.InstanceID, t.Kind, t.SubjectID, t.From.In(billing.BusinessLocation).Format("2006-01-02"), t.To.In(billing.BusinessLocation).Format("2006-01-02"), t.Overwrite, batchID, t.ExcludeZeroOutput); err != nil {
 			return err
 		}
 		if t.Overwrite {
