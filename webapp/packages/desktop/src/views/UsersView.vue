@@ -270,9 +270,9 @@ void loadPresets()
         <el-table-column label="操作" width="210"><template #default="{ row }"><template v-if="manageable(row)"><el-button link type="primary" @click="showEdit(row)">{{ tab === 'admin' ? '配置权限' : '修改客户' }}</el-button><el-button v-if="tab === 'admin'" link type="primary" @click="showReset(row)">重置密码</el-button></template><span v-else class="muted">{{ row.id === current.user?.id ? '当前账号' : '超出可管理权限' }}</span></template></el-table-column>
       </el-table>
     </template>
-    <el-dialog v-model="open" :title="editing ? (editorRole === 'admin' ? '配置管理员权限 · ' + editing.username : '修改可查看客户') : (editorRole === 'admin' ? '创建管理员' : '创建查看账号')" :width="editorRole === 'admin' ? 'min(980px, calc(100vw - 24px))' : 'min(640px, calc(100vw - 24px))'" top="5vh" class="account-editor" :close-on-click-modal="false" :close-on-press-escape="!saving && !savingPreset" :show-close="!saving && !savingPreset" :before-close="closeEditor" destroy-on-close @closed="editorClosed">
+    <el-dialog v-model="open" :title="editing ? (editorRole === 'admin' ? '配置管理员权限 · ' + editing.username : '修改可查看客户') : (editorRole === 'admin' ? '创建管理员' : '创建查看账号')" :width="editorRole === 'admin' ? 'min(980px, calc(100vw - 24px))' : 'min(640px, calc(100vw - 24px))'" top="5vh" class="account-editor" :class="{ 'permission-editor-dialog': editorRole === 'admin' }" :close-on-click-modal="false" :close-on-press-escape="!saving && !savingPreset" :show-close="!saving && !savingPreset" :before-close="closeEditor" destroy-on-close @closed="editorClosed">
       <el-alert v-if="editorError" type="error" :closable="false" class="intro" :title="editorError" />
-      <el-form label-position="top" :disabled="saving" @submit.prevent="submit">
+      <el-form class="account-editor-form" label-position="top" :disabled="saving" @submit.prevent="submit">
         <div :class="['account-basics', { creating: !editing, viewer: editorRole === 'viewer' }]">
           <el-form-item label="登录账号" :required="!editing"><span v-if="editing" class="account-identity">{{ form.username }}</span><el-input v-else v-model="form.username" maxlength="64" autocomplete="off" placeholder="请输入登录账号" /></el-form-item>
           <el-form-item v-if="editorRole === 'admin'" label="姓名"><el-input v-model="form.display_name" maxlength="64" placeholder="选填" /></el-form-item>
@@ -290,7 +290,7 @@ void loadPresets()
             <div v-if="!presetError" class="tip">{{ applyMode === 'merge' ? '保留现有权限，补充预设包含的权限。' : '以预设重新选择，不在预设中的权限会被移除。' }} 保存账号后生效。</div>
             <div v-if="draftPresetMatch" class="tip">当前权限与「{{ draftPresetMatch.name }}」一致</div>
           </section>
-          <PermissionTree v-model="form.permissions" :options="grantable" :allow-full="can(current.user, '*')" :baseline="editing?.permissions || []" :disabled="saving" :scrollable="false" />
+          <PermissionTree v-model="form.permissions" :options="grantable" :allow-full="can(current.user, '*')" :baseline="editing?.permissions || []" :disabled="saving" />
         </template>
         <template v-else>
           <el-form-item label="站点" required><el-select v-model="form.scope_site" filterable :disabled="Boolean(editing)" placeholder="请选择站点" style="width:100%" @change="changeSite"><el-option v-if="editing" :label="form.scope_site" :value="form.scope_site" /><el-option v-for="site in editing ? [] : sites" :key="site" :label="site" :value="site" /></el-select></el-form-item>
@@ -319,6 +319,15 @@ void loadPresets()
 .account-basics{display:grid;grid-template-columns:1fr 1fr;gap:20px;padding-bottom:8px;border-bottom:1px solid var(--el-border-color-lighter);margin-bottom:18px}.account-basics.creating{grid-template-columns:1fr 1fr 1fr}.account-basics.viewer{grid-template-columns:1fr 1fr}.account-identity{font-weight:600;line-height:32px;overflow-wrap:anywhere}
 .preset-picker{margin-bottom:18px}.preset-title{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px}.preset-title>strong{font-size:13px}.preset-controls{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.preset-controls>.el-select{flex:1;min-width:180px}
 .editor-footer{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;border-top:1px solid var(--el-border-color-lighter);padding-top:12px}.editor-footer>span{font-size:12px;color:var(--el-text-color-secondary)}.editor-footer>div{margin-left:auto}
-.account-editor :deep(.el-dialog__body){max-height:calc(88dvh - 130px);overflow:auto}.account-editor :deep(.el-form-item__label){font-size:13px;padding-bottom:5px}.account-editor :deep(.el-input__wrapper){min-height:36px}.account-editor :deep(.permission-groups){max-height:none;overflow:visible}
+.account-editor :deep(.el-dialog__body){max-height:calc(88dvh - 130px);overflow:auto}.account-editor :deep(.el-form-item__label){font-size:13px;padding-bottom:5px}.account-editor :deep(.el-input__wrapper){min-height:36px}
 @media(max-width:700px){.account-toolbar{flex-wrap:wrap}.account-toolbar>span{flex-basis:100%}.account-toolbar>.el-input{flex:1;max-width:none}.account-basics.creating,.account-basics.viewer{grid-template-columns:1fr 1fr}.account-basics.creating>.el-form-item:last-child{grid-column:1/-1}.account-basics{gap:12px}.preset-title{flex-wrap:wrap}.preset-controls>.el-select{flex-basis:100%}.editor-footer{gap:8px}.editor-footer>span{flex-basis:100%}}
+</style>
+
+<style>
+.el-dialog.account-editor.permission-editor-dialog{display:flex;flex-direction:column;max-height:90dvh;overflow:hidden}
+.permission-editor-dialog .el-dialog__header,.permission-editor-dialog .el-dialog__footer{flex-shrink:0}
+.el-dialog.account-editor.permission-editor-dialog .el-dialog__body{display:flex;flex-direction:column;flex:1;min-height:0;max-height:none;overflow:auto}
+.permission-editor-dialog .account-editor-form{display:flex;flex-direction:column;flex:1;min-height:0}
+.permission-editor-dialog .intro,.permission-editor-dialog .account-basics,.permission-editor-dialog .preset-picker{flex-shrink:0}
+.permission-editor-dialog .permission-picker{flex:1;min-height:120px}
 </style>
