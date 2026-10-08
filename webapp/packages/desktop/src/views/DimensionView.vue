@@ -171,21 +171,31 @@ function snapshotFallbackRow(s: ChannelSnapshot): DimRow {
   };
 }
 const rows = computed<DimRow[]>(() => {
-  const metricRows = (state.data.value || []).map((item) => ({
-    ...item,
-    channelStatus:
-      props.kind === "channels"
-        ? snapshots.value.find(
-            (s) =>
-              s.channel_id === Number(item.dimension_key.split(":").pop()) &&
-              s.instance_id === item.instance_id,
-          )?.status || "enabled"
-        : undefined,
-  }));
-  if (props.kind !== "channels") return metricRows;
-  const present = new Set(metricRows.map((item) => item.dimension_key));
-  const fallback = snapshots.value
-    .filter((s) => !present.has(`${s.instance_id}:channel:${s.channel_id}`))
+  const items = state.data.value || [];
+  if (props.kind !== "channels") return items;
+  // 当前数据已按站点加载；渠道目录与指标可能归属不同采集实例，补位不能按实例重复。
+  const latestSnapshots = new Map<string, ChannelSnapshot>();
+  for (const snapshot of snapshots.value) {
+    const id = String(snapshot.channel_id);
+    const current = latestSnapshots.get(id);
+    if (!current || Date.parse(snapshot.captured_at) > Date.parse(current.captured_at) ||
+      (snapshot.captured_at === current.captured_at && snapshot.instance_id < current.instance_id)) {
+      latestSnapshots.set(id, snapshot);
+    }
+  }
+  const present = new Set<string>();
+  const metricRows = items.map((item) => {
+    const id = item.dimension_key.split(":").pop() || "";
+    present.add(id);
+    const snapshot = latestSnapshots.get(id);
+    return {
+      ...item,
+      display_name: snapshot?.channel_name || item.display_name,
+      channelStatus: snapshot?.status || "enabled",
+    };
+  });
+  const fallback = [...latestSnapshots.values()]
+    .filter((s) => !present.has(String(s.channel_id)))
     .map(snapshotFallbackRow);
   return [...metricRows, ...fallback];
 });
@@ -208,6 +218,16 @@ const kindLabels: Record<string, string> = {
   disabled: "已禁用",
 };
 const searchOptions = computed(() => monitorSearchOptions(rows.value, props.kind));
+watch(searchOptions, (options) => {
+  if (props.kind !== "channels" || !searchKey.value || options.some(option => option.key === searchKey.value)) return;
+  // 补位被真实指标替换后，选择仍跟随同一渠道，避免刷新后落在已移除的实例键上。
+  const id = searchKey.value.split(":").pop();
+  const matches = options.filter(option => option.key.split(":").pop() === id);
+  if (matches.length === 1) {
+    searchKey.value = matches[0].key;
+    search.value = matches[0].value;
+  }
+});
 const searched = computed(() => {
   const keys = new Set(filterMonitorOptions(searchOptions.value, search.value, searchKey.value).map(option => option.key));
   return rows.value.filter(item => keys.has(item.dimension_key));

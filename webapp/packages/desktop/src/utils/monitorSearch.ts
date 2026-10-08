@@ -12,7 +12,9 @@ export function monitorSearchOptions(items: MetricItem[], kind: "customers" | "c
   for (const item of items) {
     const id = item.dimension_key.split(":").pop() || item.dimension_key;
     const value = item.display_name || item.display_key || (kind === "customers" ? `客户 ${id}` : id);
-    const instance = item.instance_name || item.instance_id;
+    const instance = item.instance_name && item.instance_name !== item.instance_id
+      ? `${item.instance_name} (${item.instance_id})`
+      : item.instance_id;
     options.set(item.dimension_key, {
       key: item.dimension_key,
       value,
