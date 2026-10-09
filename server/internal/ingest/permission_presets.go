@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"context"
+	"fmt"
 	"maps"
 	"slices"
 	"time"
@@ -37,10 +38,12 @@ func sortedPresets(values map[int64]storage.PermissionPreset) []storage.Permissi
 }
 
 type permissionPresetTx struct {
-	users   map[int64]storage.User
-	presets map[int64]storage.PermissionPreset
-	audits  map[string]storage.OperationAudit
-	nextID  int64
+	users      map[int64]storage.User
+	presets    map[int64]storage.PermissionPreset
+	audits     map[string]storage.OperationAudit
+	nextID     int64
+	sessions   map[string]storage.Session
+	nextUserID int64
 }
 
 func (s *MemoryStore) WithPermissionPresetTransaction(ctx context.Context, apply func(storage.PermissionPresetTransaction) error) error {
@@ -49,7 +52,7 @@ func (s *MemoryStore) WithPermissionPresetTransaction(ctx context.Context, apply
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	tx := &permissionPresetTx{users: maps.Clone(s.users), presets: make(map[int64]storage.PermissionPreset), audits: maps.Clone(s.operationAudits), nextID: s.nextPermissionPresetID}
+	tx := &permissionPresetTx{users: maps.Clone(s.users), presets: make(map[int64]storage.PermissionPreset), audits: maps.Clone(s.operationAudits), nextID: s.nextPermissionPresetID, sessions: maps.Clone(s.sessions), nextUserID: s.nextUserID}
 	for id, user := range tx.users {
 		user.Permissions = slices.Clone(user.Permissions)
 		user.ScopeUserIDs = slices.Clone(user.ScopeUserIDs)
@@ -66,6 +69,7 @@ func (s *MemoryStore) WithPermissionPresetTransaction(ctx context.Context, apply
 	}
 	s.users, s.permissionPresets, s.operationAudits = tx.users, tx.presets, tx.audits
 	s.nextPermissionPresetID = tx.nextID
+	s.sessions, s.nextUserID = tx.sessions, tx.nextUserID
 	return nil
 }
 func (t *permissionPresetTx) Administrators() ([]storage.User, error) {
@@ -118,5 +122,37 @@ func (t *permissionPresetTx) InsertAudit(audit storage.OperationAudit) error {
 		return storage.ErrUnsupportedOperationAudit
 	}
 	t.audits[audit.ID] = storage.NormalizeOperationAudit(audit)
+	return nil
+}
+
+func (t *permissionPresetTx) SaveAccount(user *storage.User) error {
+	if user.ID == 0 {
+		for _, existing := range t.users {
+			if existing.Username == user.Username {
+				return fmt.Errorf("account already exists")
+			}
+		}
+		if t.nextUserID < 1 {
+			t.nextUserID = 1
+		}
+		for {
+			if _, exists := t.users[t.nextUserID]; !exists {
+				break
+			}
+			t.nextUserID++
+		}
+		user.ID = t.nextUserID
+		t.nextUserID++
+	}
+	value := *user
+	value.Permissions = slices.Clone(user.Permissions)
+	t.users[user.ID] = value
+	if !user.Enabled {
+		for key, session := range t.sessions {
+			if session.UserID == user.ID {
+				delete(t.sessions, key)
+			}
+		}
+	}
 	return nil
 }

@@ -40,6 +40,14 @@ type presetApplyInput struct {
 	UserIDs             []int64            `json:"user_ids"`
 	Mode                string             `json:"mode"`
 	ExpectedPermissions map[int64][]string `json:"expected_permissions"`
+	ExpectedPresetIDs   map[int64]int64    `json:"expected_preset_ids"`
+}
+
+func samePresetPermissions(left, right []string) bool {
+	a, b := ExpandPermissions(left), ExpandPermissions(right)
+	slices.Sort(a)
+	slices.Sort(b)
+	return slices.Equal(a, b)
 }
 
 func normalizePreset(actor storage.User, input presetInput) (storage.PermissionPreset, error) {
@@ -159,12 +167,22 @@ func (h Handlers) PermissionPresets(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		visible := []storage.PermissionPreset{}
+		users, err := h.M.ListUsers()
+		if err != nil {
+			presetError(w, err)
+			return
+		}
+		boundCounts := map[int64]int{}
+		for _, user := range users {
+			boundCounts[user.PermissionPresetID]++
+		}
 		for _, p := range items {
 			if canGrant(actor, p.Permissions) && !slices.Contains(p.Permissions, "*") {
+				p.BoundAccounts = boundCounts[p.ID]
 				visible = append(visible, p)
 			}
 		}
-		write(w, 200, map[string]any{"items": visible, "max_presets": maxPermissionPresets, "max_apply_accounts": maxPresetApplyAccounts})
+		write(w, 200, map[string]any{"items": visible, "max_presets": maxPermissionPresets, "max_apply_accounts": maxPresetApplyAccounts, "binding_supported": true})
 		return
 	}
 	if r.Method != http.MethodPost {
@@ -245,7 +263,7 @@ func (h Handlers) PermissionPreset(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	var after storage.PermissionPreset
 	err = store.WithPermissionPresetTransaction(ctx, func(tx storage.PermissionPresetTransaction) error {
-		actor, _, err := lockedPresetActor(tx, actor.ID)
+		actor, users, err := lockedPresetActor(tx, actor.ID)
 		if err != nil {
 			return err
 		}
@@ -261,6 +279,22 @@ func (h Handlers) PermissionPreset(w http.ResponseWriter, r *http.Request) {
 			return ErrForbidden
 		}
 		if r.Method == http.MethodDelete {
+			for _, beforeUser := range users {
+				if beforeUser.PermissionPresetID != id {
+					continue
+				}
+				if !canManage(actor, beforeUser) {
+					return ErrForbidden
+				}
+				afterUser := beforeUser
+				afterUser.PermissionPresetID, afterUser.UpdatedAt = 0, time.Now().UTC()
+				if err := tx.SaveAccount(&afterUser); err != nil {
+					return err
+				}
+				if err := insertPresetAudit(tx, r, actor, "auth.permission_preset_apply", "ct_user", strconv.FormatInt(afterUser.ID, 10), userResponse(beforeUser), map[string]any{"account": userResponse(afterUser), "apply_mode": "unbind", "permission_preset": before}); err != nil {
+					return err
+				}
+			}
 			if err := tx.DeletePreset(id); err != nil {
 				return err
 			}
@@ -283,6 +317,37 @@ func (h Handlers) PermissionPreset(w http.ResponseWriter, r *http.Request) {
 		after.UpdatedBy = actor.Username
 		if err := tx.SavePreset(&after); err != nil {
 			return err
+		}
+		added := []string{}
+		for _, permission := range after.Permissions {
+			if !slices.Contains(before.Permissions, permission) {
+				added = append(added, permission)
+			}
+		}
+		for _, beforeUser := range users {
+			if beforeUser.PermissionPresetID != id {
+				continue
+			}
+			after.BoundAccounts++
+			if storage.IsFullAdmin(beforeUser) || len(added) == 0 {
+				continue
+			}
+			permissions := ExpandPermissions(append(slices.Clone(beforeUser.Permissions), added...))
+			if samePresetPermissions(permissions, beforeUser.Permissions) {
+				continue
+			}
+			if !canManage(actor, beforeUser) || !canGrant(actor, permissions) {
+				return ErrForbidden
+			}
+			afterUser := beforeUser
+			afterUser.Permissions, afterUser.UpdatedAt = permissions, after.UpdatedAt
+			if err := tx.SaveAccount(&afterUser); err != nil {
+				return err
+			}
+			if err := insertPresetAudit(tx, r, actor, "auth.permission_preset_apply", "ct_user", strconv.FormatInt(afterUser.ID, 10), userResponse(beforeUser), map[string]any{"account": userResponse(afterUser), "apply_mode": "sync_added", "permission_preset": after}); err != nil {
+				return err
+			}
+			after.SyncedAccounts++
 		}
 		return insertPresetAudit(tx, r, actor, "auth.permission_preset_update", "permission_preset", strconv.FormatInt(id, 10), before, after)
 	})
@@ -369,6 +434,9 @@ func (h Handlers) ApplyPermissionPreset(w http.ResponseWriter, r *http.Request) 
 				if !slices.Equal(expected, actual) {
 					return errPresetAccountsChanged
 				}
+				if expectedID, supplied := input.ExpectedPresetIDs[u.ID]; supplied && expectedID != u.PermissionPresetID {
+					return errPresetAccountsChanged
+				}
 			}
 		}
 		if found != len(ids) {
@@ -389,12 +457,13 @@ func (h Handlers) ApplyPermissionPreset(w http.ResponseWriter, r *http.Request) 
 			slices.Sort(permissions)
 			existing := ExpandPermissions(before.Permissions)
 			slices.Sort(existing)
-			if slices.Equal(existing, permissions) {
+			if slices.Equal(existing, permissions) && before.PermissionPresetID == preset.ID {
 				continue
 			}
 			after.Permissions = permissions
+			after.PermissionPresetID = preset.ID
 			after.UpdatedAt = time.Now().UTC()
-			if err := tx.SetPermissions(after.ID, permissions, after.UpdatedAt); err != nil {
+			if err := tx.SaveAccount(&after); err != nil {
 				return err
 			}
 			summary := map[string]any{"actor_username": actor.Username, "account": userResponse(after), "permission_preset": preset, "apply_mode": input.Mode}

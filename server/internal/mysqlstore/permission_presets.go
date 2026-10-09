@@ -54,7 +54,7 @@ func (s Store) WithPermissionPresetTransaction(ctx context.Context, apply func(s
 }
 
 func (t permissionPresetTx) Administrators() ([]storage.User, error) {
-	rows, err := t.tx.QueryContext(t.ctx, "SELECT id,username,password_hash,role,scope_site,scope_user_ids,enabled,created_at,updated_at,display_name,permissions FROM users WHERE role='admin' ORDER BY id FOR UPDATE")
+	rows, err := t.tx.QueryContext(t.ctx, "SELECT "+userColumns+" FROM users WHERE role='admin' ORDER BY id FOR UPDATE")
 	if err != nil {
 		return nil, err
 	}
@@ -109,4 +109,26 @@ func (t permissionPresetTx) SetPermissions(id int64, permissions []string, now t
 }
 func (t permissionPresetTx) InsertAudit(audit storage.OperationAudit) error {
 	return insertOperationAuditTx(t.tx, audit)
+}
+
+func (t permissionPresetTx) SaveAccount(u *storage.User) error {
+	permissions, err := json.Marshal(u.Permissions)
+	if err != nil {
+		return err
+	}
+	if u.ID == 0 {
+		result, err := t.tx.ExecContext(t.ctx, "INSERT INTO users(username,password_hash,role,scope_site,scope_user_ids,enabled,created_at,updated_at,display_name,permissions,permission_preset_id) VALUES(?,?,?,'','[]',?,?,?,?,?,?)", u.Username, u.PasswordHash, u.Role, u.Enabled, u.CreatedAt, u.UpdatedAt, u.DisplayName, permissions, u.PermissionPresetID)
+		if err != nil {
+			return err
+		}
+		u.ID, err = result.LastInsertId()
+		return err
+	}
+	if _, err := t.tx.ExecContext(t.ctx, "UPDATE users SET enabled=?,updated_at=?,display_name=?,permissions=?,permission_preset_id=? WHERE id=?", u.Enabled, u.UpdatedAt, u.DisplayName, permissions, u.PermissionPresetID, u.ID); err != nil {
+		return err
+	}
+	if !u.Enabled {
+		_, err = t.tx.ExecContext(t.ctx, "DELETE FROM sessions WHERE user_id=?", u.ID)
+	}
+	return err
 }

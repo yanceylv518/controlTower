@@ -9,6 +9,7 @@ type User struct {
 	ScopeUserIDs                 []int64
 	DisplayName                  string
 	Permissions                  []string // nil preserves legacy administrator access; [] grants nothing.
+	PermissionPresetID           int64
 	Enabled                      bool
 	CreatedAt, UpdatedAt         time.Time
 }

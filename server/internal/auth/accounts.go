@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"controltower/server/internal/auditmeta"
 	"controltower/server/internal/storage"
 	"crypto/rand"
@@ -17,14 +18,18 @@ import (
 var ErrForbidden = errors.New("forbidden")
 
 type AccountInput struct {
-	Username     string   `json:"username"`
-	Password     string   `json:"password"`
-	Role         string   `json:"role"`
-	ScopeSite    string   `json:"scope_site"`
-	ScopeUserIDs []int64  `json:"scope_user_ids"`
-	Enabled      bool     `json:"enabled"`
-	DisplayName  string   `json:"display_name"`
-	Permissions  []string `json:"permissions"`
+	Username                   string   `json:"username"`
+	Password                   string   `json:"password"`
+	Role                       string   `json:"role"`
+	ScopeSite                  string   `json:"scope_site"`
+	ScopeUserIDs               []int64  `json:"scope_user_ids"`
+	Enabled                    bool     `json:"enabled"`
+	DisplayName                string   `json:"display_name"`
+	Permissions                []string `json:"permissions"`
+	PermissionPresetID         *int64   `json:"permission_preset_id"`
+	PermissionPresetVersion    int64    `json:"permission_preset_version"`
+	ExpectedPermissions        []string `json:"expected_permissions"`
+	ExpectedPermissionPresetID *int64   `json:"expected_permission_preset_id"`
 }
 
 func (m *Manager) accountActor(id int64) (storage.User, error) {
@@ -43,7 +48,7 @@ func applyAccountInput(actor storage.User, target *storage.User, q AccountInput)
 		return ErrInvalid
 	}
 	if q.Role == "viewer" {
-		if len(q.Permissions) > 0 {
+		if len(q.Permissions) > 0 || (q.PermissionPresetID != nil && *q.PermissionPresetID != 0) {
 			return ErrForbidden
 		}
 		if strings.TrimSpace(q.ScopeSite) == "" || len(q.ScopeUserIDs) == 0 {
@@ -86,7 +91,14 @@ func (m *Manager) CreateAccount(actorID int64, q AccountInput, now time.Time) (s
 	if err != nil {
 		return u, err
 	}
-	if err = m.store.CreateUser(u); err != nil {
+	if _, supported := m.store.(storage.PermissionPresetStore); supported && q.Role == "admin" {
+		_, u, err = m.saveAdministrator(actorID, u, q, now)
+	} else if q.PermissionPresetID != nil && *q.PermissionPresetID != 0 {
+		err = ErrForbidden
+	} else {
+		err = m.store.CreateUser(u)
+	}
+	if err != nil {
 		return u, err
 	}
 	u, _, err = m.store.UserByUsername(name)
@@ -115,7 +127,99 @@ func (m *Manager) UpdateAccount(actorID, targetID int64, q AccountInput, now tim
 		return before, before, err
 	}
 	after.Enabled, after.UpdatedAt = q.Enabled, now
+	if _, supported := m.store.(storage.PermissionPresetStore); supported && before.Role == "admin" {
+		return m.saveAdministrator(actorID, after, q, now)
+	}
+	if q.PermissionPresetID != nil && *q.PermissionPresetID != 0 {
+		return before, before, ErrForbidden
+	}
 	err = m.store.UpdateUser(after)
+	return before, after, err
+}
+
+func (m *Manager) saveAdministrator(actorID int64, draft storage.User, input AccountInput, now time.Time) (storage.User, storage.User, error) {
+	store := m.store.(storage.PermissionPresetStore)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	var before, after storage.User
+	err := store.WithPermissionPresetTransaction(ctx, func(tx storage.PermissionPresetTransaction) error {
+		actor, users, err := lockedPresetActor(tx, actorID)
+		if err != nil {
+			return err
+		}
+		after = draft
+		if draft.ID != 0 {
+			found := false
+			for _, user := range users {
+				if user.ID == draft.ID {
+					before, after, found = user, user, true
+				}
+			}
+			if !found || draft.ID == actorID || !canManage(actor, before) {
+				return ErrForbidden
+			}
+			actualPermissions := before.Permissions
+			if storage.IsFullAdmin(before) {
+				actualPermissions = []string{"*"}
+			}
+			if (before.PermissionPresetID != 0 && input.ExpectedPermissions == nil) || (input.ExpectedPermissions != nil && !samePresetPermissions(input.ExpectedPermissions, actualPermissions)) || (input.ExpectedPermissionPresetID != nil && *input.ExpectedPermissionPresetID != before.PermissionPresetID) {
+				return errPresetAccountsChanged
+			}
+		}
+		if err := applyAccountInput(actor, &after, input); err != nil {
+			return err
+		}
+		if draft.ID != 0 {
+			after.Enabled = input.Enabled
+		}
+		after.UpdatedAt = now
+		if input.PermissionPresetID != nil {
+			id := *input.PermissionPresetID
+			if id < 0 || input.PermissionPresetVersion < 0 || (id != 0 && storage.IsFullAdmin(after)) {
+				return errPresetInvalid
+			}
+			if id != 0 {
+				presets, err := tx.Presets()
+				if err != nil {
+					return err
+				}
+				var preset storage.PermissionPreset
+				for _, item := range presets {
+					if item.ID == id {
+						preset = item
+					}
+				}
+				if preset.ID == 0 {
+					return errPresetMissing
+				}
+				if input.PermissionPresetVersion == 0 && id != before.PermissionPresetID {
+					return errPresetInvalid
+				}
+				if input.PermissionPresetVersion != 0 && input.PermissionPresetVersion != preset.Version {
+					return errPresetConflict
+				}
+				if !canGrant(actor, preset.Permissions) {
+					return ErrForbidden
+				}
+			}
+			after.PermissionPresetID = id
+		}
+		if storage.IsFullAdmin(after) {
+			after.PermissionPresetID = 0
+		}
+		if before.Enabled && storage.IsFullAdmin(before) && (!after.Enabled || !storage.IsFullAdmin(after)) {
+			fullCount := 0
+			for _, user := range users {
+				if user.Enabled && storage.IsFullAdmin(user) {
+					fullCount++
+				}
+			}
+			if fullCount <= 1 {
+				return errors.New("last_full_admin")
+			}
+		}
+		return tx.SaveAccount(&after)
+	})
 	return before, after, err
 }
 
@@ -154,6 +258,10 @@ func (m *Manager) ResetAccountPassword(actorID, targetID int64, password string,
 }
 
 func accountError(w http.ResponseWriter, err error) {
+	if errors.Is(err, errPresetConflict) || errors.Is(err, errPresetMissing) || errors.Is(err, errPresetInvalid) || errors.Is(err, errPresetAccountsChanged) {
+		presetError(w, err)
+		return
+	}
 	status, code := http.StatusInternalServerError, "account_update_failed"
 	if errors.Is(err, ErrForbidden) {
 		status, code = http.StatusForbidden, "forbidden"

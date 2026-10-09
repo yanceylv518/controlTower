@@ -5,7 +5,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { siteOf, type PermissionPreset, type ScopedUser } from '@ct/shared'
 import { auth, dashboard, passthrough } from '../api'
 import { useAuthStore } from '../stores/auth'
-import { can, permissionChanges, permissionError, permissionKeys, samePermissions } from '../permissions'
+import { can, permissionChanges, permissionError, permissionKeys } from '../permissions'
 import AppShell from '../components/AppShell.vue'
 import PermissionTree from '../components/PermissionTree.vue'
 import PermissionPresetManager from '../components/PermissionPresetManager.vue'
@@ -20,6 +20,7 @@ const editorRole = ref<'admin' | 'viewer'>('admin')
 const loading = ref(false), pageError = ref(''), editorError = ref(''), accountSearch = ref('')
 const initialForm = ref('')
 const presets = ref<PermissionPreset[]>([]), presetLoading = ref(false), presetError = ref('')
+const bindingSupported = ref(false)
 const selectedPreset = ref<number | null>(null), applyMode = ref<'merge' | 'replace'>('merge')
 const savingPreset = ref(false), savePresetOpen = ref(false), savePresetError = ref('')
 const presetForm = reactive({ name: '', description: '', permissions: [] as string[] })
@@ -35,7 +36,7 @@ const open = ref(false)
 const editing = ref<ScopedUser | null>(null)
 const saving = ref(false)
 const loadingCustomers = ref(false)
-const form = reactive({ username: '', password: '', scope_site: '', scope_user_ids: [] as number[], display_name: '', permissions: [] as string[] })
+const form = reactive({ username: '', password: '', scope_site: '', scope_user_ids: [] as number[], display_name: '', permissions: [] as string[], permission_preset_id: 0, permission_preset_version: 0 })
 const sites = computed(() => [...new Set(instances.value.filter(item => item.enabled).map(siteOf))].sort())
 const customerCache = new Map<string, { expires: number; items: Array<{ id: number; name: string }> }>()
 let customerRequest = 0
@@ -43,10 +44,11 @@ let usersController: AbortController | undefined, presetController: AbortControl
 let disposed = false
 const changes = computed(() => permissionChanges(editing.value?.permissions || [], form.permissions, grantable.value))
 const editorDirty = computed(() => formState() !== initialForm.value)
-const draftPresetMatch = computed(() => presets.value.find(preset => samePermissions(preset.permissions, form.permissions)))
+const draftPresetName = computed(() => presetName(form.permission_preset_id))
 function formState() { return JSON.stringify({ ...form, permissions: [...form.permissions].sort(), scope_user_ids: [...form.scope_user_ids].sort((a,b) => a-b) }) }
 function names(keys: string[]) { return keys.map(key => permissions.value.find(option => option.key === key)?.label || key).join('、') || '尚未分配' }
-function presetMatch(row: ScopedUser) { return presets.value.find(preset => samePermissions(preset.permissions, row.permissions || []))?.name }
+function presetName(id: number) { return id ? presets.value.find(preset => preset.id === id)?.name || `权限预设 #${id}` : '' }
+function presetMatch(row: ScopedUser) { return presetName(row.permission_preset_id || 0) }
 onBeforeUnmount(() => { disposed = true; usersController?.abort(); presetController?.abort(); customerRequest++ })
 
 async function load(afterSave = false) {
@@ -70,7 +72,7 @@ async function loadPresets() {
   try {
     const result = await auth.permissionPresets(request.signal)
     if (disposed || presetController !== request) return
-    presets.value = result.items; presetError.value = ''
+    presets.value = result.items; presetError.value = ''; bindingSupported.value = result.binding_supported === true
     if (selectedPreset.value && !presets.value.some(p => p.id === selectedPreset.value)) selectedPreset.value = null
   } catch (cause) {
     if (!disposed && presetController === request) { presetError.value = permissionError(cause); presets.value = [] }
@@ -78,7 +80,9 @@ async function loadPresets() {
 }
 async function leaveTab(next: string | number) {
   if (tab.value === 'presets' && manager.value && !await manager.value.confirmLeave()) return false
-  accountSearch.value = ''; if (next !== 'presets') void loadPresets(); return true
+  accountSearch.value = ''
+  if (next !== 'presets') { void loadPresets(); void load() }
+  return true
 }
 async function confirmEditorLeave() {
   if (saving.value || savingPreset.value || resetSaving.value) return false
@@ -91,9 +95,15 @@ function editorClosed() { form.password = ''; customerRequest++; loadingCustomer
 function applyPreset() {
   const preset = presets.value.find(p => p.id === selectedPreset.value)
   if (!preset || saving.value) return
-  form.permissions = applyMode.value === 'merge' ? [...new Set([...form.permissions, ...preset.permissions])] : [...preset.permissions]
+  if (!bindingSupported.value) { ElMessage.warning('请先更新 Server 并执行权限预设绑定迁移，再应用预设'); return }
+  const nextPermissions = applyMode.value === 'merge' ? [...new Set([...form.permissions, ...preset.permissions])] : [...preset.permissions]
+  if (nextPermissions.includes('*')) { ElMessage.warning('全部权限管理员无需绑定预设'); return }
+  form.permissions = nextPermissions
+  form.permission_preset_id = preset.id
+  form.permission_preset_version = preset.version
   ElMessage.info(`已应用「${preset.name}」，保存账号后生效`)
 }
+function unbindPreset() { form.permission_preset_id = 0; form.permission_preset_version = 0 }
 function showSavePreset() {
   const keys = permissionKeys(form.permissions, grantable.value)
   if (!keys.length) { ElMessage.warning('请先选择至少一项权限'); return }
@@ -158,7 +168,7 @@ async function showCreate() {
   if (disposed || tab.value !== role) return
   editorRole.value = role
   editing.value = null
-  Object.assign(form, { username: '', password: '', scope_site: sites.value[0] || '', scope_user_ids: [], display_name: '', permissions: [] })
+  Object.assign(form, { username: '', password: '', scope_site: sites.value[0] || '', scope_user_ids: [], display_name: '', permissions: [], permission_preset_id: 0, permission_preset_version: 0 })
   initialForm.value = formState(); editorError.value = ''; selectedPreset.value = null; applyMode.value = 'replace'
   open.value = true
   if (editorRole.value === 'viewer') await loadCustomers()
@@ -169,8 +179,8 @@ async function showEdit(row: ScopedUser) {
   if (!manageable(row)) return
   editorRole.value = row.role === 'admin' ? 'admin' : 'viewer'
   editing.value = { ...row, permissions: [...(row.permissions || [])], scope_user_ids: [...(row.scope_user_ids || [])] }
-  Object.assign(form, { username: row.username, password: '', scope_site: row.scope_site, scope_user_ids: [...(row.scope_user_ids || [])], display_name: row.display_name || '', permissions: [...(row.permissions || [])] })
-  initialForm.value = formState(); editorError.value = ''; selectedPreset.value = null; applyMode.value = 'merge'
+  Object.assign(form, { username: row.username, password: '', scope_site: row.scope_site, scope_user_ids: [...(row.scope_user_ids || [])], display_name: row.display_name || '', permissions: [...(row.permissions || [])], permission_preset_id: row.permission_preset_id || 0, permission_preset_version: 0 })
+  initialForm.value = formState(); editorError.value = ''; selectedPreset.value = row.permission_preset_id || null; applyMode.value = 'merge'
   customers.value = (row.scope_user_ids || []).map(id => ({ id, name: `客户 ${id}` }))
   open.value = true
   if (row.role === 'viewer') { await loadCustomers(); if (open.value && editing.value?.id === row.id) await loadSelectedCustomers(row.scope_user_ids) }
@@ -205,10 +215,19 @@ async function saveEdit() {
   } catch (error) { showError(error) } finally { saving.value = false }
 }
 async function submit() { if (saving.value || savingPreset.value) return; if (editing.value) await saveEdit(); else await create() }
+async function reloadEditor() {
+  if (saving.value || savingPreset.value || !editing.value || !await confirmEditorLeave()) return
+  const id = editing.value.id
+  await load()
+  if (pageError.value) { editorError.value = pageError.value; return }
+  const latest = items.value.find(item => item.id === id)
+  if (!latest || !manageable(latest)) { editorError.value = '该账号已不存在或超出当前可管理范围'; return }
+  await showEdit(latest)
+}
 async function toggle(row: ScopedUser, enabled: boolean) {
   if (!manageable(row) || toggling.value.includes(row.id)) return
   toggling.value.push(row.id)
-  try { await auth.updateUser(row.id, { role: row.role, scope_site: row.scope_site, scope_user_ids: row.scope_user_ids, enabled, display_name: row.display_name, permissions: row.permissions }); row.enabled = enabled; await load(true) } catch (error) { showError(error) } finally { toggling.value = toggling.value.filter(id => id !== row.id) }
+  try { await auth.updateUser(row.id, { role: row.role, scope_site: row.scope_site, scope_user_ids: row.scope_user_ids, enabled, display_name: row.display_name, permissions: row.permissions, expected_permissions: row.permissions || [], expected_permission_preset_id: row.permission_preset_id || 0 }); row.enabled = enabled; await load(true) } catch (error) { showError(error) } finally { toggling.value = toggling.value.filter(id => id !== row.id) }
 }
 const visibleItems = computed(() => items.value.filter(item => item.role === tab.value && `${item.username} ${item.display_name || ''}`.toLowerCase().includes(accountSearch.value.trim().toLowerCase())))
 const grantable = computed(() => permissions.value.filter(item => can(current.user, item.key)))
@@ -222,7 +241,7 @@ async function saveAdmin() {
     if (!form.permissions.length) {
       try { await ElMessageBox.confirm('该管理员将没有可访问的功能，是否继续保存？', '未分配权限', { type: 'warning', confirmButtonText: '保存为空权限', cancelButtonText: '继续配置' }) } catch { return }
     }
-    const body = { role: 'admin', scope_site: '', scope_user_ids: [], display_name: form.display_name.trim(), permissions: [...form.permissions] }
+    const body = { role: 'admin', scope_site: '', scope_user_ids: [], display_name: form.display_name.trim(), permissions: [...form.permissions], permission_preset_id: form.permissions.includes('*') ? 0 : form.permission_preset_id, permission_preset_version: form.permission_preset_version, ...(editing.value ? { expected_permissions: editing.value.permissions || [], expected_permission_preset_id: editing.value.permission_preset_id || 0 } : {}) }
     if (editing.value) await auth.updateUser(editing.value.id, { ...body, enabled: editing.value.enabled })
     else await auth.createUser({ ...body, username: form.username.trim(), password: form.password })
     open.value = false
@@ -261,7 +280,7 @@ void loadPresets()
           <span v-else-if="!row.permissions?.length" class="muted">尚未分配</span>
           <template v-else>
             <el-popover trigger="click" :width="320"><template #reference><el-button link class="permission-summary">{{ names(row.permissions.slice(0, 3)) }}{{ row.permissions.length > 3 ? '…' : '' }} · {{ row.permissions.length }} 项</el-button></template><div class="permission-tags"><el-tag v-for="key in row.permissions" :key="key" type="info">{{ names([key]) }}</el-tag></div></el-popover>
-            <div v-if="presetMatch(row)" class="tip">与「{{ presetMatch(row) }}」权限一致</div>
+            <div v-if="presetMatch(row)" class="tip">已绑定「{{ presetMatch(row) }}」</div>
           </template>
         </template></el-table-column>
         <el-table-column v-if="tab === 'viewer'" prop="scope_site" label="可看站点" />
@@ -271,7 +290,7 @@ void loadPresets()
       </el-table>
     </template>
     <el-dialog v-model="open" :title="editing ? (editorRole === 'admin' ? '配置管理员权限 · ' + editing.username : '修改可查看客户') : (editorRole === 'admin' ? '创建管理员' : '创建查看账号')" :width="editorRole === 'admin' ? 'min(980px, calc(100vw - 24px))' : 'min(640px, calc(100vw - 24px))'" top="5vh" class="account-editor" :class="{ 'permission-editor-dialog': editorRole === 'admin' }" :close-on-click-modal="false" :close-on-press-escape="!saving && !savingPreset" :show-close="!saving && !savingPreset" :before-close="closeEditor" destroy-on-close @closed="editorClosed">
-      <el-alert v-if="editorError" type="error" :closable="false" class="intro" :title="editorError" />
+      <el-alert v-if="editorError" type="error" :closable="false" class="intro"><div role="alert">{{ editorError }}</div><el-button v-if="editing" link :disabled="saving || savingPreset || loading" @click="reloadEditor">重新载入账号</el-button></el-alert>
       <el-form class="account-editor-form" label-position="top" :disabled="saving" @submit.prevent="submit">
         <div :class="['account-basics', { creating: !editing, viewer: editorRole === 'viewer' }]">
           <el-form-item label="登录账号" :required="!editing"><span v-if="editing" class="account-identity">{{ form.username }}</span><el-input v-else v-model="form.username" maxlength="64" autocomplete="off" placeholder="请输入登录账号" /></el-form-item>
@@ -288,9 +307,10 @@ void loadPresets()
               <el-button :disabled="!selectedPreset || presetLoading" @click="applyPreset">应用到草稿</el-button>
             </div>
             <div v-if="!presetError" class="tip">{{ applyMode === 'merge' ? '保留现有权限，补充预设包含的权限。' : '以预设重新选择，不在预设中的权限会被移除。' }} 保存账号后生效。</div>
-            <div v-if="draftPresetMatch" class="tip">当前权限与「{{ draftPresetMatch.name }}」一致</div>
+            <div v-if="draftPresetName" class="preset-binding"><span>绑定预设：{{ draftPresetName }} · 新增权限自动同步，保存账号后生效</span><el-button link :disabled="saving" @click="unbindPreset">解除绑定</el-button></div>
+            <div v-else class="tip">未绑定预设，权限由账号单独配置。应用并保存后建立绑定。</div>
           </section>
-          <PermissionTree v-model="form.permissions" :options="grantable" :allow-full="can(current.user, '*')" :baseline="editing?.permissions || []" :disabled="saving" />
+          <PermissionTree class="permission-viewport" v-model="form.permissions" :options="grantable" :allow-full="can(current.user, '*')" :baseline="editing?.permissions || []" :disabled="saving" />
         </template>
         <template v-else>
           <el-form-item label="站点" required><el-select v-model="form.scope_site" filterable :disabled="Boolean(editing)" placeholder="请选择站点" style="width:100%" @change="changeSite"><el-option v-if="editing" :label="form.scope_site" :value="form.scope_site" /><el-option v-for="site in editing ? [] : sites" :key="site" :label="site" :value="site" /></el-select></el-form-item>
@@ -324,10 +344,12 @@ void loadPresets()
 </style>
 
 <style>
-.el-dialog.account-editor.permission-editor-dialog{display:flex;flex-direction:column;max-height:90dvh;overflow:hidden}
+.el-dialog.account-editor.permission-editor-dialog{display:flex;flex-direction:column;height:min(900px,90dvh);max-height:90dvh;overflow:hidden}
 .permission-editor-dialog .el-dialog__header,.permission-editor-dialog .el-dialog__footer{flex-shrink:0}
-.el-dialog.account-editor.permission-editor-dialog .el-dialog__body{display:flex;flex-direction:column;flex:1;min-height:0;max-height:none;overflow:auto}
-.permission-editor-dialog .account-editor-form{display:flex;flex-direction:column;flex:1;min-height:0}
+.el-dialog.account-editor.permission-editor-dialog .el-dialog__body{display:flex;flex-direction:column;flex:1;min-height:0;max-height:none;overflow:hidden}
+.permission-editor-dialog .account-editor-form{display:grid;grid-template-rows:auto auto minmax(0,1fr);flex:1;min-height:0;overflow:hidden}
 .permission-editor-dialog .intro,.permission-editor-dialog .account-basics,.permission-editor-dialog .preset-picker{flex-shrink:0}
-.permission-editor-dialog .permission-picker{flex:1;min-height:120px}
+.permission-editor-dialog .permission-picker{min-height:0}
+.preset-binding{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px;margin-top:8px;font-size:12px;color:var(--el-text-color-secondary)}
+@media(max-height:600px){.el-dialog.account-editor.permission-editor-dialog .el-dialog__body{overflow:auto}.permission-editor-dialog .account-editor-form{display:block;flex:none;overflow:visible}.permission-editor-dialog .permission-picker.permission-viewport{height:240px}}
 </style>

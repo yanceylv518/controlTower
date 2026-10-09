@@ -99,6 +99,9 @@ const fieldLabels: Record<string, string> = {
   password_updated: "密码已更新",
   permissions: "权限",
   permission_preset: "权限预设",
+  permission_preset_id: "绑定预设 ID",
+  bound_accounts: "绑定账号数",
+  synced_accounts: "同步账号数",
   apply_mode: "应用方式",
   phone: "联系电话",
   policy: "策略",
@@ -277,6 +280,7 @@ function displayValue(value: unknown, present: boolean, path: PathPart[] = []) {
       role: { admin: "管理员", viewer: "查看账号" },
       actor_role: { admin: "管理员", viewer: "查看账号" },
       mode: { observe: "仅观察", auto: "自动调权", manual: "手动调权" },
+      apply_mode: { merge: "补充权限并绑定", replace: "替换权限并绑定", sync_added: "同步预设新增权限", unbind: "解除预设绑定" },
       status: { succeeded: "成功", success: "成功", failed: "失败", submitted: "已提交", pending: "等待执行", expired: "已过期" },
     };
     return enums[String(path[path.length - 1])]?.[value] || value || "空字符串";

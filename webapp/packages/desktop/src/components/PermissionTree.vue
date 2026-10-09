@@ -4,7 +4,7 @@ import { ArrowRight, Search } from '@element-plus/icons-vue'
 import { permissionChanges } from '../permissions'
 
 interface PermissionOption { key: string; label: string; description: string }
-const props = defineProps<{ modelValue: string[]; options: PermissionOption[]; allowFull: boolean; baseline?: string[]; disabled?: boolean; scrollable?: boolean }>()
+const props = withDefaults(defineProps<{ modelValue: string[]; options: PermissionOption[]; allowFull: boolean; baseline?: string[]; disabled?: boolean; scrollable?: boolean }>(), { scrollable: true })
 const emit = defineEmits<{ 'update:modelValue': [value: string[]] }>()
 const keyword = ref('')
 const collapsed = ref<string[]>([])
@@ -61,7 +61,7 @@ function toggleGroup(label: string) { collapsed.value = collapsed.value.includes
       <el-checkbox v-if="baseline !== undefined" v-model="changesOnly" size="small">只看变更</el-checkbox>
       <el-button text size="small" @click="collapsed = collapsed.length ? [] : groups.map(group => group.label)">{{ collapsed.length ? '展开全部' : '收起全部' }}</el-button>
     </div>
-    <div class="permission-groups" aria-label="功能权限分组">
+    <div class="permission-groups" role="region" tabindex="0" aria-label="功能权限分组">
       <section v-for="group in visibleGroups" :key="group.label" :class="['permission-card', { wide: group.children.length > 1, chosen: count(group.children) > 0 }]">
         <div class="group-header">
           <el-checkbox :model-value="count(group.visible) === group.visible.length" :indeterminate="count(group.visible) > 0 && count(group.visible) < group.visible.length" :disabled="full || disabled" :aria-label="`${keyword || changesOnly ? '选择匹配项' : '全选'}：${group.label}`" @change="(value: boolean | string | number) => change(group.visible.map(child => child.key), value)" />
@@ -82,6 +82,10 @@ function toggleGroup(label: string) { collapsed.value = collapsed.value.includes
 <style scoped>
 .permission-picker{width:100%;color:var(--el-text-color-primary)}
 .permission-picker:not(.single-scroll){display:flex;flex-direction:column;min-height:0}.all-access,.permission-toolbar{flex-shrink:0}
+.permission-picker.permission-viewport{height:100%;min-height:0;overflow:hidden}
+.permission-viewport .permission-groups{max-height:none}
+.permission-groups:focus-visible{outline:2px solid var(--el-color-primary);outline-offset:-2px}
+.permission-groups{grid-auto-rows:max-content}
 .single-scroll .permission-groups{max-height:none;overflow:visible}.permission-toolbar{flex-wrap:wrap}.permission-toolbar>.el-checkbox{margin-right:0}.permission-option :deep(.el-checkbox__label){display:flex;align-items:center;gap:8px;white-space:normal}.permission-added{color:var(--el-color-success)}.permission-removed{color:var(--el-color-danger)}.permission-added,.permission-removed{font-size:11px;flex-shrink:0}
 .all-access{display:flex;align-items:center;gap:12px;padding:10px 14px;border:1px solid var(--el-border-color-lighter);border-radius:8px;background:var(--el-fill-color-extra-light);transition:background .15s,border-color .15s}
 .all-access.active{background:var(--el-color-primary-light-9);border-color:var(--el-color-primary-light-5)}

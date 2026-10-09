@@ -241,14 +241,15 @@ func (h Handlers) Me(w http.ResponseWriter, r *http.Request) {
 }
 
 type userResponseDTO struct {
-	ID           int64    `json:"id,omitempty"`
-	Username     string   `json:"username"`
-	Role         string   `json:"role"`
-	ScopeSite    string   `json:"scope_site"`
-	ScopeUserIDs []int64  `json:"scope_user_ids"`
-	Enabled      bool     `json:"enabled"`
-	DisplayName  string   `json:"display_name"`
-	Permissions  []string `json:"permissions"`
+	ID                 int64    `json:"id,omitempty"`
+	Username           string   `json:"username"`
+	Role               string   `json:"role"`
+	ScopeSite          string   `json:"scope_site"`
+	ScopeUserIDs       []int64  `json:"scope_user_ids"`
+	Enabled            bool     `json:"enabled"`
+	DisplayName        string   `json:"display_name"`
+	Permissions        []string `json:"permissions"`
+	PermissionPresetID int64    `json:"permission_preset_id"`
 }
 
 func userResponse(u storage.User) userResponseDTO {
@@ -259,7 +260,7 @@ func userResponse(u storage.User) userResponseDTO {
 			permissions = []string{"*"}
 		}
 	}
-	return userResponseDTO{u.ID, u.Username, u.Role, u.ScopeSite, u.ScopeUserIDs, u.Enabled, u.DisplayName, permissions}
+	return userResponseDTO{u.ID, u.Username, u.Role, u.ScopeSite, u.ScopeUserIDs, u.Enabled, u.DisplayName, permissions, u.PermissionPresetID}
 }
 
 func (h Handlers) Users(w http.ResponseWriter, r *http.Request) {
