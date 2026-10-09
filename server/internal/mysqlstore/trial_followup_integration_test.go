@@ -114,6 +114,9 @@ func TestTrialFollowupIntegration(t *testing.T) {
 	if err != nil || len(ignored) != 0 || caller.calls.Load() != 0 || messages.Load() != 0 {
 		t.Fatal("unselected model generated notifications", ignored, err)
 	}
+	if untriggered, e := store.TrialTriggerTimes(ctx, site); e != nil || len(untriggered) != 0 {
+		t.Fatal("watches without reminders must have no trigger time", untriggered, e)
+	}
 	source.logs = []voicealert.TrialLog{{Model: "gpt-4.1", ID: 99, UserID: 7, TokenID: 9, Type: 2, CreatedAt: now.Add(-time.Hour)}, {Model: "gpt-4.1", ID: 101, UserID: 7, TokenID: 9, Type: 5, CreatedAt: time.Now().UTC().Add(time.Second)}}
 	var group sync.WaitGroup
 	for i := 0; i < 2; i++ {
@@ -141,6 +144,10 @@ func TestTrialFollowupIntegration(t *testing.T) {
 	}
 	if len(events[0].Deliveries) != 3 || len(events[1].Deliveries) != 3 {
 		t.Fatal("overlap subscriptions must share delivery outcomes")
+	}
+	triggered, err := store.TrialTriggerTimes(ctx, site)
+	if err != nil || len(triggered) != 2 || triggered[first.ID].Before(now.Truncate(time.Second)) || triggered[second.ID].Before(now.Truncate(time.Second)) {
+		t.Fatal("each triggered watch must report its latest reminder time", triggered, err)
 	}
 	original := people[0].Name
 	people[0].Name = "已改名"

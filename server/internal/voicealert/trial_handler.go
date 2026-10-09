@@ -211,6 +211,11 @@ func (h TrialHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fail(500, "提醒记录读取失败")
 		return
 	}
+	triggered, err := h.Store.TrialTriggerTimes(ctx, site)
+	if err != nil {
+		fail(500, "触发时间读取失败")
+		return
+	}
 	var siteName string
 	if err = h.Store.DB.QueryRowContext(ctx, `SELECT COALESCE(NULLIF(MIN(name),''),?) FROM instances WHERE enabled=1 AND COALESCE(NULLIF(site_id,''),id)=?`, site, site).Scan(&siteName); err != nil {
 		fail(500, "站点读取失败")
@@ -222,13 +227,34 @@ func (h TrialHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	phoneReady := phone.TrialTemplateReady && strings.HasPrefix(phone.TrialTtsCode, "TTS_") && (phone.ServiceEnabled == nil || *phone.ServiceEnabled)
-	reply(map[string]any{"site_id": site, "site_name": siteName, "phone_ready": phoneReady, "watches": watches, "people": people, "events": events, "display_name": alias, "state": state, "checked_at": checked.Time, "worker_enabled": h.WorkerEnabled})
+	reply(map[string]any{"site_id": site, "site_name": siteName, "phone_ready": phoneReady, "watches": watches, "people": people, "events": events, "triggered_at": triggered, "display_name": alias, "state": state, "checked_at": checked.Time, "worker_enabled": h.WorkerEnabled})
 }
 func maskPhone(s string) string {
 	if len(s) > 7 {
 		return s[:3] + "****" + s[len(s)-4:]
 	}
 	return s
+}
+// TrialTriggerTimes returns each watch's latest reminder detection time. It
+// spans every round and is not capped by the 100-row event list.
+func (s Store) TrialTriggerTimes(ctx context.Context, site string) (map[string]time.Time, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT watch_id,MAX(created_at) FROM trial_events WHERE site_id=? GROUP BY watch_id`, site)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]time.Time{}
+	for rows.Next() {
+		var id string
+		var at sql.NullTime
+		if err = rows.Scan(&id, &at); err != nil {
+			return nil, err
+		}
+		if at.Valid {
+			out[id] = at.Time.UTC()
+		}
+	}
+	return out, rows.Err()
 }
 func (s Store) TrialEvents(ctx context.Context, site string) ([]TrialEvent, error) {
 	rows, err := s.DB.QueryContext(ctx, `SELECT payload_json,followed_by FROM trial_events WHERE site_id=? ORDER BY created_at DESC,id DESC LIMIT 100`, site)

@@ -12,7 +12,7 @@ type Identity={id:number;name:string}
 type Watch={id:string;site:string;user_id:number;token_id:number;label:string;model:string;rule:'first'|'resume';gap_minutes:number;include_failed:boolean;phone:boolean;message:boolean;person_ids:string[];enabled:boolean;revision:number;round:number;started_at:string;last_at:string;last_id:number;fired:boolean;reset?:boolean}
 type Delivery={id:string;name:string;phone:string;kind:string;status:string;code:string}
 type Event={id:string;site_name:string;customer:string;watch_id:string;log:{id:number;user_id:number;token_id:number;type:number;created_at:string;model:string};detected_at:string;followed_by:string;deliveries:Delivery[]}
-type Response={site_id:string;site_name:string;phone_ready:boolean;display_name:string;watches:Watch[];people:Person[];events:Event[];state:string;checked_at:string;worker_enabled:boolean}
+type Response={site_id:string;site_name:string;phone_ready:boolean;display_name:string;watches:Watch[];people:Person[];events:Event[];triggered_at?:Record<string,string>;state:string;checked_at:string;worker_enabled:boolean}
 const filters=useFiltersStore(),auth=useAuthStore(),router=useRouter()
 const data=ref<Response|null>(null),loading=ref(false),saving=ref(false),error=ref(''),tab=ref('watches'),editor=ref(false),alias=ref(''),detail=ref<Event|null>(null),users=ref<Identity[]>([]),keys=ref<Identity[]>([]),identityError=ref(''),identityLoading=ref(false),mode=ref('account')
 const preview=ref(false)
@@ -25,9 +25,12 @@ function previewData(site:string):Response {
  const people=[{id:'preview-person',name:'示例运营人员',phone:'示例号码',enabled:true}]
  const watch:Watch={...blank(),id:'preview-watch',site,user_id:101,token_id:201,label:'示例客户',model:'示例模型',enabled:true,person_ids:[people[0].id]}
  const at='2026-09-20T02:00:00Z'
- return {site_id:site,site_name:'示例站点',phone_ready:true,display_name:'示例测试站',watches:[watch],people,state:'preview',checked_at:'',worker_enabled:false,events:[{id:'preview-event',site_name:'示例测试站',customer:'示例客户',watch_id:watch.id,log:{id:1,user_id:101,token_id:201,type:2,created_at:at,model:'示例模型'},detected_at:at,followed_by:'',deliveries:[{id:'preview-delivery',name:people[0].name,phone:people[0].phone,kind:'phone',status:'accepted',code:'示例结果，未拨号'}]}]}
+ watch.started_at=at
+ return {site_id:site,site_name:'示例站点',phone_ready:true,display_name:'示例测试站',watches:[watch],people,triggered_at:{[watch.id]:at},state:'preview',checked_at:'',worker_enabled:false,events:[{id:'preview-event',site_name:'示例测试站',customer:'示例客户',watch_id:watch.id,log:{id:1,user_id:101,token_id:201,type:2,created_at:at,model:'示例模型'},detected_at:at,followed_by:'',deliveries:[{id:'preview-delivery',name:people[0].name,phone:people[0].phone,kind:'phone',status:'accepted',code:'示例结果，未拨号'}]}]}
 }
 const displayName=computed(()=>alias.value.trim()||data.value?.site_name||filters.site_id)
+// Newest round first; rows without a usable start time sink to the end.
+const watchRows=computed(()=>[...(data.value?.watches||[])].sort((a,b)=>(Date.parse(b.started_at)||0)-(Date.parse(a.started_at)||0)))
 const statuses:Record<string,string>={watch_changed:'测试配置或轮次已变更，本次跳过',pending:'等待通知',accepted:'呼叫已受理（未确认接听）',unknown:'结果未知，不自动重拨',limited:'号码频控受限',person_disabled:'人员已停用',recipient_changed:'号码已变更，本次跳过',template_unavailable:'模板未就绪',service_disabled:'电话服务已关闭',credentials_missing:'服务端凭据未配置',expired:'提醒已过期',sent:'消息已送达',partial:'部分渠道已送达',no_channel:'未配置匹配的群通知渠道',site_disabled:'站点已停用',notifications_disabled:'通知总开关已关闭',rejected:'拨号被拒绝'}
 const stateText=computed(()=>preview.value?'界面预览 · 示例数据':!data.value?.worker_enabled?'检测后台未运行':data.value.state==='healthy'?'检测正常':data.value.state==='catching_up'?'正在追赶积压日志':data.value.state==='source_unavailable'?'日志源不可用，请检查只读连接':'等待检测')
 const endpoint=()=>`/api/dashboard/trial-followup?site_id=${encodeURIComponent(filters.site_id)}`
@@ -60,11 +63,13 @@ watch(()=>filters.site_id,()=>{++version;++keyVersion;preview.value=false;data.v
    <el-alert v-if="error" :title="error" type="error" :closable="false" /><el-empty v-if="!filters.site_id" description="请选择站点" />
    <template v-if="data"><el-alert v-if="data.watches.some(w=>!w.model)" title="部分测试对象尚未配置模型，不会触发提醒。请进入配置填写测试模型并保存开启检测。" type="warning" :closable="false"/><div class="trial-summary"><span>{{ stateText }}</span><span>最近检测：{{ stamp(data.checked_at) }}</span><span>站点通知名称：{{ data.display_name||filters.site_id }}</span></div>
    <template v-if="!editor"><el-tabs v-model="tab"><el-tab-pane label="测试名单" name="watches"/><el-tab-pane label="提醒记录" name="events"/></el-tabs>
-   <el-table v-if="tab==='watches'" v-mobile-cards :data="data.watches" empty-text="暂无测试对象，添加后开始观察后续调用">
+   <el-table v-if="tab==='watches'" v-mobile-cards :data="watchRows" empty-text="暂无测试对象，添加后开始观察后续调用">
     <el-table-column prop="label" label="客户"/><el-table-column label="监控对象"><template #default="{row}">账户 #{{ row.user_id }} · {{ row.token_id?'Key #'+row.token_id:'全部 Key' }}</template></el-table-column>
     <el-table-column class="trial-field-wide" label="测试模型"><template #default="{row}">{{ row.model||'未配置，请补充模型' }}</template></el-table-column>
     <el-table-column label="检测状态"><template #default="{row}"><el-tag :type="!row.model||!row.enabled?'info':row.fired?'success':'primary'">{{ !row.model?'待配置模型':!row.enabled?'暂停 / 草稿':row.fired?'已发现调用':'等待调用' }}</el-tag></template></el-table-column>
     <el-table-column label="通知人员"><template #default="{row}">{{ row.person_ids.map((id:string)=>data?.people.find(p=>p.id===id)?.name||'不可用人员').join('、')||'—' }}</template></el-table-column>
+    <el-table-column label="开始跟进" min-width="150"><template #default="{row}">{{ stamp(row.started_at) }}</template></el-table-column>
+    <el-table-column label="最近触发" min-width="150"><template #default="{row}">{{ stamp(data?.triggered_at?.[row.id]||'') }}</template></el-table-column>
     <el-table-column label="操作" min-width="210"><template #default="{row}"><el-button link type="primary" :disabled="saving" @click="edit(row)">配置</el-button><el-button link :disabled="saving||preview" @click="toggle(row)">{{ row.enabled?'暂停':'恢复' }}</el-button><el-button link type="primary" :disabled="saving||preview" @click="toggle(row,true)">新一轮</el-button></template></el-table-column>
    </el-table>
    <el-table v-else v-mobile-cards :data="data.events" empty-text="暂无提醒记录">
