@@ -193,6 +193,7 @@ func NewMux(options Options) *http.ServeMux {
 	mux.Handle("/api/dashboard/log-samples", protect(http.HandlerFunc(dashboardHandler.HandleLogSamples)))
 	mux.Handle("/api/dashboard/logs", protect(http.HandlerFunc(dashboardHandler.HandleLogs)))
 	mux.Handle("GET /api/dashboard/request-monitor/channels", protect(http.HandlerFunc(dashboardHandler.HandleRequestMonitorChannels)))
+	mux.Handle("/api/dashboard/request-monitor/rules", protect(http.HandlerFunc(dashboardHandler.HandleRequestMonitorRules)))
 	mux.Handle("/api/dashboard/metrics", protect(http.HandlerFunc(dashboardHandler.HandleMetrics)))
 	mux.Handle("/api/dashboard/metric-history", protect(http.HandlerFunc(dashboardHandler.HandleMetricHistory)))
 	mux.Handle("/api/dashboard/usage", protect(http.HandlerFunc(dashboardHandler.HandleUsage)))

@@ -144,6 +144,9 @@ func allowAdminRequest(u storage.User, r *http.Request) bool {
 	if path == "model-square" {
 		return (read || r.Method == http.MethodPost) && HasPermission(u, "models.manage")
 	}
+	if path == "request-monitor/rules" {
+		return (read && (HasPermission(u, "monitor.requests") || HasPermission(u, "settings.manage"))) || (r.Method == http.MethodPut && HasPermission(u, "settings.manage"))
+	}
 	if path == "request-monitor" || path == "request-monitor/channels" {
 		return read && HasPermission(u, "monitor.requests")
 	}

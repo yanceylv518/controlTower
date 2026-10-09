@@ -13,6 +13,7 @@ import (
 )
 
 type MemoryStore struct {
+	requestMonitorRules    storage.RequestMonitorRules
 	albLogConfig           alblog.Config
 	mu                     sync.Mutex
 	agents                 map[string]storage.Agent

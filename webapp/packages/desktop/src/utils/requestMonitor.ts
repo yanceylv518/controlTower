@@ -5,8 +5,16 @@ export type RequestMinute = {
 export type RequestSnapshot = {
  status: string; code?: string; queried_at: number; from: number; to: number; latest: number; settled_before: number; rows: RequestMinute[]
 }
-export type SlowChannel = { instance_id: string; instance_name: string; key: string; name: string; count: number; samples: number; p95_seconds: number; tail_capped: boolean; latest: number; trend: Array<number | null> }
-export type ChannelSnapshot = { from: number; to: number; queried_at: number; latest: number; excluded: number; items: SlowChannel[] }
+export type ChannelRules = {version:number;site_id:string;window_minutes:number;min_requests:number;min_samples:number;ttft_seconds:number;duration_seconds:number;error_percent:number}
+export type ChannelMeasure = {value:number|null;samples:number;minutes:number;lower_bound:boolean;trend:Array<number|null>}
+export type SlowChannel = {instance_id:string;instance_name:string;key:string;name:string;count:number;latest:number;ttft:ChannelMeasure;duration:ChannelMeasure;errors:ChannelMeasure;reasons:string[];unknown:string[];partial:boolean;score:number}
+export type ChannelSnapshot = {from:number;to:number;queried_at:number;latest:number;rules:ChannelRules;site:string;pending_count:number;pending:SlowChannel[];items:SlowChannel[]}
+export const channelReason:Record<string,string>={ttft:'首响应慢',duration:'总耗时长',error_rate:'错误率高'}
+export function measureText(m:ChannelMeasure|undefined,unit='秒'){return m?.value==null?'—':(m.lower_bound?'≥':'')+m.value.toFixed(1)+unit}
+export function channelSeries(channel:SlowChannel,from:number,errors=false){
+ const keys=errors?['errors'] as const:['ttft','duration'] as const
+ return keys.map(key=>({name:({ttft:'首响应 P95',duration:'总耗时 P95',errors:'错误率'})[key],color:({ttft:'#ef4444',duration:'#f59e0b',errors:'#8b5cf6'})[key],unit:errors?'%':' 秒',smooth:false,data:channel[key].trend.map((v,i)=>[new Date((from+i*60)*1000).toISOString(),v===null?null:Number(v.toFixed(1))] as [string,number|null])}))
+}
 export const bins = [
  { key: 'small', name: '<5 MiB', color: '#94a3b8' },
  { key: 'medium', name: '5–10 MiB', color: '#3b82f6' },

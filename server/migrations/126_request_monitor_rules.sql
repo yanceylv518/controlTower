@@ -1,0 +1,7 @@
+CREATE TABLE IF NOT EXISTS request_monitor_rules (
+ id TINYINT NOT NULL PRIMARY KEY,
+ config_json LONGTEXT NOT NULL,
+ version BIGINT NOT NULL,
+ updated_by VARCHAR(191) NOT NULL,
+ updated_at DATETIME(6) NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

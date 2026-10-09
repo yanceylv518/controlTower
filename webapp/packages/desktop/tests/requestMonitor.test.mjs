@@ -49,7 +49,7 @@ test('refresh coalesces; failures retain explicit old result; page aggregates al
 })
 test('channel sort race and unmount cannot overwrite current response',async()=>{
  const p=panel(),a=p.loadChannels();p.sort.value='latency';const b=p.loadChannels()
- assert.equal(p.requests[0].options.signal.aborted,true)
+ assert.ok(!p.requests[0].path.includes('site='));assert.equal(p.requests[0].options.signal.aborted,true)
  p.requests[1].resolve({items:[{key:'new'}]});await b
  p.requests[0].resolve({items:[{key:'old'}]});await a
  assert.equal(p.channels.value.items[0].key,'new')
@@ -92,4 +92,14 @@ test('picker retains internal gaps and handles an empty window',()=>{
  p.index.value=10
  assert.equal(p.selectedTime.value,null)
  p.stop()
+})
+test('channel values retain unknown and lower bounds, and chart values use readable precision',()=>{
+ const m={value:90,samples:100,minutes:5,lower_bound:true,trend:[24.749999999999996,null,90]}
+ assert.equal(exports.measureText(m),'≥90.0秒')
+ assert.equal(exports.measureText({...m,value:null}),'—')
+ assert.equal(exports.measureText({...m,value:5,lower_bound:false},'%'),'5.0%')
+ const series=exports.channelSeries({ttft:m,duration:m,errors:m},t)
+ assert.equal(series[0].data[0][1],24.7)
+ assert.equal(series[0].data[1][1],null)
+ assert.equal(exports.channelSeries({errors:m},t,true)[0].unit,'%')
 })

@@ -73,7 +73,9 @@ func TestSlowChannelsHistogramRankingAndMissingData(t *testing.T) {
 		n := int64(20)
 		b := latencyhist.BucketsV2{}
 		b[index] = 20
-		return aggregator.Metric{InstanceID: instance, DimensionType: "instance_channel", DimensionKey: key, BucketTime: at, RequestCount: count, TTFTCount: &n, TTFTBuckets: &b}
+		duration := latencyhist.BucketsV2{}
+		duration[0] = count
+		return aggregator.Metric{InstanceID: instance, DimensionType: "instance_channel", DimensionKey: key, BucketTime: at, RequestCount: count, TTFTCount: &n, TTFTBuckets: &b, LatencyBucketsV2: &duration}
 	}
 	items := []aggregator.Metric{
 		sample("i", "a", 50, 0, from), sample("i", "a", 100, 10, from.Add(time.Minute)),

@@ -4,11 +4,13 @@ import { ApiError } from '@ct/shared'
 import { client } from '../api'
 import { can } from '../permissions'
 import { useAuthStore } from '../stores/auth'
+import RequestMonitorRules from '../components/RequestMonitorRules.vue'
 import AppShell from '../components/AppShell.vue'
 import TrendChart from '../components/TrendChart.vue'
-import { bins, monitorWindow, largePercent, monitorError, type RequestSnapshot, type ChannelSnapshot } from '../utils/requestMonitor'
+import { bins, monitorWindow, largePercent, monitorError, channelReason, channelSeries, measureText, type RequestSnapshot, type ChannelSnapshot } from '../utils/requestMonitor'
 
 const auth = useAuthStore()
+const rulesOpen=ref(false)
 const snapshot = ref<RequestSnapshot>(), channels = ref<ChannelSnapshot>()
 const minutes = ref(30), selectedTime = ref<number|null>(null), sort = ref('volume')
 const loading = ref(false), channelsLoading = ref(false), error = ref(''), channelError = ref('')
@@ -47,7 +49,7 @@ const flowSeries = computed(()=>[
 const outdated = computed(()=>snapshot.value?.queried_at ? clock.value/1000-snapshot.value.queried_at>90 : false)
 const channelsOutdated = computed(()=>channels.value?.queried_at ? clock.value/1000-channels.value.queried_at>90 : false)
 const status = computed(()=>error.value?'查询失败':outdated.value?'数据已过期':({success:'查询成功',delayed:'日志时间落后',no_data:'窗口内暂无日志',unconfigured:'尚未接入',failed:'查询失败'} as Record<string,string>)[snapshot.value?.status||'']||'等待查询')
-const channelCeiling = computed(()=>Math.max(40,...(channels.value?.items.flatMap(c=>c.trend.filter((n): n is number=>n!==null))||[])))
+const channelCeiling = computed(()=>Math.max(40,...(channels.value?.items.flatMap(c=>[...c.ttft.trend,...c.duration.trend].filter((n): n is number=>n!==null))||[])))
 function selectMinute(value:number) {const found=points.value.findIndex(p=>p.time===Math.floor(value/60000)*60);if(found>=0)index.value=found}
 function time(value?:number,full=false) {return value?new Date(value*1000).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',...(full?{}:{hour:'2-digit',minute:'2-digit'})}):'—'}
 function num(value?:number|null) {return value==null?'—':value.toLocaleString('zh-CN',{maximumFractionDigits:1})}
@@ -71,12 +73,12 @@ async function loadChannels() {
  try {
   const data=await client.request<ChannelSnapshot>('/api/dashboard/request-monitor/channels?sort='+sort.value,{signal:channelAbort.signal})
   if(alive&&sequence===channelSequence)channels.value=data
- } catch(e) {if(alive&&sequence===channelSequence)channelError.value=e instanceof ApiError&&e.code==='channel_metrics_limit'?'渠道指标超出查询上限，本次不展示截断排名。':'渠道指标查询失败，请检查 Server 或稍后重试。'}
+ } catch(e) {if(alive&&sequence===channelSequence)channelError.value=e instanceof ApiError&&e.code==='channel_site_unconfigured'?'请在“判断规则”中选择 ALB 对应站点。':e instanceof ApiError&&e.code==='channel_metrics_limit'?'渠道指标超出查询上限，本次不展示截断排名。':'渠道指标查询失败，请检查 Server 或稍后重试。'}
  finally {if(alive&&sequence===channelSequence)channelsLoading.value=false}
 }
 function refresh() {void loadALB();if(!channelsLoading.value)void loadChannels()}
 function visible() {if(auto.value&&document.visibilityState==='visible')refresh()}
-watch(sort,()=>{channels.value=undefined;void loadChannels()})
+watch(sort,()=>{channels.value=undefined;channelSequence++;channelAbort?.abort();void loadChannels()})
 watch(minutes,()=>{selectedTime.value=null})
 onMounted(()=>{refresh();timer=setInterval(()=>{clock.value=Date.now();visible()},30000);document.addEventListener('visibilitychange',visible)})
 onUnmounted(()=>{alive=false;channelSequence++;clearInterval(timer);albAbort?.abort();channelAbort?.abort();document.removeEventListener('visibilitychange',visible)})
@@ -86,7 +88,7 @@ onUnmounted(()=>{alive=false;channelSequence++;clearInterval(timer);albAbort?.ab
  <AppShell title="请求监控">
   <div class="request-monitor">
    <header class="monitor-heading">
-    <div><h2>请求监控</h2><p>全站已结束请求与重点慢渠道</p></div>
+    <div><h2>请求监控</h2><p>ALB 请求趋势与对应站点重点渠道</p></div>
     <div class="controls"><el-switch v-model="auto" active-text="30 秒刷新" /><el-button :loading="loading || channelsLoading" @click="refresh">刷新</el-button><router-link v-if="can(auth.user,'settings.manage')" to="/settings?tab=external"><el-button>ALB 接入配置</el-button></router-link></div>
    </header>
    <div class="source-line"><el-tag :type="snapshot?.status==='success'&&!outdated?'success':'warning'">{{status}}</el-tag><span>最近查询 {{time(snapshot?.queried_at,true)}}</span></div>
@@ -118,18 +120,26 @@ onUnmounted(()=>{alive=false;channelSequence++;clearInterval(timer);albAbort?.ab
    </section>
 
    <section class="monitor-panel">
-    <div class="panel-heading"><div><h3>重点慢渠道 <el-tag size="small">最多 5 条</el-tag></h3><p>近 5 分钟 · 请求量大且首响应慢的渠道</p></div><el-radio-group v-model="sort" size="small"><el-radio-button value="volume">请求量优先</el-radio-button><el-radio-button value="latency">延迟优先</el-radio-button></el-radio-group></div>
+    <div class="panel-heading"><div><h3>重点关注渠道 <el-tag size="small">最多 5 条</el-tag></h3><p>ALB 对应站点 {{channels?.site||'未配置'}} · 近 {{channels?.rules.window_minutes??'—'}} 分钟 · 任一指标达到阈值</p></div><div class="controls"><el-radio-group v-model="sort" size="small"><el-radio-button value="volume">请求量优先</el-radio-button><el-radio-button value="latency">异常程度优先</el-radio-button></el-radio-group><el-button size="small" @click="rulesOpen=true">判断规则</el-button></div></div>
     <el-alert v-if="channelError || channelsOutdated" :title="channelError || '渠道查询结果已过期，请刷新。'" type="warning" :closable="false"/>
     <div v-if="channels?.items.length" class="channel-grid">
      <article v-for="channel in channels.items" :key="channel.instance_id+channel.key" class="channel-card">
       <h4>{{channel.name||channel.key}}</h4><p>{{channel.instance_name||channel.instance_id}}</p>
-      <div class="channel-values"><div><span>首响应 P95</span><b class="red">{{channel.tail_capped?'≥90':channel.p95_seconds.toFixed(1)}}<small> 秒</small></b></div><div><span>五分钟请求</span><b>{{num(channel.count)}}</b></div></div>
-      <TrendChart title="首响应 P95 · 秒" :y-min="0" :y-max="channelCeiling" :series="[{name:'首响应 P95',color:'#ef4444',unit:' 秒',smooth:false,data:channel.trend.map((v,i)=>[new Date((channels!.from+i*60)*1000).toISOString(),v])}]" />
+      <div class="reason-tags"><el-tag v-for="reason in channel.reasons" :key="reason" type="danger" size="small">{{channelReason[reason]}}</el-tag><el-tag v-if="channel.partial||channel.unknown.length" type="warning" size="small">部分数据</el-tag></div>
+      <div class="channel-values">
+       <div><span>首响应 P95</span><b :class="{red:channel.reasons.includes('ttft')}">{{measureText(channel.ttft)}}</b></div>
+       <div><span>总耗时 P95</span><b :class="{red:channel.reasons.includes('duration')}">{{measureText(channel.duration)}}</b></div>
+       <div><span>错误率</span><b :class="{red:channel.reasons.includes('error_rate')}">{{measureText(channel.errors,'%')}}</b></div>
+       <div><span>窗口请求</span><b>{{num(channel.count)}}</b></div>
+      </div>
+      <TrendChart title="延迟 P95 · 秒" :y-min="0" :y-max="channelCeiling" :series="channelSeries(channel,channels!.from)" />
+      <TrendChart title="错误率 · %" :y-min="0" :percent="true" :series="channelSeries(channel,channels!.from,true)" />
+      <p v-if="channel.partial||channel.unknown.length">有效样本：首响应 {{num(channel.ttft.samples)}} · 总耗时 {{num(channel.duration.samples)}} · 错误率 {{num(channel.errors.samples)}}</p>
       <p>更新至 {{time(channel.latest)}}</p>
      </article>
     </div>
-    <el-empty v-else :description="channelsLoading?'正在加载渠道…':channelError?'渠道数据暂不可用':channels?.latest?'当前窗口暂无同时满足条件的渠道':'当前窗口暂无渠道指标'"/>
-    <p v-if="channels?.excluded" class="warning-text">{{channels.excluded}} 条渠道因统计数据不完整未参与排名。</p>
+    <el-empty v-else :description="channelsLoading?'正在加载渠道…':channelError?'渠道数据暂不可用':channels?.latest?'ALB 对应站点暂无达到阈值的渠道':'当前窗口暂无渠道指标'"/>
+    <details v-if="channels?.pending_count" class="pending-channels"><summary>数据待补充 {{channels.pending_count}} 条</summary><p v-for="item in channels.pending" :key="item.instance_id+item.key">{{item.name||item.key}} · {{num(item.count)}} 次请求 · {{item.unknown.map(k=>({ttft:'首响应',duration:'总耗时',error_rate:'错误率'})[k]).join('、')}}暂不能判断</p><p v-if="channels.pending_count>10">显示请求量最多的 10 条</p></details>
    </section>
 
    <section v-if="snapshot && ['success','delayed'].includes(snapshot.status)" class="monitor-panel">
@@ -139,6 +149,7 @@ onUnmounted(()=>{alive=false;channelSequence++;clearInterval(timer);albAbort?.ab
     <p v-if="row?.response_unknown" class="warning-text">所选分钟有 {{num(row.response_unknown)}} 次请求的响应大小未知。</p>
    </section>
   </div>
+  <RequestMonitorRules v-if="rulesOpen" :editable="can(auth.user,'settings.manage')" @close="rulesOpen=false" @saved="channels=undefined;loadChannels()"/>
  </AppShell>
 </template>
 
@@ -159,8 +170,9 @@ h2,h3,h4,p{margin:0}h2{font-size:23px}h3{font-size:16px}h4{font-size:16px;overfl
 .bin-counts{font-size:12px}.bin-counts i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:5px}.bin-counts b{margin-left:6px}
 .channel-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:14px;margin-top:14px}
 .channel-card{padding:16px;border:1px solid var(--el-border-color-lighter);border-radius:9px;min-width:0}
-.channel-values{display:flex;gap:28px;margin:16px 0}.channel-values b{font-size:25px}.channel-values small{font-size:12px;font-weight:400}
+.channel-values{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin:16px 0}.channel-values b{font-size:22px}.channel-values small{font-size:12px;font-weight:400}
 .channel-card :deep(.trend-chart-canvas){height:140px}.channel-card :deep(.trend-chart){padding:0;border:0;box-shadow:none}
+.reason-tags{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}.pending-channels{font-size:12px;margin-top:14px;color:var(--el-color-warning)}.pending-channels summary{cursor:pointer}.pending-channels p{margin-top:8px}
 .warning-text{color:var(--el-color-warning);font-size:12px;margin-top:10px}
 @media(max-width:600px){.monitor-panel{padding:14px}.minute-summary{grid-template-columns:repeat(2,1fr)}.minute-summary>div:first-child{grid-column:1/-1}.controls{width:100%}.channel-grid{grid-template-columns:1fr}.minute-picker{flex-wrap:wrap}}
 </style>
