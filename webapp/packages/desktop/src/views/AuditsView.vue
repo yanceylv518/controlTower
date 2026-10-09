@@ -182,6 +182,8 @@ function errorLabel(value: string) {
 function operationLabel(value: string) {
   const labels: Record<string, string> = {
     "settings.update": "系统设置变更",
+    "http.system.alb_access_log.put": "ALB 访问日志配置保存",
+    "http.system.alb_access_log.post": "ALB 访问日志连接测试",
     "settings.balance_alert_user_update": "额度告警用户配置变更",
     "menu_visibility.update": "菜单可见性变更",
     "instance.update": "修改站点实例",

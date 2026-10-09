@@ -8,10 +8,12 @@ import (
 	"time"
 
 	"controltower/server/internal/aggregator"
+	"controltower/server/internal/alblog"
 	"controltower/server/internal/storage"
 )
 
 type MemoryStore struct {
+	albLogConfig           alblog.Config
 	mu                     sync.Mutex
 	agents                 map[string]storage.Agent
 	logEvents              map[string]storage.LogEvent

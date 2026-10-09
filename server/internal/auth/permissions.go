@@ -18,6 +18,7 @@ var PermissionCatalog = []Permission{
 	{"logs.query", "容器日志", "查询已配置容器的日志，查看本人查询任务及结果"},
 	{"overview.read", "运行总览", "查看运行总览和实例汇总"},
 	{"monitor.customers", "客户监控", "查看客户指标及客户维度明细"},
+	{"monitor.requests", "请求监控", "查看全局 ALB 请求趋势及重点慢渠道"},
 	{"monitor.channels", "渠道监控", "查看渠道指标、快照及渠道维度明细"},
 	{"monitor.models", "模型监控", "查看模型指标及模型维度明细"},
 	{"monitor.runtime", "系统状态", "查看 Agent、服务器、健康检查与容器状态"},
@@ -143,6 +144,9 @@ func allowAdminRequest(u storage.User, r *http.Request) bool {
 	if path == "model-square" {
 		return (read || r.Method == http.MethodPost) && HasPermission(u, "models.manage")
 	}
+	if path == "request-monitor" || path == "request-monitor/channels" {
+		return read && HasPermission(u, "monitor.requests")
+	}
 	if path == "menu-visibility" {
 		return read || (r.Method == http.MethodPut && HasPermission(u, "settings.manage"))
 	}
@@ -166,7 +170,7 @@ func allowAdminRequest(u storage.User, r *http.Request) bool {
 	if path == "operation-audits" {
 		return read && any("audits.read")
 	}
-	if path == "settings" || path == "voice-alerts" {
+	if path == "settings" || path == "voice-alerts" || path == "alb-access-log" || path == "alb-access-log/test" {
 		return any("settings.manage")
 	}
 	if strings.HasPrefix(path, "notification-") {

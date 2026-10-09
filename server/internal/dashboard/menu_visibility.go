@@ -20,8 +20,9 @@ type MenuVisibilityStore interface {
 
 // These are sidebar entry IDs, not access permissions. Missing entries are visible.
 var menuPaths = map[string]bool{
-	"/trial-followup": true,
-	"/":               true, "/customers": true, "/channels": true, "/models": true, "/runtime": true,
+	"/request-monitor": true,
+	"/trial-followup":  true,
+	"/":                true, "/customers": true, "/channels": true, "/models": true, "/runtime": true,
 	"/usage": true, "/readonly-users": true, "/readonly-logs": true, "/container-logs": true,
 	"/billing/new": true, "/billing/reports": true, "/billing/user-discounts": true,
 	"/billing": true, "/billing/channels": true, "/billing/tasks": true, "/billing/discounts": true,

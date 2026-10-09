@@ -36,7 +36,7 @@ onMounted(() => { void menuVisibility.load(); menuTimer = setInterval(refreshMen
 onUnmounted(() => { clearInterval(menuTimer); document.removeEventListener('visibilitychange', refreshMenus); window.removeEventListener('focus', refreshMenus); });
 const mobile = useMobileViewport();
 const moreOpen = ref(false), menuSearch = ref('');
-const monitorPaths = ['/customers', '/trial-followup', '/channels', '/models', '/runtime'];
+const monitorPaths = ['/customers', '/trial-followup', '/channels', '/request-monitor', '/models', '/runtime'];
 const mobileMonitor = computed(() => monitorPaths.find(path => menuVisibility.visible(path) && canVisit(auth.user, path)));
 const mobileNav = computed(() => [
   { path:'/', label:'总览', icon:HomeFilled },
@@ -59,6 +59,7 @@ const nav = [
     items: [
       ["/customers", "客户监控", User],
       ["/trial-followup", "测试跟进", User],
+      ["/request-monitor", "请求监控", TrendCharts],
       ["/channels", "渠道监控", Connection],
       ["/models", "模型监控", DataAnalysis],
       ["/runtime", "系统状态", Monitor],

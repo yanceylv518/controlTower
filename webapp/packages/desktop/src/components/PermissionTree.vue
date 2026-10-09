@@ -14,7 +14,7 @@ const full = computed(() => props.modelValue.includes('*'))
 const selectedCount = computed(() => props.options.filter(option => selected(option.key)).length)
 const groupDefinitions = [
   { label: '总览与分析', keys: ['overview.read', 'monitor.samples', 'monitor.latency'] },
-  { label: '监控分析', keys: ['monitor.customers', 'monitor.trials', 'monitor.channels', 'monitor.models', 'monitor.runtime'] },
+  { label: '监控分析', keys: ['monitor.requests', 'monitor.customers', 'monitor.trials', 'monitor.channels', 'monitor.models', 'monitor.runtime'] },
   { label: '数据查询', keys: ['data.usage', 'data.users', 'data.logs', 'logs.query'] },
   { label: '账单管理', keys: ['billing.users', 'billing.channels', 'upstreams.manage', 'billing.tasks', 'discounts.manage'] },
   { label: '系统管理', keys: ['tuning.manage', 'alerts.manage', 'notifications.manage', 'instances.manage', 'archive.manage', 'accounts.manage', 'models.manage', 'settings.manage', 'audits.read'] },

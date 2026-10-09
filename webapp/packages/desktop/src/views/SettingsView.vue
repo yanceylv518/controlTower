@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from "vue";
+import { useRoute } from "vue-router";
 import { ApiError, type SystemSettingItem } from "@ct/shared";
 import { ElMessage } from "element-plus";
 import { dashboard } from "../api";
 import AppShell from "../components/AppShell.vue";
+import ALBAccessLogSettings from "../components/ALBAccessLogSettings.vue";
 import BillingConfiguration from '../components/BillingConfiguration.vue';
 import VoiceAlertsSettings from "../components/VoiceAlertsSettings.vue";
 import MenuVisibilitySettings from "../components/MenuVisibilitySettings.vue";
@@ -13,7 +15,7 @@ import { usePrefsStore } from "../stores/prefs";
 const prefs = usePrefsStore();
 const loading = ref(false);
 const saving = ref(false);
-const activeTab = ref('voice');
+const activeTab = ref(useRoute().query.tab === 'external' ? 'external' : 'voice');
 const items = ref<Record<string, SystemSettingItem>>({});
 const values = reactive<Record<string, string | number>>({});
 type Field = readonly [string, string, number, number];
@@ -125,6 +127,7 @@ onMounted(load);
         <el-radio-button value="voice">电话预警</el-radio-button>
         <el-radio-button value="system">系统与监控</el-radio-button>
         <el-radio-button value="billing">账单配置</el-radio-button>
+        <el-radio-button value="external">外部数据源</el-radio-button>
         <el-radio-button value="menus">菜单显示</el-radio-button>
       </el-radio-group>
       <el-button v-if="activeTab === 'system'" type="primary" :loading="saving" :disabled="loading" @click="save"
@@ -132,6 +135,7 @@ onMounted(load);
       >
     </template>
     <div class="settings-page">
+      <ALBAccessLogSettings v-if="activeTab === 'external'" />
       <BillingConfiguration v-if="activeTab === 'billing'"/>
       <MenuVisibilitySettings v-if="activeTab === 'menus'" />
       <VoiceAlertsSettings v-if="activeTab === 'voice'" />

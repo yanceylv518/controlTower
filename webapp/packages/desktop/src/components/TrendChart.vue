@@ -26,9 +26,10 @@ export interface TrendSeries {
   smooth?: boolean;
 }
 const props = withDefaults(
-  defineProps<{ title: string; series: TrendSeries[]; percent?: boolean; contextSeries?: TrendSeries[] }>(),
+  defineProps<{ title: string; series: TrendSeries[]; percent?: boolean; contextSeries?: TrendSeries[]; yMax?: number; yMin?: number }>(),
   { percent: false },
 );
+const emit = defineEmits<{ selectMinute: [time: number] }>();
 const chartEl = ref<HTMLDivElement>();
 const hasData = computed(() =>
   props.series.some((item) => item.data.some(([, value]) => value != null)),
@@ -62,6 +63,10 @@ function renderNow() {
   if (!chartEl.value || !hasData.value) return;
   const initial = !chart;
   chart ??= echarts.init(chartEl.value);
+  if (initial) chart.on("click", (params: any) => {
+    const time = Date.parse(String(params.value?.[0] ?? ""));
+    if (Number.isFinite(time)) emit("selectMinute", time);
+  });
   chart.setOption(
     withChartTheme({
       animationDuration: initial ? 150 : 0,
@@ -78,8 +83,8 @@ function renderNow() {
       xAxis: { type: "time", axisLabel: { hideOverlap: true } },
       yAxis: {
         type: "value",
-        min: props.percent ? 0 : undefined,
-        max: props.percent ? 100 : undefined,
+        min: props.percent ? 0 : props.yMin,
+        max: props.percent ? 100 : props.yMax,
         axisLabel: { formatter: props.percent ? "{value}%" : "{value}" },
       },
       series: props.series.map((item) => ({
@@ -106,7 +111,7 @@ watch(
   { deep: true, immediate: true },
 );
 watch(
-  () => props.percent,
+  () => [props.percent, props.yMax, props.yMin],
   () => void render(),
 );
 watch(chartEl, (element) => {

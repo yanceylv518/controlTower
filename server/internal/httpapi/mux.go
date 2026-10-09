@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"controltower/server/internal/agentgateway"
+	"controltower/server/internal/alblog"
 	"controltower/server/internal/archivereader"
 	ctauth "controltower/server/internal/auth"
 	"controltower/server/internal/billing"
@@ -89,6 +90,13 @@ func NewMux(options Options) *http.ServeMux {
 			return ctauth.RequireSessionOrToken(options.AuthManager, options.DashboardToken, h)
 		}
 		return dashboard.RequireBearerToken(options.DashboardToken, h)
+	}
+	if albStore, ok := any(options.Store).(alblog.Store); ok {
+		h := &dashboard.ALBAccessLogHandler{Store: albStore, SecretKey: options.SecretKey, Slots: make(chan struct{}, 2)}
+		mux.Handle("GET /api/dashboard/request-monitor", protect(&dashboard.RequestMonitorHandler{Store: albStore, Client: alblog.Client{SecretKey: options.SecretKey}}))
+		mux.Handle("GET /api/dashboard/alb-access-log", protect(h))
+		mux.Handle("PUT /api/dashboard/alb-access-log", protect(h))
+		mux.Handle("POST /api/dashboard/alb-access-log/test", protect(h))
 	}
 	a := ctauth.Handlers{M: options.AuthManager, Limiter: ctauth.NewIPLimiter(), Audit: options.Store}
 	jobReader, _ := options.ArchiveReader.(dashboard.ArchiveJobReader)
@@ -184,6 +192,7 @@ func NewMux(options Options) *http.ServeMux {
 	}
 	mux.Handle("/api/dashboard/log-samples", protect(http.HandlerFunc(dashboardHandler.HandleLogSamples)))
 	mux.Handle("/api/dashboard/logs", protect(http.HandlerFunc(dashboardHandler.HandleLogs)))
+	mux.Handle("GET /api/dashboard/request-monitor/channels", protect(http.HandlerFunc(dashboardHandler.HandleRequestMonitorChannels)))
 	mux.Handle("/api/dashboard/metrics", protect(http.HandlerFunc(dashboardHandler.HandleMetrics)))
 	mux.Handle("/api/dashboard/metric-history", protect(http.HandlerFunc(dashboardHandler.HandleMetricHistory)))
 	mux.Handle("/api/dashboard/usage", protect(http.HandlerFunc(dashboardHandler.HandleUsage)))

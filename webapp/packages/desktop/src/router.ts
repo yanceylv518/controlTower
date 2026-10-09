@@ -3,6 +3,7 @@ import { ApiError } from '@ct/shared'
 import { useAuthStore } from './stores/auth'
 import { setUnauthorizedHandler } from './api'
 import { canVisit, homeFor } from './permissions'
+import RequestMonitorView from './views/RequestMonitorView.vue'
 import NoAccessView from './views/NoAccessView.vue'
 import LoginView from './views/LoginView.vue'
 import OverviewView from './views/OverviewView.vue'
@@ -36,6 +37,7 @@ import SettlementReportsView from './views/SettlementReportsView.vue'
 import BillingWorkspaceView from './views/BillingWorkspaceView.vue'
 import UserDiscountSupplementsView from './views/UserDiscountSupplementsView.vue'
 export const router = createRouter({ history: createWebHistory('/'), routes: [
+  { path: '/request-monitor', component: RequestMonitorView, meta: { title: '请求监控', adminOnly: true } },
   { path:'/trial-followup',component:TrialFollowupView,meta:{title:'测试跟进',adminOnly:true} },
   { path: '/log-archives', component: LogArchiveView, meta: { title: '日志归档' } },
   { path: '/container-logs', component: ContainerLogsView, meta: { title: '容器日志' } },
