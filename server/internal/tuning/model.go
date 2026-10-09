@@ -313,6 +313,7 @@ type ContinuousState struct {
 	LastBucketAt           *time.Time `json:"last_bucket_at,omitempty"`
 	PausedReason           string     `json:"paused_reason,omitempty"`
 	Phase                  string     `json:"phase"`
+	ControlRevision        int64      `json:"-"`
 	CircuitDisabled        bool       `json:"circuit_disabled"`
 	CircuitStatusTarget    int        `json:"circuit_status_target,omitempty"`
 	CircuitStatusCommandID string     `json:"circuit_status_command_id,omitempty"`
@@ -327,7 +328,8 @@ type ContinuousState struct {
 	SoftStartPending       bool       `json:"soft_start_pending"`
 	// Direct-control write failure accounting: after a streak of failed
 	// new-api writes the channel pauses (paused_reason=write_failed) and
-	// retries on a slow interval instead of hammering every tick.
+	// retries on a slow interval. Five failures retire the old task and return
+	// the channel to evaluation; they do not require an operator-only state.
 	WriteFailureStreak int        `json:"write_failure_streak,omitempty"`
 	LastWriteFailureAt *time.Time `json:"last_write_failure_at,omitempty"`
 	LastWriteError     string     `json:"last_write_error,omitempty"`

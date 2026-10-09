@@ -156,6 +156,26 @@ func TestContinuousStateRetryFieldsMySQLIntegration(t *testing.T) {
 			}
 		}
 	})
+	t.Run("exhausted old intent retires across database reload", func(t *testing.T) {
+		state := tuning.ContinuousState{InstanceID: site, ChannelID: 199, ModelName: "m", Phase: "probing", KError: 1, CircuitDisabled: true, CircuitStatusTarget: 3, PausedReason: "write_failed", WriteFailureStreak: 10, LastWriteError: "Invalid parameters", UpdatedAt: now}
+		require.NoError(t, s.PutContinuousState(state))
+		f := &retryIntegrationStore{Store: s, site: site, now: now}
+		tuning.NewEngine(f).Tick(now.Add(time.Hour))
+		require.Zero(t, f.attempts, "legacy status3 must not be replayed")
+		states, err := s.ListContinuousStates(site)
+		require.NoError(t, err)
+		for _, got := range states {
+			if got.ChannelID == 199 {
+				require.Zero(t, got.CircuitStatusTarget)
+				require.False(t, got.CircuitDisabled)
+				require.Equal(t, "normal", got.Phase)
+				require.Empty(t, got.PausedReason)
+			}
+		}
+		tuning.NewEngine(f).Tick(now.Add(time.Hour + time.Minute))
+		require.Equal(t, 1, f.attempts, "fresh normal evaluation must work after restart without operator reset")
+	})
+
 }
 
 func TestSaveChannelBaseValuesAuditsOnlyChangedRowsMySQLIntegration(t *testing.T) {

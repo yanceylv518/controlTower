@@ -153,6 +153,9 @@ func (c *Client) Update(ctx context.Context, update UpdateRequest) (Result, erro
 	if update.ChannelID <= 0 {
 		return Result{}, fmt.Errorf("channel id must be positive")
 	}
+	if update.Status != nil && *update.Status != 1 && *update.Status != 2 {
+		return Result{}, fmt.Errorf("new-api channel status must be 1 (enabled) or 2 (disabled)")
+	}
 	if err := c.ensureToken(ctx); err != nil {
 		return Result{}, err
 	}

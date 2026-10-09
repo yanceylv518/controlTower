@@ -43,8 +43,10 @@ const (
 	// Control writes fail loudly on the direct path (immediate error) and as
 	// enqueue errors on the agent path. A short streak pauses the channel so
 	// the engine stops hammering new-api, then keeps probing on a slow
-	// interval and self-heals when writes succeed again.
+	// interval. Five consecutive failures end the old write task; later
+	// evaluations make fresh decisions from current metrics and channel state.
 	writeFailurePauseThreshold = 3
+	writeFailureMaxAttempts    = 5
 	writeFailureRetryInterval  = 10 * time.Minute
 
 	// Auto mode writes every integer change, so the deadband survives only as
@@ -216,6 +218,7 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 				// naturally stop producing traffic and must recover without it.
 				// Explicit exclusion settings still take effect without samples.
 				if len(metrics) == 0 && exists && previous.ModelName == model && previous.LastObservedRequests > 0 &&
+					!(mode != "auto" && previous.PausedReason == "write_failed") &&
 					(previous.Phase == "normal" || previous.Phase == "") && base.BaseWeight > 0 && len(base.Models) <= 1 &&
 					!capacityConfigured(base) && previous.Capacity.PendingCommandID == "" {
 					preserved.Add(1)
@@ -247,6 +250,10 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 				// stale label would stick until the mode flips back.
 				if mode != "auto" && state.PausedReason == "write_failed" {
 					e.noteWriteSuccess(&state)
+					// Persist the operator's reset even when circuit ownership
+					// returns early without running observe-mode recovery.
+					state.UpdatedAt = now
+					_ = persistState(state)
 				}
 				m := metricByID[base.ChannelID]
 				// Operator-facing sample progress describes the complete current
@@ -327,6 +334,16 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 					return
 				}
 
+				// End an exhausted operation instead of replaying its old target
+				// forever. Never discard a write whose receipt is still pending.
+				if state.WriteFailureStreak >= writeFailureMaxAttempts &&
+					state.CircuitStatusCommandID == "" && state.Capacity.PendingCommandID == "" {
+					e.finishFailedWrite(&state, base, p, now)
+					state.UpdatedAt = now
+					_ = persistState(state)
+					evaluated.Add(1)
+					return
+				}
 				wasCircuit := state.Phase == "circuit"
 				if state.CircuitDisabled && mode != "auto" {
 					// Observation must not consume the evidence needed to re-enable a real disabled channel.
@@ -371,7 +388,7 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 						completeFailure = expected > 0 && state.ProbeAttempts >= expected
 					}
 					if mode == "auto" && !state.CircuitDisabled && (completeFailure || state.ProbeSlowStreak >= 2) {
-						state.CircuitDisabled, state.CircuitStatusTarget = true, 3
+						state.CircuitDisabled, state.CircuitStatusTarget = true, 2
 						state.ProposedWeight = 0
 						// Persist ownership before disabling: disabled channels must remain eligible after a restart.
 						if err := persistState(state); err == nil {
@@ -898,10 +915,13 @@ func (e *Engine) noteWriteFailure(id string, base ChannelBaseValue, state *Conti
 	}
 }
 
-// writeAttemptAllowed keeps a write_failed pause retryable: one attempt per
-// slow interval instead of every tick, so recovery is automatic once the
-// control path works again.
+// Retry the current operation at most twice after the initial three failures.
+// The engine retires an exhausted operation before its next normal evaluation.
+// Pending receipts are settled separately and are never treated as unsent work.
 func writeAttemptAllowed(state ContinuousState, now time.Time) bool {
+	if state.WriteFailureStreak >= writeFailureMaxAttempts {
+		return false
+	}
 	if state.PausedReason == "" {
 		return true
 	}
@@ -944,8 +964,8 @@ func continuousEvent(id string, base ChannelBaseValue, state ContinuousState, ru
 	}
 	return Recommendation{ID: NewID(now, id, base.ChannelID, rule), InstanceID: id, ChannelID: base.ChannelID, ChannelName: base.ChannelName, CreatedAt: now, Rule: rule,
 		Evidence: map[string]any{
-			"evaluation": state.Evaluation,
-			"capacity":   state.Capacity, "capacity_managed": state.Capacity.Initialized && (rule == "weight_write" || rule == "capacity_reduce" || rule == "circuit_opened" || rule == "circuit_recovered"),
+			"evaluation": state.Evaluation, "control_revision": state.ControlRevision,
+			"capacity": state.Capacity, "capacity_managed": state.Capacity.Initialized && (rule == "weight_write" || rule == "capacity_reduce" || rule == "circuit_opened" || rule == "circuit_recovered"),
 			"metric_rpm": state.MetricRPM, "metric_tpm": state.MetricTPM, "max_rpm": base.MaxRPM, "max_tpm": base.MaxTPM,
 			"model": base.ModelName, "phase": state.Phase, "multiplier": state.Multiplier,
 			"k_speed": state.KSpeed, "k_cache": state.KCache, "k_otps": state.KOTPS, "k_error": state.KError,

@@ -61,7 +61,7 @@ function page() {
     tuningChannels: async () => { throw new Error('channel directory unavailable') },
   }
   const names = ['computed', 'reactive', 'ref', 'watch', 'onMounted', 'onBeforeUnmount', 'useFiltersStore', 'dashboard', 'formatTime', 'ApiError', 'ElMessage', 'ElMessageBox', 'useMobileViewport', 'hiddenChannelGroupCount', 'matchesChannelGroup', 'MAX_VISIBLE_CHANNEL_GROUPS', 'normalizeChannelGroups', 'splitChannelGroups', 'visibleChannelGroups']
-  const create = new Function(...names, `${compiled}\nreturn { watchChannelChanges, stopWatching: () => changesAbort?.abort(), sync, save, savedPolicy, mode, policyConflict, factorExplanation, refreshCurrentRates, ratesError, saveCapacity, saving, mobileEditRow, stageMobileEdit, mobileChanges, mobilePriorityChanges, mobileRuleChanges, mobileSaveOpen, load, refreshRuntime, loadChannelDirectory, applyGroupLocally, acceptStates, stateFor, sampleText, evaluationText, states, refreshError, bases, channels, channelDirectorySite, channelDirectoryLoading, policy, channelSwitchFilter, selectedGroupFilter, toggleGroupFilter, selectedGroupName, displayedRows, activeRows, modelChannelRows, models, modelChannelCount, modelChannelCountLabel, activeModel, dirty, selectModel, fieldChanged, savedBases, originalBase, calculatedWeight, displayedSpeedFactor, coefficientCell, overallEvaluationStatus, coefficientEmptyText, coefficientSpan, displayedPriority, editPriority, priorityLocked, cancelChanges, limitReason, currentRates, ratesReady, rowStatus, channelStatusFor, channelStatusLabel, isDirectoryOnlyRow, eventResult, eventResultClass, events, filteredEvents, eventDateRange };`)
+  const create = new Function(...names, `${compiled}\nreturn { phaseText, watchChannelChanges, stopWatching: () => changesAbort?.abort(), sync, save, savedPolicy, mode, policyConflict, factorExplanation, refreshCurrentRates, ratesError, saveCapacity, saving, mobileEditRow, stageMobileEdit, mobileChanges, mobilePriorityChanges, mobileRuleChanges, mobileSaveOpen, load, refreshRuntime, loadChannelDirectory, applyGroupLocally, acceptStates, stateFor, sampleText, evaluationText, states, refreshError, bases, channels, channelDirectorySite, channelDirectoryLoading, policy, channelSwitchFilter, selectedGroupFilter, toggleGroupFilter, selectedGroupName, displayedRows, activeRows, modelChannelRows, models, modelChannelCount, modelChannelCountLabel, activeModel, dirty, selectModel, fieldChanged, savedBases, originalBase, calculatedWeight, displayedSpeedFactor, coefficientCell, overallEvaluationStatus, coefficientEmptyText, coefficientSpan, displayedPriority, editPriority, priorityLocked, cancelChanges, limitReason, currentRates, ratesReady, rowStatus, channelStatusFor, channelStatusLabel, isDirectoryOnlyRow, eventResult, eventResultClass, events, filteredEvents, eventDateRange };`)
   const messages = [];
   const view = create(computed, reactive, ref, () => {}, () => {}, () => {}, () => filters, dashboard, String, ApiError, {info() {}, success() {}, error(message) {messages.push(message)}}, {confirm: async () => {}}, () => ref(false), groupUtils.hiddenChannelGroupCount, groupUtils.matchesChannelGroup, groupUtils.MAX_VISIBLE_CHANNEL_GROUPS, groupUtils.normalizeChannelGroups, groupUtils.splitChannelGroups, groupUtils.visibleChannelGroups)
   const initialPolicy = JSON.parse(JSON.stringify({...view.policy, dispatch_modes:{m:'auto'}}));
@@ -409,8 +409,8 @@ test('channel switch status filters compose with the group filter without tuning
   assert.equal(p.channelSwitchFilter.value, 'enabled')
   assert.deepEqual(p.displayedRows.value.map(item => item.channel_id), [1])
   assert.match(script, /watch\(\(\) => filters\.site_id, \(\) => \{[^\n]*channelSwitchFilter\.value = "enabled"/)
-  p.channelSwitchFilter.value = 'not_enabled'
-  assert.deepEqual(p.displayedRows.value.map(item => item.channel_id), [4, 3, 2])
+  p.channelSwitchFilter.value = 'disabled'
+  assert.deepEqual(p.displayedRows.value.map(item => item.channel_id), [3, 2])
   p.channelSwitchFilter.value = 'enabled'
   p.acceptStates('a', [{ ...state(100), proposed_weight: 90 }])
   assert.deepEqual(p.displayedRows.value.map(item => item.channel_id), [1])
@@ -436,16 +436,16 @@ test('model counts show status totals only for the selected model and update on 
   p.selectModel('n')
   assert.equal(p.modelChannelCountLabel('m'), '共 4 个渠道')
   assert.equal(p.modelChannelCountLabel('n'), '已启用 2 个渠道')
-  p.channelSwitchFilter.value = 'not_enabled'
-  assert.equal(p.modelChannelCountLabel('n'), '未启用 1 个渠道')
+  p.channelSwitchFilter.value = 'disabled'
+  assert.equal(p.modelChannelCountLabel('n'), '手动关闭 1 个渠道')
   assert.equal(p.modelChannelCountLabel('m'), '共 4 个渠道')
   p.selectModel('m')
-  assert.equal(p.modelChannelCountLabel('m'), '未启用 3 个渠道')
+  assert.equal(p.modelChannelCountLabel('m'), '手动关闭 2 个渠道')
   assert.equal(p.modelChannelCountLabel('n'), '共 3 个渠道')
   p.selectedGroupFilter.value = { kind: 'group', name: 'missing' }
-  assert.equal(p.modelChannelCountLabel('m'), '未启用 3 个渠道')
+  assert.equal(p.modelChannelCountLabel('m'), '手动关闭 2 个渠道')
   p.channels.value = p.channels.value.map(item => item.channel_id === 1 ? { ...item, status: 'disabled' } : item)
-  assert.equal(p.modelChannelCountLabel('m'), '未启用 4 个渠道')
+  assert.equal(p.modelChannelCountLabel('m'), '手动关闭 3 个渠道')
   p.channelSwitchFilter.value = 'enabled'
   assert.equal(p.modelChannelCountLabel('m'), '已启用 0 个渠道')
   p.channelSwitchFilter.value = ''
@@ -740,4 +740,55 @@ test('channel notification refreshes evaluation and execution result without the
     assert.equal(p.policy.dispatch_modes.m, 'off');
     assert.equal(p.dirty.value, true);
   } finally { p.stopWatching(); await watching; }
+});
+
+test('automatic closure is a confirmed CT origin, independent of NewAPI numeric status', async () => {
+  const p = page(); await p.load();
+  p.channels.value = [{channel_id:1,channel_name:'ct',status:'disabled',weight:0,priority:1,models:['m'],group_name:'default'}];
+  p.channelDirectorySite.value='a'; p.activeModel.value='m';
+  const channel = p.modelChannelRows.value[0];
+  p.acceptStates('a',[{...state(0),circuit_disabled:true,circuit_status_target:0,phase:'circuit'}]);
+  assert.equal(p.channelStatusFor(channel),'auto_disabled');
+  p.channelSwitchFilter.value='auto_disabled'; assert.equal(p.displayedRows.value.length,1);
+  p.channelSwitchFilter.value='disabled'; assert.equal(p.displayedRows.value.length,0);
+  for (const pending of [2,3]) {
+   p.acceptStates('a',[{...state(0),circuit_disabled:true,circuit_status_target:pending}]);
+   assert.equal(p.channelStatusFor(channel),'disabled','unconfirmed intent does not claim origin');
+  }
+  p.acceptStates('a',[{...state(0),circuit_disabled:false}]);
+  for (const status of ['disabled','2','auto_disabled','3']) {
+   p.channels.value[0].status=status;
+   assert.equal(p.channelStatusFor(channel),'disabled','NewAPI closure is manual in CT');
+  }
+  p.acceptStates('other-site',[{...state(0),circuit_disabled:true,circuit_status_target:0}]);
+  assert.equal(p.channelStatusFor(channel),'disabled','another site cannot own this closure');
+  p.channels.value[0].status='enabled';
+  assert.equal(p.channelStatusFor(channel),'enabled','a live enabled channel is never shown closed');
+});
+
+test('external enable followed by manual disable releases the previous CT label', async () => {
+  const p = page(); await p.load();
+  p.channels.value = [{channel_id:1,channel_name:'ct',status:'disabled',weight:0,priority:1,models:['m'],group_name:'default'}];
+  p.channelDirectorySite.value='a'; p.activeModel.value='m';
+  const channel = p.modelChannelRows.value[0];
+  p.acceptStates('a',[{...state(0),circuit_disabled:true,circuit_status_target:0,phase:'circuit'}]);
+  assert.equal(p.channelStatusFor(channel),'auto_disabled');
+  p.channels.value[0].status='enabled';
+  p.acceptStates('a',[{...state(0),circuit_disabled:false,circuit_status_target:0,phase:'normal'}]);
+  assert.equal(p.channelStatusFor(channel),'enabled');
+  p.channels.value[0].status='disabled';
+  assert.equal(p.channelStatusFor(channel),'disabled');
+  p.channelSwitchFilter.value='auto_disabled';
+  assert.equal(p.displayedRows.value.length,0);
+  p.channelSwitchFilter.value='disabled';
+  assert.equal(p.displayedRows.value.length,1);
+});
+
+test('write failures describe bounded task retries without an operator-only state', async () => {
+  const p=page(); await p.load();
+  const failed={...state(100),paused_reason:'write_failed',write_failure_streak:5,last_write_error:'Invalid parameters'};
+  assert.match(p.phaseText(failed),/连续失败5次后结束本次任务并重新评估/);
+  assert.doesNotMatch(p.phaseText(failed),/人工|只观察|开启自动执行/);
+  p.acceptStates('a',[{...state(100),paused_reason:'',write_failure_streak:0,phase:'normal'}]);
+  assert.doesNotMatch(p.rowStatus(row).label,/重试已停止|写入失败/);
 });

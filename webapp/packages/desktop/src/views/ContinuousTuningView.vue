@@ -112,11 +112,17 @@ const isDirectoryOnlyRow = (row: ChannelDisplayRow): row is DirectoryOnlyChannel
 const normalizeChannelStatus = (value: string | number | undefined) => {
   const status = String(value ?? "").trim().toLowerCase();
   if (["1", "enabled", "enable", "active", "normal"].includes(status)) return "enabled";
-  if (["2", "disabled", "disable", "inactive"].includes(status)) return "disabled";
-  if (["3", "auto_disabled", "auto-disabled"].includes(status)) return "auto_disabled";
+  if (["2", "disabled", "disable", "inactive", "3", "auto_disabled", "auto-disabled"].includes(status)) return "disabled";
   return "unknown";
 };
-const channelStatusFor = (row: ChannelDisplayRow) => normalizeChannelStatus(isDirectoryOnlyRow(row) ? row.status : channelDirectoryByID.value.get(row.channel_id)?.status);
+const channelStatusFor = (row: ChannelDisplayRow) => {
+  const status = normalizeChannelStatus(isDirectoryOnlyRow(row) ? row.status : channelDirectoryByID.value.get(row.channel_id)?.status);
+  if (status !== "disabled") return status;
+  // Pending disable intent is not a confirmed CT-originated shutdown.
+  const state = statesSite.value === siteID.value ? states.value.find(item => item.channel_id === row.channel_id) : undefined;
+  return state?.circuit_disabled && state.circuit_status_target !== 2 && state.circuit_status_target !== 3
+    ? "auto_disabled" : "disabled";
+};
 const channelStatusLabels = { enabled: "已启用", disabled: "手动关闭", auto_disabled: "自动关闭", unknown: "状态未知" };
 const channelStatusLabel = (row: ChannelDisplayRow) => channelStatusLabels[channelStatusFor(row)];
 const channelStatusClass = (row: ChannelDisplayRow) => `is-${channelStatusFor(row).replace("_", "-")}`;
@@ -218,7 +224,7 @@ const acceptStates = (site: string, items: TuningContinuousState[]) => {
   refreshError.value = "";
 };
 const validEvent = (item: TuningRecommendation) => item.rule !== "circuit_recovered" || item.proposed_weight > 0;
-const recentEvents = computed(() => events.value.filter(x => validEvent(x) && ["weight_observed", "weight_write", "capacity_reduce", "manual_takeover", "auto_paused", "circuit_opened", "probe_started", "probe_failed", "circuit_disabled", "circuit_recovered"].includes(x.rule)));
+const recentEvents = computed(() => events.value.filter(x => validEvent(x) && ["write_abandoned", "weight_observed", "weight_write", "capacity_reduce", "manual_takeover", "auto_paused", "circuit_opened", "probe_started", "probe_failed", "circuit_disabled", "circuit_recovered"].includes(x.rule)));
 const eventModel = (item: TuningRecommendation) => String(item.evidence?.model ?? bases.value.find(row => row.channel_id === item.channel_id)?.model_name ?? "");
 const filteredEvents = computed(() => {
   const selectedModel = eventModelFilter.value === "__current__" ? activeModel.value : eventModelFilter.value;
@@ -289,9 +295,9 @@ const modelMode = (model: string) => policy.dispatch_modes[model] || "off";
 const modeText = (model: string) => ({ off: "已关闭", observe: "只观察", auto: "自动执行" }[modelMode(model)]);
 const modeType = (model: string) => modelMode(model) === "auto" ? "success" : modelMode(model) === "observe" ? "warning" : "info";
 const effectivePause = (s?: TuningContinuousState) => s?.paused_reason === "manual_override" ? "" : s?.paused_reason || "";
-const phaseText = (s?: TuningContinuousState) => !s ? "等待首次评估" : effectivePause(s) === "write_failed" ? `写入 new-api 失败已暂停，每10分钟自动重试${s.last_write_error ? `：${s.last_write_error}` : ""}` : effectivePause(s) ? "安全保护已暂停" : s.capacity?.pending_command_id ? `权重 ${s.capacity.confirmed_weight} → ${s.capacity.pending_weight}，等待执行回执` : s.circuit_status_target ? (s.circuit_status_target === 1 ? "正在启用渠道，等待执行确认" : "正在禁用渠道，等待执行确认") : s.circuit_disabled ? `已禁用，${s.phase === "probing" ? "恢复检测中" : `下次检测 ${s.next_probe_at ? formatTime(s.next_probe_at) : "待定"}`}` : s.phase === "circuit" ? `已熔断，下次检测 ${s.next_probe_at ? formatTime(s.next_probe_at) : "待定"}` : s.phase === "probing" ? `恢复检测 ${s.probe_attempts || 0}/${policy.continuous.probe_count}` : s.phase === "soft_start" ? "恢复中（低权重运行）" : "运行正常";
+const phaseText = (s?: TuningContinuousState) => !s ? "等待首次评估" : effectivePause(s) === "write_failed" ? `本次写入失败，每10分钟重试，连续失败5次后结束本次任务并重新评估${s.last_write_error ? `：${s.last_write_error}` : ""}` : effectivePause(s) ? "安全保护已暂停" : s.capacity?.pending_command_id ? `权重 ${s.capacity.confirmed_weight} → ${s.capacity.pending_weight}，等待执行回执` : s.circuit_status_target ? (s.circuit_status_target === 1 ? "正在启用渠道，等待执行确认" : "正在禁用渠道，等待执行确认") : s.circuit_disabled ? `已禁用，${s.phase === "probing" ? "恢复检测中" : `下次检测 ${s.next_probe_at ? formatTime(s.next_probe_at) : "待定"}`}` : s.phase === "circuit" ? `已熔断，下次检测 ${s.next_probe_at ? formatTime(s.next_probe_at) : "待定"}` : s.phase === "probing" ? `恢复检测 ${s.probe_attempts || 0}/${policy.continuous.probe_count}` : s.phase === "soft_start" ? "恢复中（低权重运行）" : "运行正常";
 const phaseType = (s?: TuningContinuousState) => s?.phase === "circuit" ? "danger" : s?.phase === "probing" || s?.phase === "soft_start" || effectivePause(s) ? "warning" : "success";
-const eventName = (rule: string) => ({ weight_observed: "观察到权重变化", weight_write: "自动调整权重", capacity_reduce: "持续超限主动降权", manual_takeover: "检测到人工修改", auto_paused: "安全保护暂停", circuit_opened: "渠道熔断", probe_started: "开始恢复检测", probe_failed: "恢复检测未通过", circuit_disabled: "探针全部失败，禁用渠道", circuit_recovered: "渠道恢复" } as Record<string, string>)[rule] || rule;
+const eventName = (rule: string) => ({ write_abandoned: "写入任务已结束，重新评估", weight_observed: "观察到权重变化", weight_write: "自动调整权重", capacity_reduce: "持续超限主动降权", manual_takeover: "检测到人工修改", auto_paused: "安全保护暂停", circuit_opened: "渠道熔断", probe_started: "开始恢复检测", probe_failed: "恢复检测未通过", circuit_disabled: "探针全部失败，禁用渠道", circuit_recovered: "渠道恢复" } as Record<string, string>)[rule] || rule;
 const eventCount = (days: number, rule: string) => events.value.filter(x => validEvent(x) && x.rule === rule && new Date(x.created_at).getTime() >= Date.now() - days * 86400000).length;
 const sampleText = (row: ChannelDisplayRow) => { const state = stateFor(row); return state ? `${state.last_observed_requests}/${(state.evaluation?.params ?? savedPolicy.value?.continuous ?? policy.continuous).min_samples}` : "—"; };
 const rateText = (value?: number) => value == null ? "—" : Math.round(value).toLocaleString("zh-CN");

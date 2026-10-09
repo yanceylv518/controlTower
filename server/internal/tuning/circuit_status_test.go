@@ -17,7 +17,7 @@ func TestAllFailedRoundDisablesThenProbesAndEnables(t *testing.T) {
 	e := NewEngine(f)
 	e.evaluateContinuous("i", p, now, f)
 	s := f.states[1]
-	if len(f.writes) != 1 || f.writes[0].ProposedChannelStatus == nil || *f.writes[0].ProposedChannelStatus != 3 || !s.CircuitDisabled || s.Phase != "circuit" {
+	if len(f.writes) != 1 || f.writes[0].ProposedChannelStatus == nil || *f.writes[0].ProposedChannelStatus != 2 || !s.CircuitDisabled || s.Phase != "circuit" {
 		t.Fatalf("disable: %+v writes=%+v", s, f.writes)
 	}
 	e.evaluateContinuous("i", p, now.Add(4*time.Minute), f)
@@ -76,7 +76,7 @@ func TestTwoSlowProbesDisableWithoutFinishingRound(t *testing.T) {
 	e := NewEngine(f)
 	e.evaluateContinuous("i", autoPolicy(), now, f)
 	s = f.states[1]
-	if len(f.writes) != 1 || f.writes[0].ProposedChannelStatus == nil || *f.writes[0].ProposedChannelStatus != 3 || s.CircuitStatusCommandID == "" {
+	if len(f.writes) != 1 || f.writes[0].ProposedChannelStatus == nil || *f.writes[0].ProposedChannelStatus != 2 || s.CircuitStatusCommandID == "" {
 		t.Fatalf("partial slow round did not request disable: %+v writes=%+v", s, f.writes)
 	}
 	if s.Phase == "soft_start" {
@@ -118,7 +118,7 @@ func TestCircuitStatusWaitsForAgentAndRetriesFailure(t *testing.T) {
 	e := NewEngine(f)
 	p := autoPolicy()
 	e.evaluateContinuous("i", p, now, f)
-	if f.states[1].CircuitStatusCommandID == "" || f.states[1].CircuitStatusTarget != 3 {
+	if f.states[1].CircuitStatusCommandID == "" || f.states[1].CircuitStatusTarget != 2 {
 		t.Fatal("must persist pending disable")
 	}
 	e.evaluateContinuous("i", p, now.Add(time.Minute), f)
@@ -127,7 +127,7 @@ func TestCircuitStatusWaitsForAgentAndRetriesFailure(t *testing.T) {
 	}
 	f.commandStatus = "failed"
 	e.evaluateContinuous("i", p, now.Add(2*time.Minute), f)
-	if f.states[1].CircuitStatusTarget != 3 || f.states[1].CircuitStatusCommandID != "" {
+	if f.states[1].CircuitStatusTarget != 2 || f.states[1].CircuitStatusCommandID != "" {
 		t.Fatal("failed disable was treated as success")
 	}
 	f.commandStatus = "succeeded"
@@ -159,13 +159,13 @@ func TestCircuitStatusWriteFailureKeepsIntentAndObserveDoesNotWrite(t *testing.T
 	p := autoPolicy()
 	e := NewEngine(f)
 	e.evaluateContinuous("i", p, now, f)
-	if !f.states[1].CircuitDisabled || f.states[1].CircuitStatusTarget != 3 {
+	if !f.states[1].CircuitDisabled || f.states[1].CircuitStatusTarget != 2 {
 		t.Fatal("lost disable intent")
 	}
 	p.Policy.DispatchModes["m"] = "observe"
 	f.writeErr = nil
 	e.evaluateContinuous("i", p, now.Add(time.Minute), f)
-	if len(f.writes) != 0 || f.states[1].CircuitStatusTarget != 3 {
+	if len(f.writes) != 0 || f.states[1].CircuitStatusTarget != 2 {
 		t.Fatal("observe executed/consumed status intent")
 	}
 	p.Policy.DispatchModes["m"] = "auto"
@@ -260,5 +260,39 @@ func TestDisabledChannelDoesNotDistortPeerPerformanceBaseline(t *testing.T) {
 	NewEngine(f).evaluateContinuous("i", autoPolicy(), now, f)
 	if f.states[2].BaselineTTFTP95 != 1 || f.states[3].BaselineTTFTP95 != 1 {
 		t.Fatalf("disabled channel affected peers: %+v", f.states)
+	}
+}
+
+func TestLegacyAutomaticDisableIntentUsesAcceptedStatus(t *testing.T) {
+	for _, previous := range []string{"", "pending", "delivered", "failed", "expired", "succeeded"} {
+		f := failedRound()
+		s := f.states[1]
+		s.CircuitDisabled, s.CircuitStatusTarget = true, 3
+		if previous != "" {
+			s.CircuitStatusCommandID = "legacy-command"
+		}
+		f.states[1], f.commandStatus = s, previous
+		e := NewEngine(f)
+		now := time.Now().UTC()
+		e.evaluateContinuous("i", autoPolicy(), now, f)
+		if previous == "pending" || previous == "delivered" {
+			if len(f.writes) != 0 || f.states[1].CircuitStatusCommandID != "legacy-command" {
+				t.Fatal("legacy in-flight write duplicated")
+			}
+			continue
+		}
+		if previous == "succeeded" {
+			if len(f.writes) != 0 || !f.states[1].CircuitDisabled || f.states[1].CircuitStatusTarget != 0 {
+				t.Fatal("confirmed legacy origin lost")
+			}
+			continue
+		}
+		if previous == "failed" || previous == "expired" {
+			f.commandStatus = "succeeded"
+			e.evaluateContinuous("i", autoPolicy(), now.Add(time.Minute), f)
+		}
+		if len(f.writes) != 1 || *f.writes[0].ProposedChannelStatus != 2 {
+			t.Fatalf("previous=%s writes=%+v", previous, f.writes)
+		}
 	}
 }

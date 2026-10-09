@@ -321,6 +321,9 @@ VALUES (?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE id=VALUES(id),channel_name=
 			snapshot.InstanceID, snapshot.ChannelID, snapshot.ID, snapshot.ChannelName, snapshot.Status, snapshot.Weight, snapshot.ModelsText, nullString(snapshot.GroupName), nullInt64(snapshot.Priority), snapshot.CapturedAt); err != nil {
 			return err
 		}
+		if err = reconcileCircuitOwnership(tx, siteID, snapshot); err != nil {
+			return err
+		}
 		models := parseChannelModels(snapshot.ModelsText)
 		if len(models) == 1 {
 			priority := int64(0)

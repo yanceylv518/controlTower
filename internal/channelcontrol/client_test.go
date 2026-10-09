@@ -325,3 +325,61 @@ func TestCheckSurfacesAPIFailure(t *testing.T) {
 		t.Fatalf("api failure must surface: %v", err)
 	}
 }
+
+func TestUpdateRejectsUnsupportedStatusBeforeAnyHTTPWrite(t *testing.T) {
+	for _, status := range []int{0, 3, -1, 4} {
+		calls := 0
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; w.WriteHeader(http.StatusInternalServerError) }))
+		_, err := New(server.URL, "token", 7, server.Client()).Update(context.Background(), UpdateRequest{ChannelID: 191, Status: &status})
+		server.Close()
+		if err == nil || calls != 0 {
+			t.Fatalf("status=%d err=%v requests=%d", status, err, calls)
+		}
+	}
+}
+
+func TestDisableAndEnableUseNewAPIManagementStatusContract(t *testing.T) {
+	for _, status := range []int{2, 1} {
+		var steps []string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			steps = append(steps, r.Method+" "+r.URL.Path)
+			if r.Header.Get("Authorization") != "Bearer token" || r.Header.Get("New-Api-User") != "7" {
+				t.Error("missing admin identity")
+			}
+			switch r.Method {
+			case http.MethodGet:
+				_, _ = w.Write([]byte(`{"success":true,"data":{"id":191,"key":"private","status":1,"weight":40,"priority":11}}`))
+			case http.MethodPut:
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Fatal(err)
+				}
+				if _, ok := body["status"]; ok {
+					t.Error("status sent to general update")
+				}
+				if _, ok := body["key"]; ok {
+					t.Error("key sent to general update")
+				}
+				if body["weight"] != float64(0) || body["priority"] != float64(11) {
+					t.Errorf("bad weight/priority: %v", body)
+				}
+				_, _ = w.Write([]byte(`{"success":true}`))
+			case http.MethodPost:
+				var body map[string]int
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Fatal(err)
+				}
+				if len(body) != 1 || body["status"] != status || r.URL.Path != "/api/channel/191/status" {
+					t.Errorf("bad status request: %v", body)
+				}
+				_, _ = w.Write([]byte(`{"success":true,"data":true}`))
+			}
+		}))
+		weight := uint(0)
+		result, err := New(server.URL, "token", 7, server.Client()).Update(context.Background(), UpdateRequest{ChannelID: 191, Weight: &weight, Status: &status})
+		server.Close()
+		if err != nil || result.Status == nil || *result.Status != status || len(steps) != 3 {
+			t.Fatalf("status=%d steps=%v result=%+v err=%v", status, steps, result, err)
+		}
+	}
+}

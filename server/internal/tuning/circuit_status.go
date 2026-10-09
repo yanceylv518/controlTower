@@ -10,9 +10,9 @@ import (
 // is acknowledged. Agent commands are asynchronous; enqueueing is not success.
 func (e *Engine) advanceCircuitStatus(cs ContinuousStore, site string, base ChannelBaseValue, state *ContinuousState, p ContinuousDispatchParams, now time.Time) int {
 	target := state.CircuitStatusTarget
-	// 未投递的旧禁用意图改用自动禁用；已有命令仍先等待回执，避免重复执行。
-	if target == 2 && state.CircuitStatusCommandID == "" {
-		state.CircuitStatusTarget = 3
+	// NewAPI 仅接受 1/2；禁用归属保存在 CT。旧 3 意图改用 2，已有命令先等待回执。
+	if target == 3 && state.CircuitStatusCommandID == "" {
+		state.CircuitStatusTarget = 2
 		if err := cs.PutContinuousState(*state); err != nil {
 			e.noteWriteFailure(site, base, state, "auto", fmt.Errorf("persist automatic disable target: %w", err), now)
 			return 0
@@ -68,7 +68,7 @@ func (e *Engine) advanceCircuitStatus(cs ContinuousStore, site string, base Chan
 	weight := state.ProposedWeight
 	state.LastWrittenWeight, state.LastWriteAt = &weight, &now
 	e.noteWriteSuccess(state)
-	// 兼容升级前已投递的状态 2 命令，成功回执仍按禁用处理。
+	// 兼容升级前已投递的状态 3 命令，成功回执仍保留 CT 禁用归属。
 	if target == 2 || target == 3 {
 		state.Phase, state.Multiplier = "circuit", 0
 		next := now.Add(time.Duration(p.SilentMinutes) * time.Minute)

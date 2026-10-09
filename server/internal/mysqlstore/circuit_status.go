@@ -4,13 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"math"
 
 	"controltower/server/internal/tuning"
 )
 
-var ErrCircuitStatusSuperseded = errors.New("circuit status target or automatic mode changed")
+var ErrCircuitStatusSuperseded = tuning.ErrDecisionSuperseded
 
 // Only the new circuit-owned status writes are gated here. Ordinary weight,
 // manual channel operations and priority synchronization retain their contracts.
@@ -19,23 +18,23 @@ func checkCircuitStatus(q priorityQuery, v tuning.Recommendation) error {
 		return nil
 	}
 	target := *v.ProposedChannelStatus
-	if (target != 1 && target != 3) || (target == 1 && v.Rule != "circuit_recovered") || (target == 3 && v.Rule != "circuit_disabled") || v.ModeAtCreation != "auto" {
+	if (target != 1 && target != 2) || (target == 1 && v.Rule != "circuit_recovered") || (target == 2 && v.Rule != "circuit_disabled") || v.ModeAtCreation != "auto" {
 		return ErrCircuitStatusSuperseded
 	}
 	var model, stateModel string
-	var weight, proposedWeight int64
+	var weight, proposedWeight, revision int64
 	var owned bool
 	var pending int
-	err := q.QueryRowContext(context.Background(), `SELECT b.model_name,b.base_weight,s.model_name,s.circuit_disabled,s.circuit_status_target,s.proposed_weight
+	err := q.QueryRowContext(context.Background(), `SELECT b.model_name,b.base_weight,s.model_name,s.circuit_disabled,s.circuit_status_target,s.proposed_weight,s.control_revision
 FROM channel_base_values b JOIN tuning_continuous_states s ON s.instance_id=b.instance_id AND s.channel_id=b.channel_id
-WHERE b.instance_id=? AND b.channel_id=?`, v.InstanceID, v.ChannelID).Scan(&model, &weight, &stateModel, &owned, &pending, &proposedWeight)
+WHERE b.instance_id=? AND b.channel_id=?`, v.InstanceID, v.ChannelID).Scan(&model, &weight, &stateModel, &owned, &pending, &proposedWeight, &revision)
 	if err == sql.ErrNoRows {
 		return ErrCircuitStatusSuperseded
 	}
 	if err != nil {
 		return err
 	}
-	if !owned || pending != target || weight <= 0 || model != stateModel || proposedWeight != v.ProposedWeight {
+	if revision != recommendationControlRevision(v) || !owned || pending != target || weight <= 0 || model != stateModel || proposedWeight != v.ProposedWeight {
 		return ErrCircuitStatusSuperseded
 	}
 	var raw string

@@ -304,6 +304,11 @@ func capacityRecoveryBlocked(b ChannelBaseValue, s ContinuousState) bool {
 // Use this for weight-only circuit transitions too: their acknowledgements
 // establish the same feedback baseline as normal capacity-managed writes.
 func (e *Engine) createTrackedWeightChange(cs ContinuousStore, rec Recommendation, b ChannelBaseValue, s *ContinuousState, now time.Time) (string, error) {
+	// Recovery transitions also use this entry point; do not let fresh probe
+	// evidence bypass a control-write pause or its retry budget.
+	if !writeAttemptAllowed(*s, now) {
+		return "", ErrDecisionSuperseded
+	}
 	if !s.Capacity.Initialized {
 		s.Capacity.Initialized = true
 		s.Capacity.ConfirmedWeight = effectiveCurrentWeight(b, *s)
