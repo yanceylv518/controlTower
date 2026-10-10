@@ -117,3 +117,37 @@ func TestRedactAuditErrorRemovesCredentialsAndBoundsLength(t *testing.T) {
 		t.Fatalf("audit error length=%d, want <= 1000 bytes", got)
 	}
 }
+
+func TestUpstreamSyncAuditAcceptedAndExactlyFilterable(t *testing.T) {
+	const operation = "billing.upstream.sync"
+	if !IsSupportedOperationAudit(operation) || !IsConfigurationAuditOperation(operation) {
+		t.Fatal("explicit channel discovery and restore must be accepted by the audit writer")
+	}
+	count := 0
+	for _, filter := range OperationAuditFilterTypes() {
+		if filter == operation {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("sync filter appears %d times, want exactly once", count)
+	}
+	for _, test := range []struct {
+		operation string
+		want      bool
+	}{
+		{operation, true}, {"billing.upstream.update", false}, {"billing.upstream.sync_extra", false}, {"http.billing.upstreams.post", false},
+	} {
+		if got := OperationAuditTypeMatchesFilter(test.operation, operation); got != test.want {
+			t.Fatalf("sync filter for %q = %t, want %t", test.operation, got, test.want)
+		}
+	}
+	manual := NormalizeOperationAudit(OperationAudit{OperationType: operation, ActorID: "admin", ActorType: "human", ActorRole: "admin", AuthMethod: "session"})
+	if !IsManualOperationAudit(manual) || manual.SourceComponent != "billing" {
+		t.Fatalf("explicit sync lost manual billing classification: %+v", manual)
+	}
+	automatic := NormalizeOperationAudit(OperationAudit{OperationType: operation, ActorID: "system:billing", ActorType: "system"})
+	if IsManualOperationAudit(automatic) {
+		t.Fatal("automatic discovery must not appear as a manual operation")
+	}
+}

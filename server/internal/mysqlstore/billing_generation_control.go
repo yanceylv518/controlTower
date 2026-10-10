@@ -67,7 +67,9 @@ func supersedeBillingStatement(ctx context.Context, tx *sql.Tx, job billing.Job)
 		return err
 	}
 	if job.BillPeriod == "daily" {
-		err = supersedeBillingCandidates(ctx, tx, `j.instance_id=? AND j.job_type=? AND st.subject_id=? AND j.bill_period='monthly' AND j.range_from<=? AND j.range_to>=? AND j.usage_version>=3 AND j.status IN ('complete','pending') AND NOT EXISTS (SELECT 1 FROM billing_month_daily_sources src WHERE src.month_job_id=j.id AND src.daily_job_id=?)`, job.InstanceID, job.JobType, subject, job.From.UTC(), job.To.UTC(), job.ID)
+		// An overwrite keeps the previous month visible until a complete new
+		// month is published. Ordinary incremental months still refresh per day.
+		err = supersedeBillingCandidates(ctx, tx, `j.instance_id=? AND j.job_type=? AND st.subject_id=? AND j.bill_period='monthly' AND j.range_from<=? AND j.range_to>=? AND j.usage_version>=3 AND j.status IN ('complete','pending') AND NOT EXISTS (SELECT 1 FROM billing_month_daily_sources src WHERE src.month_job_id=j.id AND src.daily_job_id=?) AND NOT EXISTS (SELECT 1 FROM billing_generation_ranges r WHERE r.instance_id=j.instance_id AND r.kind=j.job_type AND r.subject_id=st.subject_id AND r.cancelled=0 AND r.overwrite_existing=1 AND j.created_at<r.generation_started_at AND j.range_from<CONVERT_TZ(r.range_to,'+08:00','+00:00') AND j.range_to>CONVERT_TZ(r.range_from,'+08:00','+00:00'))`, job.InstanceID, job.JobType, subject, job.From.UTC(), job.To.UTC(), job.ID)
 	}
 	return err
 }

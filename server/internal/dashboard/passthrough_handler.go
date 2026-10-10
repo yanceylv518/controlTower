@@ -542,7 +542,9 @@ func (h *PassthroughHandler) CurrentChannelsForBilling(ctx context.Context, site
 	if !configured {
 		return nil, fmt.Errorf("readonly database is not configured for %s", site)
 	}
-	rows, err := db.QueryContext(ctx, `SELECT id,COALESCE(name,''),status,COALESCE(models,'') FROM channels ORDER BY id`)
+	queryCtx, cancel := context.WithTimeout(ctx, readonlyQueryTimeout)
+	defer cancel()
+	rows, err := db.QueryContext(queryCtx, `SELECT id,COALESCE(name,''),status,COALESCE(models,''),COALESCE(base_url,'') FROM channels ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -550,7 +552,7 @@ func (h *PassthroughHandler) CurrentChannelsForBilling(ctx context.Context, site
 	items := []billing.ConfiguredChannel{}
 	for rows.Next() {
 		var item billing.ConfiguredChannel
-		if err = rows.Scan(&item.ChannelID, &item.ChannelName, &item.Status, &item.Models); err != nil {
+		if err = rows.Scan(&item.ChannelID, &item.ChannelName, &item.Status, &item.Models, &item.BaseURL); err != nil {
 			return nil, err
 		}
 		items = append(items, item)

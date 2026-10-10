@@ -120,7 +120,7 @@ defineExpose({open,active,hasBatch,saving,restore});
   <div class="generation-paging"><small>当前搜索 {{matchingOptions.length}} {{unit}}{{subjectLabel}}<span v-if="statementKind==='user_statement'&&queryResults.length>=200">（最多展示 200 条，请搜索缩小范围）</span></small><el-pagination v-model:current-page="selectionPage" :disabled="saving" :page-size="20" :total="matchingOptions.length" layout="prev,pager,next"/></div>
   <div v-if="selectedUsers.length" class="generation-picked"><el-tag v-for="id in selectedUsers" :key="id" :closable="!saving" @close="toggleSubject(id,false)">{{names[id]||subjectLabel}} · #{{id}}</el-tag></div>
   <el-checkbox v-model="excludeZeroOutput" :disabled="saving">排除输出为 0 的请求</el-checkbox>
-  <el-checkbox v-model="overwrite" :disabled="saving">覆盖已有账单</el-checkbox><p class="generation-note">{{overwrite?'将重新生成所选对象在该月的账单；新结果成功后替代旧账单。':'已完成的日账单会复用，只补齐缺失日期并汇总月账单。'}}</p>
+  <el-checkbox v-model="overwrite" :disabled="saving">覆盖已有账单</el-checkbox><p class="generation-note">{{overwrite?(statementKind==='upstream_statement'?'按当前渠道归属、已配置的账期折扣和金额配置重算所选月份。漏渠道可用此方式补齐，原有渠道金额也可能变化；新月账完整生成后替代旧月账。':'重新生成所选月份的账单，新月账完整生成后替代旧月账。'):'已完成的日账单会复用，只补齐缺失日期；修复已生成账单漏渠道时，请勾选覆盖已有账单。'}}</p>
  </el-form>
  <template #footer><el-button :disabled="saving" @click="dialog=false">取消</el-button><el-button type="primary" :loading="saving" :disabled="active||busy||!selectedUsers.length||!validDraftMonth" @click="submit">{{overwrite?'覆盖生成':'补齐并生成'}}{{selectedUsers.length?'（'+selectedUsers.length+' '+unit+subjectLabel+'）':''}}</el-button></template>
 </el-dialog>

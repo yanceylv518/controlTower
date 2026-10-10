@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"controltower/server/internal/aggregator"
@@ -15,10 +16,12 @@ import (
 )
 
 type Store struct {
-	db             *sql.DB
-	auditCounts    *auditCountCache
-	generationSite string
-	generationJob  string
+	db              *sql.DB
+	upstreamSource  billingUpstreamChannelSource
+	upstreamRefresh *sync.Map
+	auditCounts     *auditCountCache
+	generationSite  string
+	generationJob   string
 }
 
 // A channel snapshot owns the channel's model assignment, but it must not

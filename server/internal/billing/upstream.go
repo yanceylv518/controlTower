@@ -13,22 +13,46 @@ type UpstreamChannelMapping struct {
 	UpdatedAt                                                           time.Time
 }
 
+type UpstreamChannelTransfer struct {
+	ChannelID      int64 `json:"channel_id"`
+	FromUpstreamID int64 `json:"from_upstream_id"`
+}
+type UpstreamPrefixTransfer struct {
+	Prefix         string `json:"prefix"`
+	FromUpstreamID int64  `json:"from_upstream_id"`
+}
+
 type Upstream struct {
-	ID         int64             `json:"id"`
-	InstanceID string            `json:"instance_id"`
-	Name       string            `json:"name"`
-	Enabled    bool              `json:"enabled"`
-	Remark     string            `json:"remark"`
-	Channels   []UpstreamChannel `json:"channels"`
-	CreatedAt  time.Time         `json:"created_at"`
-	UpdatedAt  time.Time         `json:"updated_at"`
-	UpdatedBy  string            `json:"updated_by"`
+	Revision          int64                     `json:"revision"`
+	SuggestedPrefixes []string                  `json:"suggested_prefixes"`
+	ReviewPrefixes    []string                  `json:"review_prefixes,omitempty"`
+	ChannelTransfers  []UpstreamChannelTransfer `json:"channel_transfers,omitempty"`
+	PrefixTransfers   []UpstreamPrefixTransfer  `json:"prefix_transfers,omitempty"`
+	SyncError         string                    `json:"sync_error,omitempty"`
+	ChannelPrefixes   []string                  `json:"channel_prefixes"`
+	AddChannelIDs     []int64                   `json:"add_channel_ids,omitempty"`
+	RemoveChannelIDs  []int64                   `json:"remove_channel_ids,omitempty"`
+	ID                int64                     `json:"id"`
+	InstanceID        string                    `json:"instance_id"`
+	Name              string                    `json:"name"`
+	URL               string                    `json:"url,omitempty"`
+	URLs              []string                  `json:"urls"`
+	Enabled           bool                      `json:"enabled"`
+	Remark            string                    `json:"remark"`
+	Channels          []UpstreamChannel         `json:"channels"`
+	CreatedAt         time.Time                 `json:"created_at"`
+	UpdatedAt         time.Time                 `json:"updated_at"`
+	UpdatedBy         string                    `json:"updated_by"`
 }
 
 type UpstreamChannel struct {
-	Models      []string `json:"selected_models,omitempty"`
-	ChannelID   int64    `json:"channel_id"`
-	ChannelName string   `json:"channel_name"`
+	AssociationSource string     `json:"association_source"`
+	MatchedPrefix     string     `json:"matched_prefix,omitempty"`
+	AssociatedAt      *time.Time `json:"associated_at,omitempty"`
+	AssociatedBy      string     `json:"associated_by,omitempty"`
+	Models            []string   `json:"selected_models,omitempty"`
+	ChannelID         int64      `json:"channel_id"`
+	ChannelName       string     `json:"channel_name"`
 }
 
 type UpstreamTotals struct {

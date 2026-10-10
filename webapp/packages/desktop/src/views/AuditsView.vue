@@ -211,6 +211,7 @@ function operationLabel(value: string) {
     "billing.upstream.create": "添加账单上游",
     "billing.upstream.update": "修改账单上游",
     "billing.upstream.delete": "删除账单上游",
+    "billing.upstream.sync": "同步上游渠道",
     "billing.channel_setting.update": "修改渠道计费配置",
     "billing.user_setting.update": "修改用户计费配置",
     "channel.update": "渠道配置变更",

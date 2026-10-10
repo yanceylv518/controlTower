@@ -36,7 +36,7 @@ func (s Store) billingMonthlyCoverage(ctx context.Context, job billing.Job) (*bi
 	return billing.NewMonthlyCoverage(job.From, job.To, days), rows.Err()
 }
 
-func snapshotBillingMonthCoverage(ctx context.Context, tx *sql.Tx, job billing.Job, days map[string]bool) error {
+func addBillingMonthEmptyChecks(ctx context.Context, tx *sql.Tx, job billing.Job, days map[string]bool) error {
 	// Read CT's completed checks only. Unchecked, ongoing and future dates stay
 	// missing. An overwrite generation invalidates older empty-day evidence.
 	rows, err := tx.QueryContext(ctx, `SELECT DATE_FORMAT(c.bill_day,'%Y-%m-%d') FROM billing_day_checks c WHERE c.instance_id=? AND c.kind=? AND c.subject_id=? AND c.has_consumption=0 AND c.bill_day>=? AND c.bill_day<? AND c.checked_at<=? AND c.checked_at>=CONVERT_TZ(DATE_ADD(c.bill_day,INTERVAL 1 DAY),'+08:00','+00:00') AND NOT EXISTS (SELECT 1 FROM billing_generation_ranges r WHERE r.instance_id=c.instance_id AND r.kind=c.kind AND r.subject_id=c.subject_id AND r.cancelled=0 AND r.overwrite_existing=1 AND r.range_from<=c.bill_day AND r.range_to>c.bill_day AND r.generation_started_at>c.checked_at)`, job.InstanceID, job.JobType, billingJobSubject(job), job.From.In(billing.BusinessLocation).Format("2006-01-02"), job.To.In(billing.BusinessLocation).Format("2006-01-02"), job.CreatedAt.UTC())
@@ -56,6 +56,13 @@ func snapshotBillingMonthCoverage(ctx context.Context, tx *sql.Tx, job billing.J
 	err = rows.Err()
 	rows.Close()
 	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func snapshotBillingMonthCoverage(ctx context.Context, tx *sql.Tx, job billing.Job, days map[string]bool) error {
+	if err := addBillingMonthEmptyChecks(ctx, tx, job, days); err != nil {
 		return err
 	}
 	raw, err := json.Marshal(billing.NewMonthlyCoverage(job.From, job.To, days))

@@ -13,10 +13,13 @@ type ChannelSetting struct {
 	UpdatedBy  string    `json:"updated_by"`
 }
 type ConfiguredChannel struct {
-	ChannelID   int64  `json:"channel_id"`
-	ChannelName string `json:"channel_name"`
-	Status      int    `json:"status"`
-	Models      string `json:"models"`
+	SourceMissing bool   `json:"source_missing,omitempty"`
+	AutoExcluded  bool   `json:"auto_excluded,omitempty"`
+	ChannelID     int64  `json:"channel_id"`
+	ChannelName   string `json:"channel_name"`
+	Status        int    `json:"status"`
+	Models        string `json:"models"`
+	BaseURL       string `json:"base_url"`
 }
 type ChannelSummary struct {
 	ChannelID        int64    `json:"channel_id"`

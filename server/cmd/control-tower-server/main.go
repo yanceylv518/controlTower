@@ -75,6 +75,7 @@ func run() error {
 	}
 
 	store := mysqlstore.New(db)
+	store = store.WithBillingUpstreamSource(dashboard.BillingReadonlySource{Handler: &dashboard.PassthroughHandler{SecretKey: cfg.SecretKey, Config: store}})
 	settingsProvider := settings.NewProvider(store, 60*time.Second)
 	authManager := ctauth.NewManager(store, time.Duration(cfg.SessionTTLHours)*time.Hour)
 	count, err := store.CountUsers()

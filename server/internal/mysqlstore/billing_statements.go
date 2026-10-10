@@ -11,6 +11,11 @@ import (
 )
 
 func (s Store) CreateBillingStatementJob(ctx context.Context, job billing.Job, steps []billing.JobStep, subjectName string) error {
+	if job.JobType == "upstream_statement" && job.BillPeriod != "monthly" {
+		if err := s.refreshBillingUpstreamChannels(ctx, job.InstanceID); err != nil {
+			return err
+		}
+	}
 	return retryBillingDeadlock(ctx, func() error { return s.createBillingStatementJobAttempt(ctx, job, steps, subjectName) })
 }
 
@@ -167,6 +172,9 @@ func (s Store) createBillingStatementJobAttempt(ctx context.Context, job billing
 }
 
 func (s Store) BillingStatementUpstream(ctx context.Context, site string, id int64) (billing.Upstream, error) {
+	if err := s.refreshBillingUpstreamChannels(ctx, site); err != nil {
+		return billing.Upstream{}, err
+	}
 	var v billing.Upstream
 	err := s.db.QueryRowContext(ctx, `SELECT id,instance_id,name,enabled,remark,created_at,updated_at,updated_by FROM billing_upstreams WHERE instance_id=? AND id=?`, site, id).Scan(&v.ID, &v.InstanceID, &v.Name, &v.Enabled, &v.Remark, &v.CreatedAt, &v.UpdatedAt, &v.UpdatedBy)
 	if err != nil {

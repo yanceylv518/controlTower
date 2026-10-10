@@ -182,7 +182,9 @@ func (s Store) RecordBillingDayActivity(ctx context.Context, t billing.Automatic
 		return err
 	}
 	if !active {
-		if _, err = tx.ExecContext(ctx, `UPDATE billing_jobs j JOIN billing_statement_jobs st ON st.job_id=j.id JOIN billing_generation_ranges r ON r.instance_id=j.instance_id AND r.kind=j.job_type AND r.subject_id=st.subject_id SET j.status='superseded',j.updated_at=UTC_TIMESTAMP(6) WHERE j.instance_id=? AND st.subject_id=? AND j.job_type=? AND j.usage_version>=3 AND j.bill_period IN ('daily','monthly') AND j.range_from<=? AND j.range_to>=? AND j.status IN ('complete','no_data') AND r.cancelled=0 AND r.overwrite_existing=1 AND j.created_at<r.generation_started_at AND r.range_from<=? AND r.range_to>?`, t.InstanceID, t.SubjectID, t.Kind, t.From.UTC(), t.To.UTC(), day, day); err != nil {
+		// This is a replacement for one day only. The old monthly invoice
+		// stays valid until all required days form a verified new month.
+		if _, err = tx.ExecContext(ctx, `UPDATE billing_jobs j JOIN billing_statement_jobs st ON st.job_id=j.id JOIN billing_generation_ranges r ON r.instance_id=j.instance_id AND r.kind=j.job_type AND r.subject_id=st.subject_id SET j.status='superseded',j.updated_at=UTC_TIMESTAMP(6) WHERE j.instance_id=? AND st.subject_id=? AND j.job_type=? AND j.usage_version>=3 AND j.bill_period='daily' AND j.range_from<=? AND j.range_to>=? AND j.status IN ('complete','no_data') AND r.cancelled=0 AND r.overwrite_existing=1 AND j.created_at<r.generation_started_at AND r.range_from<=? AND r.range_to>?`, t.InstanceID, t.SubjectID, t.Kind, t.From.UTC(), t.To.UTC(), day, day); err != nil {
 			return err
 		}
 	}

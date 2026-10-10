@@ -3,6 +3,7 @@ package mysqlstore
 import (
 	"context"
 	"controltower/server/internal/billing"
+	"errors"
 	"fmt"
 	"os"
 	"reflect"
@@ -95,7 +96,7 @@ func TestBillingMonthlyCoverageSnapshotAndHistoricalFallback(t *testing.T) {
 	}
 	// A new overwrite invalidates old empty checks. A positive consumption
 	// check and a check from after this snapshot cannot fill other gaps either.
-	if _, err = db.Exec(`INSERT INTO billing_generation_ranges(instance_id,kind,subject_id,range_from,range_to,created_at,overwrite_existing,generation_started_at) VALUES(?,?,?,'2025-09-05','2025-09-06',UTC_TIMESTAMP(6),1,DATE_ADD(UTC_TIMESTAMP(6),INTERVAL 1 MINUTE))`, site, "user_statement", 7); err != nil {
+	if _, err = db.Exec(`INSERT INTO billing_generation_ranges(instance_id,kind,subject_id,range_from,range_to,created_at,overwrite_existing,generation_started_at) VALUES(?,?,?,'2025-09-05','2025-09-06',UTC_TIMESTAMP(6),1,UTC_TIMESTAMP(6))`, site, "user_statement", 7); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = db.Exec(`UPDATE billing_day_checks SET has_consumption=1 WHERE instance_id=? AND bill_day='2025-09-06'`, site); err != nil {
@@ -107,9 +108,17 @@ func TestBillingMonthlyCoverageSnapshotAndHistoricalFallback(t *testing.T) {
 	if _, err = db.Exec(`UPDATE billing_jobs SET status='superseded' WHERE id=?`, full.ID); err != nil {
 		t.Fatal(err)
 	}
+	blocked, _, _ := billing.NewJob(site, from, from.AddDate(0, 1, 0), "test")
+	blocked.JobType, blocked.UserID, blocked.UsageVersion, blocked.BillPeriod, blocked.RequestKey = "user_statement", 7, 3, "monthly", blocked.ID
+	if err = s.CreateBillingStatementJob(ctx, blocked, nil, "test"); !errors.Is(err, billing.ErrDailyBillsIncomplete) {
+		t.Fatal("overwrite accepted stale empty-day evidence", err)
+	}
+	// A fresh no_data day completes the overwritten subrange. Positive and
+	// future checks elsewhere still cannot count toward frozen coverage.
+	makeJob(from.AddDate(0, 0, 4), "daily", "no_data")
 	checked := makeJob(from, "monthly", "pending")
 	checkedLoaded, err := s.BillingJob(ctx, checked.ID)
-	if err != nil || checkedLoaded.MonthlyCoverage.CoveredDays != 27 || checkedLoaded.MonthlyCoverage.Complete || !reflect.DeepEqual(checkedLoaded.MonthlyCoverage.Missing, []billing.CoverageRange{{From: "2025-09-05", To: "2025-09-07"}}) {
+	if err != nil || checkedLoaded.MonthlyCoverage.CoveredDays != 28 || checkedLoaded.MonthlyCoverage.Complete || !reflect.DeepEqual(checkedLoaded.MonthlyCoverage.Missing, []billing.CoverageRange{{From: "2025-09-06", To: "2025-09-07"}}) {
 		t.Fatal(checkedLoaded, err)
 	}
 	// Source daily jobs and mutable checks may be retained for less time than

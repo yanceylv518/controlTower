@@ -75,6 +75,12 @@ func (s Store) createBillingMonthFromDays(ctx context.Context, tx *sql.Tx, job b
 	if err != nil {
 		return err
 	}
+	if err = addBillingMonthEmptyChecks(ctx, tx, job, covered); err != nil {
+		return err
+	}
+	if err = checkBillingMonthOverwriteCoverage(ctx, tx, job, covered); err != nil {
+		return err
+	}
 	if len(ids) == 0 {
 		return billing.ErrStatementNoData
 	}
@@ -196,6 +202,13 @@ func billingMonthSourcesCurrent(ctx context.Context, tx *sql.Tx, job billing.Job
 	if err := tx.QueryRowContext(ctx, `SELECT subject_id FROM billing_statement_jobs WHERE job_id=?`, job.ID).Scan(&subject); err != nil {
 		return false, err
 	}
+	// Publication claims load the job row; upstream ownership lives in the
+	// statement row and must be restored before checking range/check evidence.
+	if job.JobType == "upstream_statement" {
+		job.UpstreamID = subject
+	} else {
+		job.UserID = subject
+	}
 	var raw string
 	if err := tx.QueryRowContext(ctx, `SELECT coverage_json FROM billing_month_coverage WHERE job_id=?`, job.ID).Scan(&raw); err != nil {
 		return false, err
@@ -222,6 +235,7 @@ func billingMonthSourcesCurrent(ctx context.Context, tx *sql.Tx, job billing.Job
 		want[id] = true
 	}
 	seen := map[string]bool{}
+	completed := map[string]bool{}
 	current := true
 	boundary := billing.CompleteDayBoundary(time.Now())
 	for rows.Next() {
@@ -238,6 +252,7 @@ func billingMonthSourcesCurrent(ctx context.Context, tx *sql.Tx, job billing.Job
 			continue
 		}
 		seen[day] = true
+		completed[day] = status == "no_data"
 		if !covered(day) {
 			current = false
 		}
@@ -248,5 +263,18 @@ func billingMonthSourcesCurrent(ctx context.Context, tx *sql.Tx, job billing.Job
 			delete(want, id)
 		}
 	}
-	return current && len(want) == 0, rows.Err()
+	if err = rows.Err(); err != nil {
+		return false, err
+	}
+	rows.Close()
+	if err = addBillingMonthEmptyChecks(ctx, tx, job, completed); err != nil {
+		return false, err
+	}
+	if err = checkBillingMonthOverwriteCoverage(ctx, tx, job, completed); err != nil {
+		if err == billing.ErrDailyBillsIncomplete || err == billing.ErrGenerationCancelled {
+			return false, nil
+		}
+		return false, err
+	}
+	return current && len(want) == 0, nil
 }

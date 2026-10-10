@@ -102,6 +102,7 @@ var configurationAuditOperationTypes = []string{
 	"billing.discount.delete",
 	"billing.upstream.create",
 	"billing.upstream.update",
+	"billing.upstream.sync",
 	"billing.upstream.delete",
 	"billing.channel_setting.update",
 	"billing.user_setting.update",
