@@ -23,14 +23,14 @@ func (e *Engine) historyStep(ctx context.Context, c *sql.Conn, s *state, batch i
 
 		var date string
 		var revision uint64
-		err := c.QueryRowContext(ctx, "SELECT CAST(log_date AS CHAR),revision FROM log_archive_days WHERE state IN ('pending','processing') AND log_date<=? AND log_date<? ORDER BY log_date LIMIT 1", cutoff, s.Frontier).Scan(&date, &revision)
+		err := c.QueryRowContext(ctx, "SELECT CAST(log_date AS CHAR),revision FROM log_archive_days WHERE state IN ('pending','processing') AND log_date>=? AND log_date<=? AND log_date<? ORDER BY log_date LIMIT 1", s.summaryLowerBound(), cutoff, s.Frontier).Scan(&date, &revision)
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil
+			return startSummaryRebuild(ctx, c, s, cutoff)
 		}
 		if err != nil {
 			return err
 		}
-		s.History = history{Date: date, Step: "verify_source", Revision: revision, Version: id(), ParserVersion: 2}
+		s.History = history{Date: date, Step: "verify_source", Revision: revision, Version: id(), ParserVersion: summaryParserVersion}
 	}
 	h := &s.History
 	s.HistoryProgress.Date = h.Date

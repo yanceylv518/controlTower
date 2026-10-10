@@ -26,6 +26,7 @@ var beijing = time.FixedZone("Asia/Shanghai", 28800)
 var monthName = regexp.MustCompile(`^logs_[0-9]{6}$`)
 
 type Engine struct {
+	now            func() time.Time
 	site           string
 	source, target *sql.DB
 	identity       string
@@ -71,6 +72,8 @@ type history struct {
 	TargetRows    uint64
 }
 type state struct {
+	SummaryVersion     int
+	SummaryFromDate    string
 	liveChanges        []rawChange
 	LargeCollection    *largeRecord `json:",omitempty"`
 	LargeHistory       *largeRecord `json:",omitempty"`
@@ -212,7 +215,7 @@ func (e *Engine) prepare(ctx context.Context, c *sql.Conn) error {
 	if err != nil {
 		return err
 	}
-	s := state{Collection: aj.Progress{Step: "idle", UpdatedAt: time.Now().UTC()}, FirstDateSource: "archive"}
+	s := state{SummaryVersion: summaryParserVersion, Collection: aj.Progress{Step: "idle", UpdatedAt: time.Now().UTC()}, FirstDateSource: "archive"}
 	for _, name := range names {
 		var max sql.NullInt64
 		if err = c.QueryRowContext(ctx, "SELECT MAX(id) FROM "+q(name)).Scan(&max); err != nil {
@@ -332,8 +335,11 @@ func (e *Engine) Step(ctx context.Context, settings aj.Settings, batch, delay in
 		if err != nil {
 			return err
 		}
+		if err = ensureSummaryGeneration(ctx, c, &s, settings.SummaryFromDate, e.currentTime()); err != nil {
+			return err
+		}
 		if settings.RetryToken != s.RetryToken {
-			if _, err = c.ExecContext(ctx, "UPDATE log_archive_days SET state='pending',error_code='' WHERE state='failed'"); err != nil {
+			if _, err = c.ExecContext(ctx, "UPDATE log_archive_days SET state='pending',error_code='' WHERE state='failed' AND log_date>=?", s.SummaryFromDate); err != nil {
 				return err
 			}
 			s.RetryToken = settings.RetryToken
@@ -431,6 +437,7 @@ func (e *Engine) status(ctx context.Context, advance bool) (aj.Status, error) {
 	}
 	st.Collection = s.Collection
 	st.History = s.HistoryProgress
+	st.SummaryFromDate = s.SummaryFromDate
 	st.FirstDate = s.FirstDate
 	st.FirstDateSource = s.FirstDateSource
 	st.Frontier = s.Frontier
@@ -539,4 +546,11 @@ func failedAttempt(committed, attempted state, historyTurn bool) state {
 	committed.ScheduleCollection = attempted.ScheduleCollection
 	committed.ScheduleHistory = attempted.ScheduleHistory
 	return committed
+}
+
+func (e *Engine) currentTime() time.Time {
+	if e.now != nil {
+		return e.now()
+	}
+	return time.Now()
 }

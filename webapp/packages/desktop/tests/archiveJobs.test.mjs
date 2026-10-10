@@ -8,7 +8,7 @@ const transpile = source => ts.transpileModule(source, {compilerOptions:{target:
 const helperExports = {}
 new Function('exports', transpile(readFileSync(new URL('../src/utils/logArchive.ts', import.meta.url), 'utf8')))(helperExports)
 const permissionExports = {}
-new Function('exports', transpile(readFileSync(new URL('../src/permissions.ts', import.meta.url), 'utf8')))(permissionExports)
+new Function('require','exports', transpile(readFileSync(new URL('../src/permissions.ts', import.meta.url), 'utf8')))(name=>{if(name==='@ct/shared')return {ApiError:Error};throw Error('Unexpected permission dependency '+name)},permissionExports)
 class ApiError extends Error { constructor(status) { super('fixture failure'); this.status = status } }
 function pending() { let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no});return{promise,resolve,reject} }
 function setup(t) {
@@ -91,4 +91,19 @@ test('entry loads status once and does not request the earliest archive month',a
  ctx.requests[0].resolve({protocol:1,items:[item('A')],days:[]})
  await vue.nextTick();await vue.nextTick()
  assert.equal(ctx.requests.length,1);assert.equal(value(ctx,'month').value,month)
+})
+
+test('summary start uses applied date, saves chosen date and survives toggles',async t=>{
+ const ctx=setup(t);await initial(ctx)
+ value(ctx,'item').value.status.engine.summary_from_date='2026-10-10'
+ value(ctx,'edit')();const form=value(ctx,'form').value
+ assert.equal(form.tasks.summary_from_date,'2026-10-10')
+ form.tasks.summary_from_date='2026-09-01'
+ const saving=value(ctx,'save')(form),req=ctx.requests.at(-1)
+ assert.equal(JSON.parse(req.options.body).tasks.summary_from_date,'2026-09-01')
+ req.reject(new Error('test failure'));await saving
+ value(ctx,'item').value.config.tasks.summary_from_date='2026-09-01'
+ value(ctx,'toggle')('history');const toggle=ctx.requests.at(-1)
+ assert.equal(JSON.parse(toggle.options.body).tasks.summary_from_date,'2026-09-01')
+ toggle.reject(new Error('test failure'));await new Promise(r=>setImmediate(r))
 })

@@ -8,11 +8,16 @@ import (
 	"encoding/json"
 	"errors"
 	"math/big"
+	"strconv"
 	"strings"
+
+	"controltower/internal/archivefacts"
 )
 
 // Groups retain historical pricing evidence. Amounts are sums of request-level
 // charges, never a second application of the user's discount or a daily expression.
+const summaryParserVersion = 3
+
 type aggregate struct {
 	Dimensions map[string]any
 	Amounts    map[string]string
@@ -46,12 +51,75 @@ func parseAggregate(r row) (string, aggregate, error) {
 		}
 	}
 	pricing := map[string]any{}
-	for _, key := range []string{"model_ratio", "model_price", "completion_ratio", "cache_ratio", "cache_creation_ratio", "cache_creation_5m_ratio", "cache_creation_1h_ratio", "cache_creation_ratio_1h", "cache_creation_ratio_5m", "group_ratio", "user_group_ratio", "user_model_discount", "billing_mode", "billing_expr", "expr", "expr_string", "expr_b64", "matched_tier", "billing_source"} {
+	for _, key := range []string{"model_ratio", "model_price", "completion_ratio", "cache_ratio", "cache_creation_ratio", "cache_creation_5m_ratio", "cache_creation_1h_ratio", "cache_creation_ratio_1h", "cache_creation_ratio_5m", "group_ratio", "user_group_ratio", "user_model_discount", "billing_mode", "billing_expr", "expr", "expr_string", "expr_b64", "matched_tier", "billing_source", "image_ratio", "request_rules", "tool_surcharges"} {
 		if v, ok := other[key]; ok {
 			pricing[key] = v
 		}
 	}
 	a.Dimensions["pricing"] = pricing
+	a.Dimensions["summary_version"] = summaryParserVersion
+	addToolCallCounts(a.Amounts, other)
+	values := map[string][]byte{}
+	for k, v := range r {
+		if v == nil {
+			values[k] = nil
+		} else {
+			values[k] = []byte(*v)
+		}
+	}
+	fact := archivefacts.ParseUsageSnapshot(values)
+	// New structured price evidence stores decimal lexemes as strings so MySQL
+	// JSON storage cannot round historical rule/tool prices through float64.
+	var exactPrices map[string]json.RawMessage
+	if err := json.Unmarshal(fact.PricingSnapshotJSON, &exactPrices); err != nil {
+		return "", a, err
+	}
+	for _, key := range []string{"image_ratio", "request_rules", "tool_surcharges"} {
+		if value, ok := exactPrices[key]; ok {
+			pricing[key] = value
+		}
+	}
+	var usage archivefacts.UsageContext
+	if err := json.Unmarshal(fact.UsageContextJSON, &usage); err != nil {
+		return "", a, err
+	}
+	// Only semantic metadata is a dimension, never per-request normalized counts.
+	a.Dimensions["usage"] = map[string]any{"semantic": usage.UsageSemantic, "semantic_basis": usage.SemanticBasis, "billing_path": usage.UsageBillingPath, "cache_policy": usage.CachePolicy, "version": usage.UsageVersion, "issues": fact.IssueCodes}
+	normalized := map[string]*int64{
+		"input_tokens": fact.InputTokens, "output_tokens": fact.OutputTokens,
+		"pricing_input_tokens": usage.PricingInputTokens, "context_tokens": usage.ContextTokens,
+		"cache_read_tokens": fact.CacheReadTokens, "cache_write_tokens": fact.CacheWriteTokens,
+		"cache_write_5m_tokens": fact.CacheWrite5mTokens, "cache_write_1h_tokens": fact.CacheWrite1hTokens,
+		"image_input_tokens": fact.ImageInputTokens, "image_output_tokens": fact.ImageOutputTokens,
+		"audio_input_tokens": fact.AudioInputTokens, "audio_output_tokens": fact.AudioOutputTokens,
+	}
+	if fact.CacheWriteTokens != nil {
+		remaining := *fact.CacheWriteTokens
+		for _, split := range []*int64{fact.CacheWrite5mTokens, fact.CacheWrite1hTokens} {
+			if split != nil {
+				remaining -= *split
+			}
+		}
+		if remaining < 0 {
+			remaining = 0
+		}
+		normalized["cache_write_unclassified_tokens"] = &remaining
+	} else {
+		normalized["cache_write_unclassified_tokens"] = nil
+	}
+	for k, v := range normalized {
+		if v == nil {
+			a.Amounts[k+"_missing"] = "1"
+		} else {
+			a.Amounts[k] = strconv.FormatInt(*v, 10)
+		}
+	}
+	if len(fact.IssueCodes) > 0 {
+		a.Amounts["usage_issue_rows"] = "1"
+	} else {
+		a.Amounts["usage_issue_rows"] = "0"
+	}
+
 	if err := add(a.Amounts, "log_rows", "1"); err != nil {
 		return "", a, err
 	}

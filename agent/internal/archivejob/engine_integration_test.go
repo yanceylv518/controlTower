@@ -50,6 +50,9 @@ func fixtureTimeout(t *testing.T, timeout time.Duration) (*Engine, context.Conte
 		t.Fatal(err)
 	}
 	t.Cleanup(e.Close)
+	// Existing fixtures explicitly exercise all January history. Production's
+	// default starts on the first upgraded run's Beijing date.
+	e.now = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, beijing) }
 	_, err = e.source.ExecContext(ctx, "CREATE TABLE logs(id BIGINT PRIMARY KEY,created_at BIGINT NOT NULL,type INT,user_id BIGINT,channel BIGINT,model_name VARCHAR(64),prompt_tokens BIGINT,completion_tokens BIGINT,quota BIGINT,other TEXT,INDEX(created_at)) ENGINE=InnoDB")
 	if err != nil {
 		t.Fatal(err)

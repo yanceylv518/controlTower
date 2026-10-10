@@ -63,3 +63,22 @@ func TestScheduleSettingsValidationAndRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+func TestSummaryStartDateSettings(t *testing.T) {
+	for _, date := range []string{"", "2026-09-01", "2028-02-29"} {
+		s := Settings{SummaryFromDate: date}
+		if !s.Valid() {
+			t.Fatal("valid date rejected", date)
+		}
+		raw, _ := json.Marshal(s)
+		var decoded Settings
+		if json.Unmarshal(raw, &decoded) != nil || decoded != s {
+			t.Fatal("date lost in config", date)
+		}
+	}
+	for _, date := range []string{"2026-02-29", "2026-9-01", "2026-09-1", "2026-09-01T00:00:00Z", "0999-01-01", "not-a-date"} {
+		if (Settings{SummaryFromDate: date}).Valid() {
+			t.Fatal("invalid date accepted", date)
+		}
+	}
+}

@@ -6,6 +6,7 @@ import "time"
 const Protocol = 1
 
 type Settings struct {
+	SummaryFromDate   string `json:"summary_from_date,omitempty"`
 	CollectionBatches int    `json:"collection_batches,omitempty"`
 	HistoryBatches    int    `json:"history_batches,omitempty"`
 	Collection        bool   `json:"collection"`
@@ -25,6 +26,12 @@ func (s Settings) BatchRatio() (int, int) {
 	return c, h
 }
 func (s Settings) Valid() bool {
+	if s.SummaryFromDate != "" {
+		d, err := time.Parse("2006-01-02", s.SummaryFromDate)
+		if err != nil || d.Year() < 1000 || d.Format("2006-01-02") != s.SummaryFromDate {
+			return false
+		}
+	}
 	return s.CollectionBatches >= 0 && s.CollectionBatches <= 100 && s.HistoryBatches >= 0 && s.HistoryBatches <= 100 && len(s.RetryToken) <= 64
 }
 
@@ -49,6 +56,7 @@ type Day struct {
 }
 
 type Status struct {
+	SummaryFromDate string    `json:"summary_from_date,omitempty"`
 	CountsError     string    `json:"counts_error,omitempty"`
 	CountsDate      string    `json:"counts_date,omitempty"`
 	Latest          *Position `json:"latest,omitempty"`
@@ -74,7 +82,7 @@ func (s Status) Valid() bool {
 	if s.Protocol != Protocol || len(s.Days) > 100 || s.Collection.AfterID < 0 || s.History.AfterID < 0 {
 		return false
 	}
-	for _, date := range []string{s.FirstDate, s.Frontier, s.Cutoff, s.NextDay, s.History.Date, s.CountsDate} {
+	for _, date := range []string{s.SummaryFromDate, s.FirstDate, s.Frontier, s.Cutoff, s.NextDay, s.History.Date, s.CountsDate} {
 		if date != "" {
 			if _, err := time.Parse("2006-01-02", date); err != nil {
 				return false

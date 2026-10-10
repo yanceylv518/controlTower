@@ -16,6 +16,9 @@ func init() {
 	for _, k := range []string{"model_ratio", "model_price", "completion_ratio", "cache_ratio", "cache_creation_ratio", "cache_creation_5m_ratio", "cache_creation_1h_ratio", "cache_creation_ratio_1h", "cache_creation_ratio_5m", "group_ratio", "user_group_ratio", "user_model_discount", "billing_mode", "billing_expr", "expr", "expr_string", "expr_b64", "matched_tier", "billing_source", "cache_tokens", "cache_creation_tokens", "cache_creation_5m_tokens", "cache_creation_1h_tokens", "cache_creation_tokens_5m", "cache_creation_tokens_1h", "quota_before_discount", "discount_quota", "quota_after_discount"} {
 		summaryOtherKeys[k] = true
 	}
+	for _, k := range []string{"cached_tokens", "cache_read_input_tokens", "prompt_cache_hit_tokens", "cache_write_tokens", "cached_creation_tokens", "claude_cache_creation_5_m_tokens", "claude_cache_creation_1_h_tokens", "usage_semantic", "claude", "usage_billing_path", "admin_info", "image_input", "image_tokens", "image_output", "image_output_tokens", "audio_input", "audio_input_token_count", "audio_output", "image_ratio", "request_rules", "tool_surcharges"} {
+		summaryOtherKeys[k] = true
+	}
 }
 
 type jsonFrame struct {

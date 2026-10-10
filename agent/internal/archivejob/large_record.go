@@ -528,7 +528,7 @@ func (e *Engine) finishLarge(ctx context.Context, c *sql.Conn, s *state, r *larg
 		}
 		// A large raw replacement must not materialize its old value just to
 		// compute a live delta. Atomically invalidate and rebuild this date.
-		if inserted || changed {
+		if (inserted || changed) && s.includesSummary(day(r.Created)) {
 			if err = invalidateLive(ctx, tx, day(r.Created)); err != nil {
 				return err
 			}

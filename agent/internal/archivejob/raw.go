@@ -281,8 +281,10 @@ func writeRaw(ctx context.Context, tx *sql.Tx, r row, s *state) (bool, bool, err
 			size += col.Bytes
 		}
 		if size > maxPageBytes {
-			if err = invalidateLive(ctx, tx, date); err != nil {
-				return false, false, err
+			if s.includesSummary(date) {
+				if err = invalidateLive(ctx, tx, date); err != nil {
+					return false, false, err
+				}
 			}
 		} else {
 			existing, readErr := readRows(ctx, tx, "SELECT * FROM "+q(name)+" WHERE id=?", n)

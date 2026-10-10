@@ -76,6 +76,9 @@ func flushLive(ctx context.Context, tx *sql.Tx, s *state) error {
 		// Raw collection must not be held hostage by a malformed pricing record or
 		// failed summary write. Invalidate the snapshot atomically, then rebuild it.
 		for date := range dates {
+			if !s.includesSummary(date) {
+				continue
+			}
 			if _, resetErr := tx.ExecContext(ctx, `UPDATE log_archive_live_stats SET version_id=?,after_created=0,after_id=0,upper_created=-1,upper_id=0,ready=0,error_code=?,retry_at=DATE_ADD(UTC_TIMESTAMP(6),INTERVAL 60 SECOND),updated_at=UTC_TIMESTAMP(6) WHERE log_date=?`, id(), code(err), date); resetErr != nil {
 				return resetErr
 			}
@@ -101,6 +104,9 @@ func applyLiveChanges(ctx context.Context, tx *sql.Tx, s *state) error {
 		}
 	}
 	for date, changes := range byDate {
+		if !s.includesSummary(date) {
+			continue
+		}
 		var p liveCursor
 		err := tx.QueryRowContext(ctx, "SELECT version_id,after_created,after_id,ready,upper_created,upper_id FROM log_archive_live_stats WHERE log_date=? FOR UPDATE", date).Scan(&p.version, &p.created, &p.id, &p.ready, &p.upperCreated, &p.upperID)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -175,7 +181,7 @@ func (e *Engine) liveStep(ctx context.Context, c *sql.Conn, batch int) error {
 	}
 	var date string
 	// Newest incomplete dates first: today's statistics do not wait for history.
-	err = c.QueryRowContext(ctx, `SELECT CAST(d.log_date AS CHAR) FROM log_archive_days d LEFT JOIN log_archive_live_stats l ON l.log_date=d.log_date WHERE (l.log_date IS NULL OR l.ready=0) AND (l.retry_at IS NULL OR l.retry_at<=UTC_TIMESTAMP(6)) ORDER BY d.log_date DESC LIMIT 1`).Scan(&date)
+	err = c.QueryRowContext(ctx, `SELECT CAST(d.log_date AS CHAR) FROM log_archive_days d LEFT JOIN log_archive_live_stats l ON l.log_date=d.log_date WHERE d.log_date>=? AND (l.log_date IS NULL OR l.ready=0) AND (l.retry_at IS NULL OR l.retry_at<=UTC_TIMESTAMP(6)) ORDER BY d.log_date DESC LIMIT 1`, s.summaryLowerBound()).Scan(&date)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
@@ -198,6 +204,13 @@ func (e *Engine) liveStep(ctx context.Context, c *sql.Conn, batch int) error {
 	return err
 }
 func (e *Engine) buildLive(ctx context.Context, c *sql.Conn, date string, batch int) error {
+	s, err := load(ctx, c)
+	if err != nil {
+		return err
+	}
+	if !s.includesSummary(date) {
+		return nil
+	}
 	if _, err := c.ExecContext(ctx, `INSERT IGNORE INTO log_archive_live_stats(log_date,version_id,upper_created,updated_at) VALUES(?,?,-1,UTC_TIMESTAMP(6))`, date, id()); err != nil {
 		return err
 	}
