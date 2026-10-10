@@ -42,3 +42,24 @@ test('other billing tabs and old server responses keep the bill rows usable', ()
   }
   assert.equal(billingWorkspaceRows([bill('month', [{ ...stats, model: 'a' }])], false)[0].children, undefined)
 })
+
+test('only recorded peak/off-peak tiers expand under daily models without changing totals',()=>{
+ const input=[bill('day',[{...stats,model:'deepseek'},{...stats,model:'plain'}])]
+ input[0].tiers=[
+  {...stats,model:'deepseek',tier:'高峰时段',amount:'0.010000'},
+  {...stats,model:'deepseek',tier:'空闲时段',amount:'0.002280'},
+  {...stats,model:'plain',tier:'base'},
+  {...stats,model:'plain',tier:''},
+  {...stats,model:'plain',tier:'超长上下文'},
+ ]
+ const original=JSON.stringify(input)
+ const rows=billingWorkspaceRows(input,true)
+ assert.deepEqual(rows[0].children[0].children.map(v=>v.tier_name),['高峰时段','空闲时段'])
+ assert.equal(rows[0].children[1].children,undefined)
+ assert.equal(rows[0].children[0].amount,stats.amount)
+ assert.equal(rows[0].amount,stats.amount)
+ assert.equal(rows[0].children[0].children[0].amount,'0.010000')
+ assert.equal(rows[0].children[0].children[0].row_kind,'tier')
+ assert.equal(JSON.stringify(input),original)
+ assert.equal(billingWorkspaceRows(input,false)[0].children,undefined)
+})

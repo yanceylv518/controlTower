@@ -17,7 +17,7 @@ export interface BillingWorkspaceTotals {
 }
 export interface BillingWorkspaceModel extends BillingWorkspaceTotals { model:string }
 export interface BillingWorkspaceBill extends BillingWorkspaceTotals {
-  job:BillingJob; currency?:BillingCurrencyDisplay; models?:BillingWorkspaceModel[];
+  job:BillingJob; currency?:BillingCurrencyDisplay; models?:BillingWorkspaceModel[]; tiers?:(Omit<BillingWorkspaceTotals,"empty_count"|"empty_amount"> & {model:string;tier:string})[];
 }
 export interface BillingCatalogPage {
   items:(BillingWorkspaceBill & {generated_at:string})[]; total:number; subjects:number;

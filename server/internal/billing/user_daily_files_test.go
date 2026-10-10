@@ -15,6 +15,7 @@ type dailyFileStoreStub struct {
 	groups  []UserDailyFile
 	details []RequestDetail
 	files   []UserDailyFile
+	tiers   []TierStatistics
 }
 
 func (s *dailyFileStoreStub) ListBillingRequestDetailGroups(context.Context, string) ([]UserDailyFile, error) {
@@ -156,4 +157,9 @@ func workbookText(t *testing.T, path string) string {
 		t.Fatal(err)
 	}
 	return out.String()
+}
+
+func (s *dailyFileStoreStub) PutBillingTierStatistics(_ context.Context, _ string, _ time.Time, _ int64, rows []TierStatistics) error {
+	s.tiers = rows
+	return nil
 }

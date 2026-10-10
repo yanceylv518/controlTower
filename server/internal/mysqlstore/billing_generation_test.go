@@ -135,6 +135,12 @@ func testBillingDailyOnceAndMonthlyReuse(t *testing.T, kind string) {
 	if err = createStatementAndPublishTestMonth(t, s, ctx, clone, nil, ""); !errors.Is(err, billing.ErrStatementDuplicate) {
 		t.Fatalf("cross-source duplicate allowed: %v", err)
 	}
+	if kind == "user_statement" {
+		stats := []billing.TierStatistics{{Model: "model-a", Tier: "高峰", Discount: "0.500000", Requests: 2, Amount: "1.25", BeforeAmount: "2.5"}}
+		if err = s.PutBillingTierStatistics(ctx, daily.ID, from, 7, stats); err != nil {
+			t.Fatal(err)
+		}
+	}
 	month, _, err := billing.NewJob(site, from, to, "test")
 	if err != nil {
 		t.Fatal(err)
@@ -167,6 +173,15 @@ func testBillingDailyOnceAndMonthlyReuse(t *testing.T, kind string) {
 	result, err := s.BillingJob(ctx, month.ID)
 	if err != nil || result.Status != "complete" || result.MoneySnapshot.ID != money.ID {
 		t.Fatalf("month result: %+v %v", result, err)
+	}
+	if kind == "user_statement" {
+		if err = s.PutBillingTierStatistics(ctx, daily.ID, from, 7, []billing.TierStatistics{{Tier: "later", Requests: 9, Amount: "999"}}); err != nil {
+			t.Fatal(err)
+		}
+		saved, e := s.QueryBillingTierStatistics(ctx, month.ID)
+		if e != nil || len(saved) != 1 || saved[0].Tier != "高峰" || saved[0].Requests != 2 || saved[0].Amount != "1.25" {
+			t.Fatalf("month tier snapshot mutated: %+v %v", saved, e)
+		}
 	}
 	aggregates, e := s.QueryBillingStatementAggregates(ctx, month.ID)
 	if e != nil || len(aggregates) != 1 || aggregates[0].BeforeAmount != "2.500000000000" || aggregates[0].SettlementDiscount != "0.500000" {

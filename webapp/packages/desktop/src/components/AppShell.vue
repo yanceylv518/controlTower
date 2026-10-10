@@ -77,10 +77,9 @@ const nav = [
   {
     group: "账单管理",
     items: [
-      ["/billing", "用户账单", Coin],
+      ["/billing/new", "用户账单", Coin],
       ["/billing/channels", "上游账单", Coin],
       ["/billing/upstreams", "上游管理", Connection],
-      ["/billing/new", "新版用户账单", Operation],
       ["/billing/reports", "报表中心", Operation],
       ["/billing/user-discounts", "用户折扣补录", SetUp],
     ],

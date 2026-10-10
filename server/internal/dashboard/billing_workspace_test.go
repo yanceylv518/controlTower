@@ -24,7 +24,7 @@ func TestWorkspaceModelAmountsUseBillCurrencySnapshot(t *testing.T) {
 		{Model: "a", WorkspaceTotals: billing.WorkspaceTotals{Requests: 1, Amount: "1.25", BeforeAmount: "2.5", EmptyAmount: "0.25", Discount: "0.5"}},
 		{Model: "b", WorkspaceTotals: billing.WorkspaceTotals{Requests: 1, Amount: "0.25", BeforeAmount: "", EmptyAmount: "0", Discount: "0.46"}},
 	}
-	store := workspaceModelStore{rows: []billing.WorkspaceBill{{Job: billing.Job{ID: "day", MoneySnapshot: snapshot}, Models: models, WorkspaceTotals: billing.SumWorkspaceModels(models)}}}
+	store := workspaceModelStore{rows: []billing.WorkspaceBill{{Job: billing.Job{ID: "day", MoneySnapshot: snapshot}, Models: models, Tiers: []billing.TierStatistics{{Model: "a", Tier: "高峰时段", Requests: 1, Amount: "1.25", BeforeAmount: "2.5"}}, WorkspaceTotals: billing.SumWorkspaceModels(models)}}}
 	w := httptest.NewRecorder()
 	BillingWorkspaceHandler{Store: store}.ServeHTTP(w, httptest.NewRequest("GET", "/?instance_id=site&kind=user_statement&subject_id=7&from=2026-09-01&to=2026-10-01", nil))
 	var result struct {
@@ -42,5 +42,23 @@ func TestWorkspaceModelAmountsUseBillCurrencySnapshot(t *testing.T) {
 	}
 	if bill.Models[0].Amount != "9.000000000000" || bill.Models[0].BeforeAmount != "18.000000000000" || bill.Models[0].EmptyAmount != "1.800000000000" || bill.Models[0].Discount != "0.5" || bill.Models[1].Amount != "1.800000000000" || bill.Models[1].BeforeAmount != "" {
 		t.Fatal(bill.Models)
+	}
+}
+
+func TestWorkspaceTierAmountsFollowFrozenCurrency(t *testing.T) {
+	snapshot, err := billing.NewMoneySnapshot("site", `{"QuotaPerUnit":"500000","USDExchangeRate":"7.2","general_setting.quota_display_type":"CNY"}`, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := workspaceModelStore{rows: []billing.WorkspaceBill{{Job: billing.Job{MoneySnapshot: snapshot}, Tiers: []billing.TierStatistics{{Model: "m", Tier: "空闲时段", Requests: 2, Amount: "0.25", BeforeAmount: "0.5"}}}}}
+	w := httptest.NewRecorder()
+	BillingWorkspaceHandler{Store: store}.ServeHTTP(w, httptest.NewRequest("GET", "/?instance_id=site&kind=user_statement&subject_id=7&from=2026-09-01&to=2026-10-01", nil))
+	var response struct{ Items []billing.WorkspaceBill }
+	if err = json.Unmarshal(w.Body.Bytes(), &response); err != nil || w.Code != 200 {
+		t.Fatal(w.Body.String(), err)
+	}
+	row := response.Items[0].Tiers[0]
+	if row.Amount != "1.800000000000" || row.BeforeAmount != "3.600000000000" || row.Tier != "空闲时段" || row.Requests != 2 {
+		t.Fatal(row)
 	}
 }

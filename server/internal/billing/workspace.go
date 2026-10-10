@@ -4,6 +4,7 @@ type WorkspaceBill struct {
 	WorkspaceTotals
 	Currency CurrencyDisplay  `json:"currency"`
 	Job      Job              `json:"job"`
+	Tiers    []TierStatistics `json:"tiers,omitempty"`
 	Models   []WorkspaceModel `json:"models,omitempty"`
 }
 

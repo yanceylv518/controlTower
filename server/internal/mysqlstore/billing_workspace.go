@@ -37,6 +37,10 @@ func (s Store) BillingWorkspace(ctx context.Context, site, kind string, id int64
 			if err != nil {
 				return nil, err
 			}
+			v.Tiers, err = s.QueryBillingTierStatistics(ctx, id)
+			if err != nil {
+				return nil, err
+			}
 			v.WorkspaceTotals = billing.SumWorkspaceModels(v.Models)
 			if err = s.addExcludedOutputDiagnostics(ctx, &v); err != nil {
 				return nil, err

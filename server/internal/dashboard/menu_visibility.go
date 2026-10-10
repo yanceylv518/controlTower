@@ -25,7 +25,7 @@ var menuPaths = map[string]bool{
 	"/":                true, "/customers": true, "/channels": true, "/models": true, "/runtime": true,
 	"/usage": true, "/readonly-users": true, "/readonly-logs": true, "/container-logs": true,
 	"/billing/new": true, "/billing/reports": true, "/billing/user-discounts": true,
-	"/billing": true, "/billing/channels": true, "/billing/tasks": true, "/billing/discounts": true,
+	"/billing/channels": true, "/billing/tasks": true, "/billing/discounts": true,
 	"/tuning": true, "/alerts": true, "/notifications": true, "/instances": true, "/log-archives": true,
 	"/access-users": true, "/models/manage": true, "/billing/upstreams": true, "/settings": true, "/audits": true,
 }
@@ -55,6 +55,8 @@ func (h MenuVisibilityHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		writeDashboardError(w, 500, "invalid_stored_menu_visibility")
 		return
 	}
+	// The retired entry must not shadow the surviving workspace setting.
+	delete(values, "/billing")
 	if r.Method == http.MethodPut {
 		var req struct {
 			Items map[string]*bool `json:"items"`
@@ -72,6 +74,10 @@ func (h MenuVisibilityHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		}
 		next := map[string]bool{}
 		for path, visible := range req.Items {
+			// Older open Settings pages may still send the retired entry.
+			if path == "/billing" && visible != nil {
+				continue
+			}
 			if !menuPaths[path] || visible == nil {
 				writeDashboardError(w, 400, "invalid_menu_visibility")
 				return

@@ -296,6 +296,9 @@ func (g UserDailyFileGenerator) publishSpooledUsers(ctx context.Context, root, d
 			err = writeUserDailyWorkbook(tmp, job, group, columns, iterate)
 		}
 		if err == nil {
+			err = saveBillingTierStatistics(ctx, g.Store, job, group, iterate)
+		}
+		if err == nil {
 			err = tmp.Sync()
 		}
 		if closeErr := tmp.Close(); err == nil {

@@ -64,3 +64,35 @@ func TestMenuVisibilityValidationAndPersistence(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestMenuVisibilityRetiredBillingPreservesWorkspace(t *testing.T) {
+	for _, raw := range []string{
+		`{"/billing":true,"/billing/new":false,"/settings":true}`,
+		`{"/billing":false,"/billing/new":true,"/settings":true}`,
+	} {
+		t.Run(raw, func(t *testing.T) {
+			s := &menuFake{raw: raw}
+			h := MenuVisibilityHandler{Store: s}
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, httptest.NewRequest("GET", "/api/dashboard/menu-visibility", nil))
+			if w.Code != 200 || strings.Contains(w.Body.String(), `"/billing":`) {
+				t.Fatal(w.Code, w.Body.String())
+			}
+			want := `"/billing/new":true`
+			if strings.Contains(raw, `"/billing/new":false`) {
+				want = `"/billing/new":false`
+			}
+			if !strings.Contains(w.Body.String(), want) || s.writes != 0 {
+				t.Fatal("GET changed workspace visibility or wrote settings", w.Body.String())
+			}
+			w = httptest.NewRecorder()
+			h.ServeHTTP(w, httptest.NewRequest("PUT", "/api/dashboard/menu-visibility", strings.NewReader(`{"items":`+raw+`}`)))
+			if w.Code != 200 || strings.Contains(s.raw, `"/billing":`) || !strings.Contains(s.raw, want) || !strings.Contains(s.raw, `"/settings":true`) {
+				t.Fatal(w.Code, s.raw)
+			}
+			if len(s.audits) != 1 || s.audits[0].BeforeSummary != raw || s.audits[0].AfterSummary != s.raw {
+				t.Fatal("audit lost original settings")
+			}
+		})
+	}
+}

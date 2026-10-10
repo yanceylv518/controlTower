@@ -102,6 +102,17 @@ func (g UserDailyFileGenerator) GenerateJobFiles(ctx context.Context, job Job) e
 			_ = tmp.Close()
 			return err
 		}
+		if err = saveBillingTierStatistics(ctx, g.Store, job, group, func(visit func(RequestDetail) error) error {
+			for _, v := range details {
+				if e := visit(v); e != nil {
+					return e
+				}
+			}
+			return nil
+		}); err != nil {
+			_ = tmp.Close()
+			return err
+		}
 		if err = tmp.Sync(); err != nil {
 			_ = tmp.Close()
 			return err

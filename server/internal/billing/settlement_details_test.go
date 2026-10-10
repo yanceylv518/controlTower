@@ -246,7 +246,7 @@ func TestSettlementDailyGeneratorSeparatesSummaryAndDetails(t *testing.T) {
 	for _, useSpool := range []bool{false, true} {
 		day := time.Date(2026, 9, 11, 0, 0, 0, 0, BusinessLocation)
 		job := Job{ID: "0123456789abcdef0123456789abcdef", InstanceID: "site", JobType: "user_statement", UserID: 7, UsageVersion: 3, BillPeriod: "daily", From: day, To: day.AddDate(0, 0, 1)}
-		row := RequestDetail{JobID: job.ID, InstanceID: job.InstanceID, BillDay: day, CreatedUnix: day.Unix(), SourceLogID: 1, UserID: 7, RequestID: "detail-only", ModelName: "model", TokenID: 8, TokenName: "prod", Charge: LogCharge{Total: "1.25"}}
+		row := RequestDetail{JobID: job.ID, InstanceID: job.InstanceID, BillDay: day, CreatedUnix: day.Unix(), SourceLogID: 1, UserID: 7, RequestID: "detail-only", ModelName: "model", TokenID: 8, TokenName: "prod", Charge: LogCharge{Total: "1.25", MatchedTier: "高峰时段"}}
 		store := &dailyFileStoreStub{}
 		root := t.TempDir()
 		g := UserDailyFileGenerator{Store: store, Root: root}
@@ -262,6 +262,9 @@ func TestSettlementDailyGeneratorSeparatesSummaryAndDetails(t *testing.T) {
 		}
 		if err := g.GenerateJobFiles(context.Background(), job); err != nil {
 			t.Fatal(err)
+		}
+		if len(store.tiers) != 1 || store.tiers[0].Tier != "高峰时段" || store.tiers[0].Amount != "1.250000000000" {
+			t.Fatalf("saved tiers: %+v", store.tiers)
 		}
 		path := filepath.Join(root, store.files[0].RelativePath)
 		text := workbookText(t, path)

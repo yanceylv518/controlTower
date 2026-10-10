@@ -27,7 +27,6 @@ import TuningView from './views/ContinuousTuningView.vue'
 import UsersView from './views/UsersView.vue'
 import ReadonlyUsersView from './views/ReadonlyUsersView.vue'
 import ReadonlyLogsView from './views/ReadonlyLogsView.vue'
-import BillingView from './views/BillingView.vue'
 import BillingPricingView from './views/ModelSquareView.vue'
 import BillingReconciliationView from './views/BillingReconciliationView.vue'
 import BillingTasksView from './views/BillingTasksView.vue'
@@ -43,9 +42,9 @@ export const router = createRouter({ history: createWebHistory('/'), routes: [
   { path: '/container-logs', component: ContainerLogsView, meta: { title: '容器日志' } },
   { path: '/readonly-users', component: ReadonlyUsersView, meta: { title: '用户管理' } },
   { path: '/readonly-logs', component: ReadonlyLogsView, meta: { title: '使用日志' } },
-  { path: '/billing', alias: ['/billing/overview', '/billing/generated'], component: BillingView, meta: { title: '用户账单' } },
+  { path: '/billing', alias: ['/billing/overview', '/billing/generated'], redirect: to => ({ path: '/billing/new', query: to.query, hash: to.hash }) },
   { path: '/billing/reports', component: SettlementReportsView, meta:{title:'报表中心',adminOnly:true} },
-  { path: '/billing/new', component: BillingWorkspaceView, meta: {title:'新版用户账单',adminOnly:true} },
+  { path: '/billing/new', component: BillingWorkspaceView, meta: {title:'用户账单',adminOnly:true} },
   { path: '/billing/upstream-new', component: BillingWorkspaceView, props:{kind:'upstream'}, meta:{title:'上游账单',adminOnly:true} },
   { path: '/billing/tasks', component: BillingTasksView, meta: { title: '账单任务', adminOnly: true } },
   { path: '/billing/channels', component: BillingWorkspaceView, props:{kind:'upstream'}, meta: { title: '上游账单', adminOnly: true } },

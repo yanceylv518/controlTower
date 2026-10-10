@@ -189,6 +189,10 @@ func (s Store) completeBillingMonthAttempt(ctx context.Context, job billing.Job)
 	if _, err = tx.ExecContext(ctx, `INSERT INTO billing_excluded_output_stats(job_id,model_name,request_count,total_amount) SELECT ?,model_name,SUM(request_count),SUM(total_amount) FROM billing_excluded_output_stats WHERE job_id IN (`+strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")+`) GROUP BY model_name ON DUPLICATE KEY UPDATE request_count=request_count+VALUES(request_count),total_amount=total_amount+VALUES(total_amount)`, args...); err != nil {
 		return err
 	}
+	// Copy the exact tier snapshots with the same frozen daily lineage.
+	if _, err = tx.ExecContext(ctx, `INSERT INTO billing_tier_statistics(job_id,bill_day,user_id,statistics_json) SELECT ?,bill_day,user_id,statistics_json FROM billing_tier_statistics WHERE job_id IN (`+strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")+`)`, args...); err != nil {
+		return err
+	}
 	if err = s.finalizeBillingStatement(ctx, tx, job, time.Now().UTC()); err != nil {
 		return err
 	}
