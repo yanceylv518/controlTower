@@ -391,7 +391,7 @@ const firingCount = computed(
         <el-tabs v-model="tab" class="detail-tabs">
           <el-tab-pane label="趋势" name="trends">
             <div v-loading="historyLoading" class="trend-grid">
-              <MonitorErrorCodes :site="errorSite" :dimension-type="dimensionType" :value="errorDimensionValue" :hours="hours" :active="tab === 'trends'" :series="requestSeries" :bucket="historyWindow" />
+              <MonitorErrorCodes :instance-id="instancePart" :site="errorSite" :dimension-type="dimensionType" :value="errorDimensionValue" :hours="hours" :active="tab === 'trends'" :series="requestSeries" :bucket="historyWindow" />
               <TrendChart
                 :title="`延迟（秒，${bucketLabel}）`"
                 :series="latencySeries"

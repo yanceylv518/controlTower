@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"controltower/agent/internal/errorstats"
 	"database/sql"
 	"flag"
 	"fmt"
@@ -132,6 +133,25 @@ func run() error {
 		})
 	}
 
+	if cfg.LogCollectEnabled {
+		stream, streamErr := errorstats.Open(filepath.Join(cfg.DataDir, "error-statistics.json"), cfg.InstanceID, time.Now().UTC())
+		if streamErr != nil {
+			log.Printf("optional error statistics disabled: %v", streamErr)
+		} else {
+			ctx = errorstats.WithStream(ctx, stream)
+			if !cfg.RunOnce {
+				go stream.Run(ctx, client.ErrorStatistics, log.Printf)
+			} else {
+				defer func() {
+					flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancel()
+					if err := stream.Flush(flushCtx, client.ErrorStatistics); err != nil {
+						log.Printf("optional error statistics pending: %v", err)
+					}
+				}()
+			}
+		}
+	}
 	metricCollector := syscollector.New(cfg.DataDir)
 	if cfg.ContainerLogSocket != "" && !cfg.RunOnce {
 		go containerlogs.Run(ctx, cfg.ServerURL, cfg.AgentToken, cfg.AgentID, cfg.ContainerLogSocket)
@@ -352,6 +372,25 @@ func collectAndReportFullPass(ctx context.Context, client controlTowerReporter, 
 			current.LastLogID, lastLogID, alertStats.EventCount, alertStats.ErrorCount,
 			alertStats.ChannelDimensions, alertStats.UserDimensions, alertStats.AlertsTriggered,
 			alertStats.AlertsSent, alertStats.AlertsSendFailures)
+	}
+
+	if stream := errorstats.FromContext(ctx); stream != nil {
+		if backlog.SnapshotKnown {
+			if err := stream.Activate(backlog.SourceLatestLogID, time.Now().UTC()); err != nil {
+				log.Printf("optional error statistics activation delayed: %v", err)
+			}
+		}
+		var covered *time.Time
+		statisticsLimit := cfg.LogBatchSize
+		if statisticsLimit <= 0 || statisticsLimit > 5000 {
+			statisticsLimit = 1000
+		}
+		if cfg.LogCollectEnabled && backlog.SnapshotKnown && (backlog.BacklogEstimate == 0 || len(events) < statisticsLimit) {
+			covered = &now
+		}
+		if err := stream.RecordPass(events, time.Now().UTC(), covered, current.LastLogID); err != nil {
+			return collectorFailure("error_statistics_buffer", err)
+		}
 	}
 
 	report := buildReport(ctx, cfg, now, sequence+1, lastLogID, backlog, events, metricCollector, checker, dockerCollector, channelCollector)

@@ -16,17 +16,30 @@ var statusCodePatterns = []*regexp.Regexp{
 // ExtractStatusCode returns the first status code found by the documented
 // pattern precedence. Values outside the HTTP status-code range are ignored.
 func ExtractStatusCode(summary string) (int, bool) {
-	for _, pattern := range statusCodePatterns {
+	legacy, _ := ExtractStatusCodes(summary)
+	return legacy, legacy != 0
+}
+
+// ExtractStatusCodes preserves the legacy alert precedence while distinguishing
+// an explicit HTTP status from a generic numeric business "code" for display.
+// Both are extracted in the same pass through the patterns.
+func ExtractStatusCodes(summary string) (legacy, explicitHTTP int) {
+	for index, pattern := range statusCodePatterns {
 		match := pattern.FindStringSubmatch(summary)
 		if len(match) != 2 {
 			continue
 		}
 		code, err := strconv.Atoi(match[1])
 		if err == nil && code >= 100 && code <= 599 {
-			return code, true
+			if legacy == 0 {
+				legacy = code
+			}
+			if index != 3 {
+				return legacy, code
+			}
 		}
 	}
-	return 0, false
+	return legacy, 0
 }
 
 // IsUserError deliberately treats unknown/unparseable errors as channel-side

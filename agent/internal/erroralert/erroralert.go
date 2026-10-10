@@ -12,7 +12,6 @@ import (
 	"sync"
 	"time"
 
-	"controltower/agent/internal/errorclass"
 	"controltower/agent/internal/logcollector"
 	"controltower/internal/notificationtime"
 )
@@ -154,7 +153,8 @@ func (n *Notifier) Process(ctx context.Context, events []logcollector.Event) Pro
 		if event.LogType == "error" {
 			stats.ErrorCount++
 		}
-		includeInWindow := event.LogType != "error" || !errorclass.IsUserError(event.ErrorSummary, n.userErrorCodes)
+		event.ClassifyError()
+		includeInWindow := event.LogType != "error" || event.HTTPStatus == 0 || !n.userErrorCodes[event.HTTPStatus]
 		if event.ChannelID > 0 && !n.disabledChannels[event.ChannelID] {
 			channelDimensions[event.ChannelID] = struct{}{}
 			if includeInWindow {

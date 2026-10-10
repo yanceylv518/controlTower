@@ -5,13 +5,14 @@ import ts from 'typescript';
 import {ref,computed} from 'vue';
 const util={};new Function('exports',ts.transpileModule(readFileSync(new URL('../src/utils/monitorErrorTrend.ts',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText)(util);
 const loader={};new Function('exports',ts.transpileModule(readFileSync(new URL('../src/utils/loadMonitorErrors.ts',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText)(loader);
+const aggregated={};new Function('exports',ts.transpileModule(readFileSync(new URL('../src/utils/aggregatedMonitorErrors.ts',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText)(aggregated);
 const source=readFileSync(new URL('../src/components/MonitorErrorCodes.vue',import.meta.url),'utf8').match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1].replace(/^import .*;\r?\n/gm,'');
 const compiled=ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.None}}).outputText;
-function setup(){const props={site:'a',dimensionType:'instance_user',value:'4',hours:1,active:true,bucket:'1m',series:[{name:'请求量',data:[['2026-09-27T06:00:00Z',20]]}]};const calls=[];const client={request:(url,opts)=>new Promise((resolve,reject)=>calls.push({url,opts,resolve,reject}))};const make=new Function('ref','computed','watch','onBeforeUnmount','defineProps','client','errorTrend','loadMonitorErrors',compiled+';return {load,data,error,loading,mode,expanded}');return {...make(ref,computed,()=>{},()=>{},()=>props,client,util.errorTrend,loader.loadMonitorErrors),props,calls};}
+function setup(){const props={instanceId:'inst-a',site:'a',dimensionType:'instance_user',value:'4',hours:1,active:true,bucket:'1m',series:[{name:'请求量',data:[['2026-09-27T06:00:00Z',20]]}]};const calls=[];const client={request:(url,opts)=>new Promise((resolve,reject)=>calls.push({url,opts,resolve:value=>resolve({since:'2026-09-27T06:00:00Z',until:'2026-09-27T06:01:00Z',started_at:'2026-09-27T05:00:00Z',observed_at:'2026-09-27T06:01:00Z',covered_until:'2026-09-27T06:01:00Z',dropped:0,total_errors:value.total,codes:(value.items??[]).map(i=>({key:i.code,count:i.count})),buckets:value.buckets??[],truncated:false}),reject}))};const make=new Function('ref','computed','watch','onBeforeUnmount','defineProps','client','errorTrend','loadAggregatedMonitorErrors',compiled+';return {load,data,error,loading,mode,expanded}');return {...make(ref,computed,()=>{},()=>{},()=>props,client,util.errorTrend,aggregated.loadAggregatedMonitorErrors),props,calls};}
 test('inactive panel does not query and parameter changes reject stale results',async()=>{
  const c=setup();c.props.active=false;await c.load();assert.equal(c.calls.length,0);c.props.active=true;c.mode.value='codes';
  const first=c.load();c.props.value='8';const second=c.load();assert.equal(c.calls[0].opts.signal.aborted,true);
- assert.equal(new URL(c.calls[1].url,'http://local').searchParams.get('value'),'8');
+ assert.equal(new URL(c.calls[1].url,'http://local').searchParams.get('dimension_key'),'inst-a:user:8');
  c.calls[1].resolve({configured:true,total:1,items:[{code:'429',count:1}]});await second;
  c.calls[0].resolve({configured:true,total:999,items:[]});await first;assert.equal(c.data.value.total,1);
 });
@@ -70,4 +71,9 @@ test('repeated limits stay within the request budget and never publish partial t
   if(Date.parse(p.get('end_time'))-Date.parse(p.get('start_time'))>60000)throw {code:'error_statistics_limit'};
   return {configured:true,total:0,items:[],buckets:[]};
  }),e=>e.code==='error_statistics_limit');assert.equal(calls,63);
+});
+
+test('same-window statistics expire so newly arrived aggregates become visible',async(t)=>{
+ let now=1_000_000;t.mock.method(Date,'now',()=>now);const c=setup();c.mode.value='codes';const first=c.load();c.calls[0].resolve({total:0,items:[],buckets:[]});await first;
+ now+=16_000;const refresh=c.load();assert.equal(c.calls.length,2);c.calls[1].resolve({total:7,items:[{code:'http:429',count:7}],buckets:[]});await refresh;assert.equal(c.data.value.total,7);
 });

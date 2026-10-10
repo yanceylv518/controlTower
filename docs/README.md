@@ -4,6 +4,8 @@ This folder stores Control Tower-specific design contracts, schema notes, and pr
 
 Current phase documents:
 
+- [Monitor error statistics repair](tasks/2026-10-09-monitor-error-statistics-repair.md): Agent minute aggregation, idempotent statistics ingestion, coverage-aware error-code trends and upgrade requirements.
+
 - [Request monitor implementation](tasks/2026-10-09-request-monitor-implementation.md): ALB site-wide minute trends, latest-minute selection, merged-histogram slow channels, tests and production acceptance gaps.
 
 - `tasks/2026-10-09-alb-access-log-connection.md`: ALB access-log connection settings, encrypted database storage, manual connectivity tests, verification and rollout requirements.

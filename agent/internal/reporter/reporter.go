@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"controltower/internal/errorstats"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -86,4 +87,8 @@ func gzipBytes(data []byte) ([]byte, error) {
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+func (c Client) ErrorStatistics(ctx context.Context, b errorstats.Batch) error {
+	return c.postJSON(ctx, "/api/agent/error-statistics", b, "error statistics")
 }

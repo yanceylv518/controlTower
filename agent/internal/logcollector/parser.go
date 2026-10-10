@@ -49,6 +49,9 @@ type Event struct {
 	RequestID         string
 	UpstreamRequestID string
 	ErrorSummary      string
+	ErrorParsed       bool
+	HTTPStatus        int
+	ErrorCode         string
 	CacheTokens       *int64
 	CacheFieldPresent bool
 	CachePromptTokens *int64
@@ -70,7 +73,7 @@ func ConvertRow(row Row) (Event, bool, error) {
 		attempts = attemptCount(row.Other, row.ChannelID)
 	}
 
-	return Event{
+	event := Event{
 		SourceLogID:       row.ID,
 		CreatedAt:         row.CreatedAt,
 		LogType:           logType,
@@ -95,7 +98,9 @@ func ConvertRow(row Row) (Event, bool, error) {
 		CachePromptTokens: cachePromptTokens,
 		FirstResponseMs:   firstResponseMs,
 		AttemptCount:      attempts,
-	}, true, nil
+	}
+	classifyRowError(&event, row.Content, row.Other)
+	return event, true, nil
 }
 
 func parseCachePromptTokens(other string, promptTokens int64, cacheTokens *int64) (*int64, error) {

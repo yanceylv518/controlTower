@@ -67,6 +67,7 @@ func NewMux(options Options) *http.ServeMux {
 	agentHandler := agentgateway.NewHandlerWithTokens(options.AgentToken, ingestService, options.Store, options.AgentTokenPepper)
 	mux.HandleFunc("/api/agent/heartbeat", agentHandler.HandleHeartbeat)
 	mux.HandleFunc("/api/agent/report", agentHandler.HandleReport)
+	mux.HandleFunc("/api/agent/error-statistics", agentHandler.HandleErrorStatistics)
 
 	passthrough := &dashboard.PassthroughHandler{SecretKey: options.SecretKey, Audit: options.Store}
 	if configStore, ok := any(options.Store).(dashboard.ReadonlyConfigStore); ok {
@@ -196,6 +197,7 @@ func NewMux(options Options) *http.ServeMux {
 	mux.Handle("/api/dashboard/request-monitor/rules", protect(http.HandlerFunc(dashboardHandler.HandleRequestMonitorRules)))
 	mux.Handle("/api/dashboard/metrics", protect(http.HandlerFunc(dashboardHandler.HandleMetrics)))
 	mux.Handle("/api/dashboard/metric-history", protect(http.HandlerFunc(dashboardHandler.HandleMetricHistory)))
+	mux.Handle("/api/dashboard/error-statistics", protect(http.HandlerFunc(dashboardHandler.HandleErrorStatistics)))
 	mux.Handle("/api/dashboard/usage", protect(http.HandlerFunc(dashboardHandler.HandleUsage)))
 	mux.Handle("/api/dashboard/channel-snapshots", protect(http.HandlerFunc(dashboardHandler.HandleChannelSnapshots)))
 	mux.Handle("/api/dashboard/alerts", protect(http.HandlerFunc(dashboardHandler.HandleAlerts)))

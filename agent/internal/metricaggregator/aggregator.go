@@ -5,7 +5,6 @@ import (
 	"strconv"
 	"time"
 
-	"controltower/agent/internal/errorclass"
 	"controltower/agent/internal/logcollector"
 	"controltower/agent/internal/reporter"
 	"controltower/internal/cachemetrics"
@@ -44,6 +43,7 @@ func Aggregate(instanceID string, events []logcollector.Event, cacheHitMinPrompt
 	accumulators := make(map[string]*accumulator)
 	traffic := make(map[customerChannelBucket]int64)
 	for _, event := range events {
+		event.ClassifyError()
 		bucket := event.CreatedAt.Truncate(time.Minute)
 		if event.UserID > 0 && event.ChannelID > 0 {
 			traffic[customerChannelBucket{bucket: bucket, user: event.UserID, channel: event.ChannelID}] += event.TotalTokens
@@ -94,13 +94,14 @@ func (a *accumulator) add(event logcollector.Event, cacheHitMinPromptTokens int6
 		a.metric.OutputSpeed.Add(event.CompletionTokens, event.UseTime, event.AttemptCount, a.metric.DimensionType == "instance_channel")
 	}
 	a.metric.RequestCount++
-	// Consumption logs remain successful even when output tokens are zero.
+	// Consumption logs are successful requests regardless of output token count.
+	// Only explicit error logs contribute to error rates and circuit evidence.
 	if event.LogType == "consume" {
 		a.metric.SuccessCount++
 	}
 	if event.LogType == "error" {
 		a.metric.ErrorCount++
-		if event.LogType == "error" && errorclass.IsUserError(event.ErrorSummary, userCodes) {
+		if event.LogType == "error" && event.HTTPStatus != 0 && userCodes[event.HTTPStatus] {
 			a.metric.UserErrorCount++
 		}
 	}
