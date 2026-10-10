@@ -61,7 +61,7 @@ function page() {
     tuningChannels: async () => { throw new Error('channel directory unavailable') },
   }
   const names = ['computed', 'reactive', 'ref', 'watch', 'onMounted', 'onBeforeUnmount', 'useFiltersStore', 'dashboard', 'formatTime', 'ApiError', 'ElMessage', 'ElMessageBox', 'useMobileViewport', 'hiddenChannelGroupCount', 'matchesChannelGroup', 'MAX_VISIBLE_CHANNEL_GROUPS', 'normalizeChannelGroups', 'splitChannelGroups', 'visibleChannelGroups']
-  const create = new Function(...names, `${compiled}\nreturn { phaseText, watchChannelChanges, stopWatching: () => changesAbort?.abort(), sync, save, savedPolicy, mode, policyConflict, factorExplanation, refreshCurrentRates, ratesError, saveCapacity, saving, mobileEditRow, stageMobileEdit, mobileChanges, mobilePriorityChanges, mobileRuleChanges, mobileSaveOpen, load, refreshRuntime, loadChannelDirectory, applyGroupLocally, acceptStates, stateFor, sampleText, evaluationText, states, refreshError, bases, channels, channelDirectorySite, channelDirectoryLoading, policy, channelSwitchFilter, selectedGroupFilter, toggleGroupFilter, selectedGroupName, displayedRows, activeRows, modelChannelRows, models, modelChannelCount, modelChannelCountLabel, activeModel, dirty, selectModel, fieldChanged, savedBases, originalBase, calculatedWeight, displayedSpeedFactor, coefficientCell, overallEvaluationStatus, coefficientEmptyText, coefficientSpan, displayedPriority, editPriority, priorityLocked, cancelChanges, limitReason, currentRates, ratesReady, rowStatus, channelStatusFor, channelStatusLabel, isDirectoryOnlyRow, eventResult, eventResultClass, events, filteredEvents, eventDateRange };`)
+  const create = new Function(...names, `${compiled}\nreturn { phaseText, watchChannelChanges, stopWatching: () => changesAbort?.abort(), sync, save, savedPolicy, mode, policyConflict, factorExplanation, refreshCurrentRates, ratesError, saveCapacity, saving, mobileEditRow, stageMobileEdit, mobileChanges, mobilePriorityChanges, mobileRuleChanges, mobileSaveOpen, load, refreshRuntime, loadChannelDirectory, applyGroupLocally, acceptStates, stateFor, sampleText, evaluationText, states, refreshError, bases, channels, channelDirectorySite, channelDirectoryLoading, policy, channelQuery, channelSwitchFilter, selectedGroupFilter, toggleGroupFilter, selectedGroupName, displayedRows, activeRows, modelChannelRows, models, modelChannelCount, modelChannelCountLabel, activeModel, dirty, selectModel, fieldChanged, savedBases, originalBase, calculatedWeight, executionWeightText, displayedSpeedFactor, coefficientCell, overallEvaluationStatus, coefficientEmptyText, coefficientSpan, displayedPriority, editPriority, priorityLocked, cancelChanges, limitReason, currentRates, ratesReady, rowStatus, channelStatusFor, channelStatusLabel, isDirectoryOnlyRow, eventResult, eventResultClass, events, filteredEvents, eventDateRange };`)
   const messages = [];
   const view = create(computed, reactive, ref, () => {}, () => {}, () => {}, () => filters, dashboard, String, ApiError, {info() {}, success() {}, error(message) {messages.push(message)}}, {confirm: async () => {}}, () => ref(false), groupUtils.hiddenChannelGroupCount, groupUtils.matchesChannelGroup, groupUtils.MAX_VISIBLE_CHANNEL_GROUPS, groupUtils.normalizeChannelGroups, groupUtils.splitChannelGroups, groupUtils.visibleChannelGroups)
   const initialPolicy = JSON.parse(JSON.stringify({...view.policy, dispatch_modes:{m:'auto'}}));
@@ -297,9 +297,9 @@ test('capacity distinguishes unavailable rates from zero and reports the exceede
   assert.equal(p.limitReason({...b,max_rpm:0,max_tpm:0}), '');
 })
 
-test('channel tuning status remains visible without the removed channel text search', async () => {
+test('channel name and ID search compose with group and status filters', async () => {
   assert.doesNotMatch(sfc, /搜索渠道或分组|搜索渠道 \/ ID \/ 分组/)
-  assert.doesNotMatch(script, /const channelQuery = ref\(/)
+  assert.match(script, /const channelQuery = ref\(/)
   const p = page(); await p.load(); p.activeModel.value='m';
   p.bases.value = [
     {...row, channel_id:1, channel_name:'north', max_rpm:0,max_tpm:0},
@@ -312,6 +312,22 @@ test('channel tuning status remains visible without the removed channel text sea
     {...state(100), channel_id:2, phase:'normal',otps_ready:true,otps_stats_version:1,metric_ready:true},
   ]);
   assert.equal(p.rowStatus(p.bases.value[0]).label,'熔断');
+  assert.deepEqual(p.displayedRows.value.map(item => item.channel_id), [1,2]);
+  p.channelQuery.value = ' NORTH ';
+  assert.deepEqual(p.displayedRows.value.map(item => item.channel_id), [1]);
+  p.channelQuery.value = '#2';
+  assert.deepEqual(p.displayedRows.value.map(item => item.channel_id), [2]);
+  p.selectedGroupFilter.value = {kind:'group',name:'missing'};
+  assert.equal(p.displayedRows.value.length, 0);
+  p.selectedGroupFilter.value = null;
+  p.channelSwitchFilter.value = 'disabled';
+  assert.equal(p.displayedRows.value.length, 0);
+  p.channelSwitchFilter.value = 'enabled';
+  p.channelQuery.value = '1';
+  assert.deepEqual(p.displayedRows.value.map(item => item.channel_id), [1]);
+  p.channelQuery.value = 'missing';
+  assert.equal(p.displayedRows.value.length, 0);
+  p.channelQuery.value = '';
   assert.deepEqual(p.displayedRows.value.map(item => item.channel_id), [1,2]);
 })
 
@@ -791,4 +807,70 @@ test('write failures describe bounded task retries without an operator-only stat
   assert.doesNotMatch(p.phaseText(failed),/人工|只观察|开启自动执行/);
   p.acceptStates('a',[{...state(100),paused_reason:'',write_failure_streak:0,phase:'normal'}]);
   assert.doesNotMatch(p.rowStatus(row).label,/重试已停止|写入失败/);
+});
+
+test('execution wording distinguishes preserved weights from real targets and pending writes', async () => {
+  const p = page(); await p.load();
+  p.savedPolicy.value.dispatch_modes.m = 'auto';
+  const online = { ...row, current_weight: 500 };
+  p.states.value = [{ ...state(148, 500), baseline_ready: false, otps_ready: false }];
+  assert.equal(p.executionWeightText(online), '本轮不调权，保持当前权重：500');
+  p.policy.dispatch_modes.m = 'off';
+  assert.equal(p.executionWeightText({ ...online, base_weight: 0 }), '本轮不调权，保持当前权重：500', 'unsaved edits do not rewrite evaluation');
+  Object.assign(p.states.value[0], { last_written_weight: 500, last_write_at: '2026-10-10T01:00:00Z' });
+  assert.equal(p.executionWeightText({ ...row, snapshot_at: '2026-10-10T00:59:00Z' }), '本轮不调权，保持当前权重：500');
+  p.states.value[0].proposed_weight = 375;
+  p.states.value[0].capacity = { initialized: true, phase: 'reducing' };
+  assert.equal(p.executionWeightText(online), '本轮目标权重：375', 'capacity can reduce even without performance evidence');
+  p.states.value[0].capacity = { pending_command_id: 'cmd', pending_weight: 375 };
+  assert.equal(p.executionWeightText(online), '待确认权重：375（等待执行回执）');
+  p.states.value[0].capacity = undefined;
+  p.states.value[0].paused_reason = 'write_failed';
+  assert.equal(p.executionWeightText(online), '写入失败，目标权重：375（未确认生效）');
+  p.states.value[0] = state(0, 0);
+  p.states.value[0].phase = 'circuit';
+  assert.equal(p.executionWeightText(online), '本轮目标权重：0');
+  p.states.value[0] = state(0, 500);
+  assert.equal(p.executionWeightText(online), '本轮不调权，保持当前权重：500');
+  p.states.value[0] = state(148, 100);
+  assert.equal(p.executionWeightText(online), '本轮目标权重：100');
+  p.savedPolicy.value.dispatch_modes.m = 'observe';
+  assert.equal(p.executionWeightText(online), '观察目标权重：100（不执行）');
+  p.savedPolicy.value.dispatch_modes.m = 'off';
+  assert.equal(p.executionWeightText(online), '未参与调权');
+  p.states.value = [];
+  assert.equal(p.executionWeightText(online), '等待首次评估');
+  assert.doesNotMatch(sfc, /安全限制后拟执行/);
+  assert.equal((sfc.match(/\{\{ executionWeightText\(row\) \}\}/g) ?? []).length, 2, 'desktop and mobile share wording');
+});
+
+test('capacity decrease setting defaults for old policies and survives save and reload', async () => {
+  const p = page();
+  const old = cloneFixture(p.policy);
+  old.dispatch_modes = {m:'auto'};
+  delete old.continuous.capacity_max_decrease_percent;
+  p.dashboard.tuningPolicy = async () => ({mode:'observe', policy:cloneFixture(old)});
+  await p.load();
+  assert.equal(p.policy.continuous.capacity_max_decrease_percent, 25);
+  let saved;
+  p.dashboard.saveTuningPolicy = async (_site, next) => {
+    saved = cloneFixture(next);
+    p.dashboard.tuningPolicy = async () => ({mode:'observe', policy:cloneFixture(saved)});
+  };
+  p.policy.continuous.capacity_max_decrease_percent = 40;
+  p.dirty.value = true;
+  assert.ok(p.mobileRuleChanges.value.some(item => JSON.stringify(item).includes('单次容量最大降幅')));
+  await p.save();
+  assert.equal(saved.continuous.capacity_max_decrease_percent, 40);
+  assert.equal(p.policy.continuous.capacity_max_decrease_percent, 40);
+  assert.equal(p.savedPolicy.value.continuous.capacity_max_decrease_percent, 40);
+  const evidence = {...state(100), capacity:{initialized:true,phase:'normal',utilization:0.2}};
+  evidence.evaluation.params = {...evidence.evaluation.params, capacity_max_decrease_percent:10};
+  p.states.value = [evidence];
+  assert.match(p.factorExplanation(row), /单次容量最大降幅 10%/);
+  p.policy.continuous.capacity_max_decrease_percent = 60;
+  assert.match(p.factorExplanation(row), /单次容量最大降幅 10%/, 'draft and saved rules cannot rewrite evaluation evidence');
+  delete p.states.value[0].evaluation.params.capacity_max_decrease_percent;
+  assert.match(p.factorExplanation(row), /单次容量最大降幅 25%/);
+  assert.match(sfc, /v-model="policy\.continuous\.capacity_max_decrease_percent" :min="1" :max="100"/);
 });

@@ -48,14 +48,14 @@ func TestCapacityHealthyRepeatedDecreasesAndLegacyFeedback(t *testing.T) {
 	_, _, start := capacityFixture()
 	b := ChannelBaseValue{BaseWeight: 100, CurrentWeight: 100, MaxTPM: 1000}
 	s := ContinuousState{MetricTPM: 200}
-	updateCapacity(b, &s, start, start, true)
+	updateCapacity(b, &s, start, start, true, 25)
 	for i := 0; i < 6; i++ {
 		now := start.Add(time.Duration(i) * 30 * time.Second)
 		confirmCapacityWrite(&s, 90-int64(i), now)
 		// Persisted false-positive states from older versions clear on the
 		// next fresh evaluation without requiring the user to remove a cap.
 		s.Capacity.Phase, s.CapacityLimited = "waiting_feedback", true
-		updateCapacity(b, &s, now, now, true)
+		updateCapacity(b, &s, now, now, true, 25)
 		if s.CapacityLimited || s.Capacity.Active || s.Capacity.Phase != "normal" {
 			t.Fatalf("ordinary decrease must not latch capacity: %+v", s.Capacity)
 		}
@@ -117,7 +117,7 @@ func TestCapacityDirectWriteOnlyWaitsForFeedbackDuringProtection(t *testing.T) {
 	for _, active := range []bool{false, true} {
 		f, e, now := capacityFixture()
 		s := ContinuousState{MetricTPM: 200}
-		updateCapacity(f.bases[0], &s, now, now, true)
+		updateCapacity(f.bases[0], &s, now, now, true, 25)
 		s.Capacity.Active = active
 		_, err := e.createTrackedWeightChange(&capacityDirectFake{f}, Recommendation{InstanceID: "i", ChannelID: 1, ProposedWeight: 75}, f.bases[0], &s, now)
 		wantPhase := "normal"
@@ -138,7 +138,7 @@ func TestCapacityTargetAndIntegerFloor(t *testing.T) {
 	}{
 		{100, 1.5, 60, 75}, {100, 1, 90, 90}, {100, 5, 18, 75}, {5, 2, 2, 4}, {3, 2, 1, 2}, {2, 2, 1, 1}, {1, 2, 1, 1}, {0, 2, 0, 0},
 	} {
-		a, b := capacityTarget(test.w, test.u)
+		a, b := capacityTarget(test.w, test.u, 25)
 		if a != test.raw || b != test.bounded {
 			t.Fatalf("%+v got %d/%d", test, a, b)
 		}
@@ -285,8 +285,8 @@ func TestCapacityDiversionAndStrongerPenalty(t *testing.T) {
 	}
 	rates[2] = ChannelMetric{TPM: 100}
 	b.GroupName = "default,vip"
-	if ok, _ := capacityDiversion(b, f.bases, f.states, rates, DefaultPolicy().Continuous); ok {
-		t.Fatal("partial group alternatives cannot solve channel-wide cap")
+	if ok, _ := capacityDiversion(b, f.bases, f.states, rates, DefaultPolicy().Continuous); !ok {
+		t.Fatal("partial group coverage must not block capacity reduction")
 	}
 	b.GroupName = "default"
 	b.CurrentPriority = 10
@@ -434,5 +434,111 @@ func TestCapacityExclusionsAndEvidenceGap(t *testing.T) {
 	e.evaluateContinuous("i", autoPolicy(), now.Add(90*time.Second), f)
 	if f.states[1].Capacity.Fresh {
 		t.Fatal("out-of-order evidence must not advance state")
+	}
+}
+
+func TestCapacityReductionIgnoresGroups(t *testing.T) {
+	for _, tc := range []struct{ name, current, peer string }{
+		{"partial", "default,vip", "default"},
+		{"disjoint", "vip", "default"},
+		{"empty_current", "", "default"},
+		{"empty_peer", "default", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, e, now := capacityFixture()
+			f.bases[0].GroupName, f.bases[1].GroupName = tc.current, tc.peer
+			for _, sec := range []int{0, 30, 60} {
+				f.asOf = now.Add(time.Duration(sec) * time.Second)
+				e.evaluateContinuous("i", autoPolicy(), f.asOf, f)
+				if sec < 60 && len(f.writes) != 0 {
+					t.Fatal("group-independent eligibility must still wait for sustained overload")
+				}
+			}
+			if len(f.writes) != 1 || f.writes[0].ChannelID != 1 || f.writes[0].Rule != "capacity_reduce" || f.writes[0].ProposedWeight != 75 {
+				t.Fatalf("expected bounded capacity reduction across groups: %+v", f.writes)
+			}
+		})
+	}
+}
+
+func TestCapacityDiversionRetainsPeerGuards(t *testing.T) {
+	for _, scenario := range []string{"self_only", "other_model", "other_priority", "zero_base", "zero_weight", "disabled", "circuit", "paused", "capacity_active", "pending_write", "errors", "at_headroom_limit", "unconfigured"} {
+		t.Run(scenario, func(t *testing.T) {
+			f, _, _ := capacityFixture()
+			f.bases[0].GroupName, f.bases[1].GroupName = "vip", "other"
+			peer := &f.bases[1]
+			state := ContinuousState{}
+			rates := map[int64]ChannelMetric{2: {TPM: 200}}
+			p := DefaultPolicy().Continuous
+			switch scenario {
+			case "self_only":
+				f.bases = f.bases[:1]
+			case "other_model":
+				peer.ModelName = "other"
+			case "other_priority":
+				peer.CurrentPriority = 1
+			case "zero_base":
+				peer.BaseWeight = 0
+			case "zero_weight":
+				peer.CurrentWeight = 0
+			case "disabled":
+				state.CircuitDisabled = true
+			case "circuit":
+				state.Phase = "circuit"
+			case "paused":
+				state.PausedReason = "mixed_channel"
+			case "capacity_active":
+				state.Capacity.Active = true
+			case "pending_write":
+				state.Capacity.PendingCommandID = "pending"
+			case "errors":
+				state.SmoothedErrorRate = p.ErrorDegradedRate
+			case "at_headroom_limit":
+				rates[2] = ChannelMetric{TPM: 850}
+			case "unconfigured":
+				peer.MaxTPM = 0
+			}
+			f.states[2] = state
+			ok, reason := capacityDiversion(f.bases[0], f.bases, f.states, rates, p)
+			if scenario == "unconfigured" {
+				if !ok || reason != "peer_capacity_unconfigured" {
+					t.Fatalf("unknown capacity must retain its warning: %v %s", ok, reason)
+				}
+			} else if ok || reason != "no_eligible_headroom" {
+				t.Fatalf("ineligible peer must not permit reduction: %v %s", ok, reason)
+			}
+		})
+	}
+}
+
+func TestCapacityConfiguredDecreaseReachesExecutionAndSnapshot(t *testing.T) {
+	for _, tc := range []struct {
+		percent float64
+		want    int64
+	}{{1, 99}, {10, 90}, {25, 75}, {40, 60}, {100, 60}} {
+		f, e, now := capacityFixture()
+		p := autoPolicy()
+		p.Policy.Continuous.CapacityMaxDecreasePercent = tc.percent
+		for _, sec := range []int{0, 30, 60} {
+			f.asOf = now.Add(time.Duration(sec) * time.Second)
+			e.evaluateContinuous("i", p, f.asOf, f)
+		}
+		s := f.states[1]
+		if len(f.writes) != 1 || f.writes[0].ProposedWeight != tc.want || s.Capacity.ConfirmedWeight != tc.want {
+			t.Fatalf("limit %v: want %d, writes=%+v state=%+v", tc.percent, tc.want, f.writes, s)
+		}
+		if s.Evaluation == nil || s.Evaluation.Params.CapacityMaxDecreasePercent != tc.percent {
+			t.Fatalf("missing policy snapshot: %+v", s.Evaluation)
+		}
+	}
+	for _, tc := range []struct {
+		weight  int64
+		percent float64
+		want    int64
+	}{{3, 1, 2}, {2, 10, 1}, {1, 100, 1}, {0, 100, 0}, {100, 100, 1}} {
+		_, got := capacityTarget(tc.weight, 1000, tc.percent)
+		if got != tc.want {
+			t.Fatalf("integer minimum %+v: got %d", tc, got)
+		}
 	}
 }

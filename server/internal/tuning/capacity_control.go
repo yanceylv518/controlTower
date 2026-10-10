@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"strings"
 	"time"
 )
 
@@ -56,13 +55,13 @@ func capacityUtilization(b ChannelBaseValue, rpm, tpm float64) float64 {
 	return u
 }
 
-func capacityTarget(weight int64, utilization float64) (raw, bounded int64) {
+func capacityTarget(weight int64, utilization, maxDecreasePercent float64) (raw, bounded int64) {
 	if weight <= 1 || utilization < 1 {
 		return weight, weight
 	}
 	raw = max(int64(1), int64(math.Floor(float64(weight)*.90/utilization)))
-	// Integer weights 2 and 3 cannot fall by 25%; explicitly allow one unit.
-	bounded = max(raw, weight-max(int64(1), weight/4), int64(1))
+	// Allow at least one unit so small integer weights can still decrease.
+	bounded = max(raw, weight-max(int64(1), int64(math.Floor(float64(weight)*maxDecreasePercent/100))), int64(1))
 	return
 }
 
@@ -142,7 +141,7 @@ func (e *Engine) resetUnappliedCapacityTransition(site string, s *ContinuousStat
 
 // updateCapacity never interprets absent coverage as zero traffic. A gap resets
 // confirmation, but not the latch or a confirmed write's feedback deadline.
-func updateCapacity(b ChannelBaseValue, s *ContinuousState, asOf, now time.Time, available bool) {
+func updateCapacity(b ChannelBaseValue, s *ContinuousState, asOf, now time.Time, available bool, maxDecreasePercent float64) {
 	c := &s.Capacity
 	if !capacityConfigured(b) {
 		// Keep command acknowledgement tracking even without a capacity cap.
@@ -228,54 +227,32 @@ func updateCapacity(b ChannelBaseValue, s *ContinuousState, asOf, now time.Time,
 		c.Phase = "minimum_weight"
 	case c.Utilization >= 1:
 		c.Phase = "reducing"
-		c.RawTarget, c.BoundWeight = capacityTarget(c.ConfirmedWeight, c.Utilization)
+		c.RawTarget, c.BoundWeight = capacityTarget(c.ConfirmedWeight, c.Utilization, maxDecreasePercent)
 	default:
 		c.Phase = "normal"
 	}
 }
 
-// A weight only redistributes within an eligible model/group/priority pool.
-// Require an alternative in every group, rather than claiming a partial pool
-// can solve a channel-wide cap. Unconfigured peers have unknown headroom.
+// One eligible peer of the same model and priority permits capacity reduction.
+// Group membership does not gate reduction. Unconfigured peers have unknown headroom.
 func capacityDiversion(b ChannelBaseValue, rows []ChannelBaseValue, states map[int64]ContinuousState, rates map[int64]ChannelMetric, p ContinuousDispatchParams) (bool, string) {
-	groups := strings.Split(b.GroupName, ",")
-	unknown := false
-	for _, group := range groups {
-		group = strings.TrimSpace(group)
-		if group == "" {
-			return false, "unknown_group"
+	for _, peer := range rows {
+		state := states[peer.ChannelID]
+		if peer.ChannelID == b.ChannelID || peer.CurrentPriority != b.CurrentPriority || peer.ModelName != b.ModelName ||
+			peer.BaseWeight <= 0 || effectiveCurrentWeight(peer, state) <= 0 || state.CircuitDisabled ||
+			(state.Phase != "" && state.Phase != "normal") || state.PausedReason != "" || state.Capacity.Active || state.Capacity.PendingCommandID != "" || state.SmoothedErrorRate >= p.ErrorDegradedRate {
+			continue
 		}
-		found := false
-		for _, peer := range rows {
-			state := states[peer.ChannelID]
-			if peer.ChannelID == b.ChannelID || peer.CurrentPriority != b.CurrentPriority || peer.ModelName != b.ModelName ||
-				peer.BaseWeight <= 0 || effectiveCurrentWeight(peer, state) <= 0 || state.CircuitDisabled ||
-				(state.Phase != "" && state.Phase != "normal") || state.PausedReason != "" || state.Capacity.Active || state.Capacity.PendingCommandID != "" || state.SmoothedErrorRate >= p.ErrorDegradedRate {
-				continue
-			}
-			m := rates[peer.ChannelID]
-			if capacityUtilization(peer, float64(m.RequestCount), float64(m.TPM)) >= .85 {
-				continue
-			}
-			for _, pg := range strings.Split(peer.GroupName, ",") {
-				if strings.TrimSpace(pg) == group {
-					found = true
-					unknown = unknown || !capacityConfigured(peer)
-					break
-				}
-			}
-			if found {
-				break
-			}
+		m := rates[peer.ChannelID]
+		if capacityUtilization(peer, float64(m.RequestCount), float64(m.TPM)) >= .85 {
+			continue
 		}
-		if !found {
-			return false, "no_eligible_headroom"
+		if !capacityConfigured(peer) {
+			return true, "peer_capacity_unconfigured"
 		}
+		return true, ""
 	}
-	if unknown {
-		return true, "peer_capacity_unconfigured"
-	}
-	return true, ""
+	return false, "no_eligible_headroom"
 }
 
 func applyCapacityTarget(s *ContinuousState) bool {

@@ -315,3 +315,47 @@ func TestSavingWeightDoesNotSyncUnchangedBasePriority(t *testing.T) {
 		t.Fatalf("weight-only update must not synchronize an unchanged base priority: status=%d writes=%#v body=%s", rr.Code, s.priorityWrites, rr.Body.String())
 	}
 }
+
+func TestTuningCapacityDecreasePolicySaveAndRead(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		value  any
+		status int
+		want   float64
+	}{
+		{"legacy", nil, 200, 25}, {"custom", 40, 200, 40}, {"zero", 0, 400, 0}, {"too_high", 101, 400, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := tuning.DefaultPolicy()
+			p.Continuous.Sensitivity = 1.2
+			raw, _ := json.Marshal(p)
+			var shape map[string]any
+			_ = json.Unmarshal(raw, &shape)
+			continuous := shape["continuous"].(map[string]any)
+			delete(continuous, "capacity_max_decrease_percent")
+			if tc.value != nil {
+				continuous["capacity_max_decrease_percent"] = tc.value
+			}
+			body, _ := json.Marshal(map[string]any{"mode": "observe", "policy": shape})
+			s := &tuningStub{}
+			h := NewHandler(nil).WithTuningStore(s)
+			rr := httptest.NewRecorder()
+			h.HandleTuningPolicy(rr, httptest.NewRequest("PUT", "/api/dashboard/tuning/policy?site_id=s", bytes.NewReader(body)))
+			if rr.Code != tc.status {
+				t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+			}
+			if tc.status != 200 {
+				if s.putPolicyCalls != 0 {
+					t.Fatal("invalid policy persisted")
+				}
+				return
+			}
+			rr = httptest.NewRecorder()
+			h.HandleTuningPolicy(rr, httptest.NewRequest("GET", "/api/dashboard/tuning/policy?site_id=s", nil))
+			var got PolicyResponse
+			if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil || rr.Code != 200 || got.Policy.Continuous.CapacityMaxDecreasePercent != tc.want {
+				t.Fatalf("saved policy not returned: %v %s", err, rr.Body.String())
+			}
+		})
+	}
+}

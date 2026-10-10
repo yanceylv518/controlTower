@@ -273,7 +273,7 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 				}
 				if hasRateSnapshot || state.Capacity.Initialized {
 					e.settleCapacityWrite(cs, id, base, &state, now)
-					updateCapacity(base, &state, ratesAsOf, now, !currentRatesUnavailable)
+					updateCapacity(base, &state, ratesAsOf, now, !currentRatesUnavailable, p.CapacityMaxDecreasePercent)
 					if state.Capacity.Fresh && (state.Capacity.Phase == "reducing" || state.Capacity.PendingCommandID != "") {
 						canDivert, reason := capacityDiversion(base, rows, stateByID, currentMetricByID, p)
 						state.Capacity.Reason = reason

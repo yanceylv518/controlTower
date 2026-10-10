@@ -18,43 +18,57 @@ type SchedulingParams struct {
 
 // ContinuousDispatchParams is the v3.0 continuous weighting policy.
 type ContinuousDispatchParams struct {
-	Sensitivity           float64 `json:"sensitivity"`
-	SpeedExponent         float64 `json:"speed_exponent"`
-	SpeedP50Weight        float64 `json:"speed_p50_weight"`
-	SpeedP90Weight        float64 `json:"speed_p90_weight"`
-	SpeedP95Weight        float64 `json:"speed_p95_weight"`
-	SpeedMinFactor        float64 `json:"speed_min_factor"`
-	SpeedMaxFactor        float64 `json:"speed_max_factor"`
-	CacheExponent         float64 `json:"cache_exponent"`
-	CacheMinFactor        float64 `json:"cache_min_factor"`
-	CacheMaxFactor        float64 `json:"cache_max_factor"`
-	OTPSExponent          float64 `json:"otps_exponent"`
-	OTPSMinFactor         float64 `json:"otps_min_factor"`
-	OTPSMaxFactor         float64 `json:"otps_max_factor"`
-	ErrorHealthyRate      float64 `json:"error_healthy_rate"`
-	ErrorDegradedRate     float64 `json:"error_degraded_rate"`
-	ErrorPoorRate         float64 `json:"error_poor_rate"`
-	ErrorFloorRate        float64 `json:"error_floor_rate"`
-	ErrorDegradedFactor   float64 `json:"error_degraded_factor"`
-	ErrorPoorFactor       float64 `json:"error_poor_factor"`
-	ErrorMinFactor        float64 `json:"error_min_factor"`
-	CombinedMinFactor     float64 `json:"combined_min_factor"`
-	CombinedMaxFactor     float64 `json:"combined_max_factor"`
-	MaxIncreasePercent    float64 `json:"max_increase_percent"`
-	CircuitThreshold      float64 `json:"circuit_threshold"`
-	RecoveryThreshold     float64 `json:"recovery_threshold"`
-	CircuitErrorRate      float64 `json:"circuit_error_rate"`
-	RecoveryErrorRate     float64 `json:"recovery_error_rate"`
-	SilentMinutes         int     `json:"silent_minutes"`
-	ProbeIntervalSeconds  int     `json:"probe_interval_seconds"`
-	ProbeCount            int     `json:"probe_count"`
-	SoftStartMultiplier   float64 `json:"soft_start_multiplier"`
-	WindowMinutes         int     `json:"window_minutes"`
-	MinSamples            int64   `json:"min_samples"`
-	SparseLookbackMinutes int     `json:"sparse_lookback_minutes"`
-	FastCircuitEnabled    bool    `json:"fast_circuit_enabled"`
-	FastCircuitMinSamples int64   `json:"fast_circuit_min_samples"`
-	FastCircuitErrorRate  float64 `json:"fast_circuit_error_rate"`
+	Sensitivity                float64 `json:"sensitivity"`
+	SpeedExponent              float64 `json:"speed_exponent"`
+	SpeedP50Weight             float64 `json:"speed_p50_weight"`
+	SpeedP90Weight             float64 `json:"speed_p90_weight"`
+	SpeedP95Weight             float64 `json:"speed_p95_weight"`
+	SpeedMinFactor             float64 `json:"speed_min_factor"`
+	SpeedMaxFactor             float64 `json:"speed_max_factor"`
+	CacheExponent              float64 `json:"cache_exponent"`
+	CacheMinFactor             float64 `json:"cache_min_factor"`
+	CacheMaxFactor             float64 `json:"cache_max_factor"`
+	OTPSExponent               float64 `json:"otps_exponent"`
+	OTPSMinFactor              float64 `json:"otps_min_factor"`
+	OTPSMaxFactor              float64 `json:"otps_max_factor"`
+	ErrorHealthyRate           float64 `json:"error_healthy_rate"`
+	ErrorDegradedRate          float64 `json:"error_degraded_rate"`
+	ErrorPoorRate              float64 `json:"error_poor_rate"`
+	ErrorFloorRate             float64 `json:"error_floor_rate"`
+	ErrorDegradedFactor        float64 `json:"error_degraded_factor"`
+	ErrorPoorFactor            float64 `json:"error_poor_factor"`
+	ErrorMinFactor             float64 `json:"error_min_factor"`
+	CombinedMinFactor          float64 `json:"combined_min_factor"`
+	CombinedMaxFactor          float64 `json:"combined_max_factor"`
+	MaxIncreasePercent         float64 `json:"max_increase_percent"`
+	CapacityMaxDecreasePercent float64 `json:"capacity_max_decrease_percent"`
+	CircuitThreshold           float64 `json:"circuit_threshold"`
+	RecoveryThreshold          float64 `json:"recovery_threshold"`
+	CircuitErrorRate           float64 `json:"circuit_error_rate"`
+	RecoveryErrorRate          float64 `json:"recovery_error_rate"`
+	SilentMinutes              int     `json:"silent_minutes"`
+	ProbeIntervalSeconds       int     `json:"probe_interval_seconds"`
+	ProbeCount                 int     `json:"probe_count"`
+	SoftStartMultiplier        float64 `json:"soft_start_multiplier"`
+	WindowMinutes              int     `json:"window_minutes"`
+	MinSamples                 int64   `json:"min_samples"`
+	SparseLookbackMinutes      int     `json:"sparse_lookback_minutes"`
+	FastCircuitEnabled         bool    `json:"fast_circuit_enabled"`
+	FastCircuitMinSamples      int64   `json:"fast_circuit_min_samples"`
+	FastCircuitErrorRate       float64 `json:"fast_circuit_error_rate"`
+}
+
+// Missing capacity decrease limits in older policies and evaluation snapshots
+// retain the former 25% behavior. Explicit zero still fails validation.
+func (p *ContinuousDispatchParams) UnmarshalJSON(data []byte) error {
+	type plain ContinuousDispatchParams
+	value := plain(*p)
+	value.CapacityMaxDecreasePercent = 25
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	*p = ContinuousDispatchParams(value)
+	return nil
 }
 
 type Policy struct {
@@ -75,7 +89,7 @@ func DefaultPolicy() Policy {
 			OTPSExponent: .25, OTPSMinFactor: .80, OTPSMaxFactor: 1.20,
 			ErrorHealthyRate: .01, ErrorDegradedRate: .05, ErrorPoorRate: .15, ErrorFloorRate: .30,
 			ErrorDegradedFactor: .85, ErrorPoorFactor: .50, ErrorMinFactor: .20,
-			CombinedMinFactor: .50, CombinedMaxFactor: 1.50, MaxIncreasePercent: 10,
+			CombinedMinFactor: .50, CombinedMaxFactor: 1.50, MaxIncreasePercent: 10, CapacityMaxDecreasePercent: 25,
 			CircuitThreshold: .1, RecoveryThreshold: .2,
 			CircuitErrorRate: .30, RecoveryErrorRate: .10,
 			SilentMinutes: 5, ProbeIntervalSeconds: 0, ProbeCount: 10, SoftStartMultiplier: .2,
@@ -150,6 +164,9 @@ func (p Policy) Validate() map[string]string {
 	}
 	if c.MaxIncreasePercent < 1 || c.MaxIncreasePercent > 100 {
 		e["continuous.max_increase_percent"] = "must_be_between_1_and_100"
+	}
+	if math.IsNaN(c.CapacityMaxDecreasePercent) || math.IsInf(c.CapacityMaxDecreasePercent, 0) || c.CapacityMaxDecreasePercent < 1 || c.CapacityMaxDecreasePercent > 100 {
+		e["continuous.capacity_max_decrease_percent"] = "must_be_between_1_and_100"
 	}
 	if c.CircuitThreshold <= 0 || c.CircuitThreshold >= c.RecoveryThreshold {
 		e["continuous.circuit_threshold"] = "must_be_positive_and_less_than_recovery"

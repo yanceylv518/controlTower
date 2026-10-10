@@ -88,3 +88,35 @@ func TestDecodePolicyJSONIgnoresRetiredWriteKnobs(t *testing.T) {
 		t.Fatalf("retired knobs must not fail validation: %#v", fields)
 	}
 }
+
+func TestCapacityDecreasePolicyCompatibilityAndValidation(t *testing.T) {
+	for _, tc := range []struct {
+		raw   string
+		want  float64
+		valid bool
+	}{
+		{`{"continuous":{}}`, 25, true},
+		{`{"continuous":{"capacity_max_decrease_percent":1}}`, 1, true},
+		{`{"continuous":{"capacity_max_decrease_percent":40}}`, 40, true},
+		{`{"continuous":{"capacity_max_decrease_percent":100}}`, 100, true},
+		{`{"continuous":{"capacity_max_decrease_percent":0}}`, 0, false},
+		{`{"continuous":{"capacity_max_decrease_percent":101}}`, 101, false},
+		{`{"continuous":{"capacity_max_decrease_percent":-1}}`, -1, false},
+	} {
+		p, err := DecodePolicyJSON([]byte(tc.raw))
+		if err != nil || p.Continuous.CapacityMaxDecreasePercent != tc.want {
+			t.Fatalf("decode %s: policy=%+v err=%v", tc.raw, p, err)
+		}
+		if valid := p.Validate()["continuous.capacity_max_decrease_percent"] == ""; valid != tc.valid {
+			t.Fatalf("validation %s: %+v", tc.raw, p.Validate())
+		}
+		raw, err := json.Marshal(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		roundtrip, err := DecodePolicyJSON(raw)
+		if err != nil || roundtrip.Continuous.CapacityMaxDecreasePercent != tc.want {
+			t.Fatalf("roundtrip: %v %+v", err, roundtrip)
+		}
+	}
+}
