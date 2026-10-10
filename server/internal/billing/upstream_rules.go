@@ -46,3 +46,24 @@ func SuggestUpstreamPrefixes(up Upstream) []string {
 	sort.Strings(out)
 	return out
 }
+
+// MatchUpstream resolves URLs first, using a confirmed prefix only to disambiguate shared URLs.
+// blocked means the caller must not auto-create an upstream.
+func MatchUpstream(name string, urls map[int64]bool, prefixes map[string]int64, review map[string]bool) (owner int64, prefix string, blocked bool) {
+	if len(urls) == 1 {
+		for id := range urls {
+			return id, "", false
+		}
+	}
+	owner, prefix = ChannelPrefix(name, prefixes)
+	if len(urls) > 1 {
+		if owner != 0 && urls[owner] && !review[prefix] {
+			return owner, prefix, false
+		}
+		return 0, "", true
+	}
+	if review[prefix] {
+		return 0, "", true
+	}
+	return owner, prefix, false
+}

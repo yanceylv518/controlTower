@@ -257,3 +257,23 @@ func TestUpstreamManualTransferAuditIncludesPreviousOwner(t *testing.T) {
 		t.Fatalf("%d %s audits=%+v", w.Code, w.Body.String(), store.audits)
 	}
 }
+
+type removableUpstreamStore struct {
+	urlUpstreamStore
+	args []int64
+	site string
+}
+
+func (s *removableUpstreamStore) RemoveBillingUpstream(ctx context.Context, site string, id, revision, target, targetRevision int64, actor string) (bool, error) {
+	s.site = site
+	s.args = []int64{id, revision, target, targetRevision}
+	return true, nil
+}
+func TestUpstreamMergeDeleteContract(t *testing.T) {
+	store := &removableUpstreamStore{}
+	w := httptest.NewRecorder()
+	BillingUpstreamConfigHandler{Store: store}.ServeHTTP(w, httptest.NewRequest(http.MethodDelete, "/?instance_id=a&id=7&revision=3&target_id=9&target_revision=4", nil))
+	if w.Code != 200 || store.site != "a" || len(store.args) != 4 || store.args[0] != 7 || store.args[1] != 3 || store.args[2] != 9 || store.args[3] != 4 || !strings.Contains(w.Body.String(), `"archived":true`) {
+		t.Fatalf("delete contract %d %s %+v", w.Code, w.Body.String(), store.args)
+	}
+}

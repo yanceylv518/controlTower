@@ -33,7 +33,7 @@ async function page(t, overrides = {}) {
   const confirm = { confirm:async(message,title)=>{confirmations.push({message,title});} };
   const scope=effectScope(),unmount=[];t.after(()=>{unmount.forEach(fn=>fn());scope.stop();});
   const names=['computed','onBeforeUnmount','reactive','ref','watch','ElMessage','ElMessageBox','dashboard','useAsyncData','useFiltersStore','normalizeUpstreamUrl'];
-  const create=new Function(...names,`${script};return {state,current,discountRules,currentDiscount,items,allItems,channels,unassigned,enabledCount,selected,active,search,statusFilter,drawerOpen,form,configuredChannelIDs,originalChannelIDs,configurableChannels,occupiedByOther,ready,sourceAvailable,openEditor,formPrefixes,prefixSuggestions,prefixTransfers,prefixPreview,channelTransfers,urlRecords,associationLabel,configurationLabel,save,saveError,revisionConflict,reloadEditor,synchronize,syncFeedback,syncing,addSuggestedPrefix};`);
+  const create=new Function(...names,`${script};return {state,current,discountRules,currentDiscount,items,allItems,channels,unassigned,enabledCount,selected,active,search,statusFilter,drawerOpen,form,configuredChannelIDs,originalChannelIDs,configurableChannels,occupiedByOther,ready,sourceAvailable,openEditor,formPrefixes,prefixSuggestions,prefixTransfers,prefixPreview,channelTransfers,urlRecords,associationLabel,configurationLabel,save,saveError,revisionConflict,reloadEditor,synchronize,syncFeedback,syncing,addSuggestedPrefix,deleteOpen,deleteTarget,deleting,openDelete,removeUpstream};`);
   const p=scope.run(()=>create(computed,fn=>unmount.push(fn),reactive,ref,watch,{warning:m=>messages.push(m),error:m=>messages.push(m),success:m=>messages.push(m)},confirm,dashboard,useAsyncData,()=>filters,normalizeUpstreamUrl));
   await settle();await nextTick();return {...p,filters,dashboard,calls,messages,events,confirmations,confirm};
 }
@@ -166,7 +166,7 @@ test('saving with a sync failure reports saved configuration separately from cha
 });
 
 test('association origin labels distinguish automatic, manual and legacy data',async t=>{
-  const p=await page(t);assert.equal(p.associationLabel({association_source:'auto'}),'前缀匹配');assert.equal(p.associationLabel({association_source:'manual'}),'手动配置');assert.equal(p.associationLabel({}),'历史关联');p.selected.value='unassigned';assert.equal(p.associationLabel({auto_excluded:true}),'已暂停自动匹配');
+  const p=await page(t);assert.equal(p.associationLabel({association_source:'auto',matched_prefix:'one'}),'前缀匹配');assert.equal(p.associationLabel({association_source:'manual'}),'手动配置');assert.equal(p.associationLabel({}),'历史关联');p.selected.value='unassigned';assert.equal(p.associationLabel({auto_excluded:true}),'已暂停自动匹配');
 });
 
 test('new upstream supports prefixes without URL and validates optional URLs',async t=>{
@@ -221,4 +221,25 @@ test('successful synchronization with failed audit stays online and does not rec
   const p=await page(t);p.dashboard.syncBillingUpstreams=async()=>({...fixture(),sync_error:'billing_upstream_audit_failed'});await p.synchronize();
   assert.equal(p.syncFeedback.value,'渠道同步已完成，操作记录写入失败。');assert.equal(p.sourceAvailable.value,true);
   assert.doesNotMatch(p.syncFeedback.value,/未完成|重试|稍后|不可用/);
+});
+
+test('URL preview precedes conflicting prefixes and shared URL requires a matching owner',async t=>{
+ const data=fixture();data.channels.push({channel_id:71,channel_name:'two_new',base_url:'https://one.example'},{channel_id:72,channel_name:'unknown_new',base_url:'https://shared.example'});
+ const p=await page(t,{billingUpstreams:async()=>data});p.openEditor(p.allItems.value[0]);
+ assert.ok(p.prefixPreview.value.automatic.some(c=>c.channel_id===71));assert.ok(!p.prefixPreview.value.automatic.some(c=>c.channel_id===72));
+ assert.equal(p.associationLabel({association_source:'auto'}),'URL 匹配');
+});
+test('deleting occupied upstream requires merge target and sends both revisions',async t=>{
+ const deleted=[];const p=await page(t,{deleteBillingUpstream:async(...args)=>{deleted.push(args);return {deleted:true,archived:true};}});
+ p.openEditor(p.allItems.value[0]);p.openDelete();await p.removeUpstream();assert.equal(deleted.length,0);
+ p.deleteTarget.value=2;await p.removeUpstream();assert.deepEqual(deleted,[['a',1,3,2,4]]);assert.equal(p.deleteOpen.value,false);assert.equal(p.drawerOpen.value,false);
+});
+test('deletion conflict preserves dialog and cancelled confirmation never deletes',async t=>{
+ const p=await page(t,{deleteBillingUpstream:async()=>{throw Error('discount_overlap')}});p.openEditor(p.allItems.value[0]);p.openDelete();p.deleteTarget.value=2;
+ await p.removeUpstream();assert.equal(p.deleteOpen.value,true);assert.ok(p.messages.some(m=>m.includes('折扣有效期重叠')));
+ let called=false;p.dashboard.deleteBillingUpstream=async()=>{called=true};p.confirm.confirm=async()=>{throw Error('cancel')};await p.removeUpstream();assert.equal(called,false);
+});
+test('late delete response cannot close a new-site editor',async t=>{
+ const wait=deferred();const p=await page(t,{deleteBillingUpstream:()=>wait.promise});p.openEditor(p.allItems.value[0]);p.openDelete();p.deleteTarget.value=2;
+ const deleting=p.removeUpstream();await settle();p.filters.site_id='b';await settle();p.openEditor(p.allItems.value[0]);wait.resolve({deleted:true});await deleting;assert.equal(p.drawerOpen.value,true);
 });

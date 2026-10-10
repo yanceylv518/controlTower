@@ -18,6 +18,7 @@ let contextVersion = 0, editorVersion = 0;
 const statusFilter = ref('all'), selected = ref<number | 'unassigned' | null>(null);
 const configuredChannelIDs = ref<number[]>([]), originalChannelIDs = ref<number[]>([]), configSearch = ref('');
 const drawerOpen = ref(false), saving = ref(false), syncing = ref(false), restoringChannel = ref(0);
+const deleteOpen = ref(false), deleteTarget = ref<number>(), deleting = ref(false);
 const syncFeedback = ref(''), saveError = ref(''), revisionConflict = ref(false);
 const form = reactive<BillingUpstream>({ id: 0, instance_id: '', name: '', url: '', urls: [], channel_prefixes: [], enabled: true, remark: '', channels: [] });
 const state = useAsyncData(async (signal?: AbortSignal) => {
@@ -72,7 +73,17 @@ const draftRules = computed(() => [
   ...formPrefixes.value.map(prefix => ({ prefix, owner: form.id })),
 ].sort((a, b) => b.prefix.length - a.prefix.length));
 function matchingPrefix(channel: BillingReadonlyChannel) {
+  const endpoint = normalizeUpstreamUrl(channel.base_url);
+  const candidates = allItems.value.filter(up => {
+    const urls = [...(up.urls || []), ...up.channels.map(c => channelMap.value.get(c.channel_id)?.base_url || '')];
+    if (up.id === form.id) urls.push(form.url || '');
+    return endpoint && urls.some(url => normalizeUpstreamUrl(url) === endpoint);
+  }).map(up => up.id);
+  if (!form.id && endpoint && normalizeUpstreamUrl(form.url) === endpoint) candidates.push(0);
+  if (candidates.length === 1) return candidates[0] === form.id ? 'URL' : '';
   const rule = draftRules.value.find(rule => channel.channel_name === rule.prefix || channel.channel_name.startsWith(rule.prefix + '_'));
+  if (rule && rule.owner !== form.id && allItems.value.find(up => up.id === rule.owner)?.review_prefixes?.includes(rule.prefix)) return '';
+  if (candidates.length > 1 && (!rule || !candidates.includes(rule.owner))) return '';
   return rule?.owner === form.id ? rule.prefix : '';
 }
 const prefixPreview = computed(() => {
@@ -94,7 +105,7 @@ function occupiedByOther(id: number) { const owner = owners.value.get(id); retur
 function associationLabel(channel: ChannelRow) {
   if (isUnassigned.value && channel.auto_excluded) return '已暂停自动匹配';
   if (isUnassigned.value) return '待匹配';
-  return channel.association_source === 'manual' ? '手动配置' : channel.association_source === 'auto' ? '前缀匹配' : '历史关联';
+  return channel.association_source === 'manual' ? '手动配置' : channel.association_source === 'auto' ? channel.matched_prefix ? '前缀匹配' : 'URL 匹配' : '历史关联';
 }
 function configurationLabel(channel: ChannelRow) {
   const owner = occupiedByOther(channel.channel_id);
@@ -110,7 +121,7 @@ const urlRecords = computed(() => (form.urls || []).map(url => {
   const shared = allItems.value.filter(u => u.id !== form.id && (u.urls || []).includes(url)).length;
   return { url, count, shared, label: !sourceAvailable.value ? '使用状态未知' : count ? `当前使用 · ${count} 个渠道` : '历史 / 手工记录' };
 }));
-const ready = computed(() => !!filters.site_id && !!current.value && !state.loading.value && !syncing.value && !state.error.value);
+const ready = computed(() => !deleting.value && !!filters.site_id && !!current.value && !state.loading.value && !syncing.value && !state.error.value);
 watch(items, list => {
   if (selected.value !== 'unassigned' && !list.some(u => u.id === selected.value)) selected.value = list[0]?.id ?? null;
 });
@@ -119,7 +130,7 @@ watch(drawerOpen, () => { editorVersion++; }, { flush: 'sync' });
 watch(() => filters.site_id, () => {
   contextVersion++; saving.value = false; syncing.value = false; restoringChannel.value = 0;
   state.cancel(); state.data.value = undefined;
-  selected.value = null; drawerOpen.value = false; search.value = ''; channelSearch.value = ''; statusFilter.value = 'all'; syncFeedback.value = ''; saveError.value = '';
+  selected.value = null; drawerOpen.value = false; deleteOpen.value = false; deleting.value = false; search.value = ''; channelSearch.value = ''; statusFilter.value = 'all'; syncFeedback.value = ''; saveError.value = '';
   if (filters.site_id) void synchronize([], true);
 }, { immediate: true, flush: 'sync' });
 void filters.loadInstances();
@@ -142,6 +153,28 @@ async function synchronize(restoreIDs: number[] = [], initial = false) {
       if (version === contextVersion) { syncing.value = false; restoringChannel.value = 0; }
     }
   }
+}
+function openDelete() { deleteTarget.value = undefined; deleteOpen.value = true; }
+async function removeUpstream() {
+  const source = allItems.value.find(up => up.id === form.id), target = allItems.value.find(up => up.id === deleteTarget.value);
+  if (!source || deleting.value || saving.value || !ready.value) return;
+  if (source.channels.length && !target) { ElMessage.warning('请先选择渠道转入的正确上游'); return; }
+  const site = filters.site_id, version = contextVersion, editor = editorVersion;
+  try { await ElMessageBox.confirm(target ? `将 ${source.name} 的全部渠道、URL 和前缀合并到 ${target.name}，并删除错误上游。折扣将复制，冲突时整笔取消；历史账单不变。` : `删除 ${source.name}？有账单或折扣历史时保留记录并从日常列表隐藏。`, '确认删除上游', { type: 'warning', confirmButtonText: target ? '合并并删除' : '删除', cancelButtonText: '取消' }); } catch { return; }
+  if (version !== contextVersion || editor !== editorVersion || !deleteOpen.value || deleting.value || saving.value) return;
+  deleting.value = true; saving.value = true;
+  try {
+    const result = await dashboard.deleteBillingUpstream(site, source.id, source.revision, target?.id, target?.revision);
+    if (version !== contextVersion) return;
+    deleteOpen.value = false; drawerOpen.value = false; selected.value = target?.id || null;
+    ElMessage.success(result.archived ? '已移出日常列表，历史记录保留' : '已删除错误上游');
+    if (result.sync_error) ElMessage.warning('操作已完成，但操作记录写入失败');
+    await state.reload();
+  } catch (error) {
+    if (version !== contextVersion) return;
+    const message = String(error);
+    ElMessage.error(message.includes('discount_overlap') ? '两个上游的渠道折扣有效期重叠，请先调整折扣再合并' : message.includes('upstream_billing_busy') ? '相关上游有账单正在生成，请完成或取消后重试' : message.includes('revision_conflict') ? '上游配置已变化，请关闭弹窗并刷新后重试' : '删除未完成，现有配置已保留');
+  } finally { if (version === contextVersion) { deleting.value = false; saving.value = false; } }
 }
 function openEditor(row?: BillingUpstream) {
   if (!ready.value || saving.value) return;
@@ -193,7 +226,7 @@ async function save() {
     }
     const saved = await dashboard.saveBillingUpstream(payload);
     if (version !== contextVersion) return;
-    drawerOpen.value = false; search.value = ''; statusFilter.value = 'all';
+    drawerOpen.value = false; deleteOpen.value = false; deleting.value = false; search.value = ''; statusFilter.value = 'all';
     const auditFailed = saved.sync_error === 'billing_upstream_audit_failed';
     syncFeedback.value = auditFailed ? '配置已保存，操作记录写入失败。' : saved.sync_error ? '上游信息已保存，但自动同步未完成。请稍后点击“同步渠道”。' : '';
     await state.reload();
@@ -252,12 +285,12 @@ async function save() {
               <header class="detail-heading">
                 <div class="detail-title">
                   <div><h3>{{ isUnassigned ? '未分配渠道' : active?.name }}</h3><span v-if="active" class="status" :class="{ enabled: active.enabled }"><i/>{{ active.enabled ? '自动出账已开启' : '自动出账已关闭' }}</span></div>
-                  <p v-if="isUnassigned || active?.remark">{{ isUnassigned ? '渠道按前缀自动关联；手动移出的渠道可在这里恢复自动匹配，也可从上游信息中手动指定归属。' : active?.remark }}</p>
+                  <p v-if="isUnassigned || active?.remark">{{ isUnassigned ? '后台每30秒同步，先按URL、再按前缀关联；手动移出的渠道可在这里恢复自动匹配，也可手动指定归属。' : active?.remark }}</p>
                 </div>
                 <div v-if="active" class="detail-actions"><el-button :icon="Edit" :disabled="!ready || saving" @click="openEditor(active)">上游信息</el-button></div>
               </header>
               <div class="channel-toolbar">
-                <div class="channel-title"><h4>{{ isUnassigned ? '可关联渠道' : '关联渠道' }}</h4><span>{{ sourceAvailable || !isUnassigned ? detailChannels.length : '—' }}</span><el-tooltip content="前缀匹配来自自动同步；手动配置优先保留，历史关联表示旧数据未记录来源。" placement="top"><button class="help-button" aria-label="关联来源说明"><el-icon><InfoFilled/></el-icon></button></el-tooltip></div>
+                <div class="channel-title"><h4>{{ isUnassigned ? '可关联渠道' : '关联渠道' }}</h4><span>{{ sourceAvailable || !isUnassigned ? detailChannels.length : '—' }}</span><el-tooltip content="自动同步先按URL、再按前缀匹配；已有归属优先保留，历史关联表示旧数据未记录来源。" placement="top"><button class="help-button" aria-label="关联来源说明"><el-icon><InfoFilled/></el-icon></button></el-tooltip></div>
                 <div class="channel-tools"><el-input v-model="channelSearch" :prefix-icon="Search" clearable placeholder="搜索渠道名称、ID 或模型" aria-label="搜索渠道名称、ID 或模型"/></div>
               </div>
               <el-table v-mobile-cards :data="visibleChannels" row-key="channel_id" max-height="max(300px, calc(100vh - 210px))" class="channel-table" :empty-text="channelSearch ? '没有匹配的渠道' : isUnassigned ? sourceAvailable ? '所有渠道均已分配' : '渠道源不可用，暂无法读取未分配渠道' : '尚未关联渠道'">
@@ -283,23 +316,23 @@ async function save() {
         <section class="info-basics">
           <el-form-item label="上游名称" required><el-input v-model="form.name" maxlength="128" placeholder="上游的显示名称"/><small v-if="form.id" class="muted">ID #{{ form.id }}</small></el-form-item>
           <el-form-item label="渠道前缀"><el-select v-model="form.channel_prefixes" multiple filterable allow-create default-first-option :reserve-keyword="false" placeholder="输入前缀后按回车，可添加多个" style="width:100%"><el-option v-for="prefix in form.channel_prefixes || []" :key="prefix" :label="prefix" :value="prefix"/></el-select></el-form-item>
-          <p class="picker-hint">如 pindu 匹配 pindu 及 pindu_模型。区分大小写，多条命中时取最长前缀。</p>
+          <p class="picker-hint">URL 未命中时，如 pindu 匹配 pindu 及 pindu_模型。区分大小写，多条命中时取最长前缀。</p>
           <p v-if="form.review_prefixes?.length" class="prefix-review">待确认前缀：{{ form.review_prefixes.join('、') }}。这些历史推导规则尚未自动关联新渠道，确认保存后启用；不属于此上游的请移除。</p>
-          <div v-if="prefixSuggestions.length" class="prefix-suggestions"><small>根据已有渠道建议，点击添加</small><div><el-button v-for="prefix in prefixSuggestions" :key="prefix" size="small" plain @click="addSuggestedPrefix(prefix)">{{ prefix }}<span v-if="prefixOwners.get(prefix) && prefixOwners.get(prefix)!.id !== form.id"> · 转移规则</span><el-icon><Plus/></el-icon></el-button></div></div>
+          <div v-if="prefixSuggestions.length" class="prefix-suggestions"><small>根据已有渠道建议，点击添加</small><div><el-button v-for="prefix in prefixSuggestions" :key="prefix" size="small" plain @click="addSuggestedPrefix(prefix)">{{ prefix }}<span v-if="prefixOwners.get(prefix) && prefixOwners.get(prefix)!.id !== form.id"> · 当前属于 {{ prefixOwners.get(prefix)!.name }}</span><el-icon><Plus/></el-icon></el-button></div></div>
           <div v-if="prefixTransfers.length" class="prefix-review"><div v-for="item in prefixTransfers" :key="item.prefix">前缀 {{ item.prefix }} 将从 {{ item.owner.name }} 转入。</div><small>保存时确认；原有渠道只转移本次勾选项。</small></div>
           <el-form-item label="备注"><el-input v-model="form.remark" type="textarea" :rows="2" maxlength="500" show-word-limit placeholder="用途或账户说明"/></el-form-item>
           <el-form-item label="自动出账"><el-switch v-model="form.enabled" active-text="开启" inactive-text="关闭"/></el-form-item>
           <div class="url-summary">
             <h4>关联 URL <small class="muted">{{ urlRecords.length }} 个</small></h4><p class="picker-hint">随渠道收集，历史地址保留；同一地址可由多个上游使用。</p>
             <ul v-if="urlRecords.length" class="info-url-list"><li v-for="record in urlRecords" :key="record.url"><span>{{ record.url }}</span><small>{{ record.label }}<template v-if="record.shared"> · 另 {{ record.shared }} 个上游有记录</template></small></li></ul><p v-else class="muted">暂无 URL</p>
-            <details class="url-extra"><summary>手动补充 URL</summary><el-input v-model="form.url" maxlength="2048" placeholder="https://api.example.com" clearable/><p class="picker-hint">仅补充地址记录；自动关联依据渠道前缀。</p></details>
+            <details class="url-extra"><summary>手动补充 URL</summary><el-input v-model="form.url" maxlength="2048" placeholder="https://api.example.com" clearable/><p class="picker-hint">先按 URL 自动关联；未匹配时按前缀关联并收集新 URL。</p></details>
           </div>
         </section>
         <section class="info-channels">
           <div class="config-heading"><h4>渠道列表配置</h4><span class="muted">已选 {{ configuredChannelIDs.length }} 个</span></div>
           <p class="picker-hint">手动配置不受前缀限制；勾选其他上游的渠道可转入。移出渠道后会暂停其自动匹配。</p>
-          <div class="prefix-preview" aria-label="前缀匹配预览">
-            <template v-if="sourceAvailable"><div><b>保存后的自动匹配预览</b><span>{{ formPrefixes.length }} 个前缀 · 命中 {{ prefixPreview.matched.length }} 个渠道</span></div><p>新增自动关联 <strong>{{ prefixPreview.automatic.length }}</strong> 个<span v-if="prefixPreview.occupied.length"> · 已属其他上游 {{ prefixPreview.occupied.length }} 个</span><span v-if="prefixPreview.excluded.length"> · 已暂停 {{ prefixPreview.excluded.length }} 个</span></p><details v-if="prefixPreview.automatic.length"><summary>查看将自动关联的渠道</summary><ul><li v-for="channel in prefixPreview.automatic" :key="channel.channel_id">{{ channel.channel_name }} <small>#{{ channel.channel_id }} · {{ matchingPrefix(channel) }}</small></li></ul></details></template>
+          <div class="prefix-preview" aria-label="URL 与前缀匹配预览">
+            <template v-if="sourceAvailable"><div><b>保存后的自动匹配预览</b><span>URL 优先 · 命中 {{ prefixPreview.matched.length }} 个渠道</span></div><p>新增自动关联 <strong>{{ prefixPreview.automatic.length }}</strong> 个<span v-if="prefixPreview.occupied.length"> · 已属其他上游 {{ prefixPreview.occupied.length }} 个</span><span v-if="prefixPreview.excluded.length"> · 已暂停 {{ prefixPreview.excluded.length }} 个</span></p><el-button v-if="prefixPreview.occupied.length" link type="primary" @click="configuredChannelIDs = [...new Set([...configuredChannelIDs, ...prefixPreview.occupied.map(c => c.channel_id)])]">将已属其他上游的匹配渠道一并转入</el-button><details v-if="prefixPreview.automatic.length"><summary>查看将自动关联的渠道</summary><ul><li v-for="channel in prefixPreview.automatic" :key="channel.channel_id">{{ channel.channel_name }} <small>#{{ channel.channel_id }} · {{ matchingPrefix(channel) }}</small></li></ul></details></template>
             <p v-else>渠道源不可用，暂无法预览匹配或调整渠道。基本信息仍可保存。</p>
           </div>
           <el-input v-model="configSearch" :prefix-icon="Search" clearable placeholder="搜索渠道名称、ID 或 URL" aria-label="搜索可配置渠道"/>
@@ -311,7 +344,13 @@ async function save() {
           <p class="configuration-note">配置只影响后续生成的账单。已有账单若需修正，请在上游账单中选择“覆盖已有账单”。</p>
         </section>
       </el-form>
-      <template #footer><el-button :disabled="saving" @click="drawerOpen = false">取消</el-button><el-button type="primary" :loading="saving" :disabled="!ready" @click="save">保存</el-button></template>
+      <template #footer><el-button v-if="form.id" type="danger" plain style="float:left" :disabled="saving || !ready" @click="openDelete">删除上游</el-button><el-button :disabled="saving" @click="drawerOpen = false">取消</el-button><el-button type="primary" :loading="saving" :disabled="!ready" @click="save">保存</el-button></template>
+    </el-dialog>
+    <el-dialog v-model="deleteOpen" title="删除错误上游" width="min(520px, calc(100vw - 32px))" align-center :close-on-click-modal="!deleting" :close-on-press-escape="!deleting" :show-close="!deleting">
+      <p>将删除已保存的“{{ form.name }}”，当前未保存的编辑不会生效。</p>
+      <p>若有关联渠道，请选择正确上游，渠道、URL 和前缀会一起合并。有账单或折扣历史时保留原记录并隐藏，源渠道不会删除。</p>
+      <el-select v-model="deleteTarget" placeholder="选择合并目标（空上游可不选）" clearable filterable style="width:100%" :disabled="deleting"><el-option v-for="up in allItems.filter(up => up.id !== form.id)" :key="up.id" :label="`${up.name} #${up.id}`" :value="up.id"/></el-select>
+      <template #footer><el-button :disabled="deleting" @click="deleteOpen = false">取消</el-button><el-button type="danger" :loading="deleting" @click="removeUpstream">{{ deleteTarget ? '合并并删除' : '删除' }}</el-button></template>
     </el-dialog>
   </AppShell>
 </template>

@@ -3,6 +3,7 @@ package mysqlstore
 import (
 	"context"
 	"database/sql"
+	"log"
 	"sort"
 	"strings"
 	"sync"
@@ -27,6 +28,9 @@ type upstreamRefreshState struct {
 }
 
 func (s Store) refreshBillingUpstreamChannels(ctx context.Context, site string) error {
+	return s.refreshUpstreamChannels(ctx, site, false)
+}
+func (s Store) refreshUpstreamChannels(ctx context.Context, site string, force bool) error {
 	if s.upstreamSource == nil {
 		return nil
 	}
@@ -36,7 +40,7 @@ func (s Store) refreshBillingUpstreamChannels(ctx context.Context, site string) 
 		state = value.(*upstreamRefreshState)
 		state.mu.Lock()
 		defer state.mu.Unlock()
-		if time.Since(state.at) < 30*time.Second {
+		if !force && time.Since(state.at) < 30*time.Second {
 			return nil
 		}
 	}
@@ -46,7 +50,7 @@ func (s Store) refreshBillingUpstreamChannels(ctx context.Context, site string) 
 	if err != nil {
 		return err
 	}
-	if err = s.SyncBillingUpstreamChannels(ctx, site, channels); err != nil {
+	if err = s.SyncBillingUpstreamChannels(queryCtx, site, channels); err != nil {
 		return err
 	}
 	if state != nil {
@@ -61,6 +65,9 @@ func (s Store) SyncBillingUpstreamChannels(ctx context.Context, site string, cha
 // Discovery preserves manual/legacy ownership. Prefix transfers change rules for
 // future channels; moving an existing channel requires an explicit owner check.
 func (s Store) SyncBillingUpstreamChannelsWithRestore(ctx context.Context, site string, channels []billing.ConfiguredChannel, restore []int64, actor string) error {
+	return retryBillingDeadlock(ctx, func() error { return s.syncBillingUpstreamChannelsAttempt(ctx, site, channels, restore, actor) })
+}
+func (s Store) syncBillingUpstreamChannelsAttempt(ctx context.Context, site string, channels []billing.ConfiguredChannel, restore []int64, actor string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -129,6 +136,29 @@ func (s Store) SyncBillingUpstreamChannelsWithRestore(ctx context.Context, site 
 	changed := map[int64]bool{}
 	created := map[int64]bool{}
 	now := time.Now().UTC()
+	// Seed URLs from every existing binding before considering new channels.
+	// Newly learned URLs from new channels are persisted, but don't bias this batch by ID order.
+	for _, c := range ordered {
+		owner := owners[c.ChannelID]
+		endpoint, e := billing.NormalizeUpstreamURL(c.BaseURL)
+		if owner == 0 || e != nil || knownURLs[owner][endpoint] {
+			continue
+		}
+		if _, e = appendUpstreamURL(ctx, tx, site, owner, endpoint, now); e != nil {
+			return e
+		}
+		knownURLs[owner][endpoint] = true
+		changed[owner] = true
+	}
+	urlOwners := map[string]map[int64]bool{}
+	for id, urls := range knownURLs {
+		for u := range urls {
+			if urlOwners[u] == nil {
+				urlOwners[u] = map[int64]bool{}
+			}
+			urlOwners[u][id] = true
+		}
+	}
 	for _, c := range ordered {
 		if c.ChannelID <= 0 || blocked[c.ChannelID] {
 			continue
@@ -136,10 +166,12 @@ func (s Store) SyncBillingUpstreamChannelsWithRestore(ctx context.Context, site 
 		owner := owners[c.ChannelID]
 		matched := ""
 		if owner == 0 {
-			owner, matched = billing.ChannelPrefix(c.ChannelName, prefixes)
-			if reviewPrefixes[matched] {
+			endpoint, _ := billing.NormalizeUpstreamURL(c.BaseURL)
+			var ambiguous bool
+			owner, matched, ambiguous = billing.MatchUpstream(c.ChannelName, urlOwners[endpoint], prefixes, reviewPrefixes)
+			if ambiguous {
 				continue
-			} // Block pending rules instead of falling back to a shorter prefix or inventing a duplicate upstream.
+			}
 			if owner == 0 {
 				p, _, _ := strings.Cut(strings.TrimSpace(c.ChannelName), "_")
 				p = strings.TrimSpace(p)
@@ -215,4 +247,43 @@ func (s Store) ListBillingUpstreamsWithChannels(ctx context.Context, site string
 		return nil, err
 	}
 	return s.listBillingUpstreams(ctx, site)
+}
+
+// RunBillingUpstreamSync discovers channels even when no page or billing job is opened.
+func (s Store) RunBillingUpstreamSync(ctx context.Context) {
+	s.runBillingUpstreamSync(ctx, 30*time.Second)
+}
+func (s Store) runBillingUpstreamSync(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		sites, err := s.ListBillingSites(ctx)
+		if err != nil && ctx.Err() == nil {
+			log.Print("upstream sync: site directory unavailable")
+		}
+		var wg sync.WaitGroup
+		limit := make(chan struct{}, 4)
+		for _, site := range sites {
+			select {
+			case <-ctx.Done():
+				wg.Wait()
+				return
+			case limit <- struct{}{}:
+			}
+			wg.Add(1)
+			go func(site string) {
+				defer wg.Done()
+				defer func() { <-limit }()
+				if err := s.refreshUpstreamChannels(ctx, site, true); err != nil && ctx.Err() == nil {
+					log.Printf("upstream sync failed for site %s; retained saved configuration", site)
+				}
+			}(site)
+		}
+		wg.Wait()
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }

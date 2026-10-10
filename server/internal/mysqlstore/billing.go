@@ -140,7 +140,7 @@ func (s Store) LatestBillingBalances(ctx context.Context, instanceID string, bef
 }
 
 func (s Store) ListBillingSites(ctx context.Context) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT COALESCE(NULLIF(site_id,''),id) FROM instances WHERE enabled=1 AND logs_readonly_dsn<>'' ORDER BY COALESCE(NULLIF(site_id,''),id)`)
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT COALESCE(NULLIF(site_id,''),id) FROM instances WHERE deleted=0 AND enabled=1 AND logs_readonly_dsn<>'' ORDER BY COALESCE(NULLIF(site_id,''),id)`)
 	if err != nil {
 		return nil, err
 	}

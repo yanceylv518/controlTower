@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"controltower/server/internal/billing"
+	"controltower/server/internal/storage"
 	"github.com/go-sql-driver/mysql"
 )
 
@@ -24,6 +25,25 @@ type upstreamURLSource struct {
 func (s *upstreamURLSource) CurrentChannels(_ context.Context, site string) ([]billing.ConfiguredChannel, error) {
 	s.calls++
 	return s.channels, s.err
+}
+
+type upstreamPollingSource struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (s *upstreamPollingSource) CurrentChannels(ctx context.Context, site string) ([]billing.ConfiguredChannel, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls++
+	if s.calls == 1 {
+		return nil, fmt.Errorf("temporary source failure")
+	}
+	items := []billing.ConfiguredChannel{{ChannelID: 1, ChannelName: "periodic_a", BaseURL: "https://periodic.example"}}
+	if s.calls > 2 {
+		items = append(items, billing.ConfiguredChannel{ChannelID: 2, ChannelName: "unrelated_b", BaseURL: "https://periodic.example"})
+	}
+	return items, nil
 }
 
 func TestBillingUpstreamURLMySQL(t *testing.T) {
@@ -105,6 +125,110 @@ func TestBillingUpstreamURLMySQL(t *testing.T) {
 		}
 		return saved
 	}
+	t.Run("URL first seeded before discovery and merge delete", func(t *testing.T) {
+		site := "url-first"
+		a := put(billing.Upstream{InstanceID: site, Name: "Original", ChannelPrefixes: []string{"original"}, Channels: []billing.UpstreamChannel{{ChannelID: 90, ChannelName: "qujing_old"}}})
+		b := put(billing.Upstream{InstanceID: site, Name: "qujing", ChannelPrefixes: []string{"qujing"}})
+		source := []billing.ConfiguredChannel{{ChannelID: 1, ChannelName: "qujing_new", BaseURL: "https://original.example/"}, {ChannelID: 90, ChannelName: "qujing_old", BaseURL: "https://original.example"}, {ChannelID: 2, ChannelName: "qujing_other", BaseURL: "https://other.example"}}
+		if e := s.SyncBillingUpstreamChannels(ctx, site, source); e != nil {
+			t.Fatal(e)
+		}
+		a = load(site, a.ID)
+		b = load(site, b.ID)
+		if len(a.Channels) != 2 || len(b.Channels) != 1 || len(a.URLs) != 1 || len(b.URLs) != 1 {
+			t.Fatalf("URL first or prefix learning failed: %+v %+v", a, b)
+		}
+		if _, e := s.RemoveBillingUpstream(ctx, site, b.ID, b.Revision, a.ID, a.Revision-1, "test"); !errors.Is(e, billing.ErrUpstreamRevisionConflict) {
+			t.Fatalf("stale merge accepted: %v", e)
+		}
+		if len(load(site, b.ID).Channels) != 1 {
+			t.Fatal("failed merge changed binding")
+		}
+		if archived, e := s.RemoveBillingUpstream(ctx, site, b.ID, b.Revision, a.ID, a.Revision, "test"); e != nil || archived {
+			t.Fatalf("merge/delete: %v %v", archived, e)
+		}
+		a = load(site, a.ID)
+		if len(a.Channels) != 3 || len(a.URLs) != 2 || len(a.ChannelPrefixes) != 2 {
+			t.Fatalf("merge lost configuration: %+v", a)
+		}
+		if e := s.SyncBillingUpstreamChannels(ctx, site, source); e != nil {
+			t.Fatal(e)
+		}
+		items, e := s.ListBillingUpstreamsConfig(ctx, site)
+		if e != nil || len(items) != 1 {
+			t.Fatalf("deleted upstream recreated: %v %+v", e, items)
+		}
+		if _, e = s.RemoveBillingUpstream(ctx, site, a.ID, a.Revision, 0, 0, "test"); !errors.Is(e, billing.ErrUpstreamInUse) {
+			t.Fatalf("deleted occupied without destination: %v", e)
+		}
+	})
+	t.Run("archive retains discounts and blocks conflicting merge", func(t *testing.T) {
+		site := "merge-history"
+		a := put(billing.Upstream{InstanceID: site, Name: "Source", Channels: []billing.UpstreamChannel{{ChannelID: 21, ChannelName: "Source_x"}}})
+		b := put(billing.Upstream{InstanceID: site, Name: "Target"})
+		from := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+		rule, e := s.PutBillingDiscountRule(ctx, billing.DiscountRule{InstanceID: site, DiscountType: billing.DiscountUpstreamChannel, SubjectID: a.ID, ChannelID: 21, Discount: "0.8", EffectiveFrom: from})
+		if e != nil {
+			t.Fatal(e)
+		}
+		// A historical target rule can remain after a previous manual transfer.
+		_, e = db.Exec(`INSERT INTO billing_discount_rules(instance_id,discount_type,subject_id,channel_id,model_name,discount,effective_from,remark,created_at,updated_at,updated_by) SELECT instance_id,discount_type,?,channel_id,model_name,discount,effective_from,remark,created_at,updated_at,updated_by FROM billing_discount_rules WHERE id=?`, b.ID, rule.ID)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if _, e = s.RemoveBillingUpstream(ctx, site, a.ID, a.Revision, b.ID, b.Revision, "test"); !errors.Is(e, billing.ErrDiscountOverlap) {
+			t.Fatalf("overlap accepted: %v", e)
+		}
+		if len(load(site, a.ID).Channels) != 1 {
+			t.Fatal("overlap rollback lost channel")
+		}
+		if _, e = db.Exec(`DELETE FROM billing_discount_rules WHERE instance_id=? AND subject_id=?`, site, b.ID); e != nil {
+			t.Fatal(e)
+		}
+		if archived, e := s.RemoveBillingUpstream(ctx, site, a.ID, a.Revision, b.ID, b.Revision, "test"); e != nil || !archived {
+			t.Fatalf("archive: %v %v", archived, e)
+		}
+		items, e := s.ListBillingUpstreamsConfig(ctx, site)
+		if e != nil || len(items) != 1 || items[0].ID != b.ID || len(items[0].Channels) != 1 {
+			t.Fatalf("archive remained active: %v %+v", e, items)
+		}
+		var archived, count int
+		if e = db.QueryRow(`SELECT archived FROM billing_upstreams WHERE id=?`, a.ID).Scan(&archived); e != nil || archived != 1 {
+			t.Fatal("history subject lost")
+		}
+		if e = db.QueryRow(`SELECT COUNT(*) FROM billing_discount_rules WHERE instance_id=?`, site).Scan(&count); e != nil || count != 2 {
+			t.Fatal("discount history/copy lost")
+		}
+	})
+	t.Run("background polling retries and discovers without opening management", func(t *testing.T) {
+		now := time.Now().UTC()
+		if e := s.CreateInstance(storage.Instance{ID: "periodic-site", SiteID: "periodic-site", Name: "Periodic", Enabled: true, CreatedAt: now, UpdatedAt: now}); e != nil {
+			t.Fatal(e)
+		}
+		if _, e := db.Exec(`UPDATE instances SET logs_readonly_dsn='test-only' WHERE id='periodic-site'`); e != nil {
+			t.Fatal(e)
+		}
+		worker := s.WithBillingUpstreamSource(&upstreamPollingSource{})
+		workerCtx, cancel := context.WithCancel(ctx)
+		done := make(chan struct{})
+		go func() { defer close(done); worker.runBillingUpstreamSync(workerCtx, 20*time.Millisecond) }()
+		defer func() { cancel(); <-done }()
+		deadline := time.After(3 * time.Second)
+		for {
+			select {
+			case <-deadline:
+				t.Fatal("worker did not discover both channels")
+			case <-time.After(15 * time.Millisecond):
+			}
+			ups, e := s.ListBillingUpstreamsConfig(ctx, "periodic-site")
+			if e != nil {
+				t.Fatal(e)
+			}
+			if len(ups) == 1 && len(ups[0].Channels) == 2 {
+				break
+			}
+		}
+	})
 	t.Run("safe legacy seed and review markers", func(t *testing.T) {
 		_, e := db.Exec(`INSERT INTO billing_upstreams(instance_id,name,enabled,remark,created_at,updated_at,updated_by) VALUES('seed','alpha_cn',0,'',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6),'test')`)
 		if e != nil {
@@ -360,6 +484,13 @@ func TestBillingUpstreamURLMySQL(t *testing.T) {
 		if e = s.DeleteBillingUpstream(ctx, up.InstanceID, up.ID); !errors.Is(e, billing.ErrUpstreamInUse) {
 			t.Fatal("retained history lost subject", e)
 		}
+		if archived, e := s.RemoveBillingUpstream(ctx, up.InstanceID, up.ID, up.Revision, 0, 0, "test"); e != nil || !archived {
+			t.Fatalf("historical task archive: %v %v", archived, e)
+		}
+		if e = db.QueryRow(`SELECT COUNT(*) FROM billing_generation_tasks WHERE instance_id=?`, up.InstanceID).Scan(&n); e != nil || n != 1 {
+			t.Fatal("archive lost task history")
+		}
+
 	})
 
 	t.Run("pure config reads cache and immutable statement membership", func(t *testing.T) {

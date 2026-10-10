@@ -25,7 +25,7 @@ func main() {
 
 func run(site string, apply bool) error {
 	if site == "" || os.Getenv("CT_DATABASE_DSN") == "" || os.Getenv("CT_SECRET_KEY") == "" {
-		return fmt.Errorf("requires -site, CT_DATABASE_DSN and CT_SECRET_KEY (same as Server); migration 128 must be applied")
+		return fmt.Errorf("requires -site, CT_DATABASE_DSN and CT_SECRET_KEY (same as Server); migrations 128 through 132 must be applied")
 	}
 	db, err := mysqlstore.Open(os.Getenv("CT_DATABASE_DSN"))
 	if err != nil {

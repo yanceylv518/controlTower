@@ -113,6 +113,10 @@ func upstreamWriteError(w http.ResponseWriter, err error) {
 		code = "upstream_channel_conflict"
 	case errors.Is(err, billing.ErrUpstreamTransferConflict):
 		code = "upstream_transfer_conflict"
+	case errors.Is(err, billing.ErrDiscountOverlap):
+		code = "discount_overlap"
+	case err.Error() == "upstream_billing_busy":
+		code = "upstream_billing_busy"
 	case errors.Is(err, billing.ErrUpstreamInUse):
 		code = "upstream_in_use"
 	}
@@ -166,13 +170,24 @@ func (h BillingUpstreamConfigHandler) ServeHTTP(w http.ResponseWriter, r *http.R
 				before = v
 			}
 		}
-		if err = h.Store.DeleteBillingUpstream(r.Context(), site, id); err != nil {
+		archived := false
+		target, _ := strconv.ParseInt(r.URL.Query().Get("target_id"), 10, 64)
+		revision, _ := strconv.ParseInt(r.URL.Query().Get("revision"), 10, 64)
+		targetRevision, _ := strconv.ParseInt(r.URL.Query().Get("target_revision"), 10, 64)
+		if remover, ok := h.Store.(interface {
+			RemoveBillingUpstream(context.Context, string, int64, int64, int64, int64, string) (bool, error)
+		}); ok {
+			archived, err = remover.RemoveBillingUpstream(r.Context(), site, id, revision, target, targetRevision, ctauth.Actor(r))
+		} else {
+			err = h.Store.DeleteBillingUpstream(r.Context(), site, id)
+		}
+		if err != nil {
 			upstreamWriteError(w, err)
 			return
 		}
-		response := map[string]any{"deleted": true}
+		response := map[string]any{"deleted": true, "archived": archived, "target_id": target}
 		if audit, ok := h.Store.(billingAuditStore); ok {
-			if err = auditBillingMutation(audit, r, site, "billing.upstream.delete", strconv.FormatInt(id, 10), before, map[string]any{"deleted": true}); err != nil {
+			if err = auditBillingMutation(audit, r, site, "billing.upstream.delete", strconv.FormatInt(id, 10), before, response); err != nil {
 				response["sync_error"] = "billing_upstream_audit_failed"
 			}
 		}

@@ -1069,7 +1069,7 @@ export const dashboardApi = (client: ApiClient) => ({
   billingUpstreams:(instance_id:string,signal?:AbortSignal)=>client.request<BillingUpstreamDirectory>(`/api/dashboard/billing/upstreams${query({instance_id})}`,{signal}),
   syncBillingUpstreams:(instance_id:string,restore_auto_channel_ids?:number[])=>client.request<BillingUpstreamDirectory>(`/api/dashboard/billing/upstreams${query({instance_id,action:"sync"})}`,{method:"POST",body:JSON.stringify({restore_auto_channel_ids:restore_auto_channel_ids||[]})}),
   saveBillingUpstream:(input:BillingUpstream)=>client.request<BillingUpstream>("/api/dashboard/billing/upstreams",{method:input.id?"PUT":"POST",body:JSON.stringify(input)}),
-  deleteBillingUpstream:(instance_id:string,id:number)=>client.request<{deleted:boolean}>(`/api/dashboard/billing/upstreams${query({instance_id,id})}`,{method:"DELETE"}),
+  deleteBillingUpstream:(instance_id:string,id:number,revision?:number,target_id?:number,target_revision?:number)=>client.request<{deleted:boolean;archived?:boolean;sync_error?:string}>(`/api/dashboard/billing/upstreams${query({instance_id,id,revision,target_id,target_revision})}`,{method:"DELETE"}),
   reportTasks:(instance_id:string)=>client.request<{items:SettlementReportTask[]}>(`/api/dashboard/billing/report-tasks${query({instance_id})}`),
   createReportTask:(input:{instance_id:string;from:string;to:string;overwrite:boolean})=>client.request<SettlementReportTask>('/api/dashboard/billing/report-tasks',{method:'POST',body:JSON.stringify(input)}),
   retryReportTask:(instance_id:string,id:string)=>client.request<{ok:boolean}>('/api/dashboard/billing/report-tasks?action=retry',{method:'POST',body:JSON.stringify({instance_id,id})}),

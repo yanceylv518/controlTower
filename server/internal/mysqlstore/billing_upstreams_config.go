@@ -30,7 +30,7 @@ func (s Store) listBillingUpstreams(ctx context.Context, site string) ([]billing
 	return readBillingUpstreams(ctx, s.db, site)
 }
 func readBillingUpstreams(ctx context.Context, q upstreamReader, site string) ([]billing.Upstream, error) {
-	rows, err := q.QueryContext(ctx, `SELECT id,instance_id,name,enabled,remark,created_at,updated_at,updated_by,revision FROM billing_upstreams WHERE instance_id=? ORDER BY name,id`, site)
+	rows, err := q.QueryContext(ctx, `SELECT id,instance_id,name,enabled,remark,created_at,updated_at,updated_by,revision FROM billing_upstreams WHERE instance_id=? AND archived=0 ORDER BY name,id`, site)
 	if err != nil {
 		return nil, err
 	}
@@ -157,6 +157,11 @@ func appendUpstreamURL(ctx context.Context, tx *sql.Tx, site string, id int64, u
 }
 
 func (s Store) PutBillingUpstream(ctx context.Context, item billing.Upstream) (billing.Upstream, error) {
+	var saved billing.Upstream
+	err := retryBillingDeadlock(ctx, func() error { var err error; saved, err = s.putBillingUpstreamAttempt(ctx, item); return err })
+	return saved, err
+}
+func (s Store) putBillingUpstreamAttempt(ctx context.Context, item billing.Upstream) (billing.Upstream, error) {
 	endpoint := strings.TrimSpace(item.URL)
 	if endpoint != "" {
 		var err error
