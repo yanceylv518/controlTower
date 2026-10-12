@@ -2,8 +2,6 @@ package dashboard
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -11,8 +9,7 @@ import (
 	"time"
 )
 
-// Current discounts are only form defaults. They carry no effective date and
-// must never be used to overwrite the immutable discount on a historical log.
+// BillingCurrentDiscounts 兼容旧版只读查询，不参与补录保存或历史订单折扣计算。
 func (h *PassthroughHandler) BillingCurrentDiscounts(w http.ResponseWriter, r *http.Request) {
 	if !billingAdminAllowed(r) {
 		writeDashboardError(w, 403, "forbidden")
@@ -52,29 +49,4 @@ func (h *PassthroughHandler) BillingCurrentDiscounts(w http.ResponseWriter, r *h
 		return
 	}
 	writeDashboardJSON(w, 200, map[string]any{"items": items})
-}
-
-// HasCurrentModelDiscount validates future/open-ended supplements against site configuration.
-func (h *PassthroughHandler) HasCurrentModelDiscount(ctx context.Context, site string, userID int64, model string) (bool, error) {
-	db, configured, err := h.database(site)
-	if err != nil {
-		return false, err
-	}
-	if !configured {
-		return false, fmt.Errorf("readonly source unavailable")
-	}
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	var bps int64
-	err = db.QueryRowContext(ctx, `SELECT discount_bps FROM user_model_pricings WHERE user_id=? AND BINARY model_name=BINARY ? LIMIT 1`, userID, model).Scan(&bps)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	if bps < 0 || bps > 10000 {
-		return false, fmt.Errorf("invalid discount")
-	}
-	return bps != 10000, nil
 }

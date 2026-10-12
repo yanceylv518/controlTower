@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	ctauth "controltower/server/internal/auth"
 	"controltower/server/internal/billing"
@@ -22,8 +21,7 @@ type BillingDiscountStore interface {
 }
 
 type BillingDiscountHandler struct {
-	Store           BillingDiscountStore
-	CurrentDiscount func(context.Context, string, int64, string) (bool, error)
+	Store BillingDiscountStore
 }
 
 func (h BillingDiscountHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -72,17 +70,6 @@ func (h BillingDiscountHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 				return
 			}
 		} else if v.DiscountType == billing.DiscountUserModel {
-			if h.CurrentDiscount != nil && (v.EffectiveTo == nil || v.EffectiveTo.After(time.Now())) {
-				discounted, err := h.CurrentDiscount(r.Context(), v.InstanceID, v.SubjectID, v.ModelName)
-				if err != nil {
-					writeDashboardError(w, 502, "user_discount_current_unavailable")
-					return
-				}
-				if discounted {
-					writeDashboardError(w, 400, "user_discount_history_only")
-					return
-				}
-			}
 			v.ChannelID = 0
 			if v.ModelName == "" {
 				writeDashboardError(w, 400, "discount_model_required")

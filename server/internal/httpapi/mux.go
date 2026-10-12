@@ -311,7 +311,7 @@ func NewMux(options Options) *http.ServeMux {
 		mux.Handle("/api/dashboard/billing/configuration", protect(dashboard.BillingConfigHandler{Store: config}))
 	}
 	if discounts, ok := any(options.Store).(dashboard.BillingDiscountStore); ok {
-		mux.Handle("/api/dashboard/billing/discounts", protect(dashboard.BillingDiscountHandler{Store: discounts, CurrentDiscount: passthrough.HasCurrentModelDiscount}))
+		mux.Handle("/api/dashboard/billing/discounts", protect(dashboard.BillingDiscountHandler{Store: discounts}))
 	}
 	if results, ok := any(options.Store).(dashboard.BillingStatementResultStore); ok {
 		mux.Handle("/api/dashboard/billing/statements/result", protect(dashboard.BillingStatementResultHandler{Store: results}))
