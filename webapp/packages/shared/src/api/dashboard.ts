@@ -1085,6 +1085,8 @@ export const dashboardApi = (client: ApiClient) => ({
     client.request<ListResponse<ChannelBaseValue>>(`/api/dashboard/tuning/base-values${query({ site_id, model })}`),
   tuningChannels: (site_id: string) =>
     client.request<ListResponse<TuningChannel>>(`/api/dashboard/tuning/channels${query({ site_id })}`),
+  saveTuningChannelStatus: (site_id: string, channel_id: number, status: 1 | 2) =>
+    client.request<{command_id:string;channel_id:number;channel_status:1|2;status:string}>(`/api/dashboard/tuning/channels/${channel_id}/status${query({ site_id })}`, {method:"PUT",body:JSON.stringify({status,confirm:true})}),
   tuningGroups: (site_id: string) =>
     client.request<{ items: string[] }>(`/api/dashboard/tuning/groups${query({ site_id })}`),
   saveTuningChannelGroup: (site_id: string, channel_id: number, group: string) =>

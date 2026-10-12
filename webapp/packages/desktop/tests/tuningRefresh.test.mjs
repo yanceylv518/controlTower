@@ -135,6 +135,87 @@ test('probe settings default for old policies and zero disables only the coeffic
 });
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no }); return { promise, resolve, reject } }
 
+async function manualStatusPage(status='enabled', runtime=state(42)) {
+  const p=page();
+  p.dashboard.tuningChannels=async()=>({items:[{channel_id:1,channel_name:'test',status,models:['m'],weight:80,priority:1,group_name:'default'}]});
+  p.dashboard.tuningContinuousStates=async()=>({items:[runtime]});
+  await p.load(); return p;
+}
+
+test('manual close is available for enabled, auto-disabled and enabling channels', async()=>{
+  for(const status of ['enabled','disabled']) {
+    const p=await manualStatusPage(status,{...state(42),phase:'probing',circuit_disabled:status==='disabled',circuit_status_target:0});
+    assert.equal(p.canManuallyClose(row),true);
+    assert.equal(p.canManuallyOpen(row),status==='disabled');
+    p.states.value[0].circuit_status_target=1;
+    assert.equal(p.canManuallyClose(row),true);
+  }
+  const p=await manualStatusPage('disabled',{...state(42),paused_reason:'manual_disabled',circuit_disabled:false});
+  assert.equal(p.canManuallyClose(row),false);assert.equal(p.canManuallyOpen(row),true);
+  assert.equal(p.channelStatusFor(row),'disabled');assert.match(p.evaluationText(row),/不参与调权/);
+  assert.equal(p.coefficientEmptyText(row),'未参与调权');assert.equal(p.calculatedWeight(row),null);
+  assert.equal(p.coefficientCell(row,'probe').value,null);assert.match(p.executionWeightText(row),/不会自动恢复/);
+});
+
+test('status editor opens without writing, cancels safely and rejects a stale site',async()=>{
+  const p=await manualStatusPage();let calls=0;p.dashboard.saveTuningChannelStatus=async()=>{calls++;};
+  p.openChannelStatus(row);assert.equal(p.channelStatusEditor.value.target,1);assert.equal(p.canSaveChannelStatus.value,false);assert.equal(calls,0);
+  p.channelStatusEditor.value.target=2;assert.equal(p.canSaveChannelStatus.value,true);
+  p.channelStatusEditor.value=null;await p.saveChannelStatus();assert.equal(calls,0);
+  p.openChannelStatus(row);p.channelStatusEditor.value.target=2;p.filters.site_id='b';await p.saveChannelStatus();
+  assert.equal(p.channelStatusEditor.value,null);
+  assert.equal(calls,0);assert.equal(p.channelStatusBusy.size,0);
+});
+
+test('status editor saves directly without another confirmation and preserves drafts',async()=>{
+  const p=await manualStatusPage();const response=deferred();const calls=[];
+  let confirmations=0;p.messageBox.confirm=async()=>{confirmations++;};
+  p.bases.value[0].base_weight=123;p.dirty.value=true;
+  p.dashboard.saveTuningChannelStatus=async(...args)=>{calls.push(args);return response.promise};
+  p.openChannelStatus(row);p.channelStatusEditor.value.target=2;
+  const first=p.saveChannelStatus();assert.equal(p.channelStatusSaving.value,true);assert.equal(p.canSaveChannelStatus.value,false);await p.saveChannelStatus();
+  p.dashboard.tuningChannels=async()=>({items:[{channel_id:1,status:'disabled',models:['m']}]});
+  p.dashboard.tuningContinuousStates=async()=>({items:[{...state(42),paused_reason:'manual_disabled'}]});
+  response.resolve({status:'succeeded'});await first;
+  assert.deepEqual(calls,[['a',1,2]]);assert.equal(p.channelStatusFor(row),'disabled');
+  assert.equal(confirmations,0);assert.equal(p.channelStatusEditor.value,null);
+  assert.equal(p.bases.value[0].base_weight,123);assert.equal(p.dirty.value,true);assert.equal(p.channelStatusBusy.size,0);
+  p.channelSwitchFilter.value='disabled';assert.equal(p.displayedRows.value.length,1);
+});
+
+test('auto-disabled channel can be enabled or manually closed through the same editor',async()=>{
+  for(const target of [1,2]) {
+    const p=await manualStatusPage('disabled',{...state(42),circuit_disabled:true});const calls=[];
+    p.dashboard.saveTuningChannelStatus=async(...args)=>{calls.push(args);return {status:'succeeded'}};
+    p.openChannelStatus(row);assert.equal(p.channelStatusEditor.value.target,null);assert.equal(p.canSaveChannelStatus.value,false);
+    p.channelStatusEditor.value.target=target;assert.equal(p.canSaveChannelStatus.value,true);
+    await p.saveChannelStatus();assert.deepEqual(calls,[['a',1,target]]);
+  }
+});
+
+test('unconfirmed status leaves manual hold visible and allows retry or explicit enable',async()=>{
+  const p=await manualStatusPage();
+  p.dashboard.saveTuningChannelStatus=async()=>{throw new ApiError(502,'channel_status_unconfirmed_manual_hold')};
+  p.dashboard.tuningContinuousStates=async()=>({items:[{...state(42),paused_reason:'manual_disabled'}]});
+  p.openChannelStatus(row);p.channelStatusEditor.value.target=2;await p.saveChannelStatus();
+  assert.match(p.messages.at(-1),/未确认.*手动接管/);assert.match(p.channelStatusLabel(row),/关闭未确认/);
+  assert.notEqual(p.channelStatusEditor.value,null);assert.equal(p.channelStatusSaving.value,false);
+  assert.equal(p.canManuallyClose(row),true);assert.equal(p.canManuallyOpen(row),true);
+  const calls=[];
+  p.dashboard.saveTuningChannelStatus=async(...args)=>{calls.push(args);return {status:'succeeded'}};
+  p.dashboard.tuningContinuousStates=async()=>({items:[state(42)]});
+  p.channelStatusEditor.value.target=1;await p.saveChannelStatus();assert.deepEqual(calls,[['a',1,1]]);assert.equal(p.manualChannelHeld(row),false);
+});
+
+test('manual status results cannot modify another site after a switch during the request',async()=>{
+  const p=await manualStatusPage();const response=deferred();
+  p.dashboard.saveTuningChannelStatus=()=>response.promise;
+  p.openChannelStatus(row);p.channelStatusEditor.value.target=2;
+  const request=p.saveChannelStatus();p.filters.site_id='b';
+  response.resolve({status:'succeeded'});await request;
+  assert.equal(p.channels.value[0].status,'enabled');assert.equal(p.states.value[0].paused_reason,undefined);
+});
+
 test('healthy performance writes with a configured cap have no capacity warning', async () => {
   const p = page(); await p.load(); p.ratesReady.value = true;
   const limited = { ...row, max_tpm: 1000 };
@@ -178,12 +259,12 @@ function page() {
     tuningChannels: async () => { throw new Error('channel directory unavailable') },
   }
   const names = ['computed', 'reactive', 'ref', 'watch', 'onMounted', 'onBeforeUnmount', 'useFiltersStore', 'dashboard', 'formatTime', 'ApiError', 'ElMessage', 'ElMessageBox', 'useMobileViewport', 'hiddenChannelGroupCount', 'matchesChannelGroup', 'MAX_VISIBLE_CHANNEL_GROUPS', 'normalizeChannelGroups', 'splitChannelGroups', 'visibleChannelGroups']
-  const create = new Function(...names, `${compiled}\nreturn { probeCoverageCell, acceptProbeCoverage, phaseText, watchChannelChanges, stopWatching: () => changesAbort?.abort(), sync, save, savedPolicy, mode, policyConflict, factorExplanation, refreshCurrentRates, ratesError, saveCapacity, saving, mobileEditRow, stageMobileEdit, mobileChanges, mobilePriorityChanges, mobileRuleChanges, mobileSaveOpen, load, refreshRuntime, loadChannelDirectory, applyGroupLocally, acceptStates, stateFor, sampleText, evaluationText, states, refreshError, bases, channels, channelDirectorySite, channelDirectoryLoading, policy, channelQuery, channelSwitchFilter, selectedGroupFilter, toggleGroupFilter, selectedGroupName, displayedRows, activeRows, modelChannelRows, models, modelChannelCount, modelChannelCountLabel, activeModel, dirty, selectModel, fieldChanged, savedBases, originalBase, calculatedWeight, executionWeightText, displayedSpeedFactor, coefficientCell, overallEvaluationStatus, coefficientEmptyText, coefficientSpan, displayedPriority, editPriority, priorityLocked, cancelChanges, limitReason, currentRates, ratesReady, rowStatus, channelStatusFor, channelStatusLabel, isDirectoryOnlyRow, eventResult, eventResultClass, events, filteredEvents, eventDateRange };`)
-  const messages = [];
-  const view = create(computed, reactive, ref, () => {}, () => {}, () => {}, () => filters, dashboard, String, ApiError, {info() {}, success() {}, error(message) {messages.push(message)}}, {confirm: async () => {}}, () => ref(false), groupUtils.hiddenChannelGroupCount, groupUtils.matchesChannelGroup, groupUtils.MAX_VISIBLE_CHANNEL_GROUPS, groupUtils.normalizeChannelGroups, groupUtils.splitChannelGroups, groupUtils.visibleChannelGroups)
+  const create = new Function(...names, `${compiled}\nreturn { openChannelStatus, saveChannelStatus, channelStatusEditor, channelStatusSaving, canSaveChannelStatus, canManuallyClose, canManuallyOpen, manualChannelHeld, channelStatusBusy, probeCoverageCell, acceptProbeCoverage, phaseText, watchChannelChanges, stopWatching: () => changesAbort?.abort(), sync, save, savedPolicy, mode, policyConflict, factorExplanation, refreshCurrentRates, ratesError, saveCapacity, saving, mobileEditRow, stageMobileEdit, mobileChanges, mobilePriorityChanges, mobileRuleChanges, mobileSaveOpen, load, refreshRuntime, loadChannelDirectory, applyGroupLocally, acceptStates, stateFor, sampleText, evaluationText, states, refreshError, bases, channels, channelDirectorySite, channelDirectoryLoading, policy, channelQuery, channelSwitchFilter, selectedGroupFilter, toggleGroupFilter, selectedGroupName, displayedRows, activeRows, modelChannelRows, models, modelChannelCount, modelChannelCountLabel, activeModel, dirty, selectModel, fieldChanged, savedBases, originalBase, calculatedWeight, executionWeightText, displayedSpeedFactor, coefficientCell, overallEvaluationStatus, coefficientEmptyText, coefficientSpan, displayedPriority, editPriority, priorityLocked, cancelChanges, limitReason, currentRates, ratesReady, rowStatus, channelStatusFor, channelStatusLabel, isDirectoryOnlyRow, eventResult, eventResultClass, events, filteredEvents, eventDateRange };`)
+  const messages = []; const messageBox = {confirm: async () => {}};
+  const view = create(computed, reactive, ref, () => {}, () => {}, () => {}, () => filters, dashboard, String, ApiError, {info() {}, success() {}, error(message) {messages.push(message)}}, messageBox, () => ref(false), groupUtils.hiddenChannelGroupCount, groupUtils.matchesChannelGroup, groupUtils.MAX_VISIBLE_CHANNEL_GROUPS, groupUtils.normalizeChannelGroups, groupUtils.splitChannelGroups, groupUtils.visibleChannelGroups)
   const initialPolicy = JSON.parse(JSON.stringify({...view.policy, dispatch_modes:{m:'auto'}}));
   dashboard.tuningPolicy = async () => ({mode:'observe', policy: JSON.parse(JSON.stringify(initialPolicy))});
-  return { ...view, filters, dashboard, messages }
+  return { ...view, filters, dashboard, messages, messageBox }
 }
 
 test('rate failures distinguish transport, permissions and server availability; recovery clears the warning', async () => {

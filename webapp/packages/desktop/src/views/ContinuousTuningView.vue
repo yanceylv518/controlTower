@@ -432,11 +432,64 @@ const channelStatusFor = (row: ChannelDisplayRow) => {
   if (status !== "disabled") return status;
   // Pending disable intent is not a confirmed CT-originated shutdown.
   const state = statesSite.value === siteID.value ? states.value.find(item => item.channel_id === row.channel_id) : undefined;
-  return state?.circuit_disabled && state.circuit_status_target !== 2 && state.circuit_status_target !== 3
+  return state?.paused_reason !== 'manual_disabled' && state?.circuit_disabled && state.circuit_status_target !== 2 && state.circuit_status_target !== 3
     ? "auto_disabled" : "disabled";
 };
 const channelStatusLabels = { enabled: "已启用", disabled: "手动关闭", auto_disabled: "自动关闭", unknown: "状态未知" };
-const channelStatusLabel = (row: ChannelDisplayRow) => channelStatusLabels[channelStatusFor(row)];
+const manualChannelHeld = (row: ChannelDisplayRow) => statesSite.value === siteID.value && states.value.some(s => s.channel_id === row.channel_id && s.paused_reason === 'manual_disabled');
+const manualChannelExcluded = (row: ChannelDisplayRow) => manualChannelHeld(row) || channelStatusFor(row)==='disabled';
+const channelStatusLabel = (row: ChannelDisplayRow) => manualChannelHeld(row) && channelStatusFor(row) !== 'disabled' ? '手动接管 · 关闭未确认' : channelStatusLabels[channelStatusFor(row)];
+const channelStatusBusy = reactive(new Set<string>());
+const channelStatusKey = (channel: number, site = siteID.value) => `${site}:${channel}`;
+const canManuallyClose = (row: ChannelDisplayRow) => ['enabled','auto_disabled'].includes(channelStatusFor(row)) || !!(statesSite.value === siteID.value && states.value.find(s=>s.channel_id===row.channel_id)?.circuit_status_target);
+const canManuallyOpen = (row: ChannelDisplayRow) => ['disabled','auto_disabled'].includes(channelStatusFor(row)) || manualChannelHeld(row);
+const channelStatusEditor = ref<{row:ChannelDisplayRow;site:string;generation:number;target:1|2|null}|null>(null);
+const channelStatusSaving = computed(() => {
+  const editor=channelStatusEditor.value;
+  return !!editor && channelStatusBusy.has(channelStatusKey(editor.row.channel_id,editor.site));
+});
+const canSaveChannelStatus = computed(() => {
+  const editor=channelStatusEditor.value;
+  return !!editor && editor.site===siteID.value && editor.generation===loadGeneration && !saving.value && !loading.value && !channelStatusSaving.value &&
+    (editor.target===2 ? canManuallyClose(editor.row) : editor.target===1 && canManuallyOpen(editor.row));
+});
+function openChannelStatus(row: ChannelDisplayRow) {
+  if (!siteID.value || saving.value || loading.value || channelStatusBusy.has(channelStatusKey(row.channel_id)) || (!canManuallyClose(row) && !canManuallyOpen(row))) return;
+  const status=channelStatusFor(row);
+  channelStatusEditor.value={row,site:siteID.value,generation:loadGeneration,target:manualChannelHeld(row)?2:status==='enabled'?1:status==='disabled'?2:null};
+}
+function onChannelStatusVisibility(visible: boolean) {
+  if (!visible && !channelStatusSaving.value) channelStatusEditor.value=null;
+}
+async function saveChannelStatus() {
+  const editor=channelStatusEditor.value;
+  if (!editor) return;
+  const {row,site,generation,target}=editor, key=channelStatusKey(row.channel_id,site);
+  const current=()=>site===siteID.value && generation===loadGeneration;
+  if (!current()) { channelStatusEditor.value=null; return; }
+  if (target!==1 && target!==2) return;
+  if (!site || saving.value || loading.value || channelStatusBusy.has(key) || (target===2 ? !canManuallyClose(row) : !canManuallyOpen(row))) return;
+  channelStatusBusy.add(key);
+  try {
+    const result=await dashboard.saveTuningChannelStatus(site,row.channel_id,target);
+    if (!current()) return;
+    if (result.status!=='succeeded') throw new Error('渠道操作尚未确认，请刷新查看结果');
+    // Reject reads begun before the confirmed write without disturbing drafts.
+    runtimeSettledGeneration=++runtimeRefreshGeneration;
+    channelDirectoryGeneration++;
+    channels.value=channels.value.map(c=>c.channel_id===row.channel_id?{...c,status:target===1?'enabled':'disabled'}:c);
+    states.value=states.value.map(s=>s.channel_id===row.channel_id?{...s,paused_reason:target===2?'manual_disabled':'',circuit_disabled:false,routine_circuit_latched:false,circuit_status_target:0,phase:'normal',probe_speed:undefined,evaluation:undefined}:s);
+    if (channelStatusEditor.value===editor) channelStatusEditor.value=null;
+    ElMessage.success(target===2?'渠道已手动关闭，不再自动恢复；可筛选“手动关闭”后开启':'渠道已开启');
+    await refreshRuntime();
+  } catch (error) {
+    if (!current()) return;
+    const code=error instanceof ApiError?error.code:'';
+    const messages:Record<string,string>={channel_control_busy:'渠道有正在执行的操作，请稍后重试',channel_status_requires_direct_control:'请先配置该站点的 CT 直连控制',channel_status_unconfirmed_manual_hold:'渠道开关结果未确认，已保留手动接管并停止自动调权/恢复，请刷新后重试',channel_not_found:'渠道已不存在，请刷新渠道信息',channel_status_update_failed:'渠道操作失败，请检查直连配置后重试',forbidden:'没有渠道管理权限'};
+    ElMessage.error(messages[code] || (error instanceof Error?error.message:'渠道操作失败'));
+    await refreshRuntime();
+  } finally { channelStatusBusy.delete(key); }
+}
 const channelStatusClass = (row: ChannelDisplayRow) => `is-${channelStatusFor(row).replace("_", "-")}`;
 const channelStatusTitle = (row: ChannelDisplayRow) => {
   const status = isDirectoryOnlyRow(row) ? row.status : channelDirectoryByID.value.get(row.channel_id)?.status;
@@ -678,6 +731,7 @@ async function refreshCurrentRates() {
   } finally { ratesLoading = false; }
 }
 const evaluationText = (row: ChannelDisplayRow) => {
+  if (manualChannelExcluded(row)) return '手动关闭，不参与调权，也不会自动恢复';
   if (isDirectoryOnlyRow(row)) return "渠道没有调权基础值，未参与调权";
   const state = stateFor(row), requests = state?.last_observed_requests ?? 0;
   if ((row.models?.length ?? 1) > 1 || state?.paused_reason === "mixed_channel") return "多模型渠道，安全暂停";
@@ -711,6 +765,7 @@ const speedLabel = (row: ChannelDisplayRow) => {
 };
 const coefficientColumns = [{key:'speed',label:'速度'}, {key:'cache',label:'缓存'}, {key:'otps',label:'输出'}, {key:'error',label:'错误'}, {key:'probe',label:'探针'}] as const;
 const coefficientCell = (row: ChannelDisplayRow, key: 'speed' | 'cache' | 'otps' | 'error' | 'probe') => {
+  if (manualChannelExcluded(row)) return {value:null,status:'未参与调权',detail:evaluationText(row)};
   if (isDirectoryOnlyRow(row)) return {value:null, status:'未参与调权', detail:evaluationText(row)};
   const state = stateFor(row);
   if (!state) return {value:null, status:'等待评估', detail:'尚无评估数据'};
@@ -789,6 +844,7 @@ const limitReason = (row: ChannelDisplayRow) => {
   return exceeded.length ? `${exceeded.join(" / ")} 已达到上限；${detail || '保持限升，等待容量策略评估'}` : detail;
 };
 const rowStatus = (row: ChannelDisplayRow) => {
+  if (manualChannelExcluded(row)) return {kind:'muted',icon:'',label:'未参与调权'};
   if (isDirectoryOnlyRow(row)) return { kind: "muted", icon: "", label: "未参与调权" };
   const state = stateFor(row), text = evaluationText(row);
   if (text === "该模型调权已关闭，渠道未参与调权；此设置不代表模型或渠道停用") return { kind: "muted", icon: "—", label: "未参与调权" };
@@ -805,6 +861,7 @@ const rowStatus = (row: ChannelDisplayRow) => {
   return { kind: "muted", icon: "", label: "—" };
 };
 const overallEvaluationStatus = (row: ChannelDisplayRow) => {
+  if (manualChannelExcluded(row)) return '未参与调权';
   if (isDirectoryOnlyRow(row)) return "未参与调权";
   const state = stateFor(row);
   const overall = !state || modelMode(row.model_name) === 'off' || row.base_weight <= 0 || state.phase !== 'normal' || !!effectivePause(state) || (row.models?.length ?? 1) > 1 || evaluationText(row).startsWith('窗口样本不足');
@@ -907,6 +964,7 @@ const fieldChanged = (row: ChannelDisplayRow, key: "base_weight" | "base_priorit
 };
 const originalBase = (row: ChannelDisplayRow) => isDirectoryOnlyRow(row) ? null : stateFor(row)?.evaluation?.base_weight ?? stateFor(row)?.base_weight ?? savedBases.value.find(item => channelRowKey(item) === channelRowKey(row))?.base_weight ?? row.base_weight;
 const calculatedWeight = (row: ChannelDisplayRow): number | null => {
+  if (manualChannelExcluded(row)) return null;
   if (isDirectoryOnlyRow(row)) return null;
   const state = stateFor(row), params = state?.evaluation?.params;
   if (!params) return null;
@@ -919,6 +977,7 @@ const calculatedWeight = (row: ChannelDisplayRow): number | null => {
 };
 
 const executionWeightText = (row: ChannelDisplayRow): string => {
+  if (manualChannelExcluded(row)) return '手动关闭，不参与调权，也不会自动恢复';
   const state = stateFor(row);
   if (isDirectoryOnlyRow(row)) return '未参与调权';
   if (!state) return '等待首次评估';
@@ -1472,7 +1531,7 @@ async function save() {
     } else ElMessage.error(error instanceof Error ? error.message : "保存失败");
   } finally { saving.value = false; }
 }
-watch(() => filters.site_id, () => { groupDialogOpen.value = false; groupManagerOpen.value = false; groupFilterOpen.value = false; selectedGroupFilter.value = null; channelQuery.value = ""; channelSwitchFilter.value = "active"; cancelGroupPolls(); channels.value = []; channelDirectorySite.value = ""; channelDirectoryLoading.value = false; availableGroups.value = []; pendingGroups.value = new Map(); groupErrors.value = new Map(); channelDirectoryGeneration++; groupDirectoryGeneration++; void load(true); void watchChannelChanges(); });
+watch(() => filters.site_id, () => { channelStatusEditor.value = null; groupDialogOpen.value = false; groupManagerOpen.value = false; groupFilterOpen.value = false; selectedGroupFilter.value = null; channelQuery.value = ""; channelSwitchFilter.value = "active"; cancelGroupPolls(); channels.value = []; channelDirectorySite.value = ""; channelDirectoryLoading.value = false; availableGroups.value = []; pendingGroups.value = new Map(); groupErrors.value = new Map(); channelDirectoryGeneration++; groupDirectoryGeneration++; void load(true); void watchChannelChanges(); });
 watch(siteID, () => { ratesReady.value = false; ratesError.value = ""; currentRates.value.clear(); void refreshCurrentRates(); });
 watch([eventModelFilter, eventRuleFilter, eventChannelQuery, eventDateRange, activeModel], () => { eventPage.value = 1; });
 onMounted(() => { void load(true); void watchChannelChanges(); void refreshCurrentRates(); refreshTimer = setInterval(() => void refreshRuntime(), 30000); ratesTimer = setInterval(() => { if (!document.hidden) void refreshCurrentRates(); }, 5000); });
@@ -1553,7 +1612,8 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
               </div>
               <el-empty v-if="!displayedRows.length" description="没有匹配渠道" />
               <article v-for="row in displayedRows.slice(0,mobileRowCount)" :key="channelRowKey(row)" class="mobile-tuning-card">
-                <header><b>{{ row.channel_name }} <small>#{{ row.channel_id }}</small><small class="channel-switch-badge" :class="channelStatusClass(row)" :title="channelStatusTitle(row)">{{ channelStatusLabel(row) }}</small></b><span :class="rowStatus(row).kind">{{ rowStatus(row).label || '参与评估' }}</span></header>
+                <header><b>{{ row.channel_name }} <small>#{{ row.channel_id }}</small><button type="button" class="channel-switch-badge channel-status-trigger" :class="channelStatusClass(row)" :title="`${channelStatusTitle(row)} · 点击修改状态`" :aria-label="`修改渠道 #${row.channel_id} 状态：${channelStatusLabel(row)}`" :disabled="saving || loading || channelStatusBusy.has(channelStatusKey(row.channel_id)) || (!canManuallyClose(row) && !canManuallyOpen(row))" @click="openChannelStatus(row)">{{ channelStatusBusy.has(channelStatusKey(row.channel_id)) ? '处理中…' : channelStatusLabel(row) }}<span aria-hidden="true">⌄</span></button></b><span :class="rowStatus(row).kind">{{ rowStatus(row).label || '参与评估' }}</span></header>
+
                 <button class="priority-line" type="button" :disabled="saving || isDirectoryOnlyRow(row) || priorityLocked(row)" @click="openMobileEdit(row)"><span>线上优先级 <b>{{ row.current_priority }}</b><small v-if="priorityDrafts.has(row.channel_id)"> → {{ displayedPriority(row) }} 待保存</small></span><span>{{ isDirectoryOnlyRow(row) ? '只读' : '编辑 ›' }}</span></button>
                 <button class="mobile-groups" type="button" :disabled="groupSaving" @click="openGroupEditor(groupEditorRowFor(row))"><span>分组</span><span class="group-tags"><span v-for="group in visibleChannelGroups(row.group_name)" :key="group">{{ group }}</span><span v-if="hiddenChannelGroupCount(row.group_name)">+{{ hiddenChannelGroupCount(row.group_name) }}</span><span v-if="!row.group_name">未设置</span></span><span>编辑 ›</span></button>
                 <p v-if="pendingGroups.has(row.channel_id) || groupErrors.has(row.channel_id)" class="warning">{{ groupErrors.get(row.channel_id) || '分组等待执行' }}</p>
@@ -1568,7 +1628,7 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
             <el-table class="channel-table" scrollbar-always-on :span-method="coefficientSpan" :data="displayedRows" :row-key="channelRowKey" size="small" height="100%" empty-text="没有匹配渠道">
               <el-table-column label="渠道" :width="tableColumns.channel" align="left" fixed><template #default="{row}">
 
-                <div class="channel-heading"><span class="channel-key">#{{ row.channel_id }} ·</span><b class="channel-name" :title="row.channel_name">{{ row.channel_name }}</b><small class="channel-switch-badge" :class="channelStatusClass(row)" :title="channelStatusTitle(row)">{{ channelStatusLabel(row) }}</small></div>
+                <div class="channel-heading"><span class="channel-key">#{{ row.channel_id }} ·</span><b class="channel-name" :title="row.channel_name">{{ row.channel_name }}</b><button type="button" class="channel-switch-badge channel-status-trigger" :class="channelStatusClass(row)" :title="`${channelStatusTitle(row)} · 点击修改状态`" :aria-label="`修改渠道 #${row.channel_id} 状态：${channelStatusLabel(row)}`" :disabled="saving || loading || channelStatusBusy.has(channelStatusKey(row.channel_id)) || (!canManuallyClose(row) && !canManuallyOpen(row))" @click="openChannelStatus(row)">{{ channelStatusBusy.has(channelStatusKey(row.channel_id)) ? '处理中…' : channelStatusLabel(row) }}<span aria-hidden="true">⌄</span></button></div>
                 <div v-if="!isDirectoryOnlyRow(row)" class="channel-meta"><TuningCapacityMetric metric="TPM" :channel="row.channel_name" :model-value="row.max_tpm" :disabled="saving || loading || !siteID" :persist="value => saveCapacity(row, 'max_tpm', value)" :current="currentRateFor(row)?.tpm" :modified="fieldChanged(row,'max_tpm')"/><TuningCapacityMetric metric="RPM" :channel="row.channel_name" :model-value="row.max_rpm" :disabled="saving || loading || !siteID" :persist="value => saveCapacity(row, 'max_rpm', value)" :current="currentRateFor(row)?.rpm" :modified="fieldChanged(row,'max_rpm')"/></div><div v-else class="channel-meta read-only-capacity">TPM — · RPM —</div>
                 <small v-if="pendingGroups.has(row.channel_id) && !groupErrors.has(row.channel_id)" class="warning">分组等待执行</small><small v-if="groupErrors.has(row.channel_id)" class="danger" :title="groupErrors.get(row.channel_id)">分组执行失败</small>
               </template></el-table-column>
@@ -1597,6 +1657,16 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
            </section>
          </div>
        </el-card>
+       <el-dialog :model-value="!!channelStatusEditor" title="修改渠道状态" width="min(440px, calc(100vw - 32px))" append-to-body destroy-on-close :close-on-click-modal="false" :close-on-press-escape="!channelStatusSaving" :show-close="!channelStatusSaving" @update:model-value="onChannelStatusVisibility">
+         <div v-if="channelStatusEditor" class="channel-status-editor">
+           <p class="channel-status-identity"><b>{{ channelStatusEditor.row.channel_name }}</b><small>#{{ channelStatusEditor.row.channel_id }} · 当前：{{ channelStatusLabel(channelStatusEditor.row) }}</small></p>
+           <el-form label-position="top"><el-form-item label="渠道状态"><el-radio-group v-model="channelStatusEditor.target" :disabled="channelStatusSaving"><el-radio :value="1">开启</el-radio><el-radio :value="2">手动关闭</el-radio></el-radio-group></el-form-item></el-form>
+           <p class="channel-status-hint" v-if="channelStatusEditor.target===2">该渠道的所有模型将停止调权和探测，不再自动恢复。需要时可在此处或 NewAPI 重新开启。</p>
+           <p class="channel-status-hint" v-else-if="channelStatusEditor.target===1">保留当前线上权重，按当前模型模式参与调权。</p>
+           <p class="channel-status-hint" v-else>选择开启可恢复渠道使用；选择手动关闭可停止自动恢复。</p>
+         </div>
+         <template #footer><el-button :disabled="channelStatusSaving" @click="channelStatusEditor=null">取消</el-button><el-button type="primary" :loading="channelStatusSaving" :disabled="!canSaveChannelStatus" @click="saveChannelStatus">保存</el-button></template>
+       </el-dialog>
        <el-dialog v-model="groupManagerOpen" class="tuning-group-dialog" title="分组组合管理" width="min(740px, calc(100vw - 32px))" append-to-body destroy-on-close :close-on-click-modal="false"><ChannelGroupEditor v-if="groupManagerOpen" :key="siteID" :site="siteID" current="" :options="groupOptions" :saving="false" manage-only @cancel="groupManagerOpen = false" /></el-dialog>
        <el-dialog v-model="groupDialogOpen" title="调整渠道分组" width="min(740px, calc(100vw - 32px))" class="tuning-group-dialog" append-to-body destroy-on-close :close-on-click-modal="false">
          <template v-if="editingChannel">
@@ -1695,6 +1765,8 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
 .channel-name{line-height:20px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px;color:var(--ct-ink-2);font-weight:400}
 .channel-heading{display:flex;align-items:baseline;gap:6px;min-width:0;line-height:20px}.channel-heading .channel-name{min-width:0;flex:1 1 auto}.channel-key{flex-shrink:0;font-size:12px;line-height:20px;color:var(--ct-ink-3)}
 .channel-switch-badge{display:inline-flex;flex:0 0 auto;align-items:center;min-height:18px;padding:0 5px;border-radius:4px;font-size:10px;font-weight:500;line-height:16px;white-space:nowrap}
+.channel-status-trigger{border:1px solid transparent;gap:3px;font-family:inherit;cursor:pointer}.channel-status-trigger:hover:not(:disabled){border-color:currentColor}.channel-status-trigger:focus-visible{outline:2px solid var(--ct-accent);outline-offset:2px}.channel-status-trigger:disabled{cursor:default;opacity:.65}
+.channel-status-identity{display:grid;gap:6px;margin:0 0 18px;overflow-wrap:anywhere}.channel-status-identity small,.channel-status-hint{color:var(--ct-ink-3);font-size:12px;line-height:1.7}.channel-status-hint{margin:0}.channel-status-editor :deep(.el-form-item){margin-bottom:14px}
 .channel-switch-badge.is-enabled{background:var(--ct-ok-weak);color:var(--ct-ok)}
 .channel-switch-badge.is-disabled{background:var(--ct-surface-2);color:var(--ct-ink-3)}
 .channel-switch-badge.is-auto-disabled{background:var(--ct-warn-weak);color:var(--ct-warn)}

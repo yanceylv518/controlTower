@@ -17,6 +17,12 @@ func checkPrioritySync(q priorityQuery, v tuning.Recommendation) error {
 	if v.Rule != "base_priority_sync" {
 		return nil
 	}
+	if err := checkManualChannelControl(q, v); err != nil {
+		if errors.Is(err, tuning.ErrDecisionSuperseded) {
+			return ErrPrioritySyncSuperseded
+		}
+		return err
+	}
 	if v.ProposedPriority == nil {
 		return ErrPrioritySyncSuperseded
 	}

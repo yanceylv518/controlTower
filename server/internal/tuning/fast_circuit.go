@@ -105,7 +105,7 @@ func (e *Engine) evaluateFastCircuit(batch FastCircuitBatch, now time.Time) {
 			if state.Phase == "" {
 				state.Phase = "normal"
 			}
-			if state.Phase != "normal" || !writeAttemptAllowed(state, now) {
+			if state.PausedReason == ManualDisabled || state.Phase != "normal" || !writeAttemptAllowed(state, now) {
 				return
 			}
 			defer func() { guard.version = e.version.Add(1) }()

@@ -217,6 +217,9 @@ func NewMux(options Options) *http.ServeMux {
 		mux.Handle("/api/dashboard/tuning/policy", protect(http.HandlerFunc(dashboardHandler.HandleTuningPolicy)))
 		if directory, supported := any(tuningStore).(dashboard.TuningChannelDirectory); supported {
 			mux.Handle("GET /api/dashboard/tuning/channels", protect(http.HandlerFunc(dashboardHandler.HandleTuningChannels)))
+			if updater, writable := any(tuningStore).(dashboard.ChannelStatusUpdater); writable {
+				mux.Handle("PUT /api/dashboard/tuning/channels/{channelID}/status", protect(http.HandlerFunc(dashboard.ChannelStatusHandler{Updater: updater, Directory: directory}.Update)))
+			}
 			if _, groupDirectory := any(tuningStore).(dashboard.TuningGroupDirectory); groupDirectory {
 				mux.Handle("GET /api/dashboard/tuning/groups", protect(http.HandlerFunc(dashboardHandler.HandleTuningGroups)))
 			}

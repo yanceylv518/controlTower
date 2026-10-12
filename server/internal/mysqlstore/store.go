@@ -310,9 +310,10 @@ func (s Store) syncChannelSnapshotsAt(instanceID string, snapshots []storage.Cha
 	for _, snapshot := range snapshots {
 		channelIDs = append(channelIDs, snapshot.ChannelID)
 		var latest time.Time
+		var previousStatus string
 		// An in-flight older collection cannot overwrite a successful write,
 		// including its model assignment and anchor side effects.
-		err = tx.QueryRow(`SELECT captured_at FROM channel_current WHERE instance_id=? AND channel_id=? FOR UPDATE`, instanceID, snapshot.ChannelID).Scan(&latest)
+		err = tx.QueryRow(`SELECT captured_at,status FROM channel_current WHERE instance_id=? AND channel_id=? FOR UPDATE`, instanceID, snapshot.ChannelID).Scan(&latest, &previousStatus)
 		if err != nil && err != sql.ErrNoRows {
 			return err
 		}
@@ -324,7 +325,7 @@ VALUES (?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE id=VALUES(id),channel_name=
 			snapshot.InstanceID, snapshot.ChannelID, snapshot.ID, snapshot.ChannelName, snapshot.Status, snapshot.Weight, snapshot.ModelsText, nullString(snapshot.GroupName), nullInt64(snapshot.Priority), snapshot.CapturedAt); err != nil {
 			return err
 		}
-		if err = reconcileCircuitOwnership(tx, siteID, snapshot); err != nil {
+		if err = reconcileChannelOwnership(tx, siteID, snapshot, previousStatus); err != nil {
 			return err
 		}
 		models := parseChannelModels(snapshot.ModelsText)
@@ -335,7 +336,8 @@ VALUES (?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE id=VALUES(id),channel_name=
 			}
 			// State from the previous model must not leak circuit-breaker or
 			// smoothing history into the new model assignment.
-			if _, err = tx.Exec(`DELETE FROM tuning_continuous_states WHERE instance_id=? AND channel_id=? AND model_name<>?`, siteID, snapshot.ChannelID, models[0]); err != nil {
+			// Manual control belongs to the channel, irrespective of models.
+			if _, err = tx.Exec(`DELETE FROM tuning_continuous_states WHERE instance_id=? AND channel_id=? AND model_name<>? AND paused_reason<>'manual_disabled'`, siteID, snapshot.ChannelID, models[0]); err != nil {
 				return err
 			}
 			if _, err = tx.Exec(channelBaseValueSnapshotUpsertSQL, siteID, snapshot.ChannelID, models[0], snapshot.Weight, priority, snapshot.CapturedAt, "system:snapshot"); err != nil {
@@ -345,7 +347,7 @@ VALUES (?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE id=VALUES(id),channel_name=
 			// A channel-wide weight cannot safely be attributed to zero or
 			// multiple models. Keep the saved priority, but clear the weight
 			// anchor and runtime state until a single model is assigned.
-			if _, err = tx.Exec(`DELETE FROM tuning_continuous_states WHERE instance_id=? AND channel_id=?`, siteID, snapshot.ChannelID); err != nil {
+			if _, err = tx.Exec(`DELETE FROM tuning_continuous_states WHERE instance_id=? AND channel_id=? AND paused_reason<>'manual_disabled'`, siteID, snapshot.ChannelID); err != nil {
 				return err
 			}
 			if _, err = tx.Exec(`UPDATE channel_base_values SET model_name='' WHERE instance_id=? AND channel_id=?`, siteID, snapshot.ChannelID); err != nil {

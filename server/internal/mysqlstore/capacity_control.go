@@ -61,7 +61,7 @@ FROM channel_base_values b JOIN tuning_continuous_states s ON s.instance_id=b.in
 	if err = json.Unmarshal([]byte(raw), &c); err != nil {
 		return err
 	}
-	if baseWeight <= 0 || stateModel != model || paused == "mixed_channel" {
+	if baseWeight <= 0 || stateModel != model || paused == "mixed_channel" || paused == tuning.ManualDisabled {
 		return ErrCapacitySuperseded
 	}
 	if routineLatched && !statusRecovery && v.Rule != "circuit_opened" {

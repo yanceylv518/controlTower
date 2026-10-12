@@ -129,7 +129,7 @@ JOIN (SELECT cs.* FROM channel_current cs JOIN instances i ON i.id=cs.instance_i
       AND NOT EXISTS (SELECT 1 FROM channel_current tie JOIN instances ti ON ti.id=tie.instance_id
         WHERE tie.channel_id=cs.channel_id AND tie.captured_at=cs.captured_at AND tie.instance_id<cs.instance_id AND ti.enabled=1
         AND CASE WHEN ti.site_id='' THEN ti.id ELSE ti.site_id END=CASE WHEN i.site_id='' THEN i.id ELSE i.site_id END)) c ON c.channel_id=b.channel_id
-WHERE b.instance_id=? AND b.model_name<>'' AND (LOWER(c.status) IN ('enabled','enable','active','normal','1') OR EXISTS (SELECT 1 FROM tuning_continuous_states ts WHERE ts.instance_id=b.instance_id AND ts.channel_id=b.channel_id AND ts.circuit_disabled=1))`+filter+` ORDER BY b.model_name,c.channel_name`, args...)
+WHERE b.instance_id=? AND b.model_name<>'' AND NOT EXISTS (SELECT 1 FROM tuning_continuous_states manual_state WHERE manual_state.instance_id=b.instance_id AND manual_state.channel_id=b.channel_id AND manual_state.paused_reason='manual_disabled') AND (LOWER(c.status) IN ('enabled','enable','active','normal','1') OR EXISTS (SELECT 1 FROM tuning_continuous_states ts WHERE ts.instance_id=b.instance_id AND ts.channel_id=b.channel_id AND ts.circuit_disabled=1))`+filter+` ORDER BY b.model_name,c.channel_name`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -531,6 +531,9 @@ func (s Store) CreateContinuousWeightChangeWithAudit(v tuning.Recommendation, ac
 		return "", err
 	}
 	defer tx.Rollback()
+	if err := checkManualChannelControl(tx, v); err != nil {
+		return "", err
+	}
 	if err := checkContinuousCapacity(tx, v, time.Now().UTC(), ""); err != nil {
 		return "", err
 	}
@@ -612,6 +615,9 @@ func (s Store) CreateContinuousProbe(v tuning.Recommendation, model string, coun
 		return "", err
 	}
 	defer tx.Rollback()
+	if err := checkManualChannelControl(tx, v); err != nil {
+		return "", err
+	}
 	controlInstanceID, err := controlInstanceForSite(tx, v.InstanceID)
 	if err != nil {
 		return "", err
@@ -756,6 +762,9 @@ func (s Store) CreateContinuousProbeExecuting(v tuning.Recommendation, model str
 		return "", err
 	}
 	defer tx.Rollback()
+	if err := checkManualChannelControl(tx, v); err != nil {
+		return "", err
+	}
 	controlInstanceID, err := controlInstanceForSite(tx, v.InstanceID)
 	if err != nil {
 		return "", err

@@ -168,7 +168,7 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 		for _, row := range rows {
 			// Disabled channels are retained only for recovery processing, not
 			// to reintroduce their old measurements into healthy peers' baseline.
-			if !stateByID[row.ChannelID].CircuitDisabled {
+			if !stateByID[row.ChannelID].CircuitDisabled && stateByID[row.ChannelID].PausedReason != ManualDisabled {
 				baselineRows = append(baselineRows, row)
 			}
 		}
@@ -205,6 +205,9 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 					return err
 				}
 				previous, exists := stateByID[base.ChannelID]
+				if previous.PausedReason == ManualDisabled {
+					return
+				}
 				// Preserve normal evaluations during a site-wide evidence gap. Do
 				// not skip circuit/probe/soft-start processing: zero-weight channels
 				// naturally stop producing traffic and must recover without it.

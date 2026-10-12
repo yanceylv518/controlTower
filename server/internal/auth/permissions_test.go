@@ -108,6 +108,8 @@ func TestRestrictedAdminEndpointMatrix(t *testing.T) {
 		{"tuning.manage", "POST", "channels/7/commands", true},
 		{"tuning.manage", "PUT", "tuning/channels/7/group", true},
 		{"monitor.channels", "PUT", "tuning/channels/7/group", false},
+		{"tuning.manage", "PUT", "tuning/channels/7/status", true},
+		{"monitor.channels", "PUT", "tuning/channels/7/status", false},
 		{"alerts.manage", "POST", "alerts/cleanup", true},
 		{"notifications.manage", "POST", "notification-deliveries/1/resend", true},
 		{"instances.manage", "POST", "instances/1/rotate-token", true},

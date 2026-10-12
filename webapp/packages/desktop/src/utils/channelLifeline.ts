@@ -13,6 +13,8 @@ export function lifeTitle(v: ChannelLifeEvent): string {
   if(v.source==='decision') return ({routine_probe_circuit:'探针触发熔断',circuit_opened:'进入熔断',circuit_disabled:'禁用渠道决策',circuit_recovered:'恢复渠道决策',probe_started:'启动恢复探测',probe_failed:'恢复探测未通过',weight_write:'调权决策',weight_observed:'观察权重',capacity_reduce:'容量保护降权',manual_takeover:'检测到外部接管',write_abandoned:'停止重试写入'} as Record<string,string>)[v.operation] || v.operation
   if(v.operation==='channel.probe')return '恢复探测轮次'
   if(v.operation==='channel.verify')return '控制链路验证'
+  if(v.operation==='channel.manual_disable')return '手动关闭渠道'
+  if(v.operation==='channel.manual_enable')return '手动开启渠道'
   if(target.status===2)return '禁用渠道'
   if(target.status===1)return '启用渠道'
   if(target.group!=null)return '修改渠道分组'

@@ -127,6 +127,14 @@ func (s Store) CreateContinuousWeightChangeWithAudit(v tuning.Recommendation, ac
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
 	defer cancel()
+	unlock, err := s.LockChannelWrite(ctx, v.InstanceID, v.ChannelID)
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
+	if err := s.CheckManualChannelControl(v); err != nil {
+		return "", err
+	}
 	if err := s.CheckPrioritySync(v); err != nil {
 		return "", err
 	}
@@ -320,7 +328,11 @@ func (s Store) runProbeRound(controller Controller, siteID string, channelID int
 		_, _, _ = s.Store.CompleteChannelCommand(commandID, "failed", "probe marker was never persisted", time.Now().UTC())
 		return
 	}
-	round := channelcontrol.RunProbeRound(ctx, recoveryProbeJournal{Prober: controller, store: s.Store, site: siteID}, channelID, model, count, interval, s.sleep, o)
+	owned := ownedRecoveryProber{Controller: controller, cancel: cancel, active: func() bool {
+		active, err := s.ContinuousProbeActive(siteID, channelID, commandID)
+		return err == nil && active
+	}}
+	round := channelcontrol.RunProbeRound(ctx, recoveryProbeJournal{Prober: owned, store: s.Store, site: siteID}, channelID, model, count, interval, s.sleep, o)
 	attempts, successes, durationSum, lastError := round.Attempts, round.Successes, round.DurationSeconds, round.Error
 	now := time.Now().UTC()
 	status := "succeeded"

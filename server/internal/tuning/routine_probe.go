@@ -284,7 +284,7 @@ type routineRun struct {
 
 func routineEligible(base ChannelBaseValue, state ContinuousState, policy PolicyRecord) bool {
 	return policy.Policy.Continuous.Rules().RoutineProbeEnabled && base.BaseWeight > 0 && len(base.Models) == 1 && policy.Policy.DispatchModes[base.ModelName] == "auto" &&
-		!state.CircuitDisabled && !state.RoutineCircuitLatched && (state.Phase == "" || state.Phase == "normal" || state.Phase == "soft_start")
+		state.PausedReason != ManualDisabled && !state.CircuitDisabled && !state.RoutineCircuitLatched && (state.Phase == "" || state.Phase == "normal" || state.Phase == "soft_start")
 }
 
 func (e *Engine) runRoutineProbes(ctx context.Context) {
