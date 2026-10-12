@@ -150,8 +150,12 @@ onBeforeUnmount(()=>{disposed=true;++siteRevision;++userRevision;++ruleRevision;
           </el-table>
         </template></el-table-column>
         <el-table-column prop="model" label="模型" min-width="180"/>
-        <el-table-column label="补录折扣 / 有效期" min-width="420"><template #default="s">
-          <div v-for="r in s.row.history" :key="r.id" class="rule-summary"><b>{{percent(r.discount)}}</b><span>{{range(r)}}</span><el-tag size="small" :type="state(r)==='生效中'?'success':state(r)==='待生效'?'warning':'info'">{{state(r)}}</el-tag></div>
+        <el-table-column label="补录折扣" width="100"><template #default="s">
+          <div v-for="r in s.row.history" :key="r.id" class="rule-summary"><b>{{percent(r.discount)}}</b></div>
+          <span v-if="!s.row.history.length">—</span>
+        </template></el-table-column>
+        <el-table-column label="有效期" min-width="320"><template #default="s">
+          <div v-for="r in s.row.history" :key="r.id" class="rule-summary"><span>{{range(r)}}</span><el-tag size="small" :type="state(r)==='生效中'?'success':state(r)==='待生效'?'warning':'info'">{{state(r)}}</el-tag></div>
           <span v-if="!s.row.history.length">—</span>
         </template></el-table-column>
         <el-table-column label="补录记录" width="95"><template #default="s">{{s.row.history.length}} 条</template></el-table-column>
@@ -181,7 +185,7 @@ aside,section{border:1px solid var(--el-border-color-light);border-radius:8px;ba
 aside button{display:flex;flex-direction:column;gap:4px;width:100%;border:0;text-align:left;background:transparent;padding:10px;border-radius:6px;color:var(--el-text-color-primary);cursor:pointer;overflow-wrap:anywhere}
 aside button.active{background:var(--el-color-primary-light-9);color:var(--el-color-primary)}
 small{color:var(--el-text-color-secondary);font-size:12px}h3{margin:0 0 5px;font-size:16px}header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}
-.rule-summary{display:flex;align-items:center;gap:12px;padding:3px 0}.rule-summary b{min-width:44px}.rule-summary span{white-space:nowrap}
+.rule-summary{display:flex;align-items:center;gap:12px;min-height:30px;padding:3px 0;box-sizing:border-box}.rule-summary b{min-width:44px}.rule-summary span{white-space:nowrap}
 .model-search{max-width:260px;margin:12px 0}.history{padding:8px 16px}.rate{margin-left:12px}.dates{display:grid;grid-template-columns:1fr 1fr;gap:16px}.dates :deep(.el-date-editor){width:100%}.el-alert{margin-bottom:10px}
 @media(max-width:760px){.discount-workspace{grid-template-columns:1fr}.user-list{max-height:160px}.dates{grid-template-columns:1fr;gap:0}header{align-items:flex-start;flex-direction:column}}
 </style>
