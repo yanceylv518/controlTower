@@ -14,6 +14,7 @@ const compiled = ts.transpileModule(bare, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
 }).outputText
 const flush = async () => { await new Promise(setImmediate); await nextTick() }
+const settleUserFilter = async () => { await new Promise(resolve => setTimeout(resolve, 300)); await flush() }
 const deferred = () => {
   let resolve, reject
   const promise = new Promise((yes, no) => { resolve = yes; reject = no })
@@ -25,7 +26,7 @@ const rule = (patch = {}) => ({ id: 1, instance_id: 'a', discount_type: 'user_mo
 
 function create(t) {
   const filters = reactive({ site_id: 'a', loadInstances: async () => {} })
-  const writes = [], deletes = [], messages = [], currentReads = [], cleanup = []
+  const writes = [], deletes = [], messages = [], currentReads = [], cleanup = [], userReads = []
   const records = { a: [], b: [] }
   const dashboard = {
     billingDiscounts: async site => ({ items: records[site] || [] }),
@@ -42,9 +43,18 @@ function create(t) {
       records[site] = records[site].filter(r => r.id !== id)
     },
   }
-  const passthrough = { users: async () => ({ total: 2, items: [
+  const userDirectory = ref([
     { id: 7, username: 'Alice' }, { id: 8, username: 'Bob' },
-  ] }) }
+  ])
+  const passthrough = { users: async (params, signal) => {
+    userReads.push({ ...params, signal })
+    const included = params.user_ids?.split(',').map(Number), excluded = params.exclude_user_ids?.split(',').map(Number) || []
+    const keyword = (params.keyword || '').toLowerCase()
+    const matching = userDirectory.value.filter(user => (!included || included.includes(user.id)) && !excluded.includes(user.id) &&
+      (!keyword || `${user.username} ${user.display_name || ''} ${user.id}`.toLowerCase().includes(keyword)))
+    const offset = params.offset || 0
+    return { total: matching.length, items: matching.slice(offset, offset + (params.limit || 50)) }
+  } }
   const ElMessage = { success: value => messages.push(value), error: value => messages.push(value) }
   const ElMessageBox = { confirm: async () => {} }
   const document = { addEventListener() {}, removeEventListener() {} }
@@ -62,10 +72,11 @@ function create(t) {
     users, active, rules, catalog, form, target, dialog, saving, saveError, invalid, conflicts,
     rows, names, models, options, now, state, range, userLoading, userError, rulesLoading,
     rulesError, catalogLoading, catalogError, edit, save, remove, loadUsers, loadRules,
-    loadSite, loadCatalog, refreshRuleStates, get siteRevision() { return siteRevision; }
+    loadSite, loadCatalog, refreshRuleStates, keyword, supplementFilter, visibleUsers, userSummaries, total, hasMoreUsers,
+    get siteRevision() { return siteRevision; }
   };`)(...args))
   return { ...page, get siteRevision() { return page.siteRevision }, filters, dashboard, passthrough,
-    records, writes, deletes, messages, currentReads, ElMessageBox, destroy }
+    records, writes, deletes, messages, currentReads, userReads, userDirectory, ElMessageBox, destroy }
 }
 
 async function open(c, user = 7, model = 'model-a') {
@@ -291,4 +302,118 @@ test('a stale delete confirmation cannot submit after switching away and back', 
   confirmation.resolve()
   await removal
   assert.deepEqual(c.deletes, [])
+})
+
+test('supplement summaries count distinct models and every stored period', async t => {
+  const c = create(t)
+  c.records.a = [
+    rule({ id: 1, effective_to: '2026-10-02T00:00:00+08:00' }),
+    rule({ id: 2, effective_from: '2026-10-02T00:00:00+08:00' }),
+    rule({ id: 3, model_name: 'model-b', effective_from: '2027-01-01T00:00:00+08:00' }),
+  ]
+  await open(c)
+  assert.equal(c.supplementFilter.value, 'all')
+  assert.equal(c.userSummaries.value.get(7).models.size, 2)
+  assert.equal(c.userSummaries.value.get(7).records, 3)
+  assert.equal(c.userSummaries.value.has(8), false)
+  c.supplementFilter.value = 'with'
+  await settleUserFilter()
+  assert.deepEqual(c.visibleUsers.value.map(user => user.id), [7])
+  assert.equal(c.total.value, 1)
+  assert.equal(c.userReads.at(-1).user_ids, '7')
+  c.supplementFilter.value = 'without'
+  await settleUserFilter()
+  assert.deepEqual(c.visibleUsers.value.map(user => user.id), [8])
+  assert.equal(c.userReads.at(-1).exclude_user_ids, '7')
+  c.keyword.value = 'Alice'
+  await settleUserFilter()
+  assert.deepEqual(c.visibleUsers.value, [])
+  assert.equal(c.total.value, 0)
+  assert.deepEqual(c.currentReads, [])
+})
+
+test('an empty supplemented user set never requests the unfiltered directory', async t => {
+  const c = create(t)
+  await open(c)
+  const reads = c.userReads.length
+  c.supplementFilter.value = 'with'
+  await settleUserFilter()
+  assert.deepEqual(c.visibleUsers.value, [])
+  assert.equal(c.total.value, 0)
+  assert.equal(c.hasMoreUsers.value, false)
+  assert.equal(c.userLoading.value, false)
+  assert.equal(c.userReads.length, reads)
+  assert.equal(c.active.value, undefined)
+})
+
+test('supplement filters apply before pagination and find users beyond the first page', async t => {
+  const c = create(t)
+  c.userDirectory.value = Array.from({ length: 75 }, (_, index) => ({ id: index + 1, username: `user-${index + 1}` }))
+  c.records.a = [rule({ subject_id: 75 })]
+  await flush()
+  assert.equal(c.users.value.length, 50)
+  c.supplementFilter.value = 'with'
+  await settleUserFilter()
+  assert.deepEqual(c.users.value.map(user => user.id), [75])
+  assert.equal(c.total.value, 1)
+  c.supplementFilter.value = 'without'
+  await settleUserFilter()
+  assert.equal(c.users.value.length, 50)
+  assert.equal(c.total.value, 74)
+  assert.equal(c.hasMoreUsers.value, true)
+  await c.loadUsers(true)
+  assert.equal(c.users.value.length, 74)
+  assert.equal(c.hasMoreUsers.value, false)
+  assert.equal(c.users.value.some(user => user.id === 75), false)
+  assert.equal(c.userReads.at(-1).offset, 50)
+  assert.equal(c.userReads.at(-1).exclude_user_ids, '75')
+})
+
+test('changing supplement filters cancels stale user requests and ignores their late failure', async t => {
+  const c = create(t)
+  c.records.a = [rule()]
+  await open(c)
+  const old = deferred()
+  let oldSignal
+  c.passthrough.users = async (params, signal) => {
+    if (params.user_ids) { oldSignal = signal; return old.promise }
+    return { total: 1, items: [{ id: 8, username: 'Bob' }] }
+  }
+  c.supplementFilter.value = 'with'
+  await settleUserFilter()
+  assert.equal(c.userLoading.value, true)
+  c.supplementFilter.value = 'without'
+  assert.equal(oldSignal.aborted, true)
+  await settleUserFilter()
+  old.reject(Error('late failure'))
+  await flush()
+  assert.deepEqual(c.users.value.map(user => user.id), [8])
+  assert.equal(c.userError.value, '')
+  assert.equal(c.userLoading.value, false)
+})
+
+test('saving and deleting supplements refresh filter membership and counts', async t => {
+  const c = create(t)
+  c.records.a = [rule({ id: 99 })]
+  await open(c, 8, 'model-b')
+  c.supplementFilter.value = 'without'
+  await settleUserFilter()
+  assert.deepEqual(c.users.value.map(user => user.id), [8])
+  await c.save()
+  await settleUserFilter()
+  assert.deepEqual(c.visibleUsers.value, [])
+  assert.equal(c.total.value, 0)
+  assert.equal(c.userSummaries.value.get(8).records, 1)
+  c.supplementFilter.value = 'with'
+  await settleUserFilter()
+  c.active.value = c.users.value.find(user => user.id === 8)
+  await nextTick()
+  await c.remove(c.rules.value.find(item => item.subject_id === 8))
+  await settleUserFilter()
+  assert.deepEqual(c.visibleUsers.value.map(user => user.id), [7])
+  assert.equal(c.userSummaries.value.has(8), false)
+  c.filters.site_id = 'b'
+  await flush()
+  assert.equal(c.supplementFilter.value, 'all')
+  assert.equal(c.userSummaries.value.size, 0)
 })
