@@ -71,6 +71,34 @@ type reconcileMemoryStore struct {
 	reads, completions int
 }
 
+type probeReceiptStore struct {
+	*MemoryStore
+	slow int
+}
+
+func (s *probeReceiptStore) RecordContinuousProbeResultWithLatency(_ string, _ int64, _ string, _, _ int, _ float64, slow int, _ time.Time) error {
+	s.slow = slow
+	return nil
+}
+func TestConfiguredSlowLimitReachesProbeReceiptStore(t *testing.T) {
+	s := &probeReceiptStore{MemoryStore: NewMemoryStore()}
+	now := time.Now().UTC()
+	if err := s.CreateChannelCommand(storage.ChannelCommand{ID: "probe", InstanceID: "inst", ChannelID: 7, CommandType: "channel.probe", PayloadJSON: `{"probe_count":10,"probe_slow_limit":3}`, Status: "delivered", CreatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	report := agentgateway.AgentReportRequest{InstanceID: "inst", AgentID: "a", ReportedAt: now, CommandResults: []agentgateway.ChannelCommandResult{{ID: "probe", ChannelID: 7, Status: "succeeded", Attempts: 4, Successes: 1, DurationSeconds: 1, ProbeSlowStreak: 3}}}
+	if err := NewService(s).SaveReport(report); err != nil {
+		t.Fatal(err)
+	}
+	if s.slow != 3 {
+		t.Fatalf("slow receipt dropped: %d", s.slow)
+	}
+	report.CommandResults[0].ProbeSlowStreak = 4
+	if err := NewService(s).SaveReport(report); err == nil {
+		t.Fatal("streak exceeding failed attempts accepted")
+	}
+}
+
 func (s *reconcileMemoryStore) CommandsToReconcile(_ string, _ time.Time) ([]storage.ChannelCommand, error) {
 	s.reads++
 	return []storage.ChannelCommand{{ID: "lost", ChannelID: 9, CommandType: "channel.reconcile", PayloadJSON: `{"weight":55}`}}, nil

@@ -36,7 +36,7 @@ type fastCircuitStore interface {
 }
 
 func (e *Engine) evaluateFastCircuit(batch FastCircuitBatch, now time.Time) {
-	if batch.InstanceID == "" || batch.ReportedAt.IsZero() || now.Sub(batch.ReportedAt) > fastCircuitReportMaxAge || batch.ReportedAt.After(now.Add(time.Minute)) {
+	if batch.InstanceID == "" || batch.ReportedAt.IsZero() {
 		return
 	}
 	store, ok := e.store.(fastCircuitStore)
@@ -50,6 +50,10 @@ func (e *Engine) evaluateFastCircuit(batch FastCircuitBatch, now time.Time) {
 	}
 	policy, found, err := e.store.GetPolicy(siteID)
 	if err != nil || !found || !policy.Policy.Continuous.FastCircuitEnabled {
+		return
+	}
+	rules := policy.Policy.Continuous.Rules()
+	if now.Sub(batch.ReportedAt) > time.Duration(rules.FastReportMaxAgeSeconds)*time.Second || batch.ReportedAt.After(now.Add(time.Duration(rules.FastReportFutureSeconds)*time.Second)) {
 		return
 	}
 	bases, err := store.ListChannelBaseValues(siteID, "")
@@ -84,7 +88,7 @@ func (e *Engine) evaluateFastCircuit(batch FastCircuitBatch, now time.Time) {
 			if e.parallelism > 1 {
 				now = time.Now().UTC()
 			}
-			if now.Sub(batch.ReportedAt) > fastCircuitReportMaxAge {
+			if now.Sub(batch.ReportedAt) > time.Duration(rules.FastReportMaxAgeSeconds)*time.Second {
 				return
 			}
 			states, err := store.ListContinuousStates(siteID)

@@ -25,6 +25,9 @@ type AgentHeartbeatResponse struct {
 }
 
 type ChannelCommand struct {
+	ProbeTimeoutSeconds  int     `json:"probe_timeout_seconds,omitempty"`
+	ProbeSlowLimit       int     `json:"probe_slow_limit,omitempty"`
+	ProbeRoundSeconds    int     `json:"probe_round_seconds,omitempty"`
 	ID                   string  `json:"id"`
 	Type                 string  `json:"type"`
 	ChannelID            int64   `json:"channel_id"`

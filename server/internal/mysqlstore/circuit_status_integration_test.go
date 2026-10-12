@@ -47,13 +47,14 @@ func TestCircuitDisabledChannelRemainsEligibleAndStatusCommandsPersist(t *testin
 	require.Len(t, rows, 1)
 	require.Equal(t, int64(7), rows[0].ChannelID)
 	policy := tuning.DefaultPolicy()
+	policy.Continuous.RecoveryMinWeight = 30
 	policy.DispatchModes = map[string]string{"m": "auto"}
 	require.NoError(t, s.PutPolicy(tuning.PolicyRecord{InstanceID: site, Policy: policy, Mode: "observe", UpdatedAt: now, UpdatedBy: "test"}))
 	for _, target := range []int{2, 1} {
 		weight := int64(0)
 		rule := "circuit_disabled"
 		if target == 1 {
-			weight = 20
+			weight = 30
 			rule = "circuit_recovered"
 		}
 		rec := tuning.Recommendation{ID: fmt.Sprintf("%s-%d", site, target), InstanceID: site, ChannelID: 7, Rule: rule, ModeAtCreation: "auto", CreatedAt: now, ProposedWeight: weight, ProposedChannelStatus: &target, Evidence: map[string]any{"channel_status": target}}
@@ -113,4 +114,17 @@ func TestCircuitDisabledChannelRemainsEligibleAndStatusCommandsPersist(t *testin
 	expected, err := s.CompletedProbeCount(site, 7)
 	require.NoError(t, err)
 	require.Equal(t, 10, expected, "partial round must retain the original dispatched count")
+	configured := tuning.Recommendation{ID: site + "-configured-probe", InstanceID: site, ChannelID: 7, CreatedAt: now, ModeAtCreation: "auto", Evidence: map[string]any{"evaluation": tuning.EvaluationContext{Params: policy.Continuous}}}
+	probe, err = s.CreateContinuousProbe(configured, "m", 10, 0, now)
+	require.NoError(t, err)
+	state.ProbeCommandID = &probe
+	require.NoError(t, s.PutContinuousState(state))
+	require.NoError(t, s.RecordContinuousProbeResultWithLatency(site, 7, probe, 4, 1, 1, 3, now))
+	states, err := s.ListContinuousStates(site)
+	require.NoError(t, err)
+	require.Len(t, states, 1)
+	require.Equal(t, 3, states[0].ProbeSlowStreak, "custom slow limit must survive receipt persistence")
+	expected, err = s.CompletedProbeCount(site, 7)
+	require.NoError(t, err)
+	require.Equal(t, 10, expected)
 }

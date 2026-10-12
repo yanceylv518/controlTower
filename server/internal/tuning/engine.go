@@ -26,10 +26,13 @@ type Engine struct {
 	fastCircuit chan FastCircuitBatch
 	// Runtime workers share channel guards. Synchronous Tick remains useful for
 	// one-shot callers; Run uses a separate engine with bounded parallelism.
-	parallelism int
-	ctx         context.Context
-	guards      sync.Map
-	version     atomic.Uint64
+	parallelism    int
+	ctx            context.Context
+	guards         sync.Map
+	version        atomic.Uint64
+	routineSamples chan RoutineProbeSample
+	probeCoverage  *probeCoverageBuffer
+	probeRecords   *probeRecordBuffer
 }
 
 func NewEngine(s Store) *Engine {
@@ -37,10 +40,18 @@ func NewEngine(s Store) *Engine {
 }
 
 func (e *Engine) Run(ctx context.Context) error {
-	runtime := &Engine{store: e.store, fastCircuit: e.fastCircuit, parallelism: 4, ctx: ctx}
+	runtime := &Engine{store: e.store, fastCircuit: e.fastCircuit, parallelism: 4, ctx: ctx, routineSamples: make(chan RoutineProbeSample, 1024), probeCoverage: newProbeCoverageBuffer(), probeRecords: newProbeRecordBuffer()}
 	var workers sync.WaitGroup
 	workers.Add(1)
-	go func() { defer workers.Done(); runtime.runSites(ctx, 30*time.Second) }()
+	go func() { defer workers.Done(); runtime.runSites(ctx, time.Second, true) }()
+	workers.Add(1)
+	go func() { defer workers.Done(); runtime.runRoutineProbes(ctx) }()
+	workers.Add(1)
+	go func() { defer workers.Done(); runtime.runProbeSampleWriter(ctx) }()
+	workers.Add(1)
+	go func() { defer workers.Done(); runtime.runProbeCoverageWriter(ctx) }()
+	workers.Add(1)
+	go func() { defer workers.Done(); runtime.runProbeRecordsWriter(ctx) }()
 	// Reserve workers for urgent reports: a full normal write pool cannot
 	// starve circuit breaking. A channel's in-flight write is still serialized.
 	for i := 0; i < 4; i++ {
@@ -58,6 +69,9 @@ func (e *Engine) Run(ctx context.Context) error {
 		}()
 	}
 	workers.Wait()
+	// All producers have stopped; persist their final counters on graceful exit.
+	runtime.flushProbeCoverage(context.WithoutCancel(ctx))
+	runtime.flushProbeRecords(context.WithoutCancel(ctx))
 	return ctx.Err()
 }
 

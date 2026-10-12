@@ -26,7 +26,7 @@ var menuPaths = map[string]bool{
 	"/usage": true, "/readonly-users": true, "/readonly-logs": true, "/container-logs": true,
 	"/billing/new": true, "/billing/reports": true, "/billing/user-discounts": true,
 	"/billing/channels": true, "/billing/tasks": true, "/billing/discounts": true,
-	"/tuning": true, "/alerts": true, "/notifications": true, "/instances": true, "/log-archives": true,
+	"/tuning": true, "/channel-lifeline": true, "/alerts": true, "/notifications": true, "/instances": true, "/log-archives": true,
 	"/access-users": true, "/models/manage": true, "/billing/upstreams": true, "/settings": true, "/audits": true,
 }
 

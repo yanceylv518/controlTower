@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -83,7 +84,34 @@ func (h Handler) HandleTuningContinuousStates(w http.ResponseWriter, r *http.Req
 		writeDashboardError(w, 500, "query_failed")
 		return
 	}
-	writeDashboardJSON(w, 200, map[string]any{"items": items})
+	response := map[string]any{"items": items}
+	if coverageStore, supported := h.tuningStore.(tuning.RoutineProbeCoverageReader); supported {
+		coverage := tuning.ProbeCoverageWindow{Items: map[int64]tuning.RoutineProbeCoverage{}}
+		policy, found, policyErr := h.tuningStore.GetPolicy(id)
+		if policyErr != nil {
+			coverage.Error = "probe_coverage_unavailable"
+		} else {
+			minutes := tuning.DefaultPolicy().Continuous.WindowMinutes
+			if found {
+				minutes = policy.Policy.Continuous.WindowMinutes
+			}
+			minutes = max(1, min(1440, minutes))
+			// Include the current, partially collected minute and expose the exact
+			// boundaries. Unlike weight evidence this is a live dispatch view.
+			coverage.To = time.Now().UTC().Truncate(time.Minute).Add(time.Minute)
+			coverage.From = coverage.To.Add(-time.Duration(minutes) * time.Minute)
+			queryCtx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+			var err error
+			coverage.Items, coverage.AsOf, err = coverageStore.QueryRoutineProbeCoverage(queryCtx, id, coverage.From, coverage.To)
+			cancel()
+			if err != nil {
+				coverage.Items = map[int64]tuning.RoutineProbeCoverage{}
+				coverage.Error = "probe_coverage_unavailable"
+			}
+		}
+		response["probe_coverage"] = coverage
+	}
+	writeDashboardJSON(w, 200, response)
 }
 
 type TuningChannelItem struct {

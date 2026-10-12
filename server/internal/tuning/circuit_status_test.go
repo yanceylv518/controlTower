@@ -10,6 +10,44 @@ func failedRound() *continuousFake {
 	return &continuousFake{bases: []ChannelBaseValue{{ChannelID: 1, ModelName: "m", Models: []string{"m"}, BaseWeight: 100}}, states: map[int64]ContinuousState{1: {ChannelID: 1, ModelName: "m", Phase: "probing", KError: 1, ProbeAttempts: 10}}}
 }
 
+func TestRecoveryRequiresWholeDispatchedRound(t *testing.T) {
+	for _, tc := range []struct {
+		name                    string
+		sent, current, attempts int
+		wantRecovery            bool
+	}{
+		{"one success from ten", 10, 10, 1, false},
+		{"nine successes from ten", 10, 10, 9, false},
+		{"no completed attempts", 10, 10, 0, false},
+		{"excess receipt count", 10, 10, 11, false},
+		{"full round", 10, 10, 10, true},
+		{"lowered policy cannot complete old round", 10, 1, 1, false},
+		{"raised policy does not invalidate full old round", 1, 10, 1, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, disabled := range []bool{false, true} {
+				f := failedRound()
+				f.expectedProbeCount = tc.sent
+				s := f.states[1]
+				s.CircuitDisabled, s.RoutineCircuitLatched = disabled, disabled
+				s.ProbeAttempts, s.ProbeSuccesses, s.ProbeDurationSum = tc.attempts, tc.attempts, float64(tc.attempts)
+				f.states[1] = s
+				p := autoPolicy()
+				p.Policy.Continuous.ProbeCount = tc.current
+				NewEngine(f).evaluateContinuous("i", p, time.Now(), f)
+				s = f.states[1]
+				if tc.wantRecovery {
+					if s.Phase != "soft_start" || len(f.writes) != 1 {
+						t.Fatalf("full round not recovered: %+v", s)
+					}
+				} else if s.Phase != "circuit" || s.CircuitDisabled != disabled || s.RoutineCircuitLatched != disabled || len(f.writes) != 0 || s.NextProbeAt == nil {
+					t.Fatalf("incomplete round escaped circuit: %+v", s)
+				}
+			}
+		})
+	}
+}
+
 func TestAllFailedRoundDisablesThenProbesAndEnables(t *testing.T) {
 	f := failedRound()
 	now := time.Now().UTC()

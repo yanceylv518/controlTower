@@ -6,6 +6,20 @@ import "time"
 // disable intents never established CT ownership. Confirmed CT-disabled
 // channels keep their recovery cycle and must prove recovery with fresh probes.
 func (e *Engine) finishFailedWrite(s *ContinuousState, base ChannelBaseValue, p ContinuousDispatchParams, now time.Time) {
+	// Ending a failed disable task must not erase a probe-proven fault. Keep
+	// the durable latch and retry the intent only after the existing backoff.
+	if s.RoutineCircuitLatched && s.CircuitStatusTarget == 2 {
+		if s.LastWriteFailureAt != nil && now.Before(s.LastWriteFailureAt.Add(time.Duration(p.Rules().WriteRetrySeconds)*time.Second)) {
+			return
+		}
+		rec := continuousEvent(s.InstanceID, base, *s, "write_abandoned", "auto", now)
+		rec.Evidence["error"], rec.Evidence["failure_count"] = s.LastWriteError, s.WriteFailureStreak
+		_ = e.store.InsertRecommendation(rec)
+		s.Phase, s.ProposedWeight, s.Multiplier = "circuit", 0, 0
+		s.CircuitStatusCommandID = ""
+		e.noteWriteSuccess(s)
+		return
+	}
 	failedWeight, failedStatus := s.ProposedWeight, s.CircuitStatusTarget
 	if s.CircuitStatusTarget == 2 || s.CircuitStatusTarget == 3 {
 		s.CircuitDisabled = false

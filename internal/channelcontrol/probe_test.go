@@ -16,6 +16,20 @@ type sequenceProber struct {
 	cancelOn int
 }
 
+func TestConfiguredProbeRoundThresholdAndInterval(t *testing.T) {
+	p := &sequenceProber{results: []ProbeResult{{Success: true, Duration: 35}, {Duration: 46}, {Duration: 47}, {Duration: 48}}}
+	var waits []time.Duration
+	r := RunProbeRound(context.Background(), p, 1, "m", 10, 7, func(_ context.Context, d time.Duration) { waits = append(waits, d) }, ProbeOptions{TimeoutSeconds: 45, SlowLimit: 3})
+	if r.Successes != 1 || r.Attempts != 4 || r.SlowStreak != 3 || len(waits) != 3 {
+		t.Fatalf("configured round failed: %+v, waits=%v", r, waits)
+	}
+	for _, d := range waits {
+		if d != 7*time.Second {
+			t.Fatalf("interval=%v", d)
+		}
+	}
+}
+
 func (p *sequenceProber) Probe(context.Context, int64, string) (ProbeResult, error) {
 	r := p.results[p.calls]
 	p.calls++
@@ -35,7 +49,7 @@ func TestProbeRoundSlowRule(t *testing.T) {
 		{"successful but slow", []ProbeResult{{Success: true, Duration: 31}, {Success: true, Duration: 32}, {Success: true}}, 2, 0, 2},
 		{"earlier success cannot hide slow streak", []ProbeResult{{Success: true, Duration: 1}, {Slow: true}, {Slow: true}, {Success: true}}, 3, 1, 2},
 		{"fast success resets streak", []ProbeResult{{Slow: true}, {Success: true, Duration: 1}, {Slow: true}}, 3, 1, 1},
-		{"fast failure resets streak", []ProbeResult{{Slow: true}, {Success: false}, {Slow: true}}, 3, 0, 1},
+		{"channel error preserves slow evidence", []ProbeResult{{Slow: true}, {Success: false}, {Slow: true}}, 3, 0, 2},
 		{"30 seconds returned is accepted", []ProbeResult{{Success: true, Duration: 30}, {Success: true, Duration: 30}}, 2, 2, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -66,6 +80,16 @@ func TestProbeRoundCanceledLastAttemptIsNotACompleteFailure(t *testing.T) {
 		if r.Attempts != count-1 || r.Successes != 0 || r.SlowStreak != 0 || r.Error != context.Canceled.Error() {
 			t.Fatalf("count=%d: canceled request became complete-failure evidence: %+v", count, r)
 		}
+	}
+}
+
+func TestProbeRoundAbortsAfterPartialSuccess(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	p := &sequenceProber{results: []ProbeResult{{Success: true, Duration: 1}, {Success: true, Duration: 1}}, cancel: cancel, cancelOn: 2}
+	r := RunProbeRound(ctx, p, 1, "m", 10, 0, nil)
+	if !r.Aborted || r.Attempts != 1 || r.Successes != 1 || r.Error != context.Canceled.Error() {
+		t.Fatalf("partial round not marked aborted: %+v", r)
 	}
 }
 

@@ -119,11 +119,14 @@ func (s Service) SaveHeartbeatWithCommands(req agentgateway.AgentHeartbeatReques
 			Model                string  `json:"model"`
 			ProbeCount           int     `json:"probe_count"`
 			ProbeIntervalSeconds int     `json:"probe_interval_seconds"`
+			ProbeTimeoutSeconds  int     `json:"probe_timeout_seconds"`
+			ProbeSlowLimit       int     `json:"probe_slow_limit"`
+			ProbeRoundSeconds    int     `json:"probe_round_seconds"`
 		}
 		if json.Unmarshal([]byte(v.PayloadJSON), &p) != nil {
 			continue
 		}
-		commands = append(commands, agentgateway.ChannelCommand{ID: v.ID, Type: v.CommandType, ChannelID: v.ChannelID, Status: p.Status, Weight: p.Weight, Priority: p.Priority, Group: p.Group, Model: p.Model, ProbeCount: p.ProbeCount, ProbeIntervalSeconds: p.ProbeIntervalSeconds})
+		commands = append(commands, agentgateway.ChannelCommand{ID: v.ID, Type: v.CommandType, ChannelID: v.ChannelID, Status: p.Status, Weight: p.Weight, Priority: p.Priority, Group: p.Group, Model: p.Model, ProbeCount: p.ProbeCount, ProbeIntervalSeconds: p.ProbeIntervalSeconds, ProbeTimeoutSeconds: p.ProbeTimeoutSeconds, ProbeSlowLimit: p.ProbeSlowLimit, ProbeRoundSeconds: p.ProbeRoundSeconds})
 	}
 	return offset, commands, err
 }
@@ -150,7 +153,7 @@ func (s Service) SaveReport(req agentgateway.AgentReportRequest) error {
 		return err
 	}
 	for _, result := range req.CommandResults {
-		if result.ProbeSlowStreak < 0 || result.ProbeSlowStreak > 2 || result.ProbeSlowStreak > result.Attempts || result.ProbeSlowStreak > result.Attempts-result.Successes {
+		if result.ProbeSlowStreak < 0 || result.ProbeSlowStreak > result.Attempts || result.ProbeSlowStreak > result.Attempts-result.Successes {
 			return errors.New("invalid probe slow streak")
 		}
 		if result.Status == "unconfirmed" {

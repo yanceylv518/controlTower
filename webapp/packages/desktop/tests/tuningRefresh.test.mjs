@@ -16,6 +16,82 @@ const groupUtils = new Function('exports', `${groupUtilsCode}\nreturn exports;`)
 const row = { channel_id: 1, model_name: 'm', base_weight: 100, base_priority: 1, current_weight: 80, current_priority: 1, group_name: 'default,vip', models: ['m'] }
 const state = (requests, weight = 80) => ({ channel_id: 1, model_name: 'm', last_observed_requests: requests, proposed_weight: weight, speed_stats_version: 1, phase: 'normal', metric_ready: true, baseline_ready: true, updated_at: '2026-09-14T00:00:00Z', evaluation: {base_weight:100, evaluated_at:'2026-09-14T00:00:00Z', params:{min_samples:20,combined_min_factor:0.1,combined_max_factor:1.5}} })
 const cloneFixture = value => JSON.parse(JSON.stringify(value));
+
+test('probe coverage separates scheduled misses from accelerated requests and handles unavailable data', async () => {
+  const p=page(); await p.load();
+  const counts={due:0,sent:0,global_limited:0,channel_limited:0,evidence_limited:0,last_due_at:'2026-10-12T00:01:00Z'};
+  const coverage={from:'2026-10-12T00:00:00Z',to:'2026-10-12T00:15:00Z',as_of:'2026-10-12T00:02:00Z',items:{1:{scheduled:{...counts,due:6,sent:5,global_limited:1},accelerated:{...counts,due:9,sent:8,evidence_limited:1}}}};
+  p.dashboard.tuningContinuousStates=async()=>({items:[state(20)],probe_coverage:coverage});
+  await p.refreshRuntime();
+  const cell=p.probeCoverageCell(row);
+  assert.match(cell.text,/定时探针 5\/6 · 漏 1/);
+  assert.match(cell.text,/加速漏 1/);
+  assert.equal(cell.missed,true);
+  assert.match(cell.lines.join('\n'),/错误后加速探针：应发 9，实发 8，漏发 1/);
+  assert.match(cell.lines.join('\n'),/全局并发占满 1/);
+  assert.match(cell.lines.join('\n'),/等待结果容量占满 1/);
+  assert.match(p.probeCoverageCell({...row,channel_id:2}).text,/无探针记录/);
+  p.acceptProbeCoverage('a',{...coverage,error:'probe_coverage_unavailable',items:{}});
+  assert.match(p.probeCoverageCell(row).text,/暂不可用/);
+  p.filters.site_id='b';
+  assert.match(p.probeCoverageCell(row).text,/未提供/);
+});
+
+test('business rules preserve explicit zero on save and explain evaluated settings', async () => {
+  const p = page(); await p.load();
+  assert.equal(p.policy.continuous.routine_interval_seconds, 10);
+  assert.equal(p.policy.continuous.channel_history_retention_days, 7);
+  assert.equal(p.policy.continuous.recovery_speed_exponent, .5);
+  let saved;
+  p.dashboard.saveTuningPolicy = async (_site, next) => { saved=cloneFixture(next); p.dashboard.tuningPolicy=async()=>({mode:'observe',policy:saved}); };
+  Object.assign(p.policy.continuous, {channel_history_retention_days:3,routine_interval_seconds:7, probe_timeout_seconds:45, routine_error_limit:4, capacity_min_weight:0, recovery_speed_exponent:0, write_retry_seconds:120, write_max_attempts:8});
+  p.dirty.value=true; await p.save();
+  assert.equal(saved.continuous.routine_interval_seconds,7);
+  assert.equal(saved.continuous.channel_history_retention_days,3);
+  assert.equal(saved.continuous.probe_timeout_seconds,45);
+  assert.equal(saved.continuous.capacity_min_weight,0);
+  assert.equal(saved.continuous.recovery_speed_exponent,0);
+  const evaluated={...state(20),paused_reason:'write_failed'};
+  evaluated.evaluation.params={...saved.continuous,write_retry_seconds:60,write_max_attempts:4};
+  assert.match(p.phaseText(evaluated),/每1分钟重试，连续失败4次/);
+});
+
+test('probe-only evidence is visible and participates in the calculated weight', async () => {
+  const p=page(); await p.load();
+  const s={...state(0,120), k_speed:1,k_cache:1,k_otps:1,k_error:1,metric_ready:false,baseline_ready:false,
+    probe_speed:{samples:5,mean_seconds:1,baseline_seconds:2.5,factor:1.2,ready:true}};
+  s.evaluation.params={...p.policy.continuous,min_samples:5};
+  s.evaluation.performance_evaluated=true;
+  p.states.value=[s];
+  assert.equal(p.calculatedWeight(row),120);
+  assert.match(p.evaluationText(row),/探针速度已参与/);
+  assert.equal(p.coefficientEmptyText(row),'');
+  assert.equal(p.coefficientCell(row,'probe').value,1.2);
+  assert.match(p.coefficientCell(row,'probe').detail,/5\/5/);
+  assert.match(p.factorExplanation(row),/平均完整耗时 1.00s/);
+  assert.match(p.executionWeightText(row),/本轮目标权重：120/);
+  p.states.value=[{...s,probe_speed:{...s.probe_speed,ready:false,factor:0}}];
+  assert.equal(p.coefficientCell(row,'probe').value,1);
+  assert.equal(p.calculatedWeight(row),null);
+  p.states.value=[{...s,phase:'circuit',routine_circuit_latched:true}];
+  assert.equal(p.coefficientCell(row,'probe').status,'未参与');
+});
+
+test('probe settings default for old policies and zero disables only the coefficient', async () => {
+  const p=page(); const old=cloneFixture(p.policy); old.dispatch_modes={m:'auto'};
+  for(const key of ['probe_speed_exponent','probe_speed_min_factor','probe_speed_max_factor']) delete old.continuous[key];
+  p.dashboard.tuningPolicy=async()=>({mode:'observe',policy:cloneFixture(old)});
+  await p.load();
+  assert.equal(p.policy.continuous.probe_speed_exponent,.25);
+  assert.equal(p.policy.continuous.probe_speed_min_factor,.8);
+  assert.equal(p.policy.continuous.probe_speed_max_factor,1.2);
+  let saved;
+  p.dashboard.saveTuningPolicy=async(_site,next)=>{saved=cloneFixture(next);p.dashboard.tuningPolicy=async()=>({mode:'observe',policy:cloneFixture(saved)})};
+  p.policy.continuous.probe_speed_exponent=0;p.policy.continuous.probe_speed_max_factor=1.4;p.dirty.value=true;
+  await p.save();
+  assert.equal(saved.continuous.probe_speed_exponent,0);
+  assert.equal(p.savedPolicy.value.continuous.probe_speed_max_factor,1.4);
+});
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no }); return { promise, resolve, reject } }
 
 test('healthy performance writes with a configured cap have no capacity warning', async () => {
@@ -61,7 +137,7 @@ function page() {
     tuningChannels: async () => { throw new Error('channel directory unavailable') },
   }
   const names = ['computed', 'reactive', 'ref', 'watch', 'onMounted', 'onBeforeUnmount', 'useFiltersStore', 'dashboard', 'formatTime', 'ApiError', 'ElMessage', 'ElMessageBox', 'useMobileViewport', 'hiddenChannelGroupCount', 'matchesChannelGroup', 'MAX_VISIBLE_CHANNEL_GROUPS', 'normalizeChannelGroups', 'splitChannelGroups', 'visibleChannelGroups']
-  const create = new Function(...names, `${compiled}\nreturn { phaseText, watchChannelChanges, stopWatching: () => changesAbort?.abort(), sync, save, savedPolicy, mode, policyConflict, factorExplanation, refreshCurrentRates, ratesError, saveCapacity, saving, mobileEditRow, stageMobileEdit, mobileChanges, mobilePriorityChanges, mobileRuleChanges, mobileSaveOpen, load, refreshRuntime, loadChannelDirectory, applyGroupLocally, acceptStates, stateFor, sampleText, evaluationText, states, refreshError, bases, channels, channelDirectorySite, channelDirectoryLoading, policy, channelQuery, channelSwitchFilter, selectedGroupFilter, toggleGroupFilter, selectedGroupName, displayedRows, activeRows, modelChannelRows, models, modelChannelCount, modelChannelCountLabel, activeModel, dirty, selectModel, fieldChanged, savedBases, originalBase, calculatedWeight, executionWeightText, displayedSpeedFactor, coefficientCell, overallEvaluationStatus, coefficientEmptyText, coefficientSpan, displayedPriority, editPriority, priorityLocked, cancelChanges, limitReason, currentRates, ratesReady, rowStatus, channelStatusFor, channelStatusLabel, isDirectoryOnlyRow, eventResult, eventResultClass, events, filteredEvents, eventDateRange };`)
+  const create = new Function(...names, `${compiled}\nreturn { probeCoverageCell, acceptProbeCoverage, phaseText, watchChannelChanges, stopWatching: () => changesAbort?.abort(), sync, save, savedPolicy, mode, policyConflict, factorExplanation, refreshCurrentRates, ratesError, saveCapacity, saving, mobileEditRow, stageMobileEdit, mobileChanges, mobilePriorityChanges, mobileRuleChanges, mobileSaveOpen, load, refreshRuntime, loadChannelDirectory, applyGroupLocally, acceptStates, stateFor, sampleText, evaluationText, states, refreshError, bases, channels, channelDirectorySite, channelDirectoryLoading, policy, channelQuery, channelSwitchFilter, selectedGroupFilter, toggleGroupFilter, selectedGroupName, displayedRows, activeRows, modelChannelRows, models, modelChannelCount, modelChannelCountLabel, activeModel, dirty, selectModel, fieldChanged, savedBases, originalBase, calculatedWeight, executionWeightText, displayedSpeedFactor, coefficientCell, overallEvaluationStatus, coefficientEmptyText, coefficientSpan, displayedPriority, editPriority, priorityLocked, cancelChanges, limitReason, currentRates, ratesReady, rowStatus, channelStatusFor, channelStatusLabel, isDirectoryOnlyRow, eventResult, eventResultClass, events, filteredEvents, eventDateRange };`)
   const messages = [];
   const view = create(computed, reactive, ref, () => {}, () => {}, () => {}, () => filters, dashboard, String, ApiError, {info() {}, success() {}, error(message) {messages.push(message)}}, {confirm: async () => {}}, () => ref(false), groupUtils.hiddenChannelGroupCount, groupUtils.matchesChannelGroup, groupUtils.MAX_VISIBLE_CHANNEL_GROUPS, groupUtils.normalizeChannelGroups, groupUtils.splitChannelGroups, groupUtils.visibleChannelGroups)
   const initialPolicy = JSON.parse(JSON.stringify({...view.policy, dispatch_modes:{m:'auto'}}));
@@ -567,7 +643,7 @@ test('overall evaluation occupies a shared coefficient row without warning glyph
  p.states.value[0].phase='circuit';
  assert.equal(p.overallEvaluationStatus(row),'熔断');
  assert.equal(p.rowStatus(row).icon,'');
- assert.deepEqual(p.coefficientSpan({column:{property:'coefficient_speed'}}),[1,4]);
+ assert.deepEqual(p.coefficientSpan({column:{property:'coefficient_speed'}}),[1,5]);
  assert.deepEqual(p.coefficientSpan({column:{property:'coefficient_cache'}}),[0,0]);
  assert.deepEqual(p.coefficientSpan({column:{}}),[1,1]);
 });

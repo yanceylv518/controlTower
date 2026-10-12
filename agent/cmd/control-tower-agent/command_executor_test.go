@@ -89,6 +89,28 @@ type probeController struct {
 	updates []channelcontrol.UpdateRequest
 }
 
+type cancelingProbeController struct {
+	probeController
+	cancel context.CancelFunc
+}
+
+func (c *cancelingProbeController) Probe(ctx context.Context, id int64, model string) (channelcontrol.ProbeResult, error) {
+	if c.calls == 1 {
+		c.cancel()
+		return channelcontrol.ProbeResult{}, ctx.Err()
+	}
+	return c.probeController.Probe(ctx, id, model)
+}
+func TestExecuteProbeCancellationCannotReportCompletedRound(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c := &cancelingProbeController{probeController: probeController{results: []channelcontrol.ProbeResult{{Success: true, Duration: 1}}}, cancel: cancel}
+	r := executeCommand(ctx, c, reporter.ChannelCommand{ID: "partial", Type: "channel.probe", ChannelID: 7, Model: "m", ProbeCount: 10})
+	if r.Status != "failed" || r.Attempts != 1 || r.Successes != 1 || r.Error != context.Canceled.Error() {
+		t.Fatalf("partial round: %+v", r)
+	}
+}
+
 type readbackController struct {
 	probeController
 	readErr error
@@ -152,6 +174,15 @@ func TestExecuteProbeCommandAggregatesRound(t *testing.T) {
 	results := executeCommands(context.Background(), c, []reporter.ChannelCommand{{ID: "p", Type: "channel.probe", ChannelID: 7, Model: "m", ProbeCount: 3}})
 	if len(results) != 1 || results[0].Status != "succeeded" || results[0].Attempts != 3 || results[0].Successes != 2 || results[0].DurationSeconds != 4 {
 		t.Fatalf("unexpected probe result: %#v", results)
+	}
+}
+
+func TestExecuteConfiguredProbeCommand(t *testing.T) {
+	c := &probeController{results: []channelcontrol.ProbeResult{{Success: true, Duration: 35}, {Duration: 46}, {Duration: 47}, {Duration: 48}}}
+	command := reporter.ChannelCommand{ID: "configured", Type: "channel.probe", ChannelID: 7, Model: "m", ProbeCount: 10, ProbeTimeoutSeconds: 45, ProbeSlowLimit: 3, ProbeRoundSeconds: 900}
+	r := executeCommand(context.Background(), c, command)
+	if r.Attempts != 4 || r.Successes != 1 || r.ProbeSlowStreak != 3 || probeOptions(command).RoundSeconds != 900 {
+		t.Fatalf("configured command lost parameters: %+v", r)
 	}
 }
 

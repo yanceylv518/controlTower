@@ -18,6 +18,7 @@ type SchedulingParams struct {
 
 // ContinuousDispatchParams is the v3.0 continuous weighting policy.
 type ContinuousDispatchParams struct {
+	ContinuousRules
 	Sensitivity                float64 `json:"sensitivity"`
 	SpeedExponent              float64 `json:"speed_exponent"`
 	SpeedP50Weight             float64 `json:"speed_p50_weight"`
@@ -31,6 +32,9 @@ type ContinuousDispatchParams struct {
 	OTPSExponent               float64 `json:"otps_exponent"`
 	OTPSMinFactor              float64 `json:"otps_min_factor"`
 	OTPSMaxFactor              float64 `json:"otps_max_factor"`
+	ProbeSpeedExponent         float64 `json:"probe_speed_exponent"`
+	ProbeSpeedMinFactor        float64 `json:"probe_speed_min_factor"`
+	ProbeSpeedMaxFactor        float64 `json:"probe_speed_max_factor"`
 	ErrorHealthyRate           float64 `json:"error_healthy_rate"`
 	ErrorDegradedRate          float64 `json:"error_degraded_rate"`
 	ErrorPoorRate              float64 `json:"error_poor_rate"`
@@ -63,7 +67,9 @@ type ContinuousDispatchParams struct {
 func (p *ContinuousDispatchParams) UnmarshalJSON(data []byte) error {
 	type plain ContinuousDispatchParams
 	value := plain(*p)
+	value.ContinuousRules = DefaultContinuousRules()
 	value.CapacityMaxDecreasePercent = 25
+	value.ProbeSpeedExponent, value.ProbeSpeedMinFactor, value.ProbeSpeedMaxFactor = .25, .8, 1.2
 	if err := json.Unmarshal(data, &value); err != nil {
 		return err
 	}
@@ -84,9 +90,11 @@ func DefaultPolicy() Policy {
 		},
 		DispatchModes: map[string]string{},
 		Continuous: ContinuousDispatchParams{
-			Sensitivity: 1, SpeedExponent: .35, SpeedP50Weight: .50, SpeedP90Weight: .30, SpeedP95Weight: .20, SpeedMinFactor: .75, SpeedMaxFactor: 1.25,
+			ContinuousRules: DefaultContinuousRules(),
+			Sensitivity:     1, SpeedExponent: .35, SpeedP50Weight: .50, SpeedP90Weight: .30, SpeedP95Weight: .20, SpeedMinFactor: .75, SpeedMaxFactor: 1.25,
 			CacheExponent: .15, CacheMinFactor: .90, CacheMaxFactor: 1.10,
 			OTPSExponent: .25, OTPSMinFactor: .80, OTPSMaxFactor: 1.20,
+			ProbeSpeedExponent: .25, ProbeSpeedMinFactor: .8, ProbeSpeedMaxFactor: 1.2,
 			ErrorHealthyRate: .01, ErrorDegradedRate: .05, ErrorPoorRate: .15, ErrorFloorRate: .30,
 			ErrorDegradedFactor: .85, ErrorPoorFactor: .50, ErrorMinFactor: .20,
 			CombinedMinFactor: .50, CombinedMaxFactor: 1.50, MaxIncreasePercent: 10, CapacityMaxDecreasePercent: 25,
@@ -126,6 +134,7 @@ func DecodePolicyJSON(raw []byte) (Policy, error) {
 func (p Policy) Validate() map[string]string {
 	e := map[string]string{}
 	c := p.Continuous
+	validateContinuousRules(c.ContinuousRules, e)
 	if c.Sensitivity <= 0 || c.Sensitivity > 5 {
 		e["continuous.sensitivity"] = "must_be_greater_than_0_and_at_most_5"
 	}
@@ -146,6 +155,12 @@ func (p Policy) Validate() map[string]string {
 	}
 	if c.CacheMinFactor <= 0 || c.CacheMinFactor > 1 || c.CacheMaxFactor < 1 || c.CacheMaxFactor > 3 || c.CacheMaxFactor <= c.CacheMinFactor {
 		e["continuous.cache_factor_range"] = "must_include_1_and_be_ordered"
+	}
+	if math.IsNaN(c.ProbeSpeedExponent) || math.IsInf(c.ProbeSpeedExponent, 0) || c.ProbeSpeedExponent < 0 || c.ProbeSpeedExponent > 2 {
+		e["continuous.probe_speed_exponent"] = "must_be_between_0_and_2"
+	}
+	if math.IsNaN(c.ProbeSpeedMinFactor) || math.IsNaN(c.ProbeSpeedMaxFactor) || math.IsInf(c.ProbeSpeedMinFactor, 0) || math.IsInf(c.ProbeSpeedMaxFactor, 0) || c.ProbeSpeedMinFactor <= 0 || c.ProbeSpeedMinFactor > 1 || c.ProbeSpeedMaxFactor < 1 || c.ProbeSpeedMaxFactor > 3 || c.ProbeSpeedMaxFactor <= c.ProbeSpeedMinFactor {
+		e["continuous.probe_speed_factor_range"] = "must_include_1_and_be_ordered"
 	}
 	if c.OTPSExponent <= 0 || c.OTPSExponent > 2 {
 		e["continuous.otps_exponent"] = "must_be_greater_than_0_and_at_most_2"
@@ -283,46 +298,47 @@ type EvaluationContext struct {
 }
 
 type ContinuousState struct {
-	SpeedSamples         int64      `json:"speed_sample_count"`
-	SpeedRetries         int64      `json:"speed_retry_count"`
-	SpeedUnknown         int64      `json:"speed_unknown_count"`
-	SpeedLegacy          int64      `json:"speed_legacy_count"`
-	SpeedStatsVersion    int        `json:"speed_stats_version"`
-	InstanceID           string     `json:"instance_id"`
-	ChannelID            int64      `json:"channel_id"`
-	ModelName            string     `json:"model_name"`
-	KError               float64    `json:"k_error"`
-	KSpeed               float64    `json:"k_speed"`
-	KCache               float64    `json:"k_cache"`
-	KOTPS                float64    `json:"k_otps"`
-	Multiplier           float64    `json:"multiplier"`
-	ProposedWeight       int64      `json:"proposed_weight"`
-	LastWrittenWeight    *int64     `json:"last_written_weight,omitempty"`
-	LastWriteAt          *time.Time `json:"last_write_at,omitempty"`
-	LastObservedRequests int64      `json:"last_observed_requests"`
-	LastObservedErrors   int64      `json:"last_observed_errors"`
-	MetricRPM            float64    `json:"metric_rpm"`
-	MetricTPM            float64    `json:"metric_tpm"`
-	CapacityLimited      bool       `json:"capacity_limited"`
-	MetricReady          bool       `json:"metric_ready"`
-	BaselineReady        bool       `json:"baseline_ready"`
-	MetricTTFTP50        float64    `json:"metric_ttft_p50"`
-	MetricTTFTP90        float64    `json:"metric_ttft_p90"`
-	MetricTTFTP95        float64    `json:"metric_ttft_p95"`
-	BaselineTTFTP50      float64    `json:"baseline_ttft_p50"`
-	BaselineTTFTP90      float64    `json:"baseline_ttft_p90"`
-	BaselineTTFTP95      float64    `json:"baseline_ttft_p95"`
-	MetricCache          float64    `json:"metric_cache"`
-	BaselineCache        float64    `json:"baseline_cache"`
-	CacheReady           bool       `json:"cache_ready"`
-	MetricOTPS           float64    `json:"metric_otps"`
-	BaselineOTPS         float64    `json:"baseline_otps"`
-	OTPSReady            bool       `json:"otps_ready"`
-	OTPSSamples          int64      `json:"otps_sample_count"`
-	OTPSRetries          int64      `json:"otps_retry_count"`
-	OTPSUnknown          int64      `json:"otps_unknown_count"`
-	OTPSStatsVersion     int        `json:"otps_stats_version"`
-	SmoothedErrorRate    float64    `json:"smoothed_error_rate"`
+	SpeedSamples         int64           `json:"speed_sample_count"`
+	SpeedRetries         int64           `json:"speed_retry_count"`
+	SpeedUnknown         int64           `json:"speed_unknown_count"`
+	SpeedLegacy          int64           `json:"speed_legacy_count"`
+	SpeedStatsVersion    int             `json:"speed_stats_version"`
+	InstanceID           string          `json:"instance_id"`
+	ChannelID            int64           `json:"channel_id"`
+	ModelName            string          `json:"model_name"`
+	KError               float64         `json:"k_error"`
+	KSpeed               float64         `json:"k_speed"`
+	KCache               float64         `json:"k_cache"`
+	KOTPS                float64         `json:"k_otps"`
+	ProbeSpeed           ProbeSpeedStats `json:"probe_speed"`
+	Multiplier           float64         `json:"multiplier"`
+	ProposedWeight       int64           `json:"proposed_weight"`
+	LastWrittenWeight    *int64          `json:"last_written_weight,omitempty"`
+	LastWriteAt          *time.Time      `json:"last_write_at,omitempty"`
+	LastObservedRequests int64           `json:"last_observed_requests"`
+	LastObservedErrors   int64           `json:"last_observed_errors"`
+	MetricRPM            float64         `json:"metric_rpm"`
+	MetricTPM            float64         `json:"metric_tpm"`
+	CapacityLimited      bool            `json:"capacity_limited"`
+	MetricReady          bool            `json:"metric_ready"`
+	BaselineReady        bool            `json:"baseline_ready"`
+	MetricTTFTP50        float64         `json:"metric_ttft_p50"`
+	MetricTTFTP90        float64         `json:"metric_ttft_p90"`
+	MetricTTFTP95        float64         `json:"metric_ttft_p95"`
+	BaselineTTFTP50      float64         `json:"baseline_ttft_p50"`
+	BaselineTTFTP90      float64         `json:"baseline_ttft_p90"`
+	BaselineTTFTP95      float64         `json:"baseline_ttft_p95"`
+	MetricCache          float64         `json:"metric_cache"`
+	BaselineCache        float64         `json:"baseline_cache"`
+	CacheReady           bool            `json:"cache_ready"`
+	MetricOTPS           float64         `json:"metric_otps"`
+	BaselineOTPS         float64         `json:"baseline_otps"`
+	OTPSReady            bool            `json:"otps_ready"`
+	OTPSSamples          int64           `json:"otps_sample_count"`
+	OTPSRetries          int64           `json:"otps_retry_count"`
+	OTPSUnknown          int64           `json:"otps_unknown_count"`
+	OTPSStatsVersion     int             `json:"otps_stats_version"`
+	SmoothedErrorRate    float64         `json:"smoothed_error_rate"`
 	// LastBucketAt is the newest metric bucket already folded into KError.
 	// Buckets arrive late (agent reports every ~30s), so the decay must walk
 	// complete buckets past this cursor instead of re-reading "the last
@@ -332,6 +348,7 @@ type ContinuousState struct {
 	Phase                  string     `json:"phase"`
 	ControlRevision        int64      `json:"-"`
 	CircuitDisabled        bool       `json:"circuit_disabled"`
+	RoutineCircuitLatched  bool       `json:"routine_circuit_latched"`
 	CircuitStatusTarget    int        `json:"circuit_status_target,omitempty"`
 	CircuitStatusCommandID string     `json:"circuit_status_command_id,omitempty"`
 	CircuitOpenedAt        *time.Time `json:"circuit_opened_at,omitempty"`

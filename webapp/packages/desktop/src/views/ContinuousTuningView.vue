@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { ArrowLeft, ArrowRight } from "@element-plus/icons-vue";
-import { ApiError, type ChannelBaseValue, type TuningChannel, type TuningContinuousState, type TuningPolicy, type TuningRecommendation } from "@ct/shared";
+import { ApiError, type ChannelBaseValue, type ProbeCoverageWindow, type ProbeDispatchCounts, type TuningChannel, type TuningContinuousState, type TuningPolicy, type TuningRecommendation } from "@ct/shared";
 import { dashboard } from "../api";
 import AppShell from "../components/AppShell.vue";
 import MobileTuningEditor from '../components/MobileTuningEditor.vue';
@@ -47,6 +47,8 @@ const groupPollTokens = new Map<number, number>();
 // 已确认的分组写入会推进代际；在写入前发起的异步读完成后，只能保留这次写入的分组。
 let groupWriteGeneration = 0;
 const statesSite = ref("");
+const probeCoverage = ref<ProbeCoverageWindow>();
+const probeCoverageSite = ref("");
 const policyConflict = ref(false);
 const latestServerPolicy = ref<{policy: TuningPolicy; mode: "observe" | "confirm" | "auto"} | null>(null);
 const savedBases = ref<ChannelBaseValue[]>([]), savedPolicy = ref<TuningPolicy | null>(null), savedMode = ref<"observe" | "confirm" | "auto">("observe");
@@ -60,12 +62,12 @@ const detailWidth = ref(900);
 // Balance the whole table; keep usable minimums inside the table on narrow screens.
 const tableColumns = computed(() => {
   const width = Math.max(760, detailWidth.value - 2);
-  const channel = Math.round(width * .25);
-  const groups = Math.round(width * .14);
-  const factor = Math.floor(width * .07);
-  const input = Math.floor(width * .08);
+  const channel = Math.round(width * .23);
+  const groups = Math.round(width * .13);
+  const factor = Math.floor(width * .065);
+  const input = Math.floor(width * .075);
   const number = input;
-  return { channel, groups, factor, input, number, priority: width - channel - groups - factor * 4 - input - number * 2 };
+  return { channel, groups, factor, input, number, priority: width - channel - groups - factor * 5 - input - number * 2 };
 });
 let detailObserver: ResizeObserver | undefined;
 watch(detailElement, (element) => {
@@ -99,7 +101,317 @@ const eventModelFilter = ref(""), eventRuleFilter = ref(""), eventChannelQuery =
 const eventPage = ref(1), eventPageSize = ref(20);
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 const wait = (milliseconds: number) => new Promise(resolve => setTimeout(resolve, milliseconds));
-const defaults = () => ({ capacity_max_decrease_percent: 25, sensitivity: 1, speed_exponent: .35, speed_p50_weight: .5, speed_p90_weight: .3, speed_p95_weight: .2, speed_min_factor: .75, speed_max_factor: 1.25, cache_exponent: .15, cache_min_factor: .9, cache_max_factor: 1.1, otps_exponent: .25, otps_min_factor: .8, otps_max_factor: 1.2, error_healthy_rate: .01, error_degraded_rate: .05, error_poor_rate: .15, error_floor_rate: .3, error_degraded_factor: .85, error_poor_factor: .5, error_min_factor: .2, combined_min_factor: .5, combined_max_factor: 1.5, circuit_threshold: .1, recovery_threshold: .2, circuit_error_rate: .3, recovery_error_rate: .1, silent_minutes: 5, probe_interval_seconds: 0, probe_count: 10, soft_start_multiplier: .2, window_minutes: 15, min_samples: 20, sparse_lookback_minutes: 360, fast_circuit_enabled: true, fast_circuit_min_samples: 50, fast_circuit_error_rate: .5 });
+const businessRuleFields = [
+  { key: "channel_history_retention_days", label: "渠道记录保留天数", value: 7, min: 1, max: 365, group: "探针与恢复", step: 1 },
+  {
+    "key": "recovery_speed_exponent",
+    "label": "恢复速度影响指数",
+    "value": 0.5,
+    "min": 0,
+    "max": 2,
+    "group": "探针与恢复",
+    "step": 0.01
+  },
+  {
+    "key": "recovery_interval_seconds",
+    "label": "恢复探针间隔（秒）",
+    "value": 0,
+    "min": 0,
+    "max": 3600,
+    "group": "探针与恢复",
+    "step": 1
+  },
+  {
+    "key": "evaluation_interval_seconds",
+    "label": "普通评估间隔（秒）",
+    "value": 30,
+    "min": 1,
+    "max": 3600,
+    "group": "评估与证据",
+    "step": 1
+  },
+  {
+    "key": "routine_interval_seconds",
+    "label": "常态探针间隔（秒）",
+    "value": 10,
+    "min": 1,
+    "max": 3600,
+    "group": "探针与恢复",
+    "step": 1
+  },
+  {
+    "key": "probe_timeout_seconds",
+    "label": "单次探针超时（秒）",
+    "value": 30,
+    "min": 1,
+    "max": 300,
+    "group": "探针与恢复",
+    "step": 1
+  },
+  {
+    "key": "probe_slow_limit",
+    "label": "慢探针熔断次数（错误不清零）",
+    "value": 2,
+    "min": 1,
+    "max": 100,
+    "group": "探针与恢复",
+    "step": 1
+  },
+  {
+    "key": "routine_error_limit",
+    "label": "错误探针熔断次数（慢不清零）",
+    "value": 3,
+    "min": 1,
+    "max": 100,
+    "group": "探针与恢复",
+    "step": 1
+  },
+  {
+    "key": "probe_max_age_seconds",
+    "label": "探针样本最大年龄（秒）",
+    "value": 90,
+    "min": 1,
+    "max": 86400,
+    "group": "评估与证据",
+    "step": 1
+  },
+  {
+    "key": "baseline_min_channels",
+    "label": "同模型基线最少渠道数",
+    "value": 2,
+    "min": 1,
+    "max": 100,
+    "group": "评估与证据",
+    "step": 1
+  },
+  {
+    "key": "output_min_tokens",
+    "label": "输出速度最少输出Token",
+    "value": 100,
+    "min": 1,
+    "max": 1000000000,
+    "group": "评估与证据",
+    "step": 1
+  },
+  {
+    "key": "cache_min_tokens",
+    "label": "缓存系数最少提示Token",
+    "value": 10000,
+    "min": 1,
+    "max": 1000000000,
+    "group": "评估与证据",
+    "step": 1
+  },
+  {
+    "key": "error_alpha",
+    "label": "错误率平滑系数",
+    "value": 0.3,
+    "min": 0.01,
+    "max": 1,
+    "group": "评估与证据",
+    "step": 0.01
+  },
+  {
+    "key": "error_settle_seconds",
+    "label": "错误分钟桶稳定等待（秒）",
+    "value": 90,
+    "min": 0,
+    "max": 3600,
+    "group": "评估与证据",
+    "step": 1
+  },
+  {
+    "key": "error_lookback_minutes",
+    "label": "错误率回看范围（分钟）",
+    "value": 15,
+    "min": 1,
+    "max": 2880,
+    "group": "评估与证据",
+    "step": 1
+  },
+  {
+    "key": "capacity_target_utilization",
+    "label": "容量降权目标利用率",
+    "value": 0.9,
+    "min": 0.01,
+    "max": 1,
+    "group": "容量保护",
+    "step": 0.01
+  },
+  {
+    "key": "capacity_release_utilization",
+    "label": "解除容量保护利用率",
+    "value": 0.85,
+    "min": 0.01,
+    "max": 1,
+    "group": "容量保护",
+    "step": 0.01
+  },
+  {
+    "key": "capacity_peer_utilization",
+    "label": "替代渠道最大利用率",
+    "value": 0.85,
+    "min": 0.01,
+    "max": 1,
+    "group": "容量保护",
+    "step": 0.01
+  },
+  {
+    "key": "capacity_overload_seconds",
+    "label": "持续超限确认（秒）",
+    "value": 60,
+    "min": 1,
+    "max": 3600,
+    "group": "容量保护",
+    "step": 1
+  },
+  {
+    "key": "capacity_recovery_seconds",
+    "label": "低负载恢复确认（秒）",
+    "value": 60,
+    "min": 1,
+    "max": 3600,
+    "group": "容量保护",
+    "step": 1
+  },
+  {
+    "key": "capacity_feedback_seconds",
+    "label": "写入后反馈等待（秒）",
+    "value": 60,
+    "min": 60,
+    "max": 3600,
+    "group": "容量保护",
+    "step": 1
+  },
+  {
+    "key": "capacity_max_age_seconds",
+    "label": "容量样本最大年龄（秒）",
+    "value": 90,
+    "min": 1,
+    "max": 3600,
+    "group": "容量保护",
+    "step": 1
+  },
+  {
+    "key": "capacity_sample_gap_seconds",
+    "label": "容量样本最大连续间隔（秒）",
+    "value": 60,
+    "min": 1,
+    "max": 3600,
+    "group": "容量保护",
+    "step": 1
+  },
+  {
+    "key": "capacity_min_weight",
+    "label": "容量主动降权最低权重",
+    "value": 1,
+    "min": 0,
+    "max": 1000000,
+    "group": "容量保护",
+    "step": 1
+  },
+  {
+    "key": "write_pause_attempts",
+    "label": "写入失败转退避次数",
+    "value": 3,
+    "min": 1,
+    "max": 100,
+    "group": "写入与保护",
+    "step": 1
+  },
+  {
+    "key": "write_max_attempts",
+    "label": "单轮写入最多失败次数",
+    "value": 5,
+    "min": 1,
+    "max": 100,
+    "group": "写入与保护",
+    "step": 1
+  },
+  {
+    "key": "write_retry_seconds",
+    "label": "写入退避间隔（秒）",
+    "value": 600,
+    "min": 1,
+    "max": 86400,
+    "group": "写入与保护",
+    "step": 1
+  },
+  {
+    "key": "external_write_grace_seconds",
+    "label": "外部权重变化确认宽限（秒）",
+    "value": 120,
+    "min": 0,
+    "max": 3600,
+    "group": "写入与保护",
+    "step": 1
+  },
+  {
+    "key": "recovery_round_seconds",
+    "label": "恢复探测整轮超时（秒）",
+    "value": 480,
+    "min": 1,
+    "max": 86400,
+    "group": "探针与恢复",
+    "step": 1
+  },
+  {
+    "key": "recovery_lost_seconds",
+    "label": "恢复回执丢失等待（秒）",
+    "value": 600,
+    "min": 1,
+    "max": 172800,
+    "group": "探针与恢复",
+    "step": 1
+  },
+  {
+    "key": "recovery_speed_min_factor",
+    "label": "恢复探测速度得分下限",
+    "value": 0.1,
+    "min": 0.01,
+    "max": 1,
+    "group": "探针与恢复",
+    "step": 0.01
+  },
+  {
+    "key": "recovery_min_weight",
+    "label": "故障恢复初始最低权重",
+    "value": 1,
+    "min": 1,
+    "max": 1000000,
+    "group": "探针与恢复",
+    "step": 1
+  },
+  {
+    "key": "fast_report_max_age_seconds",
+    "label": "快速熔断报告最大年龄（秒）",
+    "value": 120,
+    "min": 1,
+    "max": 3600,
+    "group": "写入与保护",
+    "step": 1
+  },
+  {
+    "key": "fast_report_future_seconds",
+    "label": "报告未来时间容差（秒）",
+    "value": 60,
+    "min": 0,
+    "max": 3600,
+    "group": "写入与保护",
+    "step": 1
+  },
+  {
+    "key": "observe_deadband_percent",
+    "label": "观察模式事件最小变化（%）",
+    "value": 5,
+    "min": 0,
+    "max": 100,
+    "group": "写入与保护",
+    "step": 0.01
+  }
+] as const;
+const businessRuleGroups = ["评估与证据", "探针与恢复", "容量保护", "写入与保护"];
+const defaults = () => ({channel_history_retention_days:7,recovery_speed_exponent: 0.5, recovery_interval_seconds: 0, evaluation_interval_seconds: 30, routine_interval_seconds: 10, probe_timeout_seconds: 30, probe_slow_limit: 2, routine_error_limit: 3, probe_max_age_seconds: 90, baseline_min_channels: 2, output_min_tokens: 100, cache_min_tokens: 10000, error_alpha: 0.3, error_settle_seconds: 90, error_lookback_minutes: 15, capacity_target_utilization: 0.9, capacity_release_utilization: 0.85, capacity_peer_utilization: 0.85, capacity_overload_seconds: 60, capacity_recovery_seconds: 60, capacity_feedback_seconds: 60, capacity_max_age_seconds: 90, capacity_sample_gap_seconds: 60, capacity_min_weight: 1, write_pause_attempts: 3, write_max_attempts: 5, write_retry_seconds: 600, external_write_grace_seconds: 120, recovery_round_seconds: 480, recovery_lost_seconds: 600, recovery_speed_min_factor: 0.1, recovery_min_weight: 1, fast_report_max_age_seconds: 120, fast_report_future_seconds: 60, observe_deadband_percent: 5,  capacity_max_decrease_percent: 25, sensitivity: 1, speed_exponent: .35, speed_p50_weight: .5, speed_p90_weight: .3, speed_p95_weight: .2, speed_min_factor: .75, speed_max_factor: 1.25, cache_exponent: .15, cache_min_factor: .9, cache_max_factor: 1.1, otps_exponent: .25, otps_min_factor: .8, otps_max_factor: 1.2, probe_speed_exponent: .25, probe_speed_min_factor: .8, probe_speed_max_factor: 1.2, error_healthy_rate: .01, error_degraded_rate: .05, error_poor_rate: .15, error_floor_rate: .3, error_degraded_factor: .85, error_poor_factor: .5, error_min_factor: .2, combined_min_factor: .5, combined_max_factor: 1.5, circuit_threshold: .1, recovery_threshold: .2, circuit_error_rate: .3, recovery_error_rate: .1, silent_minutes: 5, probe_interval_seconds: 0, probe_count: 10, soft_start_multiplier: .2, window_minutes: 15, min_samples: 20, sparse_lookback_minutes: 360, fast_circuit_enabled: true, fast_circuit_min_samples: 50, fast_circuit_error_rate: .5 });
 const policy = reactive<TuningPolicy>({ scheduling: { window_minutes: 15, min_samples: 20, sparse_min_samples: 10, sparse_lookback_minutes: 360 }, continuous: defaults(), dispatch_modes: {} });
 const siteID = computed(() => filters.site_id || "");
 const currentChannels = computed(() => channelDirectorySite.value === siteID.value && siteID.value ? channels.value : []);
@@ -214,6 +526,29 @@ const groupCellTitle = (value: string | null | undefined) => {
 };
 const stateMap = computed(() => new Map((statesSite.value === siteID.value ? states.value : []).map(x => [`${x.channel_id}:${x.model_name}`, x])));
 const stateFor = (row: ChannelDisplayRow) => isDirectoryOnlyRow(row) ? undefined : stateMap.value.get(`${row.channel_id}:${row.model_name}`);
+const acceptProbeCoverage = (site: string, value?: ProbeCoverageWindow) => {
+  probeCoverageSite.value = site;
+  probeCoverage.value = value;
+};
+const probeCoverageCell = (row: ChannelDisplayRow) => {
+  const window = probeCoverageSite.value === siteID.value ? probeCoverage.value : undefined;
+  if (!window || window.error) return { text: window?.error ? "探针统计暂不可用" : "探针统计未提供", missed: false, lines: ["暂时没有可用的探针覆盖统计，不能据此判断渠道健康或覆盖率。"] };
+  const coverage = window.items[String(row.channel_id)];
+  const lines = [`统计区间：${formatTime(window.from)} 至 ${formatTime(window.to)}（包含当前未结束分钟）`, "按实际调度机会计数；首次错峰、停止探测和服务停机期间不虚增应发数。", "实发表示 CT 已调用探测；是否成功返回请结合耗时样本与熔断状态查看。", "这里只统计常态探针，熔断后的恢复探测另走恢复流程。"];
+  if (!coverage) return { text: "窗口内无探针记录", missed: false, lines };
+  const append = (name: string, c: ProbeDispatchCounts) => {
+    lines.push(`${name}：应发 ${c.due}，实发 ${c.sent}，漏发 ${c.due - c.sent}。`);
+    if (c.due > c.sent) lines.push(`${name}漏发原因：全局并发占满 ${c.global_limited}；单渠道并发占满 ${c.channel_limited}；等待结果容量占满 ${c.evidence_limited}。`);
+    if (c.due) lines.push(`${name}最近应发：${formatTime(c.last_due_at)}；最近实发：${c.last_sent_at ? formatTime(c.last_sent_at) : "无"}；最近漏发：${c.last_skipped_at ? formatTime(c.last_skipped_at) : "无"}。`);
+  };
+  append("定时探针", coverage.scheduled);
+  append("错误后加速探针", coverage.accelerated);
+  lines.push(`统计最近入库：${formatTime(window.as_of)}；异步写入，正常情况下约 5 秒，随页面刷新更新。`, "漏发是 CT 未发起，不计渠道错误或调权样本；两种探针分别统计，避免加速请求掩盖定时漏发。探针记录保留 48 小时。");
+  const regular = coverage.scheduled, accelerated = coverage.accelerated;
+  const missed = regular.due > regular.sent || accelerated.due > accelerated.sent;
+  const text = regular.due ? `定时探针 ${regular.sent}/${regular.due}${regular.due > regular.sent ? ` · 漏 ${regular.due - regular.sent}` : ""}${accelerated.due > accelerated.sent ? ` · 加速漏 ${accelerated.due - accelerated.sent}` : ""}` : "窗口内仅有加速探针";
+  return { text, missed, lines };
+};
 const acceptStates = (site: string, items: TuningContinuousState[]) => {
   if (!items.length && statesSite.value === site && states.value.length) {
     refreshError.value = "评估状态暂时为空，正在显示上次成功结果";
@@ -224,7 +559,7 @@ const acceptStates = (site: string, items: TuningContinuousState[]) => {
   refreshError.value = "";
 };
 const validEvent = (item: TuningRecommendation) => item.rule !== "circuit_recovered" || item.proposed_weight > 0;
-const recentEvents = computed(() => events.value.filter(x => validEvent(x) && ["write_abandoned", "weight_observed", "weight_write", "capacity_reduce", "manual_takeover", "auto_paused", "circuit_opened", "probe_started", "probe_failed", "circuit_disabled", "circuit_recovered"].includes(x.rule)));
+const recentEvents = computed(() => events.value.filter(x => validEvent(x) && ["routine_probe_circuit", "write_abandoned", "weight_observed", "weight_write", "capacity_reduce", "manual_takeover", "auto_paused", "circuit_opened", "probe_started", "probe_failed", "circuit_disabled", "circuit_recovered"].includes(x.rule)));
 const eventModel = (item: TuningRecommendation) => String(item.evidence?.model ?? bases.value.find(row => row.channel_id === item.channel_id)?.model_name ?? "");
 const filteredEvents = computed(() => {
   const selectedModel = eventModelFilter.value === "__current__" ? activeModel.value : eventModelFilter.value;
@@ -254,7 +589,7 @@ const factorExplanation = (row: ChannelDisplayRow) => {
   const lines: string[] = [`评估时间：${formatTime(state.evaluation!.evaluated_at)}；基础权重 ${state.evaluation!.base_weight}。以下使用当轮已保存参数。`];
 	const capacity = state.capacity;
 	if (capacity?.initialized) {
-	  lines.push(`容量状态：${({normal:'正常',awaiting_write:'等待执行回执',waiting_feedback:'等待反馈',holding:'保持限升',recovering:'恢复观察',reducing:'容量降权',observing:'超限观察',no_headroom:'分流不足',minimum_weight:'已到下限',unavailable:'负载未知',write_failed:'写入失败'} as Record<string,string>)[capacity.phase] || '待评估'}\n评估负载 RPM ${state.metric_rpm} / 上限 ${capacity.max_rpm || '未配置'}；TPM ${state.metric_tpm} / 上限 ${capacity.max_tpm || '未配置'}\n窗口截止：${formatTime(capacity.sample_at)}；利用率 ${(capacity.utilization * 100).toFixed(1)}%\n已确认权重 ${capacity.confirmed_weight}；容量理论目标 ${capacity.raw_target}；单轮限幅目标 ${capacity.bound_weight}；最终拟执行 ${state.proposed_weight}\n单次容量最大降幅 ${params.capacity_max_decrease_percent ?? 25}%；容量最低权重1；低权重至少减1可能超过该比例。权重影响相对分流，不能保证绝对负载上限。`);
+	  lines.push(`容量状态：${({normal:'正常',awaiting_write:'等待执行回执',waiting_feedback:'等待反馈',holding:'保持限升',recovering:'恢复观察',reducing:'容量降权',observing:'超限观察',no_headroom:'分流不足',minimum_weight:'已到下限',unavailable:'负载未知',write_failed:'写入失败'} as Record<string,string>)[capacity.phase] || '待评估'}\n评估负载 RPM ${state.metric_rpm} / 上限 ${capacity.max_rpm || '未配置'}；TPM ${state.metric_tpm} / 上限 ${capacity.max_tpm || '未配置'}\n窗口截止：${formatTime(capacity.sample_at)}；利用率 ${(capacity.utilization * 100).toFixed(1)}%\n已确认权重 ${capacity.confirmed_weight}；容量理论目标 ${capacity.raw_target}；单轮限幅目标 ${capacity.bound_weight}；最终拟执行 ${state.proposed_weight}\n单次容量最大降幅 ${params.capacity_max_decrease_percent ?? 25}%；容量最低权重${params.capacity_min_weight ?? 1}；低权重至少减1可能超过该比例。权重影响相对分流，不能保证绝对负载上限。`);
 	}
   const direct = state.speed_sample_count ?? 0, retried = state.speed_retry_count ?? 0;
   const unknown = (state.speed_unknown_count ?? 0) + (state.speed_legacy_count ?? 0);
@@ -272,7 +607,7 @@ const factorExplanation = (row: ChannelDisplayRow) => {
     const raw = Math.pow(ratio, params.cache_exponent * params.sensitivity);
     lines.push(`缓存 ${factor(state.k_cache)}\n大输入缓存 Token 比率 ${percent(state.metric_cache)} ÷ 同模型平均数 ${percent(state.baseline_cache)} = ${ratio.toFixed(4)}\nclamp(比值^(${params.cache_exponent}×${params.sensitivity}), ${params.cache_min_factor}, ${params.cache_max_factor}) = ${clampNumber(raw, params.cache_min_factor, params.cache_max_factor).toFixed(3)}\n口径与监控页面一致：仅统计输入大于 512 Token 的成功请求，缓存读取 Token 总数 ÷ 提示 Token 总数。`);
   } else {
-    lines.push(`缓存 ${factor(state.k_cache)}\n回退为 1.000：窗口内大输入请求的提示 Token 不足 10000，或同模型缓存基线不足。`);
+    lines.push(`缓存 ${factor(state.k_cache)}\n回退为 1.000：窗口内大输入请求的提示 Token 不足 ${params.cache_min_tokens ?? 10000}，或同模型缓存基线不足。`);
   }
   lines.push(`输出样本：未重试 ${state.otps_sample_count ?? 0}；重试排除 ${state.otps_retry_count ?? 0}；无法确认 ${state.otps_unknown_count ?? 0}。流式和非流式均按输出 Token 总数 ÷ 请求总耗时计算，监控保留重试。`);
   if (state.otps_stats_version !== 1) {
@@ -282,8 +617,12 @@ const factorExplanation = (row: ChannelDisplayRow) => {
     const raw = Math.pow(ratio, params.otps_exponent * params.sensitivity);
     lines.push(`输出 ${factor(state.k_otps)}\nOTPS ${state.metric_otps.toFixed(2)} ÷ 同模型平均数 ${state.baseline_otps.toFixed(2)} = ${ratio.toFixed(4)}\nclamp(比值^(${params.otps_exponent}×${params.sensitivity}), ${params.otps_min_factor}, ${params.otps_max_factor}) = ${clampNumber(raw, params.otps_min_factor, params.otps_max_factor).toFixed(3)}`);
   } else {
-    lines.push(`输出 ${factor(state.k_otps)}\n回退为 1.000：未重试有效请求不足 ${params.min_samples} 条、输出 Token 不足 100，或同模型合格渠道不足 2 个。`);
+    lines.push(`输出 ${factor(state.k_otps)}\n回退为 1.000：未重试有效请求不足 ${params.min_samples} 条、输出 Token 不足 ${params.output_min_tokens ?? 100}，或同模型合格渠道不足 ${params.baseline_min_channels ?? 2} 个。`);
   }
+  const probe = state.probe_speed;
+  lines.push(probe?.ready
+    ? `探针 ${factor(probe.factor)}\n平均完整耗时 ${seconds(probe.mean_seconds)}；同模型平均 ${seconds(probe.baseline_seconds)}；样本 ${probe.samples}/${params.min_samples}。\nclamp((同模型平均/本渠道平均)^(${params.probe_speed_exponent}×${params.sensitivity}), ${params.probe_speed_min_factor}, ${params.probe_speed_max_factor})`
+    : `探针 1.000\n定时样本 ${probe?.samples ?? 0}/${params.min_samples}；样本不足、过期、同模型基线不足或指数为0时保持中性。`);
   lines.push(`错误 ${factor(state.k_error)}\n平滑渠道错误率 ${(state.smoothed_error_rate * 100).toFixed(2)}%；按 ≤${percent(params.error_healthy_rate)}→1.000、${percent(params.error_degraded_rate)}→${factor(params.error_degraded_factor)}、${percent(params.error_poor_rate)}→${factor(params.error_poor_factor)}、≥${percent(params.error_floor_rate)}→${factor(params.error_min_factor)} 分段线性换算。用户自身错误不处罚渠道。`);
   return lines.join("\n\n");
 };
@@ -295,11 +634,12 @@ const modelMode = (model: string) => policy.dispatch_modes[model] || "off";
 const modeText = (model: string) => ({ off: "已关闭", observe: "只观察", auto: "自动执行" }[modelMode(model)]);
 const modeType = (model: string) => modelMode(model) === "auto" ? "success" : modelMode(model) === "observe" ? "warning" : "info";
 const effectivePause = (s?: TuningContinuousState) => s?.paused_reason === "manual_override" ? "" : s?.paused_reason || "";
-const phaseText = (s?: TuningContinuousState) => !s ? "等待首次评估" : effectivePause(s) === "write_failed" ? `本次写入失败，每10分钟重试，连续失败5次后结束本次任务并重新评估${s.last_write_error ? `：${s.last_write_error}` : ""}` : effectivePause(s) ? "安全保护已暂停" : s.capacity?.pending_command_id ? `权重 ${s.capacity.confirmed_weight} → ${s.capacity.pending_weight}，等待执行回执` : s.circuit_status_target ? (s.circuit_status_target === 1 ? "正在启用渠道，等待执行确认" : "正在禁用渠道，等待执行确认") : s.circuit_disabled ? `已禁用，${s.phase === "probing" ? "恢复检测中" : `下次检测 ${s.next_probe_at ? formatTime(s.next_probe_at) : "待定"}`}` : s.phase === "circuit" ? `已熔断，下次检测 ${s.next_probe_at ? formatTime(s.next_probe_at) : "待定"}` : s.phase === "probing" ? `恢复检测 ${s.probe_attempts || 0}/${policy.continuous.probe_count}` : s.phase === "soft_start" ? "恢复中（低权重运行）" : "运行正常";
+const ruleParams = (s?: TuningContinuousState) => ({ ...defaults(), ...(s?.evaluation?.params ?? savedPolicy.value?.continuous ?? policy.continuous) });
+const phaseText = (s?: TuningContinuousState) => !s ? "等待首次评估" : effectivePause(s) === "write_failed" ? `本次写入失败，每${ruleParams(s).write_retry_seconds / 60}分钟重试，连续失败${ruleParams(s).write_max_attempts}次后${s.routine_circuit_latched ? "保留熔断保护并退避重试" : "结束本次任务并重新评估"}${s.last_write_error ? `：${s.last_write_error}` : ""}` : effectivePause(s) ? "安全保护已暂停" : s.capacity?.pending_command_id ? `权重 ${s.capacity.confirmed_weight} → ${s.capacity.pending_weight}，等待执行回执` : s.circuit_status_target ? (s.circuit_status_target === 1 ? "正在启用渠道，等待执行确认" : "正在禁用渠道，等待执行确认") : s.circuit_disabled ? `已禁用，${s.phase === "probing" ? "恢复检测中" : `下次检测 ${s.next_probe_at ? formatTime(s.next_probe_at) : "待定"}`}` : s.phase === "circuit" ? `已熔断，下次检测 ${s.next_probe_at ? formatTime(s.next_probe_at) : "待定"}` : s.phase === "probing" ? `恢复检测 ${s.probe_attempts || 0}/${policy.continuous.probe_count}` : s.phase === "soft_start" ? "恢复中（低权重运行）" : "运行正常";
 const phaseType = (s?: TuningContinuousState) => s?.phase === "circuit" ? "danger" : s?.phase === "probing" || s?.phase === "soft_start" || effectivePause(s) ? "warning" : "success";
-const eventName = (rule: string) => ({ write_abandoned: "写入任务已结束，重新评估", weight_observed: "观察到权重变化", weight_write: "自动调整权重", capacity_reduce: "持续超限主动降权", manual_takeover: "检测到人工修改", auto_paused: "安全保护暂停", circuit_opened: "渠道熔断", probe_started: "开始恢复检测", probe_failed: "恢复检测未通过", circuit_disabled: "探针全部失败，禁用渠道", circuit_recovered: "渠道恢复" } as Record<string, string>)[rule] || rule;
+const eventName = (rule: string) => ({ routine_probe_circuit: "常态探针触发熔断", write_abandoned: "写入任务已结束，重新评估", weight_observed: "观察到权重变化", weight_write: "自动调整权重", capacity_reduce: "持续超限主动降权", manual_takeover: "检测到人工修改", auto_paused: "安全保护暂停", circuit_opened: "渠道熔断", probe_started: "开始恢复检测", probe_failed: "恢复检测未通过", circuit_disabled: "探测异常，禁用渠道", circuit_recovered: "渠道恢复" } as Record<string, string>)[rule] || rule;
 const eventCount = (days: number, rule: string) => events.value.filter(x => validEvent(x) && x.rule === rule && new Date(x.created_at).getTime() >= Date.now() - days * 86400000).length;
-const sampleText = (row: ChannelDisplayRow) => { const state = stateFor(row); return state ? `${state.last_observed_requests}/${(state.evaluation?.params ?? savedPolicy.value?.continuous ?? policy.continuous).min_samples}` : "—"; };
+const sampleText = (row: ChannelDisplayRow) => { const state = stateFor(row); if (!state) return "—"; const minimum = (state.evaluation?.params ?? savedPolicy.value?.continuous ?? policy.continuous).min_samples; return `${state.last_observed_requests}/${minimum}${state.probe_speed?.samples ? ` · 探针 ${state.probe_speed.samples}/${minimum}` : ""}`; };
 const rateText = (value?: number) => value == null ? "—" : Math.round(value).toLocaleString("zh-CN");
 const currentRates = ref(new Map<number, { rpm: number; tpm: number }>());
 const ratesReady = ref(false), ratesError = ref("");
@@ -346,6 +686,7 @@ const evaluationText = (row: ChannelDisplayRow) => {
 	const capacity = capacityStatus(row);
 	if (capacity) return capacity;
   const minimum = (savedPolicy.value?.continuous ?? policy.continuous).min_samples;
+  if (state.probe_speed?.ready) return "探针速度已参与本轮计算";
   if (requests < minimum) return `窗口样本不足 ${requests}/${minimum}，本轮不调权`;
   if (state.speed_stats_version !== 1) return "等待新口径速度评估";
   if (!state?.metric_ready) return state.otps_ready && state.otps_stats_version === 1 ? "TTFT 样本不足，使用本轮输出系数" : `TTFT 样本不足 ${state.speed_sample_count ?? 0}/${policy.continuous.min_samples}，输出不可用，本轮不调权`;
@@ -366,15 +707,16 @@ const speedLabel = (row: ChannelDisplayRow) => {
   const state = stateFor(row);
   return displayedSpeedFactor(row) !== null && state && (!state.metric_ready || !state.baseline_ready) ? "速度（输出替代）" : "速度";
 };
-const coefficientColumns = [{key:'speed',label:'速度'}, {key:'cache',label:'缓存'}, {key:'otps',label:'输出'}, {key:'error',label:'错误'}] as const;
-const coefficientCell = (row: ChannelDisplayRow, key: 'speed' | 'cache' | 'otps' | 'error') => {
+const coefficientColumns = [{key:'speed',label:'速度'}, {key:'cache',label:'缓存'}, {key:'otps',label:'输出'}, {key:'error',label:'错误'}, {key:'probe',label:'探针'}] as const;
+const coefficientCell = (row: ChannelDisplayRow, key: 'speed' | 'cache' | 'otps' | 'error' | 'probe') => {
   if (isDirectoryOnlyRow(row)) return {value:null, status:'未参与调权', detail:evaluationText(row)};
   const state = stateFor(row);
   if (!state) return {value:null, status:'等待评估', detail:'尚无评估数据'};
-  const value = key === 'speed' ? displayedSpeedFactor(row) : state[`k_${key}`];
+  const value = key === 'speed' ? displayedSpeedFactor(row) : key === 'probe' ? (state.probe_speed?.ready ? state.probe_speed.factor : 1) : state[`k_${key}`];
   const result = (status: string, detail = status) => ({value: Number.isFinite(value) ? value : null, status, detail});
   const params = state?.evaluation?.params ?? savedPolicy.value?.continuous ?? policy.continuous;
   if (modelMode(row.model_name) === 'off' || row.base_weight <= 0 || state.phase !== 'normal' || state.paused_reason || (row.models?.length ?? 1)>1) return result('未参与', evaluationText(row));
+  if (key === 'probe') return result(state.probe_speed?.ready ? '完整耗时' : '中性回退', `定时探针样本 ${state.probe_speed?.samples ?? 0}/${params.min_samples}；平均 ${seconds(state.probe_speed?.mean_seconds)}，同模型基线 ${seconds(state.probe_speed?.baseline_seconds)}。样本不足、超过${ruleParams(state).probe_max_age_seconds}秒无新样本、合格渠道不足${ruleParams(state).baseline_min_channels}个或影响指数为0时不参与。`);
   if (key === 'error') return result('平滑错误率', `平滑错误率 ${percent(state.smoothed_error_rate)}；错误系数独立于速度样本判断`);
   if (state.last_observed_requests < params.min_samples) return result(key === 'speed' ? '' : '保留值', `窗口样本 ${state.last_observed_requests}/${params.min_samples}，本轮不重新计算性能系数`);
   if (key === 'speed') {
@@ -413,13 +755,14 @@ const capacityStatus = (row: ChannelDisplayRow) => {
   if (modelMode(row.model_name) === 'off' || row.base_weight <= 0 || (row.models?.length ?? 1) > 1) return '';
   const c = stateFor(row)?.capacity;
   if (!c?.initialized || c.phase === 'normal') return '';
+  const r = ruleParams(stateFor(row));
   const label: Record<string,string> = {
-    observing: '超限观察：有效负载持续超限60秒后才降权',
+    observing: `超限观察：有效负载持续超限${r.capacity_overload_seconds}秒后才降权`,
     reducing: modelMode(row.model_name) === 'observe' ? '容量降权建议（只观察）' : '持续超限，准备按比例降权',
     awaiting_write: '等待权重执行回执，暂不重复下发',
-    waiting_feedback: '容量保护中：等待权重生效后的完整60秒负载窗口，之后确认低负载持续60秒才解除',
-    holding: '此前已触发超限，保持容量限升；低于85%持续60秒后解除',
-    recovering: '恢复观察：负载低于85%，等待持续60秒确认',
+    waiting_feedback: `容量保护中：等待权重生效后的完整${r.capacity_feedback_seconds}秒负载窗口，之后确认低负载持续${r.capacity_recovery_seconds}秒才解除`,
+    holding: `此前已触发超限，保持容量限升；低于${r.capacity_release_utilization * 100}%持续${r.capacity_recovery_seconds}秒后解除`,
+    recovering: `恢复观察：负载低于${r.capacity_release_utilization * 100}%，等待持续${r.capacity_recovery_seconds}秒确认`,
     no_headroom: '分流空间不足：没有同模型、同优先级的可用替代渠道，保持限升',
     minimum_weight: '已达容量最低权重，仍超限；需要增加可用容量',
     unavailable: '实时负载证据不足，暂停容量降权并保持限升',
@@ -464,7 +807,7 @@ const coefficientEmptyText = (row: ChannelDisplayRow) => {
   return ['未参与', '未参与调权', '已暂停'].includes(status) ? '未参与调权' : '';
 };
 const coefficientSpan = ({column}: {column: {property?: string}}) => {
-  if (column.property === 'coefficient_speed') return [1,4];
+  if (column.property === 'coefficient_speed') return [1,coefficientColumns.length];
   if (column.property?.startsWith('coefficient_')) return [0,0];
   return [1,1];
 };
@@ -488,6 +831,7 @@ const mobilePriorityChanges = computed(() => [...priorityDrafts].map(([id,value]
 const mobileModeChanges = computed(() => models.value.filter(model => policy.dispatch_modes[model] !== savedPolicy.value?.dispatch_modes?.[model]).map(model => ({model,before:savedPolicy.value?.dispatch_modes?.[model] || 'off',after:policy.dispatch_modes[model]})));
 const mobileModeLabel = (value: string | undefined) => ({off:'关闭',observe:'只观察',auto:'自动执行'}[value || 'off'] || value);
 const ruleLabels: Record<string,string> = {
+ ...Object.fromEntries(businessRuleFields.map(item => [item.key,item.label])),
   "window_minutes": "评估窗口（分钟）",
   "min_samples": "每渠道最少请求数",
   "max_increase_percent": "单次上调上限（%）",
@@ -496,6 +840,9 @@ const ruleLabels: Record<string,string> = {
   "speed_exponent": "速度影响指数 αs",
   "speed_min_factor": "速度系数下限 Ls",
   "speed_max_factor": "速度系数上限 Us",
+  "probe_speed_exponent": "探针影响指数 αp",
+  "probe_speed_min_factor": "探针系数下限 Lp",
+  "probe_speed_max_factor": "探针系数上限 Up",
   "otps_exponent": "输出影响指数 αo",
   "otps_min_factor": "输出系数下限 Lo",
   "otps_max_factor": "输出系数上限 Uo",
@@ -553,12 +900,12 @@ const calculatedWeight = (row: ChannelDisplayRow): number | null => {
   if (isDirectoryOnlyRow(row)) return null;
   const state = stateFor(row), params = state?.evaluation?.params;
   if (!params) return null;
-  if ((state?.last_observed_requests ?? 0) < params.min_samples) return null;
+  if (!state?.probe_speed?.ready && (state?.last_observed_requests ?? 0) < params.min_samples) return null;
   const base = originalBase(row);
   if (base == null || base <= 0) return null;
   // Display the latest coefficient snapshot as a reference; execution eligibility is separate.
-  const factors = [state?.k_speed, state?.k_cache, state?.k_otps, state?.k_error].map(value => value ?? 1);
-  return Math.max(1, Math.round(base * clampNumber(factors.reduce((a, b) => a * b, 1), params.combined_min_factor, params.combined_max_factor)));
+  const factors = [state?.k_speed, state?.k_cache, state?.k_otps, state?.k_error, state?.probe_speed?.ready ? state.probe_speed.factor : 1].map(value => value ?? 1);
+  return Math.floor(base * clampNumber(factors.reduce((a, b) => a * b, 1), params.combined_min_factor, params.combined_max_factor));
 };
 
 const executionWeightText = (row: ChannelDisplayRow): string => {
@@ -574,7 +921,7 @@ const executionWeightText = (row: ChannelDisplayRow): string => {
   if (effectivePause(state)) return '调权已暂停';
   if (mode === 'observe') return `观察目标权重：${target}（不执行）`;
   const params = state.evaluation?.params;
-  const insufficient = params && (state.last_observed_requests < params.min_samples ||
+  const insufficient = !state.probe_speed?.ready && params && (state.last_observed_requests < params.min_samples ||
     (!(state.metric_ready && state.baseline_ready) && !(state.otps_ready && state.otps_stats_version === 1)));
   // A recent confirmed write can precede the channel snapshot, as on the server.
   const current = state.last_written_weight != null && state.last_write_at &&
@@ -650,6 +997,7 @@ async function load(syncOnline = false) {
       const result = await dashboard.tuningContinuousStates(site);
       if (!isCurrentLoad()) return;
       acceptStates(site, result.items ?? []);
+      acceptProbeCoverage(site, result.probe_coverage);
     } catch (error) {
       if (!isCurrentLoad()) return;
       refreshError.value = error instanceof Error ? error.message : "评估状态暂不可用";
@@ -971,6 +1319,7 @@ async function refreshRuntime() {
       policyConflict.value = false;
     }
     acceptStates(site, s.items ?? []); events.value = r.items ?? [];
+    acceptProbeCoverage(site, s.probe_coverage);
     mergeOnlineRows(b.items ?? [], groupGeneration !== groupWriteGeneration);
     void loadChannelDirectory(site);
     for (const model of models.value) policy.dispatch_modes[model] ||= "off";
@@ -1199,6 +1548,7 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
                 <p v-if="pendingGroups.has(row.channel_id) || groupErrors.has(row.channel_id)" class="warning">{{ groupErrors.get(row.channel_id) || '分组等待执行' }}</p>
                 <dl class="mobile-weight-grid"><div><dt>基础权重</dt><dd>{{ isDirectoryOnlyRow(row) ? '—' : row.base_weight }}</dd></div><div><dt>计算参考</dt><dd>{{ calculatedWeight(row) ?? '—' }}</dd></div><div><dt>线上权重</dt><dd>{{ row.current_weight }}</dd></div></dl>
                 <div v-if="!isDirectoryOnlyRow(row)" class="mobile-capacity"><TuningCapacityMetric metric="TPM" :channel="row.channel_name" :model-value="row.max_tpm" :disabled="saving || loading || !siteID" :persist="value => saveCapacity(row, 'max_tpm', value)" :current="currentRateFor(row)?.tpm" :modified="fieldChanged(row,'max_tpm')"/><TuningCapacityMetric metric="RPM" :channel="row.channel_name" :model-value="row.max_rpm" :disabled="saving || loading || !siteID" :persist="value => saveCapacity(row, 'max_rpm', value)" :current="currentRateFor(row)?.rpm" :modified="fieldChanged(row,'max_rpm')"/></div><div v-else class="mobile-capacity read-only-capacity">TPM — · RPM —</div>
+                <details><summary>{{ probeCoverageCell(row).text }}</summary><p v-for="line in probeCoverageCell(row).lines" :key="line">{{ line }}</p></details>
                 <details><summary>查看计算与状态</summary><p>{{ evaluationText(row) }}</p><p>{{ executionWeightText(row) }}</p><p v-if="limitReason(row)">{{ limitReason(row) }}</p><pre>{{ factorExplanation(row) }}</pre></details>
                 <el-button v-if="!isDirectoryOnlyRow(row)" type="primary" plain :disabled="saving" @click="mobileEditRow = row">编辑基础值与优先级</el-button>
               </article>
@@ -1218,13 +1568,14 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
                     <div v-if="!coefficientEmptyText(row)" class="coefficient-values"><div v-for="item in coefficientColumns" :key="item.key" class="coefficient-cell" :title="coefficientCell(row, item.key).detail"><b v-if="item.key !== 'speed' || coefficientCell(row, item.key).value != null || !coefficientCell(row, item.key).status" :class="{'factor-up':(coefficientCell(row, item.key).value ?? 1)>1,'factor-down':(coefficientCell(row, item.key).value ?? 1)<1}">{{ coefficientCell(row, item.key).value == null ? '—' : factor(coefficientCell(row, item.key).value!) }}<el-tooltip v-if="item.key === 'speed' && coefficientCell(row, item.key).status === '输出替代'" content="TTFT 样本或基线不足，本轮使用输出速度系数替代。" placement="top"><span class="output-fallback-icon" tabindex="0" role="img" aria-label="输出替代：TTFT 样本或基线不足，本轮使用输出速度系数"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 5h10m-3-3 3 3-3 3M13 11H3m3-3-3 3 3 3"/></svg></span></el-tooltip></b><small v-if="item.key === 'speed' && !overallEvaluationStatus(row) && coefficientCell(row, item.key).status && coefficientCell(row, item.key).status !== 'TTFT 有效' && coefficientCell(row, item.key).status !== '输出替代'">{{ coefficientCell(row, item.key).status }}</small></div></div>
                     <div v-if="overallEvaluationStatus(row)" class="coefficient-overall" :class="[rowStatus(row).kind, {'only-status':!!coefficientEmptyText(row)}]" :title="evaluationText(row)">{{ coefficientEmptyText(row) || overallEvaluationStatus(row) }}</div>
                     <span class="coefficient-samples" :title="'本轮评估窗口请求数；最低要求 ' + (savedPolicy?.continuous.min_samples ?? policy.continuous.min_samples) + ' 条'">样本 <b>{{ sampleText(row) }}</b></span>
+                    <div class="probe-coverage" :class="{warning:probeCoverageCell(row).missed}"><TuningInfo :trigger-text="probeCoverageCell(row).text" :label="'探针覆盖 · ' + row.channel_name" :width="440"><p v-for="line in probeCoverageCell(row).lines" :key="line">{{ line }}</p><router-link :to="{path:'/channel-lifeline',query:{channel_id:row.channel_id}}">查看渠道生命线</router-link></TuningInfo></div>
                   </div>
                 </template></el-table-column>
               </el-table-column>
               <el-table-column label="权重" align="center">
                 <el-table-column label="基础" :width="tableColumns.input" align="center"><template #default="{row}"><el-input-number v-if="!isDirectoryOnlyRow(row)" v-model="row.base_weight" :class="{modified:fieldChanged(row,'base_weight')}" :aria-label="row.channel_name + ' 基础权重'" :min="0" :controls="false" size="small" @change="dirty=true"/><span v-else class="tuning-readonly-value">—</span></template></el-table-column>
                 <el-table-column label="计算" :width="tableColumns.number" align="center"><template #default="{row}"><div class="weight-calculated"><TuningInfo v-if="!isDirectoryOnlyRow(row)" :trigger-text="String(calculatedWeight(row) ?? '—')" :class="{accent: calculatedWeight(row) !== null && calculatedWeight(row) !== row.current_weight}" :key="channelRowKey(row)" :label="'本轮计算 · ' + row.channel_name" :width="500">
-                    <template v-if="stateFor(row)"><p class="calculation-formula">{{ originalBase(row) }} × {{ factor(stateFor(row)?.k_speed) }} × {{ factor(stateFor(row)?.k_otps) }} × {{ factor(stateFor(row)?.k_cache) }} × {{ factor(stateFor(row)?.k_error) }}</p><p class="formula-caption">基础 × {{ speedLabel(row) }} × 输出 × 缓存 × 错误</p><p>{{ evaluationText(row) }}</p><p v-if="displayedSpeedFactor(row) === null && calculatedWeight(row) !== null" class="formula-caption">参考值使用接口最近保留的系数；速度当前不可用于本轮评估，此处不代表本轮重新测得。</p><p v-if="speedLabel(row).includes('替代')">TTFT 不足，使用本轮 OTPS；输出系数参与两次。</p><div class="evidence-pairs"><span>窗口样本 <b>{{ sampleText(row) }}</b></span><span>TTFT 有效 <b>{{ stateFor(row)?.speed_sample_count ?? 0 }}</b></span><span>输出有效 <b>{{ stateFor(row)?.otps_sample_count ?? 0 }}</b></span><span>重试排除 <b>{{ stateFor(row)?.speed_retry_count ?? 0 }}</b></span></div><p>公式目标：<b>{{ calculatedWeight(row) ?? '—' }}</b><small>（按本轮参数快照与系数计算；缺少快照、窗口不足或基础权重为0时不展示，不代表会执行）</small></p><p><b>{{ executionWeightText(row) }}</b> · 线上权重：{{ row.current_weight }}</p><p v-if="fieldChanged(row, 'base_weight')" class="warning">基础值有未保存修改；本轮结果仍对应上次评估。</p><p v-if="limitReason(row)" class="limit-note">{{ limitReason(row) }}</p><details class="full-evidence"><summary>完整指标与计算依据</summary><pre class="factor-explanation">{{ factorExplanation(row) }}</pre></details></template><p v-else>等待首次评估，尚无计算数据。</p>
+                    <template v-if="stateFor(row)"><p class="calculation-formula">{{ originalBase(row) }} × {{ factor(stateFor(row)?.k_speed) }} × {{ factor(stateFor(row)?.k_otps) }} × {{ factor(stateFor(row)?.k_cache) }} × {{ factor(stateFor(row)?.k_error) }} × {{ factor(stateFor(row)?.probe_speed?.ready ? stateFor(row)?.probe_speed?.factor : 1) }}</p><p class="formula-caption">基础 × {{ speedLabel(row) }} × 输出 × 缓存 × 错误 × 探针</p><p>{{ evaluationText(row) }}</p><p v-if="displayedSpeedFactor(row) === null && calculatedWeight(row) !== null" class="formula-caption">参考值使用接口最近保留的系数；速度当前不可用于本轮评估，此处不代表本轮重新测得。</p><p v-if="speedLabel(row).includes('替代')">TTFT 不足，使用本轮 OTPS；输出系数参与两次。</p><div class="evidence-pairs"><span>窗口样本 <b>{{ sampleText(row) }}</b></span><span>TTFT 有效 <b>{{ stateFor(row)?.speed_sample_count ?? 0 }}</b></span><span>输出有效 <b>{{ stateFor(row)?.otps_sample_count ?? 0 }}</b></span><span>重试排除 <b>{{ stateFor(row)?.speed_retry_count ?? 0 }}</b></span></div><p>公式目标：<b>{{ calculatedWeight(row) ?? '—' }}</b><small>（按本轮参数快照与系数计算；缺少快照、窗口不足或基础权重为0时不展示，不代表会执行）</small></p><p><b>{{ executionWeightText(row) }}</b> · 线上权重：{{ row.current_weight }}</p><p v-if="fieldChanged(row, 'base_weight')" class="warning">基础值有未保存修改；本轮结果仍对应上次评估。</p><p v-if="limitReason(row)" class="limit-note">{{ limitReason(row) }}</p><details class="full-evidence"><summary>完整指标与计算依据</summary><pre class="factor-explanation">{{ factorExplanation(row) }}</pre></details></template><p v-else>等待首次评估，尚无计算数据。</p>
                   </TuningInfo><span v-else class="tuning-readonly-value">未参与调权</span><el-tooltip v-if="limitReason(row)" :content="limitReason(row)" placement="top"><button class="status-icon warning limit-icon" :aria-label="limitReason(row)"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 3h12M10 17V7m-4 4 4-4 4 4"/></svg></button></el-tooltip></div></template></el-table-column>
                 <el-table-column label="线上" :width="tableColumns.number" align="center"><template #default="{row}"><span class="current-weight">{{ row.current_weight }}</span></template></el-table-column>
               </el-table-column>
@@ -1264,7 +1615,7 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
         <el-empty v-else description="当前筛选条件下暂无记录"/>
       </el-card>
     </el-tab-pane>
-<el-tab-pane label="规则设置" name="settings"><el-card shadow="never" class="settings-card"><template #header><div class="head"><div><b>规则设置</b><small>当前站点 · {{ siteID }}</small></div><el-button @click="helpOpen=true">使用说明</el-button></div></template><el-tabs v-model="settingsSection" class="settings-sections"><el-tab-pane label="基础评估" name="basic"><div class="settings-intro"><div><h3>基础评估</h3><p>样本与评估周期，决定每轮使用的数据范围。</p></div><TuningInfo label="系数如何参与计算"><p>速度 × 输出 × 缓存 × 错误</p><p>TTFT 不足：输出² × 缓存 × 错误</p><p>最终受综合倍率、容量保护及单次上调上限约束。</p></TuningInfo></div><el-form label-position="top" class="settings-form"><div class="params"><el-form-item label="评估窗口（分钟）"><el-input-number v-model="policy.continuous.window_minutes" :min="1" @change="dirty=true"/><small>每次计算使用最近多少分钟的指标</small></el-form-item><el-form-item label="每渠道最少请求数"><el-input-number v-model="policy.continuous.min_samples" :min="1" @change="dirty=true"/><small>低于此数量不参与本轮性能比较，错误历史仍参与可靠性计算</small></el-form-item><el-form-item label="单次上调上限（%）"><el-input-number v-model="policy.continuous.max_increase_percent" :min="1" :max="100" :step="1" :precision="0" @change="dirty=true"/><small>自动模式每轮最多按当前有效权重上调该比例（至少允许 +1），默认 10%；下调不受限制</small></el-form-item><el-form-item label="单次容量最大降幅（%）"><el-input-number v-model="policy.continuous.capacity_max_decrease_percent" :min="1" :max="100" :step="1" :precision="0" @change="dirty=true"/><small>持续超容量时，每轮最多按已确认权重降低该比例，默认25%；整数权重至少降1、最低保留1。性能惩罚与熔断不受此项限制</small></el-form-item><el-form-item label="调整灵敏度 S"><el-input-number v-model="policy.continuous.sensitivity" :min=".1" :max="5" :step=".1" @change="dirty=true"/><small>放大或缩小渠道相对差异；1 为标准</small></el-form-item></div></el-form></el-tab-pane><el-tab-pane label="性能系数" name="performance"><div class="settings-intro"><div><h3>性能系数</h3><p>TTFT 不足时复用本轮输出系数；缓存保留原逻辑。</p></div><TuningInfo label="系数如何参与计算"><p>速度 × 输出 × 缓存 × 错误</p><p>TTFT 不足：输出² × 缓存 × 错误</p><p>最终受综合倍率、容量保护及单次上调上限约束。</p></TuningInfo></div><el-form label-position="top" class="settings-form"><div class="factor-matrix"><div class="factor-matrix-head"><span>指标</span><span>影响指数</span><span>系数下限</span><span>系数上限</span></div><div class="factor-matrix-row"><b>TTFT 速度</b><el-form-item label="速度影响指数 αs"><el-input-number v-model="policy.continuous.speed_exponent" :min=".01" :max="2" :step=".05" :precision="2" @change="dirty=true"/><small>速度差异进入幂运算的强度；默认 0.35</small></el-form-item><el-form-item label="速度系数下限 Ls"><el-input-number v-model="policy.continuous.speed_min_factor" :min=".01" :max="1" :step=".05" :precision="2" @change="dirty=true"/><small>慢渠道速度系数最低值；默认 0.75</small></el-form-item><el-form-item label="速度系数上限 Us"><el-input-number v-model="policy.continuous.speed_max_factor" :min="1" :max="3" :step=".05" :precision="2" @change="dirty=true"/><small>快渠道速度系数最高值；默认 1.25</small></el-form-item></div><div class="factor-matrix-row"><b>平均输出速度</b><el-form-item label="输出影响指数 αo"><el-input-number v-model="policy.continuous.otps_exponent" :min=".01" :max="2" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="输出系数下限 Lo"><el-input-number v-model="policy.continuous.otps_min_factor" :min=".01" :max="1" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="输出系数上限 Uo"><el-input-number v-model="policy.continuous.otps_max_factor" :min="1" :max="3" :step=".05" :precision="2" @change="dirty=true"/></el-form-item></div><div class="factor-matrix-row"><b>缓存</b><el-form-item label="缓存影响指数 αc"><el-input-number v-model="policy.continuous.cache_exponent" :min=".01" :max="2" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="缓存系数下限 Lc"><el-input-number v-model="policy.continuous.cache_min_factor" :min=".01" :max="1" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="缓存系数上限 Uc"><el-input-number v-model="policy.continuous.cache_max_factor" :min="1" :max="3" :step=".05" :precision="2" @change="dirty=true"/></el-form-item></div></div><h4 class="parameter-heading">综合倍率边界</h4><div class="params two-columns"><el-form-item label="综合倍率下限 Lm"><el-input-number v-model="policy.continuous.combined_min_factor" :min=".01" :max="1" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="综合倍率上限 Um"><el-input-number v-model="policy.continuous.combined_max_factor" :min="1" :max="5" :step=".05" :precision="2" @change="dirty=true"/></el-form-item></div><h4 class="parameter-heading">TTFT 分位权重</h4><div class="params"><el-form-item label="P50 占比 w50"><el-input-number v-model="policy.continuous.speed_p50_weight" :min="0" :max="1" :step=".05" :precision="2" @change="dirty=true"/><small>默认 0.50；三个占比之和必须为 1</small></el-form-item><el-form-item label="P90 占比 w90"><el-input-number v-model="policy.continuous.speed_p90_weight" :min="0" :max="1" :step=".05" :precision="2" @change="dirty=true"/><small>默认 0.30；三个占比之和必须为 1</small></el-form-item><el-form-item label="P95 占比 w95"><el-input-number v-model="policy.continuous.speed_p95_weight" :min="0" :max="1" :step=".05" :precision="2" @change="dirty=true"/><small>默认 0.20；三个占比之和必须为 1</small></el-form-item></div></el-form></el-tab-pane><el-tab-pane label="错误率曲线" name="errors"><div class="settings-intro"><div><h3>错误率曲线</h3><p>错误率节点与惩罚系数之间采用线性插值。</p></div><TuningInfo label="系数如何参与计算"><p>速度 × 输出 × 缓存 × 错误</p><p>TTFT 不足：输出² × 缓存 × 错误</p><p>最终受综合倍率、容量保护及单次上调上限约束。</p></TuningInfo></div><el-form label-position="top" class="settings-form"><div class="params"><el-form-item label="健康错误率节点 E1"><el-input-number v-model="policy.continuous.error_healthy_rate" :min="0" :max="1" :step=".01" :precision="2" @change="dirty=true"/><small>此错误率以内系数为 1</small></el-form-item><el-form-item label="轻度错误率节点 E2"><el-input-number v-model="policy.continuous.error_degraded_rate" :min="0" :max="1" :step=".01" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="轻度错误系数 K2"><el-input-number v-model="policy.continuous.error_degraded_factor" :min=".01" :max=".99" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="严重错误率节点 E3"><el-input-number v-model="policy.continuous.error_poor_rate" :min="0" :max="1" :step=".01" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="严重错误系数 K3"><el-input-number v-model="policy.continuous.error_poor_factor" :min=".01" :max=".99" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="封底错误率节点 E4"><el-input-number v-model="policy.continuous.error_floor_rate" :min="0" :max="1" :step=".01" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="错误系数下限 Kmin"><el-input-number v-model="policy.continuous.error_min_factor" :min=".01" :max=".99" :step=".05" :precision="2" @change="dirty=true"/></el-form-item></div></el-form></el-tab-pane><el-tab-pane label="熔断与恢复" name="safety"><div class="settings-intro"><div><h3>熔断与恢复</h3><p>自动模式静默后主动探测，观察模式使用真实流量恢复。</p></div><TuningInfo label="系数如何参与计算"><p>速度 × 输出 × 缓存 × 错误</p><p>TTFT 不足：输出² × 缓存 × 错误</p><p>最终受综合倍率、容量保护及单次上调上限约束。</p></TuningInfo></div><el-form label-position="top" class="settings-form"><div class="params"><el-form-item label="启用批次快速熔断"><el-switch v-model="policy.continuous.fast_circuit_enabled" @change="dirty=true"/><small>直接检查每次 Agent 上报的渠道增量，不等待分钟桶稳定</small></el-form-item><el-form-item label="快速熔断最少请求数"><el-input-number v-model="policy.continuous.fast_circuit_min_samples" :min="1" :max="100000" @change="dirty=true"/><small>单次上报达到该请求数后才判断，默认 50</small></el-form-item><el-form-item label="快速熔断错误率"><el-input-number v-model="policy.continuous.fast_circuit_error_rate" :min=".01" :max="1" :step=".05" :precision="2" @change="dirty=true"/><small>非用户错误率达到阈值立即熔断，默认 50%</small></el-form-item><el-form-item label="熔断错误率"><el-input-number v-model="policy.continuous.circuit_error_rate" :min=".01" :max="1" :step=".01" @change="dirty=true"/><small>平滑渠道错误率达到此值才停止分流</small></el-form-item><el-form-item label="被动恢复错误率"><el-input-number v-model="policy.continuous.recovery_error_rate" :min="0" :max=".99" :step=".01" @change="dirty=true"/><small>观察模式降到此值后解除模拟熔断</small></el-form-item><el-form-item label="探针恢复阈值"><el-input-number v-model="policy.continuous.recovery_threshold" :min=".01" :max="1" :step=".01" @change="dirty=true"/><small>自动模式探针成功率×探针速度达到此值才恢复</small></el-form-item><el-form-item label="熔断静默期（分钟）"><el-input-number v-model="policy.continuous.silent_minutes" :min="1" @change="dirty=true"/><small>自动模式熔断后等待多久再开始探测</small></el-form-item><el-form-item label="探测时长保护"><small>单次请求满30秒未返回立即计为慢探测并取消等待；同渠道逐次探测、无额外间隔，连续两次慢探测触发禁用。不同渠道后台并发，最多4个。</small></el-form-item><el-form-item label="探测次数"><el-input-number v-model="policy.continuous.probe_count" :min="1" @change="dirty=true"/><small>一次恢复判断发送多少次请求</small></el-form-item><el-form-item label="恢复初始倍率"><el-input-number v-model="policy.continuous.soft_start_multiplier" :min=".01" :max="1" :step=".05" @change="dirty=true"/><small>恢复首轮使用基础权重的比例</small></el-form-item></div></el-form></el-tab-pane></el-tabs></el-card></el-tab-pane>
+<el-tab-pane label="规则设置" name="settings"><el-card shadow="never" class="settings-card"><template #header><div class="head"><div><b>规则设置</b><small>当前站点 · {{ siteID }}</small></div><el-button @click="helpOpen=true">使用说明</el-button></div></template><el-tabs v-model="settingsSection" class="settings-sections"><el-tab-pane label="基础评估" name="basic"><div class="settings-intro"><div><h3>基础评估</h3><p>样本与评估周期，决定每轮使用的数据范围。</p></div><TuningInfo label="系数如何参与计算"><p>速度 × 输出 × 缓存 × 错误 × 探针</p><p>TTFT 不足：输出² × 缓存 × 错误 × 探针</p><p>最终受综合倍率、容量保护及单次上调上限约束。</p></TuningInfo></div><el-form label-position="top" class="settings-form"><div class="params"><el-form-item label="评估窗口（分钟）"><el-input-number v-model="policy.continuous.window_minutes" :min="1" @change="dirty=true"/><small>每次计算使用最近多少分钟的指标</small></el-form-item><el-form-item label="每渠道最少请求数"><el-input-number v-model="policy.continuous.min_samples" :min="1" @change="dirty=true"/><small>低于此数量不参与本轮性能比较，错误历史仍参与可靠性计算</small></el-form-item><el-form-item label="单次上调上限（%）"><el-input-number v-model="policy.continuous.max_increase_percent" :min="1" :max="100" :step="1" :precision="0" @change="dirty=true"/><small>自动模式每轮最多按当前有效权重上调该比例（至少允许 +1），默认 10%；下调不受限制</small></el-form-item><el-form-item label="单次容量最大降幅（%）"><el-input-number v-model="policy.continuous.capacity_max_decrease_percent" :min="1" :max="100" :step="1" :precision="0" @change="dirty=true"/><small>持续超容量时，每轮最多按已确认权重降低该比例，默认25%；整数权重至少降1，最低权重使用运行规则配置。性能惩罚与熔断不受此项限制</small></el-form-item><el-form-item label="调整灵敏度 S"><el-input-number v-model="policy.continuous.sensitivity" :min=".1" :max="5" :step=".1" @change="dirty=true"/><small>放大或缩小渠道相对差异；1 为标准</small></el-form-item></div></el-form></el-tab-pane><el-tab-pane label="性能系数" name="performance"><div class="settings-intro"><div><h3>性能系数</h3><p>TTFT 不足时复用本轮输出系数；缓存保留原逻辑。</p></div><TuningInfo label="系数如何参与计算"><p>速度 × 输出 × 缓存 × 错误 × 探针</p><p>TTFT 不足：输出² × 缓存 × 错误 × 探针</p><p>最终受综合倍率、容量保护及单次上调上限约束。</p></TuningInfo></div><el-form label-position="top" class="settings-form"><div class="factor-matrix"><div class="factor-matrix-head"><span>指标</span><span>影响指数</span><span>系数下限</span><span>系数上限</span></div><div class="factor-matrix-row"><b>TTFT 速度</b><el-form-item label="速度影响指数 αs"><el-input-number v-model="policy.continuous.speed_exponent" :min=".01" :max="2" :step=".05" :precision="2" @change="dirty=true"/><small>速度差异进入幂运算的强度；默认 0.35</small></el-form-item><el-form-item label="速度系数下限 Ls"><el-input-number v-model="policy.continuous.speed_min_factor" :min=".01" :max="1" :step=".05" :precision="2" @change="dirty=true"/><small>慢渠道速度系数最低值；默认 0.75</small></el-form-item><el-form-item label="速度系数上限 Us"><el-input-number v-model="policy.continuous.speed_max_factor" :min="1" :max="3" :step=".05" :precision="2" @change="dirty=true"/><small>快渠道速度系数最高值；默认 1.25</small></el-form-item></div><div class="factor-matrix-row"><b>平均输出速度</b><el-form-item label="输出影响指数 αo"><el-input-number v-model="policy.continuous.otps_exponent" :min=".01" :max="2" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="输出系数下限 Lo"><el-input-number v-model="policy.continuous.otps_min_factor" :min=".01" :max="1" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="输出系数上限 Uo"><el-input-number v-model="policy.continuous.otps_max_factor" :min="1" :max="3" :step=".05" :precision="2" @change="dirty=true"/></el-form-item></div><div class="factor-matrix-row"><b>探针完整耗时</b><el-form-item label="探针影响指数 αp"><el-input-number v-model="policy.continuous.probe_speed_exponent" :min="0" :max="2" :step=".05" :precision="2" @change="dirty=true"/><small>默认0.25；0表示不参与调权，仍保留故障探测</small></el-form-item><el-form-item label="探针系数下限 Lp"><el-input-number v-model="policy.continuous.probe_speed_min_factor" :min=".01" :max="1" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="探针系数上限 Up"><el-input-number v-model="policy.continuous.probe_speed_max_factor" :min="1" :max="3" :step=".05" :precision="2" @change="dirty=true"/></el-form-item></div><div class="factor-matrix-row"><b>缓存</b><el-form-item label="缓存影响指数 αc"><el-input-number v-model="policy.continuous.cache_exponent" :min=".01" :max="2" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="缓存系数下限 Lc"><el-input-number v-model="policy.continuous.cache_min_factor" :min=".01" :max="1" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="缓存系数上限 Uc"><el-input-number v-model="policy.continuous.cache_max_factor" :min="1" :max="3" :step=".05" :precision="2" @change="dirty=true"/></el-form-item></div></div><h4 class="parameter-heading">综合倍率边界</h4><div class="params two-columns"><el-form-item label="综合倍率下限 Lm"><el-input-number v-model="policy.continuous.combined_min_factor" :min=".01" :max="1" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="综合倍率上限 Um"><el-input-number v-model="policy.continuous.combined_max_factor" :min="1" :max="5" :step=".05" :precision="2" @change="dirty=true"/></el-form-item></div><h4 class="parameter-heading">TTFT 分位权重</h4><div class="params"><el-form-item label="P50 占比 w50"><el-input-number v-model="policy.continuous.speed_p50_weight" :min="0" :max="1" :step=".05" :precision="2" @change="dirty=true"/><small>默认 0.50；三个占比之和必须为 1</small></el-form-item><el-form-item label="P90 占比 w90"><el-input-number v-model="policy.continuous.speed_p90_weight" :min="0" :max="1" :step=".05" :precision="2" @change="dirty=true"/><small>默认 0.30；三个占比之和必须为 1</small></el-form-item><el-form-item label="P95 占比 w95"><el-input-number v-model="policy.continuous.speed_p95_weight" :min="0" :max="1" :step=".05" :precision="2" @change="dirty=true"/><small>默认 0.20；三个占比之和必须为 1</small></el-form-item></div></el-form></el-tab-pane><el-tab-pane label="运行规则" name="business"><div class="settings-intro"><div><h3>运行规则</h3><p>按当前站点保存；各项默认值保持原行为。容量利用率使用小数，例如0.9表示90%；RPM/TPM仍按滚动60秒度量。</p></div></div><el-form label-position="top" class="settings-form"><section v-for="group in businessRuleGroups" :key="group"><h4>{{ group }}</h4><div class="params"><el-form-item v-for="item in businessRuleFields.filter(field => field.group === group)" :key="item.key" :label="item.label"><el-input-number v-model="policy.continuous[item.key]" :min="item.min" :max="item.max" :step="item.step" :precision="item.step < 1 ? 2 : 0" @change="dirty=true"/><small>默认 {{ item.value }}<template v-if="item.key === 'channel_history_retention_days'"> 天；超期探针与直连操作记录自动清理</template></small></el-form-item></div></section></el-form></el-tab-pane><el-tab-pane label="错误率曲线" name="errors"><div class="settings-intro"><div><h3>错误率曲线</h3><p>错误率节点与惩罚系数之间采用线性插值。</p></div><TuningInfo label="系数如何参与计算"><p>速度 × 输出 × 缓存 × 错误 × 探针</p><p>TTFT 不足：输出² × 缓存 × 错误 × 探针</p><p>最终受综合倍率、容量保护及单次上调上限约束。</p></TuningInfo></div><el-form label-position="top" class="settings-form"><div class="params"><el-form-item label="健康错误率节点 E1"><el-input-number v-model="policy.continuous.error_healthy_rate" :min="0" :max="1" :step=".01" :precision="2" @change="dirty=true"/><small>此错误率以内系数为 1</small></el-form-item><el-form-item label="轻度错误率节点 E2"><el-input-number v-model="policy.continuous.error_degraded_rate" :min="0" :max="1" :step=".01" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="轻度错误系数 K2"><el-input-number v-model="policy.continuous.error_degraded_factor" :min=".01" :max=".99" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="严重错误率节点 E3"><el-input-number v-model="policy.continuous.error_poor_rate" :min="0" :max="1" :step=".01" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="严重错误系数 K3"><el-input-number v-model="policy.continuous.error_poor_factor" :min=".01" :max=".99" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="封底错误率节点 E4"><el-input-number v-model="policy.continuous.error_floor_rate" :min="0" :max="1" :step=".01" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="错误系数下限 Kmin"><el-input-number v-model="policy.continuous.error_min_factor" :min=".01" :max=".99" :step=".05" :precision="2" @change="dirty=true"/></el-form-item></div></el-form></el-tab-pane><el-tab-pane label="熔断与恢复" name="safety"><div class="settings-intro"><div><h3>熔断与恢复</h3><p>自动模式静默后主动探测，观察模式使用真实流量恢复。</p></div><TuningInfo label="系数如何参与计算"><p>速度 × 输出 × 缓存 × 错误 × 探针</p><p>TTFT 不足：输出² × 缓存 × 错误 × 探针</p><p>最终受综合倍率、容量保护及单次上调上限约束。</p></TuningInfo></div><el-form label-position="top" class="settings-form"><div class="params"><el-form-item label="启用批次快速熔断"><el-switch v-model="policy.continuous.fast_circuit_enabled" @change="dirty=true"/><small>直接检查每次 Agent 上报的渠道增量，不等待分钟桶稳定</small></el-form-item><el-form-item label="快速熔断最少请求数"><el-input-number v-model="policy.continuous.fast_circuit_min_samples" :min="1" :max="100000" @change="dirty=true"/><small>单次上报达到该请求数后才判断，默认 50</small></el-form-item><el-form-item label="快速熔断错误率"><el-input-number v-model="policy.continuous.fast_circuit_error_rate" :min=".01" :max="1" :step=".05" :precision="2" @change="dirty=true"/><small>非用户错误率达到阈值立即熔断，默认 50%</small></el-form-item><el-form-item label="熔断错误率"><el-input-number v-model="policy.continuous.circuit_error_rate" :min=".01" :max="1" :step=".01" @change="dirty=true"/><small>平滑渠道错误率达到此值才停止分流</small></el-form-item><el-form-item label="被动恢复错误率"><el-input-number v-model="policy.continuous.recovery_error_rate" :min="0" :max=".99" :step=".01" @change="dirty=true"/><small>观察模式降到此值后解除模拟熔断</small></el-form-item><el-form-item label="探针恢复阈值"><el-input-number v-model="policy.continuous.recovery_threshold" :min=".01" :max="1" :step=".01" @change="dirty=true"/><small>自动模式探针成功率×探针速度达到此值才恢复</small></el-form-item><el-form-item label="熔断静默期（分钟）"><el-input-number v-model="policy.continuous.silent_minutes" :min="1" @change="dirty=true"/><small>自动模式熔断后等待多久再开始探测</small></el-form-item><el-form-item label="探测时长保护"><small>恢复探测单次满 {{ policy.continuous.probe_timeout_seconds }} 秒未返回即计慢；累计 {{ policy.continuous.probe_slow_limit }} 次慢触发禁用，渠道错误不清零、健康成功清零。同渠道逐次探测，间隔 {{ policy.continuous.recovery_interval_seconds }} 秒；不同渠道并发执行。</small></el-form-item><el-form-item label="探测次数"><el-input-number v-model="policy.continuous.probe_count" :min="1" @change="dirty=true"/><small>一次恢复判断发送多少次请求</small></el-form-item><el-form-item label="恢复初始倍率"><el-input-number v-model="policy.continuous.soft_start_multiplier" :min=".01" :max="1" :step=".05" @change="dirty=true"/><small>恢复首轮使用基础权重的比例</small></el-form-item></div></el-form></el-tab-pane></el-tabs></el-card></el-tab-pane>
   </el-tabs></div>
   <div v-if="mobile && dirty" class="tuning-save-bar" role="status"><span><i/>有未保存更改<span class="save-context">基础值、容量与规则统一保存</span></span><div><el-button :disabled="saving" @click="cancelChanges()">取消更改</el-button><el-button type="primary" :loading="saving" :disabled="loading || !siteID" @click="mobileSaveOpen = true">预览更改</el-button></div></div>
   <MobileTuningEditor v-if="mobile && mobileEditRow" :row="mobileEditRow" :site="siteID" :priority="displayedPriority(mobileEditRow)" :priority-locked="priorityLocked(mobileEditRow)" @close="mobileEditRow = null" @apply="stageMobileEdit" />
@@ -1280,7 +1631,7 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
     <template #footer><el-button :disabled="saving" @click="mobileSaveOpen = false">返回修改</el-button><el-button type="primary" :loading="saving" :disabled="!dirty" @click="saveMobileChanges">确认保存</el-button></template>
   </el-dialog>
   <el-drawer v-model="helpOpen" title="调权中心使用说明" size="min(860px, 92vw)" class="tuning-help">
-<el-tabs v-model="helpSection"><el-tab-pane label="权重与参数" name="calculation"><div class="help-guide"><section><h3>完整计算流程</h3><ol><li>按模型分组，只比较提供同一个模型的渠道；多模型渠道为避免互相影响，不参与自动调权。</li><li>读取最近“评估窗口”内的请求，形成每个渠道的 TTFT、缓存命中、OTPS 和错误率指标。</li><li>用至少 2 个合格渠道计算同模型平均基线，再得到速度、缓存、输出、错误四个系数。</li><li>先计算原始目标：<code>Wtarget = round(Wbase × clamp(Ks × Kc × Ko × Ke, Lm, Um))</code>。</li><li>自动模式再应用容量保护和单次上调限制，得到页面展示并写入 new-api 的本轮权重；性能惩罚下调不受单次容量最大降幅约束。</li></ol><p class="help-warning">“本轮目标权重”已考虑容量保护和单次上调限制；样本或基线不足且没有其他调权动作时，显示“本轮不调权，保持当前权重”。目标值不代表已经写入成功。</p></section><section><h3>第一次使用</h3><ol><li>点击“初始化/刷新基础值”，读取当前线上权重和优先级。</li><li>先选择“只观察”，确认计算结果合理。</li><li>再切换为“自动执行”并保存；系统会先验证 new-api 控制链路。</li></ol></section><section><h3>指标与统计口径</h3><div class="help-table"><div><b>指标</b><b>定义、来源与参与条件</b></div><div><strong>TTFT P50/P90/P95</strong><span>首字节或首 Token 响应耗时的第 50、90、95 百分位，单位秒，来自 Agent 采集的 new-api 请求日志。P50 代表典型延迟，P90/P95 体现慢请求尾部。仅使用成功流式请求中确认未重试的 TTFT；有效样本达到“每渠道最少请求数”，且三个分位值都大于 0，才参与速度比较。重试和无法确认的样本不用于调权速度，监控统计不变。</span></div><div><strong>同模型平均数</strong><span>对同一模型下所有合格渠道的对应指标做算术平均；速度基线至少需要 2 个未重试样本合格渠道；不足时复用本轮有效输出系数，OTPS 参与两次，不沿用历史速度系数。输出独立建立同模型基线，不依赖 TTFT 是否存在。</span></div><div><strong>大输入缓存命中率 C</strong><span><code>缓存读取 Token 总数 ÷ 提示 Token 总数</code>。只统计成功请求且输入大于 512 Token；当前渠道累计提示 Token 至少 10,000，并且至少 2 个渠道有足够缓存证据时才参与。</span></div><div><strong>OTPS</strong><span><code>成功请求输出 Token 总数 ÷ 请求总耗时总秒数</code>，包含流式和非流式，不扣除首字等待；排除 fallback、同渠道重试与无法确认的请求。未重试有效请求达到“每渠道最少请求数”、输出 Token 至少 100，且至少 2 个渠道满足条件时参与，不依赖 TTFT。监控保留重试样本。</span></div><div><strong>渠道错误率 E</strong><span><code>(总错误数 − 用户自身错误数) ÷ 请求数</code>。用户参数、余额等归类为用户侧的错误不会处罚渠道；渠道错误按完整分钟桶进入 EWMA。</span></div><div><strong>平滑错误率</strong><span><code>Ema(new) = 0.3 × E本分钟 + 0.7 × Ema(old)</code>。最近约 90 秒的未稳定分钟桶暂不折入，避免半桶数据让错误率剧烈跳变。</span></div></div></section><section><h3>四项评估系数</h3><dl class="formula-list"><div><dt>速度系数 Ks</dt><dd><code>R = w50×TTFT50/平均TTFT50 + w90×TTFT90/平均TTFT90 + w95×TTFT95/平均TTFT95</code><code>Ks = clamp((1/R)^(αs×S), Ls, Us)</code><span>w50、w90、w95 合计必须为 1；αs 是速度影响指数，S 是全局敏感度。渠道越快，R 越小、Ks 越大。TTFT 样本或基线不足时 Ks=Ko，直接复用本轮输出系数，不再单独应用 TTFT 系数上下限。</span></dd></div><div><dt>缓存系数 Kc</dt><dd><code>Kc = clamp((C/Cavg)^(αc×S), Lc, Uc)</code><span>C 是本渠道大输入缓存命中率，Cavg 是同模型平均值；αc 控制缓存差异影响强度。证据不足时 Kc=1。</span></dd></div><div><dt>输出系数 Ko</dt><dd><code>Ko = clamp((OTPS/OTPSavg)^(αo×S), Lo, Uo)</code><span>αo 控制输出速度差异影响强度；输出越快 Ko 越大。证据不足时 Ko=1。</span></dd></div><div><dt>错误系数 Ke</dt><dd><code>E≤E1 → 1；E1~E2 → 1 到 K2；E2~E3 → K2 到 K3；E3~E4 → K3 到 Kmin；E≥E4 → Kmin</code><span>区间内采用线性插值。E1/E2/E3/E4 是健康、轻度、严重和封底错误率节点，K2/K3/Kmin 是对应惩罚系数。</span></dd></div></dl></section><section><h3>参数符号说明</h3><div class="help-table compact"><div><b>参数</b><b>作用</b></div><div><strong>S 敏感度</strong><span>同时放大或减弱速度、缓存、输出三项差异；越大越激进，不直接改变错误系数。</span></div><div><strong>αs / αc / αo</strong><span>对应速度、缓存、输出的指数。等于 1 按原始比例响应；小于 1 压缩差异；大于 1 放大差异。</span></div><div><strong>Ls/Us、Lc/Uc、Lo/Uo</strong><span>单项系数上下限，防止某一个指标独自把权重推得过高或过低。</span></div><div><strong>Lm / Um</strong><span>四项相乘后的综合倍率上下限。即使单项乘积超出范围，原始目标也只按该范围计算。</span></div><div><strong>评估窗口</strong><span>性能指标使用的最近分钟数。窗口越大越稳定但反应越慢；窗口越小越灵敏但更容易波动。</span></div><div><strong>最少请求数</strong><span>速度采用未重试有效 TTFT 样本数；TTFT 不足时使用本轮有效输出系数；窗口总请求不足时保持已执行权重。缓存和错误规则不变。</span></div></div></section><section><h3>三个权重与刷新时序</h3><dl><div><dt>基础权重 Wbase</dt><dd>长期计算基准，可手动修改；不是当前线上权重。</dd></div><div><dt>计算权重</dt><dd>表格“计算”为基础权重与性能系数推算的公式参考值，尚未应用容量保护和单次上调限制；详情按状态显示本轮目标、保持当前权重或等待执行回执；“本轮不调权”表示保留已确认权重，不能用公式参考值推断发生了升权。</dd></div><div><dt>当前权重 Wcurrent</dt><dd>new-api 已确认的线上权重。评估、写入和渠道快照更新时间不同，短时间内可能看到计算权重与当前权重相同，下一轮才继续爬升。</dd></div></dl></section><section><h3>自动模式</h3><p>每30秒评估。只要本轮执行权重与上次成功写入值不同，就写入 new-api；没有变化则不重复写。如果线上权重被人工或其他系统修改，系统会在确认外部变化后按当前规则重新计算并写回。</p></section><section><h3>保留的安全保护</h3><dl><div><dt>熔断</dt><dd>渠道错误率达到阈值且样本足够时，只将权重置为 0，优先级保持调权中心保存值。</dd></div><div><dt>恢复</dt><dd>静默期后主动探测；通过后先以低权重恢复，再回到正常计算。</dd></div><div><dt>多模型渠道</dt><dd>一个渠道同时服务多个模型时不自动调权，避免模型之间互相影响。</dd></div><div><dt>写入失败</dt><dd>连续失败 3 次后暂停每分钟写入，改为每 10 分钟重试，成功后自动恢复。</dd></div></dl></section><section><h3>表格与记录</h3><p>“状态”列显示样本不足、熔断、恢复中或写入失败等原因；“变更记录”保存每次自动写入、熔断和恢复。计算公式可悬停或点击“计算”数值查看。</p></section></div></el-tab-pane><el-tab-pane label="容量与执行" name="capacity"><div class="help-guide"><section><h3>从原始目标到本轮执行权重</h3><ol><li><code>M = clamp(Ks × Kc × Ko × Ke, Lm, Um)</code></li><li><code>Wtarget = max(1, round(Wbase × M))</code>；基础权重为 0 时渠道不参与调权。</li><li>RPM/TPM 达到上限立即限升；有效数据持续超限60秒且存在同模型、同优先级的可用替代渠道时（不检查分组），按90%目标利用率主动降权，单次容量下降最多 {{ (savedPolicy?.continuous ?? policy.continuous).capacity_max_decrease_percent ?? 25 }}%（可在规则设置中修改，整数权重至少下降1），最低保留1。性能更强的下降和错误熔断仍然生效。0 表示该项未配置上限。</li><li>自动模式上调时：<code>Wmax = max(Wcurrent + 1, floor(Wcurrent × (1 + P/100)))</code>，最终取 <code>min(Wtarget, Wmax)</code>。P 是“单次上调上限”；至少允许 +1，所以下降后的低权重会逐轮恢复。</li><li>只观察模式不写 new-api；自动模式只在整数执行权重变化时写入。</li></ol></section><section><h3>容量、熔断与恢复参数</h3><dl class="formula-list"><div><dt>最大 RPM / TPM</dt><dd>使用完整滚动60秒负载，RPM/TPM利用率取较大值；容量理论目标=floor(已确认权重×90%÷利用率)，再限制单次容量降幅。写入必须有成功回执，未收到回执时不重复下发。仅已触发超限保护的渠道在调权后等待完整的新60秒窗口；随后低于85%还需持续确认60秒才解除，85%至100%保持限升。未触发超限保护时，普通性能调权不会额外进入容量反馈等待，仍按单次上调上限逐轮调整。实时数据不可用时不盲目降权，仍然禁止上调。权重仅影响相对分流，不能保证绝对上限；没有分流空间或最低权重仍超限时提示容量不足。</dd></div><div><dt>快速熔断</dt><dd>直接检查每次 Agent 上报增量：非用户错误率达到“快速熔断错误率”，且本批请求数达到门槛时立即熔断，不等待稳定分钟桶。</dd></div><div><dt>常规熔断</dt><dd>平滑错误率达到“熔断错误率”且样本充分时，只将权重置 0，优先级保持调权中心保存值。错误系数节点负责渐进降权，熔断阈值负责彻底停流，两者不是同一参数。</dd></div><div><dt>探针恢复阈值</dt><dd><code>探针成功率 × 探针速度得分 ≥ 恢复阈值</code>才通过。静默期决定熔断后等待多久，探测次数与间隔决定一次恢复检测的规模。</dd></div><div><dt>恢复初始倍率</dt><dd>探针通过后先以<code>基础权重 × 恢复初始倍率</code>软启动，下一轮再回到正常公式和单次上调限制。</dd></div></dl></section></div></el-tab-pane></el-tabs>
+<el-tabs v-model="helpSection"><el-tab-pane label="权重与参数" name="calculation"><div class="help-guide"><section><h3>完整计算流程</h3><ol><li>按模型分组，只比较提供同一个模型的渠道；多模型渠道为避免互相影响，不参与自动调权。</li><li>读取最近“评估窗口”内的请求，形成每个渠道的 TTFT、缓存命中、OTPS 和错误率指标。</li><li>用至少 2 个合格渠道计算同模型平均基线，再得到速度、缓存、输出、错误及探针五个系数。</li><li>先计算原始目标：<code>Wtarget = floor(Wbase × clamp(Ks × Kc × Ko × Ke × Kp, Lm, Um))</code>。</li><li>自动模式再应用容量保护和单次上调限制，得到页面展示并写入 new-api 的本轮权重；性能惩罚下调不受单次容量最大降幅约束。</li></ol><p class="help-warning">“本轮目标权重”已考虑容量保护和单次上调限制；样本或基线不足且没有其他调权动作时，显示“本轮不调权，保持当前权重”。目标值不代表已经写入成功。</p></section><section><h3>第一次使用</h3><ol><li>点击“初始化/刷新基础值”，读取当前线上权重和优先级。</li><li>先选择“只观察”，确认计算结果合理。</li><li>再切换为“自动执行”并保存；系统会先验证 new-api 控制链路。</li></ol></section><section><h3>指标与统计口径</h3><div class="help-table"><div><b>指标</b><b>定义、来源与参与条件</b></div><div><strong>TTFT P50/P90/P95</strong><span>首字节或首 Token 响应耗时的第 50、90、95 百分位，单位秒，来自 Agent 采集的 new-api 请求日志。P50 代表典型延迟，P90/P95 体现慢请求尾部。仅使用成功流式请求中确认未重试的 TTFT；有效样本达到“每渠道最少请求数”，且三个分位值都大于 0，才参与速度比较。重试和无法确认的样本不用于调权速度，监控统计不变。</span></div><div><strong>同模型平均数</strong><span>对同一模型下所有合格渠道的对应指标做算术平均；速度基线使用运行规则中的最少合格渠道数；不足时复用本轮有效输出系数，OTPS 参与两次，不沿用历史速度系数。输出独立建立同模型基线，不依赖 TTFT 是否存在。</span></div><div><strong>大输入缓存命中率 C</strong><span><code>缓存读取 Token 总数 ÷ 提示 Token 总数</code>。只统计成功请求且输入大于 512 Token；当前渠道累计提示 Token 和合格渠道数量达到运行规则门槛时才参与。</span></div><div><strong>OTPS</strong><span><code>成功请求输出 Token 总数 ÷ 请求总耗时总秒数</code>，包含流式和非流式，不扣除首字等待；排除 fallback、同渠道重试与无法确认的请求。未重试有效请求达到“每渠道最少请求数”、输出 Token 和合格渠道数量达到运行规则门槛时参与，不依赖 TTFT。监控保留重试样本。</span></div><div><strong>渠道错误率 E</strong><span><code>(总错误数 − 用户自身错误数) ÷ 请求数</code>。用户参数、余额等归类为用户侧的错误不会处罚渠道；渠道错误按完整分钟桶进入 EWMA。</span></div><div><strong>平滑错误率</strong><span><code>Ema(new) = α × E本分钟 + (1−α) × Ema(old)</code>。α、稳定等待时间与回看范围可在运行规则中配置；未稳定分钟桶暂不折入，避免半桶数据让错误率剧烈跳变。</span></div></div></section><section><h3>五项评估系数</h3><dl class="formula-list"><div><dt>速度系数 Ks</dt><dd><code>R = w50×TTFT50/平均TTFT50 + w90×TTFT90/平均TTFT90 + w95×TTFT95/平均TTFT95</code><code>Ks = clamp((1/R)^(αs×S), Ls, Us)</code><span>w50、w90、w95 合计必须为 1；αs 是速度影响指数，S 是全局敏感度。渠道越快，R 越小、Ks 越大。TTFT 样本或基线不足时 Ks=Ko，直接复用本轮输出系数，不再单独应用 TTFT 系数上下限。</span></dd></div><div><dt>缓存系数 Kc</dt><dd><code>Kc = clamp((C/Cavg)^(αc×S), Lc, Uc)</code><span>C 是本渠道大输入缓存命中率，Cavg 是同模型平均值；αc 控制缓存差异影响强度。证据不足时 Kc=1。</span></dd></div><div><dt>输出系数 Ko</dt><dd><code>Ko = clamp((OTPS/OTPSavg)^(αo×S), Lo, Uo)</code><span>αo 控制输出速度差异影响强度；输出越快 Ko 越大。证据不足时 Ko=1。</span></dd></div><div><dt>探针系数 Kp</dt><dd><code>Kp = clamp((同模型平均探针耗时 / 本渠道平均探针耗时)^(αp×S), Lp, Up)</code><span>按CT发出到完整返回的耗时计算，成功定时探针使用实际耗时，慢探针按配置的超时秒数计；明确错误、控制链路错误及加速补测不用于速度排名。沿用评估窗口和最少样本配置，采用已完成分钟；基线最少渠道数和样本最大年龄均使用运行规则配置，样本过期则回退1。探针可独立参与正常调权，故障熔断优先。</span></dd></div><div><dt>错误系数 Ke</dt><dd><code>E≤E1 → 1；E1~E2 → 1 到 K2；E2~E3 → K2 到 K3；E3~E4 → K3 到 Kmin；E≥E4 → Kmin</code><span>区间内采用线性插值。E1/E2/E3/E4 是健康、轻度、严重和封底错误率节点，K2/K3/Kmin 是对应惩罚系数。</span></dd></div></dl></section><section><h3>参数符号说明</h3><div class="help-table compact"><div><b>参数</b><b>作用</b></div><div><strong>S 敏感度</strong><span>同时放大或减弱速度、缓存、输出、探针四项差异；越大越激进，不直接改变错误系数。</span></div><div><strong>αs / αc / αo / αp</strong><span>对应速度、缓存、输出、探针的指数。等于 1 按原始比例响应；小于 1 压缩差异；大于 1 放大差异。</span></div><div><strong>Ls/Us、Lc/Uc、Lo/Uo、Lp/Up</strong><span>单项系数上下限，防止某一个指标独自把权重推得过高或过低。</span></div><div><strong>Lm / Um</strong><span>五项相乘后的综合倍率上下限。即使单项乘积超出范围，原始目标也只按该范围计算。</span></div><div><strong>评估窗口</strong><span>性能指标使用的最近分钟数。窗口越大越稳定但反应越慢；窗口越小越灵敏但更容易波动。</span></div><div><strong>最少请求数</strong><span>速度采用未重试有效 TTFT 样本数；TTFT 不足时使用本轮有效输出系数；窗口总请求不足时保持已执行权重。缓存和错误规则不变。</span></div></div></section><section><h3>三个权重与刷新时序</h3><dl><div><dt>基础权重 Wbase</dt><dd>长期计算基准，可手动修改；不是当前线上权重。</dd></div><div><dt>计算权重</dt><dd>表格“计算”为基础权重与性能系数推算的公式参考值，尚未应用容量保护和单次上调限制；详情按状态显示本轮目标、保持当前权重或等待执行回执；“本轮不调权”表示保留已确认权重，不能用公式参考值推断发生了升权。</dd></div><div><dt>当前权重 Wcurrent</dt><dd>new-api 已确认的线上权重。评估、写入和渠道快照更新时间不同，短时间内可能看到计算权重与当前权重相同，下一轮才继续爬升。</dd></div></dl></section><section><h3>自动模式</h3><p>按运行规则中的普通评估间隔执行。只要本轮执行权重与上次成功写入值不同，就写入 new-api；没有变化则不重复写。如果线上权重被人工或其他系统修改，系统会在确认外部变化后按当前规则重新计算并写回。</p></section><section><h3>保留的安全保护</h3><dl><div><dt>熔断</dt><dd>渠道错误率达到阈值且样本足够时，只将权重置为 0，优先级保持调权中心保存值。</dd></div><div><dt>恢复</dt><dd>静默期后主动探测；通过后先以低权重恢复，再回到正常计算。</dd></div><div><dt>多模型渠道</dt><dd>一个渠道同时服务多个模型时不自动调权，避免模型之间互相影响。</dd></div><div><dt>写入失败</dt><dd>失败转退避次数、重试间隔与单轮最多失败次数均按运行规则执行，成功后自动恢复。</dd></div></dl></section><section><h3>表格与记录</h3><p>“状态”列显示样本不足、熔断、恢复中或写入失败等原因；“变更记录”保存每次自动写入、熔断和恢复。计算公式可悬停或点击“计算”数值查看。</p></section></div></el-tab-pane><el-tab-pane label="容量与执行" name="capacity"><div class="help-guide"><section><h3>从原始目标到本轮执行权重</h3><ol><li><code>M = clamp(Ks × Kc × Ko × Ke × Kp, Lm, Um)</code></li><li><code>Wtarget = floor(Wbase × M)</code>，允许性能权重降到0；基础权重为 0 时渠道不参与调权。</li><li>RPM/TPM 达到上限立即限升；有效数据持续超限达到配置的确认时间且存在同模型、同优先级的可用替代渠道时（不检查分组），按配置的目标利用率主动降权，单次容量下降最多 {{ (savedPolicy?.continuous ?? policy.continuous).capacity_max_decrease_percent ?? 25 }}%（可在规则设置中修改，整数权重至少下降1），最低权重按运行规则配置。性能更强的下降和错误熔断仍然生效。0 表示该项未配置上限。</li><li>自动模式上调时：<code>Wmax = max(Wcurrent + 1, floor(Wcurrent × (1 + P/100)))</code>，最终取 <code>min(Wtarget, Wmax)</code>。P 是“单次上调上限”；至少允许 +1，所以下降后的低权重会逐轮恢复。</li><li>只观察模式不写 new-api；自动模式只在整数执行权重变化时写入。</li></ol></section><section><h3>容量、熔断与恢复参数</h3><dl class="formula-list"><div><dt>最大 RPM / TPM</dt><dd>使用完整滚动60秒负载，RPM/TPM利用率取较大值；容量理论目标=floor(已确认权重×目标利用率÷利用率)，再限制单次容量降幅。写入必须有成功回执，未收到回执时不重复下发。仅已触发超限保护的渠道在调权后等待配置的反馈时间（至少一个完整60秒窗口）；随后低于解除利用率还需持续达到恢复确认时间才解除，其余保持限升。未触发超限保护时，普通性能调权不会额外进入容量反馈等待，仍按单次上调上限逐轮调整。实时数据不可用时不盲目降权，仍然禁止上调。权重仅影响相对分流，不能保证绝对上限；没有分流空间或最低权重仍超限时提示容量不足。</dd></div><div><dt>常态探针</dt><dd>直连自动模式按配置间隔发起，达到超时仍未返回立即计慢；按发起顺序独立累计慢请求和明确错误，互不清零，成功返回才同时清零；任一计数达到配置门槛后禁用。错误后立即继续发送以加速确认，已确定的失败段不等待更早的无关请求。性能权重0仍允许普通调权升权，探针速度样本充分时可独立调权；性能权重0不进入熔断恢复或软启动，证据不足则保持当前权重；手动关闭和基础权重0不自动恢复。故障禁用后沿用静默与恢复参数。</dd></div><div><dt>快速熔断</dt><dd>直接检查每次 Agent 上报增量：非用户错误率达到“快速熔断错误率”，且本批请求数达到门槛时立即熔断，不等待稳定分钟桶。</dd></div><div><dt>常规熔断</dt><dd>平滑错误率达到“熔断错误率”且样本充分时，只将权重置 0，优先级保持调权中心保存值。错误系数节点负责渐进降权，熔断阈值负责彻底停流，两者不是同一参数。</dd></div><div><dt>探针恢复阈值</dt><dd><code>探针成功率 × 探针速度得分 ≥ 恢复阈值</code>才通过，并且必须完成原命令要求的全部探测；取消或整轮超时不能用部分成功结果恢复。静默期决定故障禁用后等待多久，探测次数决定恢复检测规模；恢复轮次内按恢复探针间隔逐次执行，默认无额外间隔。</dd></div><div><dt>恢复初始倍率</dt><dd>探针通过后先以<code>基础权重 × 恢复初始倍率</code>软启动，下一轮再回到正常公式和单次上调限制。</dd></div></dl></section></div></el-tab-pane></el-tabs>
   </el-drawer>
 </div></AppShell></template>
 
@@ -1501,7 +1852,7 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
 .weight-calculated{display:flex;align-items:center;justify-content:center;gap:6px;font-variant-numeric:tabular-nums}.channel-table .current-weight{font-weight:400}
 .speed-source{display:block;font-size:10px;color:var(--ct-ink-3);line-height:14px}
 .coefficient-cell{display:flex;flex-direction:column;gap:2px;line-height:20px;font-size:12px;font-variant-numeric:tabular-nums}.coefficient-cell b{font-weight:500;color:var(--ct-ink-2)}.coefficient-cell small{font-size:10px;line-height:16px;color:var(--ct-ink-3);white-space:normal}.coefficient-cell .factor-up{color:var(--ct-ok)}.coefficient-cell .factor-down{color:var(--ct-crit)}
-.channel-table :deep(td.coefficient-merged .cell){padding:0}.coefficient-values{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));align-items:start}.coefficient-values .coefficient-cell{padding:0 8px}.coefficient-overall{margin-top:5px;padding:0 10px;font-size:11px;line-height:18px;text-align:center}
+.channel-table :deep(td.coefficient-merged .cell){padding:0}.coefficient-values{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));align-items:start}.coefficient-values .coefficient-cell{padding:0 8px}.coefficient-overall{margin-top:5px;padding:0 10px;font-size:11px;line-height:18px;text-align:center}
 .coefficient-overall.only-status{margin-top:0;text-align:center}
 /* Respond to available page width, including changes to the application sidebar. */
 /* The global desktop body minimum must not force this page beyond the viewport. */
@@ -1557,6 +1908,7 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
 .channel-key{font-size:11px}
 .channel-meta{margin-top:5px;gap:5px 12px;line-height:18px}
 .coefficient-samples{display:block;margin-top:4px;text-align:center;white-space:nowrap;font-size:11px;line-height:18px;color:var(--ct-ink-3)}.coefficient-samples b{font-weight:500;color:var(--ct-ink-2)}
+.probe-coverage{font-size:11px;line-height:18px;text-align:center;color:var(--ct-ink-3)}.probe-coverage.warning{color:var(--ct-warning,#b7791f)}
 .group-tags{gap:4px;line-height:18px}.group-tags>span{background:var(--ct-surface-2);color:var(--ct-ink-2);border-color:transparent;border-radius:4px;padding:1px 5px}
 .channel-table :deep(.el-input-number){width:100%;max-width:76px}
 .channel-table :deep(.el-input__wrapper){min-height:28px;box-shadow:0 0 0 1px var(--ct-line) inset;background:var(--ct-surface-2);border-radius:5px}

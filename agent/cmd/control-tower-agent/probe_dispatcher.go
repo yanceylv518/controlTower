@@ -36,7 +36,7 @@ func withProbeDispatcher(ctx context.Context, controller channelController) cont
 						lock.Unlock()
 						return
 					}
-					probeCtx, cancel := context.WithTimeout(ctx, 8*time.Minute)
+					probeCtx, cancel := context.WithTimeout(ctx, time.Duration(probeOptions(command).RoundSeconds)*time.Second)
 					result := executeCommand(probeCtx, controller, command)
 					cancel()
 					lock.Unlock()

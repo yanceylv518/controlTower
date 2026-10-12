@@ -96,17 +96,24 @@ func executeCommand(ctx context.Context, controller channelController, command r
 		return result
 	}
 	if command.Type == "channel.probe" {
-		round := channelcontrol.RunProbeRound(ctx, controller, command.ChannelID, command.Model, command.ProbeCount, command.ProbeIntervalSeconds, func(ctx context.Context, d time.Duration) {
+		interval := command.ProbeIntervalSeconds
+		if command.ProbeTimeoutSeconds == 0 && command.ProbeSlowLimit == 0 && command.ProbeRoundSeconds == 0 {
+			interval = 0 // Legacy commands carried an unused interval.
+		}
+		round := channelcontrol.RunProbeRound(ctx, controller, command.ChannelID, command.Model, command.ProbeCount, interval, func(ctx context.Context, d time.Duration) {
 			timer := time.NewTimer(d)
 			defer timer.Stop()
 			select {
 			case <-ctx.Done():
 			case <-timer.C:
 			}
-		})
+		}, probeOptions(command))
 		result.Attempts, result.Successes = round.Attempts, round.Successes
 		result.DurationSeconds, result.ProbeSlowStreak = round.DurationSeconds, round.SlowStreak
 		result.Status, result.Error = "succeeded", round.Error
+		if round.Aborted || round.Attempts == 0 {
+			result.Status = "failed"
+		}
 		result.AppliedAt = time.Now().UTC()
 		return result
 	}
@@ -126,4 +133,8 @@ func executeCommand(ctx context.Context, controller channelController, command r
 		result.Status = "succeeded"
 	}
 	return result
+}
+
+func probeOptions(command reporter.ChannelCommand) channelcontrol.ProbeOptions {
+	return (channelcontrol.ProbeOptions{TimeoutSeconds: command.ProbeTimeoutSeconds, SlowLimit: command.ProbeSlowLimit, RoundSeconds: command.ProbeRoundSeconds}).Defaults()
 }

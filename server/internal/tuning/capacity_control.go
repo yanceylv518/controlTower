@@ -55,13 +55,14 @@ func capacityUtilization(b ChannelBaseValue, rpm, tpm float64) float64 {
 	return u
 }
 
-func capacityTarget(weight int64, utilization, maxDecreasePercent float64) (raw, bounded int64) {
-	if weight <= 1 || utilization < 1 {
+func capacityTarget(weight int64, utilization, maxDecreasePercent float64, policy ...ContinuousDispatchParams) (raw, bounded int64) {
+	rules := optionalRules(policy)
+	if weight <= int64(rules.CapacityMinWeight) || utilization < 1 {
 		return weight, weight
 	}
-	raw = max(int64(1), int64(math.Floor(float64(weight)*.90/utilization)))
+	raw = max(int64(rules.CapacityMinWeight), int64(math.Floor(float64(weight)*rules.CapacityTargetUtilization/utilization)))
 	// Allow at least one unit so small integer weights can still decrease.
-	bounded = max(raw, weight-max(int64(1), int64(math.Floor(float64(weight)*maxDecreasePercent/100))), int64(1))
+	bounded = max(raw, weight-max(int64(1), int64(math.Floor(float64(weight)*maxDecreasePercent/100))), int64(rules.CapacityMinWeight))
 	return
 }
 
@@ -143,6 +144,7 @@ func (e *Engine) resetUnappliedCapacityTransition(site string, s *ContinuousStat
 // confirmation, but not the latch or a confirmed write's feedback deadline.
 func updateCapacity(b ChannelBaseValue, s *ContinuousState, asOf, now time.Time, available bool, maxDecreasePercent float64) {
 	c := &s.Capacity
+	rules := stateRules(*s)
 	if !capacityConfigured(b) {
 		// Keep command acknowledgement tracking even without a capacity cap.
 		// Traffic evidence is only required for capacity decisions.
@@ -173,7 +175,7 @@ func updateCapacity(b ChannelBaseValue, s *ContinuousState, asOf, now time.Time,
 		}
 	}
 	c.BoundWeight, c.RawTarget, c.Reason = c.ConfirmedWeight, c.ConfirmedWeight, ""
-	c.Fresh = available && !asOf.IsZero() && !asOf.After(now) && now.Sub(asOf) <= 90*time.Second && !asOf.Before(c.SampleAt)
+	c.Fresh = available && !asOf.IsZero() && !asOf.After(now) && now.Sub(asOf) <= time.Duration(rules.CapacityMaxAgeSeconds)*time.Second && !asOf.Before(c.SampleAt)
 	if !c.Fresh {
 		c.OverSince, c.UnderSince, c.Phase = time.Time{}, time.Time{}, "unavailable"
 		s.CapacityLimited = capacityConfigured(b) || c.PendingCommandID != ""
@@ -188,7 +190,7 @@ func updateCapacity(b ChannelBaseValue, s *ContinuousState, asOf, now time.Time,
 	}
 	newSample := asOf.After(c.SampleAt)
 	if newSample {
-		if !c.SampleAt.IsZero() && asOf.Sub(c.SampleAt) > capacityWindow {
+		if !c.SampleAt.IsZero() && asOf.Sub(c.SampleAt) > time.Duration(rules.CapacitySampleGapSeconds)*time.Second {
 			c.OverSince, c.UnderSince = time.Time{}, time.Time{}
 		}
 		c.SampleAt = asOf
@@ -199,12 +201,12 @@ func updateCapacity(b ChannelBaseValue, s *ContinuousState, asOf, now time.Time,
 		} else {
 			c.OverSince = time.Time{}
 		}
-		feedbackReady := c.AppliedAt.IsZero() || !asOf.Add(-capacityWindow).Before(c.AppliedAt)
-		if c.Active && c.Utilization < .85 && feedbackReady && c.PendingCommandID == "" {
+		feedbackReady := c.AppliedAt.IsZero() || !asOf.Add(-time.Duration(rules.CapacityFeedbackSeconds)*time.Second).Before(c.AppliedAt)
+		if c.Active && c.Utilization < rules.CapacityReleaseUtilization && feedbackReady && c.PendingCommandID == "" {
 			if c.UnderSince.IsZero() {
 				c.UnderSince = asOf
 			}
-			if asOf.Sub(c.UnderSince) >= capacityWindow {
+			if asOf.Sub(c.UnderSince) >= time.Duration(rules.CapacityRecoverySeconds)*time.Second {
 				c.Active = false
 			}
 		} else {
@@ -215,19 +217,19 @@ func updateCapacity(b ChannelBaseValue, s *ContinuousState, asOf, now time.Time,
 	switch {
 	case c.PendingCommandID != "":
 		c.Phase = "awaiting_write"
-	case c.Active && !c.AppliedAt.IsZero() && asOf.Add(-capacityWindow).Before(c.AppliedAt):
+	case c.Active && !c.AppliedAt.IsZero() && asOf.Add(-time.Duration(rules.CapacityFeedbackSeconds)*time.Second).Before(c.AppliedAt):
 		c.Phase = "waiting_feedback"
 	case c.Active && !c.UnderSince.IsZero():
 		c.Phase = "recovering"
 	case c.Active && c.Utilization < 1:
 		c.Phase = "holding"
-	case c.Utilization >= 1 && (c.OverSince.IsZero() || asOf.Sub(c.OverSince) < capacityWindow):
+	case c.Utilization >= 1 && (c.OverSince.IsZero() || asOf.Sub(c.OverSince) < time.Duration(rules.CapacityOverloadSeconds)*time.Second):
 		c.Phase = "observing"
-	case c.Utilization >= 1 && c.ConfirmedWeight <= 1:
+	case c.Utilization >= 1 && c.ConfirmedWeight <= int64(rules.CapacityMinWeight):
 		c.Phase = "minimum_weight"
 	case c.Utilization >= 1:
 		c.Phase = "reducing"
-		c.RawTarget, c.BoundWeight = capacityTarget(c.ConfirmedWeight, c.Utilization, maxDecreasePercent)
+		c.RawTarget, c.BoundWeight = capacityTarget(c.ConfirmedWeight, c.Utilization, maxDecreasePercent, ContinuousDispatchParams{ContinuousRules: rules})
 	default:
 		c.Phase = "normal"
 	}
@@ -244,7 +246,7 @@ func capacityDiversion(b ChannelBaseValue, rows []ChannelBaseValue, states map[i
 			continue
 		}
 		m := rates[peer.ChannelID]
-		if capacityUtilization(peer, float64(m.RequestCount), float64(m.TPM)) >= .85 {
+		if capacityUtilization(peer, float64(m.RequestCount), float64(m.TPM)) >= p.Rules().CapacityPeerUtilization {
 			continue
 		}
 		if !capacityConfigured(peer) {

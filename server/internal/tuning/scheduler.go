@@ -69,13 +69,14 @@ func (e *Engine) runChannels(jobs []func()) {
 
 // Coalesce overlapping ticks per site, while allowing other sites to run on
 // schedule. Queue entries carry no old ticker timestamp or evaluation data.
-func (e *Engine) runSites(ctx context.Context, interval time.Duration) {
+func (e *Engine) runSites(ctx context.Context, interval time.Duration, perSitePolicy ...bool) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	done := make(chan string, 4)
 	var workers sync.WaitGroup
 	defer workers.Wait()
 	queued := map[string]bool{}
+	lastStarted := map[string]time.Time{}
 	var queue []string
 	running := 0
 	enqueue := func() {
@@ -85,6 +86,19 @@ func (e *Engine) runSites(ctx context.Context, interval time.Duration) {
 			return
 		}
 		for _, id := range ids {
+			if len(perSitePolicy) > 0 && perSitePolicy[0] {
+				p, found, err := e.store.GetPolicy(id)
+				if err != nil {
+					continue
+				}
+				rules := DefaultContinuousRules()
+				if found {
+					rules = p.Policy.Continuous.Rules()
+				}
+				if time.Since(lastStarted[id]) < time.Duration(rules.EvaluationIntervalSeconds)*time.Second {
+					continue
+				}
+			}
 			if !queued[id] {
 				queued[id] = true
 				queue = append(queue, id)
@@ -98,6 +112,7 @@ func (e *Engine) runSites(ctx context.Context, interval time.Duration) {
 		}
 		for running < 4 && len(queue) > 0 {
 			id := queue[0]
+			lastStarted[id] = time.Now()
 			queue = queue[1:]
 			running++
 			workers.Add(1)

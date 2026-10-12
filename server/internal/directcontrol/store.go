@@ -7,6 +7,7 @@ package directcontrol
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,10 +36,6 @@ func DefaultFactory(baseURL, accessToken string, adminUserID int64) Controller {
 
 const writeTimeout = 15 * time.Second
 
-// probeRoundTimeout stays below the engine's 10-minute lost-probe fallback so
-// a finished round always reports before the state machine gives up on it.
-const probeRoundTimeout = 8 * time.Minute
-
 // Store wraps the MySQL store; every method not overridden here behaves
 // exactly as before, so the engine and the dashboard handlers stay unchanged.
 type Store struct {
@@ -65,6 +62,24 @@ func (s Store) WithFactory(factory Factory, sleep func(context.Context, time.Dur
 		s.sleep = sleep
 	}
 	return s
+}
+
+// Return a credential/configuration generation without exposing credentials.
+// Each scheduler generation shares a client, including its authentication lock.
+func (s Store) RoutineProbeController(site string) (tuning.RoutineProber, string, error) {
+	cfg, err := s.Store.ControlConfigForSite(site)
+	if err != nil {
+		return nil, "", err
+	}
+	if cfg.APIURL == "" || cfg.EncryptedToken == "" {
+		return nil, "", nil
+	}
+	token, err := secrets.Decrypt(s.secretKey, cfg.EncryptedToken)
+	if err != nil {
+		return nil, "", fmt.Errorf("routine probe credentials unavailable")
+	}
+	fingerprint := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%d", cfg.APIURL, cfg.EncryptedToken, cfg.AdminUserID)))
+	return s.factory(cfg.APIURL, token, cfg.AdminUserID), fmt.Sprintf("%x", fingerprint), nil
 }
 
 func sleepContext(ctx context.Context, d time.Duration) {
@@ -121,7 +136,8 @@ func (s Store) CreateContinuousWeightChangeWithAudit(v tuning.Recommendation, ac
 	if err := s.CheckContinuousCapacity(v, time.Now().UTC()); err != nil {
 		return "", err
 	}
-	if err := executeWeightUpdate(ctx, controller, v); err != nil {
+	tracked := &journalController{Controller: controller, journal: s.Store, site: v.InstanceID, actor: actor, recommendation: v.ID, before: map[string]any{"weight": v.CurrentWeight, "priority": v.CurrentPriority}}
+	if err := executeWeightUpdate(ctx, tracked, v); err != nil {
 		log.Printf("direct control: weight write site=%s channel=%d target=%d duration=%s failed: %v", v.InstanceID, v.ChannelID, v.ProposedWeight, time.Since(started), err)
 		return "", fmt.Errorf("direct weight write: %w", err)
 	}
@@ -142,6 +158,7 @@ func (s Store) CreateContinuousWeightChangeWithAudit(v tuning.Recommendation, ac
 		return s.Store.RecordDirectWeightChangeWithAudit(v, actor, writtenAt, auditContext)
 	})
 	log.Printf("direct control: weight write site=%s channel=%d target=%d duration=%s succeeded", v.InstanceID, v.ChannelID, v.ProposedWeight, time.Since(started))
+	tracked.link(commandID)
 	return commandID, err
 }
 
@@ -164,9 +181,11 @@ func (s Store) UpdateChannelGroup(ctx context.Context, siteID string, channelID 
 		return storage.ChannelCommand{}, fmt.Errorf("query channel groups: %w", err)
 	}
 	targetFound := false
+	previousGroup := ""
 	for _, channel := range channels {
 		if channel.ID == channelID {
 			targetFound = true
+			previousGroup = channel.GroupName
 		}
 	}
 	if !targetFound {
@@ -177,7 +196,8 @@ func (s Store) UpdateChannelGroup(ctx context.Context, siteID string, channelID 
 	}
 	ctx, cancel := context.WithTimeout(ctx, writeTimeout)
 	defer cancel()
-	result, err := controller.Update(ctx, channelcontrol.UpdateRequest{ChannelID: channelID, Group: &normalized})
+	tracked := &journalController{Controller: controller, journal: s.Store, site: siteID, actor: actor, operation: "channel.group", before: map[string]any{"group": previousGroup}}
+	result, err := tracked.Update(ctx, channelcontrol.UpdateRequest{ChannelID: channelID, Group: &normalized})
 	if err != nil {
 		// New API 的不存在渠道通常以 HTTP 200 + success=false 返回；把该
 		// 业务错误转换为站点级哨兵，供 HTTP 层返回 404 并刷新过期快照。
@@ -202,6 +222,7 @@ func (s Store) UpdateChannelGroup(ctx context.Context, siteID string, channelID 
 		return command, err
 	}
 	log.Printf("direct control: group write site=%s channel=%d group=%q succeeded", siteID, channelID, actual)
+	tracked.link(command.ID)
 	return command, err
 }
 
@@ -270,12 +291,16 @@ func (s Store) CreateContinuousProbe(v tuning.Recommendation, model string, coun
 	if err != nil {
 		return "", err
 	}
-	go s.runProbeRound(controller, v.InstanceID, v.ChannelID, commandID, model, count, interval)
+	go s.runProbeRound(controller, v.InstanceID, v.ChannelID, commandID, model, count, interval, tuning.RecoveryProbeOptions(v))
 	return commandID, nil
 }
 
-func (s Store) runProbeRound(controller Controller, siteID string, channelID int64, commandID, model string, count, interval int) {
-	ctx, cancel := context.WithTimeout(context.Background(), probeRoundTimeout)
+func (s Store) runProbeRound(controller Controller, siteID string, channelID int64, commandID, model string, count, interval int, options ...channelcontrol.ProbeOptions) {
+	o := channelcontrol.ProbeOptions{}.Defaults()
+	if len(options) > 0 {
+		o = options[0].Defaults()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(o.RoundSeconds)*time.Second)
 	defer cancel()
 	if s.probeSlots != nil {
 		select {
@@ -295,11 +320,11 @@ func (s Store) runProbeRound(controller Controller, siteID string, channelID int
 		_, _, _ = s.Store.CompleteChannelCommand(commandID, "failed", "probe marker was never persisted", time.Now().UTC())
 		return
 	}
-	round := channelcontrol.RunProbeRound(ctx, controller, channelID, model, count, interval, s.sleep)
+	round := channelcontrol.RunProbeRound(ctx, recoveryProbeJournal{Prober: controller, store: s.Store, site: siteID}, channelID, model, count, interval, s.sleep, o)
 	attempts, successes, durationSum, lastError := round.Attempts, round.Successes, round.DurationSeconds, round.Error
 	now := time.Now().UTC()
 	status := "succeeded"
-	if attempts == 0 {
+	if round.Aborted || attempts == 0 {
 		status = "failed"
 	}
 	if _, _, err := s.Store.CompleteChannelCommand(commandID, status, lastError, now); err != nil {
@@ -356,8 +381,11 @@ func (s Store) CreateTuningPreflight(siteID string, channelID int64, actor strin
 	ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
 	defer cancel()
 	status, errorSummary := "succeeded", ""
-	if _, err := controller.Update(ctx, channelcontrol.UpdateRequest{ChannelID: channelID}); err != nil {
+	tracked := &journalController{Controller: controller, journal: s.Store, site: siteID, actor: actor, operation: "channel.verify"}
+	if _, err := tracked.Update(ctx, channelcontrol.UpdateRequest{ChannelID: channelID}); err != nil {
 		status, errorSummary = "failed", err.Error()
 	}
-	return s.Store.RecordTuningPreflightResult(siteID, channelID, actor, status, errorSummary, time.Now().UTC())
+	command, recordErr := s.Store.RecordTuningPreflightResult(siteID, channelID, actor, status, errorSummary, time.Now().UTC())
+	tracked.link(command.ID)
+	return command, recordErr
 }

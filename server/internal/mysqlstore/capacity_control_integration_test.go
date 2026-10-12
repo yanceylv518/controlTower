@@ -57,6 +57,16 @@ func TestCapacityStateAndCommandLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, loaded, 1)
 	require.Equal(t, state.Capacity, loaded[0].Capacity)
+	t.Run("configured freshness is enforced at execution", func(t *testing.T) {
+		policy.Continuous.CapacityMaxAgeSeconds = 200
+		require.NoError(t, s.PutPolicy(tuning.PolicyRecord{InstanceID: site, Policy: policy, Mode: "observe", UpdatedAt: now}))
+		require.NoError(t, s.CheckContinuousCapacity(makeRec("freshness-check"), now.Add(100*time.Second)))
+		policy.Continuous.CapacityMaxAgeSeconds = 50
+		require.NoError(t, s.PutPolicy(tuning.PolicyRecord{InstanceID: site, Policy: policy, Mode: "observe", UpdatedAt: now}))
+		require.ErrorIs(t, s.CheckContinuousCapacity(makeRec("freshness-check"), now.Add(100*time.Second)), ErrCapacitySuperseded)
+		policy.Continuous.CapacityMaxAgeSeconds = 90
+		require.NoError(t, s.PutPolicy(tuning.PolicyRecord{InstanceID: site, Policy: policy, Mode: "observe", UpdatedAt: now}))
+	})
 	id, err := s.CreateContinuousWeightChange(makeRec("first"), "system:auto", now)
 	require.NoError(t, err)
 	// No engine post-write persistence: the enqueue transaction owns the marker.

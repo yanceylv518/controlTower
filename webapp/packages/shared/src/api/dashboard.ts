@@ -382,6 +382,42 @@ export interface TuningSchedulingParams {
   sparse_min_samples: number; sparse_lookback_minutes: number;
 }
 export interface TuningContinuousDispatchParams {
+	 recovery_speed_exponent: number;
+  channel_history_retention_days: number;
+  recovery_interval_seconds: number;
+  evaluation_interval_seconds: number;
+  routine_interval_seconds: number;
+  probe_timeout_seconds: number;
+  probe_slow_limit: number;
+  routine_error_limit: number;
+  probe_max_age_seconds: number;
+  baseline_min_channels: number;
+  output_min_tokens: number;
+  cache_min_tokens: number;
+  error_alpha: number;
+  error_settle_seconds: number;
+  error_lookback_minutes: number;
+  capacity_target_utilization: number;
+  capacity_release_utilization: number;
+  capacity_peer_utilization: number;
+  capacity_overload_seconds: number;
+  capacity_recovery_seconds: number;
+  capacity_feedback_seconds: number;
+  capacity_max_age_seconds: number;
+  capacity_sample_gap_seconds: number;
+  capacity_min_weight: number;
+  write_pause_attempts: number;
+  write_max_attempts: number;
+  write_retry_seconds: number;
+  external_write_grace_seconds: number;
+  recovery_round_seconds: number;
+  recovery_lost_seconds: number;
+  recovery_speed_min_factor: number;
+  recovery_min_weight: number;
+  fast_report_max_age_seconds: number;
+  fast_report_future_seconds: number;
+  observe_deadband_percent: number;
+
   sensitivity: number;
   speed_exponent: number;
   speed_p50_weight: number;
@@ -395,6 +431,9 @@ export interface TuningContinuousDispatchParams {
   otps_exponent: number;
   otps_min_factor: number;
   otps_max_factor: number;
+  probe_speed_exponent: number;
+  probe_speed_min_factor: number;
+  probe_speed_max_factor: number;
   error_healthy_rate: number;
   error_degraded_rate: number;
   error_poor_rate: number;
@@ -456,6 +495,35 @@ export interface TuningRecommendation {
 export interface TuningReport {
   total: number; by_rule: Record<string, number>;
 }
+export interface ProbeDispatchCounts {
+  due: number; sent: number; global_limited: number; channel_limited: number; evidence_limited: number;
+  last_due_at: string; last_sent_at?: string; last_skipped_at?: string;
+}
+export interface ProbeMetrics {
+  due: number; sent: number; success: number; slow: number; errors: number; unknown: number; canceled: number;
+  pending: number; unconfirmed: number; skipped: number; global_limited: number; channel_limited: number; evidence_limited: number;
+  success_rate: number | null; mean_seconds: number | null; mean_success_seconds: number | null; max_seconds: number | null; last_started_at?: string;
+}
+export interface ProbeChannelStats extends ProbeMetrics { channel_id: number; channel_name: string; model_name: string }
+export interface ProbeRecord {
+  id: string; instance_id: string; channel_id: number; channel_name: string; model_name: string; kind: string;
+  started_at: string; deadline_at: string; finished_at?: string; outcome: string; reason: string; duration_seconds?: number;
+}
+export interface ProbeOverview {
+  retention_days: number;
+  from: string; to: string; queried_at: string; bucket_seconds: number; total: ProbeMetrics; channels: ProbeChannelStats[];
+  trend: Array<ProbeMetrics & {at: string}>;
+  recorder?: {started_at: string; last_seen_at: string; last_loss_at?: string; dropped_records: number; queued_records: number};
+}
+export interface ProbeQuery {site_id: string; from: string; to: string; channel_id?: number; model?: string; kind?: string; q?: string; outcome?: string; cursor?: string; limit?: number}
+export interface ChannelLifeEvent {
+  id: string; source: string; at: string; finished_at?: string; operation: string; outcome: string; actor: string;
+  command_id?: string; recommendation_id?: string; details: Record<string, unknown>;
+}
+export interface ProbeCoverageWindow {
+  from: string; to: string; as_of: string; error?: string;
+  items: Record<string, { scheduled: ProbeDispatchCounts; accelerated: ProbeDispatchCounts }>;
+}
 export interface TuningContinuousState {
   evaluation?: {performance_evaluated?: boolean; base_weight: number; base_updated_at: string; policy_updated_at: string; evaluated_at: string; params: TuningPolicy["continuous"]};
   instance_id: string;
@@ -467,6 +535,7 @@ export interface TuningContinuousState {
   k_speed: number;
   k_cache: number;
   k_otps: number;
+  probe_speed?: { samples: number; mean_seconds: number; baseline_seconds: number; last_started_at: string; factor: number; ready: boolean };
   k_error: number;
   multiplier: number;
   proposed_weight: number;
@@ -511,6 +580,7 @@ export interface TuningContinuousState {
   paused_reason?: string;
   phase: "normal" | "circuit" | "probing" | "soft_start";
   circuit_disabled?: boolean;
+  routine_circuit_latched?: boolean;
   circuit_status_target?: number;
   circuit_status_command_id?: string;
   circuit_opened_at?: string;
@@ -1023,7 +1093,10 @@ export const dashboardApi = (client: ApiClient) => ({
   tuningChannelChanges: (site_id: string, after: string, signal: AbortSignal) =>
     client.request<{ revision: string }>(`/api/dashboard/tuning/channels/changes${query({ site_id, after })}`, { signal }),
   tuningContinuousStates: (site_id: string) =>
-    client.request<ListResponse<TuningContinuousState>>(`/api/dashboard/tuning/continuous-states${query({ site_id })}`),
+    client.request<ListResponse<TuningContinuousState> & { probe_coverage?: ProbeCoverageWindow }>(`/api/dashboard/tuning/continuous-states${query({ site_id })}`),
+  probeOverview: (params: ProbeQuery, signal?: AbortSignal) => client.request<ProbeOverview>(`/api/dashboard/tuning/probes/overview${query({...params})}`, {signal}),
+  probeRecords: (params: ProbeQuery, signal?: AbortSignal) => client.request<{items: ProbeRecord[]; total: number; next_cursor?: string}>(`/api/dashboard/tuning/probes/records${query({...params})}`, {signal}),
+  channelLifeline: (params: ProbeQuery & {source?: string}, signal?: AbortSignal) => client.request<{items: ChannelLifeEvent[]; next_cursor?: string}>(`/api/dashboard/tuning/probes/lifeline${query({...params})}`, {signal}),
   tuningCurrentRates: (site_id: string) =>
     client.request<{ items: { channel_id: number; rpm: number; tpm: number }[]; as_of: string; window_start: string; window_seconds: number; delay_seconds: number }>(`/api/dashboard/tuning/continuous-states${query({ site_id, rates_only: 1 })}`),
   saveTuningBaseValues: (site_id: string, items: ChannelBaseValue[]) =>

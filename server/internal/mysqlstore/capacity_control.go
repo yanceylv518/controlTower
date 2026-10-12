@@ -48,9 +48,9 @@ func checkContinuousCapacity(q priorityQuery, v tuning.Recommendation, now time.
 	var model, stateModel, phase, paused, raw, policyJSON string
 	var baseUpdatedAt, policyUpdatedAt time.Time
 	var rpm, tpm, baseWeight int64
-	var limited bool
-	err := q.QueryRowContext(context.Background(), `SELECT b.model_name,b.base_weight,b.max_rpm,b.max_tpm,s.model_name,s.phase,s.paused_reason,s.capacity_limited,COALESCE(s.capacity_control_json,'{}'),b.updated_at
-FROM channel_base_values b JOIN tuning_continuous_states s ON s.instance_id=b.instance_id AND s.channel_id=b.channel_id WHERE b.instance_id=? AND b.channel_id=?`, v.InstanceID, v.ChannelID).Scan(&model, &baseWeight, &rpm, &tpm, &stateModel, &phase, &paused, &limited, &raw, &baseUpdatedAt)
+	var limited, routineLatched bool
+	err := q.QueryRowContext(context.Background(), `SELECT b.model_name,b.base_weight,b.max_rpm,b.max_tpm,s.model_name,s.phase,s.paused_reason,s.capacity_limited,COALESCE(s.capacity_control_json,'{}'),b.updated_at,s.routine_circuit_latched
+FROM channel_base_values b JOIN tuning_continuous_states s ON s.instance_id=b.instance_id AND s.channel_id=b.channel_id WHERE b.instance_id=? AND b.channel_id=?`, v.InstanceID, v.ChannelID).Scan(&model, &baseWeight, &rpm, &tpm, &stateModel, &phase, &paused, &limited, &raw, &baseUpdatedAt, &routineLatched)
 	if err == sql.ErrNoRows {
 		return ErrCapacitySuperseded
 	}
@@ -64,13 +64,30 @@ FROM channel_base_values b JOIN tuning_continuous_states s ON s.instance_id=b.in
 	if baseWeight <= 0 || stateModel != model || paused == "mixed_channel" {
 		return ErrCapacitySuperseded
 	}
+	if routineLatched && !statusRecovery && v.Rule != "circuit_opened" {
+		return ErrCapacitySuperseded
+	}
+	err = q.QueryRowContext(context.Background(), `SELECT policy_json,updated_at FROM tuning_policies WHERE instance_id=?`, v.InstanceID).Scan(&policyJSON, &policyUpdatedAt)
+	if err == sql.ErrNoRows {
+		return ErrCapacitySuperseded
+	}
+	if err != nil {
+		return err
+	}
+	policy, err := tuning.DecodePolicyJSON([]byte(policyJSON))
+	if err != nil {
+		return err
+	}
+	if policy.DispatchModes[model] != "auto" {
+		return ErrCapacitySuperseded
+	}
 	// Status ownership/mode is checked by checkCircuitStatus. Re-enabling a
 	// disabled channel must still respect the independent capacity interlock.
 	if statusRecovery {
 		if rpm <= 0 && tpm <= 0 {
 			return nil
 		}
-		fresh := c.Fresh && !c.SampleAt.IsZero() && !c.SampleAt.After(now) && now.Sub(c.SampleAt) <= 90*time.Second
+		fresh := c.Fresh && !c.SampleAt.IsZero() && !c.SampleAt.After(now) && now.Sub(c.SampleAt) <= time.Duration(policy.Continuous.Rules().CapacityMaxAgeSeconds)*time.Second
 		if limited || c.Active || c.Utilization >= 1 || c.PendingCommandID != "" || !fresh {
 			return ErrCapacitySuperseded
 		}
@@ -96,20 +113,7 @@ WHERE CASE WHEN i.site_id='' THEN i.id ELSE i.site_id END=? AND i.enabled=1 AND 
 	default:
 		return ErrCapacitySuperseded
 	}
-	err = q.QueryRowContext(context.Background(), `SELECT policy_json,updated_at FROM tuning_policies WHERE instance_id=?`, v.InstanceID).Scan(&policyJSON, &policyUpdatedAt)
-	if err == sql.ErrNoRows {
-		return ErrCapacitySuperseded
-	}
-	if err != nil {
-		return err
-	}
-	policy, err := tuning.DecodePolicyJSON([]byte(policyJSON))
-	if err != nil {
-		return err
-	}
-	if policy.DispatchModes[model] != "auto" {
-		return ErrCapacitySuperseded
-	}
+
 	var evaluation *tuning.EvaluationContext
 	encoded, err := json.Marshal(v.Evidence["evaluation"])
 	if err != nil {
@@ -148,7 +152,7 @@ WHERE CASE WHEN i.site_id='' THEN i.id ELSE i.site_id END=? AND i.enabled=1 AND 
 			return ErrCapacitySuperseded
 		}
 	}
-	fresh := rpm <= 0 && tpm <= 0 || c.Fresh && !c.SampleAt.IsZero() && !c.SampleAt.After(now) && now.Sub(c.SampleAt) <= 90*time.Second
+	fresh := rpm <= 0 && tpm <= 0 || c.Fresh && !c.SampleAt.IsZero() && !c.SampleAt.After(now) && now.Sub(c.SampleAt) <= time.Duration(policy.Continuous.Rules().CapacityMaxAgeSeconds)*time.Second
 	if v.Rule == "circuit_recovered" {
 		if (limited && (commandID == "" || c.PendingCommandID != commandID)) || c.Active || c.Utilization >= 1 || (c.PendingCommandID != "" && c.PendingCommandID != commandID) || !fresh {
 			return ErrCapacitySuperseded
@@ -168,7 +172,7 @@ WHERE CASE WHEN i.site_id='' THEN i.id ELSE i.site_id END=? AND i.enabled=1 AND 
 	if v.ProposedWeight > c.ConfirmedWeight && ((limited && (commandID == "" || c.PendingCommandID != commandID)) || c.Active || c.Utilization >= 1 || !fresh) {
 		return ErrCapacitySuperseded
 	}
-	if v.Rule == "capacity_reduce" && (!fresh || !c.Active || c.Utilization < 1 || c.Reason == "no_eligible_headroom" || c.Reason == "unknown_group" || v.ProposedWeight < 1 || v.ProposedWeight >= c.ConfirmedWeight) {
+	if v.Rule == "capacity_reduce" && (!fresh || !c.Active || c.Utilization < 1 || c.Reason == "no_eligible_headroom" || c.Reason == "unknown_group" || v.ProposedWeight < int64(policy.Continuous.Rules().CapacityMinWeight) || v.ProposedWeight >= c.ConfirmedWeight) {
 		return ErrCapacitySuperseded
 	}
 	return nil

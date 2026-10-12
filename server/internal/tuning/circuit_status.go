@@ -75,6 +75,7 @@ func (e *Engine) advanceCircuitStatus(cs ContinuousStore, site string, base Chan
 		state.NextProbeAt = &next
 	} else {
 		state.CircuitDisabled = false
+		state.RoutineCircuitLatched = false
 		state.Phase, state.SoftStartPending = "soft_start", true
 		state.Multiplier = p.SoftStartMultiplier
 		state.SmoothedErrorRate = math.Min(state.SmoothedErrorRate, p.RecoveryErrorRate)

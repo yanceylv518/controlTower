@@ -1,6 +1,7 @@
 package tuning
 
 import (
+	"context"
 	"errors"
 	"log"
 	"math"
@@ -35,26 +36,6 @@ type continuousBaseline struct {
 	speedReady             bool
 	probeTTFT95            float64 // Public baseline retained for existing recovery probes.
 }
-
-const (
-	cacheEvidenceTokens = int64(10_000)
-	otpsEvidenceTokens  = int64(100)
-
-	// Control writes fail loudly on the direct path (immediate error) and as
-	// enqueue errors on the agent path. A short streak pauses the channel so
-	// the engine stops hammering new-api, then keeps probing on a slow
-	// interval. Five consecutive failures end the old write task; later
-	// evaluations make fresh decisions from current metrics and channel state.
-	writeFailurePauseThreshold = 3
-	writeFailureMaxAttempts    = 5
-	writeFailureRetryInterval  = 10 * time.Minute
-
-	// Auto mode writes every integer change, so the deadband survives only as
-	// the observe-event anchor granularity: a weight_observed event is
-	// recorded once cumulative drift from the last recorded event exceeds
-	// this percentage of the base weight (at least one unit).
-	observeEventDeadbandPercent = 5.0
-)
 
 // evaluateContinuous implements the v3.0 continuous dispatch state machine,
 // including B3 circuit breaking, active probes, and one-cycle soft start.
@@ -106,6 +87,16 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 		return 0, 0
 	}
 	currentMetrics := metrics
+	probeSpeeds := map[int64]ProbeSpeedStats{}
+	if speedStore, ok := e.store.(routineSpeedStore); ok {
+		queryCtx, cancel := context.WithTimeout(e.context(), 5*time.Second)
+		probeSpeeds, err = speedStore.QueryRoutineProbeSpeeds(queryCtx, id, metricsEnd.Add(-time.Duration(p.WindowMinutes)*time.Minute), metricsEnd)
+		cancel()
+		if err != nil {
+			log.Printf("tuning probe speed query failed site=%s", id)
+			probeSpeeds = nil
+		}
+	}
 	currentRatesAreWindowTotals := true
 	currentRatesUnavailable := false
 	var ratesAsOf time.Time
@@ -140,7 +131,7 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 	var recentBuckets map[int64][]RecentChannelBucket
 	if batchStore, ok := e.store.(continuousRecentBucketsStore); ok {
 		stageStarted = time.Now()
-		recentBuckets, err = batchStore.QueryRecentChannelBucketsBySite(id, now.Add(-15*time.Minute))
+		recentBuckets, err = batchStore.QueryRecentChannelBucketsBySite(id, now.Add(-time.Duration(p.Rules().ErrorLookbackMinutes)*time.Minute))
 		if err != nil {
 			log.Printf("tuning continuous evaluation site=%s stage=recent_buckets_batch failed duration=%s error=%v; falling back to per-channel queries", id, time.Since(stageStarted), err)
 			recentBuckets = nil
@@ -181,7 +172,8 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 				baselineRows = append(baselineRows, row)
 			}
 		}
-		baseline, healthy := buildContinuousBaseline(baselineRows, metricByID, p.MinSamples)
+		baseline, healthy := buildContinuousBaseline(baselineRows, metricByID, p.MinSamples, p)
+		probeBaseline := probeSpeedBaseline(rows, probeSpeeds, stateByID, p.MinSamples, now, p)
 		for _, base := range rows {
 			jobs = append(jobs, func() {
 				evaluatedAt := now
@@ -217,7 +209,7 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 				// not skip circuit/probe/soft-start processing: zero-weight channels
 				// naturally stop producing traffic and must recover without it.
 				// Explicit exclusion settings still take effect without samples.
-				if len(metrics) == 0 && exists && previous.ModelName == model && previous.LastObservedRequests > 0 &&
+				if len(metrics) == 0 && exists && !previous.ProbeSpeed.Ready && !(p.ProbeSpeedExponent > 0 && probeBaseline > 0 && probeSpeedEvidenceReady(probeSpeeds[base.ChannelID], p.MinSamples, now, p)) && previous.ModelName == model && previous.LastObservedRequests > 0 &&
 					!(mode != "auto" && previous.PausedReason == "write_failed") &&
 					(previous.Phase == "normal" || previous.Phase == "") && base.BaseWeight > 0 && len(base.Models) <= 1 &&
 					!capacityConfigured(base) && previous.Capacity.PendingCommandID == "" {
@@ -234,6 +226,10 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 					state.Phase = "normal"
 				}
 				state.KSpeed, state.KCache, state.KOTPS = 1, 1, 1
+				state.ProbeSpeed = evaluateProbeSpeed(probeSpeeds[base.ChannelID], probeBaseline, p, now)
+				if base.BaseWeight <= 0 || len(base.Models) != 1 || state.CircuitDisabled || state.RoutineCircuitLatched || (state.Phase != "normal" && state.Phase != "soft_start") {
+					state.ProbeSpeed.Factor, state.ProbeSpeed.Ready = 1, false
+				}
 				// Every performance factor belongs to this window. Missing TTFT
 				// uses this window's output factor, never a historical speed score.
 				state.SpeedStatsVersion = 1
@@ -288,9 +284,9 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 				state.MetricTTFTP50, state.MetricTTFTP90, state.MetricTTFTP95 = m.SpeedTTFTP50, m.SpeedTTFTP90, m.SpeedTTFTP95
 				state.BaselineTTFTP50, state.BaselineTTFTP90, state.BaselineTTFTP95 = baseline.ttft50, baseline.ttft90, baseline.ttft95
 				state.MetricCache, state.BaselineCache = m.CacheHitRate, baseline.cache
-				state.CacheReady = baseline.cacheReady && m.CachePromptTokens >= cacheEvidenceTokens
+				state.CacheReady = baseline.cacheReady && m.CachePromptTokens >= int64(p.Rules().CacheMinTokens)
 				state.MetricOTPS, state.BaselineOTPS = m.OTPS, baseline.otps
-				state.OTPSReady = baseline.otpsReady && outputEvidenceReady(m, p.MinSamples)
+				state.OTPSReady = baseline.otpsReady && outputEvidenceReady(m, p.MinSamples, p)
 				state.OTPSSamples, state.OTPSRetries, state.OTPSUnknown = m.OTPSSamples, m.OTPSRetries, m.OTPSUnknown
 				state.OTPSStatsVersion = m.OTPSStatsVersion
 
@@ -336,7 +332,7 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 
 				// End an exhausted operation instead of replaying its old target
 				// forever. Never discard a write whose receipt is still pending.
-				if state.WriteFailureStreak >= writeFailureMaxAttempts &&
+				if state.WriteFailureStreak >= p.Rules().WriteMaxAttempts &&
 					state.CircuitStatusCommandID == "" && state.Capacity.PendingCommandID == "" {
 					e.finishFailedWrite(&state, base, p, now)
 					state.UpdatedAt = now
@@ -376,18 +372,23 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 				recoveredNow := false
 
 				// A completed probe round is folded before normal factor evaluation.
-				if state.Phase == "probing" && state.ProbeCommandID == nil && state.ProbeAttempts > 0 {
-					completeFailure := false
-					if mode == "auto" && state.ProbeSuccesses == 0 && !state.CircuitDisabled && state.ProbeSlowStreak < 2 {
-						// The configured count may change while a round is in flight.
-						// Judge completeness against that command, not today's policy.
+				if state.Phase == "probing" && state.ProbeCommandID == nil {
+					// Use the dispatched command's count, not today's policy. A
+					// canceled/expired round may contain successes but cannot prove
+					// recovery until every requested attempt has settled.
+					completeRound := false
+					if mode == "auto" {
 						expected, err := cs.CompletedProbeCount(id, base.ChannelID)
 						if err != nil {
 							return
 						}
-						completeFailure = expected > 0 && state.ProbeAttempts >= expected
+						completeRound = expected > 0 && state.ProbeAttempts == expected && state.ProbeSuccesses >= 0 && state.ProbeSuccesses <= expected
 					}
-					if mode == "auto" && !state.CircuitDisabled && (completeFailure || state.ProbeSlowStreak >= 2) {
+					completeFailure := false
+					if mode == "auto" && state.ProbeSuccesses == 0 && !state.CircuitDisabled && state.ProbeSlowStreak < p.Rules().ProbeSlowLimit {
+						completeFailure = completeRound
+					}
+					if mode == "auto" && !state.CircuitDisabled && (completeFailure || state.ProbeSlowStreak >= p.Rules().ProbeSlowLimit) {
 						state.CircuitDisabled, state.CircuitStatusTarget = true, 2
 						state.ProposedWeight = 0
 						// Persist ownership before disabling: disabled channels must remain eligible after a restart.
@@ -399,16 +400,19 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 						evaluated.Add(1)
 						return
 					}
-					successRatio := float64(state.ProbeSuccesses) / float64(state.ProbeAttempts)
+					successRatio := 0.0
+					if state.ProbeAttempts > 0 {
+						successRatio = float64(state.ProbeSuccesses) / float64(state.ProbeAttempts)
+					}
 					probeSpeed := 1.0
 					if state.ProbeSuccesses > 0 && healthy && baseline.probeTTFT95 > 0 {
 						avg := state.ProbeDurationSum / float64(state.ProbeSuccesses)
 						if avg > 0 {
-							probeSpeed = clamp(math.Sqrt(baseline.probeTTFT95/avg), .1, 1)
+							probeSpeed = clamp(math.Pow(baseline.probeTTFT95/avg, p.Rules().RecoverySpeedExponent), p.Rules().RecoverySpeedMinFactor, 1)
 						}
 					}
 					probeMultiplier := successRatio * probeSpeed
-					if probeMultiplier >= p.RecoveryThreshold && state.ProbeSlowStreak < 2 {
+					if (mode != "auto" || completeRound) && probeMultiplier >= p.RecoveryThreshold && state.ProbeSlowStreak < p.Rules().ProbeSlowLimit {
 						if capacityRecoveryBlocked(base, state) {
 							state.UpdatedAt = now
 							_ = persistState(state)
@@ -417,7 +421,7 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 						}
 						if mode == "auto" && state.CircuitDisabled {
 							state.CircuitStatusTarget = 1
-							state.ProposedWeight = max(int64(1), int64(math.Round(float64(base.BaseWeight)*p.SoftStartMultiplier)))
+							state.ProposedWeight = max(int64(p.Rules().RecoveryMinWeight), int64(math.Round(float64(base.BaseWeight)*p.SoftStartMultiplier)))
 							if err := persistState(state); err == nil {
 								writes.Add(int64(e.advanceCircuitStatus(cs, id, base, &state, p, now)))
 							}
@@ -436,7 +440,7 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 						state.KError = reliabilityFactorWithPolicy(state.SmoothedErrorRate, p)
 						state.Phase, state.SoftStartPending = "soft_start", true
 						state.Multiplier = p.SoftStartMultiplier
-						state.ProposedWeight = max(int64(1), int64(math.Round(float64(base.BaseWeight)*state.Multiplier)))
+						state.ProposedWeight = max(int64(p.Rules().RecoveryMinWeight), int64(math.Round(float64(base.BaseWeight)*state.Multiplier)))
 						rec := continuousEvent(id, base, state, "circuit_recovered", mode, now)
 						rec.ProposedPriority = nil
 						if mode == "auto" {
@@ -483,10 +487,7 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 						passiveMultiplier := combinedFactor(state, p)
 						state.Phase = "normal"
 						state.Multiplier = passiveMultiplier
-						state.ProposedWeight = int64(math.Round(float64(base.BaseWeight) * passiveMultiplier))
-						if state.ProposedWeight < 1 && base.BaseWeight > 0 {
-							state.ProposedWeight = 1
-						}
+						state.ProposedWeight = int64(math.Floor(float64(base.BaseWeight) * passiveMultiplier))
 						state.CircuitOpenedAt, state.NextProbeAt, state.OriginalPriority = nil, nil, nil
 						state.SoftStartPending = false
 						state.ProbeAttempts, state.ProbeSuccesses = 0, 0
@@ -508,7 +509,7 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 						// leftover passive evidence.
 						state.ProbeAttempts, state.ProbeSuccesses, state.ProbeDurationSum, state.ProbeSlowStreak = 0, 0, 0, 0
 						rec := continuousEvent(id, base, state, "probe_started", mode, now)
-						if commandID, probeErr := cs.CreateContinuousProbe(rec, model, p.ProbeCount, 0, now); probeErr == nil {
+						if commandID, probeErr := cs.CreateContinuousProbe(rec, model, p.ProbeCount, p.Rules().RecoveryIntervalSeconds, now); probeErr == nil {
 							state.Phase = "probing"
 							state.ProbeCommandID = &commandID
 						}
@@ -521,7 +522,7 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 				if state.Phase == "probing" {
 					// Do not strand a channel forever when a probe command is lost or
 					// expires before an Agent reports it.
-					if state.NextProbeAt != nil && now.After(state.NextProbeAt.Add(10*time.Minute)) {
+					if state.NextProbeAt != nil && now.After(state.NextProbeAt.Add(time.Duration(p.Rules().RecoveryLostSeconds)*time.Second)) {
 						state.Phase, state.ProbeCommandID = "circuit", nil
 						next := now.Add(time.Duration(p.SilentMinutes) * time.Minute)
 						state.NextProbeAt = &next
@@ -546,13 +547,13 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 					applyPerformanceFactors(&state, m, baseline, p)
 				}
 				state.Multiplier = combinedFactor(state, p)
-				if mode == "off" || (!healthy && !baseline.otpsReady) {
+				if state.ProbeSpeed.Ready {
+					state.Evaluation.PerformanceEvaluated = true
+				}
+				if mode == "off" || (!healthy && !baseline.otpsReady && !state.ProbeSpeed.Ready) {
 					state.Multiplier = 1
 				}
-				state.ProposedWeight = int64(math.Round(float64(base.BaseWeight) * state.Multiplier))
-				if state.ProposedWeight < 1 && base.BaseWeight > 0 {
-					state.ProposedWeight = 1
-				}
+				state.ProposedWeight = int64(math.Floor(float64(base.BaseWeight) * state.Multiplier))
 				// Capacity limits are a one-way guard: once the channel reaches either
 				// configured rate, performance factors may keep or reduce its effective
 				// weight but may not increase it. Prefer our last successful write over
@@ -594,7 +595,7 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 						} else {
 							state.Phase = "normal"
 							state.Multiplier = combinedFactor(state, p)
-							state.ProposedWeight = max(int64(1), int64(math.Round(float64(base.BaseWeight)*state.Multiplier)))
+							state.ProposedWeight = max(int64(p.Rules().RecoveryMinWeight), int64(math.Round(float64(base.BaseWeight)*state.Multiplier)))
 							state.CircuitOpenedAt, state.NextProbeAt, state.OriginalPriority = nil, nil, nil
 							e.noteWriteFailure(id, base, &state, mode, err, now)
 						}
@@ -609,7 +610,7 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 
 				// Circuit/probe/recovery decisions above take precedence. A sparse
 				// normal window must not reset or rewrite the already applied weight.
-				if m.RequestCount < p.MinSamples || (!state.MetricReady || !state.BaselineReady) && !state.OTPSReady {
+				if !state.ProbeSpeed.Ready && (m.RequestCount < p.MinSamples || (!state.MetricReady || !state.BaselineReady) && !state.OTPSReady) {
 					state.ProposedWeight = effectiveCurrentWeight(base, state)
 					state.Multiplier = float64(state.ProposedWeight) / float64(base.BaseWeight)
 					if !state.Capacity.Initialized {
@@ -631,8 +632,8 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 				// previous tick instead would rate-filter — a slow drift never
 				// exceeds the threshold per step and would stay unrecorded no
 				// matter how far it travels.
-				if mode == "observe" && (capacityReduction || (healthy || baseline.otpsReady) && m.RequestCount >= p.MinSamples) &&
-					(state.LastObservedWeight == nil || weightChangeOutsideDeadband(state.ProposedWeight, *state.LastObservedWeight, base.BaseWeight, observeEventDeadbandPercent)) {
+				if mode == "observe" && (capacityReduction || state.ProbeSpeed.Ready || (healthy || baseline.otpsReady) && m.RequestCount >= p.MinSamples) &&
+					(state.LastObservedWeight == nil || weightChangeOutsideDeadband(state.ProposedWeight, *state.LastObservedWeight, base.BaseWeight, p.Rules().ObserveDeadbandPercent)) {
 					_ = e.store.InsertRecommendation(continuousEvent(id, base, state, "weight_observed", mode, now))
 					anchor := state.ProposedWeight
 					state.LastObservedWeight = &anchor
@@ -643,7 +644,7 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 				// the channel. The snapshot must postdate our write plus apply grace;
 				// otherwise it is merely the expected stale snapshot after our own write.
 				confirmedExternalChange := state.LastWrittenWeight != nil && state.LastWriteAt != nil &&
-					base.CurrentWeight != *state.LastWrittenWeight && base.SnapshotAt.After(state.LastWriteAt.Add(2*time.Minute))
+					base.CurrentWeight != *state.LastWrittenWeight && base.SnapshotAt.After(state.LastWriteAt.Add(time.Duration(p.Rules().ExternalWriteGraceSeconds)*time.Second))
 				// Recalculate every minute and write every integer target change. Keep
 				// only exact-value deduplication so a stale channel snapshot does not
 				// cause the same command to be sent repeatedly before it refreshes.
@@ -686,7 +687,7 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 
 // foldErrorDecay advances KError over the complete metric buckets newer than
 // the stored cursor. Buckets land late (agent reports every ~30s), so only
-// buckets older than a 90s settling lag are folded, each exactly once.
+// only buckets older than the configured settling lag are folded, each once.
 func (e *Engine) foldErrorDecay(id string, channelID int64, state *ContinuousState, now time.Time) (int64, int64) {
 	return e.foldErrorDecayWithBuckets(id, channelID, state, now, nil, DefaultPolicy().Continuous)
 }
@@ -701,19 +702,19 @@ func (e *Engine) foldErrorDecayWithBuckets(id string, channelID int64, state *Co
 		state.SmoothedErrorRate = legacyErrorRateWithPolicy(state.KError, p)
 		state.KError = reliabilityFactorWithPolicy(state.SmoothedErrorRate, p)
 	}
-	since := now.Add(-15 * time.Minute)
+	since := now.Add(-time.Duration(p.Rules().ErrorLookbackMinutes) * time.Minute)
 	if state.LastBucketAt != nil && state.LastBucketAt.After(since) {
 		since = *state.LastBucketAt
 	}
 	buckets := recentBuckets[channelID]
 	if recentBuckets == nil {
 		var err error
-		buckets, err = e.store.QueryRecentChannelBuckets(id, channelID, since, 240)
+		buckets, err = e.store.QueryRecentChannelBuckets(id, channelID, since, p.Rules().ErrorLookbackMinutes+1)
 		if err != nil {
 			return 0, 0
 		}
 	}
-	settled := now.Add(-90 * time.Second)
+	settled := now.Add(-time.Duration(p.Rules().ErrorSettleSeconds) * time.Second)
 	var requests, channelErrors int64
 	newest := state.LastBucketAt
 	// The store returns newest buckets first so LIMIT keeps the most recent
@@ -729,7 +730,7 @@ func (e *Engine) foldErrorDecayWithBuckets(id string, channelID int64, state *Co
 		errs := max(bucket.ErrorCount-bucket.UserErrorCount, 0)
 		if bucket.RequestCount > 0 {
 			rate := float64(errs) / float64(bucket.RequestCount)
-			state.SmoothedErrorRate = .3*rate + .7*state.SmoothedErrorRate
+			state.SmoothedErrorRate = p.Rules().ErrorAlpha*rate + (1-p.Rules().ErrorAlpha)*state.SmoothedErrorRate
 			state.KError = reliabilityFactorWithPolicy(state.SmoothedErrorRate, p)
 		}
 		requests += bucket.RequestCount
@@ -743,7 +744,8 @@ func (e *Engine) foldErrorDecayWithBuckets(id string, channelID int64, state *Co
 	return requests, channelErrors
 }
 
-func buildContinuousBaseline(rows []ChannelBaseValue, metrics map[int64]ChannelMetric, minSamples int64) (continuousBaseline, bool) {
+func buildContinuousBaseline(rows []ChannelBaseValue, metrics map[int64]ChannelMetric, minSamples int64, policy ...ContinuousDispatchParams) (continuousBaseline, bool) {
+	rules := optionalRules(policy)
 	var b continuousBaseline
 	var ttft50, ttft90, ttft95, caches, otps []float64
 	monitorEligible := 0
@@ -751,10 +753,10 @@ func buildContinuousBaseline(rows []ChannelBaseValue, metrics map[int64]ChannelM
 	for _, row := range rows {
 		m := metrics[row.ChannelID]
 		// Output speed also supports non-streaming requests without TTFT.
-		if outputEvidenceReady(m, minSamples) {
+		if outputEvidenceReady(m, minSamples, policy...) {
 			otps = append(otps, m.OTPS)
 		}
-		if m.RequestCount >= minSamples && m.CachePromptTokens >= cacheEvidenceTokens {
+		if m.RequestCount >= minSamples && m.CachePromptTokens >= int64(rules.CacheMinTokens) {
 			caches = append(caches, m.CacheHitRate)
 		}
 		if m.RequestCount < minSamples || m.TTFTP50 <= 0 || m.TTFTP90 <= 0 || m.TTFTP95 <= 0 {
@@ -766,25 +768,25 @@ func buildContinuousBaseline(rows []ChannelBaseValue, metrics map[int64]ChannelM
 			ttft50, ttft90, ttft95 = append(ttft50, m.SpeedTTFTP50), append(ttft90, m.SpeedTTFTP90), append(ttft95, m.SpeedTTFTP95)
 		}
 	}
-	if len(otps) >= 2 {
+	if len(otps) >= rules.BaselineMinChannels {
 		b.otps, b.otpsReady = average(otps), true
 	}
-	if len(caches) >= 2 {
+	if len(caches) >= rules.BaselineMinChannels {
 		b.cache, b.cacheReady = average(caches), true
 	}
-	if monitorEligible < 2 {
+	if monitorEligible < rules.BaselineMinChannels {
 		return b, false
 	}
 	b.probeTTFT95 = probeTTFT95Sum / float64(monitorEligible)
-	if len(ttft50) >= 2 {
+	if len(ttft50) >= rules.BaselineMinChannels {
 		b.ttft50, b.ttft90, b.ttft95 = average(ttft50), average(ttft90), average(ttft95)
 		b.speedReady = true
 	}
 	return b, true
 }
 
-func outputEvidenceReady(m ChannelMetric, minSamples int64) bool {
-	return m.OTPSStatsVersion == 1 && m.OTPSSamples >= minSamples && m.OTPSSampleTokens >= otpsEvidenceTokens && m.OTPS > 0
+func outputEvidenceReady(m ChannelMetric, minSamples int64, policy ...ContinuousDispatchParams) bool {
+	return m.OTPSStatsVersion == 1 && m.OTPSSamples >= minSamples && m.OTPSSampleTokens >= int64(optionalRules(policy).OutputMinTokens) && m.OTPS > 0
 }
 
 func speedFactor(m ChannelMetric, b continuousBaseline, p ContinuousDispatchParams) float64 {
@@ -813,7 +815,11 @@ func performanceFactors(m ChannelMetric, b continuousBaseline, p ContinuousDispa
 }
 
 func combinedFactor(state ContinuousState, p ContinuousDispatchParams) float64 {
-	return clamp(state.KSpeed*state.KCache*state.KOTPS*state.KError, p.CombinedMinFactor, p.CombinedMaxFactor)
+	probe := 1.0
+	if state.ProbeSpeed.Ready && state.ProbeSpeed.Factor > 0 && p.ProbeSpeedExponent > 0 {
+		probe = state.ProbeSpeed.Factor
+	}
+	return clamp(state.KSpeed*state.KCache*state.KOTPS*state.KError*probe, p.CombinedMinFactor, p.CombinedMaxFactor)
 }
 
 func effectiveCurrentWeight(base ChannelBaseValue, state ContinuousState) int64 {
@@ -906,7 +912,7 @@ func (e *Engine) noteWriteFailure(id string, base ChannelBaseValue, state *Conti
 	at := now
 	state.LastWriteFailureAt = &at
 	state.LastWriteError = writeErr.Error()
-	if state.WriteFailureStreak >= writeFailurePauseThreshold && state.PausedReason == "" {
+	if state.WriteFailureStreak >= stateRules(*state).WritePauseAttempts && state.PausedReason == "" {
 		state.PausedReason = "write_failed"
 		rec := continuousEvent(id, base, *state, "auto_paused", mode, now)
 		rec.Evidence["reason"] = "write_failed"
@@ -915,11 +921,11 @@ func (e *Engine) noteWriteFailure(id string, base ChannelBaseValue, state *Conti
 	}
 }
 
-// Retry the current operation at most twice after the initial three failures.
+// Retry the current operation within the configured failure budget.
 // The engine retires an exhausted operation before its next normal evaluation.
 // Pending receipts are settled separately and are never treated as unsent work.
 func writeAttemptAllowed(state ContinuousState, now time.Time) bool {
-	if state.WriteFailureStreak >= writeFailureMaxAttempts {
+	if state.WriteFailureStreak >= stateRules(state).WriteMaxAttempts {
 		return false
 	}
 	if state.PausedReason == "" {
@@ -932,7 +938,7 @@ func writeAttemptAllowed(state ContinuousState, now time.Time) bool {
 	// NULL on the next tick. Let these rows retry once through the normal
 	// eligibility gates; another failure records a timestamp and restores
 	// the slow interval. UpdatedAt cannot substitute: every tick advances it.
-	return state.LastWriteFailureAt == nil || !now.Before(state.LastWriteFailureAt.Add(writeFailureRetryInterval))
+	return state.LastWriteFailureAt == nil || !now.Before(state.LastWriteFailureAt.Add(time.Duration(stateRules(state).WriteRetrySeconds)*time.Second))
 }
 
 func writeReference(state ContinuousState, base ChannelBaseValue) int64 {
@@ -969,6 +975,7 @@ func continuousEvent(id string, base ChannelBaseValue, state ContinuousState, ru
 			"metric_rpm": state.MetricRPM, "metric_tpm": state.MetricTPM, "max_rpm": base.MaxRPM, "max_tpm": base.MaxTPM,
 			"model": base.ModelName, "phase": state.Phase, "multiplier": state.Multiplier,
 			"k_speed": state.KSpeed, "k_cache": state.KCache, "k_otps": state.KOTPS, "k_error": state.KError,
+			"probe_speed":        state.ProbeSpeed,
 			"speed_sample_count": state.SpeedSamples, "speed_retry_count": state.SpeedRetries, "speed_unknown_count": state.SpeedUnknown, "speed_legacy_count": state.SpeedLegacy, "speed_stats_version": state.SpeedStatsVersion,
 			"metric_ttft_p50": state.MetricTTFTP50, "metric_ttft_p90": state.MetricTTFTP90, "metric_ttft_p95": state.MetricTTFTP95,
 			"baseline_ttft_p50": state.BaselineTTFTP50, "baseline_ttft_p90": state.BaselineTTFTP90, "baseline_ttft_p95": state.BaselineTTFTP95,
@@ -976,7 +983,7 @@ func continuousEvent(id string, base ChannelBaseValue, state ContinuousState, ru
 			"metric_otps": state.MetricOTPS, "baseline_otps": state.BaselineOTPS, "otps_ready": state.OTPSReady,
 			"otps_sample_count": state.OTPSSamples, "otps_retry_count": state.OTPSRetries, "otps_unknown_count": state.OTPSUnknown, "otps_stats_version": state.OTPSStatsVersion,
 			"smoothed_error_rate": state.SmoothedErrorRate, "probe_attempts": state.ProbeAttempts, "probe_successes": state.ProbeSuccesses, "probe_slow_streak": state.ProbeSlowStreak,
-			"probe_timeout_seconds": 30, "probe_slow_limit": 2,
+			"probe_timeout_seconds": stateRules(state).ProbeTimeoutSeconds, "probe_slow_limit": stateRules(state).ProbeSlowLimit,
 		},
 		CurrentWeight: currentWeight, ProposedWeight: state.ProposedWeight, CurrentPriority: &base.CurrentPriority, ProposedPriority: nil, ModeAtCreation: mode, Status: "recorded"}
 }

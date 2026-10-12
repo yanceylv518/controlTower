@@ -49,7 +49,7 @@ WHERE b.instance_id=? AND b.channel_id=?`, v.InstanceID, v.ChannelID).Scan(&mode
 	if err != nil {
 		return err
 	}
-	if target == 1 && v.ProposedWeight != max(int64(1), int64(math.Round(float64(weight)*policy.Continuous.SoftStartMultiplier))) {
+	if target == 1 && v.ProposedWeight != max(int64(policy.Continuous.Rules().RecoveryMinWeight), int64(math.Round(float64(weight)*policy.Continuous.SoftStartMultiplier))) {
 		return ErrCircuitStatusSuperseded
 	}
 	if policy.DispatchModes[model] != "auto" {

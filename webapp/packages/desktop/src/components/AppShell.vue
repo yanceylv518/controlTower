@@ -88,6 +88,7 @@ const nav = [
     group: "系统管理",
     items: [
       ["/tuning", "调权中心", TrendCharts],
+      ["/channel-lifeline", "渠道生命线", TrendCharts],
       ["/alerts", "告警中心", Monitor],
       ["/notifications", "通知中心", Connection],
       ["/instances", "实例管理", Management],

@@ -48,6 +48,10 @@ func (c *Client) Probe(ctx context.Context, channelID int64, model string) (Prob
 	return c.probe(ctx, channelID, model, ProbeRequestTimeout)
 }
 
+func (c *Client) ProbeWithTimeout(ctx context.Context, channelID int64, model string, timeout time.Duration) (ProbeResult, error) {
+	return c.probe(ctx, channelID, model, timeout)
+}
+
 func (c *Client) probe(ctx context.Context, channelID int64, model string, timeout time.Duration) (ProbeResult, error) {
 	if channelID <= 0 {
 		return ProbeResult{}, fmt.Errorf("channel id must be positive")
@@ -73,7 +77,7 @@ func (c *Client) probe(ctx context.Context, channelID int64, model string, timeo
 		slow := ctx.Err() == nil && (errors.Is(requestCtx.Err(), context.DeadlineExceeded) || time.Since(started) > timeout)
 		return ProbeResult{Slow: slow, Duration: time.Since(started).Seconds()}, err
 	}
-	slow := response.Time > ProbeRequestTimeout.Seconds() || time.Since(started) > timeout
+	slow := response.Time > timeout.Seconds() || time.Since(started) > timeout
 	return ProbeResult{Success: response.Success && !slow, Slow: slow, Duration: response.Time, Message: response.Message}, nil
 }
 
