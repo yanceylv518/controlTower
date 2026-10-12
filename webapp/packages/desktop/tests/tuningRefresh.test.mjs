@@ -498,9 +498,9 @@ test('channel switch status filters compose with the group filter without tuning
   p.channelDirectorySite.value = 'a'
   p.activeModel.value = 'm'
 
-  assert.equal(p.channelSwitchFilter.value, 'enabled')
+  assert.equal(p.channelSwitchFilter.value, 'active')
   assert.deepEqual(p.displayedRows.value.map(item => item.channel_id), [1])
-  assert.match(script, /watch\(\(\) => filters\.site_id, \(\) => \{[^\n]*channelSwitchFilter\.value = "enabled"/)
+  assert.match(script, /watch\(\(\) => filters\.site_id, \(\) => \{[^\n]*channelSwitchFilter\.value = "active"/)
   p.channelSwitchFilter.value = 'disabled'
   assert.deepEqual(p.displayedRows.value.map(item => item.channel_id), [3, 2])
   p.channelSwitchFilter.value = 'enabled'
@@ -523,11 +523,11 @@ test('model counts show status totals only for the selected model and update on 
   ]
   p.channelDirectorySite.value = 'a'
   p.activeModel.value = 'm'
-  assert.equal(p.modelChannelCountLabel('m'), '已启用 1 个渠道')
+  assert.equal(p.modelChannelCountLabel('m'), '已激活 1 个渠道')
   assert.equal(p.modelChannelCountLabel('n'), '共 3 个渠道')
   p.selectModel('n')
   assert.equal(p.modelChannelCountLabel('m'), '共 4 个渠道')
-  assert.equal(p.modelChannelCountLabel('n'), '已启用 2 个渠道')
+  assert.equal(p.modelChannelCountLabel('n'), '已激活 2 个渠道')
   p.channelSwitchFilter.value = 'disabled'
   assert.equal(p.modelChannelCountLabel('n'), '手动关闭 1 个渠道')
   assert.equal(p.modelChannelCountLabel('m'), '共 4 个渠道')
@@ -554,6 +554,33 @@ test('recorded events are not presented as successful writes and dates include t
   p.events.value = ['2026-09-16T23:59:59','2026-09-17T00:00:00','2026-09-17T23:59:59','2026-09-18T00:00:00'].map((created_at,i)=>({id:String(i),created_at,rule:'weight_write',channel_name:'north',channel_id:1}));
   p.eventDateRange.value=['2026-09-17','2026-09-17'];
   assert.deepEqual(p.filteredEvents.value.map(e=>e.id),['1','2']);
+})
+
+test('active channels include confirmed circuit closures and exclude pending and manual closures', () => {
+  const p = page()
+  p.channels.value = [
+    { channel_id: 1, channel_name: 'enabled', status: 'enabled', weight: 0, priority: 1, models: ['m'], group_name: 'alpha' },
+    { channel_id: 2, channel_name: 'circuit', status: 'disabled', weight: 0, priority: 2, models: ['m'], group_name: 'beta' },
+    { channel_id: 3, channel_name: 'manual', status: 'disabled', weight: 0, priority: 3, models: ['m'], group_name: 'beta' },
+    { channel_id: 4, channel_name: 'unknown', status: 'other', weight: 0, priority: 4, models: ['m'], group_name: 'beta' },
+  ]
+  p.channelDirectorySite.value = 'a'
+  p.activeModel.value = 'm'
+  p.acceptStates('a', [{ ...state(100), channel_id: 2, circuit_disabled: true, circuit_status_target: 0 }])
+  assert.equal(p.channelSwitchFilter.value, 'active')
+  assert.deepEqual(p.displayedRows.value.map(item => item.channel_id), [2, 1])
+  assert.equal(p.modelChannelCountLabel('m'), '已激活 2 个渠道')
+  p.selectedGroupFilter.value = {kind:'group',name:'beta'}
+  assert.deepEqual(p.displayedRows.value.map(item => item.channel_id), [2])
+  assert.equal(p.modelChannelCountLabel('m'), '已激活 2 个渠道')
+  p.channelSwitchFilter.value = 'disabled'
+  assert.deepEqual(p.displayedRows.value.map(item => item.channel_id), [3])
+  p.channelSwitchFilter.value = 'active'
+  p.acceptStates('a', [{ ...state(100), channel_id: 2, circuit_disabled: true, circuit_status_target: 2 }])
+  assert.deepEqual(p.displayedRows.value, [])
+  p.selectedGroupFilter.value = null
+  assert.deepEqual(p.displayedRows.value.map(item => item.channel_id), [1])
+  assert.equal(p.modelChannelCountLabel('m'), '已激活 1 个渠道')
 })
 
 test('formula target is independent of execution limits and unsaved base edits', async () => {

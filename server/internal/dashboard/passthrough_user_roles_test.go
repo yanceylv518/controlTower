@@ -16,6 +16,21 @@ func TestPassthroughUsersRejectInvalidAdminFilter(t *testing.T) {
 	}
 }
 
+func TestPassthroughUsersRejectInvalidExcludedIDs(t *testing.T) {
+	for _, value := range []string{"0", "-1", "1.5", "x", "1,x", "9223372036854775808"} {
+		t.Run(value, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			(&PassthroughHandler{}).Users(w, httptest.NewRequest("GET", "/?site=test&exclude_user_ids="+value, nil))
+			var result struct {
+				Error string `json:"error"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil || w.Code != 400 || result.Error != "invalid_exclude_user_ids" {
+				t.Fatal(w.Code, w.Body.String(), err)
+			}
+		})
+	}
+}
+
 func TestPassthroughUsersAdminFilterBeforePagination(t *testing.T) {
 	dsn := os.Getenv("CT_MYSQL_TEST_DSN")
 	if dsn == "" {
@@ -49,6 +64,13 @@ func TestPassthroughUsersAdminFilterBeforePagination(t *testing.T) {
 		{"exclude_admin=1&keyword=alice", 1, 3, 1},
 		{"exclude_admin=1&user_ids=1,3&status=1", 1, 3, 1},
 		{"exclude_admin=1&user_ids=1,2", 0, 0, 0},
+		{"exclude_user_ids=1,2&limit=1", 2, 3, 1},
+		{"exclude_user_ids=1,2&limit=1&offset=1", 2, 4, 1},
+		{"exclude_user_ids=3,3,4&user_ids=2,3", 1, 2, 100},
+		{"exclude_user_ids=3&keyword=alice", 0, 0, 0},
+		{"exclude_user_ids=1,%202,1&status=2", 1, 4, 1},
+		{"exclude_user_ids=1,2,3,4", 0, 0, 0},
+		{"exclude_user_ids=&user_ids=1", 1, 1, 10},
 	} {
 		w := httptest.NewRecorder()
 		h.Users(w, httptest.NewRequest("GET", "/?site=test&"+tc.query, nil))

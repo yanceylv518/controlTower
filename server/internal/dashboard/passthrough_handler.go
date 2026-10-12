@@ -1854,6 +1854,20 @@ func (h *PassthroughHandler) Users(w http.ResponseWriter, r *http.Request) {
 		writeDashboardError(w, 400, err.Error())
 		return
 	}
+	excludedIDs := []int64{}
+	for _, value := range strings.Split(r.URL.Query().Get("exclude_user_ids"), ",") {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		id, parseErr := strconv.ParseInt(value, 10, 64)
+		if parseErr != nil || id <= 0 {
+			writeDashboardError(w, 400, "invalid_exclude_user_ids")
+			return
+		}
+		excludedIDs = append(excludedIDs, id)
+	}
+	excludedIDs = uniquePositiveIDs(excludedIDs)
 	excludeAdmins := false
 	if raw := strings.TrimSpace(r.URL.Query().Get("exclude_admin")); raw != "" {
 		excludeAdmins, err = strconv.ParseBool(raw)
@@ -1872,7 +1886,7 @@ func (h *PassthroughHandler) Users(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit, offset := queryPage(r, 200)
-	args := make([]any, 0, len(ids)+4)
+	args := make([]any, 0, len(ids)+len(excludedIDs)+4)
 	where := " WHERE 1=1"
 	if excludeAdmins {
 		where += " AND role < 10"
@@ -1880,6 +1894,12 @@ func (h *PassthroughHandler) Users(w http.ResponseWriter, r *http.Request) {
 	if len(ids) > 0 {
 		where += " AND id IN (" + placeholders(len(ids)) + ")"
 		for _, id := range ids {
+			args = append(args, id)
+		}
+	}
+	if len(excludedIDs) > 0 {
+		where += " AND id NOT IN (" + placeholders(len(excludedIDs)) + ")"
+		for _, id := range excludedIDs {
 			args = append(args, id)
 		}
 	}
@@ -1930,7 +1950,7 @@ func (h *PassthroughHandler) Users(w http.ResponseWriter, r *http.Request) {
 		writeDashboardError(w, 502, "readonly_query_failed")
 		return
 	}
-	h.audit(r, site, "passthrough.users", map[string]any{"user_ids": ids, "limit": limit, "offset": offset})
+	h.audit(r, site, "passthrough.users", map[string]any{"user_ids": ids, "exclude_user_ids": excludedIDs, "limit": limit, "offset": offset})
 	writeDashboardJSON(w, 200, map[string]any{"items": items, "configured": true, "total": total})
 }
 
