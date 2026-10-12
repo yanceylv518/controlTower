@@ -60,7 +60,7 @@ func (e *Engine) runProbeSampleWriter(ctx context.Context) {
 }
 
 func probeSpeedEvidenceReady(s ProbeSpeedStats, minSamples int64, now time.Time, policy ...ContinuousDispatchParams) bool {
-	return s.Samples >= minSamples && s.MeanSeconds > 0 && !math.IsNaN(s.MeanSeconds) && !math.IsInf(s.MeanSeconds, 0) &&
+	return optionalRules(policy).RoutineProbeEnabled && s.Samples >= minSamples && s.MeanSeconds > 0 && !math.IsNaN(s.MeanSeconds) && !math.IsInf(s.MeanSeconds, 0) &&
 		!s.LastStartedAt.IsZero() && !s.LastStartedAt.After(now) && now.Sub(s.LastStartedAt) <= time.Duration(optionalRules(policy).ProbeMaxAgeSeconds)*time.Second
 }
 

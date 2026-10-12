@@ -387,6 +387,7 @@ export interface TuningContinuousDispatchParams {
   recovery_interval_seconds: number;
   evaluation_interval_seconds: number;
   routine_interval_seconds: number;
+  routine_probe_enabled: boolean;
   probe_timeout_seconds: number;
   probe_slow_limit: number;
   routine_error_limit: number;

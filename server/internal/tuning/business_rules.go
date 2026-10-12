@@ -12,6 +12,7 @@ type ContinuousRules struct {
 	RecoverySpeedExponent       float64 `json:"recovery_speed_exponent"`
 	RecoveryIntervalSeconds     int     `json:"recovery_interval_seconds"`
 	EvaluationIntervalSeconds   int     `json:"evaluation_interval_seconds"`
+	RoutineProbeEnabled         bool    `json:"routine_probe_enabled"`
 	RoutineIntervalSeconds      int     `json:"routine_interval_seconds"`
 	ProbeTimeoutSeconds         int     `json:"probe_timeout_seconds"`
 	ProbeSlowLimit              int     `json:"probe_slow_limit"`
@@ -51,6 +52,7 @@ func DefaultContinuousRules() ContinuousRules {
 		RecoverySpeedExponent:       .5,
 		RecoveryIntervalSeconds:     0,
 		EvaluationIntervalSeconds:   30,
+		RoutineProbeEnabled:         true,
 		RoutineIntervalSeconds:      10,
 		ProbeTimeoutSeconds:         30,
 		ProbeSlowLimit:              2,

@@ -110,6 +110,9 @@ func runRoutineChannelWithPolicy(ctx context.Context, p RoutineProber, channel i
 }
 
 func runRoutineChannelRuntime(ctx context.Context, p RoutineProber, channel int64, model string, slots chan struct{}, timing routineTiming, policy ContinuousDispatchParams, runtime routineRuntime, consume func(routineStreak, time.Time) bool, record ...func(routineResult)) {
+	if !policy.Rules().RoutineProbeEnabled {
+		return
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	var observations sync.WaitGroup
 	defer func() { cancel(); observations.Wait() }()
@@ -280,7 +283,7 @@ type routineRun struct {
 }
 
 func routineEligible(base ChannelBaseValue, state ContinuousState, policy PolicyRecord) bool {
-	return base.BaseWeight > 0 && len(base.Models) == 1 && policy.Policy.DispatchModes[base.ModelName] == "auto" &&
+	return policy.Policy.Continuous.Rules().RoutineProbeEnabled && base.BaseWeight > 0 && len(base.Models) == 1 && policy.Policy.DispatchModes[base.ModelName] == "auto" &&
 		!state.CircuitDisabled && !state.RoutineCircuitLatched && (state.Phase == "" || state.Phase == "normal" || state.Phase == "soft_start")
 }
 
@@ -315,7 +318,7 @@ func (e *Engine) runRoutineProbes(ctx context.Context) {
 				return
 			}
 			policy, found, err := e.store.GetPolicy(site)
-			if err != nil || !found {
+			if err != nil || !found || !policy.Policy.Continuous.Rules().RoutineProbeEnabled {
 				continue
 			}
 			bases, err := cs.ListChannelBaseValues(site, "")

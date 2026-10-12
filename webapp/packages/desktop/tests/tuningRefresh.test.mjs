@@ -37,6 +37,47 @@ test('probe coverage separates scheduled misses from accelerated requests and ha
   assert.match(p.probeCoverageCell(row).text,/未提供/);
 });
 
+test('routine probe toggle defaults on for old policies and persists false through save and reload', async () => {
+  const p=page(); const old=cloneFixture(p.policy); old.dispatch_modes={m:'auto'};
+  delete old.continuous.routine_probe_enabled;
+  p.dashboard.tuningPolicy=async()=>({mode:'observe',policy:cloneFixture(old)});
+  await p.load();
+  assert.equal(p.policy.continuous.routine_probe_enabled,true);
+  let saved;
+  p.dashboard.saveTuningPolicy=async(_site,next)=>{saved=cloneFixture(next);p.dashboard.tuningPolicy=async()=>({mode:'observe',policy:cloneFixture(saved)})};
+  p.policy.continuous.routine_probe_enabled=false; p.dirty.value=true;
+  assert.notEqual(p.probeCoverageCell(row).text,'常态探针已关闭','draft must not change live status');
+  assert.equal(p.mobileRuleChanges.value.find(x=>x.key==='routine_probe_enabled').label,'启用常态探针');
+  await p.save();
+  assert.equal(saved.continuous.routine_probe_enabled,false);
+  assert.equal(p.savedPolicy.value.continuous.routine_probe_enabled,false);
+  assert.equal(p.probeCoverageCell(row).text,'常态探针已关闭');
+  await p.load();
+  assert.equal(p.policy.continuous.routine_probe_enabled,false);
+  p.policy.continuous.routine_probe_enabled=true; p.dirty.value=true;
+  await p.save();
+  assert.equal(saved.continuous.routine_probe_enabled,true);
+  assert.notEqual(p.probeCoverageCell(row).text,'常态探针已关闭');
+});
+
+test('disabled routine probe snapshots cannot contribute stale factors or probe-only eligibility', async () => {
+  const p=page(); await p.load();
+  const s={...state(0),k_speed:1,k_cache:1,k_otps:1,k_error:1,metric_ready:false,baseline_ready:false,
+    probe_speed:{samples:5,mean_seconds:1,baseline_seconds:2.5,factor:1.2,ready:true}};
+  s.evaluation.params={...p.policy.continuous,min_samples:5,routine_probe_enabled:false};
+  s.evaluation.performance_evaluated=true;
+  p.states.value=[s];
+  assert.equal(p.coefficientCell(row,'probe').value,1);
+  assert.equal(p.coefficientCell(row,'probe').status,'已关闭');
+  assert.equal(p.calculatedWeight(row),null);
+  assert.doesNotMatch(p.evaluationText(row),/探针速度已参与/);
+  assert.match(p.executionWeightText(row),/本轮不调权/);
+  assert.match(p.factorExplanation(row),/历史探针样本不参与普通调权/);
+  p.states.value=[{...s,last_observed_requests:20,metric_ready:true,baseline_ready:true}];
+  assert.equal(p.calculatedWeight(row),100,'production factors still apply without probe multiplier');
+  assert.match(p.evaluationText(row),/已参与本轮计算/);
+});
+
 test('business rules preserve explicit zero on save and explain evaluated settings', async () => {
   const p = page(); await p.load();
   assert.equal(p.policy.continuous.routine_interval_seconds, 10);

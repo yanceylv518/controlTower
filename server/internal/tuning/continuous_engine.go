@@ -88,7 +88,7 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 	}
 	currentMetrics := metrics
 	probeSpeeds := map[int64]ProbeSpeedStats{}
-	if speedStore, ok := e.store.(routineSpeedStore); ok {
+	if speedStore, ok := e.store.(routineSpeedStore); ok && p.Rules().RoutineProbeEnabled {
 		queryCtx, cancel := context.WithTimeout(e.context(), 5*time.Second)
 		probeSpeeds, err = speedStore.QueryRoutineProbeSpeeds(queryCtx, id, metricsEnd.Add(-time.Duration(p.WindowMinutes)*time.Minute), metricsEnd)
 		cancel()
@@ -816,7 +816,7 @@ func performanceFactors(m ChannelMetric, b continuousBaseline, p ContinuousDispa
 
 func combinedFactor(state ContinuousState, p ContinuousDispatchParams) float64 {
 	probe := 1.0
-	if state.ProbeSpeed.Ready && state.ProbeSpeed.Factor > 0 && p.ProbeSpeedExponent > 0 {
+	if p.Rules().RoutineProbeEnabled && state.ProbeSpeed.Ready && state.ProbeSpeed.Factor > 0 && p.ProbeSpeedExponent > 0 {
 		probe = state.ProbeSpeed.Factor
 	}
 	return clamp(state.KSpeed*state.KCache*state.KOTPS*state.KError*probe, p.CombinedMinFactor, p.CombinedMaxFactor)
