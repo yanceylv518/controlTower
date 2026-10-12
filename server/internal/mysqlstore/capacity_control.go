@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"time"
 
@@ -122,7 +123,7 @@ WHERE CASE WHEN i.site_id='' THEN i.id ELSE i.site_id END=? AND i.enabled=1 AND 
 	if err = json.Unmarshal(encoded, &evaluation); err != nil {
 		return err
 	}
-	if evaluation == nil || evaluation.BaseWeight != baseWeight || !evaluation.BaseUpdatedAt.Equal(baseUpdatedAt) || !evaluation.PolicyUpdatedAt.Equal(policyUpdatedAt) || evaluation.Params != policy.Continuous || v.Evidence["model"] != model {
+	if evaluation == nil || evaluation.BaseWeight != baseWeight || !evaluation.BaseUpdatedAt.Equal(baseUpdatedAt) || !evaluation.PolicyUpdatedAt.Equal(policyUpdatedAt) || !reflect.DeepEqual(evaluation.Params, policy.Continuous) || v.Evidence["model"] != model {
 		return ErrCapacitySuperseded
 	}
 	// A readback/manual update may finish after this tick loaded its bases.

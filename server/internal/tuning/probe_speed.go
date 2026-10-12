@@ -67,6 +67,9 @@ func probeSpeedEvidenceReady(s ProbeSpeedStats, minSamples int64, now time.Time,
 func probeSpeedBaseline(rows []ChannelBaseValue, stats map[int64]ProbeSpeedStats, states map[int64]ContinuousState, minSamples int64, now time.Time, policy ...ContinuousDispatchParams) float64 {
 	var means []float64
 	for _, b := range rows {
+		if len(policy) > 0 && !policy[0].RoutineProbeEnabledFor(b.ChannelID) {
+			continue
+		}
 		s := states[b.ChannelID]
 		if b.BaseWeight <= 0 || len(b.Models) != 1 || s.PausedReason == ManualDisabled || s.CircuitDisabled || s.RoutineCircuitLatched || (s.Phase != "" && s.Phase != "normal" && s.Phase != "soft_start") {
 			continue

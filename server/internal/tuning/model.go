@@ -19,6 +19,8 @@ type SchedulingParams struct {
 // ContinuousDispatchParams is the v3.0 continuous weighting policy.
 type ContinuousDispatchParams struct {
 	ContinuousRules
+	RoutineProbeSelectedOnly   bool    `json:"routine_probe_selected_only"`
+	RoutineProbeChannelIDs     []int64 `json:"routine_probe_channel_ids"`
 	Sensitivity                float64 `json:"sensitivity"`
 	SpeedExponent              float64 `json:"speed_exponent"`
 	SpeedP50Weight             float64 `json:"speed_p50_weight"`
@@ -67,6 +69,8 @@ type ContinuousDispatchParams struct {
 func (p *ContinuousDispatchParams) UnmarshalJSON(data []byte) error {
 	type plain ContinuousDispatchParams
 	value := plain(*p)
+	value.RoutineProbeSelectedOnly = false
+	value.RoutineProbeChannelIDs = []int64{}
 	value.ContinuousRules = DefaultContinuousRules()
 	value.CapacityMaxDecreasePercent = 25
 	value.ProbeSpeedExponent, value.ProbeSpeedMinFactor, value.ProbeSpeedMaxFactor = .25, .8, 1.2
@@ -74,6 +78,9 @@ func (p *ContinuousDispatchParams) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*p = ContinuousDispatchParams(value)
+	if p.RoutineProbeChannelIDs == nil {
+		p.RoutineProbeChannelIDs = []int64{}
+	}
 	return nil
 }
 
@@ -90,8 +97,9 @@ func DefaultPolicy() Policy {
 		},
 		DispatchModes: map[string]string{},
 		Continuous: ContinuousDispatchParams{
-			ContinuousRules: DefaultContinuousRules(),
-			Sensitivity:     1, SpeedExponent: .35, SpeedP50Weight: .50, SpeedP90Weight: .30, SpeedP95Weight: .20, SpeedMinFactor: .75, SpeedMaxFactor: 1.25,
+			RoutineProbeChannelIDs: []int64{},
+			ContinuousRules:        DefaultContinuousRules(),
+			Sensitivity:            1, SpeedExponent: .35, SpeedP50Weight: .50, SpeedP90Weight: .30, SpeedP95Weight: .20, SpeedMinFactor: .75, SpeedMaxFactor: 1.25,
 			CacheExponent: .15, CacheMinFactor: .90, CacheMaxFactor: 1.10,
 			OTPSExponent: .25, OTPSMinFactor: .80, OTPSMaxFactor: 1.20,
 			ProbeSpeedExponent: .25, ProbeSpeedMinFactor: .8, ProbeSpeedMaxFactor: 1.2,
@@ -135,6 +143,7 @@ func (p Policy) Validate() map[string]string {
 	e := map[string]string{}
 	c := p.Continuous
 	validateContinuousRules(c.ContinuousRules, e)
+	validateProbeSelection(c, e)
 	if c.Sensitivity <= 0 || c.Sensitivity > 5 {
 		e["continuous.sensitivity"] = "must_be_greater_than_0_and_at_most_5"
 	}

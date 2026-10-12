@@ -110,7 +110,7 @@ func runRoutineChannelWithPolicy(ctx context.Context, p RoutineProber, channel i
 }
 
 func runRoutineChannelRuntime(ctx context.Context, p RoutineProber, channel int64, model string, slots chan struct{}, timing routineTiming, policy ContinuousDispatchParams, runtime routineRuntime, consume func(routineStreak, time.Time) bool, record ...func(routineResult)) {
-	if !policy.Rules().RoutineProbeEnabled {
+	if !policy.RoutineProbeEnabledFor(channel) {
 		return
 	}
 	ctx, cancel := context.WithCancel(ctx)
@@ -283,7 +283,7 @@ type routineRun struct {
 }
 
 func routineEligible(base ChannelBaseValue, state ContinuousState, policy PolicyRecord) bool {
-	return policy.Policy.Continuous.Rules().RoutineProbeEnabled && base.BaseWeight > 0 && len(base.Models) == 1 && policy.Policy.DispatchModes[base.ModelName] == "auto" &&
+	return policy.Policy.Continuous.RoutineProbeEnabledFor(base.ChannelID) && base.BaseWeight > 0 && len(base.Models) == 1 && policy.Policy.DispatchModes[base.ModelName] == "auto" &&
 		state.PausedReason != ManualDisabled && !state.CircuitDisabled && !state.RoutineCircuitLatched && (state.Phase == "" || state.Phase == "normal" || state.Phase == "soft_start")
 }
 
