@@ -103,6 +103,7 @@ func TestBillingUpstreamURLMySQL(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := New(db)
+	t.Run("generation names", func(t *testing.T) { testUpstreamGenerationNames(t, s) })
 	load := func(site string, id int64) billing.Upstream {
 		t.Helper()
 		items, e := s.ListBillingUpstreamsConfig(ctx, site)

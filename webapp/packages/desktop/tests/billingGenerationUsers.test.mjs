@@ -15,7 +15,7 @@ function create(t,kind='user_statement') {
  const previews=[];const dashboard={billingGenerationPreview:async(q,signal)=>{previews.push({q,signal});return {items:q.subject_ids.map(id=>({subject_id:id,total_days:30,complete:0,empty:0,failed:0,pending:0,running:0,outcome:'registered'}))}},billingUpstreams:async()=>({items:[{id:1,name:'上游'}]}),generateBillingBatch:async q=>{requests.push(q);return {items:[{subject_id:3,outcome:'complete'}]}}}
  const scope=effectScope();t.after(()=>scope.stop())
  const names=['computed','ref','watch','onBeforeUnmount','defineProps','defineEmits','defineExpose','setInterval','clearInterval','ElMessage','ElMessageBox','dashboard','passthrough','billingTaskErrorMessage']
- const init=new Function(...names,compiled+'\nreturn {excludeZeroOutput,open,options,selectedUsers,excludeAdmins,filterAdmins,searchUsers,submit,queryResults,roles,batch,items,waitingForReport,resultLabel,draftMonth,preview,previewLoading,previewError,selectionStatus,monthlyStatus,loadPreview,selectMissing,toggleSubject,selectionPage,visibleOptions,dialog};')
+ const init=new Function(...names,compiled+'\nreturn {restore,refresh,progressName,names,excludeZeroOutput,open,options,selectedUsers,excludeAdmins,filterAdmins,searchUsers,submit,queryResults,roles,batch,items,waitingForReport,resultLabel,draftMonth,preview,previewLoading,previewError,selectionStatus,monthlyStatus,loadPreview,selectMissing,toggleSubject,selectionPage,visibleOptions,dialog};')
  const view=scope.run(()=>init(computed,ref,watch,()=>{},()=>props,()=>()=>{},()=>{},()=>1,()=>{}, {error:()=>{},info:()=>{},success:()=>{}},{},dashboard,passthrough,String))
  return {...view,props,passthrough,dashboard,previews,queries,requests}
 }
@@ -91,4 +91,22 @@ test('user includes zero output by default; upstream excludes, with explicit ove
   v.selectedUsers.value=[kind==='user_statement'?3:1];await v.submit();assert.equal(v.requests[0].exclude_zero_output,kind==='upstream_statement');
   v.excludeZeroOutput.value=kind!=='upstream_statement';await v.submit();assert.equal(v.requests[1].exclude_zero_output,kind!=='upstream_statement');
  }
+})
+
+
+test('restored upstream progress shows API names without opening the subject selector',async t=>{
+ const v=create(t,'upstream_statement');v.props.subjects=[];await flush()
+ v.dashboard.billingBatchProgress=async()=>({items:[{subject_id:28,subject_name:'趋境',outcome:'registered'}]})
+ v.restore([{instance_id:'a',kind:'upstream_statement',subject_id:28,from:'2026-09-01T00:00:00+08:00',to:'2026-10-01T00:00:00+08:00'}]);await flush()
+ assert.equal(v.progressName(v.items.value[0]),'趋境');assert.equal(v.queries.length,0)
+ v.names.value[28]='旧名称';assert.equal(v.progressName(v.items.value[0]),'趋境')
+ assert.equal(v.progressName({subject_id:28}),'旧名称');assert.equal(v.progressName({subject_id:999}),'上游')
+})
+
+test('late upstream progress cannot restore previous site names after switching sites',async t=>{
+ const v=create(t,'upstream_statement');let finish
+ v.dashboard.billingBatchProgress=()=>new Promise(resolve=>finish=resolve)
+ v.restore([{instance_id:'a',kind:'upstream_statement',subject_id:28,from:'2026-09-01T00:00:00+08:00',to:'2026-10-01T00:00:00+08:00'}])
+ v.props.site='b';await flush();finish({items:[{subject_id:28,subject_name:'旧站点上游',outcome:'registered'}]});await flush()
+ assert.deepEqual(v.items.value,[]);assert.deepEqual(v.names.value,{})
 })
