@@ -67,6 +67,9 @@ func (s Store) RecordBillingGenerationAttempt(ctx context.Context, t billing.Aut
 }
 func (s Store) BillingGenerationProgress(ctx context.Context, t billing.AutomaticTarget) (billing.GenerationProgress, error) {
 	p := billing.GenerationProgress{SubjectID: t.SubjectID, Outcome: "registered", Days: []billing.GenerationDay{}}
+	if err := s.fillBillingGenerationName(ctx, t.InstanceID, t.Kind, &p); err != nil {
+		return p, err
+	}
 	if t.ProgressUntil.IsZero() && !t.To.IsZero() {
 		var until time.Time
 		err := s.db.QueryRowContext(ctx, `SELECT task.work_until FROM billing_generation_ranges r JOIN billing_generation_tasks task ON task.id=r.batch_id WHERE r.instance_id=? AND r.kind=? AND r.subject_id=? AND r.range_from=? AND r.range_to=?`, t.InstanceID, t.Kind, t.SubjectID, t.From.In(billing.BusinessLocation).Format("2006-01-02"), t.To.In(billing.BusinessLocation).Format("2006-01-02")).Scan(&until)

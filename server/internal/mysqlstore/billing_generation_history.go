@@ -117,6 +117,12 @@ func (s Store) BillingGenerationTask(ctx context.Context, site, id string) (bill
 			t.Items = append(t.Items, p)
 		}
 	}
+	// Older frozen tasks lack names; enrich the response without changing their progress.
+	for i := range t.Items {
+		if err = s.fillBillingGenerationName(ctx, site, t.Kind, &t.Items[i]); err != nil {
+			return t, err
+		}
+	}
 	summarizeBillingTask(&t)
 	if !frozen.Valid && (t.Outcome == "complete" || t.Outcome == "no_consumption" || t.Outcome == "cancelled" || (job != "" && t.Outcome == "failed")) {
 		raw, e := json.Marshal(t.Items)
