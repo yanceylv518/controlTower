@@ -2,6 +2,7 @@ package tuning
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -79,7 +80,7 @@ func TestEvaluationKeepsItsOriginalPolicyAndBase(t *testing.T) {
 	pr, now := autoPolicy(), time.Now().UTC()
 	NewEngine(f).evaluateContinuous("i", pr, now, f)
 	evaluation := f.states[1].Evaluation
-	if evaluation == nil || evaluation.BaseWeight != 100 || evaluation.Params != pr.Policy.Continuous || evaluation.EvaluatedAt != now {
+	if evaluation == nil || evaluation.BaseWeight != 100 || !reflect.DeepEqual(evaluation.Params, pr.Policy.Continuous) || evaluation.EvaluatedAt != now {
 		t.Fatalf("evaluation context missing: %+v", evaluation)
 	}
 	pr.Policy.Continuous.Sensitivity = 2

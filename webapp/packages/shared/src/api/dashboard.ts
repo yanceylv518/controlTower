@@ -388,6 +388,8 @@ export interface TuningContinuousDispatchParams {
   evaluation_interval_seconds: number;
   routine_interval_seconds: number;
   routine_probe_enabled: boolean;
+  routine_probe_selected_only?: boolean;
+  routine_probe_channel_ids?: number[];
   probe_timeout_seconds: number;
   probe_slow_limit: number;
   routine_error_limit: number;

@@ -17,6 +17,74 @@ const row = { channel_id: 1, model_name: 'm', base_weight: 100, base_priority: 1
 const state = (requests, weight = 80) => ({ channel_id: 1, model_name: 'm', last_observed_requests: requests, proposed_weight: weight, speed_stats_version: 1, phase: 'normal', metric_ready: true, baseline_ready: true, updated_at: '2026-09-14T00:00:00Z', evaluation: {base_weight:100, evaluated_at:'2026-09-14T00:00:00Z', params:{min_samples:20,combined_min_factor:0.1,combined_max_factor:1.5}} })
 const cloneFixture = value => JSON.parse(JSON.stringify(value));
 
+test('probe picker groups by model and displays online priority and weight independently of drafts', async () => {
+  const p=page(); await p.load();
+  p.channelDirectorySite.value='a';
+  p.channels.value=[
+    {channel_id:1,channel_name:'one',models:['m'],priority:10,weight:0},
+    {channel_id:2,channel_name:'two',models:['m'],priority:20,weight:30},
+    {channel_id:3,channel_name:'three',models:['other'],priority:0,weight:80},
+    {channel_id:4,channel_name:'mixed',models:['other','m'],priority:2,weight:5},
+  ];
+  p.bases.value[0].base_priority=999; p.bases.value[0].base_weight=999;
+  p.activeModel.value='m';
+  p.policy.continuous.routine_probe_channel_ids=[1,3,99];
+  const groups=p.probeChannelOptions.value;
+  const m=groups.find(x=>x.label==='m');
+  assert.deepEqual(m.children.map(x=>x.value),[2,1]);
+  assert.equal(m.children[1].priority,10);
+  assert.equal(m.children[1].weight,0,'zero online weight must remain visible');
+  assert.equal(groups.find(x=>x.label==='other').children[0].priority,0);
+  const leaves=groups.flatMap(x=>x.children);
+  assert.equal(leaves.filter(x=>x.value===4).length,1,'multi-model channel has one channel-wide selection');
+  assert.equal(leaves.find(x=>x.value===99).priority,undefined);
+  p.activeModel.value='other';
+  assert.deepEqual(p.policy.continuous.routine_probe_channel_ids,[1,3,99]);
+  p.filters.site_id='b';
+  assert.equal(p.probeChannelOptions.value.some(x=>x.children.some(c=>c.value===2)),false,'do not leak another site directory');
+});
+
+test('routine channel selection saves independently, supports empty selection and keeps live status until saved', async () => {
+  const p=page(); await p.load();
+  assert.equal(p.mobileRuleChanges.value.length,0,'cloned arrays must not appear changed');
+  p.policy.continuous.routine_probe_selected_only=true;
+  p.policy.continuous.routine_probe_channel_ids=[2]; p.dirty.value=true;
+  assert.notEqual(p.probeCoverageCell(row).text,'未开启常态探针');
+  let saved;
+  p.dashboard.saveTuningPolicy=async(_site,next)=>{saved=cloneFixture(next);p.dashboard.tuningPolicy=async()=>({mode:'observe',policy:cloneFixture(saved)})};
+  await p.save();
+  assert.deepEqual(saved.continuous.routine_probe_channel_ids,[2]);
+  assert.equal(p.probeCoverageCell(row).text,'未开启常态探针');
+  assert.notEqual(p.probeCoverageCell({...row,channel_id:2}).text,'未开启常态探针');
+  p.policy.continuous.routine_probe_channel_ids=[]; p.dirty.value=true;
+  await p.save();
+  assert.equal(p.savedPolicy.value.continuous.routine_probe_selected_only,true);
+  assert.equal(p.probeCoverageCell({...row,channel_id:2}).text,'未开启常态探针');
+  p.filters.site_id='b';
+  p.dashboard.tuningPolicy=async()=>({mode:'observe',policy:{dispatch_modes:{m:'auto'},continuous:{routine_probe_channel_ids:null}}});
+  await p.load();
+  assert.equal(p.policy.continuous.routine_probe_selected_only,false);
+  assert.deepEqual(p.policy.continuous.routine_probe_channel_ids,[]);
+  p.policy.continuous.routine_probe_selected_only=true; p.dirty.value=true;
+  let writes=0; p.dashboard.saveTuningPolicy=async()=>{writes++};
+  await p.save();
+  assert.equal(writes,0,'old servers silently ignore unknown fields; block selected mode');
+  assert.match(p.messages.at(-1),/请先升级服务端/);
+});
+
+test('unselected channel snapshots exclude old probe factors and probe-only eligibility', async () => {
+  const p=page(); await p.load();
+  const s={...state(0),k_speed:1,k_cache:1,k_otps:1,k_error:1,metric_ready:false,baseline_ready:false,
+    probe_speed:{samples:5,mean_seconds:1,baseline_seconds:2.5,factor:1.2,ready:true}};
+  s.evaluation.params={...p.policy.continuous,min_samples:5,routine_probe_selected_only:true,routine_probe_channel_ids:[2]};
+  s.evaluation.performance_evaluated=true;
+  p.states.value=[s];
+  assert.equal(p.coefficientCell(row,'probe').value,1);
+  assert.equal(p.coefficientCell(row,'probe').status,'已关闭');
+  assert.equal(p.calculatedWeight(row),null);
+  assert.doesNotMatch(p.evaluationText(row),/探针速度已参与/);
+});
+
 test('probe coverage separates scheduled misses from accelerated requests and handles unavailable data', async () => {
   const p=page(); await p.load();
   const counts={due:0,sent:0,global_limited:0,channel_limited:0,evidence_limited:0,last_due_at:'2026-10-12T00:01:00Z'};
@@ -259,7 +327,7 @@ function page() {
     tuningChannels: async () => { throw new Error('channel directory unavailable') },
   }
   const names = ['computed', 'reactive', 'ref', 'watch', 'onMounted', 'onBeforeUnmount', 'useFiltersStore', 'dashboard', 'formatTime', 'ApiError', 'ElMessage', 'ElMessageBox', 'useMobileViewport', 'hiddenChannelGroupCount', 'matchesChannelGroup', 'MAX_VISIBLE_CHANNEL_GROUPS', 'normalizeChannelGroups', 'splitChannelGroups', 'visibleChannelGroups']
-  const create = new Function(...names, `${compiled}\nreturn { openChannelStatus, saveChannelStatus, channelStatusEditor, channelStatusSaving, canSaveChannelStatus, canManuallyClose, canManuallyOpen, manualChannelHeld, channelStatusBusy, probeCoverageCell, acceptProbeCoverage, phaseText, watchChannelChanges, stopWatching: () => changesAbort?.abort(), sync, save, savedPolicy, mode, policyConflict, factorExplanation, refreshCurrentRates, ratesError, saveCapacity, saving, mobileEditRow, stageMobileEdit, mobileChanges, mobilePriorityChanges, mobileRuleChanges, mobileSaveOpen, load, refreshRuntime, loadChannelDirectory, applyGroupLocally, acceptStates, stateFor, sampleText, evaluationText, states, refreshError, bases, channels, channelDirectorySite, channelDirectoryLoading, policy, channelQuery, channelSwitchFilter, selectedGroupFilter, toggleGroupFilter, selectedGroupName, displayedRows, activeRows, modelChannelRows, models, modelChannelCount, modelChannelCountLabel, activeModel, dirty, selectModel, fieldChanged, savedBases, originalBase, calculatedWeight, executionWeightText, displayedSpeedFactor, coefficientCell, overallEvaluationStatus, coefficientEmptyText, coefficientSpan, displayedPriority, editPriority, priorityLocked, cancelChanges, limitReason, currentRates, ratesReady, rowStatus, channelStatusFor, channelStatusLabel, isDirectoryOnlyRow, eventResult, eventResultClass, events, filteredEvents, eventDateRange };`)
+  const create = new Function(...names, `${compiled}\nreturn { probeChannelOptions, openChannelStatus, saveChannelStatus, channelStatusEditor, channelStatusSaving, canSaveChannelStatus, canManuallyClose, canManuallyOpen, manualChannelHeld, channelStatusBusy, probeCoverageCell, acceptProbeCoverage, phaseText, watchChannelChanges, stopWatching: () => changesAbort?.abort(), sync, save, savedPolicy, mode, policyConflict, factorExplanation, refreshCurrentRates, ratesError, saveCapacity, saving, mobileEditRow, stageMobileEdit, mobileChanges, mobilePriorityChanges, mobileRuleChanges, mobileSaveOpen, load, refreshRuntime, loadChannelDirectory, applyGroupLocally, acceptStates, stateFor, sampleText, evaluationText, states, refreshError, bases, channels, channelDirectorySite, channelDirectoryLoading, policy, channelQuery, channelSwitchFilter, selectedGroupFilter, toggleGroupFilter, selectedGroupName, displayedRows, activeRows, modelChannelRows, models, modelChannelCount, modelChannelCountLabel, activeModel, dirty, selectModel, fieldChanged, savedBases, originalBase, calculatedWeight, executionWeightText, displayedSpeedFactor, coefficientCell, overallEvaluationStatus, coefficientEmptyText, coefficientSpan, displayedPriority, editPriority, priorityLocked, cancelChanges, limitReason, currentRates, ratesReady, rowStatus, channelStatusFor, channelStatusLabel, isDirectoryOnlyRow, eventResult, eventResultClass, events, filteredEvents, eventDateRange };`)
   const messages = []; const messageBox = {confirm: async () => {}};
   const view = create(computed, reactive, ref, () => {}, () => {}, () => {}, () => filters, dashboard, String, ApiError, {info() {}, success() {}, error(message) {messages.push(message)}}, messageBox, () => ref(false), groupUtils.hiddenChannelGroupCount, groupUtils.matchesChannelGroup, groupUtils.MAX_VISIBLE_CHANNEL_GROUPS, groupUtils.normalizeChannelGroups, groupUtils.splitChannelGroups, groupUtils.visibleChannelGroups)
   const initialPolicy = JSON.parse(JSON.stringify({...view.policy, dispatch_modes:{m:'auto'}}));

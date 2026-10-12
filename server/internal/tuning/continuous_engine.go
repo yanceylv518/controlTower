@@ -97,6 +97,14 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 			probeSpeeds = nil
 		}
 	}
+	// Never let an excluded channel's old samples affect itself or its peers.
+	selectedProbeSpeeds := make(map[int64]ProbeSpeedStats, len(probeSpeeds))
+	for channel, stats := range probeSpeeds {
+		if p.RoutineProbeEnabledFor(channel) {
+			selectedProbeSpeeds[channel] = stats
+		}
+	}
+	probeSpeeds = selectedProbeSpeeds
 	currentRatesAreWindowTotals := true
 	currentRatesUnavailable := false
 	var ratesAsOf time.Time
@@ -819,7 +827,7 @@ func performanceFactors(m ChannelMetric, b continuousBaseline, p ContinuousDispa
 
 func combinedFactor(state ContinuousState, p ContinuousDispatchParams) float64 {
 	probe := 1.0
-	if p.Rules().RoutineProbeEnabled && state.ProbeSpeed.Ready && state.ProbeSpeed.Factor > 0 && p.ProbeSpeedExponent > 0 {
+	if p.RoutineProbeEnabledFor(state.ChannelID) && state.ProbeSpeed.Ready && state.ProbeSpeed.Factor > 0 && p.ProbeSpeedExponent > 0 {
 		probe = state.ProbeSpeed.Factor
 	}
 	return clamp(state.KSpeed*state.KCache*state.KOTPS*state.KError*probe, p.CombinedMinFactor, p.CombinedMaxFactor)
