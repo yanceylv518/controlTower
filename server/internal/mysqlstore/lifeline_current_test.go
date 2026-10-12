@@ -69,4 +69,25 @@ func TestLifelineRuntimeAndRecoveryBatchIsolation(t *testing.T) {
 	current, err := s.QueryLifelineCurrent(ctx, site)
 	require.NoError(t, err)
 	require.NotNil(t, current.Channels)
+	// An actual command must remain visible even if the old phase/marker was
+	// cleared (for example by manual close). Otherwise it looks falsely idle.
+	_, err = s.db.Exec(`DELETE FROM tuning_continuous_states WHERE instance_id=?`, site)
+	require.NoError(t, err)
+	active, err = s.currentRecoveryRounds(ctx, site, now, 7)
+	require.NoError(t, err)
+	require.Equal(t, id, active[7].ID)
+	_, err = s.db.Exec(`UPDATE channel_commands SET status='succeeded' WHERE id=?`, id)
+	require.NoError(t, err)
+	active, err = s.currentRecoveryRounds(ctx, site, now, 7)
+	require.NoError(t, err)
+	require.Empty(t, active)
+	// A completed command with a still-in-flight request is not idle yet.
+	_, err = s.db.Exec(`UPDATE tuning_probe_records SET deadline_at=? WHERE id=?`, now.Add(time.Minute), records[2].ID)
+	require.NoError(t, err)
+	active, err = s.currentRecoveryRounds(ctx, site, now, 7)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, active[7].Metrics.Pending)
+	other, err := s.currentRecoveryRounds(ctx, site+"-other", now, 7)
+	require.NoError(t, err)
+	require.Empty(t, other)
 }

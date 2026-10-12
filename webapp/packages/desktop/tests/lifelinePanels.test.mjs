@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import ts from 'typescript';
-import {computed,ref,watch,nextTick} from 'vue';
+import {computed,ref,watch,nextTick,reactive} from 'vue';
 const transpile=s=>ts.transpileModule(s,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;
 const u=new Function('exports',`${transpile(readFileSync(new URL('../src/utils/lifelineCurrent.ts',import.meta.url),'utf8'))};return exports;`)({});
 function harness(name,expose,props,api){
@@ -13,6 +13,26 @@ function harness(name,expose,props,api){
  return {...p,filters,stop:()=>{cleanup.forEach(fn=>fn());stops.forEach(fn=>fn());}};
 }
 const deferred=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b});return {promise,resolve,reject}};
+test('same-channel status ticks preserve the chosen detail tab, batch and event query',async t=>{
+ const props=reactive({channel:{channel_id:7,state:'unknown'},initialTab:'records'});
+ let requests=0;const api={channelLifeline:async()=>{requests++;return {items:[{id:'change'}],next_cursor:'older'}}};
+ const p=harness('LifelineChannelDetail','tab,round,events,applied,cursors,openRound',props,api);t.after(p.stop);
+ p.tab.value='events';await nextTick();await nextTick();
+ const query=p.applied.value,count=requests;p.cursors.value.push('older');
+ for(let i=0;i<3;i++){props.channel={...props.channel,reason:`状态过期 ${i}`};await nextTick();}
+ assert.equal(p.tab.value,'events');assert.equal(requests,count);assert.equal(p.applied.value,query);assert.equal(p.events.value[0].id,'change');assert.equal(p.cursors.value.length,2);
+ p.openRound(7,'batch-7');props.channel={...props.channel,state:'recovery'};await nextTick();
+ assert.equal(p.tab.value,'rounds');assert.equal(p.round.value,'batch-7');
+ props.channel={channel_id:8,state:'unknown'};await nextTick();
+ assert.equal(p.tab.value,'records');assert.equal(p.round.value,'');assert.deepEqual([...p.events.value],[]);
+});
+test('detail opened at events still allows a persistent switch to records',async t=>{
+ const props=reactive({channel:{channel_id:7},initialTab:'events'});
+ const p=harness('LifelineChannelDetail','tab',props,{channelLifeline:async()=>({items:[]})});t.after(p.stop);
+ await nextTick();p.tab.value='records';await nextTick();props.channel={channel_id:7,reason:'new snapshot'};await nextTick();
+ assert.equal(p.tab.value,'records');
+ props.initialTab='rounds';await nextTick();assert.equal(p.tab.value,'rounds');
+});
 test('failed pagination retains the previous page across records, batches and changes',async t=>{
  for(const [name,method,expose,props] of [
   ['LifelineProbeRecords','probeRecords','load,page,cursors',{channelId:7}],
@@ -27,10 +47,10 @@ test('failed pagination retains the previous page across records, batches and ch
 const snapshot=(id=1)=>{const at=new Date().toISOString();return {queried_at:at,channels:[{channel_id:id,channel_name:'c',models:['m'],switch:'enabled',state:'routine',confirmed_at:at,pending:0,accelerated:0}]}};
 test('current panel ignores old-site replies and retains same-site snapshot on failure',async t=>{
  const old=deferred(),api={lifelineCurrent:()=>old.promise};
- const p=harness('LifelineCurrentPanel','refresh,snapshot,rows,clock,loading,error,auto,selected,order', {active:true},api);t.after(p.stop);
+ const p=harness('LifelineCurrentPanel','refresh,snapshot,rows,clock,snapshotStale,loading,error,auto,selected,order', {active:true},api);t.after(p.stop);
  p.filters.site_id='b';api.lifelineCurrent=async()=>snapshot(2);await p.refresh();old.resolve(snapshot(1));await nextTick();assert.equal(p.snapshot.value.channels[0].channel_id,2);
  api.lifelineCurrent=async()=>{throw Error('offline')};await p.refresh();assert.equal(p.snapshot.value.channels[0].channel_id,2);assert.match(p.error.value,/保留/);
- p.clock.value=Date.now()+61000;assert.equal(p.rows.value[0].state,'unknown');
+ p.clock.value=Date.now()+61000;assert.equal(p.rows.value[0].state,'routine');assert.equal(p.snapshotStale.value,true);
 });
 test('background state updates do not reorder channels or overwrite a detail opened mid-request',async t=>{
  const api={lifelineCurrent:async()=>{const s=snapshot();s.channels.push({...s.channels[0],channel_id:2});return s}};

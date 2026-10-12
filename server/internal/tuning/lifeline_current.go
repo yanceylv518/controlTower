@@ -32,7 +32,7 @@ type LifelineCurrentReader interface {
 	QueryLifelineCurrent(context.Context, string) (LifelineCurrent, error)
 }
 
-func DescribeLifelineChannel(c Channel, b ChannelBaseValue, s ContinuousState, p PolicyRecord, r ProbeRuntime, now time.Time) LifelineChannel {
+func DescribeLifelineChannel(c Channel, b ChannelBaseValue, s ContinuousState, p PolicyRecord, r ProbeRuntime, now time.Time, round *ProbeRound) LifelineChannel {
 	v := LifelineChannel{ChannelID: c.ID, ChannelName: c.Name, Models: append([]string{}, c.Models...), Weight: c.Weight, Priority: c.Priority, Switch: "unknown", State: "unknown", Reason: "缺少有效的调度确认", Next: "等待新的调度状态", Last: r.Last}
 	switch strings.ToLower(c.Status) {
 	case "1", "enabled", "enable", "active", "normal":
@@ -47,6 +47,8 @@ func DescribeLifelineChannel(c Channel, b ChannelBaseValue, s ContinuousState, p
 		v.Weight = *s.LastWrittenWeight
 	}
 	fresh := !r.ConfirmedAt.IsZero() && now.Sub(r.ConfirmedAt) <= 20*time.Second && !r.ConfirmedAt.After(now.Add(time.Second))
+	activeRound := round != nil && (round.Status == "pending" || round.Status == "delivered" || round.Status == "executing" || (round.Metrics != nil && round.Metrics.Pending > 0))
+	recoveryFresh := !s.UpdatedAt.IsZero() && now.Sub(s.UpdatedAt) <= 3*time.Minute && !s.UpdatedAt.After(now.Add(time.Second))
 	if v.Last != nil && v.Last.Outcome == "pending" && !v.Last.DeadlineAt.After(now) {
 		last := *v.Last
 		last.Outcome = "unconfirmed"
@@ -60,10 +62,13 @@ func DescribeLifelineChannel(c Channel, b ChannelBaseValue, s ContinuousState, p
 		v.State = "stopped"
 		v.Reason = reason
 		v.Next = next
-		if fresh && r.Running {
+		if activeRound || (fresh && r.Running) {
 			v.State = "stopping"
-			v.Reason = reason + "，等待调度退出确认"
+			v.Reason = reason + "，等待探测任务退出确认"
 			v.Pending = r.Pending
+			if activeRound {
+				v.CurrentRound, v.RoundID = round, &round.ID
+			}
 		} else if r.Running {
 			v.State = "unknown"
 			v.Reason = reason + "，旧调度状态已过期，无法确认退出"
@@ -84,11 +89,33 @@ func DescribeLifelineChannel(c Channel, b ChannelBaseValue, s ContinuousState, p
 	if p.Policy.DispatchModes[c.Models[0]] != "auto" {
 		return stop("模型未开启自动执行", "调整模型执行模式后重新判断资格")
 	}
+	// Commands, not historical phase names, establish an active recovery task.
+	if activeRound {
+		v.CurrentRound, v.RoundID = round, &round.ID
+		v.ConfirmedAt = &round.UpdatedAt
+		v.State, v.Reason, v.Next = "recovery", "恢复任务处理中，查看批次了解发送进度", "检测结束后评估；通过后才尝试开启"
+		if round.Status == "pending" || round.Status == "delivered" {
+			v.State, v.Reason = "waiting", "恢复任务已排队/下发，等待执行回执"
+		}
+		if !recoveryFresh && now.Sub(round.UpdatedAt) > 3*time.Minute {
+			v.State, v.Reason = "unknown", "恢复任务尚未结束，但执行信息长时间未更新"
+		}
+		return v
+	}
+	// A fresh scheduled retry is still work to do, even on a closed channel.
+	planned := recoveryFresh && s.Phase == "circuit" && s.NextProbeAt != nil
+	if (v.Switch == "disabled" || v.Switch == "auto_disabled") && !planned {
+		v = stop("渠道已关闭", "未安排新的探测；历史恢复记录可单独查询")
+		if v.State == "stopped" {
+			v.Reason += "，当前没有探测任务"
+		}
+		return v
+	}
 	// Circuit recovery is independent of the routine-probe toggle/selection.
 	if s.Phase == "circuit" || s.Phase == "probing" || s.SoftStartPending || s.CircuitStatusTarget == 1 {
 		at := s.UpdatedAt
 		v.ConfirmedAt = &at
-		if at.IsZero() || now.Sub(at) > 3*time.Minute {
+		if !recoveryFresh {
 			v.Reason = "恢复调度状态已过期"
 			return v
 		}
@@ -96,17 +123,19 @@ func DescribeLifelineChannel(c Channel, b ChannelBaseValue, s ContinuousState, p
 		v.RoundID = s.ProbeCommandID
 		switch {
 		case s.CircuitStatusTarget == 1 || s.SoftStartPending:
-			v.State = "recovery"
+			v.State = "waiting"
 			v.Reason = "恢复评估后，等待开启/软启动确认"
 			v.Next = "以渠道开关确认结果为准"
 		case s.Phase == "probing":
-			v.State = "recovery"
-			v.Reason = "恢复任务处理中，查看批次了解发送进度"
-			v.Next = "检测结束后评估；通过后才尝试开启"
+			v.State = "stopped"
+			v.Reason = "当前没有探测任务，旧恢复阶段等待更新"
+			v.Next = "等待新的调度安排"
+			v.NextAt, v.RoundID = nil, nil
 		default:
-			v.State = "waiting"
-			v.Reason = "熔断后等待恢复检测"
-			v.Next = "到期后由调度器安排；不是已发送请求"
+			v.State, v.Reason, v.Next = "stopped", "当前没有探测任务或恢复计划", "等待新的调度安排"
+			if planned {
+				v.State, v.Reason, v.Next = "waiting", "熔断后等待恢复检测", "到期后由调度器安排；不是已发送请求"
+			}
 		}
 		return v
 	}

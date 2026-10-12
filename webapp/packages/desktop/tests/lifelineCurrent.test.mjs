@@ -18,11 +18,9 @@ test('attention order distinguishes stopping, unknown, recovery, waiting and err
  assert.deepEqual(u.currentOrder(rows,'all','attention').map(r=>r.channel_id),[5,6,4,3,7,1,2]);
  assert.deepEqual(u.currentOrder(rows,'routine','id').map(r=>r.channel_id),[1,7]);assert.equal(rows[0].channel_id,1);
 });
-test('unrefreshed live states expire locally instead of claiming continued probing',()=>{
- assert.equal(u.effectiveCurrent(row(1),iso,now+19000).state,'routine');
- assert.equal(u.effectiveCurrent(row(1),iso,now+30000).state,'routine');
- assert.equal(u.effectiveCurrent({...row(1),confirmed_at:new Date(now-21000).toISOString()},iso,now).state,'unknown');
- assert.equal(u.effectiveCurrent(row(2,'recovery'),iso,now+59000).state,'recovery');
- assert.equal(u.effectiveCurrent(row(2,'stopped'),iso,now+61000).state,'unknown');
- assert.equal(row(1).state,'routine');
+test('snapshot expiry is separate from channel state',()=>{
+ assert.equal(u.isCurrentSnapshotStale(iso,now+59000),false);
+ assert.equal(u.isCurrentSnapshotStale(iso,now+61000),true);
+ assert.equal(u.isCurrentSnapshotStale(undefined,now),false);
+ assert.equal(u.lifelineStates.stopping,'正在停止探测');
 });

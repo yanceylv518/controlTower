@@ -17,7 +17,9 @@ async function loadEvents(reset=false){abort?.abort();const gen=++generation,con
 async function page(next:boolean){const previous=[...cursors.value];if(next&&nextCursor.value)cursors.value.push(nextCursor.value);else if(!next&&cursors.value.length>1)cursors.value.pop();else return;if(await loadEvents()===false)cursors.value=previous;}
 function openRound(_channel:number,id:string){round.value=id;tab.value='rounds';}
 watch(tab,()=>{if(tab.value==='events')void loadEvents(true);});
-watch(()=>[filters.site_id,props.channel.channel_id,props.initialTab,props.roundId],()=>{abort?.abort();generation++;events.value=[];applied.value=undefined;tab.value=props.initialTab||'records';round.value=props.roundId||'';if(tab.value==='events')void loadEvents(true);},{immediate:true});
+// Compare navigation values individually: status ticks may replace the channel
+// object without changing identity and must not reset the reader's active tab.
+watch([()=>filters.site_id,()=>props.channel.channel_id,()=>props.initialTab,()=>props.roundId],()=>{abort?.abort();generation++;events.value=[];applied.value=undefined;tab.value=props.initialTab||'records';round.value=props.roundId||'';if(tab.value==='events')void loadEvents(true);},{immediate:true});
 onBeforeUnmount(()=>{generation++;abort?.abort();});
 </script>
 <template>

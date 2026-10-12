@@ -83,32 +83,16 @@ func (s Store) QueryLifelineCurrent(ctx context.Context, site string) (tuning.Li
 	for _, v := range runtime {
 		byRuntime[v.ChannelID] = v
 	}
-	for _, c := range channels {
-		out.Channels = append(out.Channels, tuning.DescribeLifelineChannel(c, byBase[c.ID], byState[c.ID], policy, byRuntime[c.ID], out.QueriedAt))
-	}
 	rounds, err := s.currentRecoveryRounds(ctx, site, out.QueriedAt, policy.Policy.Continuous.Rules().ChannelHistoryRetentionDays)
 	if err != nil {
 		return out, err
 	}
-	for i := range out.Channels {
-		v := &out.Channels[i]
-		r, ok := rounds[v.ChannelID]
-		if !ok || v.State != "recovery" {
-			continue
+	for _, c := range channels {
+		var round *tuning.ProbeRound
+		if v, ok := rounds[c.ID]; ok {
+			round = &v
 		}
-		if v.RoundID != nil && *v.RoundID != r.ID {
-			continue
-		}
-		v.CurrentRound = &r
-		v.RoundID = &r.ID
-		switch r.Status {
-		case "pending", "delivered":
-			v.Reason = "恢复任务已排队/下发，尚未确认逐条发送"
-		case "succeeded":
-			v.Reason = "恢复检测任务已完成，等待规则评估"
-		case "failed", "expired":
-			v.Reason = "恢复任务失败或过期，等待调度处理"
-		}
+		out.Channels = append(out.Channels, tuning.DescribeLifelineChannel(c, byBase[c.ID], byState[c.ID], policy, byRuntime[c.ID], out.QueriedAt, round))
 	}
 	return out, nil
 }
@@ -118,7 +102,7 @@ func (s Store) QueryLifelineCurrent(ctx context.Context, site string) (tuning.Li
 func (s Store) currentRecoveryRounds(ctx context.Context, site string, now time.Time, days int) (map[int64]tuning.ProbeRound, error) {
 	out := map[int64]tuning.ProbeRound{}
 	floor := now.Add(-time.Duration(days) * 24 * time.Hour)
-	rows, err := s.db.QueryContext(ctx, `SELECT c.id,c.channel_id,c.payload_json,c.status,c.created_at,c.updated_at FROM tuning_continuous_states st JOIN channel_commands c ON c.id=COALESCE(NULLIF(st.probe_command_id,''),st.last_probe_command_id) AND c.channel_id=st.channel_id AND c.command_type='channel.probe' WHERE st.instance_id=? AND st.phase='probing' AND c.created_at>=? AND (c.instance_id=? OR c.instance_id IN (SELECT id FROM instances WHERE site_id=?))`, site, floor, site, site)
+	rows, err := s.db.QueryContext(ctx, `SELECT c.id,c.channel_id,c.payload_json,c.status,c.created_at,c.updated_at FROM channel_commands c WHERE c.command_type='channel.probe' AND (c.instance_id=? OR c.instance_id IN (SELECT id FROM instances WHERE site_id=?)) AND (c.status IN ('pending','delivered','executing') OR EXISTS (SELECT 1 FROM tuning_probe_records p WHERE p.instance_id=? AND p.round_id=c.id AND p.channel_id=c.channel_id AND p.started_at>=? AND p.outcome='pending' AND p.deadline_at>?)) ORDER BY (c.status IN ('pending','delivered','executing')) DESC,c.created_at DESC,c.id DESC`, site, site, site, floor, now)
 	if err != nil {
 		return out, err
 	}
@@ -137,6 +121,9 @@ func (s Store) currentRecoveryRounds(ctx context.Context, site string, now time.
 		if err = json.Unmarshal(raw, &payload); err != nil {
 			rows.Close()
 			return out, err
+		}
+		if _, exists := out[r.ChannelID]; exists {
+			continue
 		}
 		r.Model = payload.Model
 		r.Planned = payload.Count

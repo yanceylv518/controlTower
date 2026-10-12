@@ -14,7 +14,7 @@ func TestLifelineRequiresFreshMatchingWorker(t *testing.T) {
 	p.Policy.DispatchModes = map[string]string{"m": "auto"}
 	s := ContinuousState{ControlRevision: 3}
 	r := ProbeRuntime{Running: true, Model: "m", Revision: 3, BaseAt: now, PolicyAt: now, ConfirmedAt: now}
-	describe := func() LifelineChannel { return DescribeLifelineChannel(c, b, s, p, r, now) }
+	describe := func() LifelineChannel { return DescribeLifelineChannel(c, b, s, p, r, now, nil) }
 	require.Equal(t, "routine", describe().State)
 	r.Pending = 1
 	r.Accelerated = 1
@@ -41,15 +41,15 @@ func TestLifelineManualProtectionAndRecoveryIndependentOfRoutineSelection(t *tes
 	p := PolicyRecord{Policy: DefaultPolicy()}
 	p.Policy.DispatchModes = map[string]string{"m": "auto"}
 	p.Policy.Continuous.RoutineProbeEnabled = false
-	s := ContinuousState{Phase: "probing", CircuitDisabled: true, UpdatedAt: now}
+	s := ContinuousState{Phase: "circuit", CircuitDisabled: true, UpdatedAt: now, NextProbeAt: &now}
 	r := ProbeRuntime{}
-	describe := func() LifelineChannel { return DescribeLifelineChannel(c, b, s, p, r, now) }
-	require.Equal(t, "recovery", describe().State)
+	describe := func() LifelineChannel { return DescribeLifelineChannel(c, b, s, p, r, now, nil) }
+	require.Equal(t, "waiting", describe().State)
 	require.Equal(t, "auto_disabled", describe().Switch)
 	s.Phase = "circuit"
 	require.Equal(t, "waiting", describe().State)
 	s.UpdatedAt = now.Add(-4 * time.Minute)
-	require.Equal(t, "unknown", describe().State)
+	require.Equal(t, "stopped", describe().State)
 	s.UpdatedAt = now
 	s.PausedReason = ManualDisabled
 	require.Equal(t, "stopped", describe().State)
@@ -68,9 +68,60 @@ func TestLifelineManualProtectionAndRecoveryIndependentOfRoutineSelection(t *tes
 func TestLifelineMultiModelCountAndExpiredLastRecord(t *testing.T) {
 	now := time.Now().UTC()
 	record := ProbeRecord{Outcome: "pending", DeadlineAt: now.Add(-time.Second)}
-	v := DescribeLifelineChannel(Channel{ID: 7, Status: "1", Models: []string{"a", "b"}}, ChannelBaseValue{}, ContinuousState{}, PolicyRecord{Policy: DefaultPolicy()}, ProbeRuntime{Last: &record}, now)
+	v := DescribeLifelineChannel(Channel{ID: 7, Status: "1", Models: []string{"a", "b"}}, ChannelBaseValue{}, ContinuousState{}, PolicyRecord{Policy: DefaultPolicy()}, ProbeRuntime{Last: &record}, now, nil)
 	require.Equal(t, "stopped", v.State)
 	require.Len(t, v.Models, 2)
 	require.Equal(t, "unconfirmed", v.Last.Outcome)
 	require.Equal(t, "pending", record.Outcome)
+}
+
+func TestClosedLifelineUsesTasksInsteadOfOldRecoveryPhase(t *testing.T) {
+	now := time.Now().UTC()
+	c := Channel{ID: 7, Status: "2", Models: []string{"m"}}
+	p := PolicyRecord{Policy: DefaultPolicy()}
+	p.Policy.DispatchModes = map[string]string{"m": "auto"}
+	p.Policy.Continuous.RoutineProbeEnabled = false
+	for _, phase := range []string{"circuit", "probing", "soft_start", "normal"} {
+		for _, age := range []time.Duration{0, 24 * time.Hour} {
+			for _, status := range []string{"", "succeeded", "failed", "expired", "canceled", "pending", "delivered", "executing"} {
+				t.Run(phase+"/"+age.String()+"/"+status, func(t *testing.T) {
+					state := ContinuousState{Phase: phase, UpdatedAt: now.Add(-age), NextProbeAt: &now}
+					var round *ProbeRound
+					if status != "" {
+						round = &ProbeRound{ID: "batch", Status: status, UpdatedAt: now}
+					}
+					v := DescribeLifelineChannel(c, ChannelBaseValue{}, state, p, ProbeRuntime{}, now, round)
+					want := "stopped"
+					if phase == "circuit" && age == 0 {
+						want = "waiting"
+					}
+					if status == "pending" || status == "delivered" {
+						want = "waiting"
+					}
+					if status == "executing" {
+						want = "recovery"
+					}
+					require.Equal(t, want, v.State)
+					if want == "stopped" {
+						require.Nil(t, v.NextAt)
+						require.Nil(t, v.RoundID)
+						require.Contains(t, v.Reason, "渠道已关闭")
+					}
+				})
+			}
+		}
+	}
+	state := ContinuousState{PausedReason: ManualDisabled}
+	round := &ProbeRound{ID: "inflight", Status: "executing", UpdatedAt: now}
+	v := DescribeLifelineChannel(c, ChannelBaseValue{}, state, p, ProbeRuntime{}, now, round)
+	require.Equal(t, "stopping", v.State)
+	require.Nil(t, v.NextAt)
+	state = ContinuousState{}
+	round.Status = "failed"
+	round.Metrics = &ProbeMetrics{Pending: 1}
+	require.Equal(t, "recovery", DescribeLifelineChannel(c, ChannelBaseValue{}, state, p, ProbeRuntime{}, now, round).State)
+	round.Metrics = nil
+	round.Status = "executing"
+	round.UpdatedAt = now.Add(-time.Hour)
+	require.Equal(t, "unknown", DescribeLifelineChannel(c, ChannelBaseValue{}, state, p, ProbeRuntime{}, now, round).State)
 }
