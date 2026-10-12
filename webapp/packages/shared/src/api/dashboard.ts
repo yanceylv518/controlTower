@@ -509,6 +509,7 @@ export interface ProbeMetrics {
 }
 export interface ProbeChannelStats extends ProbeMetrics { channel_id: number; channel_name: string; model_name: string }
 export interface ProbeRecord {
+	 round_id?: string; round_index?: number;
   id: string; instance_id: string; channel_id: number; channel_name: string; model_name: string; kind: string;
   started_at: string; deadline_at: string; finished_at?: string; outcome: string; reason: string; duration_seconds?: number;
 }
@@ -518,7 +519,17 @@ export interface ProbeOverview {
   trend: Array<ProbeMetrics & {at: string}>;
   recorder?: {started_at: string; last_seen_at: string; last_loss_at?: string; dropped_records: number; queued_records: number};
 }
-export interface ProbeQuery {site_id: string; from: string; to: string; channel_id?: number; model?: string; kind?: string; q?: string; outcome?: string; cursor?: string; limit?: number}
+export interface ProbeQuery {site_id: string; from: string; to: string; channel_id?: number; model?: string; kind?: string; q?: string; outcome?: string; cursor?: string; limit?: number; round_id?: string; dispatch?: string}
+export interface LifelineChannel {
+ channel_id:number; channel_name:string; models:string[]; weight:number; priority:number;
+ switch:string; state:string; reason:string; next:string; next_at?:string; confirmed_at?:string;
+ pending:number; accelerated:number; last?:ProbeRecord; round_id?:string;current_round?:ProbeRound;
+}
+export interface LifelineCurrent {queried_at:string; channels:LifelineChannel[]}
+export interface ProbeRound {
+ id:string; channel_id:number; model:string; planned:number; status:string; created_at:string; updated_at:string;
+ metrics?:ProbeMetrics; reported_attempts?:number; reported_successes?:number;
+}
 export interface ChannelLifeEvent {
   id: string; source: string; at: string; finished_at?: string; operation: string; outcome: string; actor: string;
   command_id?: string; recommendation_id?: string; details: Record<string, unknown>;
@@ -1100,6 +1111,8 @@ export const dashboardApi = (client: ApiClient) => ({
   tuningContinuousStates: (site_id: string) =>
     client.request<ListResponse<TuningContinuousState> & { probe_coverage?: ProbeCoverageWindow }>(`/api/dashboard/tuning/continuous-states${query({ site_id })}`),
   probeOverview: (params: ProbeQuery, signal?: AbortSignal) => client.request<ProbeOverview>(`/api/dashboard/tuning/probes/overview${query({...params})}`, {signal}),
+  lifelineCurrent: (site_id:string, signal?:AbortSignal) => client.request<LifelineCurrent>(`/api/dashboard/tuning/probes/current${query({site_id})}`,{signal}),
+  probeRounds: (params:ProbeQuery, signal?:AbortSignal) => client.request<{items:ProbeRound[];next_cursor?:string}>(`/api/dashboard/tuning/probes/rounds${query({...params})}`,{signal}),
   probeRecords: (params: ProbeQuery, signal?: AbortSignal) => client.request<{items: ProbeRecord[]; total: number; next_cursor?: string}>(`/api/dashboard/tuning/probes/records${query({...params})}`, {signal}),
   channelLifeline: (params: ProbeQuery & {source?: string}, signal?: AbortSignal) => client.request<{items: ChannelLifeEvent[]; next_cursor?: string}>(`/api/dashboard/tuning/probes/lifeline${query({...params})}`, {signal}),
   tuningCurrentRates: (site_id: string) =>

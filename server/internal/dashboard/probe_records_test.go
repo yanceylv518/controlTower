@@ -29,6 +29,42 @@ func (s *probeReadStub) QueryChannelLifeline(_ context.Context, q tuning.ProbeRe
 	s.source = source
 	return tuning.ChannelLifePage{Items: []tuning.ChannelLifeEvent{}}, s.err
 }
+func (s *probeReadStub) QueryLifelineCurrent(_ context.Context, site string) (tuning.LifelineCurrent, error) {
+	s.query.Site = site
+	return tuning.LifelineCurrent{Channels: []tuning.LifelineChannel{}}, s.err
+}
+func (s *probeReadStub) QueryProbeRounds(_ context.Context, q tuning.ProbeRecordQuery) (tuning.ProbeRoundPage, error) {
+	s.query = q
+	return tuning.ProbeRoundPage{Items: []tuning.ProbeRound{}}, s.err
+}
+func TestCurrentAndRoundsReadContracts(t *testing.T) {
+	s := &probeReadStub{tuningStub: &tuningStub{}}
+	h := NewHandler(nil).WithTuningStore(s)
+	w := httptest.NewRecorder()
+	h.HandleLifelineCurrent(w, httptest.NewRequest("GET", "/?site_id=site-b", nil))
+	require.Equal(t, 200, w.Code)
+	require.Equal(t, "site-b", s.query.Site)
+	w = httptest.NewRecorder()
+	h.HandleProbeRounds(w, httptest.NewRequest("GET", "/?site_id=site-b", nil))
+	require.Equal(t, 400, w.Code)
+	w = httptest.NewRecorder()
+	h.HandleProbeRounds(w, httptest.NewRequest("GET", "/?site_id=site-b&channel_id=7&round_id=round-1", nil))
+	require.Equal(t, 200, w.Code)
+	require.Equal(t, "round-1", s.query.RoundID)
+	require.EqualValues(t, 7, s.query.ChannelID)
+	w = httptest.NewRecorder()
+	h.HandleProbeRecords(w, httptest.NewRequest("GET", "/?site_id=site-b&dispatch=invalid", nil))
+	require.Equal(t, 400, w.Code)
+	w = httptest.NewRecorder()
+	h.HandleChannelLifeline(w, httptest.NewRequest("GET", "/?site_id=site-b&channel_id=7&source=changes", nil))
+	require.Equal(t, 200, w.Code)
+	require.Equal(t, "changes", s.source)
+	s.err = errors.New("private mysql details")
+	w = httptest.NewRecorder()
+	h.HandleLifelineCurrent(w, httptest.NewRequest("GET", "/?site_id=site-b", nil))
+	require.Equal(t, 503, w.Code)
+	require.NotContains(t, w.Body.String(), "private")
+}
 func TestProbeRecordsQueryValidationAndExplicitErrors(t *testing.T) {
 	s := &probeReadStub{tuningStub: &tuningStub{}}
 	h := NewHandler(nil).WithTuningStore(s)

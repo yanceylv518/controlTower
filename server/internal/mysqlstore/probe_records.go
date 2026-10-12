@@ -17,9 +17,9 @@ func (s Store) StoreProbeRecords(ctx context.Context, records []tuning.ProbeReco
 		batch := records[start:min(start+200, len(records))]
 		args := make([]any, 0, len(batch)*13)
 		for _, v := range batch {
-			args = append(args, v.ID, v.InstanceID, v.ChannelID, v.ChannelName, v.ModelName, v.Kind, v.StartedAt, v.DeadlineAt, v.FinishedAt, v.Outcome, v.Reason, v.DurationSeconds)
+			args = append(args, v.ID, v.InstanceID, v.ChannelID, v.ChannelName, v.ModelName, v.Kind, v.StartedAt, v.DeadlineAt, v.FinishedAt, v.Outcome, v.Reason, v.DurationSeconds, v.RoundID, v.RoundIndex)
 		}
-		_, err := s.db.ExecContext(ctx, `INSERT INTO tuning_probe_records (id,instance_id,channel_id,channel_name,model_name,kind,started_at,deadline_at,finished_at,outcome,reason,duration_seconds) VALUES `+strings.TrimSuffix(strings.Repeat("(?,?,?,?,?,?,?,?,?,?,?,?),", len(batch)), ",")+`
+		_, err := s.db.ExecContext(ctx, `INSERT INTO tuning_probe_records (id,instance_id,channel_id,channel_name,model_name,kind,started_at,deadline_at,finished_at,outcome,reason,duration_seconds,round_id,round_index) VALUES `+strings.TrimSuffix(strings.Repeat("(?,?,?,?,?,?,?,?,?,?,?,?,?,?),", len(batch)), ",")+`
 ON DUPLICATE KEY UPDATE finished_at=IF(outcome='pending',VALUES(finished_at),finished_at),reason=IF(outcome='pending',VALUES(reason),reason),duration_seconds=IF(outcome='pending',VALUES(duration_seconds),duration_seconds),outcome=IF(outcome='pending',VALUES(outcome),outcome)`, args...)
 		if err != nil {
 			return err
@@ -34,6 +34,9 @@ ON DUPLICATE KEY UPDATE finished_at=IF(outcome='pending',VALUES(finished_at),fin
 	return nil
 }
 func (s Store) PruneProbeRecords(ctx context.Context, now time.Time) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM tuning_probe_runtime WHERE confirmed_at<? LIMIT 10000`, now.Add(-24*time.Hour)); err != nil {
+		return err
+	}
 	// Include disabled/deleted sites: retaining a stopped site must not disable
 	// cleanup. Shared command/audit history is owned by its existing modules.
 	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT instance_id FROM tuning_probe_records UNION SELECT DISTINCT instance_id FROM channel_control_requests UNION SELECT DISTINCT instance_id FROM tuning_probe_recorders`)
@@ -109,6 +112,15 @@ func (s Store) retainChannelHistory(ctx context.Context, q *tuning.ProbeRecordQu
 func probeRecordSource(q tuning.ProbeRecordQuery) (string, []any) {
 	where := "instance_id=? AND started_at>=? AND started_at<?"
 	args := []any{q.Now, q.Site, q.From, q.To}
+	if q.RoundID != "" {
+		where += " AND round_id=?"
+		args = append(args, q.RoundID)
+	}
+	if q.Dispatch == "sent" {
+		where += " AND outcome<>'skipped'"
+	} else if q.Dispatch == "unsent" {
+		where += " AND outcome='skipped'"
+	}
 	if q.ChannelID > 0 {
 		where += " AND channel_id=?"
 		args = append(args, q.ChannelID)
@@ -125,7 +137,7 @@ func probeRecordSource(q tuning.ProbeRecordQuery) (string, []any) {
 		where += " AND (LOCATE(?,channel_name)>0 OR CAST(channel_id AS CHAR)=?)"
 		args = append(args, q.Search, q.Search)
 	}
-	return `(SELECT id,instance_id,channel_id,channel_name,model_name,kind,started_at,deadline_at,finished_at,reason,duration_seconds,CASE WHEN outcome='pending' AND deadline_at<=? THEN 'unconfirmed' ELSE outcome END AS outcome FROM tuning_probe_records WHERE ` + where + `) p`, args
+	return `(SELECT id,instance_id,channel_id,channel_name,model_name,kind,started_at,deadline_at,finished_at,reason,duration_seconds,round_id,round_index,CASE WHEN outcome='pending' AND deadline_at<=? THEN 'unconfirmed' ELSE outcome END AS outcome FROM tuning_probe_records WHERE ` + where + `) p`, args
 }
 
 const probeMetricsSQL = `COUNT(*),COALESCE(SUM(outcome<>'skipped'),0),
@@ -320,7 +332,7 @@ func (s Store) QueryProbeRecords(ctx context.Context, q tuning.ProbeRecordQuery)
 	}
 	limit := max(1, min(q.Limit, 200))
 	args = append(args, limit+1)
-	rows, err := tx.QueryContext(ctx, `SELECT id,instance_id,channel_id,channel_name,model_name,kind,started_at,deadline_at,finished_at,outcome,reason,duration_seconds FROM `+source+where+" ORDER BY started_at DESC,id DESC LIMIT ?", args...)
+	rows, err := tx.QueryContext(ctx, `SELECT id,instance_id,channel_id,channel_name,model_name,kind,started_at,deadline_at,finished_at,outcome,reason,duration_seconds,round_id,round_index FROM `+source+where+" ORDER BY started_at DESC,id DESC LIMIT ?", args...)
 	if err != nil {
 		return out, err
 	}
@@ -328,7 +340,7 @@ func (s Store) QueryProbeRecords(ctx context.Context, q tuning.ProbeRecordQuery)
 		var v tuning.ProbeRecord
 		var finished sql.NullTime
 		var duration sql.NullFloat64
-		if err = rows.Scan(&v.ID, &v.InstanceID, &v.ChannelID, &v.ChannelName, &v.ModelName, &v.Kind, &v.StartedAt, &v.DeadlineAt, &finished, &v.Outcome, &v.Reason, &duration); err != nil {
+		if err = rows.Scan(&v.ID, &v.InstanceID, &v.ChannelID, &v.ChannelName, &v.ModelName, &v.Kind, &v.StartedAt, &v.DeadlineAt, &finished, &v.Outcome, &v.Reason, &duration, &v.RoundID, &v.RoundIndex); err != nil {
 			rows.Close()
 			return out, err
 		}

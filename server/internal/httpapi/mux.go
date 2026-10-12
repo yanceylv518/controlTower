@@ -238,6 +238,8 @@ func NewMux(options Options) *http.ServeMux {
 		mux.Handle("/api/dashboard/tuning/preflight", protect(http.HandlerFunc(dashboardHandler.HandleTuningPreflight)))
 		mux.Handle("GET /api/dashboard/tuning/continuous-states", protect(http.HandlerFunc(dashboardHandler.HandleTuningContinuousStates)))
 		mux.Handle("GET /api/dashboard/tuning/probes/overview", protect(http.HandlerFunc(dashboardHandler.HandleProbeOverview)))
+		mux.Handle("GET /api/dashboard/tuning/probes/current", protect(http.HandlerFunc(dashboardHandler.HandleLifelineCurrent)))
+		mux.Handle("GET /api/dashboard/tuning/probes/rounds", protect(http.HandlerFunc(dashboardHandler.HandleProbeRounds)))
 		mux.Handle("GET /api/dashboard/tuning/probes/records", protect(http.HandlerFunc(dashboardHandler.HandleProbeRecords)))
 		mux.Handle("GET /api/dashboard/tuning/probes/lifeline", protect(http.HandlerFunc(dashboardHandler.HandleChannelLifeline)))
 		mux.Handle("GET /api/dashboard/tuning/recommendations", protect(http.HandlerFunc(dashboardHandler.HandleTuningRecommendations)))

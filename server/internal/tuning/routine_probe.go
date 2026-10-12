@@ -65,6 +65,7 @@ type routineResult struct {
 type routineTiming struct{ interval, timeout time.Duration }
 
 type routineRuntime struct {
+	confirm      func(bool, *time.Time)
 	initialDelay time.Duration
 	dispatch     func(routineDispatch)
 	settled      func(routineResult)
@@ -115,7 +116,22 @@ func runRoutineChannelRuntime(ctx context.Context, p RoutineProber, channel int6
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	var observations sync.WaitGroup
-	defer func() { cancel(); observations.Wait() }()
+	defer func() {
+		cancel()
+		observations.Wait()
+		if runtime.confirm != nil {
+			runtime.confirm(false, nil)
+		}
+	}()
+	nextAt := time.Now().Add(runtime.initialDelay).UTC()
+	confirm := func() {
+		if runtime.confirm != nil {
+			runtime.confirm(true, &nextAt)
+		}
+	}
+	confirm()
+	heartbeat := time.NewTicker(5 * time.Second)
+	defer heartbeat.Stop()
 	results := make(chan routineResult, max(8, int(timing.timeout/timing.interval)+4))
 	maxInFlight := max(4, int((timing.timeout+timing.interval-1)/timing.interval)+1)
 	// Keep room for a complete fault segment behind pending IO, including
@@ -135,6 +151,8 @@ func runRoutineChannelRuntime(ctx context.Context, p RoutineProber, channel int6
 			}
 		}
 		next.Reset(timing.interval)
+		nextAt = time.Now().Add(timing.interval).UTC()
+		confirm()
 	}
 	lastPendingGap := -1
 	launch := func(scheduled bool) {
@@ -242,6 +260,9 @@ func runRoutineChannelRuntime(ctx context.Context, p RoutineProber, channel int6
 		select {
 		case <-ctx.Done():
 			return
+		case <-heartbeat.C:
+			confirm()
+			continue
 		case <-next.C:
 			launch(true)
 			reset()
@@ -360,11 +381,33 @@ func (e *Engine) runRoutineProbes(ctx context.Context) {
 				done := make(chan struct{})
 				running[key] = routineRun{signature, cancel, done}
 				workers.Add(1)
+				workerID := rand.Text()
+				e.probeRuntime.update(key, func(v *ProbeRuntime) {
+					*v = ProbeRuntime{WorkerID: workerID, InstanceID: key.site, ChannelID: key.channel, Model: base.ModelName, Revision: state.ControlRevision, PolicyAt: policy.UpdatedAt, BaseAt: base.UpdatedAt}
+				})
 				go func() {
 					defer workers.Done()
 					defer close(done)
 					timing := routineTiming{time.Duration(policy.Policy.Continuous.Rules().RoutineIntervalSeconds) * time.Second, time.Duration(policy.Policy.Continuous.Rules().ProbeTimeoutSeconds) * time.Second}
-					runtime := routineRuntime{initialDelay: routineInitialDelay(key.site, key.channel, timing.interval), dispatch: func(d routineDispatch) {
+					updateRuntime := func(fn func(*ProbeRuntime)) {
+						e.probeRuntime.update(key, func(v *ProbeRuntime) {
+							if v.WorkerID == workerID {
+								fn(v)
+							}
+						})
+					}
+					runtime := routineRuntime{initialDelay: routineInitialDelay(key.site, key.channel, timing.interval), confirm: func(running bool, next *time.Time) {
+						updateRuntime(func(v *ProbeRuntime) {
+							v.Running = running
+							v.ConfirmedAt = time.Now().UTC()
+							if next != nil {
+								at := *next
+								v.NextAt = &at
+							} else {
+								v.NextAt = nil
+							}
+						})
+					}, dispatch: func(d routineDispatch) {
 						e.probeCoverage.record(key, d)
 						v := probeRecord(base, key.site, d.id, d.at, d.scheduled, timing.timeout)
 						if d.skipReason != "" {
@@ -374,8 +417,27 @@ func (e *Engine) runRoutineProbes(ctx context.Context) {
 							v.FinishedAt = &at
 						}
 						e.probeRecords.put(v)
+						updateRuntime(func(s *ProbeRuntime) {
+							s.Last = &v
+							if d.skipReason == "" {
+								s.Pending++
+								if !d.scheduled {
+									s.Accelerated++
+								}
+							}
+						})
 					}, settled: func(r routineResult) {
-						e.probeRecords.put(probeRecordResult(probeRecord(base, key.site, r.id, r.started, r.scheduled, timing.timeout), r))
+						v := probeRecordResult(probeRecord(base, key.site, r.id, r.started, r.scheduled, timing.timeout), r)
+						e.probeRecords.put(v)
+						updateRuntime(func(s *ProbeRuntime) {
+							s.Pending = max(0, s.Pending-1)
+							if !r.scheduled {
+								s.Accelerated = max(0, s.Accelerated-1)
+							}
+							if s.Last == nil || !v.StartedAt.Before(s.Last.StartedAt) {
+								s.Last = &v
+							}
+						})
 					}}
 					runRoutineChannelRuntime(runCtx, prober, key.channel, base.ModelName, slots, timing, policy.Policy.Continuous, runtime, func(streak routineStreak, started time.Time) bool {
 						return e.applyRoutineEvidence(runCtx, prober, key, base, policy, state.ControlRevision, streak, started)

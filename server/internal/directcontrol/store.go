@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sync/atomic"
 	"time"
 
 	"controltower/internal/channelcontrol"
@@ -332,7 +333,7 @@ func (s Store) runProbeRound(controller Controller, siteID string, channelID int
 		active, err := s.ContinuousProbeActive(siteID, channelID, commandID)
 		return err == nil && active
 	}}
-	round := channelcontrol.RunProbeRound(ctx, recoveryProbeJournal{Prober: owned, store: s.Store, site: siteID}, channelID, model, count, interval, s.sleep, o)
+	round := channelcontrol.RunProbeRound(ctx, recoveryProbeJournal{Prober: owned, store: s.Store, site: siteID, round: commandID, sequence: &atomic.Int64{}}, channelID, model, count, interval, s.sleep, o)
 	attempts, successes, durationSum, lastError := round.Attempts, round.Successes, round.DurationSeconds, round.Error
 	now := time.Now().UTC()
 	status := "succeeded"
