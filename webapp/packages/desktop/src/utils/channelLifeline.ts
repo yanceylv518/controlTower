@@ -1,4 +1,35 @@
-import type { ChannelLifeEvent, ProbeOverview } from '@ct/shared'
+import type { ChannelLifeEvent, ProbeChannelStats, ProbeOverview } from '@ct/shared'
+
+export const channelProbeFilters = {all:'全部渠道',abnormal:'有异常',error:'有渠道错误',slow:'有慢请求',skipped:'有漏测',unconfirmed:'有待确认结果',unknown:'有控制异常',pending:'有执行中探针',empty:'无探针记录'}
+export const channelProbeSorts = {channel:'渠道 ID',errors:'错误最多',slow:'慢请求最多',skipped:'漏测最多',success_rate:'成功率最低',mean_seconds:'平均耗时最长',latest:'最近探测优先'}
+export type ChannelProbeFilter = keyof typeof channelProbeFilters
+export type ChannelProbeSort = keyof typeof channelProbeSorts
+export function filterProbeChannels(rows: ProbeChannelStats[], filter: ChannelProbeFilter, sort: ChannelProbeSort): ProbeChannelStats[] {
+  const matches = (row: ProbeChannelStats) => {
+    switch(filter) {
+      case 'abnormal': return [row.errors,row.slow,row.skipped,row.unconfirmed,row.unknown].some(n=>n>0)
+      case 'error': return row.errors>0
+      case 'slow': return row.slow>0
+      case 'skipped': return row.skipped>0
+      case 'unconfirmed': return row.unconfirmed>0
+      case 'unknown': return row.unknown>0
+      case 'pending': return row.pending>0
+      case 'empty': return row.due===0
+      default: return true
+    }
+  }
+  const value = (row: ProbeChannelStats): number|null => {
+    if(sort==='channel')return row.channel_id
+    if(sort==='latest')return row.last_started_at ? Date.parse(row.last_started_at) : null
+    return row[sort] ?? null
+  }
+  return rows.filter(matches).sort((a,b)=>{
+    const av=value(a),bv=value(b), aMissing=av==null||!Number.isFinite(av),bMissing=bv==null||!Number.isFinite(bv)
+    if(aMissing!==bMissing)return aMissing?1:-1
+    const difference=aMissing||bMissing ? 0 : (av! - bv!)*(sort==='channel'||sort==='success_rate'?1:-1)
+    return difference || a.channel_id-b.channel_id || a.model_name.localeCompare(b.model_name)
+  })
+}
 
 export const probeKinds: Record<string,string> = {scheduled:'定时探针',accelerated:'错误后加速',recovery:'CT 恢复探针'}
 export const probeOutcomes: Record<string,string> = {success:'成功',slow:'慢请求',error:'渠道错误',unknown:'控制异常',canceled:'已取消',pending:'执行中',unconfirmed:'结果待确认',skipped:'漏测',succeeded:'执行成功',failed:'执行失败',expired:'已过期',delivered:'已下发',recorded:'已记录',auto_executed:'已关联执行',observed:'观察记录',submitted:'已提交'}

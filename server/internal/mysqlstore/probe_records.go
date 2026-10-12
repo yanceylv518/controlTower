@@ -131,16 +131,54 @@ func probeRecordSource(q tuning.ProbeRecordQuery) (string, []any) {
 const probeMetricsSQL = `COUNT(*),COALESCE(SUM(outcome<>'skipped'),0),
 COALESCE(SUM(outcome='success'),0),COALESCE(SUM(outcome='slow'),0),COALESCE(SUM(outcome='error'),0),COALESCE(SUM(outcome='unknown'),0),COALESCE(SUM(outcome='canceled'),0),COALESCE(SUM(outcome='pending'),0),COALESCE(SUM(outcome='unconfirmed'),0),COALESCE(SUM(outcome='skipped'),0),
 COALESCE(SUM(reason='global_concurrency'),0),COALESCE(SUM(reason='channel_concurrency'),0),COALESCE(SUM(reason='pending_evidence'),0),
-AVG(CASE WHEN outcome IN ('success','slow','error') THEN duration_seconds END),AVG(CASE WHEN outcome='success' THEN duration_seconds END),MAX(CASE WHEN outcome IN ('success','slow','error') THEN duration_seconds END),MAX(started_at)`
+AVG(CASE WHEN outcome IN ('success','slow','error') THEN duration_seconds END),AVG(CASE WHEN outcome='success' THEN duration_seconds END),MAX(CASE WHEN outcome IN ('success','slow','error') THEN duration_seconds END),MAX(started_at),
+COUNT(CASE WHEN outcome IN ('success','slow','error') THEN duration_seconds END),COUNT(CASE WHEN outcome='success' THEN duration_seconds END)`
 
 type metricScan struct {
-	mean, successMean, maximum sql.NullFloat64
-	last                       sql.NullTime
+	mean, successMean, maximum          sql.NullFloat64
+	last                                sql.NullTime
+	durationCount, successDurationCount int64
 }
 
 func (s *metricScan) args(v *tuning.ProbeMetrics) []any {
-	return []any{&v.Due, &v.Sent, &v.Success, &v.Slow, &v.Errors, &v.Unknown, &v.Canceled, &v.Pending, &v.Unconfirmed, &v.Skipped, &v.GlobalLimited, &v.ChannelLimited, &v.EvidenceLimited, &s.mean, &s.successMean, &s.maximum, &s.last}
+	return []any{&v.Due, &v.Sent, &v.Success, &v.Slow, &v.Errors, &v.Unknown, &v.Canceled, &v.Pending, &v.Unconfirmed, &v.Skipped, &v.GlobalLimited, &v.ChannelLimited, &v.EvidenceLimited, &s.mean, &s.successMean, &s.maximum, &s.last, &s.durationCount, &s.successDurationCount}
 }
+
+// Reuse the channel aggregates for the overview total instead of scanning the
+// same record range a third time. AVG ignores NULL durations, so weight means
+// by measured durations rather than by outcome counts or channel counts.
+func (s *metricScan) add(total *tuning.ProbeMetrics, v tuning.ProbeMetrics, part metricScan) {
+	total.Due += v.Due
+	total.Sent += v.Sent
+	total.Success += v.Success
+	total.Slow += v.Slow
+	total.Errors += v.Errors
+	total.Unknown += v.Unknown
+	total.Canceled += v.Canceled
+	total.Pending += v.Pending
+	total.Unconfirmed += v.Unconfirmed
+	total.Skipped += v.Skipped
+	total.GlobalLimited += v.GlobalLimited
+	total.ChannelLimited += v.ChannelLimited
+	total.EvidenceLimited += v.EvidenceLimited
+	if part.durationCount > 0 {
+		s.mean.Float64 = (s.mean.Float64*float64(s.durationCount) + part.mean.Float64*float64(part.durationCount)) / float64(s.durationCount+part.durationCount)
+		s.durationCount += part.durationCount
+		s.mean.Valid = true
+	}
+	if part.successDurationCount > 0 {
+		s.successMean.Float64 = (s.successMean.Float64*float64(s.successDurationCount) + part.successMean.Float64*float64(part.successDurationCount)) / float64(s.successDurationCount+part.successDurationCount)
+		s.successDurationCount += part.successDurationCount
+		s.successMean.Valid = true
+	}
+	if part.maximum.Valid && (!s.maximum.Valid || part.maximum.Float64 > s.maximum.Float64) {
+		s.maximum = part.maximum
+	}
+	if part.last.Valid && (!s.last.Valid || part.last.Time.After(s.last.Time)) {
+		s.last = part.last
+	}
+}
+
 func (s metricScan) finish(v *tuning.ProbeMetrics) {
 	if n := v.Success + v.Slow + v.Errors; n > 0 {
 		rate := float64(v.Success) / float64(n)
@@ -173,10 +211,6 @@ func (s Store) QueryProbeOverview(ctx context.Context, q tuning.ProbeRecordQuery
 	defer tx.Rollback()
 	source, args := probeRecordSource(q)
 	var totalScan metricScan
-	if err = tx.QueryRowContext(ctx, "SELECT "+probeMetricsSQL+" FROM "+source, args...).Scan(totalScan.args(&out.Total)...); err != nil {
-		return out, err
-	}
-	totalScan.finish(&out.Total)
 	rows, err := tx.QueryContext(ctx, "SELECT channel_id,MAX(channel_name),model_name,"+probeMetricsSQL+" FROM "+source+" GROUP BY channel_id,model_name ORDER BY channel_id,model_name", args...)
 	if err != nil {
 		return out, err
@@ -190,6 +224,7 @@ func (s Store) QueryProbeOverview(ctx context.Context, q tuning.ProbeRecordQuery
 			return out, err
 		}
 		scan.finish(&v.ProbeMetrics)
+		totalScan.add(&out.Total, v.ProbeMetrics, scan)
 		out.Channels = append(out.Channels, v)
 	}
 	err = rows.Err()
@@ -197,6 +232,7 @@ func (s Store) QueryProbeOverview(ctx context.Context, q tuning.ProbeRecordQuery
 	if err != nil {
 		return out, err
 	}
+	totalScan.finish(&out.Total)
 	trendArgs := append([]any{out.BucketSeconds}, args...)
 	rows, err = tx.QueryContext(ctx, "SELECT FLOOR(TIMESTAMPDIFF(SECOND,'1970-01-01',started_at)/?) AS bucket,"+probeMetricsSQL+" FROM "+source+" GROUP BY bucket ORDER BY bucket", trendArgs...)
 	if err != nil {
