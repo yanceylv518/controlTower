@@ -388,12 +388,18 @@ const coefficientCell = (row: ChannelDisplayRow, key: 'speed' | 'cache' | 'otps'
 };
 // 分组筛选只匹配渠道实际拥有的完整分组名，不按子串误命中。
 const channelQuery = ref("");
-const channelSwitchFilter = ref<"" | "enabled" | "disabled" | "auto_disabled">("enabled");
+const channelSwitchFilter = ref<"" | "active" | "enabled" | "disabled" | "auto_disabled">("active");
+function matchesChannelSwitchFilter(row: ChannelDisplayRow) {
+  const filter = channelSwitchFilter.value;
+  if (!filter) return true;
+  const status = channelStatusFor(row);
+  return filter === "active" ? status === "enabled" || status === "auto_disabled" : status === filter;
+}
 const modelChannelCountLabel = (model: string) => {
   if (model !== activeModel.value || !channelSwitchFilter.value) return `共 ${modelChannelCount(model)} 个渠道`;
   const status = channelSwitchFilter.value;
-  const count = modelChannelRows.value.filter(row => channelStatusFor(row) === status).length;
-  return `${channelStatusLabels[status]} ${count} 个渠道`;
+  const count = modelChannelRows.value.filter(matchesChannelSwitchFilter).length;
+  return `${status === "active" ? "已激活" : channelStatusLabels[status]} ${count} 个渠道`;
 };
 const groupFilterOpen = ref(false);
 const selectedGroupFilter = ref<{ kind: "all" } | { kind: "group"; name: string } | null>(null);
@@ -473,7 +479,7 @@ const displayedRows = computed<ChannelDisplayRow[]>(() => modelChannelRows.value
   const idQuery = query.replace(/^#/, "");
   if (query && !(row.channel_name ?? "").toLowerCase().includes(query) && !(idQuery && String(row.channel_id).includes(idQuery))) return false;
   if (!matchesChannelGroup(row.group_name, selectedGroupName.value)) return false;
-  return !channelSwitchFilter.value || channelStatusFor(row) === channelSwitchFilter.value;
+  return matchesChannelSwitchFilter(row);
 }));
 const priorityDrafts = reactive(new Map<number, number>());
 watch([activeModel, selectedGroupFilter, channelSwitchFilter, channelQuery], () => { mobileRowCount.value = 20; });
@@ -1113,7 +1119,7 @@ async function save() {
     } else ElMessage.error(error instanceof Error ? error.message : "保存失败");
   } finally { saving.value = false; }
 }
-watch(() => filters.site_id, () => { groupDialogOpen.value = false; groupManagerOpen.value = false; groupFilterOpen.value = false; selectedGroupFilter.value = null; channelQuery.value = ""; channelSwitchFilter.value = "enabled"; cancelGroupPolls(); channels.value = []; channelDirectorySite.value = ""; channelDirectoryLoading.value = false; availableGroups.value = []; pendingGroups.value = new Map(); groupErrors.value = new Map(); channelDirectoryGeneration++; groupDirectoryGeneration++; void load(true); void watchChannelChanges(); });
+watch(() => filters.site_id, () => { groupDialogOpen.value = false; groupManagerOpen.value = false; groupFilterOpen.value = false; selectedGroupFilter.value = null; channelQuery.value = ""; channelSwitchFilter.value = "active"; cancelGroupPolls(); channels.value = []; channelDirectorySite.value = ""; channelDirectoryLoading.value = false; availableGroups.value = []; pendingGroups.value = new Map(); groupErrors.value = new Map(); channelDirectoryGeneration++; groupDirectoryGeneration++; void load(true); void watchChannelChanges(); });
 watch(siteID, () => { ratesReady.value = false; ratesError.value = ""; currentRates.value.clear(); void refreshCurrentRates(); });
 watch([eventModelFilter, eventRuleFilter, eventChannelQuery, eventDateRange, activeModel], () => { eventPage.value = 1; });
 onMounted(() => { void load(true); void watchChannelChanges(); void refreshCurrentRates(); refreshTimer = setInterval(() => void refreshRuntime(), 30000); ratesTimer = setInterval(() => { if (!document.hidden) void refreshCurrentRates(); }, 5000); });
@@ -1172,6 +1178,7 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
               <el-input v-model="channelQuery" aria-label="渠道名称或ID筛选" placeholder="搜索渠道名称 / ID" clearable class="channel-name-filter"/>
               <el-select v-model="channelSwitchFilter" aria-label="渠道开关状态筛选" placeholder="全部开关状态" class="channel-status-filter">
                 <el-option value="" label="全部开关状态"/>
+                <el-option value="active" label="已激活"/>
                 <el-option value="enabled" label="已启用"/>
                 <el-option value="auto_disabled" label="自动关闭"/>
                 <el-option value="disabled" label="手动关闭"/>
@@ -1188,7 +1195,7 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
                   @clear="selectedGroupFilter = null"
                 />
                 <el-input v-model="channelQuery" aria-label="渠道名称或ID筛选" placeholder="搜索渠道名称 / ID" clearable class="channel-name-filter"/>
-              <el-select v-model="channelSwitchFilter" aria-label="渠道开关状态筛选" placeholder="全部开关状态"><el-option value="" label="全部开关状态"/><el-option value="enabled" label="已启用"/><el-option value="auto_disabled" label="自动关闭"/><el-option value="disabled" label="手动关闭"/></el-select>
+              <el-select v-model="channelSwitchFilter" aria-label="渠道开关状态筛选" placeholder="全部开关状态"><el-option value="" label="全部开关状态"/><el-option value="active" label="已激活"/><el-option value="enabled" label="已启用"/><el-option value="auto_disabled" label="自动关闭"/><el-option value="disabled" label="手动关闭"/></el-select>
                 <span v-if="selectedGroupFilter || channelQuery.trim()" class="channel-filter-summary">匹配 {{ displayedRows.length }} / {{ modelChannelRows.length }} 个渠道</span>
               </div>
               <el-empty v-if="!displayedRows.length" description="没有匹配渠道" />
