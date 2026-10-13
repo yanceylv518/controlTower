@@ -439,7 +439,7 @@ function rowClass({ row }: { row: DimRow }) {
           <article v-for="group in chartTrendGroups" :key="group.key" class="dimension-chart-card">
             <header>
               <div class="dimension-heading">
-                <div class="dimension-name"><MonitorNameButton :name="group.name" @detail="group.row && openDetail(group.row)" /><MonitorCopyButton :value="kind === 'channels' ? group.id : group.name" :label="kind === 'channels' ? '复制渠道 ID' : '复制模型名称'" /></div>
+                <div class="dimension-name"><MonitorNameButton :name="group.name" @detail="group.row && openDetail(group.row)" /><MonitorCopyButton :value="group.name" :label="kind === 'channels' ? '复制渠道名称' : '复制模型名称'" /></div>
                 <span v-if="kind === 'channels'" class="dimension-id">ID {{ group.id }}</span>
               </div>
               <div class="dimension-headline" :title="group.headline.detail"><span>{{ group.headline.label }}</span><strong>{{ group.headline.value }}</strong><small v-if="activeMetric === 'tpm'">{{ group.headline.detail }}</small></div>
@@ -479,7 +479,7 @@ function rowClass({ row }: { row: DimRow }) {
             <template #default="{ row }">
               <span class="dim-name">
                 <i :class="['dim-dot', rowKind(row)]" />
-                <MonitorNameButton :name="row.display_name || row.display_key || row.dimension_key" @detail="openDetail(row)" /><MonitorCopyButton :value="kind === 'channels' ? row.dimension_key.split(':').pop() || '' : row.display_name || row.display_key || row.dimension_key" :label="kind === 'channels' ? '复制渠道 ID' : '复制模型名称'" />
+                <MonitorNameButton :name="row.display_name || row.display_key || row.dimension_key" @detail="openDetail(row)" /><MonitorCopyButton :value="row.display_name || row.display_key || row.dimension_key" :label="kind === 'channels' ? '复制渠道名称' : '复制模型名称'" />
                 <el-tooltip :content="row.dimension_key" placement="top">
                   <i class="dim-id">{{ row.dimension_key.split(":").pop() }}</i>
                 </el-tooltip>
