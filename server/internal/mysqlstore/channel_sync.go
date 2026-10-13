@@ -18,9 +18,23 @@ import (
 // applied even when the row carries a later captured_at from an Agent whose
 // clock runs ahead; captured_at only ever moves forward.
 func (s Store) ApplyChannelWrite(siteID string, channelID int64, weight *uint, priority *int64, status *int, at time.Time) error {
-	_, err := s.db.ExecContext(context.Background(), `UPDATE channel_current c JOIN instances i ON i.id=c.instance_id
+	tx, err := s.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	_, err = tx.ExecContext(context.Background(), `UPDATE channel_current c JOIN instances i ON i.id=c.instance_id
 SET c.weight=COALESCE(?,c.weight),c.priority=COALESCE(?,c.priority),c.status=COALESCE(?,c.status),c.captured_at=GREATEST(c.captured_at,?)
 WHERE CASE WHEN i.site_id='' THEN i.id ELSE i.site_id END=? AND c.channel_id=?`, weight, priority, channelStatusLabelPtr(status), at, siteID, channelID)
+	if err != nil {
+		return err
+	}
+	if status != nil && *status == 1 {
+		if _, err = tx.Exec("UPDATE channel_schedules SET closed_by_schedule=0 WHERE site_id=? AND channel_id=?", siteID, channelID); err != nil {
+			return err
+		}
+	}
+	err = tx.Commit()
 	if err == nil {
 		channelupdates.Notify(siteID)
 	}

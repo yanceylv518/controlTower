@@ -11,6 +11,7 @@ import (
 
 	"controltower/internal/channelcontrol"
 	ctauth "controltower/server/internal/auth"
+	"controltower/server/internal/channelschedule"
 	"controltower/server/internal/storage"
 	"controltower/server/internal/tuning"
 )
@@ -114,6 +115,10 @@ func (h ChannelGroupHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	command, err := h.Updater.UpdateChannelGroup(r.Context(), siteID, channelID, group, ctauth.Actor(r), time.Now().UTC())
 	if err != nil {
+		if errors.Is(err, channelschedule.ErrBusy) {
+			writeDashboardError(w, http.StatusConflict, "channel_control_busy")
+			return
+		}
 		if errors.Is(err, tuning.ErrChannelNotFound) {
 			writeDashboardError(w, http.StatusNotFound, "channel_not_found")
 			return

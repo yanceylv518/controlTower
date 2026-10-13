@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"controltower/internal/channelcontrol"
+	"controltower/server/internal/channelschedule"
 	"controltower/server/internal/mysqlstore"
 	"controltower/server/internal/secrets"
 	"controltower/server/internal/storage"
@@ -109,6 +110,29 @@ func (s Store) controllerForSite(siteID string) (Controller, bool, error) {
 	return s.factory(cfg.APIURL, token, cfg.AdminUserID), true, nil
 }
 
+// 同站点的直连写入与计划共享锁，防止关闭检查期间替代渠道被调权或移出分组。
+func (s Store) lockChannelWrite(ctx context.Context, siteID string, channelID int64) (func(), error) {
+	siteRelease, err := s.LockChannelControlSite(ctx, siteID, writeTimeout)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, channelschedule.ErrBusy
+		}
+		return nil, err
+	}
+	channelRelease, err := s.LockChannelWrite(ctx, siteID, channelID)
+	if err != nil {
+		siteRelease()
+		if errors.Is(err, tuning.ErrChannelControlBusy) {
+			return nil, channelschedule.ErrBusy
+		}
+		return nil, err
+	}
+	return func() {
+		channelRelease()
+		siteRelease()
+	}, nil
+}
+
 // CreateContinuousWeightChange writes the weight to new-api synchronously on
 // direct sites, then records the same paper trail the command path leaves.
 // The recommendation's InstanceID carries the site id (engine convention).
@@ -128,11 +152,14 @@ func (s Store) CreateContinuousWeightChangeWithAudit(v tuning.Recommendation, ac
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
 	defer cancel()
-	unlock, err := s.LockChannelWrite(ctx, v.InstanceID, v.ChannelID)
-	if err != nil {
-		return "", err
+	release, lockErr := s.lockChannelWrite(ctx, v.InstanceID, v.ChannelID)
+	if errors.Is(lockErr, channelschedule.ErrBusy) {
+		return "", tuning.ErrDecisionSuperseded
 	}
-	defer unlock()
+	if lockErr != nil {
+		return "", lockErr
+	}
+	defer release()
 	if err := s.CheckManualChannelControl(v); err != nil {
 		return "", err
 	}
@@ -205,6 +232,11 @@ func (s Store) UpdateChannelGroup(ctx context.Context, siteID string, channelID 
 	}
 	ctx, cancel := context.WithTimeout(ctx, writeTimeout)
 	defer cancel()
+	release, err := s.lockChannelWrite(ctx, siteID, channelID)
+	if err != nil {
+		return storage.ChannelCommand{}, err
+	}
+	defer release()
 	tracked := &journalController{Controller: controller, journal: s.Store, site: siteID, actor: actor, operation: "channel.group", before: map[string]any{"group": previousGroup}}
 	result, err := tracked.Update(ctx, channelcontrol.UpdateRequest{ChannelID: channelID, Group: &normalized})
 	if err != nil {
@@ -393,6 +425,11 @@ func (s Store) CreateTuningPreflight(siteID string, channelID int64, actor strin
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
 	defer cancel()
+	release, err := s.lockChannelWrite(ctx, siteID, channelID)
+	if err != nil {
+		return storage.ChannelCommand{}, err
+	}
+	defer release()
 	status, errorSummary := "succeeded", ""
 	tracked := &journalController{Controller: controller, journal: s.Store, site: siteID, actor: actor, operation: "channel.verify"}
 	if _, err := tracked.Update(ctx, channelcontrol.UpdateRequest{ChannelID: channelID}); err != nil {

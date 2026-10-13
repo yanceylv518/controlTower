@@ -1,4 +1,5 @@
 export const alertCategories = [
+  { key: "schedule", label: "渠道定时启停", rules: ["channel_schedule"] },
   { key:"trial",label:"测试开始提醒",rules:["trial_started"] },
   { key: "circuit", label: "渠道熔断", rules: ["channel_circuit_opened", "channel_circuit_recovered"] },
   { key: "balance", label: "余额告警", rules: ["user_low_balance"] },

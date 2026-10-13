@@ -19,6 +19,13 @@ import (
 // ErrChannelNotFound 表示 New API 已确认目标渠道不存在，调用方可据此
 // 将过期快照与普通控制链路故障区分开，避免误报为通用写入失败。
 var ErrChannelNotFound = errors.New("new-api channel not found")
+var ErrStatusRejected = errors.New("new-api rejected channel status")
+
+type HTTPError struct{ StatusCode int }
+
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("new-api request failed with status %d", e.StatusCode)
+}
 
 type UpdateRequest struct {
 	ChannelID int64
@@ -132,7 +139,7 @@ func NewWithCredentials(baseURL, accessToken, username, password string, adminUs
 	return &Client{baseURL: strings.TrimRight(baseURL, "/"), accessToken: accessToken, username: username, password: password, adminUserID: adminUserID, tokenStore: tokenStore, httpClient: httpClient}
 }
 
-// Read observes a channel without issuing PUT/POST control operations.
+// Read 只读取渠道状态，不执行控制写入。
 func (c *Client) Read(ctx context.Context, channelID int64) (Result, error) {
 	if channelID <= 0 {
 		return Result{}, fmt.Errorf("channel id must be positive")
@@ -144,7 +151,7 @@ func (c *Client) Read(ctx context.Context, channelID int64) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	// An incomplete response cannot confirm a lost write acknowledgement.
+	// 返回字段不完整时，不能据此确认丢失回执的写入。
 	for _, field := range []string{"weight", "status", "priority", "group"} {
 		if channel[field] == nil {
 			return Result{}, fmt.Errorf("channel read missing %s", field)
@@ -167,11 +174,37 @@ func (c *Client) Update(ctx context.Context, update UpdateRequest) (Result, erro
 		return Result{}, fmt.Errorf("new-api admin user id is not configured")
 	}
 
+	statusOnly := update.Status != nil && update.Weight == nil && update.Priority == nil && update.Group == nil
 	channel, err := c.get(ctx, update.ChannelID)
 	if err != nil {
+		if statusOnly && rejectedStatusResponse(err) {
+			return Result{}, fmt.Errorf("%w: %w", ErrStatusRejected, err)
+		}
 		return Result{}, err
 	}
 	originalStatus := channelNumber(channel["status"])
+	if statusOnly {
+		// 只改开关时不回传整份渠道配置，避免覆盖并行修改的权重或分组。
+		body, err := json.Marshal(map[string]int{"status": *update.Status})
+		if err != nil {
+			return Result{}, err
+		}
+		var response struct {
+			Success bool   `json:"success"`
+			Message string `json:"message"`
+			Data    any    `json:"data"`
+		}
+		if err = c.do(ctx, http.MethodPost, c.baseURL+"/api/channel/"+strconv.FormatInt(update.ChannelID, 10)+"/status", body, &response, true); err != nil {
+			if rejectedStatusResponse(err) {
+				return Result{}, fmt.Errorf("%w: %w", ErrStatusRejected, err)
+			}
+			return Result{}, err
+		}
+		if !response.Success {
+			return Result{}, fmt.Errorf("%w: %s", ErrStatusRejected, response.Message)
+		}
+		return Result{ChannelID: update.ChannelID, Status: update.Status, Weight: uintPointer(channelNumber(channel["weight"])), Priority: int64Pointer(channelNumber(channel["priority"])), Group: channelString(channel["group"])}, nil
+	}
 	originalGroup := channelString(channel["group"])
 	delete(channel, "key")
 	// Current new-api versions reject status on the general channel update
@@ -234,6 +267,14 @@ func (c *Client) Update(ctx context.Context, update UpdateRequest) (Result, erro
 		originalStatus = int64(*update.Status)
 	}
 	return Result{ChannelID: update.ChannelID, Status: intPointer(originalStatus), Weight: uintPointer(channelNumber(channel["weight"])), Priority: int64Pointer(channelNumber(channel["priority"])), PreviousGroup: originalGroup, Group: actualGroup}, nil
+}
+
+func rejectedStatusResponse(err error) bool {
+	if errors.Is(err, ErrChannelNotFound) {
+		return true
+	}
+	var response *HTTPError
+	return errors.As(err, &response) && response.StatusCode >= 400 && response.StatusCode < 500 && response.StatusCode != http.StatusRequestTimeout && response.StatusCode != http.StatusTooManyRequests
 }
 
 func (c *Client) ensureToken(ctx context.Context) error {
@@ -378,7 +419,7 @@ func (c *Client) do(ctx context.Context, method, url string, body []byte, target
 				}
 			}
 		}
-		return fmt.Errorf("new-api request failed with status %d", resp.StatusCode)
+		return &HTTPError{StatusCode: resp.StatusCode}
 	}
 	if target == nil {
 		return nil

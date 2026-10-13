@@ -12,6 +12,12 @@ export function formatTime(value: string | null | undefined) {
   if (!value) return '—'; const date = new Date(value)
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN', { hour12: false })
 }
+const beijingTimeFormatter = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })
+export function formatBeijingTime(value: string | null | undefined) {
+  if (!value) return '—'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : beijingTimeFormatter.format(date)
+}
 export function formatTokens(value: number | null | undefined) {
   if (value == null) return '—'
   if (Math.abs(value) >= 1_000_000) return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1)}M`

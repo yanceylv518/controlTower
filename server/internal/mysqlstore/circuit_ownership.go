@@ -41,6 +41,9 @@ func reconcileChannelOwnership(tx *sql.Tx, site string, snapshot storage.Channel
 	case "disabled", "disable", "inactive", "2", "3", "auto_disabled", "auto-disabled":
 		previouslyDisabled = true
 	}
+	if _, err := tx.Exec(`UPDATE channel_schedules s SET closed_by_schedule=0 WHERE site_id=? AND channel_id=? AND closed_by_schedule=1 AND NOT EXISTS (SELECT 1 FROM channel_schedule_executions e WHERE e.id=s.last_execution_id AND e.status='running')`, site, snapshot.ChannelID); err != nil {
+		return err
+	}
 	_, err := tx.Exec(`UPDATE tuning_continuous_states SET
  control_revision=control_revision+1,
  circuit_disabled=0,routine_circuit_latched=0,circuit_status_target=0,circuit_status_command_id='',

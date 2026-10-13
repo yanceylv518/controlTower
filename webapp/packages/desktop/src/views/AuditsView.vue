@@ -215,6 +215,10 @@ function operationLabel(value: string) {
     "billing.channel_setting.update": "修改渠道计费配置",
     "billing.user_setting.update": "修改用户计费配置",
     "channel.update": "渠道配置变更",
+    "channel.schedule_save": "保存渠道定时计划",
+    "channel.schedule_delete": "删除渠道定时计划",
+    "channel.schedule_open": "定时开启",
+    "channel.schedule_close": "定时关闭",
     "channel.probe": "渠道连通性测试",
     "tuning.base_update": "调权基础值变更",
     "tuning.base_priority_sync": "基础优先级同步",
@@ -314,6 +318,12 @@ function httpOperationLabel(value: string) {
 }
 
 function statusMeta(value: string) {
+  if (value === "waiting_control") return { label: "等待其他操作", type: "warning" as const };
+  if (value === "unchanged") return { label: "状态已符合", type: "success" as const };
+  if (value === "skipped") return { label: "安全跳过", type: "warning" as const };
+  if (value === "unknown") return { label: "结果待确认", type: "danger" as const };
+  if (value === "superseded") return { label: "已失效", type: "info" as const };
+  if (value === "retry" || value === "waiting_recovery" || value === "running") return { label: value === "retry" ? "等待重试" : value === "waiting_recovery" ? "等待恢复" : "执行中", type: "warning" as const };
   if (value === "succeeded" || value === "success") return { label: "成功", type: "success" as const };
   if (value === "failed") return { label: "失败", type: "danger" as const };
   if (value === "submitted" || value === "pending") return { label: "执行中", type: "warning" as const };
@@ -358,6 +368,7 @@ function sourceComponentLabel(value: string) {
 
 function targetTypeLabel(value: string) {
   const labels: Record<string, string> = {
+    channel_schedule: "渠道定时计划",
     channel: "渠道",
     ct_user: "账号",
     permission_preset: "权限预设",
@@ -501,6 +512,13 @@ function httpStatus(item: OperationAuditItem) {
         <el-select v-model="draft.status" clearable placeholder="结果" class="audit-select">
           <el-option label="成功" value="succeeded" />
           <el-option label="失败" value="failed" />
+          <el-option label="状态已符合" value="unchanged" />
+          <el-option label="安全跳过" value="skipped" />
+          <el-option label="结果待确认" value="unknown" />
+          <el-option label="等待恢复" value="waiting_recovery" />
+          <el-option label="等待其他操作" value="waiting_control" />
+          <el-option label="等待重试" value="retry" />
+          <el-option label="已失效" value="superseded" />
         </el-select>
         <el-button type="primary" :loading="state.loading.value" @click="applyFilters">查询</el-button>
         <el-button @click="clearFilters">重置</el-button>

@@ -17,13 +17,17 @@ import (
 // Serialize CT status/weight writes across API and scheduler processes. The
 // connection remains checked out until RELEASE_LOCK, not returned to the pool.
 func (s Store) LockChannelWrite(ctx context.Context, site string, channel int64) (func(), error) {
+	return s.lockChannelWrite(ctx, site, channel, 10*time.Second)
+}
+
+func (s Store) lockChannelWrite(ctx context.Context, site string, channel int64, wait time.Duration) (func(), error) {
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
 		return nil, err
 	}
 	key := fmt.Sprintf("ct-channel:%x", sha256.Sum256([]byte(fmt.Sprintf("%s/%d", site, channel))))[:64]
 	var acquired sql.NullInt64
-	if err = conn.QueryRowContext(ctx, `SELECT GET_LOCK(?,10)`, key).Scan(&acquired); err != nil || !acquired.Valid || acquired.Int64 != 1 {
+	if err = conn.QueryRowContext(ctx, `SELECT GET_LOCK(?,?)`, key, wait.Seconds()).Scan(&acquired); err != nil || !acquired.Valid || acquired.Int64 != 1 {
 		if err != nil {
 			// A lost response may hide a successful acquisition. Never return
 			// that session (and its advisory lock) to the connection pool.
@@ -192,6 +196,10 @@ func (s Store) FinishManualChannelStatus(site string, cmd storage.ChannelCommand
 	if succeeded {
 		status, reason = "succeeded", ""
 		if err = applyCompletedChannelWrite(tx, cmd, at); err != nil {
+			return err
+		}
+		// 已确认的人工操作重新取得关闭来源，计划仍从下一边界执行。
+		if _, err = tx.Exec(`UPDATE channel_schedules SET closed_by_schedule=0 WHERE site_id=? AND channel_id=?`, site, cmd.ChannelID); err != nil {
 			return err
 		}
 		if payload.Status == 1 {

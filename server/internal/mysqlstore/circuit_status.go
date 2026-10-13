@@ -4,8 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"math"
+	"time"
 
+	"controltower/server/internal/channelschedule"
 	"controltower/server/internal/tuning"
 )
 
@@ -18,6 +21,17 @@ func checkCircuitStatus(q priorityQuery, v tuning.Recommendation) error {
 		return nil
 	}
 	target := *v.ProposedChannelStatus
+	scheduleClosed := false
+	if target == 1 {
+		var err error
+		scheduleClosed, err = checkScheduleRecovery(q, v.InstanceID, v.ChannelID, time.Now().UTC())
+		if errors.Is(err, channelschedule.ErrSuperseded) {
+			return ErrCircuitStatusSuperseded
+		}
+		if err != nil {
+			return err
+		}
+	}
 	if (target != 1 && target != 2) || (target == 1 && v.Rule != "circuit_recovered") || (target == 2 && v.Rule != "circuit_disabled") || v.ModeAtCreation != "auto" {
 		return ErrCircuitStatusSuperseded
 	}
@@ -34,7 +48,7 @@ WHERE b.instance_id=? AND b.channel_id=?`, v.InstanceID, v.ChannelID).Scan(&mode
 	if err != nil {
 		return err
 	}
-	if revision != recommendationControlRevision(v) || !owned || pending != target || weight <= 0 || model != stateModel || proposedWeight != v.ProposedWeight {
+	if revision != recommendationControlRevision(v) || !(owned || target == 1 && scheduleClosed) || pending != target || weight <= 0 || model != stateModel || proposedWeight != v.ProposedWeight {
 		return ErrCircuitStatusSuperseded
 	}
 	var raw string

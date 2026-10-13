@@ -4,6 +4,52 @@ import type { ApiClient } from "../client";
 export interface ChannelGroupPreset { id: string; name: string; groups: string[] }
 export interface ChannelGroupPresets { items: ChannelGroupPreset[]; revision: number }
 
+export interface ChannelScheduleConfig {
+  enabled: boolean;
+  days: number[];
+  windows: { start: string; end: string }[];
+  revision: number;
+  align_now: boolean;
+  expected_updated_at?: string;
+}
+export interface ChannelScheduleExecution {
+  id: string;
+  site_id: string;
+  channel_id: number;
+  revision: number;
+  boundary: string;
+  target: number;
+  status: string;
+  attempts: number;
+  error: string;
+  updated_at: string;
+  expires_at?: string;
+  before_status: number;
+}
+export interface ChannelSchedule extends ChannelScheduleConfig {
+  site_id: string;
+  channel_id: number;
+  effective_at: string;
+  updated_at: string;
+  updated_by: string;
+  closed_by_schedule: boolean;
+  allowed: boolean;
+  next_at?: string;
+  next_status?: number;
+  execution?: ChannelScheduleExecution;
+}
+export interface ChannelScheduleList {
+  items: ChannelSchedule[];
+  direct_configured: boolean;
+  worker_enabled: boolean;
+}
+export interface ChannelSchedulePreview {
+  allowed: boolean;
+  next_at?: string;
+  next_status?: number;
+  effective_windows: { start_minute: number; end_minute: number }[];
+}
+
 export interface BillingGenerationDay {day:string;status:string;job_id?:string;processed:number;error?:string;updated_at?:string}
 export interface BillingGenerationProgress {subject_name?:string;waiting_for?:string;subject_id:number;outcome:string;total_days:number;checked:number;complete:number;empty:number;pending:number;running:number;failed:number;processed:number;error?:string;last_attempt?:string;days:BillingGenerationDay[];monthly?:BillingGenerationDay}
 export interface BillingGenerationTask {id:string;instance_id:string;kind:string;from:string;to:string;work_until:string;source:string;overwrite:boolean;exclude_zero_output?:boolean;subject_ids:number[];created_at:string;outcome:string;percentage:number;completed_users:number;failed_users:number;complete_days:number;empty_days:number;items?:BillingGenerationProgress[]}
@@ -1100,6 +1146,11 @@ export const dashboardApi = (client: ApiClient) => ({
     client.request<ListResponse<TuningChannel>>(`/api/dashboard/tuning/channels${query({ site_id })}`),
   saveTuningChannelStatus: (site_id: string, channel_id: number, status: 1 | 2) =>
     client.request<{command_id:string;channel_id:number;channel_status:1|2;status:string}>(`/api/dashboard/tuning/channels/${channel_id}/status${query({ site_id })}`, {method:"PUT",body:JSON.stringify({status,confirm:true})}),
+  channelSchedules: (site_id:string, signal?:AbortSignal) => client.request<ChannelScheduleList>(`/api/dashboard/tuning/channel-schedules${query({site_id})}`, {signal}),
+  saveChannelSchedule: (site_id:string,channel_id:number,value:ChannelScheduleConfig,signal?:AbortSignal) => client.request<{saved:boolean;revision:number;changed:boolean}>(`/api/dashboard/tuning/channel-schedules/${channel_id}${query({site_id})}`,{method:'PUT',body:JSON.stringify({...value,confirm:true}),signal}),
+  previewChannelSchedule: (site_id:string,value:ChannelScheduleConfig,signal?:AbortSignal) => client.request<ChannelSchedulePreview>(`/api/dashboard/tuning/channel-schedules/preview${query({site_id,config:JSON.stringify(value)})}`,{signal}),
+  deleteChannelSchedule: (site_id:string,channel_id:number,revision:number,signal?:AbortSignal,expected_updated_at?:string) => client.request<{saved:boolean}>(`/api/dashboard/tuning/channel-schedules/${channel_id}${query({site_id})}`,{method:'DELETE',body:JSON.stringify({revision,confirm:true,expected_updated_at}),signal}),
+  channelScheduleExecutions: (site_id:string,channel_id:number,signal?:AbortSignal) => client.request<{items:ChannelScheduleExecution[]}>(`/api/dashboard/tuning/channel-schedules/${channel_id}/executions${query({site_id})}`,{signal}),
   tuningGroups: (site_id: string) =>
     client.request<{ items: string[] }>(`/api/dashboard/tuning/groups${query({ site_id })}`),
   saveTuningChannelGroup: (site_id: string, channel_id: number, group: string) =>

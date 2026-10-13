@@ -136,6 +136,7 @@ func run() error {
 		startNotificationRunner(workers, store, settingsProvider, cfg.SecretKey, time.Duration(cfg.NotificationIntervalSeconds)*time.Second)
 		fastCircuitSink = startTuningRunner(workers, controlStore)
 		workers.Go(controlStore.RunReadonlyChannelSync)
+		workers.Go(controlStore.RunChannelSchedules)
 	}
 	dashboard.SetBillingSourceReadPause(time.Duration(cfg.BillingPagePauseMilliseconds) * time.Millisecond)
 	startBillingJobRunner(workers, store, cfg.SecretKey, time.Duration(cfg.BillingPagePauseMilliseconds)*time.Millisecond)
@@ -143,6 +144,7 @@ func run() error {
 	startReadonlyLogRollupRunner(workers, store, cfg.SecretKey)
 
 	muxOptions := httpapi.Options{ArchiveReader: archivereader.Reader{ConnectionsFile: cfg.ArchiveReadonlyConnectionsFile, Connections: store, SecretKey: cfg.SecretKey}, TrialHandler: voicealert.TrialHandler{Store: voiceStore, Source: trialSource, WorkerEnabled: !cfg.APIOnly}, VoiceHandler: voicealert.Handler{Store: voiceStore, Caller: voiceCaller, Runner: voiceRunner}, AfterAgentReport: afterReport, AgentToken: cfg.AgentToken, DashboardToken: cfg.DashboardToken, Store: store, TuningStore: controlStore, FastCircuitSink: fastCircuitSink, AuthManager: authManager, AgentTokenPepper: cfg.AgentTokenPepper, SecretKey: cfg.SecretKey, NotificationMaxAttempts: cfg.NotificationMaxAttempts, CommandExpiry: time.Duration(cfg.CommandExpiryMinutes) * time.Minute, SettingsProvider: settingsProvider, BillingPagePause: time.Duration(cfg.BillingPagePauseMilliseconds) * time.Millisecond}
+	muxOptions.ChannelScheduleWorkerEnabled = !cfg.APIOnly
 	server := &http.Server{
 		Addr:              cfg.ListenAddr,
 		Handler:           httpapi.NewMux(muxOptions),

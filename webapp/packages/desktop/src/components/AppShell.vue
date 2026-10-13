@@ -26,7 +26,7 @@ import AccountMenu from "./AccountMenu.vue";
 import BrandMark from "./BrandMark.vue";
 import { useMenuVisibilityStore } from '../stores/menuVisibility';
 
-defineProps<{ title: string }>();
+defineProps<{ title: string; beforeSiteChange?: (site: string) => boolean | Promise<boolean> }>();
 const auth = useAuthStore();
 const route = useRoute();
 const menuVisibility = useMenuVisibilityStore();
@@ -172,7 +172,7 @@ const visibleViewerNav = computed(() => viewerNav.filter(item => menuVisibility.
         <div class="topbar-tools"><slot name="tools" /></div>
         <div class="topbar-spacer"></div>
         <div class="user">
-          <SiteSelect :readonly-only="readonlySiteRequired" />
+          <SiteSelect :readonly-only="readonlySiteRequired" :before-change="beforeSiteChange" />
           <ThemeSwitch />
           <AccountMenu />
         </div>
