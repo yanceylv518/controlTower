@@ -382,7 +382,7 @@ func (s Store) QueryChannelCommands(q storage.ChannelCommandQuery) ([]storage.Ch
 
 func (s Store) InsertOperationAudit(v storage.OperationAudit) error {
 	v = storage.NormalizeOperationAudit(v)
-	if !storage.IsManualOperationAudit(v) {
+	if !storage.IsManualOperationAudit(v) && !storage.IsChannelScheduleExecutionAudit(v) {
 		return nil
 	}
 	if storage.IsExcludedOperationAudit(v.OperationType) {
@@ -424,7 +424,7 @@ func (s Store) QueryOperationAuditsContext(ctx context.Context, q storage.Operat
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
 	limit, offset := storage.NormalizeCommandPagination(q.Limit, q.Offset)
-	where := []string{"a.is_manual_audit=1"}
+	where := []string{"(a.is_manual_audit=1 OR a.operation_type IN ('channel.schedule_open','channel.schedule_close'))"}
 	args := []any{}
 	if q.InstanceID != "" {
 		where = append(where, "a.instance_id=?")

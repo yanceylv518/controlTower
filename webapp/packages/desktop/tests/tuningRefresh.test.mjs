@@ -44,6 +44,54 @@ test('probe picker groups by model and displays online priority and weight indep
   assert.equal(p.probeChannelOptions.value.some(x=>x.children.some(c=>c.value===2)),false,'do not leak another site directory');
 });
 
+test('probe picker hides unselected manual shutdown and pending holds, but allows CT auto-disabled channels', async () => {
+  for (const status of ['disabled','2','3','auto_disabled']) {
+    const p=await manualStatusPage(status,{...state(42),paused_reason:'manual_disabled'});
+    const option=()=>p.probeChannelOptions.value.flatMap(g=>g.children).find(c=>c.value===1);
+    assert.equal(option(),undefined);
+    assert.equal(p.probeChannelOptions.value.length,0,'omit empty model groups');
+    p.channels.value[0].status='enabled';
+    assert.equal(option(),undefined,'pending manual hold overrides an enabled directory entry');
+    p.policy.continuous.routine_probe_channel_ids=[1];
+    assert.equal(option().disabled,true);
+    assert.match(option().label,/手动接管.*关闭未确认.*不探测/);
+    p.policy.continuous.routine_probe_channel_ids=[];
+    p.acceptStates('a',[{...state(42),circuit_disabled:true,circuit_status_target:0}]);
+    p.channels.value[0].status=status;
+    assert.equal(option().disabled,false,'confirmed CT circuit shutdown may be configured for future routine probes');
+    assert.equal(option().statusLabel,'自动关闭');
+    p.acceptStates('b',[{...state(42),circuit_disabled:true}]);
+    assert.equal(option(),undefined,'another site cannot prove CT ownership of this shutdown');
+  }
+  const p=await manualStatusPage('enabled');
+  assert.equal(p.probeChannelOptions.value[0].children[0].disabled,false);
+  p.channels.value[0].status='disabled';
+  assert.equal(p.probeChannelOptions.value.length,0,'directory shutdown is hidden even without a manual hold');
+  p.channels.value[0].status='enabled';
+  assert.equal(p.probeChannelOptions.value[0].children[0].disabled,false,'explicit re-enable restores the option');
+});
+
+test('previously selected manual channels remain visible and can be explicitly removed without losing other selections', async () => {
+  const p=await manualStatusPage('disabled',{...state(42),paused_reason:'manual_disabled'});
+  p.policy.continuous.routine_probe_selected_only=true;
+  p.policy.continuous.routine_probe_channel_ids=[1,99];
+  p.dirty.value=false;
+  assert.deepEqual(p.selectedManualProbeChannelIDs.value,[1]);
+  assert.deepEqual(p.policy.continuous.routine_probe_channel_ids,[1,99],'refresh must not silently rewrite the saved choice');
+  assert.equal(p.dirty.value,false);
+  assert.equal(p.probeChannelOptions.value.flatMap(g=>g.children).find(c=>c.value===1).disabled,true);
+  assert.match(p.probeChannelOptions.value.flatMap(g=>g.children).find(c=>c.value===1).label,/手动关闭.*不探测/,'selected tag explains why it does not probe');
+  p.removeManualProbeChannels();
+  assert.deepEqual(p.policy.continuous.routine_probe_channel_ids,[99],'unavailable directory entries remain intact');
+  assert.equal(p.dirty.value,true);
+  assert.deepEqual(p.selectedManualProbeChannelIDs.value,[]);
+  assert.equal(p.probeChannelOptions.value.some(g=>g.children.some(c=>c.value===1)),false,'removed manual channel disappears instead of becoming selectable');
+  let saved;
+  p.dashboard.saveTuningPolicy=async(_site,next)=>{saved=cloneFixture(next);p.dashboard.tuningPolicy=async()=>({mode:'observe',policy:cloneFixture(saved)})};
+  await p.save();
+  assert.deepEqual(saved.continuous.routine_probe_channel_ids,[99]);
+});
+
 test('routine channel selection saves independently, supports empty selection and keeps live status until saved', async () => {
   const p=page(); await p.load();
   assert.equal(p.mobileRuleChanges.value.length,0,'cloned arrays must not appear changed');
@@ -325,13 +373,16 @@ function page() {
     tuningRecommendations: async () => ({ items: [] }),
     tuningContinuousStates: async () => ({ items: [state(42)] }),
     tuningChannels: async () => { throw new Error('channel directory unavailable') },
+    channelSchedules: async () => ({ items: [], direct_configured: true, worker_enabled: true }),
   }
   const names = ['computed', 'reactive', 'ref', 'watch', 'onMounted', 'onBeforeUnmount', 'useFiltersStore', 'dashboard', 'formatTime', 'ApiError', 'ElMessage', 'ElMessageBox', 'useMobileViewport', 'hiddenChannelGroupCount', 'matchesChannelGroup', 'MAX_VISIBLE_CHANNEL_GROUPS', 'normalizeChannelGroups', 'splitChannelGroups', 'visibleChannelGroups']
-  const create = new Function(...names, `${compiled}\nreturn { probeChannelOptions, openChannelStatus, saveChannelStatus, channelStatusEditor, channelStatusSaving, canSaveChannelStatus, canManuallyClose, canManuallyOpen, manualChannelHeld, channelStatusBusy, probeCoverageCell, acceptProbeCoverage, phaseText, watchChannelChanges, stopWatching: () => changesAbort?.abort(), sync, save, savedPolicy, mode, policyConflict, factorExplanation, refreshCurrentRates, ratesError, saveCapacity, saving, mobileEditRow, stageMobileEdit, mobileChanges, mobilePriorityChanges, mobileRuleChanges, mobileSaveOpen, load, refreshRuntime, loadChannelDirectory, applyGroupLocally, acceptStates, stateFor, sampleText, evaluationText, states, refreshError, bases, channels, channelDirectorySite, channelDirectoryLoading, policy, channelQuery, channelSwitchFilter, selectedGroupFilter, toggleGroupFilter, selectedGroupName, displayedRows, activeRows, modelChannelRows, models, modelChannelCount, modelChannelCountLabel, activeModel, dirty, selectModel, fieldChanged, savedBases, originalBase, calculatedWeight, executionWeightText, displayedSpeedFactor, coefficientCell, overallEvaluationStatus, coefficientEmptyText, coefficientSpan, displayedPriority, editPriority, priorityLocked, cancelChanges, limitReason, currentRates, ratesReady, rowStatus, channelStatusFor, channelStatusLabel, isDirectoryOnlyRow, eventResult, eventResultClass, events, filteredEvents, eventDateRange };`)
+  const create = new Function(...names, `${compiled}\nreturn { selectedManualProbeChannelIDs, removeManualProbeChannels, probeChannelOptions, openChannelStatus, saveChannelStatus, channelStatusEditor, channelStatusSaving, canSaveChannelStatus, canManuallyClose, canManuallyOpen, manualChannelHeld, channelStatusBusy, probeCoverageCell, acceptProbeCoverage, phaseText, watchChannelChanges, stopWatching: () => changesAbort?.abort(), sync, save, savedPolicy, mode, policyConflict, factorExplanation, refreshCurrentRates, ratesError, saveCapacity, saving, mobileEditRow, stageMobileEdit, mobileChanges, mobilePriorityChanges, mobileRuleChanges, mobileSaveOpen, load, refreshRuntime, loadChannelDirectory, applyGroupLocally, acceptStates, stateFor, sampleText, evaluationText, states, refreshError, bases, channels, channelDirectorySite, channelDirectoryLoading, policy, channelQuery, channelSwitchFilter, selectedGroupFilter, toggleGroupFilter, selectedGroupName, displayedRows, activeRows, modelChannelRows, models, modelChannelCount, modelChannelCountLabel, activeModel, dirty, selectModel, fieldChanged, savedBases, originalBase, calculatedWeight, executionWeightText, displayedSpeedFactor, coefficientCell, overallEvaluationStatus, coefficientEmptyText, coefficientSpan, displayedPriority, editPriority, priorityLocked, cancelChanges, limitReason, currentRates, ratesReady, rowStatus, channelStatusFor, channelStatusLabel, isDirectoryOnlyRow, eventResult, eventResultClass, events, filteredEvents, eventDateRange, schedules, schedulesSite, schedulesError };`)
   const messages = []; const messageBox = {confirm: async () => {}};
   const view = create(computed, reactive, ref, () => {}, () => {}, () => {}, () => filters, dashboard, String, ApiError, {info() {}, success() {}, error(message) {messages.push(message)}}, messageBox, () => ref(false), groupUtils.hiddenChannelGroupCount, groupUtils.matchesChannelGroup, groupUtils.MAX_VISIBLE_CHANNEL_GROUPS, groupUtils.normalizeChannelGroups, groupUtils.splitChannelGroups, groupUtils.visibleChannelGroups)
   const initialPolicy = JSON.parse(JSON.stringify({...view.policy, dispatch_modes:{m:'auto'}}));
   dashboard.tuningPolicy = async () => ({mode:'observe', policy: JSON.parse(JSON.stringify(initialPolicy))});
+  // 关闭来源仅在本站计划已加载后归类，夹具默认为空计划列表。
+  view.schedulesSite.value = filters.site_id
   return { ...view, filters, dashboard, messages, messageBox }
 }
 
@@ -1167,3 +1218,30 @@ test('capacity decrease setting defaults for old policies and survives save and 
   assert.match(p.factorExplanation(row), /单次容量最大降幅 25%/);
   assert.match(sfc, /v-model="policy\.continuous\.capacity_max_decrease_percent" :min="1" :max="100"/);
 });
+
+test('manual closures wait for the schedule list before being attributed, and scheduled closures are labelled', () => {
+  const p = page()
+  p.channels.value = [{ channel_id: 2, channel_name: 'closed', status: 'disabled', weight: 0, priority: 1, models: ['m'], group_name: '' }]
+  p.channelDirectorySite.value = 'a'
+  const channel = { ...row, channel_id: 2, channel_name: 'closed' }
+  p.schedulesSite.value = ''
+  assert.equal(p.channelStatusFor(channel), 'closed_unknown', 'schedule list not loaded for this site')
+  assert.equal(p.channelStatusLabel(channel), '关闭来源待确认')
+  p.schedulesSite.value = 'a'; p.schedulesError.value = '计划刷新失败'
+  assert.equal(p.channelStatusFor(channel), 'closed_unknown', 'a failed refresh cannot confirm the origin')
+  p.schedulesError.value = ''
+  assert.equal(p.channelStatusFor(channel), 'disabled')
+  p.schedules.value = [{ channel_id: 2, enabled: true, closed_by_schedule: true, days: [1], windows: [{ start: '00:00', end: '08:00' }], revision: 1 }]
+  assert.equal(p.channelStatusFor(channel), 'scheduled_disabled')
+  assert.equal(p.channelStatusLabel(channel), '定时关闭')
+  assert.equal(p.canManuallyOpen(channel), true, 'a schedule closure retains the manual enable action')
+  assert.equal(p.canManuallyClose(channel), true, 'manual control can take over a schedule closure')
+  p.schedulesError.value = '计划刷新失败'
+  assert.equal(p.channelStatusFor(channel), 'closed_unknown', 'cached schedule ownership is unconfirmed after a refresh failure')
+  p.schedulesError.value = ''
+  assert.equal(p.channelStatusFor(channel), 'scheduled_disabled', 'a successful refresh restores the confirmed origin')
+  assert.equal(p.evaluationText(channel), '定时关闭，等待下一个计划开启时点')
+  p.acceptStates('a', [{ ...state(0), channel_id: 2, paused_reason: 'manual_disabled' }])
+  assert.equal(p.channelStatusFor(channel), 'disabled', 'manual takeover wins over cached schedule ownership')
+  assert.equal(p.channelStatusLabel(channel), '手动关闭')
+})

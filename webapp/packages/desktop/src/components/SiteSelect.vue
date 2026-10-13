@@ -6,11 +6,20 @@ import { useAuthStore } from "../stores/auth";
 import { useFiltersStore } from "../stores/filters";
 import { usePrefsStore } from "../stores/prefs";
 
-const props = withDefaults(defineProps<{ readonlyOnly?: boolean }>(), { readonlyOnly: false });
+const props = withDefaults(defineProps<{ readonlyOnly?: boolean; beforeChange?: (site: string) => boolean | Promise<boolean> }>(), { readonlyOnly: false });
 
 const auth = useAuthStore();
 const mobile = useMobileViewport();
 const siteOpen = ref(false), siteQuery = ref('');
+const changing = ref(false);
+async function selectSite(site: string) {
+  if (changing.value || site === filters.site_id) { if (site === filters.site_id) siteOpen.value = false; return; }
+  changing.value = true;
+  try {
+    if (props.beforeChange && !await props.beforeChange(site)) return;
+    filters.selectSite(site); siteOpen.value = false;
+  } finally { changing.value = false; }
+}
 watch(mobile, value => { if (!value) siteOpen.value = false; });
 const filters = useFiltersStore();
 const prefs = usePrefsStore();
@@ -56,16 +65,17 @@ watch(sites, (available) => {
     <button type="button" class="mobile-site-trigger" aria-label="切换站点" @click="siteQuery = ''; siteOpen = true">{{ filters.site_id || '选择站点' }}⌄</button>
     <el-drawer v-model="siteOpen" title="切换站点" direction="btt" size="75%" class="mobile-site-drawer" append-to-body>
       <el-input v-model="siteQuery" placeholder="搜索站点" aria-label="搜索站点" clearable />
-      <button v-for="site in sites.filter(value => value.toLowerCase().includes(siteQuery.trim().toLowerCase()))" :key="site" class="mobile-site-option" type="button" :aria-pressed="site === filters.site_id" @click="filters.selectSite(site); siteOpen = false">{{ site }}<span v-if="site === filters.site_id">✓</span></button>
+      <button v-for="site in sites.filter(value => value.toLowerCase().includes(siteQuery.trim().toLowerCase()))" :key="site" class="mobile-site-option" type="button" :disabled="changing" :aria-pressed="site === filters.site_id" @click="selectSite(site)">{{ site }}<span v-if="site === filters.site_id">✓</span></button>
       <el-empty v-if="!sites.some(value => value.toLowerCase().includes(siteQuery.trim().toLowerCase()))" description="没有匹配站点" />
     </el-drawer>
   </template>
   <el-select
     v-else-if="sites.length"
     :model-value="filters.site_id"
+    :disabled="changing"
     aria-label="站点"
     style="width: 180px"
-    @update:model-value="filters.selectSite(String($event))"
+    @update:model-value="selectSite(String($event))"
   >
     <el-option v-for="site in sites" :key="site" :label="site" :value="site" />
   </el-select>

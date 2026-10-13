@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"controltower/server/internal/channelschedule"
 	"controltower/server/internal/tuning"
 )
 
@@ -37,6 +38,15 @@ func capacityManaged(v tuning.Recommendation) bool {
 // not permission to increase after coverage disappears or the operator changes
 // the model mode. Stronger performance decreases remain permitted.
 func checkContinuousCapacity(q priorityQuery, v tuning.Recommendation, now time.Time, commandID string) error {
+	if v.Rule == "circuit_recovered" {
+		_, err := checkScheduleRecovery(q, v.InstanceID, v.ChannelID, now)
+		if errors.Is(err, channelschedule.ErrSuperseded) {
+			return ErrCapacitySuperseded
+		}
+		if err != nil {
+			return err
+		}
+	}
 	managed := capacityManaged(v)
 	statusRecovery := v.ProposedChannelStatus != nil && *v.ProposedChannelStatus == 1 && v.Rule == "circuit_recovered"
 	if !statusRecovery && (v.ProposedChannelStatus != nil || (v.Rule != "weight_write" && v.Rule != "capacity_reduce" && v.Rule != "circuit_opened" && v.Rule != "circuit_recovered")) {

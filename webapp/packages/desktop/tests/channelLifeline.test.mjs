@@ -11,11 +11,12 @@ const source=readFileSync(new URL('../src/views/ChannelLifelineView.vue',import.
 const script=source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1].replace(/^import .*;\r?\n/gm,'')
 const code=ts.transpileModule(script,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.None}}).outputText
 const snapshot=(channel=7)=>({retention_days:7,from:'2026-10-12T00:00:00Z',to:'2026-10-12T01:00:00Z',queried_at:'2026-10-12T01:00:00Z',channels:[{channel_id:channel,channel_name:'channel',model_name:'m'}],trend:[],bucket_seconds:60,total:{}})
-function harness(liveWatch=false){
+function harness(liveWatch=false,view='history'){
   const api={probeOverview:async()=>snapshot(),channelLifeline:async()=>({items:[],next_cursor:''}),probeRecords:async()=>({items:[],total:0,next_cursor:''})}
   const filters={site_id:'a'}, noop=()=>{}, timers=new Map(), document={hidden:false},stops=[];let id=0,unmount=noop
   const watchState=liveWatch ? (...args)=>{stops.push(watch(...args))} : noop
-  const p=new Function('computed','ref','watch','onMounted','onBeforeUnmount','useFiltersStore','useRoute','dashboard','probeTrend','document','setTimeout','clearTimeout','filterProbeChannels','nextTick',`${code};return {refresh,selectChannel,closeChannel,loadDetail,pageDetail,changeDetail,openProbeRecords,filterChannels,resetChannelFilters,overview,applied,selected,events,records,cursors,nextCursor,error,detailError,loading,refreshing,detailLoading,kind,model,tab,source,outcome,recordModel,recordKind,recordModels,search,hours,channelPage,channelFilter,channelSort,channels,filteredChannels,visibleChannels,autoRefresh,refreshSeconds,autoRefreshPause,automaticRefresh,scheduleRefresh};`)(computed,ref,watchState,noop,fn=>{unmount=fn},()=>filters,()=>({query:{}}),api,utils.probeTrend,document,(fn,ms)=>{timers.set(++id,{fn,ms});return id},key=>timers.delete(key),utils.filterProbeChannels,nextTick)
+  const p=new Function('computed','ref','watch','onMounted','onBeforeUnmount','useFiltersStore','useRoute','dashboard','probeTrend','document','setTimeout','clearTimeout','filterProbeChannels','nextTick',`${code};return {pageMode,refresh,selectChannel,closeChannel,loadDetail,pageDetail,changeDetail,openProbeRecords,filterChannels,resetChannelFilters,overview,applied,selected,events,records,cursors,nextCursor,error,detailError,loading,refreshing,detailLoading,kind,model,tab,source,outcome,recordModel,recordKind,recordModels,search,hours,channelPage,channelFilter,channelSort,channels,filteredChannels,visibleChannels,autoRefresh,refreshSeconds,autoRefreshPause,automaticRefresh,scheduleRefresh};`)(computed,ref,watchState,noop,fn=>{unmount=fn},()=>filters,()=>({query:{}}),api,utils.probeTrend,document,(fn,ms)=>{timers.set(++id,{fn,ms});return id},key=>timers.delete(key),utils.filterProbeChannels,nextTick)
+  p.pageMode.value=view;
   return {...p,api,filters,timers,document,unmount:()=>{unmount();stops.forEach(stop=>stop())}}
 }
 function deferred(){let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b});return {promise,resolve,reject}}
@@ -24,6 +25,10 @@ test('life labels distinguish decisions, disable and restore, and unknown has no
  assert.equal(utils.ratio(null),'—');assert.equal(utils.seconds(undefined),'—')
  assert.equal(utils.lifeTitle({source:'operation',operation:'channel.update',details:{target:{status:2,weight:0}}}),'禁用渠道')
  assert.equal(utils.lifeTitle({source:'operation',operation:'channel.update',details:{target:{status:1,weight:10}}}),'启用渠道')
+ assert.equal(utils.lifeTitle({source:'operation',operation:'channel.schedule_open',details:{target:{status:1}}}),'定时开启渠道')
+ assert.equal(utils.lifeTitle({source:'operation',operation:'channel.schedule_close',details:{target:{status:2}}}),'定时关闭渠道')
+ assert.deepEqual(utils.lifeChanges({details:{reason:'upstream_rejected'}}),['上游明确拒绝写入'])
+ assert.deepEqual(utils.lifeChanges({details:{reason:'status_confirmed'}}),['已回读确认目标状态'])
  assert.equal(utils.lifeTitle({source:'decision',operation:'weight_write',details:{target:{weight:10}}}),'调权决策')
  assert.deepEqual(utils.lifeChanges({details:{before:{weight:100},target:{weight:0}}}),['权重：100 → 0'])
  const values=utils.probeTrend({...snapshot(),to:'2026-10-12T00:03:00Z',trend:[{at:'2026-10-12T00:01:00Z',success:2}]})

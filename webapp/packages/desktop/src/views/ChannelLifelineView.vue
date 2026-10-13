@@ -10,11 +10,16 @@ import { formatTime } from '../utils/format';
 import { lifeChanges, lifeTitle, outcomeTone, probeKinds, probeOutcomes, probeReasons, probeTrend, ratio, seconds } from '../utils/channelLifeline';
 import { channelProbeFilters, channelProbeSorts, filterProbeChannels } from '../utils/channelLifeline';
 import type { ChannelProbeFilter, ChannelProbeSort } from '../utils/channelLifeline';
+import LifelineCurrentPanel from '../components/LifelineCurrentPanel.vue';
+import LifelineProbeRecords from '../components/LifelineProbeRecords.vue';
+import LifelineRounds from '../components/LifelineRounds.vue';
 
 const filters = useFiltersStore(), route = useRoute();
 const overview = ref<ProbeOverview>(), loading = ref(false), error = ref('');
 const hours = ref(1), customRange = ref<[Date, Date]>(), model = ref(''), kind = ref(''), search = ref('');
 const applied = ref<ProbeQuery>(), selected = ref(Number(route.query.channel_id) || 0), channelPage = ref(1);
+const pageMode=ref(selected.value?'history':'current'),globalRoundChannel=ref(0),globalRound=ref('');
+function openGlobalRound(channel:number,id:string){globalRoundChannel.value=channel;globalRound.value=id;}
 const tab = ref('life'), source = ref('important'), outcome = ref(''), autoRefresh = ref(false), refreshSeconds = ref(60);
 const refreshing = ref(false), appliedFilterKey = ref('');
 const channelFilter = ref<ChannelProbeFilter>('all'), channelSort = ref<ChannelProbeSort>('channel');
@@ -46,6 +51,7 @@ function scheduleRefresh() {
 }
 async function automaticRefresh() {
   if(!autoRefresh.value || disposed)return;
+  if(pageMode.value!=='history'){scheduleRefresh();return;}
   if(!document.hidden && !autoRefreshPause.value && !loading.value && !refreshing.value && !detailLoading.value)await refresh(true);
   else scheduleRefresh();
 }
@@ -113,15 +119,23 @@ function futureDate(date: Date) { return date.getTime()>Date.now(); }
 watch([tab,source,outcome],changeDetail);
 watch([channelFilter,channelSort],()=>{channelPage.value=1;});
 watch([autoRefresh,refreshSeconds],scheduleRefresh);
-watch(() => filters.site_id,(_site,previous) => { overview.value=undefined; if(previous)selected.value=0; resetChannelFilters(); void refresh(); });
-onMounted(async () => { try { await filters.loadInstances(); if(!applied.value && !loading.value)await refresh(); } catch { error.value='站点信息加载失败，请刷新页面。'; } });
+watch(() => filters.site_id,(_site,previous) => { summaryAbort?.abort();summaryGeneration++;resetDetail();overview.value=undefined;applied.value=undefined;loading.value=false;refreshing.value=false;globalRoundChannel.value=0;globalRound.value='';if(previous)selected.value=0;resetChannelFilters();if(pageMode.value==='history')void refresh(); });
+watch(pageMode,()=>{if(pageMode.value==='history'&&!applied.value&&!loading.value)void refresh();});
+onMounted(async () => { try { await filters.loadInstances(); if(pageMode.value==='history'&&!applied.value && !loading.value)await refresh(); } catch { error.value='站点信息加载失败，请刷新页面。'; } });
 onBeforeUnmount(() => { disposed=true; summaryGeneration++; summaryAbort?.abort(); cancelDetail(); if(timer)clearTimeout(timer); });
 </script>
 
 <template>
   <AppShell title="渠道生命线">
-    <template #tools><el-button :loading="loading" @click="refresh()">刷新</el-button><router-link to="/tuning">调权设置</router-link></template>
+    <template #tools><el-button v-if="pageMode==='history'" :loading="loading" @click="refresh()">刷新历史统计</el-button><router-link to="/tuning">调权设置</router-link></template>
     <div class="lifeline-page">
+      <el-tabs v-model="pageMode" aria-label="生命线视图"><el-tab-pane name="current" label="当前渠道"/><el-tab-pane name="records" label="探针记录"/><el-tab-pane name="history" label="历史统计"/></el-tabs>
+      <LifelineCurrentPanel v-show="pageMode==='current'" :active="pageMode==='current'"/>
+      <section v-show="pageMode==='records'" class="panel">
+        <template v-if="globalRoundChannel"><el-button @click="globalRoundChannel=0;globalRound=''">← 返回探针记录</el-button><h3>渠道 #{{globalRoundChannel}} · 恢复检测批次</h3><LifelineRounds :key="`${filters.site_id}:${globalRoundChannel}:${globalRound}`" :channel-id="globalRoundChannel" :focused-round="globalRound"/></template>
+        <div v-show="!globalRoundChannel"><h3>跨渠道探针记录</h3><p class="help">默认包含成功与异常记录。每次请求与渠道是否恢复分别展示。</p><LifelineProbeRecords @round="openGlobalRound"/></div>
+      </section>
+      <section v-show="pageMode==='history'">
       <header class="intro"><div><h2>从每次探测，到每次渠道变更</h2><p>按时间查看 CT 保存的探针、调权、禁用、恢复与其他渠道操作。</p></div><div class="retention">保留最近 <strong>{{ retentionDays }}</strong> 天<br/><span>在调权中心「规则设置 → 运行规则 → 探针与恢复」配置</span></div></header>
       <section class="filter-bar" aria-label="统计筛选">
         <el-select v-model="hours" aria-label="时间范围" style="width:140px"><el-option label="最近 1 小时" :value="1"/><el-option label="最近 6 小时" :value="6"/><el-option label="最近 24 小时" :value="24"/><el-option :label="`保留期内 ${retentionDays} 天`" :value="retentionDays*24"/><el-option label="自定义" :value="0"/></el-select>
@@ -202,6 +216,7 @@ onBeforeUnmount(() => { disposed=true; summaryGeneration++; summaryAbort?.abort(
         </section>
         <p class="help">逐条探针从本功能启用后开始留存，旧数据不会补造。CT 直连恢复探针有逐条明细，Agent 恢复任务展示已有轮次结果。页面仅展示保留期内的记录；原有共享操作审计仍按原模块规则保存。</p>
       </template>
+      </section>
     </div>
   </AppShell>
 </template>

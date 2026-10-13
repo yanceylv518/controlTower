@@ -63,6 +63,8 @@ func (c *journalController) Update(ctx context.Context, r channelcontrol.UpdateR
 		}
 		if errors.Is(err, channelcontrol.ErrChannelNotFound) {
 			v.Outcome, v.Reason = "failed", "channel_not_found"
+		} else if errors.Is(err, channelcontrol.ErrStatusRejected) {
+			v.Outcome, v.Reason = "failed", "upstream_rejected"
 		}
 	}
 	finishCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"log"
+	"sync/atomic"
 	"time"
 
 	"controltower/internal/channelcontrol"
@@ -15,8 +16,10 @@ type probeJournalStore interface {
 }
 type recoveryProbeJournal struct {
 	channelcontrol.Prober
-	store probeJournalStore
-	site  string
+	store    probeJournalStore
+	site     string
+	round    string
+	sequence *atomic.Int64
 }
 
 func (p recoveryProbeJournal) Probe(ctx context.Context, id int64, model string) (channelcontrol.ProbeResult, error) {
@@ -25,6 +28,10 @@ func (p recoveryProbeJournal) Probe(ctx context.Context, id int64, model string)
 func (p recoveryProbeJournal) ProbeWithTimeout(ctx context.Context, id int64, model string, timeout time.Duration) (channelcontrol.ProbeResult, error) {
 	at := time.Now().UTC()
 	v := tuning.ProbeRecord{ID: rand.Text(), InstanceID: p.site, ChannelID: id, ModelName: model, Kind: "recovery", StartedAt: at, DeadlineAt: at.Add(timeout), Outcome: "pending"}
+	v.RoundID = p.round
+	if p.sequence != nil {
+		v.RoundIndex = int(p.sequence.Add(1))
+	}
 	// Recovery rounds are infrequent and already asynchronous; persist intent
 	// before IO. Database failure is control uncertainty, never channel failure.
 	writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)

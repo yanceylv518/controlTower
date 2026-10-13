@@ -4,6 +4,52 @@ import type { ApiClient } from "../client";
 export interface ChannelGroupPreset { id: string; name: string; groups: string[] }
 export interface ChannelGroupPresets { items: ChannelGroupPreset[]; revision: number }
 
+export interface ChannelScheduleConfig {
+  enabled: boolean;
+  days: number[];
+  windows: { start: string; end: string }[];
+  revision: number;
+  align_now: boolean;
+  expected_updated_at?: string;
+}
+export interface ChannelScheduleExecution {
+  id: string;
+  site_id: string;
+  channel_id: number;
+  revision: number;
+  boundary: string;
+  target: number;
+  status: string;
+  attempts: number;
+  error: string;
+  updated_at: string;
+  expires_at?: string;
+  before_status: number;
+}
+export interface ChannelSchedule extends ChannelScheduleConfig {
+  site_id: string;
+  channel_id: number;
+  effective_at: string;
+  updated_at: string;
+  updated_by: string;
+  closed_by_schedule: boolean;
+  allowed: boolean;
+  next_at?: string;
+  next_status?: number;
+  execution?: ChannelScheduleExecution;
+}
+export interface ChannelScheduleList {
+  items: ChannelSchedule[];
+  direct_configured: boolean;
+  worker_enabled: boolean;
+}
+export interface ChannelSchedulePreview {
+  allowed: boolean;
+  next_at?: string;
+  next_status?: number;
+  effective_windows: { start_minute: number; end_minute: number }[];
+}
+
 export interface BillingGenerationDay {day:string;status:string;job_id?:string;processed:number;error?:string;updated_at?:string}
 export interface BillingGenerationProgress {subject_name?:string;waiting_for?:string;subject_id:number;outcome:string;total_days:number;checked:number;complete:number;empty:number;pending:number;running:number;failed:number;processed:number;error?:string;last_attempt?:string;days:BillingGenerationDay[];monthly?:BillingGenerationDay}
 export interface BillingGenerationTask {id:string;instance_id:string;kind:string;from:string;to:string;work_until:string;source:string;overwrite:boolean;exclude_zero_output?:boolean;subject_ids:number[];created_at:string;outcome:string;percentage:number;completed_users:number;failed_users:number;complete_days:number;empty_days:number;items?:BillingGenerationProgress[]}
@@ -509,6 +555,7 @@ export interface ProbeMetrics {
 }
 export interface ProbeChannelStats extends ProbeMetrics { channel_id: number; channel_name: string; model_name: string }
 export interface ProbeRecord {
+	 round_id?: string; round_index?: number;
   id: string; instance_id: string; channel_id: number; channel_name: string; model_name: string; kind: string;
   started_at: string; deadline_at: string; finished_at?: string; outcome: string; reason: string; duration_seconds?: number;
 }
@@ -518,7 +565,17 @@ export interface ProbeOverview {
   trend: Array<ProbeMetrics & {at: string}>;
   recorder?: {started_at: string; last_seen_at: string; last_loss_at?: string; dropped_records: number; queued_records: number};
 }
-export interface ProbeQuery {site_id: string; from: string; to: string; channel_id?: number; model?: string; kind?: string; q?: string; outcome?: string; cursor?: string; limit?: number}
+export interface ProbeQuery {site_id: string; from: string; to: string; channel_id?: number; model?: string; kind?: string; q?: string; outcome?: string; cursor?: string; limit?: number; round_id?: string; dispatch?: string}
+export interface LifelineChannel {
+ channel_id:number; channel_name:string; models:string[]; weight:number; priority:number;
+ switch:string; state:string; reason:string; next:string; next_at?:string; confirmed_at?:string;
+ pending:number; accelerated:number; last?:ProbeRecord; round_id?:string;current_round?:ProbeRound;
+}
+export interface LifelineCurrent {queried_at:string; channels:LifelineChannel[]}
+export interface ProbeRound {
+ id:string; channel_id:number; model:string; planned:number; status:string; created_at:string; updated_at:string;
+ metrics?:ProbeMetrics; reported_attempts?:number; reported_successes?:number;
+}
 export interface ChannelLifeEvent {
   id: string; source: string; at: string; finished_at?: string; operation: string; outcome: string; actor: string;
   command_id?: string; recommendation_id?: string; details: Record<string, unknown>;
@@ -1089,6 +1146,11 @@ export const dashboardApi = (client: ApiClient) => ({
     client.request<ListResponse<TuningChannel>>(`/api/dashboard/tuning/channels${query({ site_id })}`),
   saveTuningChannelStatus: (site_id: string, channel_id: number, status: 1 | 2) =>
     client.request<{command_id:string;channel_id:number;channel_status:1|2;status:string}>(`/api/dashboard/tuning/channels/${channel_id}/status${query({ site_id })}`, {method:"PUT",body:JSON.stringify({status,confirm:true})}),
+  channelSchedules: (site_id:string, signal?:AbortSignal) => client.request<ChannelScheduleList>(`/api/dashboard/tuning/channel-schedules${query({site_id})}`, {signal}),
+  saveChannelSchedule: (site_id:string,channel_id:number,value:ChannelScheduleConfig,signal?:AbortSignal) => client.request<{saved:boolean;revision:number;changed:boolean}>(`/api/dashboard/tuning/channel-schedules/${channel_id}${query({site_id})}`,{method:'PUT',body:JSON.stringify({...value,confirm:true}),signal}),
+  previewChannelSchedule: (site_id:string,value:ChannelScheduleConfig,signal?:AbortSignal) => client.request<ChannelSchedulePreview>(`/api/dashboard/tuning/channel-schedules/preview${query({site_id,config:JSON.stringify(value)})}`,{signal}),
+  deleteChannelSchedule: (site_id:string,channel_id:number,revision:number,signal?:AbortSignal,expected_updated_at?:string) => client.request<{saved:boolean}>(`/api/dashboard/tuning/channel-schedules/${channel_id}${query({site_id})}`,{method:'DELETE',body:JSON.stringify({revision,confirm:true,expected_updated_at}),signal}),
+  channelScheduleExecutions: (site_id:string,channel_id:number,signal?:AbortSignal) => client.request<{items:ChannelScheduleExecution[]}>(`/api/dashboard/tuning/channel-schedules/${channel_id}/executions${query({site_id})}`,{signal}),
   tuningGroups: (site_id: string) =>
     client.request<{ items: string[] }>(`/api/dashboard/tuning/groups${query({ site_id })}`),
   saveTuningChannelGroup: (site_id: string, channel_id: number, group: string) =>
@@ -1100,6 +1162,8 @@ export const dashboardApi = (client: ApiClient) => ({
   tuningContinuousStates: (site_id: string) =>
     client.request<ListResponse<TuningContinuousState> & { probe_coverage?: ProbeCoverageWindow }>(`/api/dashboard/tuning/continuous-states${query({ site_id })}`),
   probeOverview: (params: ProbeQuery, signal?: AbortSignal) => client.request<ProbeOverview>(`/api/dashboard/tuning/probes/overview${query({...params})}`, {signal}),
+  lifelineCurrent: (site_id:string, signal?:AbortSignal) => client.request<LifelineCurrent>(`/api/dashboard/tuning/probes/current${query({site_id})}`,{signal}),
+  probeRounds: (params:ProbeQuery, signal?:AbortSignal) => client.request<{items:ProbeRound[];next_cursor?:string}>(`/api/dashboard/tuning/probes/rounds${query({...params})}`,{signal}),
   probeRecords: (params: ProbeQuery, signal?: AbortSignal) => client.request<{items: ProbeRecord[]; total: number; next_cursor?: string}>(`/api/dashboard/tuning/probes/records${query({...params})}`, {signal}),
   channelLifeline: (params: ProbeQuery & {source?: string}, signal?: AbortSignal) => client.request<{items: ChannelLifeEvent[]; next_cursor?: string}>(`/api/dashboard/tuning/probes/lifeline${query({...params})}`, {signal}),
   tuningCurrentRates: (site_id: string) =>

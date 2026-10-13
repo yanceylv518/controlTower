@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"controltower/server/internal/channelschedule"
 	"controltower/server/internal/channelupdates"
 )
 
@@ -23,6 +24,10 @@ type ContinuousStore interface {
 
 type continuousRecentBucketsStore interface {
 	QueryRecentChannelBucketsBySite(string, time.Time) (map[int64][]RecentChannelBucket, error)
+}
+
+type channelScheduleControlsStore interface {
+	ListChannelScheduleControls(string, time.Time) (map[int64]channelschedule.Control, error)
 }
 
 type currentChannelRatesStore interface {
@@ -161,6 +166,15 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 		stateByID[v.ChannelID] = v
 	}
 
+	scheduleControls := map[int64]channelschedule.Control{}
+	if source, ok := any(cs).(channelScheduleControlsStore); ok {
+		var scheduleErr error
+		scheduleControls, scheduleErr = source.ListChannelScheduleControls(id, now)
+		if scheduleErr != nil {
+			log.Printf("tuning schedule gate site=%s failed: %v", id, scheduleErr)
+			return 0, 0
+		}
+	}
 	groups := map[string][]ChannelBaseValue{}
 	for _, v := range values {
 		groups[v.ModelName] = append(groups[v.ModelName], v)
@@ -352,17 +366,26 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 					return
 				}
 				wasCircuit := state.Phase == "circuit"
+				scheduleControl := scheduleControls[base.ChannelID]
 				if state.CircuitDisabled && mode != "auto" {
 					// Observation must not consume the evidence needed to re-enable a real disabled channel.
 					return
 				}
 				if state.CircuitStatusTarget != 0 {
 					if mode == "auto" {
-						writes.Add(int64(e.advanceCircuitStatus(cs, id, base, &state, p, now)))
+						// 窗口外仍结算禁用和在途回执；未下发的恢复须重新取得探测证据。
+						if state.CircuitStatusTarget == 1 && state.CircuitStatusCommandID == "" && scheduleControl.Enabled && !scheduleControl.Allowed {
+							resetFailedCircuitEnable(&state, p, now)
+						} else {
+							writes.Add(int64(e.advanceCircuitStatus(cs, id, base, &state, p, now)))
+						}
 					}
 					state.UpdatedAt = now
 					_ = persistState(state)
 					evaluated.Add(1)
+					return
+				}
+				if mode == "auto" && scheduleControl.Enabled && !scheduleControl.Allowed && (state.Phase == "circuit" || state.Phase == "probing") {
 					return
 				}
 				// A queued zero/recovery is not yet an applied circuit transition.
@@ -430,7 +453,7 @@ func (e *Engine) evaluateContinuous(id string, pr PolicyRecord, now time.Time, c
 							evaluated.Add(1)
 							return
 						}
-						if mode == "auto" && state.CircuitDisabled {
+						if mode == "auto" && (state.CircuitDisabled || scheduleControl.Closed) {
 							state.CircuitStatusTarget = 1
 							state.ProposedWeight = max(int64(p.Rules().RecoveryMinWeight), int64(math.Round(float64(base.BaseWeight)*p.SoftStartMultiplier)))
 							if err := persistState(state); err == nil {

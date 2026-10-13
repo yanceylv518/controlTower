@@ -7,6 +7,7 @@ import (
 )
 
 var notificationRuleKeys = map[string]bool{
+	"channel_schedule":          true,
 	"trial_started":             true,
 	"channel_circuit_opened":    true,
 	"channel_circuit_recovered": true,

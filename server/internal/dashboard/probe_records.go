@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -21,8 +23,13 @@ func probeQuery(r *http.Request) (tuning.ProbeRecordQuery, error) {
 	q.Kind = values.Get("kind")
 	q.Search = strings.TrimSpace(values.Get("q"))
 	q.Outcome = values.Get("outcome")
+	q.RoundID = values.Get("round_id")
+	q.Dispatch = values.Get("dispatch")
 	q.Cursor = values.Get("cursor")
 	invalid := fmt.Errorf("invalid probe query")
+	if len(q.RoundID) > 64 || (q.Dispatch != "" && q.Dispatch != "sent" && q.Dispatch != "unsent") {
+		return q, invalid
+	}
 	if q.Site == "" || len(q.Site) > 64 || len(q.Model) > 255 || len(q.Search) > 100 {
 		return q, invalid
 	}
@@ -155,7 +162,7 @@ func (h Handler) HandleChannelLifeline(w http.ResponseWriter, r *http.Request) {
 	if source == "" {
 		source = "important"
 	}
-	if err != nil || q.ChannelID <= 0 || (source != "all" && source != "important" && source != "operations" && source != "decisions" && source != "probes") {
+	if err != nil || q.ChannelID <= 0 || (source != "all" && source != "important" && source != "operations" && source != "decisions" && source != "probes" && source != "changes") {
 		writeDashboardError(w, 400, "invalid_probe_query")
 		return
 	}
@@ -169,6 +176,52 @@ func (h Handler) HandleChannelLifeline(w http.ResponseWriter, r *http.Request) {
 	v, err := s.QueryChannelLifeline(ctx, q, source)
 	if err != nil {
 		writeDashboardError(w, 503, "channel_lifeline_unavailable")
+		return
+	}
+	writeDashboardJSON(w, 200, v)
+}
+
+func (h Handler) HandleLifelineCurrent(w http.ResponseWriter, r *http.Request) {
+	site := tuningSiteID(r)
+	if site == "" || len(site) > 64 {
+		writeDashboardError(w, 400, "invalid_site")
+		return
+	}
+	s, ok := h.tuningStore.(tuning.LifelineCurrentReader)
+	if !ok {
+		writeDashboardError(w, 501, "lifeline_current_unavailable")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	v, err := s.QueryLifelineCurrent(ctx, site)
+	if err != nil {
+		slog.WarnContext(r.Context(), "lifeline current read failed", "site", site, "error", err)
+		if errors.Is(err, context.DeadlineExceeded) {
+			writeDashboardError(w, 504, "lifeline_current_timeout")
+			return
+		}
+		writeDashboardError(w, 503, "lifeline_current_unavailable")
+		return
+	}
+	writeDashboardJSON(w, 200, v)
+}
+func (h Handler) HandleProbeRounds(w http.ResponseWriter, r *http.Request) {
+	q, err := probeQuery(r)
+	if err != nil || q.ChannelID <= 0 {
+		writeDashboardError(w, 400, "invalid_probe_query")
+		return
+	}
+	s, ok := h.tuningStore.(tuning.ProbeRoundsReader)
+	if !ok {
+		writeDashboardError(w, 501, "probe_rounds_unavailable")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	v, err := s.QueryProbeRounds(ctx, q)
+	if err != nil {
+		writeDashboardError(w, 503, "probe_rounds_unavailable")
 		return
 	}
 	writeDashboardJSON(w, 200, v)

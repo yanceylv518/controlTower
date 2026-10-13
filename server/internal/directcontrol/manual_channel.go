@@ -2,10 +2,12 @@ package directcontrol
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"controltower/internal/channelcontrol"
+	"controltower/server/internal/channelschedule"
 	"controltower/server/internal/storage"
 	"controltower/server/internal/tuning"
 )
@@ -18,7 +20,10 @@ func (s Store) UpdateChannelStatus(ctx context.Context, site string, channel int
 	if !direct {
 		return storage.ChannelCommand{}, tuning.ErrManualStatusUnavailable
 	}
-	unlock, err := s.LockChannelWrite(ctx, site, channel)
+	unlock, err := s.lockChannelWrite(ctx, site, channel)
+	if errors.Is(err, channelschedule.ErrBusy) {
+		return storage.ChannelCommand{}, tuning.ErrChannelControlBusy
+	}
 	if err != nil {
 		return storage.ChannelCommand{}, err
 	}

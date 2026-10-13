@@ -108,7 +108,7 @@ func (s Store) ResolveMissingAlerts(currentIDs []string, now time.Time) error {
 	}
 	defer tx.Rollback()
 	selectArgs := []any{}
-	selectSQL := "SELECT id FROM alerts WHERE status <> 'resolved' AND rule_key NOT IN ('channel_circuit_opened','channel_circuit_recovered')"
+	selectSQL := "SELECT id FROM alerts WHERE status <> 'resolved' AND rule_key NOT IN ('channel_circuit_opened','channel_circuit_recovered','channel_schedule')"
 	if len(currentIDs) > 0 {
 		placeholders := make([]string, 0, len(currentIDs))
 		for _, id := range currentIDs {
@@ -136,7 +136,7 @@ func (s Store) ResolveMissingAlerts(currentIDs []string, now time.Time) error {
 	}
 	rows.Close()
 	args := []any{now}
-	sqlText := "UPDATE alerts SET status = 'resolved', resolved_at = ? WHERE status <> 'resolved' AND rule_key NOT IN ('channel_circuit_opened','channel_circuit_recovered')"
+	sqlText := "UPDATE alerts SET status = 'resolved', resolved_at = ? WHERE status <> 'resolved' AND rule_key NOT IN ('channel_circuit_opened','channel_circuit_recovered','channel_schedule')"
 	if len(currentIDs) > 0 {
 		p := make([]string, len(currentIDs))
 		for i, id := range currentIDs {

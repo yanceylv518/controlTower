@@ -21,25 +21,26 @@ import (
 )
 
 type Options struct {
-	ArchiveReader           dashboard.ArchiveCatalogReader
-	AgentToken              string
-	DashboardToken          string
-	Store                   Store
-	WebDir                  string
-	WebAppDir               string
-	NextWebDir              string
-	AuthManager             *ctauth.Manager
-	AgentTokenPepper        string
-	SecretKey               string
-	NotificationMaxAttempts int
-	CommandExpiry           time.Duration
-	TuningStore             tuning.Store
-	FastCircuitSink         tuning.FastCircuitSink
-	SettingsProvider        *settings.Provider
-	BillingPagePause        time.Duration
-	VoiceHandler            http.Handler
-	TrialHandler            http.Handler
-	AfterAgentReport        func()
+	ChannelScheduleWorkerEnabled bool
+	ArchiveReader                dashboard.ArchiveCatalogReader
+	AgentToken                   string
+	DashboardToken               string
+	Store                        Store
+	WebDir                       string
+	WebAppDir                    string
+	NextWebDir                   string
+	AuthManager                  *ctauth.Manager
+	AgentTokenPepper             string
+	SecretKey                    string
+	NotificationMaxAttempts      int
+	CommandExpiry                time.Duration
+	TuningStore                  tuning.Store
+	FastCircuitSink              tuning.FastCircuitSink
+	SettingsProvider             *settings.Provider
+	BillingPagePause             time.Duration
+	VoiceHandler                 http.Handler
+	TrialHandler                 http.Handler
+	AfterAgentReport             func()
 }
 
 type Store interface {
@@ -215,6 +216,14 @@ func NewMux(options Options) *http.ServeMux {
 	mux.Handle("GET /api/dashboard/nginx-timing/slow-samples", protect(http.HandlerFunc(dashboardHandler.HandleNginxSlowSamples)))
 	if tuningStore != nil {
 		mux.Handle("/api/dashboard/tuning/policy", protect(http.HandlerFunc(dashboardHandler.HandleTuningPolicy)))
+		if schedules, ok := any(options.Store).(dashboard.ChannelSchedulesStore); ok {
+			h := dashboard.ChannelSchedulesHandler{Store: schedules, WorkerEnabled: options.ChannelScheduleWorkerEnabled}
+			mux.Handle("GET /api/dashboard/tuning/channel-schedules", protect(h))
+			mux.Handle("GET /api/dashboard/tuning/channel-schedules/preview", protect(http.HandlerFunc(h.HandlePreview)))
+			mux.Handle("PUT /api/dashboard/tuning/channel-schedules/{channelID}", protect(h))
+			mux.Handle("DELETE /api/dashboard/tuning/channel-schedules/{channelID}", protect(h))
+			mux.Handle("GET /api/dashboard/tuning/channel-schedules/{channelID}/executions", protect(h))
+		}
 		if directory, supported := any(tuningStore).(dashboard.TuningChannelDirectory); supported {
 			mux.Handle("GET /api/dashboard/tuning/channels", protect(http.HandlerFunc(dashboardHandler.HandleTuningChannels)))
 			if updater, writable := any(tuningStore).(dashboard.ChannelStatusUpdater); writable {
@@ -238,6 +247,8 @@ func NewMux(options Options) *http.ServeMux {
 		mux.Handle("/api/dashboard/tuning/preflight", protect(http.HandlerFunc(dashboardHandler.HandleTuningPreflight)))
 		mux.Handle("GET /api/dashboard/tuning/continuous-states", protect(http.HandlerFunc(dashboardHandler.HandleTuningContinuousStates)))
 		mux.Handle("GET /api/dashboard/tuning/probes/overview", protect(http.HandlerFunc(dashboardHandler.HandleProbeOverview)))
+		mux.Handle("GET /api/dashboard/tuning/probes/current", protect(http.HandlerFunc(dashboardHandler.HandleLifelineCurrent)))
+		mux.Handle("GET /api/dashboard/tuning/probes/rounds", protect(http.HandlerFunc(dashboardHandler.HandleProbeRounds)))
 		mux.Handle("GET /api/dashboard/tuning/probes/records", protect(http.HandlerFunc(dashboardHandler.HandleProbeRecords)))
 		mux.Handle("GET /api/dashboard/tuning/probes/lifeline", protect(http.HandlerFunc(dashboardHandler.HandleChannelLifeline)))
 		mux.Handle("GET /api/dashboard/tuning/recommendations", protect(http.HandlerFunc(dashboardHandler.HandleTuningRecommendations)))

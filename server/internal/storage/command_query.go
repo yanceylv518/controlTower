@@ -107,6 +107,10 @@ var configurationAuditOperationTypes = []string{
 	"billing.channel_setting.update",
 	"billing.user_setting.update",
 	"channel.update",
+	"channel.schedule_save",
+	"channel.schedule_delete",
+	"channel.schedule_open",
+	"channel.schedule_close",
 }
 
 var configurationAuditOperationSet = func() map[string]struct{} {
@@ -144,6 +148,11 @@ func IsManualOperationAudit(v OperationAudit) bool {
 	}
 	return v.ActorID != "system" && v.ActorID != "agent" &&
 		!strings.HasPrefix(v.ActorID, "system:") && !strings.HasPrefix(v.ActorID, "agent:")
+}
+
+// 仅允许计划调度的执行记录进入操作审计，其他自动调权仍走变更记录。
+func IsChannelScheduleExecutionAudit(v OperationAudit) bool {
+	return (v.OperationType == "channel.schedule_open" || v.OperationType == "channel.schedule_close") && v.ActorType == "system" && v.ActorID == "system:schedule" && v.TriggerType == "automatic"
 }
 
 // OperationAuditFilterTypes 返回固定的操作类型筛选目录，不依赖审计表中的历史数据。

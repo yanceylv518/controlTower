@@ -12,6 +12,8 @@ const ProbeRecordRetention = 7 * 24 * time.Hour
 const probeRecordBufferLimit = 65536
 
 type ProbeRecord struct {
+	RoundID         string     `json:"round_id,omitempty"`
+	RoundIndex      int        `json:"round_index,omitempty"`
 	ID              string     `json:"id"`
 	InstanceID      string     `json:"instance_id"`
 	ChannelID       int64      `json:"channel_id"`
@@ -37,6 +39,7 @@ type ProbeRecorderHealth struct {
 }
 
 type ProbeRecordQuery struct {
+	RoundID, Dispatch                          string
 	Site, Model, Kind, Search, Outcome, Cursor string
 	ChannelID                                  int64
 	From, To, Now                              time.Time
@@ -199,6 +202,7 @@ func (e *Engine) runProbeRecordsWriter(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
+			e.flushProbeRuntime(ctx)
 			e.flushProbeRecords(ctx)
 		case <-cleanup.C:
 			c, cancel := context.WithTimeout(ctx, 5*time.Second)

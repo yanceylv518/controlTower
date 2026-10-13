@@ -33,6 +33,7 @@ type Engine struct {
 	routineSamples chan RoutineProbeSample
 	probeCoverage  *probeCoverageBuffer
 	probeRecords   *probeRecordBuffer
+	probeRuntime   *probeRuntimeBuffer
 }
 
 func NewEngine(s Store) *Engine {
@@ -40,7 +41,7 @@ func NewEngine(s Store) *Engine {
 }
 
 func (e *Engine) Run(ctx context.Context) error {
-	runtime := &Engine{store: e.store, fastCircuit: e.fastCircuit, parallelism: 4, ctx: ctx, routineSamples: make(chan RoutineProbeSample, 1024), probeCoverage: newProbeCoverageBuffer(), probeRecords: newProbeRecordBuffer()}
+	runtime := &Engine{store: e.store, fastCircuit: e.fastCircuit, parallelism: 4, ctx: ctx, routineSamples: make(chan RoutineProbeSample, 1024), probeCoverage: newProbeCoverageBuffer(), probeRecords: newProbeRecordBuffer(), probeRuntime: newProbeRuntimeBuffer()}
 	var workers sync.WaitGroup
 	workers.Add(1)
 	go func() { defer workers.Done(); runtime.runSites(ctx, time.Second, true) }()
@@ -72,6 +73,7 @@ func (e *Engine) Run(ctx context.Context) error {
 	// All producers have stopped; persist their final counters on graceful exit.
 	runtime.flushProbeCoverage(context.WithoutCancel(ctx))
 	runtime.flushProbeRecords(context.WithoutCancel(ctx))
+	runtime.flushProbeRuntime(context.WithoutCancel(ctx))
 	return ctx.Err()
 }
 
