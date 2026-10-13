@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS channel_schedules (
   next_check_at DATETIME(6) NOT NULL,
   PRIMARY KEY (site_id, channel_id),
   KEY idx_channel_schedules_due (enabled, next_check_at)
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS channel_schedule_executions (
   id VARCHAR(64) NOT NULL PRIMARY KEY,
@@ -30,8 +30,8 @@ CREATE TABLE IF NOT EXISTS channel_schedule_executions (
   updated_at DATETIME(6) NOT NULL,
   UNIQUE KEY idx_channel_schedule_boundary (site_id, channel_id, revision, boundary_at),
   KEY idx_channel_schedule_history (site_id, channel_id, updated_at)
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS channel_control_site_guards (
   site_id VARCHAR(191) NOT NULL PRIMARY KEY
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
