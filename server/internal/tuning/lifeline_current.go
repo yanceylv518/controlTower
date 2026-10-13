@@ -48,6 +48,8 @@ func DescribeLifelineChannel(c Channel, b ChannelBaseValue, s ContinuousState, p
 	}
 	fresh := !r.ConfirmedAt.IsZero() && now.Sub(r.ConfirmedAt) <= 20*time.Second && !r.ConfirmedAt.After(now.Add(time.Second))
 	activeRound := round != nil && (round.Status == "pending" || round.Status == "delivered" || round.Status == "executing" || (round.Metrics != nil && round.Metrics.Pending > 0))
+	roundInFlight := round != nil && round.Metrics != nil && round.Metrics.Pending > 0
+	roundFresh := activeRound && !round.UpdatedAt.IsZero() && now.Sub(round.UpdatedAt) <= 3*time.Minute && !round.UpdatedAt.After(now.Add(time.Second))
 	recoveryFresh := !s.UpdatedAt.IsZero() && now.Sub(s.UpdatedAt) <= 3*time.Minute && !s.UpdatedAt.After(now.Add(time.Second))
 	if v.Last != nil && v.Last.Outcome == "pending" && !v.Last.DeadlineAt.After(now) {
 		last := *v.Last
@@ -62,16 +64,24 @@ func DescribeLifelineChannel(c Channel, b ChannelBaseValue, s ContinuousState, p
 		v.State = "stopped"
 		v.Reason = reason
 		v.Next = next
-		if activeRound || (fresh && r.Running) {
-			v.State = "stopping"
-			v.Reason = reason + "，等待探测任务退出确认"
+		// Stopping is an action, not a persistent channel state. Old command
+		// status or a stale worker heartbeat cannot keep a disabled channel
+		// active. Only recent tasks or actual in-flight requests remain visible
+		// as supplementary progress, without claiming cancellation succeeded.
+		if fresh && r.Running {
 			v.Pending = r.Pending
-			if activeRound {
-				v.CurrentRound, v.RoundID = round, &round.ID
+		}
+		if roundFresh || roundInFlight {
+			v.CurrentRound, v.RoundID = round, &round.ID
+			if roundInFlight {
+				v.Pending += int(round.Metrics.Pending)
 			}
-		} else if r.Running {
-			v.State = "unknown"
-			v.Reason = reason + "，旧调度状态已过期，无法确认退出"
+			if v.Pending == 0 {
+				v.Reason += "；先前的恢复任务尚未结案，可查看恢复进度"
+			}
+		}
+		if v.Pending > 0 {
+			v.Reason += "；仍有先前发出的请求待结果"
 		}
 		return v
 	}
@@ -106,7 +116,7 @@ func DescribeLifelineChannel(c Channel, b ChannelBaseValue, s ContinuousState, p
 	planned := recoveryFresh && s.Phase == "circuit" && s.NextProbeAt != nil
 	if (v.Switch == "disabled" || v.Switch == "auto_disabled") && !planned {
 		v = stop("渠道已关闭", "未安排新的探测；历史恢复记录可单独查询")
-		if v.State == "stopped" {
+		if v.Pending == 0 && v.CurrentRound == nil && !(fresh && r.Running) {
 			v.Reason += "，当前没有探测任务"
 		}
 		return v

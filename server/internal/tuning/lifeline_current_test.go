@@ -58,9 +58,11 @@ func TestLifelineManualProtectionAndRecoveryIndependentOfRoutineSelection(t *tes
 	r.Running = true
 	r.Pending = 1
 	r.ConfirmedAt = now
-	require.Equal(t, "stopping", describe().State)
+	require.Equal(t, "stopped", describe().State)
+	require.Equal(t, 1, describe().Pending)
 	r.ConfirmedAt = now.Add(-time.Minute)
-	require.Equal(t, "unknown", describe().State)
+	require.Equal(t, "stopped", describe().State)
+	require.Zero(t, describe().Pending)
 	r.Running = false
 	c.Status = "1"
 	require.Equal(t, "manual_hold", describe().Switch)
@@ -114,7 +116,8 @@ func TestClosedLifelineUsesTasksInsteadOfOldRecoveryPhase(t *testing.T) {
 	state := ContinuousState{PausedReason: ManualDisabled}
 	round := &ProbeRound{ID: "inflight", Status: "executing", UpdatedAt: now}
 	v := DescribeLifelineChannel(c, ChannelBaseValue{}, state, p, ProbeRuntime{}, now, round)
-	require.Equal(t, "stopping", v.State)
+	require.Equal(t, "stopped", v.State)
+	require.NotNil(t, v.CurrentRound)
 	require.Nil(t, v.NextAt)
 	state = ContinuousState{}
 	round.Status = "failed"
@@ -124,4 +127,65 @@ func TestClosedLifelineUsesTasksInsteadOfOldRecoveryPhase(t *testing.T) {
 	round.Status = "executing"
 	round.UpdatedAt = now.Add(-time.Hour)
 	require.Equal(t, "unknown", DescribeLifelineChannel(c, ChannelBaseValue{}, state, p, ProbeRuntime{}, now, round).State)
+}
+
+func TestLifelineDisabledEligibilityNeverBecomesPersistentStopping(t *testing.T) {
+	now := time.Date(2026, 10, 13, 0, 20, 22, 0, time.UTC)
+	for _, cause := range []string{"model_disabled", "manual_disabled", "multiple_models"} {
+		for _, status := range []string{"pending", "delivered", "executing"} {
+			for _, age := range []time.Duration{0, 3 * time.Minute, 3*time.Minute + time.Nanosecond, 32 * 24 * time.Hour, -time.Minute} {
+				t.Run(cause+"/"+status+"/"+age.String(), func(t *testing.T) {
+					c := Channel{ID: 214, Status: "2", Models: []string{"deepseek-v4-flash"}}
+					p := PolicyRecord{Policy: DefaultPolicy()}
+					s := ContinuousState{UpdatedAt: now} // fresh state is not proof an old command is running.
+					if cause == "manual_disabled" {
+						s.PausedReason = ManualDisabled
+					}
+					if cause == "multiple_models" {
+						c.Models = append(c.Models, "other")
+					}
+					round := &ProbeRound{ID: "old-batch", Status: status, CreatedAt: now.Add(-32 * 24 * time.Hour), UpdatedAt: now.Add(-age), Planned: 10}
+					v := DescribeLifelineChannel(c, ChannelBaseValue{}, s, p, ProbeRuntime{}, now, round)
+					require.Equal(t, "stopped", v.State)
+					require.Zero(t, v.Pending)
+					require.Nil(t, v.NextAt)
+					if age >= 0 && age <= 3*time.Minute {
+						require.NotNil(t, v.CurrentRound)
+						require.Contains(t, v.Reason, "先前的恢复任务尚未结案")
+					} else {
+						require.Nil(t, v.CurrentRound)
+						require.Nil(t, v.RoundID)
+						require.NotContains(t, v.Reason, "退出确认")
+					}
+					// Actual unexpired requests remain visible even with an old or
+					// terminal command; the state does not claim they were canceled.
+					round.Status = "succeeded"
+					round.Metrics = &ProbeMetrics{Pending: 2}
+					v = DescribeLifelineChannel(c, ChannelBaseValue{}, s, p, ProbeRuntime{}, now, round)
+					require.Equal(t, "stopped", v.State)
+					require.Equal(t, 2, v.Pending)
+					require.NotNil(t, v.CurrentRound)
+					require.Contains(t, v.Reason, "先前发出的请求待结果")
+				})
+			}
+		}
+	}
+}
+
+func TestLifelineStoppedWorkerRequestsRemainSupplementary(t *testing.T) {
+	now := time.Now().UTC()
+	c := Channel{ID: 7, Status: "2", Models: []string{"m"}}
+	p := PolicyRecord{Policy: DefaultPolicy()}
+	p.Policy.DispatchModes = map[string]string{"m": "auto"}
+	r := ProbeRuntime{Running: true, Pending: 1, ConfirmedAt: now}
+	v := DescribeLifelineChannel(c, ChannelBaseValue{}, ContinuousState{}, p, r, now, nil)
+	require.Equal(t, "stopped", v.State)
+	require.Equal(t, 1, v.Pending)
+	require.NotContains(t, v.Reason, "当前没有探测任务")
+	r.ConfirmedAt = now.Add(-time.Minute)
+	v = DescribeLifelineChannel(c, ChannelBaseValue{}, ContinuousState{}, p, r, now, nil)
+	require.Equal(t, "stopped", v.State)
+	require.Zero(t, v.Pending)
+	require.Nil(t, v.CurrentRound)
+	require.Contains(t, v.Reason, "当前没有探测任务")
 }

@@ -13,8 +13,8 @@ test('current scope counts channels once even with multiple models and combines 
  assert.deepEqual(u.currentScope(rows,'2','b','manual_disabled').map(r=>r.channel_id),[2]);
  assert.equal(u.currentScope(rows,'','a','manual_disabled').length,0);
 });
-test('attention order distinguishes stopping, unknown, recovery, waiting and error confirmation',()=>{
- const rows=[row(1),row(2,'stopped'),row(3,'waiting'),row(4,'recovery'),row(5,'unknown'),row(6,'stopping'),{...row(7),accelerated:1}];
+test('attention order distinguishes in-flight requests, unknown, recovery, waiting and error confirmation',()=>{
+ const rows=[row(1),row(2,'stopped'),row(3,'waiting'),row(4,'recovery'),row(5,'unknown'),{...row(6,'stopped'),pending:1},{...row(7),accelerated:1}];
  assert.deepEqual(u.currentOrder(rows,'all','attention').map(r=>r.channel_id),[5,6,4,3,7,1,2]);
  assert.deepEqual(u.currentOrder(rows,'routine','id').map(r=>r.channel_id),[1,7]);assert.equal(rows[0].channel_id,1);
 });
@@ -22,5 +22,5 @@ test('snapshot expiry is separate from channel state',()=>{
  assert.equal(u.isCurrentSnapshotStale(iso,now+59000),false);
  assert.equal(u.isCurrentSnapshotStale(iso,now+61000),true);
  assert.equal(u.isCurrentSnapshotStale(undefined,now),false);
- assert.equal(u.lifelineStates.stopping,'正在停止探测');
+ assert.equal(u.lifelineStates.stopping,undefined);
 });
