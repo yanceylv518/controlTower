@@ -24,6 +24,12 @@ type TierStatistics struct {
 	Prices       UnitPrices `json:"prices,omitempty"`
 }
 
+// DailyTierStatistics preserves the date inside a frozen monthly snapshot.
+type DailyTierStatistics struct {
+	Day string `json:"day"`
+	TierStatistics
+}
+
 type tierStatisticsKey struct{ model, tier, discount string }
 type TierStatisticsAccumulator struct {
 	groups map[tierStatisticsKey]*TierStatistics

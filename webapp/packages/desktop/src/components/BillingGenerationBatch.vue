@@ -25,7 +25,21 @@ const options=computed(()=>{const found=new Map(queryResults.value.map(u=>[u.id,
 const selectionPage=ref(1),previewLoading=ref(false),previewError=ref(''),preview=ref<Record<number,BillingGenerationProgress>>({});
 let previewRevision=0,previewController:AbortController|undefined;
 const matchingOptions=computed(()=>queryResults.value.filter(u=>canSelect(u.id)));
-const visibleOptions=computed(()=>matchingOptions.value.slice((selectionPage.value-1)*20,selectionPage.value*20));
+const statusFilter=ref('all');
+const statusChoices=[{value:'all',label:'全部'},{value:'missing',label:'未生成'},{value:'partial',label:'部分生成 / 待补齐'},{value:'complete',label:'已生成'},{value:'active',label:'生成中'},{value:'empty',label:'无需出账'},{value:'unknown',label:'状态未知'}];
+function statusGroup(id:number){
+ const v=preview.value[id];if(!v)return 'unknown';
+ if(['生成中','排队中'].includes(selectionStatus(id)))return 'active';
+ if(v.total_days>0&&v.empty===v.total_days)return 'empty';
+ if(selectionStatus(id)==='已生成')return 'complete';
+ return v.complete>0||v.monthly?.status==='complete'?'partial':'missing';
+}
+const statusCounts=computed(()=>{const counts:Record<string,number>={all:matchingOptions.value.length};for(const u of matchingOptions.value){const key=statusGroup(u.id);counts[key]=(counts[key]||0)+1;}return counts;});
+const filteredOptions=computed(()=>matchingOptions.value.filter(u=>statusFilter.value==='all'||statusGroup(u.id)===statusFilter.value));
+const visibleOptions=computed(()=>filteredOptions.value.slice((selectionPage.value-1)*20,selectionPage.value*20));
+const pageSelected=computed(()=>visibleOptions.value.length>0&&visibleOptions.value.every(u=>selectedUsers.value.includes(u.id)));
+const pageIndeterminate=computed(()=>!pageSelected.value&&visibleOptions.value.some(u=>selectedUsers.value.includes(u.id)));
+watch(statusFilter,()=>{selectionPage.value=1;});
 const businessToday=()=>new Date().toLocaleDateString('sv-SE',{timeZone:'Asia/Shanghai'});
 const validDraftMonth=computed(()=>/^\d{4}-(0[1-9]|1[0-2])$/.test(draftMonth.value)&&`${draftMonth.value}-01`<businessToday());
 const disabledMonth=(date:Date)=>`${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-01`>=businessToday();
@@ -46,17 +60,33 @@ function selectionStatus(id:number){
 }
 function monthlyStatus(id:number){const v=preview.value[id];if(!v)return '—';if(v.total_days>0&&v.empty===v.total_days)return '无需出账';return v.monthly?.status==='complete'?'已生成':v.monthly?labels[v.monthly.status]||v.monthly.status:'未生成';}
 function toggleSubject(id:number,checked:boolean){if(checked){if(selectedUsers.value.length<50&&!selectedUsers.value.includes(id))selectedUsers.value.push(id);}else selectedUsers.value=selectedUsers.value.filter(v=>v!==id);}
-function selectMissing(){for(const u of visibleOptions.value){const v=preview.value[u.id];if(v&&v.total_days>0&&!['已生成','无消费，无需出账','生成中','排队中'].includes(selectionStatus(u.id)))toggleSubject(u.id,true);}}
+function addSubjects(values:Subject[]){
+ if(saving.value||searching.value)return;
+ const ids=values.filter(u=>canSelect(u.id)&&!selectedUsers.value.includes(u.id)).map(u=>u.id);
+ const room=Math.max(0,50-selectedUsers.value.length);selectedUsers.value.push(...ids.slice(0,room));
+ if(ids.length>room)ElMessage.info('每批最多选择 50 个，已保留前 50 个选择；其余可在下一批生成。');
+}
+function selectPage(checked:boolean){if(saving.value||searching.value)return;if(checked)addSubjects(visibleOptions.value);else{const ids=new Set(visibleOptions.value.map(u=>u.id));selectedUsers.value=selectedUsers.value.filter(id=>!ids.has(id));}}
+function selectFiltered(){addSubjects(filteredOptions.value);}
 async function loadPreview(){
  const n=++previewRevision;previewController?.abort();preview.value={};previewError.value='';previewLoading.value=false;
- if(!dialog.value||!validDraftMonth.value||!props.site||searching.value||!visibleOptions.value.length)return;
+ if(!dialog.value||!validDraftMonth.value||!props.site||searching.value||!matchingOptions.value.length)return;
  const controller=new AbortController();previewController=controller;previewLoading.value=true;
- const request={instance_id:props.site,kind:statementKind.value,subject_ids:visibleOptions.value.map(u=>u.id),...monthRange(draftMonth.value)};
- try{const r=await dashboard.billingGenerationPreview(request,controller.signal);if(n===previewRevision&&!disposed)preview.value=Object.fromEntries(r.items.map(v=>[v.subject_id,v]));}
+ const request={instance_id:props.site,kind:statementKind.value,...monthRange(draftMonth.value)};
+ const subjects=[...matchingOptions.value];const results:Record<number,BillingGenerationProgress>={};
+ try{
+  // Read the current search in bounded sequential requests; pagination/filtering reuse it.
+  for(let offset=0;offset<subjects.length;offset+=20){
+   const r=await dashboard.billingGenerationPreview({...request,subject_ids:subjects.slice(offset,offset+20).map(u=>u.id)},controller.signal);
+   if(n!==previewRevision||disposed||controller.signal.aborted)return;
+   for(const item of r.items)results[item.subject_id]=item;
+  }
+  preview.value=results;
+ }
  catch(e){if(n===previewRevision&&!controller.signal.aborted)previewError.value=billingTaskErrorMessage(e,'账单状态读取失败，请重试');}
  finally{if(n===previewRevision)previewLoading.value=false;}
 }
-watch([dialog,draftMonth,()=>props.site,statementKind,searching,()=>visibleOptions.value.map(u=>u.id).join(',')],()=>void loadPreview());
+watch([dialog,draftMonth,()=>props.site,statementKind,searching,()=>matchingOptions.value.map(u=>u.id).join(',')],()=>void loadPreview());
 watch(draftMonth,(value,old)=>{if(dialog.value&&old&&value!==old)selectedUsers.value=[];selectionPage.value=1;});
 const terminal=(s:string)=>['complete','no_consumption','failed','cancelled'].includes(s);
 const hasBatch=computed(()=>!!batch.value);
@@ -72,7 +102,7 @@ const labels:Record<string,string>={cancelled:'已取消',superseded:'已被覆�
 const local=(v?:string)=>v?new Date(v).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false}):'—';
 function monthRange(value:string){const [y,m]=value.split('-').map(Number);const next=m===12?`${y+1}-01`:`${y}-${String(m+1).padStart(2,'0')}`;return {from:`${value}-01T00:00:00+08:00`,to:`${next}-01T00:00:00+08:00`};}
 async function searchUsers(keyword='') {searchKeyword.value=keyword;selectionPage.value=1;const n=++searchRevision;queryResults.value=[];searching.value=true;try{let values:Subject[];if(statementKind.value==='upstream_statement'){const r=await dashboard.billingUpstreams(props.site);values=r.items.map(u=>({id:u.id,name:u.name})).filter(u=>`${u.name} ${u.id}`.toLowerCase().includes(keyword.toLowerCase()));}else{const r=await passthrough.users({site:props.site,keyword,limit:200,exclude_admin:excludeAdmins.value?1:0});values=r.items.map(u=>({id:u.id,name:u.display_name||u.username,role:u.role}));}if(n!==searchRevision||disposed)return;queryResults.value=values;for(const u of queryResults.value){names.value[u.id]=u.name;roles.value[u.id]=u.role;}selectedUsers.value=selectedUsers.value.filter(canSelect);}catch(e){ElMessage.error(billingTaskErrorMessage(e,subjectLabel.value+'加载失败'));}finally{if(n===searchRevision)searching.value=false;}}
-function open(){if(active.value||saving.value||props.busy)return;overwrite.value=false;excludeZeroOutput.value=statementKind.value==='upstream_statement';selectionPage.value=1;searchKeyword.value='';draftMonth.value=props.month;for(const u of props.subjects){names.value[u.id]=u.name;roles.value[u.id]=u.role;}selectedUsers.value=props.selected&&canSelect(props.selected)?[props.selected]:[];queryResults.value=[...props.subjects];dialog.value=true;void searchUsers();}
+function open(){if(active.value||saving.value||props.busy)return;overwrite.value=false;excludeZeroOutput.value=statementKind.value==='upstream_statement';selectionPage.value=1;statusFilter.value='all';searchKeyword.value='';draftMonth.value=props.month;for(const u of props.subjects){names.value[u.id]=u.name;roles.value[u.id]=u.role;}selectedUsers.value=props.selected&&canSelect(props.selected)?[props.selected]:[];queryResults.value=[...props.subjects];dialog.value=true;void searchUsers();}
 async function submit(){if(active.value||props.busy)return;selectedUsers.value=selectedUsers.value.filter(canSelect);if(!validDraftMonth.value||selectedUsers.value.length===0)return;saving.value=true;try{
  const request={kind:statementKind.value,instance_id:props.site,subject_ids:[...selectedUsers.value],overwrite:overwrite.value,exclude_zero_output:excludeZeroOutput.value,...monthRange(draftMonth.value)};
  const r=await dashboard.generateBillingBatch(request);if(disposed||props.site!==request.instance_id||statementKind.value!==request.kind)return;batch.value=request;batchMonth.value=draftMonth.value;items.value=r.items;error.value='';dialog.value=false;progress.value=true;emit('submitted',draftMonth.value);
@@ -102,28 +132,26 @@ defineExpose({open,active,hasBatch,saving,restore});
 <template>
 <div v-if="batch" class="batch-status" :class="{'is-success':succeeded,'is-failed':totals.errors}"><button @click="progress=true;refresh()"><span>{{batchMonth}} · {{batch.subject_ids.length}} {{unit}}{{subjectLabel}}</span><span><strong>{{resultLabel}}</strong> · 已完成 {{totals.users}} {{unit}}<span v-if="totals.errors"> · 失败 {{totals.errors}} {{unit}}</span></span><el-progress :percentage="percentage" :stroke-width="5" :status="progressStatus"/><b>{{active?'查看生成进度':'查看生成结果'}} →</b></button><el-button v-if="active" link type="danger" :loading="cancelling" @click="cancelTask">取消任务</el-button><el-button v-if="!active" link @click="batch=undefined;progress=false">关闭</el-button></div>
 <div v-if="otherBatches.length" class="other-batches"><el-button v-for="b in otherBatches" :key="b.from" link type="primary" @click="viewOther(b.from)">{{b.month}} · {{b.count}} {{unit}}{{subjectLabel}} · 查看生成进度</el-button></div>
-<el-dialog v-model="dialog" class="billing-generation-dialog" top="5vh" title="生成账单" width="min(920px,95vw)" :close-on-click-modal="!saving" :close-on-press-escape="!saving" :show-close="!saving">
- <el-form label-position="top">
-  <div class="generation-controls">
-   <el-form-item label="账单月份"><el-date-picker v-model="draftMonth" type="month" value-format="YYYY-MM" :clearable="false" :disabled="saving" :disabled-date="disabledMonth" style="width:170px"/></el-form-item>
-   <el-form-item :label="`搜索${subjectLabel}`"><el-input v-model="searchKeyword" :disabled="saving" clearable :placeholder="`${subjectLabel}名称或 ID，回车搜索`" @keyup.enter="searchUsers(searchKeyword)" @clear="searchUsers('')"><template #append><el-button :disabled="saving" @click="searchUsers(searchKeyword)">搜索</el-button></template></el-input></el-form-item>
+<el-dialog v-model="dialog" class="billing-generation-dialog" top="5vh" title="生成账单" width="min(1040px,95vw)" :close-on-click-modal="!saving" :close-on-press-escape="!saving" :show-close="!saving">
+ <el-form label-position="top" class="generation-form">
+  <div class="generation-list-toolbar">
+   <el-date-picker v-model="draftMonth" aria-label="账单月份" type="month" value-format="YYYY-MM" :clearable="false" :disabled="saving" :disabled-date="disabledMonth" style="width:135px"/>
+   <el-select v-model="statusFilter" aria-label="生成状态" :disabled="saving||previewLoading||searching" style="width:180px"><el-option v-for="option in statusChoices" :key="option.value" :value="option.value" :label="`${option.label} (${statusCounts[option.value]||0})`"/></el-select>
+   <el-input v-model="searchKeyword" class="generation-search" :disabled="saving" clearable :placeholder="`${subjectLabel}名称或 ID`" aria-label="搜索用户或上游" @keyup.enter="searchUsers(searchKeyword)" @clear="searchUsers('')"><template #append><el-button :disabled="saving" @click="searchUsers(searchKeyword)">搜索</el-button></template></el-input>
+   <el-button link :disabled="saving||searching" :loading="previewLoading" @click="loadPreview">刷新</el-button>
   </div>
-  <div class="generation-selection-tools"><el-checkbox v-if="statementKind==='user_statement'" v-model="excludeAdmins" :disabled="saving" @change="filterAdmins">过滤管理员及超级管理员</el-checkbox><span>已选 {{selectedUsers.length}} / 50 {{unit}}</span><el-button link :disabled="saving||previewLoading||searching||!!previewError" @click="selectMissing">选择本页待生成</el-button><el-button link :disabled="saving||!selectedUsers.length" @click="selectedUsers=[]">清空选择</el-button><el-button link :disabled="saving||searching" :loading="previewLoading" @click="loadPreview">刷新状态</el-button></div>
-  <p class="generation-note">按所选月份查看；当月只统计截至昨日的完整日期。默认补齐缺失账单，临时账单不计入日 / 月账单覆盖。</p>
+  <div class="generation-selection-tools"><el-button link type="primary" :disabled="saving||previewLoading||searching||!filteredOptions.length" @click="selectFiltered">选择筛选结果</el-button><el-button link :disabled="saving||!selectedUsers.length" @click="selectedUsers=[]">清空</el-button><span class="selection-count">已选 <b>{{selectedUsers.length}}</b> / 50</span><el-checkbox v-if="statementKind==='user_statement'" v-model="excludeAdmins" :disabled="saving" @change="filterAdmins">隐藏管理员</el-checkbox></div>
   <el-alert v-if="previewError" :title="previewError" type="error" :closable="false"/>
-  <el-table v-loading="searching||previewLoading" :data="visibleOptions" row-key="id" max-height="min(340px,35vh)" :empty-text="searching?'正在搜索':`没有匹配的${subjectLabel}`">
-   <el-table-column width="48"><template #default="s"><el-checkbox :model-value="selectedUsers.includes(s.row.id)" :aria-label="`选择 ${s.row.name}`" :disabled="saving||(!selectedUsers.includes(s.row.id)&&selectedUsers.length>=50)" @change="toggleSubject(s.row.id,!!$event)"/></template></el-table-column>
-   <el-table-column :label="subjectLabel" min-width="165"><template #default="s"><b>{{s.row.name}}</b><small class="id">#{{s.row.id}}</small></template></el-table-column>
-   <el-table-column label="生成情况" min-width="165"><template #default="s"><el-tag :type="selectionStatus(s.row.id).includes('失败')?'danger':selectionStatus(s.row.id)==='已生成'?'success':selectionStatus(s.row.id)==='部分已生成'?'warning':'info'" size="small">{{selectionStatus(s.row.id)}}</el-tag></template></el-table-column>
-   <el-table-column label="日账单" min-width="160"><template #default="s"><span v-if="preview[s.row.id]">已生成 {{preview[s.row.id].complete}} / {{preview[s.row.id].total_days}} 天<small class="id">无消费 {{preview[s.row.id].empty}} 天 · 失败 {{preview[s.row.id].failed}} 天</small></span><span v-else>—</span></template></el-table-column>
-   <el-table-column label="月账单" min-width="140"><template #default="s">{{monthlyStatus(s.row.id)}}</template></el-table-column>
+  <el-table class="generation-table" :row-class-name="({row}: {row:Subject})=>selectedUsers.includes(row.id)?'is-picked':''" v-loading="searching||previewLoading" :data="visibleOptions" row-key="id" height="max(220px,calc(85vh - 240px))" :empty-text="searching?'正在搜索':`没有匹配的${subjectLabel}`">
+   <el-table-column width="48"><template #header><el-checkbox :model-value="pageSelected" :indeterminate="pageIndeterminate" :disabled="saving||searching||previewLoading||!visibleOptions.length" aria-label="选择本页全部" @change="selectPage(!!$event)"/></template><template #default="s"><el-checkbox :model-value="selectedUsers.includes(s.row.id)" :aria-label="`选择 ${s.row.name}`" :disabled="saving||(!selectedUsers.includes(s.row.id)&&selectedUsers.length>=50)" @change="toggleSubject(s.row.id,!!$event)"/></template></el-table-column>
+   <el-table-column :label="subjectLabel" min-width="140"><template #default="s"><div class="subject-cell"><span class="subject-name">{{s.row.name}}</span><small class="subject-id">#{{s.row.id}}</small></div></template></el-table-column>
+   <el-table-column label="生成情况" min-width="140"><template #default="s"><span class="generation-state" :class="selectionStatus(s.row.id).includes('失败')?'state-failed':'state-'+statusGroup(s.row.id)"><i aria-hidden="true"></i>{{selectionStatus(s.row.id)}}</span></template></el-table-column>
+   <el-table-column label="日账单" min-width="125" align="right" header-align="right"><template #default="s"><span v-if="preview[s.row.id]"><b class="day-count">{{preview[s.row.id].complete}}</b><span class="day-total"> / {{preview[s.row.id].total_days}} 天</span><small class="id"><span v-if="preview[s.row.id].empty">无消费 {{preview[s.row.id].empty}} 天</span><span v-if="preview[s.row.id].empty&&preview[s.row.id].failed"> · </span><span v-if="preview[s.row.id].failed" class="day-failed">失败 {{preview[s.row.id].failed}} 天</span></small></span><span v-else>—</span></template></el-table-column>
+   <el-table-column label="月账单" min-width="95" align="center"><template #default="s"><span :class="{'muted-value':monthlyStatus(s.row.id)==='无需出账'||monthlyStatus(s.row.id)==='—'}">{{monthlyStatus(s.row.id)}}</span></template></el-table-column>
   </el-table>
-  <div class="generation-paging"><small>当前搜索 {{matchingOptions.length}} {{unit}}{{subjectLabel}}<span v-if="statementKind==='user_statement'&&queryResults.length>=200">（最多展示 200 条，请搜索缩小范围）</span></small><el-pagination v-model:current-page="selectionPage" :disabled="saving" :page-size="20" :total="matchingOptions.length" layout="prev,pager,next"/></div>
-  <div v-if="selectedUsers.length" class="generation-picked"><el-tag v-for="id in selectedUsers" :key="id" :closable="!saving" @close="toggleSubject(id,false)">{{names[id]||subjectLabel}} · #{{id}}</el-tag></div>
-  <el-checkbox v-model="excludeZeroOutput" :disabled="saving">排除输出为 0 的请求</el-checkbox>
-  <el-checkbox v-model="overwrite" :disabled="saving">覆盖已有账单</el-checkbox><p class="generation-note">{{overwrite?(statementKind==='upstream_statement'?'按当前渠道归属、已配置的账期折扣和金额配置重算所选月份。漏渠道可用此方式补齐，原有渠道金额也可能变化；新月账完整生成后替代旧月账。':'重新生成所选月份的账单，新月账完整生成后替代旧月账。'):'已完成的日账单会复用，只补齐缺失日期；修复已生成账单漏渠道时，请勾选覆盖已有账单。'}}</p>
+  <div class="generation-paging"><small>{{filteredOptions.length}} / {{matchingOptions.length}} {{unit}}{{subjectLabel}}<span v-if="statementKind==='user_statement'&&queryResults.length>=200">（最多 200 条，可搜索）</span></small><el-pagination v-model:current-page="selectionPage" :disabled="saving" :page-size="20" :total="filteredOptions.length" layout="prev,pager,next"/></div>
  </el-form>
- <template #footer><el-button :disabled="saving" @click="dialog=false">取消</el-button><el-button type="primary" :loading="saving" :disabled="active||busy||!selectedUsers.length||!validDraftMonth" @click="submit">{{overwrite?'覆盖生成':'补齐并生成'}}{{selectedUsers.length?'（'+selectedUsers.length+' '+unit+subjectLabel+'）':''}}</el-button></template>
+ <template #footer><div class="generation-footer"><div class="generation-footer-options"><el-checkbox v-model="excludeZeroOutput" :disabled="saving">排除零输出</el-checkbox><el-checkbox v-model="overwrite" :disabled="saving">覆盖已有账单</el-checkbox></div><div class="generation-footer-actions"><el-button :disabled="saving" @click="dialog=false">取消</el-button><el-button type="primary" :loading="saving" :disabled="active||busy||!selectedUsers.length||!validDraftMonth" @click="submit">{{overwrite?'覆盖生成':'补齐并生成'}}{{selectedUsers.length?'（'+selectedUsers.length+'）':''}}</el-button></div></div><p v-if="overwrite" class="generation-note">完整生成后替换所选月份的已有账单。</p></template>
 </el-dialog>
 <el-dialog v-model="progress" :title="batchMonth+(active?' · 账单生成进度':' · 账单生成结果')" width="min(1180px,96vw)">
  <el-alert v-if="error" :title="error" type="error" :closable="false"/>
@@ -144,9 +172,42 @@ defineExpose({open,active,hasBatch,saving,restore});
 </el-dialog>
 </template>
 <style scoped>
-:global(.billing-generation-dialog .el-dialog__body){max-height:calc(90vh - 125px);overflow:auto}.generation-controls{display:flex;gap:20px;flex-wrap:wrap}.generation-controls .el-form-item:last-child{flex:1;min-width:220px}.generation-selection-tools{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.generation-selection-tools>span{margin-left:auto}.generation-note,.generation-paging{font-size:12px;color:var(--el-text-color-secondary)}.generation-note{line-height:1.6;margin:10px 0}.generation-paging{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:10px;flex-wrap:wrap}.generation-picked{display:flex;flex-wrap:wrap;gap:6px;max-height:80px;overflow:auto;margin:12px 0}
-
-.admin-filter-note{margin-left:12px;font-size:12px;color:var(--el-text-color-secondary)}
+:global(.billing-generation-dialog){border-radius:12px;padding:0;overflow:hidden}
+:global(.billing-generation-dialog .el-dialog__header){margin:0;padding:18px 22px 16px;border-bottom:1px solid var(--el-border-color-extra-light)}
+:global(.billing-generation-dialog .el-dialog__title){font-size:17px;font-weight:600}
+:global(.billing-generation-dialog .el-dialog__headerbtn){top:8px;right:10px}
+:global(.billing-generation-dialog .el-dialog__body){padding:14px 22px 10px;max-height:calc(90vh - 125px);overflow:auto}
+:global(.billing-generation-dialog .el-dialog__footer){padding:12px 22px;border-top:1px solid var(--el-border-color-extra-light)}
+.generation-list-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding-bottom:8px}
+.generation-list-toolbar :deep(.el-input__wrapper),.generation-list-toolbar :deep(.el-select__wrapper){min-height:34px;border-radius:6px}
+.generation-list-toolbar :deep(.el-input-group .el-input__wrapper){border-radius:6px 0 0 6px}
+.generation-list-toolbar :deep(.el-input-group__append){border-radius:0 6px 6px 0;background:var(--el-fill-color-extra-light);padding:0 15px}
+.generation-list-toolbar>.el-button{font-size:12px;color:var(--el-text-color-secondary)}
+.generation-search{flex:1;min-width:160px}
+.generation-selection-tools{display:flex;align-items:center;gap:14px;flex-wrap:wrap;min-height:34px;margin-bottom:6px}
+.generation-selection-tools .el-button+.el-button{margin-left:0}
+.generation-selection-tools :deep(.el-checkbox__label){font-size:12px;color:var(--el-text-color-secondary)}
+.selection-count{margin-left:auto;color:var(--el-text-color-secondary);font-size:12px;font-variant-numeric:tabular-nums}
+.selection-count b{color:var(--el-text-color-primary);font-size:13px}
+.generation-table{border:1px solid var(--el-border-color-lighter);border-radius:7px;overflow:hidden;--el-table-header-bg-color:var(--el-fill-color-extra-light);--el-table-border-color:var(--el-border-color-extra-light)}
+.generation-table :deep(th.el-table__cell){height:38px;font-size:12px;font-weight:500;color:var(--el-text-color-secondary)}
+.generation-table :deep(td.el-table__cell){padding:8px 0;height:52px;font-size:13px}.generation-table :deep(.cell){padding-left:12px;padding-right:12px}
+.generation-table :deep(.is-picked){--el-table-tr-bg-color:var(--el-color-primary-light-9)}
+.subject-cell{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}.subject-name{font-weight:500;color:var(--el-text-color-primary);overflow-wrap:anywhere}.subject-id{font-size:11px;color:var(--el-text-color-placeholder);font-variant-numeric:tabular-nums;white-space:nowrap}
+.generation-table .id{font-size:11px;margin-top:1px}
+.generation-state{display:inline-flex;align-items:center;gap:6px;color:var(--el-text-color-secondary);font-size:12px;line-height:18px}
+.generation-state i{flex:none;width:5px;height:5px;border-radius:50%;background:var(--el-text-color-placeholder)}
+.state-complete{color:var(--el-color-success)}.state-complete i{background:var(--el-color-success)}
+.state-partial{color:var(--el-color-warning)}.state-partial i{background:var(--el-color-warning)}
+.state-active{color:var(--el-color-primary)}.state-active i{background:var(--el-color-primary)}
+.state-failed{color:var(--el-color-danger)}.state-failed i{background:var(--el-color-danger)}
+.muted-value{font-size:12px;color:var(--el-text-color-placeholder)}
+.day-count{font-weight:500;font-variant-numeric:tabular-nums}.day-total{color:var(--el-text-color-secondary);font-variant-numeric:tabular-nums}.day-failed{color:var(--el-color-danger)}
+.generation-paging{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:8px;flex-wrap:wrap;font-size:12px;color:var(--el-text-color-secondary)}
+.generation-footer{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;flex-wrap:wrap}
+.generation-footer-options{display:flex;gap:18px;flex-wrap:wrap}.generation-footer-options .el-checkbox{margin:0}.generation-footer-options :deep(.el-checkbox__label){font-size:12px}
+.generation-footer-actions{margin-left:auto;white-space:nowrap;display:flex;gap:10px}.generation-footer-actions .el-button{margin:0;min-width:76px;border-radius:6px}.generation-footer-actions .el-button--primary{min-width:112px}.generation-footer-options :deep(.el-checkbox__label){color:var(--el-text-color-secondary)}.generation-note{font-size:12px;color:var(--el-text-color-secondary);margin:6px 0 0;text-align:left}
+@media(max-width:600px){:global(.billing-generation-dialog .el-dialog__body){padding:12px}.generation-list-toolbar{gap:8px}.generation-search{flex-basis:calc(100% - 55px)}.generation-selection-tools{gap:10px}.generation-footer-options{gap:12px}}
 .batch-status.is-success>button:first-child{border-color:var(--el-color-success-light-7);background:var(--el-color-success-light-9);color:var(--el-color-success)}.batch-status.is-failed>button:first-child{border-color:var(--el-color-danger-light-7);background:var(--el-color-danger-light-9);color:var(--el-color-danger)}
 .batch-status{display:flex;align-items:center;gap:8px;margin:10px 0}.batch-status>button:first-child{display:flex;flex:1;min-width:0;align-items:center;gap:14px;border:1px solid var(--el-color-primary-light-7);background:var(--el-color-primary-light-9);color:var(--el-color-primary);border-radius:8px;padding:11px 14px;cursor:pointer;text-align:left}.batch-status .el-progress{width:180px}.batch-status b{margin-left:auto;font-size:12px;font-weight:500}.batch-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:16px}.batch-metrics>div{padding:12px 14px;border:1px solid var(--el-border-color-light);border-radius:8px;display:grid;gap:7px}.batch-metrics small,.batch-metrics span,.id{font-size:12px;color:var(--el-text-color-secondary)}.batch-metrics b{font-size:22px;font-variant-numeric:tabular-nums}.batch-overall{display:flex;gap:18px;align-items:center;margin-bottom:14px}.batch-overall .el-progress{flex:1}.batch-days{padding:12px 18px;background:var(--el-fill-color-lighter)}.monthly-status{padding:8px 0}.id{display:block;margin-top:3px}@media(max-width:700px){.batch-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.batch-status>button:first-child{flex-wrap:wrap}.batch-status .el-progress{flex:1}.batch-days{padding:8px}}
 </style>

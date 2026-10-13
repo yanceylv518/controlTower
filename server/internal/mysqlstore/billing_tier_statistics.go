@@ -16,22 +16,37 @@ func (s Store) PutBillingTierStatistics(ctx context.Context, jobID string, day t
 	return err
 }
 func (s Store) QueryBillingTierStatistics(ctx context.Context, jobID string) ([]billing.TierStatistics, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT statistics_json FROM billing_tier_statistics WHERE job_id=? ORDER BY bill_day,user_id`, jobID)
+	rows, err := s.QueryBillingDailyTierStatistics(ctx, jobID)
+	if err != nil {
+		return nil, err
+	}
+	out := []billing.TierStatistics{}
+	for _, row := range rows {
+		out = append(out, row.TierStatistics)
+	}
+	return out, nil
+}
+
+func (s Store) QueryBillingDailyTierStatistics(ctx context.Context, jobID string) ([]billing.DailyTierStatistics, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT bill_day,statistics_json FROM billing_tier_statistics WHERE job_id=? ORDER BY bill_day,user_id`, jobID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := []billing.TierStatistics{}
+	out := []billing.DailyTierStatistics{}
 	for rows.Next() {
 		var raw string
-		if err = rows.Scan(&raw); err != nil {
+		var day time.Time
+		if err = rows.Scan(&day, &raw); err != nil {
 			return nil, err
 		}
 		var values []billing.TierStatistics
 		if err = json.Unmarshal([]byte(raw), &values); err != nil {
 			return nil, err
 		}
-		out = append(out, values...)
+		for _, value := range values {
+			out = append(out, billing.DailyTierStatistics{Day: day.Format("2006-01-02"), TierStatistics: value})
+		}
 	}
 	return out, rows.Err()
 }

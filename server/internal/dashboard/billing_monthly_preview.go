@@ -1,10 +1,13 @@
 package dashboard
 
 import (
+	"context"
 	"controltower/server/internal/billing"
 	"math/big"
 	"net/http"
+	"regexp"
 	"strconv"
+	"strings"
 )
 
 // Monthly preview reads the same saved aggregates and currency snapshot as XLSX.
@@ -33,6 +36,25 @@ func (h BillingStatementResultHandler) writeMonthlyPreview(w http.ResponseWriter
 	}
 	start := len(headers)
 	headers = append(headers, "请求数", "普通输入 Token", "普通输出 Token", "缓存读取 Token", "缓存写入 Token", "图像输入 Token", "图像输出 Token", "音频输入 Token", "音频输出 Token", billing.UnitPriceHeader(currency), "原价金额", "折扣", "折后金额")
+	tierRows := map[int][][]string{}
+	tiers := map[[3]string][]billing.TierStatistics{}
+	if dimension == "daily" && job.JobType == "user_statement" {
+		if store, ok := h.Store.(interface {
+			QueryBillingDailyTierStatistics(context.Context, string) ([]billing.DailyTierStatistics, error)
+		}); ok {
+			saved, e := store.QueryBillingDailyTierStatistics(r.Context(), job.ID)
+			if e != nil {
+				writeDashboardError(w, 500, "billing_statement_query_failed")
+				return
+			}
+			for _, v := range saved {
+				if monthlyPeakTier.MatchString(strings.TrimSpace(v.Tier)) {
+					key := [3]string{v.Day, v.Model, billing.DiscountGroupKey(v.Discount)}
+					tiers[key] = append(tiers[key], v.TierStatistics)
+				}
+			}
+		}
+	}
 	data := [][]string{}
 	appendRow := func(prefix []string, count, input, output, read, write int64, media billing.MultimediaUsage, before, discount, amount string, prices billing.UnitPrices) {
 		for _, v := range []int64{count, input, output, read, write, media.ImageInputTokens, media.ImageOutputTokens, media.AudioInputTokens, media.AudioOutputTokens} {
@@ -65,6 +87,10 @@ func (h BillingStatementResultHandler) writeMonthlyPreview(w http.ResponseWriter
 				prefix = append(prefix, v.ChannelName)
 			}
 			appendRow(prefix, v.RequestCount, v.PromptTokens, v.CompletionTokens, v.CacheTokens, v.CacheWriteTokens, v.MultimediaUsage, v.BeforeAmount, v.SettlementDiscount, v.Amount, v.UnitPrices)
+			index := len(data) - 1
+			for _, tier := range tiers[[3]string{date, v.ModelName, billing.DiscountGroupKey(v.SettlementDiscount)}] {
+				tierRows[index] = append(tierRows[index], monthlyTierPreviewRow(date, tier, rate))
+			}
 		}
 	}
 	legacyMixed := false
@@ -112,5 +138,25 @@ func (h BillingStatementResultHandler) writeMonthlyPreview(w http.ResponseWriter
 	if hi > len(data) {
 		hi = len(data)
 	}
-	writeDashboardJSON(w, 200, map[string]any{"coverage": billing.MonthlyCoverageFromRows(job, rows), "legacy_mixed_discounts": legacyMixed, "covered_days": len(coveredDays), "headers": headers, "rows": data[lo:hi], "totals": totals, "total": len(data), "page_size": size, "currency": currency, "numeric_start": start})
+	pageTiers := map[int][][]string{}
+	for i := lo; i < hi; i++ {
+		if children := tierRows[i]; len(children) > 0 {
+			pageTiers[i-lo] = children
+		}
+	}
+	writeDashboardJSON(w, 200, map[string]any{"tier_rows": pageTiers, "coverage": billing.MonthlyCoverageFromRows(job, rows), "legacy_mixed_discounts": legacyMixed, "covered_days": len(coveredDays), "headers": headers, "rows": data[lo:hi], "totals": totals, "total": len(data), "page_size": size, "currency": currency, "numeric_start": start})
+}
+
+var monthlyPeakTier = regexp.MustCompile(`(?i)^(高峰(?:时段|期)?|低谷(?:时段|期)?|空闲(?:时段|期)?|peak(?:[_ -]hours)?|off[_ -]?peak(?:[_ -]hours)?|valley)$`)
+
+func monthlyTierPreviewRow(day string, v billing.TierStatistics, rate *big.Rat) []string {
+	row := []string{day, v.Tier}
+	for _, n := range []int64{v.Requests, v.Input, v.Output, v.CacheRead, v.CacheWrite, v.ImageInputTokens, v.ImageOutputTokens, v.AudioInputTokens, v.AudioOutputTokens} {
+		row = append(row, strconv.FormatInt(n, 10))
+	}
+	before := billing.DisplaySettlementAmount(v.BeforeAmount, rate)
+	if before == "" {
+		before = "—"
+	}
+	return append(row, billing.UnitPriceLabel(v.Prices, rate), before, billing.DiscountGroupLabel(v.Discount), billing.DisplaySettlementAmount(v.Amount, rate))
 }

@@ -15,7 +15,7 @@ function create(t,kind='user_statement') {
  const previews=[];const dashboard={billingGenerationPreview:async(q,signal)=>{previews.push({q,signal});return {items:q.subject_ids.map(id=>({subject_id:id,total_days:30,complete:0,empty:0,failed:0,pending:0,running:0,outcome:'registered'}))}},billingUpstreams:async()=>({items:[{id:1,name:'上游'}]}),generateBillingBatch:async q=>{requests.push(q);return {items:[{subject_id:3,outcome:'complete'}]}}}
  const scope=effectScope();t.after(()=>scope.stop())
  const names=['computed','ref','watch','onBeforeUnmount','defineProps','defineEmits','defineExpose','setInterval','clearInterval','ElMessage','ElMessageBox','dashboard','passthrough','billingTaskErrorMessage']
- const init=new Function(...names,compiled+'\nreturn {restore,refresh,progressName,names,excludeZeroOutput,open,options,selectedUsers,excludeAdmins,filterAdmins,searchUsers,submit,queryResults,roles,batch,items,waitingForReport,resultLabel,draftMonth,preview,previewLoading,previewError,selectionStatus,monthlyStatus,loadPreview,selectMissing,toggleSubject,selectionPage,visibleOptions,dialog};')
+ const init=new Function(...names,compiled+'\nreturn {statusFilter,statusCounts,filteredOptions,pageSelected,pageIndeterminate,selectPage,selectFiltered,statusGroup,restore,refresh,progressName,names,excludeZeroOutput,open,options,selectedUsers,excludeAdmins,filterAdmins,searchUsers,submit,queryResults,roles,batch,items,waitingForReport,resultLabel,draftMonth,preview,previewLoading,previewError,selectionStatus,monthlyStatus,loadPreview,toggleSubject,selectionPage,visibleOptions,dialog};')
  const view=scope.run(()=>init(computed,ref,watch,()=>{},()=>props,()=>()=>{},()=>{},()=>1,()=>{}, {error:()=>{},info:()=>{},success:()=>{}},{},dashboard,passthrough,String))
  return {...view,props,passthrough,dashboard,previews,queries,requests}
 }
@@ -71,16 +71,16 @@ test('late preview cannot overwrite a different month or a closed dialog',async 
 
 test('preview failure stays unknown; partial and failed subjects can be selected without including completed bills',async t=>{
  const v=create(t);v.open();await flush();v.dashboard.billingGenerationPreview=async()=>{throw Error('offline')};await v.loadPreview()
- assert.match(v.previewError.value,/offline/);assert.equal(v.selectionStatus(3),'状态未知');v.selectMissing();assert.deepEqual(v.selectedUsers.value,[])
+ assert.match(v.previewError.value,/offline/);assert.equal(v.selectionStatus(3),'状态未知');v.statusFilter.value='missing';await flush();v.selectFiltered();assert.deepEqual(v.selectedUsers.value,[])
  v.preview.value={3:{subject_id:3,total_days:30,complete:30,empty:0,monthly:{status:'complete'}},4:{subject_id:4,total_days:30,complete:10,empty:5,failed:1}}
- assert.equal(v.selectionStatus(4),'部分失败');v.selectMissing();assert.deepEqual(v.selectedUsers.value,[4])
+ assert.equal(v.selectionStatus(4),'部分失败');v.statusFilter.value='partial';await flush();v.selectFiltered();assert.deepEqual(v.selectedUsers.value,[4])
  v.preview.value[4]={subject_id:4,total_days:30,complete:10,empty:5};assert.equal(v.selectionStatus(4),'部分已生成')
  v.preview.value[4]={subject_id:4,total_days:30,complete:0,empty:30};assert.equal(v.selectionStatus(4),'无消费，无需出账')
 })
 
 test('preview requests are paged, capped, and upstream uses its own scope',async t=>{
  const v=create(t);v.passthrough.users=async()=>({items:Array.from({length:65},(_,i)=>({id:i+10,username:'user'+i,role:1}))});v.open();await flush()
- assert.equal(v.previews.at(-1).q.subject_ids.length,20);v.selectionPage.value=4;await flush();assert.equal(v.previews.at(-1).q.subject_ids.length,5)
+ assert.deepEqual(v.previews.map(p=>p.q.subject_ids.length),[20,20,20,5]);const count=v.previews.length;v.selectionPage.value=4;await flush();assert.equal(v.previews.length,count);assert.equal(Object.keys(v.preview.value).length,65)
  for(let i=10;i<75;i++)v.toggleSubject(i,true);assert.equal(v.selectedUsers.value.length,50)
  const up=create(t,'upstream_statement');up.open();await flush();assert.equal(up.previews.at(-1).q.kind,'upstream_statement')
 })
@@ -109,4 +109,30 @@ test('late upstream progress cannot restore previous site names after switching 
  v.restore([{instance_id:'a',kind:'upstream_statement',subject_id:28,from:'2026-09-01T00:00:00+08:00',to:'2026-10-01T00:00:00+08:00'}])
  v.props.site='b';await flush();finish({items:[{subject_id:28,subject_name:'旧站点上游',outcome:'registered'}]});await flush()
  assert.deepEqual(v.items.value,[]);assert.deepEqual(v.names.value,{})
+})
+
+
+test('status filters distinguish complete, partial, missing, running, empty and unknown',async t=>{
+ const v=create(t);v.passthrough.users=async()=>({items:Array.from({length:6},(_,i)=>({id:i+10,username:'u'+i,role:1}))});v.open();await flush()
+ v.preview.value={10:{subject_id:10,total_days:30,complete:30,empty:0,monthly:{status:'complete'}},11:{subject_id:11,total_days:30,complete:10,empty:0},12:{subject_id:12,total_days:30,complete:0,empty:0},13:{subject_id:13,total_days:30,complete:0,empty:0,running:1},14:{subject_id:14,total_days:30,complete:0,empty:30}}
+ assert.deepEqual(v.statusCounts.value,{all:6,complete:1,partial:1,missing:1,active:1,empty:1,unknown:1})
+ v.statusFilter.value='partial';await flush();assert.deepEqual(v.visibleOptions.value.map(u=>u.id),[11])
+ v.selectFiltered();assert.deepEqual(v.selectedUsers.value,[11]);v.statusFilter.value='missing';await flush();v.selectFiltered();assert.deepEqual(v.selectedUsers.value,[11,12])
+ v.statusFilter.value='complete';await flush();v.selectFiltered();assert.deepEqual(v.selectedUsers.value,[11,12,10])
+})
+
+test('page selection preserves other pages, filtered selection spans pages and respects batch limit',async t=>{
+ const v=create(t);v.passthrough.users=async()=>({items:Array.from({length:65},(_,i)=>({id:i+10,username:'u'+i,role:1}))});v.open();await flush()
+ v.selectPage(true);assert.equal(v.selectedUsers.value.length,20);assert.equal(v.pageSelected.value,true)
+ v.selectionPage.value=2;await flush();v.toggleSubject(30,true);assert.equal(v.pageIndeterminate.value,true)
+ v.selectionPage.value=1;await flush();v.selectPage(false);assert.deepEqual(v.selectedUsers.value,[30])
+ v.statusFilter.value='missing';await flush();v.selectFiltered();assert.equal(v.selectedUsers.value.length,50);assert.equal(new Set(v.selectedUsers.value).size,50);assert.ok(v.selectedUsers.value.includes(59));assert.ok(!v.selectedUsers.value.includes(74))
+ v.props.site='b';await flush();assert.deepEqual(v.selectedUsers.value,[])
+})
+
+test('incomplete status scan cannot silently select unknown users and stale scans stop',async t=>{
+ const v=create(t);v.passthrough.users=async()=>({items:Array.from({length:25},(_,i)=>({id:i+10,username:'u'+i,role:1}))});let calls=0
+ v.dashboard.billingGenerationPreview=async q=>{calls++;if(calls===2)throw Error('failed page');return {items:q.subject_ids.map(subject_id=>({subject_id,total_days:30,complete:0,empty:0}))}}
+ v.open();await flush();assert.match(v.previewError.value,/failed page/);assert.deepEqual(v.preview.value,{});v.statusFilter.value='missing';await flush();v.selectFiltered();assert.deepEqual(v.selectedUsers.value,[])
+ let finish;calls=0;v.dashboard.billingGenerationPreview=()=>{calls++;return new Promise(r=>finish=r)};const old=v.loadPreview();v.dialog.value=false;await flush();finish({items:[]});await old;assert.equal(calls,1);assert.deepEqual(v.preview.value,{})
 })
