@@ -7,17 +7,21 @@ import { useAuthStore } from '../stores/auth'
 import RequestMonitorRules from '../components/RequestMonitorRules.vue'
 import AppShell from '../components/AppShell.vue'
 import TrendChart from '../components/TrendChart.vue'
-import { bins, monitorWindow, largePercent, monitorError, channelReason, channelSeries, measureText, type RequestSnapshot, type ChannelSnapshot } from '../utils/requestMonitor'
+import { bins, legacyBins, hasDetailedSizes, monitorWindow, largePercent, monitorError, beijingInput, historyRange, channelReason, channelSeries, measureText, type RequestSnapshot, type ChannelSnapshot } from '../utils/requestMonitor'
 
 const auth = useAuthStore()
 const rulesOpen=ref(false)
 const snapshot = ref<RequestSnapshot>(), channels = ref<ChannelSnapshot>()
 const minutes = ref(30), selectedTime = ref<number|null>(null), sort = ref('volume')
+const historyFrom = ref(beijingInput(Date.now()/1000-3600)), historyTo = ref(beijingInput(Date.now()/1000))
+const appliedHistory = ref<{from:number;to:number}>(), rangeError = ref('')
+const historyMode = computed(()=>minutes.value===0)
+const displayMinutes = computed(()=>historyMode.value&&appliedHistory.value?(appliedHistory.value.to-appliedHistory.value.from)/60:minutes.value)
 const loading = ref(false), channelsLoading = ref(false), error = ref(''), channelError = ref('')
 const auto = ref(true), clock = ref(Date.now())
-let timer: ReturnType<typeof setInterval> | undefined, alive = true, channelSequence = 0
+let timer: ReturnType<typeof setInterval> | undefined, alive = true, channelSequence = 0, albSequence = 0
 let albAbort: AbortController | undefined, channelAbort: AbortController | undefined
-const windowData = computed(()=>monitorWindow(snapshot.value,minutes.value,null))
+const windowData = computed(()=>monitorWindow(snapshot.value,displayMinutes.value,null))
 const points = computed(()=>windowData.value.points)
 // Keep internal missing minutes visible, but never let the picker enter the
 // trailing minutes that have no displayable data.
@@ -38,33 +42,52 @@ const index = computed({
 const current = computed(()=>availablePoints.value[index.value])
 const row = computed(()=>current.value?.value)
 const percent = computed(()=>largePercent(row.value))
-const sizeSeries = computed(()=>bins.map(bin=>({
+const detailedSizes = computed(()=>snapshot.value?.rows.length ? snapshot.value.rows.every(hasDetailedSizes) : false)
+const activeBins = computed(()=>detailedSizes.value ? bins : legacyBins)
+const sizeSeries = computed(()=>activeBins.value.map(bin=>({
  name:bin.name,color:bin.color,unit:' 次/分钟',smooth:false,
  data:points.value.map(p=>[new Date(p.time*1000).toISOString(),p.value?.[bin.key]??null] as [string,number|null]),
 })))
-const flowSeries = computed(()=>[
- { key:'request_bytes' as const,name:'请求字节量',color:'#3b82f6' },
- { key:'response_bytes' as const,name:'响应体字节量',color:'#10b981' },
-].map(s=>({name:s.name,color:s.color,unit:' GiB/分钟',smooth:false,data:points.value.map(p=>[new Date(p.time*1000).toISOString(),p.value ? Number((p.value[s.key]/1073741824).toFixed(4)) : null] as [string,number|null])})))
-const outdated = computed(()=>snapshot.value?.queried_at ? clock.value/1000-snapshot.value.queried_at>90 : false)
+const outdated = computed(()=>!historyMode.value && snapshot.value?.queried_at ? clock.value/1000-snapshot.value.queried_at>90 : false)
 const channelsOutdated = computed(()=>channels.value?.queried_at ? clock.value/1000-channels.value.queried_at>90 : false)
 const status = computed(()=>error.value?'查询失败':outdated.value?'数据已过期':({success:'查询成功',delayed:'日志时间落后',no_data:'窗口内暂无日志',unconfigured:'尚未接入',failed:'查询失败'} as Record<string,string>)[snapshot.value?.status||'']||'等待查询')
 const channelCeiling = computed(()=>Math.max(40,...(channels.value?.items.flatMap(c=>[...c.ttft.trend,...c.duration.trend].filter((n): n is number=>n!==null))||[])))
 function selectMinute(value:number) {const found=points.value.findIndex(p=>p.time===Math.floor(value/60000)*60);if(found>=0)index.value=found}
 function time(value?:number,full=false) {return value?new Date(value*1000).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',...(full?{}:{hour:'2-digit',minute:'2-digit'})}):'—'}
 function num(value?:number|null) {return value==null?'—':value.toLocaleString('zh-CN',{maximumFractionDigits:1})}
-function bytes(value?:number) {return value==null?'—':(value/1073741824).toFixed(3)+' GiB'}
 
 async function loadALB() {
- if(loading.value || !alive)return
+ if(loading.value || !alive || (historyMode.value&&!appliedHistory.value))return
+ const sequence=++albSequence
+ const range=historyMode.value?appliedHistory.value:undefined
+ const needsRange=!!range||minutes.value>60
+ const query=range?`from=${range.from}&to=${range.to}`:`minutes=${minutes.value}`
  loading.value=true;error.value='';albAbort=new AbortController()
  try {
-  const data=await client.request<RequestSnapshot>('/api/dashboard/request-monitor',{signal:albAbort.signal})
-  if(!alive)return
+  const data=await client.request<RequestSnapshot>('/api/dashboard/request-monitor?'+query,{signal:albAbort.signal})
+  if(!alive||sequence!==albSequence)return
+  if(needsRange&&!data.range_supported) {
+   snapshot.value=undefined;error.value='远程 Server 尚不支持长时间范围和历史查询，请更新 Server 后重试。';return
+  }
+  if(range&&['success','delayed','no_data'].includes(data.status)&&(data.from!==range.from||data.to!==range.to)) {
+   snapshot.value=undefined;error.value='返回的时间范围与本次查询不一致，请更新 Server 后重试。';return
+  }
   snapshot.value=data
   if(data.status==='failed')error.value=monitorError(data.code)
- } catch(e) {if(alive)error.value=e instanceof ApiError&&e.status===403?'没有请求监控权限。':e instanceof ApiError?monitorError(e.code):'无法连接 CT，当前保留上次查询结果。'}
- finally {if(alive)loading.value=false}
+ } catch(e) {if(alive&&sequence===albSequence)error.value=e instanceof ApiError&&e.status===403?'没有请求监控权限。':e instanceof ApiError?monitorError(e.code):snapshot.value?'无法连接 CT，当前保留上次查询结果。':'无法连接 CT，请稍后重试。'}
+ finally {if(alive&&sequence===albSequence)loading.value=false}
+}
+function resetRange() {
+ albSequence++;albAbort?.abort();loading.value=false;snapshot.value=undefined;selectedTime.value=null;error.value='';rangeError.value=''
+}
+function changeRange() {
+ resetRange();appliedHistory.value=undefined
+ if(!historyMode.value)refresh()
+}
+function queryHistory() {
+ const range=historyRange(historyFrom.value,historyTo.value)
+ if(!range){rangeError.value=monitorError('alb_invalid_range');return}
+ resetRange();appliedHistory.value=range;void loadALB()
 }
 async function loadChannels() {
  const sequence=++channelSequence
@@ -76,10 +99,10 @@ async function loadChannels() {
  } catch(e) {if(alive&&sequence===channelSequence)channelError.value=e instanceof ApiError&&e.code==='channel_site_unconfigured'?'请在“判断规则”中选择 ALB 对应站点。':e instanceof ApiError&&e.code==='channel_metrics_limit'?'渠道指标超出查询上限，本次不展示截断排名。':'渠道指标查询失败，请检查 Server 或稍后重试。'}
  finally {if(alive&&sequence===channelSequence)channelsLoading.value=false}
 }
-function refresh() {void loadALB();if(!channelsLoading.value)void loadChannels()}
-function visible() {if(auto.value&&document.visibilityState==='visible')refresh()}
+function refresh() {void loadALB();if(!historyMode.value&&!channelsLoading.value)void loadChannels()}
+function visible() {if(!historyMode.value&&auto.value&&document.visibilityState==='visible')refresh()}
 watch(sort,()=>{channels.value=undefined;channelSequence++;channelAbort?.abort();void loadChannels()})
-watch(minutes,()=>{selectedTime.value=null})
+watch(minutes,changeRange)
 onMounted(()=>{refresh();timer=setInterval(()=>{clock.value=Date.now();visible()},30000);document.addEventListener('visibilitychange',visible)})
 onUnmounted(()=>{alive=false;channelSequence++;clearInterval(timer);albAbort?.abort();channelAbort?.abort();document.removeEventListener('visibilitychange',visible)})
 </script>
@@ -89,7 +112,7 @@ onUnmounted(()=>{alive=false;channelSequence++;clearInterval(timer);albAbort?.ab
   <div class="request-monitor">
    <header class="monitor-heading">
     <div><h2>请求监控</h2><p>ALB 请求趋势与对应站点重点渠道</p></div>
-    <div class="controls"><el-switch v-model="auto" active-text="30 秒刷新" /><el-button :loading="loading || channelsLoading" @click="refresh">刷新</el-button><router-link v-if="can(auth.user,'settings.manage')" to="/settings?tab=external"><el-button>ALB 接入配置</el-button></router-link></div>
+    <div class="controls"><el-switch v-model="auto" :disabled="historyMode" :active-text="historyMode?'历史查询暂停自动刷新':'30 秒刷新'" /><el-button :loading="loading || (!historyMode&&channelsLoading)" :disabled="historyMode&&!appliedHistory" @click="refresh">刷新</el-button><router-link v-if="can(auth.user,'settings.manage')" to="/settings?tab=external"><el-button>ALB 接入配置</el-button></router-link></div>
    </header>
    <div class="source-line"><el-tag :type="snapshot?.status==='success'&&!outdated?'success':'warning'">{{status}}</el-tag><span>最近查询 {{time(snapshot?.queried_at,true)}}</span></div>
    <el-alert v-if="error" :title="error" type="error" :closable="false"/>
@@ -97,29 +120,39 @@ onUnmounted(()=>{alive=false;channelSequence++;clearInterval(timer);albAbort?.ab
    <el-alert v-if="snapshot?.status==='delayed'" title="ALB 日志延迟超过 3 分钟。" type="warning" :closable="false"/>
    <section class="monitor-panel">
     <div class="panel-heading"><div><h3>请求大小趋势</h3><p>每分钟请求数 · 大小包含请求行、请求头及请求体</p></div><div class="controls">
-     <el-select v-model="minutes" style="width:135px" aria-label="时间范围"><el-option v-for="n in [15,30,60]" :key="n" :label="'最近 '+n+' 分钟'" :value="n"/></el-select>
+     <el-select v-model="minutes" style="width:150px" aria-label="时间范围"><el-option v-for="n in [15,30,60,180,360,720,1440]" :key="n" :label="n<60?'最近 '+n+' 分钟':'最近 '+n/60+' 小时'" :value="n"/><el-option label="自定义历史" :value="0"/></el-select>
     </div></div>
-    <el-empty v-if="!snapshot || snapshot.status==='unconfigured'" :description="loading?'正在查询…':'请先在系统设置中配置 ALB 访问日志接入'"/>
+    <form v-if="historyMode" class="history-controls" @submit.prevent="queryHistory">
+     <label>开始时间（北京时间）<input v-model="historyFrom" type="datetime-local" step="60" required aria-label="开始时间（北京时间）"></label>
+     <label>结束时间（北京时间）<input v-model="historyTo" type="datetime-local" step="60" required aria-label="结束时间（北京时间）"></label>
+     <el-button native-type="submit" type="primary" :loading="loading">查询历史</el-button>
+    </form>
+    <p class="muted">按分钟统计，单次最多 24 小时；历史可查范围取决于 SLS 日志保留时间。{{historyMode?'结束时间不包含在查询范围内。':''}}</p>
+    <p v-if="appliedHistory" class="muted">当前结果区间：{{time(appliedHistory.from,true)}} — {{time(appliedHistory.to,true)}}（北京时间）</p>
+    <el-alert v-if="rangeError" :title="rangeError" type="warning" :closable="false"/>
+    <el-empty v-if="!snapshot || snapshot.status==='unconfigured'" :description="loading?'正在查询…':error?'查询未成功，请查看上方提示':snapshot?.status==='unconfigured'?'请先在系统设置中配置 ALB 访问日志接入':historyMode?'选择起止时间后查询历史':'等待查询'"/>
     <el-empty v-else-if="snapshot.status==='failed'" description="本次查询失败，未展示部分统计"/>
     <el-empty v-else-if="snapshot.status==='no_data'" description="窗口内无匹配日志，请核对 ALB ID、投递状态和时间范围"/>
     <template v-else>
      <div class="minute-summary">
-      <div><span>所选分钟（北京时间）</span><b>{{time(current?.time)}}</b></div>
+      <div><span>所选分钟（北京时间）</span><b :class="{'history-time':historyMode}">{{time(current?.time,historyMode)}}</b></div>
       <div><span>已结束请求</span><b>{{num(row?.count)}}</b></div>
       <div><span>≥5 MiB</span><b class="orange">{{row?num(row.medium+row.large+row.huge):'—'}}</b></div>
       <div><span>≥20 MiB</span><b class="red">{{num(row?.huge)}}</b></div>
       <div><span>大请求占比</span><b>{{percent===null?'—':percent.toFixed(1)+'%'}}</b></div>
      </div>
-     <TrendChart title="大请求 · 次/分钟" :series="sizeSeries.slice(1)" :y-min="0" @select-minute="selectMinute" />
+     <TrendChart v-if="detailedSizes" title="≥20 MiB · 次/分钟" :series="sizeSeries.slice(3)" :y-min="0" @select-minute="selectMinute" />
+     <TrendChart :title="detailedSizes?'5–20 MiB · 次/分钟':'大请求 · 次/分钟'" :series="detailedSizes?sizeSeries.slice(1,3):sizeSeries.slice(1)" :y-min="0" @select-minute="selectMinute" />
      <div class="small-trend"><TrendChart title="小于 5 MiB · 次/分钟" :series="sizeSeries.slice(0,1)" :y-min="0" @select-minute="selectMinute" /></div>
      <label class="minute-picker">查看分钟 <input v-model.number="index" type="range" min="0" :max="Math.max(0,availablePoints.length-1)" :disabled="availablePoints.length<2" aria-label="查看分钟"><span>{{time(current?.time)}}</span><el-button link :disabled="!availablePoints.length" @click="selectedTime=null">回到最新</el-button></label>
-     <div class="bin-counts"><span v-for="bin in bins" :key="bin.key"><i :style="{background:bin.color}"/>{{bin.name}} <b>{{num(row?.[bin.key])}}</b></span><span>大小未知 <b>{{num(row?.unknown)}}</b></span></div>
+     <div class="bin-counts"><span v-for="bin in activeBins" :key="bin.key"><i :style="{background:bin.color}"/>{{bin.name}} <b>{{num(row?.[bin.key])}}</b></span><span>大小未知 <b>{{num(row?.unknown)}}</b></span></div>
+     <p class="muted">各档包含下限、不含上限；≥40 MiB 无上限。<span v-if="!detailedSizes">当前数据仅提供四档，细分统计需更新 Server。</span></p>
      <p v-if="!row" class="warning-text">{{availablePoints.length?'所选分钟尚无可展示日志':'当前时间范围暂无可展示日志'}}。</p>
      <p class="muted">数据更新至 {{time(latestAvailable)}}<span v-if="latestAvailable"> 分钟</span>。</p>
     </template>
    </section>
 
-   <section class="monitor-panel">
+   <section v-if="!historyMode" class="monitor-panel">
     <div class="panel-heading"><div><h3>重点关注渠道 <el-tag size="small">最多 5 条</el-tag></h3><p>ALB 对应站点 {{channels?.site||'未配置'}} · 近 {{channels?.rules.window_minutes??'—'}} 分钟 · 任一指标达到阈值</p></div><div class="controls"><el-radio-group v-model="sort" size="small"><el-radio-button value="volume">请求量优先</el-radio-button><el-radio-button value="latency">异常程度优先</el-radio-button></el-radio-group><el-button size="small" @click="rulesOpen=true">判断规则</el-button></div></div>
     <el-alert v-if="channelError || channelsOutdated" :title="channelError || '渠道查询结果已过期，请刷新。'" type="warning" :closable="false"/>
     <div v-if="channels?.items.length" class="channel-grid">
@@ -142,12 +175,7 @@ onUnmounted(()=>{alive=false;channelSequence++;clearInterval(timer);albAbort?.ab
     <details v-if="channels?.pending_count" class="pending-channels"><summary>数据待补充 {{channels.pending_count}} 条</summary><p v-for="item in channels.pending" :key="item.instance_id+item.key">{{item.name||item.key}} · {{num(item.count)}} 次请求 · {{item.unknown.map(k=>({ttft:'首响应',duration:'总耗时',error_rate:'错误率'})[k]).join('、')}}暂不能判断</p><p v-if="channels.pending_count>10">显示请求量最多的 10 条</p></details>
    </section>
 
-   <section v-if="snapshot && ['success','delayed'].includes(snapshot.status)" class="monitor-panel">
-    <h3>请求与响应字节趋势</h3>
-    <p class="muted">{{time(current?.time)}} · 请求 {{bytes(row?.request_bytes)}} / 响应体 {{bytes(row?.response_bytes)}}</p>
-    <TrendChart title="GiB / 分钟" :series="flowSeries" :y-min="0" @select-minute="selectMinute"/>
-    <p v-if="row?.response_unknown" class="warning-text">所选分钟有 {{num(row.response_unknown)}} 次请求的响应大小未知。</p>
-   </section>
+
   </div>
   <RequestMonitorRules v-if="rulesOpen" :editable="can(auth.user,'settings.manage')" @close="rulesOpen=false" @saved="channels=undefined;loadChannels()"/>
  </AppShell>
@@ -160,6 +188,7 @@ onUnmounted(()=>{alive=false;channelSequence++;clearInterval(timer);albAbort?.ab
 h2,h3,h4,p{margin:0}h2{font-size:23px}h3{font-size:16px}h4{font-size:16px;overflow-wrap:anywhere}
 .monitor-heading p,.panel-heading p,.muted,.channel-card p{color:var(--el-text-color-secondary);font-size:12px;line-height:1.8;margin-top:6px}
 .controls,.source-line,.bin-counts{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.source-line{font-size:12px;color:var(--el-text-color-secondary)}
+.history-controls{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-top:16px}.history-controls label{display:grid;gap:6px;font-size:12px;max-width:100%}.history-controls input{box-sizing:border-box;max-width:100%;min-width:0;padding:7px;border:1px solid var(--el-border-color);border-radius:4px;background:var(--el-bg-color);color:inherit;font:inherit}.minute-summary b.history-time{font-size:16px}
 .monitor-panel{background:var(--el-bg-color);border:1px solid var(--el-border-color-lighter);border-radius:12px;padding:20px;min-width:0}
 .minute-summary{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;padding:24px 0 12px}
 .minute-summary span,.channel-values span{display:block;font-size:12px;color:var(--el-text-color-secondary)}

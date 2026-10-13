@@ -5,13 +5,13 @@ import ts from 'typescript'
 import { computed,ref } from 'vue'
 const utilCode=ts.transpileModule(fs.readFileSync(new URL('../src/utils/requestMonitor.ts',import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText
 const exports={};new Function('exports',utilCode)(exports)
-const {monitorWindow,largePercent,bins,monitorError}=exports
+const {monitorWindow,largePercent,bins,legacyBins,hasDetailedSizes,monitorError,beijingInput,historyRange}=exports
 const t=1791504000
 const minute=(time,host,values={})=>({time,host,count:8,small:4,medium:1,large:1,huge:1,unknown:1,request_bytes:56789012,response_bytes:12345,response_unknown:0,latest:time+50,...values})
 const data=()=>({status:'success',from:t-3600,to:t+30,queried_at:t+30,latest:t-30,settled_before:t-120,rows:[minute(t-180,'a.test'),minute(t-180,'47.1.2.3'),minute(t-120,'a.test',{count:999}),minute(t-240,'a.test')]})
 test('four bins, totals, IP Hosts, actual bytes, unknowns and missing-minute gaps',()=>{
  const window=monitorWindow(data(),30,null),point=window.points.find(p=>p.time===t-180).value
- assert.equal(bins.length,4);assert.equal(point.count,16);assert.equal(point.small,8);assert.equal(point.unknown,2)
+ assert.equal(legacyBins.length,4);assert.equal(point.count,16);assert.equal(point.small,8);assert.equal(point.unknown,2)
  assert.equal(point.request_bytes,113578024);assert.equal(largePercent(point),6/14*100)
  assert.equal(window.points.find(p=>p.time===t-120).value,null)
  assert.equal(window.points.find(p=>p.time===t-300).value,null)
@@ -35,10 +35,83 @@ class ApiError extends Error{constructor(status,code){super(code);this.status=st
 function panel(){
  const requests=[],cleanup=[]
  const client={request:(path,options)=>new Promise((resolve,reject)=>requests.push({path,options,resolve,reject}))}
- const build=new Function('computed','ref','watch','onMounted','onUnmounted','useAuthStore','client','ApiError','bins','monitorWindow','largePercent','monitorError','document',script+';return {snapshot,channels,loading,error,channelError,loadALB,loadChannels,sort,selectedTime,index,row,current,availablePoints,latestAvailable,selectMinute};')
- const state=build(computed,ref,()=>{},()=>{},fn=>cleanup.push(fn),()=>({user:null}),client,ApiError,bins,monitorWindow,largePercent,monitorError,{removeEventListener:()=>{}})
+ const build=new Function('computed','ref','watch','onMounted','onUnmounted','useAuthStore','client','ApiError','bins','legacyBins','hasDetailedSizes','monitorWindow','largePercent','monitorError','beijingInput','historyRange','document',script+';return {snapshot,channels,loading,error,channelError,loadALB,loadChannels,sort,selectedTime,index,row,current,availablePoints,latestAvailable,selectMinute,detailedSizes,activeBins,sizeSeries,minutes,historyFrom,historyTo,appliedHistory,historyMode,queryHistory,changeRange,rangeError,outdated,visible};')
+ const state=build(computed,ref,()=>{},()=>{},fn=>cleanup.push(fn),()=>({user:null}),client,ApiError,bins,legacyBins,hasDetailedSizes,monitorWindow,largePercent,monitorError,beijingInput,historyRange,{removeEventListener:()=>{},visibilityState:'visible'})
  return {...state,requests,stop:()=>cleanup.forEach(fn=>fn())}
 }
+
+const detailedMinute=(time,host)=>minute(time,host,{from_20_to_30:0,from_30_to_40:0,at_least_40:1})
+
+test('history inputs use Beijing time and validate dates, duration and future bounds',()=>{
+ const end=Date.parse('2026-10-11T01:00:00+08:00')/1000
+ assert.deepEqual(historyRange('2026-10-10T01:00','2026-10-11T01:00',end),{from:end-86400,to:end})
+ assert.equal(beijingInput(end),'2026-10-11T01:00')
+ for(const [from,to] of [['2026-10-10T00:59','2026-10-11T01:00'],['2026-10-11T01:00','2026-10-11T01:00'],['2026-10-11T00:00','2026-10-11T01:01'],['2026-02-30T00:00','2026-03-01T00:00'],['','2026-10-11T01:00']])assert.equal(historyRange(from,to,end),null)
+})
+
+test('switching ranges aborts old queries and rejects an older server instead of showing the wrong window',async()=>{
+ const p=panel(),first=p.loadALB()
+ p.minutes.value=180;p.changeRange()
+ assert.equal(p.requests[0].options.signal.aborted,true)
+ assert.equal(p.requests[1].path,'/api/dashboard/request-monitor?minutes=180')
+ p.requests[0].resolve(data());await first
+ assert.equal(p.snapshot.value,undefined);assert.equal(p.loading.value,true)
+ p.requests[1].resolve(data());await new Promise(resolve=>setImmediate(resolve))
+ assert.equal(p.snapshot.value,undefined);assert.match(p.error.value,/更新 Server/)
+ const retry=p.loadALB();p.requests.at(-1).resolve({...data(),range_supported:true,from:t-10800});await retry
+ assert.equal(p.availablePoints.value[0].time,t-10800)
+ p.stop()
+})
+
+test('history queries keep the final minute, span midnight, pause auto refresh and keep result range separate from draft inputs',async()=>{
+ const p=panel();p.snapshot.value=data();p.minutes.value=0;p.changeRange()
+ assert.equal(p.snapshot.value,undefined);assert.equal(p.requests.length,0)
+ p.historyFrom.value='2026-10-08T23:00';p.historyTo.value='2026-10-09T01:00';p.queryHistory()
+ const {from,to}=p.appliedHistory.value
+ assert.equal(p.requests[0].path,`/api/dashboard/request-monitor?from=${from}&to=${to}`)
+ p.requests[0].resolve({range_supported:true,status:'success',from,to,queried_at:t,latest:to-10,settled_before:to,rows:[minute(to-60,'',{unknown:0,request_bytes:60000000})]})
+ await new Promise(resolve=>setImmediate(resolve))
+ assert.equal(p.current.value.time,to-60);assert.equal(p.outdated.value,false)
+ assert.equal(p.availablePoints.value[0].time,from)
+ p.visible();assert.equal(p.requests.length,1)
+ p.historyFrom.value='2026-10-01T00:00';p.queryHistory()
+ assert.match(p.rangeError.value,/24 小时/);assert.equal(p.requests.length,1)
+ assert.equal(p.appliedHistory.value.from,from);assert.equal(p.current.value.time,to-60)
+ p.stop()
+})
+
+test('history rejects a mismatched response interval and never falls back to recent data',async()=>{
+ const p=panel();p.minutes.value=0;p.changeRange()
+ p.historyFrom.value='2026-10-08T23:00';p.historyTo.value='2026-10-09T01:00';p.queryHistory()
+ p.requests[0].resolve({...data(),range_supported:true})
+ await new Promise(resolve=>setImmediate(resolve))
+ assert.equal(p.snapshot.value,undefined);assert.match(p.error.value,/不一致/)
+ p.stop()
+})
+test('six disjoint bins aggregate across Hosts without changing summary totals or filling gaps',()=>{
+ const d={...data(),rows:[detailedMinute(t-180,'a'),detailedMinute(t-180,'b')]}
+ const p=panel();p.snapshot.value=d
+ assert.equal(p.detailedSizes.value,true)
+ assert.deepEqual(p.activeBins.value.map(b=>b.name),['<5 MiB','5–10 MiB','10–20 MiB','20–30 MiB','30–40 MiB','≥40 MiB'])
+ assert.equal(hasDetailedSizes(p.row.value),true)
+ assert.equal(p.row.value.small,8);assert.equal(p.row.value.at_least_40,2)
+ assert.equal(bins.reduce((sum,b)=>sum+p.row.value[b.key],0)+p.row.value.unknown,p.row.value.count)
+ assert.equal(largePercent(p.row.value),6/14*100)
+ assert.equal(p.sizeSeries.value[5].data.find(([time])=>Date.parse(time)===(t-180)*1000)[1],2)
+ assert.equal(p.sizeSeries.value[5].data.find(([time])=>Date.parse(time)===(t-240)*1000)[1],null)
+ p.stop()
+})
+test('older or mixed responses retain four bins instead of inventing detailed zeros',()=>{
+ for(const rows of [[minute(t-180,'old')],[detailedMinute(t-180,'new'),minute(t-180,'old')],[minute(t-180,'old'),detailedMinute(t-180,'new')]]){
+  const p=panel();p.snapshot.value={...data(),rows}
+  assert.equal(p.detailedSizes.value,false);assert.equal(p.activeBins.value.length,4)
+  assert.equal(p.row.value.at_least_40,undefined)
+  assert.equal(hasDetailedSizes(p.row.value),false)
+  p.stop()
+ }
+ assert.equal(hasDetailedSizes({...detailedMinute(t,'a'),at_least_40:2}),false)
+ assert.equal(hasDetailedSizes({...detailedMinute(t,'a'),from_20_to_30:-1,from_30_to_40:1}),false)
+})
 test('refresh coalesces; failures retain explicit old result; page aggregates all Hosts',async()=>{
  const p=panel(),run=p.loadALB();await p.loadALB();assert.equal(p.requests.length,1)
  p.requests[0].resolve(data());await run

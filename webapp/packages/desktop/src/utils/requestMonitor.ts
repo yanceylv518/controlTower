@@ -1,9 +1,23 @@
 export type RequestMinute = {
  time: number; host: string; count: number; small: number; medium: number; large: number; huge: number; unknown: number
  request_bytes: number; response_bytes: number; response_unknown: number; latest: number
+ from_20_to_30?: number; from_30_to_40?: number; at_least_40?: number
 }
 export type RequestSnapshot = {
+ range_supported?: boolean
  status: string; code?: string; queried_at: number; from: number; to: number; latest: number; settled_before: number; rows: RequestMinute[]
+}
+// datetime-local intentionally represents Beijing wall time regardless of the
+// browser's timezone. Round-trip validation rejects impossible calendar dates.
+export function beijingInput(epoch: number) { return new Date(epoch*1000+8*3600000).toISOString().slice(0,16) }
+export function historyRange(fromText: string, toText: string, now=Date.now()/1000) {
+ const parse=(s:string)=>{
+  if(!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(s))return NaN
+  const epoch=Date.parse(s+':00+08:00')/1000
+  return Number.isFinite(epoch)&&beijingInput(epoch)===s?epoch:NaN
+ }
+ const from=parse(fromText),to=parse(toText)
+ return from>0 && to>from && to-from<=86400 && to<=now ? {from,to} : null
 }
 export type ChannelRules = {version:number;site_id:string;window_minutes:number;min_requests:number;min_samples:number;ttft_seconds:number;duration_seconds:number;error_percent:number}
 export type ChannelMeasure = {value:number|null;samples:number;minutes:number;lower_bound:boolean;trend:Array<number|null>}
@@ -15,17 +29,33 @@ export function channelSeries(channel:SlowChannel,from:number,errors=false){
  const keys=errors?['errors'] as const:['ttft','duration'] as const
  return keys.map(key=>({name:({ttft:'首响应 P95',duration:'总耗时 P95',errors:'错误率'})[key],color:({ttft:'#ef4444',duration:'#f59e0b',errors:'#8b5cf6'})[key],unit:errors?'%':' 秒',smooth:false,data:channel[key].trend.map((v,i)=>[new Date((from+i*60)*1000).toISOString(),v===null?null:Number(v.toFixed(1))] as [string,number|null])}))
 }
-export const bins = [
+export const legacyBins = [
  { key: 'small', name: '<5 MiB', color: '#94a3b8' },
  { key: 'medium', name: '5–10 MiB', color: '#3b82f6' },
  { key: 'large', name: '10–20 MiB', color: '#f59e0b' },
  { key: 'huge', name: '≥20 MiB', color: '#ef4444' },
 ] as const
+export const bins = [
+ { key: 'small', name: '<5 MiB', color: '#94a3b8' },
+ { key: 'medium', name: '5–10 MiB', color: '#3b82f6' },
+ { key: 'large', name: '10–20 MiB', color: '#f59e0b' },
+ { key: 'from_20_to_30', name: '20–30 MiB', color: '#ef4444' },
+ { key: 'from_30_to_40', name: '30–40 MiB', color: '#a855f7' },
+ { key: 'at_least_40', name: '≥40 MiB', color: '#db2777' },
+] as const
+const detailedKeys = ['from_20_to_30','from_30_to_40','at_least_40'] as const
+export function hasDetailedSizes(row: RequestMinute) {
+ return detailedKeys.every(key=>Number.isSafeInteger(row[key]) && row[key]!>=0)
+  && row.from_20_to_30! + row.from_30_to_40! + row.at_least_40! === row.huge
+}
 const additive = ['count','small','medium','large','huge','unknown','request_bytes','response_bytes','response_unknown'] as const
 function empty(time: number, host: string): RequestMinute {
- return { time, host, count:0,small:0,medium:0,large:0,huge:0,unknown:0,request_bytes:0,response_bytes:0,response_unknown:0,latest:0 }
+ return { time, host, count:0,small:0,medium:0,large:0,huge:0,unknown:0,request_bytes:0,response_bytes:0,response_unknown:0,latest:0,
+  from_20_to_30:0,from_30_to_40:0,at_least_40:0 }
 }
 export function addMinute(target: RequestMinute, row: RequestMinute) {
+ const detailed = hasDetailedSizes(target) && hasDetailedSizes(row)
+ for (const key of detailedKeys) target[key] = detailed ? target[key]! + row[key]! : undefined
  for (const key of additive) target[key] += row[key]
  target.latest = Math.max(target.latest, row.latest)
  return target
@@ -55,6 +85,7 @@ export function monitorError(code?: string) {
   alb_query_failed:'SLS 统计失败，请检查 app_lb_id、host、request_length、body_bytes_sent 的字段索引与统计开关。',
   alb_secret_unavailable:'无法解密凭证，请检查 CT_SECRET_KEY 或重新保存凭证。',
   alb_invalid_config:'ALB 接入配置无效，请重新检查。',
+  alb_invalid_range:'请选择有效的起止时间，结束时间不能晚于现在，单次最多查询 24 小时。',
   alb_config_unavailable:'读取 ALB 配置失败，请检查 Server 与数据库迁移。',
   alb_source_not_found:'未找到 SLS 日志库，请核对地域、Project 和 Logstore。',
   alb_query_incomplete:'SLS 查询尚未完成，本次不展示部分统计。',

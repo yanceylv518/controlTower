@@ -7,6 +7,7 @@ import (
 	"controltower/server/internal/alblog"
 	"controltower/server/internal/ingest"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -22,7 +23,7 @@ func TestRequestMonitorCachePermissionsAndConfigIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 	var calls atomic.Int32
-	handler := &RequestMonitorHandler{Store: store, Query: func(_ context.Context, c alblog.Config) alblog.Monitor {
+	handler := &RequestMonitorHandler{Store: store, Query: func(_ context.Context, c alblog.Config, _ alblog.MonitorRange) alblog.Monitor {
 		calls.Add(1)
 		time.Sleep(10 * time.Millisecond)
 		return alblog.Monitor{Status: "success", Rows: []alblog.Minute{{Host: c.ALBID}}}
@@ -66,6 +67,38 @@ func TestRequestMonitorCachePermissionsAndConfigIsolation(t *testing.T) {
 		}
 	}
 }
+func TestRequestMonitorRangeValidationAndCacheIsolation(t *testing.T) {
+	store := ingest.NewMemoryStore()
+	_ = store.SaveALBLogConfig(context.Background(), alblog.Config{ALBID: "alb-range"}, "test")
+	var calls []alblog.MonitorRange
+	handler := &RequestMonitorHandler{Store: store, Query: func(_ context.Context, _ alblog.Config, r alblog.MonitorRange) alblog.Monitor {
+		calls = append(calls, r)
+		return alblog.Monitor{RangeSupported: true, Status: "no_data", From: r.From, To: r.To, Rows: []alblog.Minute{}}
+	}}
+	h, cookie := foundationSession(t, handler, "admin", []string{"monitor.requests"})
+	request := func(query string, want int) {
+		r := httptest.NewRequest(http.MethodGet, "/api/dashboard/request-monitor"+query, nil)
+		r.AddCookie(cookie)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("%s: %d %s", query, w.Code, w.Body.String())
+		}
+	}
+	for _, q := range []string{"?minutes=0", "?minutes=1441", "?minutes=bad", "?minutes=30&minutes=60", "?from=1791504000", "?from=0&to=0", "?from=1791504001&to=1791504060", "?from=1791417540&to=1791504000", "?from=1791504000&to=1791504000", "?from=1791504000&to=9223372036854775807", "?minutes=30&from=1791504000&to=1791504060"} {
+		request(q, 400)
+	}
+	if len(calls) != 0 {
+		t.Fatal("invalid range reached SLS")
+	}
+	for _, q := range []string{"?minutes=180", "?minutes=180", "?minutes=1440", "?from=1791417600&to=1791504000", "?from=1791417600&to=1791504000", "?from=1791417660&to=1791504000"} {
+		request(q, 200)
+	}
+	if len(calls) != 4 || calls[0].Minutes != 180 || calls[1].Minutes != 1440 || calls[2].From != 1791417600 || calls[3].From != 1791417660 {
+		t.Fatalf("cross-range cache: %+v", calls)
+	}
+}
+
 func TestSlowChannelsHistogramRankingAndMissingData(t *testing.T) {
 	from := time.Date(2026, 10, 9, 1, 0, 0, 0, time.UTC)
 	to := from.Add(5 * time.Minute)
