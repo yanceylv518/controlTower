@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -194,6 +196,11 @@ func (h Handler) HandleLifelineCurrent(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	v, err := s.QueryLifelineCurrent(ctx, site)
 	if err != nil {
+		slog.WarnContext(r.Context(), "lifeline current read failed", "site", site, "error", err)
+		if errors.Is(err, context.DeadlineExceeded) {
+			writeDashboardError(w, 504, "lifeline_current_timeout")
+			return
+		}
 		writeDashboardError(w, 503, "lifeline_current_unavailable")
 		return
 	}

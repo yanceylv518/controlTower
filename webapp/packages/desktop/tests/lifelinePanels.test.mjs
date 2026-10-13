@@ -5,10 +5,11 @@ import ts from 'typescript';
 import {computed,ref,watch,nextTick,reactive} from 'vue';
 const transpile=s=>ts.transpileModule(s,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;
 const u=new Function('exports',`${transpile(readFileSync(new URL('../src/utils/lifelineCurrent.ts',import.meta.url),'utf8'))};return exports;`)({});
-function harness(name,expose,props,api){
+function harness(name,expose,props,api,overrides={}){
  const filters={site_id:'a'},stops=[],cleanup=[];
  const s=readFileSync(new URL(`../src/components/${name}.vue`,import.meta.url),'utf8').match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1].replace(/^import .*;\r?\n/gm,'');
  const vars={...u,computed,ref,nextTick,watch:(...args)=>stops.push(watch(...args)),onBeforeUnmount:fn=>cleanup.push(fn),defineProps:()=>props,defineEmits:()=>()=>{},defineExpose:()=>{},dashboard:api,useFiltersStore:()=>filters,setInterval:()=>1,clearInterval:()=>{},setTimeout:()=>1,clearTimeout:()=>{},document:{hidden:false},window:{scrollY:0,scrollTo:()=>{}}};
+ Object.assign(vars,overrides);
  const p=new Function(...Object.keys(vars),`${transpile(s)};return {${expose}};`)(...Object.values(vars));
  return {...p,filters,stop:()=>{cleanup.forEach(fn=>fn());stops.forEach(fn=>fn());}};
 }
@@ -45,6 +46,27 @@ test('failed pagination retains the previous page across records, batches and ch
  }
 });
 const snapshot=(id=1)=>{const at=new Date().toISOString();return {queried_at:at,channels:[{channel_id:id,channel_name:'c',models:['m'],switch:'enabled',state:'routine',confirmed_at:at,pending:0,accelerated:0}]}};
+test('current read timeout ends loading, keeps unknown counts and ignores late responses',async t=>{
+ const tasks=new Map();let id=0,signal;const late=deferred();
+ const api={lifelineCurrent:(_,s)=>{signal=s;return late.promise}};
+ const p=harness('LifelineCurrentPanel','refresh,snapshot,loading,error,emptyMessage', {active:true},api,{
+  setTimeout:(fn,ms)=>{const key=++id;tasks.set(key,{fn,ms});return key},clearTimeout:key=>tasks.delete(key)
+ });t.after(p.stop);
+ assert.equal(p.loading.value,true);assert.equal(p.snapshot.value,undefined);
+ const timeout=[...tasks.values()].find(v=>v.ms===20000);assert.ok(timeout);timeout.fn();
+ await nextTick();await nextTick();await nextTick();
+ assert.equal(signal.aborted,true);assert.equal(p.loading.value,false);assert.match(p.error.value,/超时/);assert.match(p.emptyMessage.value,/尚未读取成功/);
+ late.resolve(snapshot(1));await nextTick();assert.equal(p.snapshot.value,undefined);
+ api.lifelineCurrent=async()=>snapshot(2);await p.refresh();assert.equal(p.snapshot.value.channels[0].channel_id,2);assert.equal(p.error.value,'');assert.equal(tasks.size,0);
+ api.lifelineCurrent=async()=>{throw {code:'lifeline_current_timeout'}};await p.refresh();assert.match(p.error.value,/超时.*保留/);assert.equal(p.snapshot.value.channels[0].channel_id,2);
+});
+test('superseded current request cannot clear the newer loading state',async t=>{
+ const old=deferred(),fresh=deferred(),api={lifelineCurrent:()=>old.promise};
+ const p=harness('LifelineCurrentPanel','refresh,snapshot,loading,error', {active:true},api);t.after(p.stop);
+ api.lifelineCurrent=()=>fresh.promise;const run=p.refresh();await nextTick();await nextTick();assert.equal(p.loading.value,true);assert.equal(p.error.value,'');
+ old.resolve(snapshot(1));await nextTick();assert.equal(p.snapshot.value,undefined);
+ fresh.resolve(snapshot(2));await run;assert.equal(p.loading.value,false);assert.equal(p.snapshot.value.channels[0].channel_id,2);
+});
 test('current panel ignores old-site replies and retains same-site snapshot on failure',async t=>{
  const old=deferred(),api={lifelineCurrent:()=>old.promise};
  const p=harness('LifelineCurrentPanel','refresh,snapshot,rows,clock,snapshotStale,loading,error,auto,selected,order', {active:true},api);t.after(p.stop);

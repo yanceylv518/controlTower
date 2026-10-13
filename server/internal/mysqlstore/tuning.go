@@ -54,9 +54,13 @@ func weightChangeAuditMetadata(rule, actor string, auditContext storage.Operatio
 }
 
 func (s Store) GetPolicy(id string) (tuning.PolicyRecord, bool, error) {
+	return s.getPolicy(context.Background(), id)
+}
+
+func (s Store) getPolicy(ctx context.Context, id string) (tuning.PolicyRecord, bool, error) {
 	var r tuning.PolicyRecord
 	var raw string
-	err := s.db.QueryRowContext(context.Background(), `SELECT policy_json,mode,updated_at,updated_by FROM tuning_policies WHERE instance_id=?`, id).Scan(&raw, &r.Mode, &r.UpdatedAt, &r.UpdatedBy)
+	err := s.db.QueryRowContext(ctx, `SELECT policy_json,mode,updated_at,updated_by FROM tuning_policies WHERE instance_id=?`, id).Scan(&raw, &r.Mode, &r.UpdatedAt, &r.UpdatedBy)
 	if err == sql.ErrNoRows {
 		return r, false, nil
 	}
@@ -114,13 +118,17 @@ func (s Store) PutPolicyIfCurrent(next, expected tuning.PolicyRecord, expectedEx
 }
 
 func (s Store) ListChannelBaseValues(instanceID, model string) ([]tuning.ChannelBaseValue, error) {
+	return s.listChannelBaseValues(context.Background(), instanceID, model)
+}
+
+func (s Store) listChannelBaseValues(ctx context.Context, instanceID, model string) ([]tuning.ChannelBaseValue, error) {
 	args := []any{instanceID, instanceID, instanceID}
 	filter := ""
 	if model != "" {
 		filter = " AND b.model_name=?"
 		args = append(args, model)
 	}
-	rows, err := s.db.QueryContext(context.Background(), `SELECT b.instance_id,b.channel_id,c.channel_name,COALESCE(c.group_name,''),b.model_name,b.base_weight,b.base_priority,b.max_rpm,b.max_tpm,c.weight,COALESCE(c.priority,0),c.captured_at,COALESCE(c.models_text,''),b.updated_at,b.updated_by
+	rows, err := s.db.QueryContext(ctx, `SELECT b.instance_id,b.channel_id,c.channel_name,COALESCE(c.group_name,''),b.model_name,b.base_weight,b.base_priority,b.max_rpm,b.max_tpm,c.weight,COALESCE(c.priority,0),c.captured_at,COALESCE(c.models_text,''),b.updated_at,b.updated_by
 FROM channel_base_values b
 JOIN (SELECT cs.* FROM channel_current cs JOIN instances i ON i.id=cs.instance_id
       JOIN (SELECT cs2.channel_id,MAX(cs2.captured_at) captured_at FROM channel_current cs2 JOIN instances i2 ON i2.id=cs2.instance_id WHERE CASE WHEN i2.site_id='' THEN i2.id ELSE i2.site_id END=? AND i2.enabled=1 GROUP BY cs2.channel_id) x
@@ -400,7 +408,11 @@ func (s Store) QueryCurrentChannelRates(id string, now time.Time) ([]tuning.Chan
 }
 
 func (s Store) ListContinuousStates(id string) ([]tuning.ContinuousState, error) {
-	rows, err := s.db.QueryContext(context.Background(), `SELECT instance_id,channel_id,model_name,k_error,k_speed,k_cache,k_otps,multiplier,proposed_weight,last_written_weight,last_write_at,last_observed_requests,last_observed_errors,metric_rpm,metric_tpm,capacity_limited,metric_ready,baseline_ready,metric_ttft_p50,metric_ttft_p90,metric_ttft_p95,baseline_ttft_p50,baseline_ttft_p90,baseline_ttft_p95,metric_cache,baseline_cache,cache_ready,metric_otps,baseline_otps,otps_ready,smoothed_error_rate,last_bucket_at,paused_reason,phase,circuit_opened_at,next_probe_at,probe_command_id,probe_attempts,probe_successes,probe_duration_sum,original_priority,soft_start_pending,write_failure_streak,last_write_failure_at,last_write_error,last_observed_weight,updated_at,speed_sample_count,speed_retry_count,speed_unknown_count,speed_legacy_count,speed_stats_version,otps_sample_count,otps_retry_count,otps_unknown_count,otps_stats_version,circuit_disabled,circuit_status_target,circuit_status_command_id,COALESCE(capacity_control_json,'{}'),COALESCE(evaluation_json,'null'),probe_slow_streak,control_revision,routine_circuit_latched,COALESCE(probe_speed_json,'{}') FROM tuning_continuous_states WHERE instance_id=?`, id)
+	return s.listContinuousStates(context.Background(), id)
+}
+
+func (s Store) listContinuousStates(ctx context.Context, id string) ([]tuning.ContinuousState, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT instance_id,channel_id,model_name,k_error,k_speed,k_cache,k_otps,multiplier,proposed_weight,last_written_weight,last_write_at,last_observed_requests,last_observed_errors,metric_rpm,metric_tpm,capacity_limited,metric_ready,baseline_ready,metric_ttft_p50,metric_ttft_p90,metric_ttft_p95,baseline_ttft_p50,baseline_ttft_p90,baseline_ttft_p95,metric_cache,baseline_cache,cache_ready,metric_otps,baseline_otps,otps_ready,smoothed_error_rate,last_bucket_at,paused_reason,phase,circuit_opened_at,next_probe_at,probe_command_id,probe_attempts,probe_successes,probe_duration_sum,original_priority,soft_start_pending,write_failure_streak,last_write_failure_at,last_write_error,last_observed_weight,updated_at,speed_sample_count,speed_retry_count,speed_unknown_count,speed_legacy_count,speed_stats_version,otps_sample_count,otps_retry_count,otps_unknown_count,otps_stats_version,circuit_disabled,circuit_status_target,circuit_status_command_id,COALESCE(capacity_control_json,'{}'),COALESCE(evaluation_json,'null'),probe_slow_streak,control_revision,routine_circuit_latched,COALESCE(probe_speed_json,'{}') FROM tuning_continuous_states WHERE instance_id=?`, id)
 	if err != nil {
 		return nil, err
 	}
@@ -949,7 +961,11 @@ func (s Store) QueryRecentChannelBuckets(id string, channelID int64, since time.
 }
 
 func (s Store) LatestChannels(id string) ([]tuning.Channel, error) {
-	rows, e := s.db.QueryContext(context.Background(), latestChannelsSQL, id, id)
+	return s.latestChannels(context.Background(), id)
+}
+
+func (s Store) latestChannels(ctx context.Context, id string) ([]tuning.Channel, error) {
+	rows, e := s.db.QueryContext(ctx, latestChannelsSQL, id, id)
 	if e != nil {
 		return nil, e
 	}

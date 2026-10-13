@@ -4,6 +4,7 @@ import (
 	"context"
 	"controltower/server/internal/tuning"
 	"errors"
+	"fmt"
 	"github.com/stretchr/testify/require"
 	"net/http/httptest"
 	"testing"
@@ -64,6 +65,11 @@ func TestCurrentAndRoundsReadContracts(t *testing.T) {
 	h.HandleLifelineCurrent(w, httptest.NewRequest("GET", "/?site_id=site-b", nil))
 	require.Equal(t, 503, w.Code)
 	require.NotContains(t, w.Body.String(), "private")
+	s.err = fmt.Errorf("lifeline recovery rounds: %w", context.DeadlineExceeded)
+	w = httptest.NewRecorder()
+	h.HandleLifelineCurrent(w, httptest.NewRequest("GET", "/?site_id=site-b", nil))
+	require.Equal(t, 504, w.Code)
+	require.Contains(t, w.Body.String(), "lifeline_current_timeout")
 }
 func TestProbeRecordsQueryValidationAndExplicitErrors(t *testing.T) {
 	s := &probeReadStub{tuningStub: &tuningStub{}}
