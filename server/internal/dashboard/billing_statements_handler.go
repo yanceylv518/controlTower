@@ -83,6 +83,9 @@ func (h BillingStatementsHandler) ServeHTTP(w http.ResponseWriter, r *http.Reque
 				return
 			}
 			job.BillPeriod = "monthly"
+		} else if req.Period == billing.ZeroOutputPeriod {
+			job.BillPeriod = billing.ZeroOutputPeriod
+			job.ExcludeZeroOutput = false
 		} else if req.Period != "" && req.Period != "temporary" {
 			writeDashboardError(w, 400, "invalid_bill_period")
 			return

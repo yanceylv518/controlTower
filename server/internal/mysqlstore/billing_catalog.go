@@ -31,7 +31,7 @@ func catalogWhere(f billing.CatalogFilter) (string, []any) {
 }
 
 func (s Store) BillingCatalog(ctx context.Context, f billing.CatalogFilter) (billing.CatalogPage, error) {
-	out := billing.CatalogPage{Items: []billing.CatalogBill{}, Counts: map[string]int64{"daily": 0, "monthly": 0, "temporary": 0}, Page: f.Page, PageSize: f.PageSize}
+	out := billing.CatalogPage{Items: []billing.CatalogBill{}, Counts: map[string]int64{"daily": 0, "monthly": 0, "temporary": 0, billing.ZeroOutputPeriod: 0}, Page: f.Page, PageSize: f.PageSize}
 	where, args := catalogWhere(f)
 	rows, err := s.db.QueryContext(ctx, `SELECT `+catalogPeriodSQL+`,COUNT(*),COUNT(DISTINCT st.subject_id)`+where+` GROUP BY `+catalogPeriodSQL, args...)
 	if err != nil {

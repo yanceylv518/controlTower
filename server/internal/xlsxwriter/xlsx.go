@@ -2,6 +2,7 @@ package xlsxwriter
 
 import (
 	"archive/zip"
+	"bufio"
 	"fmt"
 	"html"
 	"io"
@@ -22,6 +23,8 @@ type Cell struct {
 const WrappedTextStyle = 11
 
 type Sheet struct {
+	writer         io.Writer
+	buffer         *bufio.Writer
 	name           string
 	file           *os.File
 	row            int
@@ -39,9 +42,15 @@ type Sheet struct {
 	writingTotal   bool
 	filterEnd      int
 }
-type Workbook struct{ sheets []*Sheet }
+type Workbook struct {
+	sheets   []*Sheet
+	buffered bool
+}
 
 func New() *Workbook { return &Workbook{} }
+
+// NewBuffered batches small XML writes for large diagnostic exports.
+func NewBuffered() *Workbook { return &Workbook{buffered: true} }
 func (w *Workbook) AddSheet(name string, widths []float64) (*Sheet, error) {
 	return w.addSheet(name, widths, false)
 }
@@ -54,16 +63,21 @@ func (w *Workbook) addSheetAt(name string, widths []float64, report bool, header
 		return nil, e
 	}
 	s := &Sheet{name: name, file: f, report: report, columns: len(widths), headerRow: headerRow, reconciliation: headerRow == 5, moneyColumns: map[int]bool{}, priceColumns: map[int]bool{}, widths: widths, totals: map[int]*big.Rat{}, unknownTotals: map[int]bool{}}
+	s.writer = f
+	if w.buffered {
+		s.buffer = bufio.NewWriterSize(f, 128*1024)
+		s.writer = s.buffer
+	}
 	w.sheets = append(w.sheets, s)
-	io.WriteString(f, `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">`)
+	io.WriteString(s.writer, `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">`)
 	if report {
-		io.WriteString(f, `<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>`)
+		io.WriteString(s.writer, `<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>`)
 	}
-	fmt.Fprintf(f, `<sheetViews><sheetView showGridLines="0" workbookViewId="0"><pane ySplit="%d" topLeftCell="A%d" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><cols>`, headerRow, headerRow+1)
+	fmt.Fprintf(s.writer, `<sheetViews><sheetView showGridLines="0" workbookViewId="0"><pane ySplit="%d" topLeftCell="A%d" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><cols>`, headerRow, headerRow+1)
 	for i, v := range widths {
-		fmt.Fprintf(f, `<col min="%d" max="%d" width="%.1f" customWidth="1"/>`, i+1, i+1, v)
+		fmt.Fprintf(s.writer, `<col min="%d" max="%d" width="%.1f" customWidth="1"/>`, i+1, i+1, v)
 	}
-	io.WriteString(f, `</cols><sheetData>`)
+	io.WriteString(s.writer, `</cols><sheetData>`)
 	return s, nil
 }
 func (s *Sheet) Row(cells []Cell) error {
@@ -108,7 +122,7 @@ func (s *Sheet) Row(cells []Cell) error {
 				height = max(height, min(409, ((units+width-1)/width)*16+8))
 			}
 		}
-		fmt.Fprintf(s.file, `<row r="%d" ht="%d" customHeight="1">`, s.row, height)
+		fmt.Fprintf(s.writer, `<row r="%d" ht="%d" customHeight="1">`, s.row, height)
 		for i := range cells {
 			if s.row == s.headerRow {
 				if strings.HasPrefix(cells[i].Value, "模型单价") {
@@ -144,7 +158,7 @@ func (s *Sheet) Row(cells []Cell) error {
 			}
 		}
 	} else {
-		fmt.Fprintf(s.file, `<row r="%d">`, s.row)
+		fmt.Fprintf(s.writer, `<row r="%d">`, s.row)
 	}
 	for i, c := range cells {
 		ref := column(i+1) + strconv.Itoa(s.row)
@@ -153,14 +167,14 @@ func (s *Sheet) Row(cells []Cell) error {
 			style = ` s="` + strconv.Itoa(c.Style) + `"`
 		}
 		if c.Formula != "" {
-			fmt.Fprintf(s.file, `<c r="%s"%s><f>%s</f><v>%s</v></c>`, ref, style, html.EscapeString(c.Formula), html.EscapeString(c.Value))
+			fmt.Fprintf(s.writer, `<c r="%s"%s><f>%s</f><v>%s</v></c>`, ref, style, html.EscapeString(c.Formula), html.EscapeString(c.Value))
 		} else if c.Number && c.Value != "" {
-			fmt.Fprintf(s.file, `<c r="%s"%s><v>%s</v></c>`, ref, style, html.EscapeString(c.Value))
+			fmt.Fprintf(s.writer, `<c r="%s"%s><v>%s</v></c>`, ref, style, html.EscapeString(c.Value))
 		} else {
-			fmt.Fprintf(s.file, `<c r="%s" t="inlineStr"%s><is><t xml:space="preserve">%s</t></is></c>`, ref, style, html.EscapeString(c.Value))
+			fmt.Fprintf(s.writer, `<c r="%s" t="inlineStr"%s><is><t xml:space="preserve">%s</t></is></c>`, ref, style, html.EscapeString(c.Value))
 		}
 	}
-	_, e := io.WriteString(s.file, `</row>`)
+	_, e := io.WriteString(s.writer, `</row>`)
 	return e
 }
 func (s *Sheet) Title(value string, columns int) error {
@@ -212,12 +226,12 @@ func (s *Sheet) Close() error {
 		}
 	}
 	s.closed = true
-	_, e := io.WriteString(s.file, `</sheetData>`)
+	_, e := io.WriteString(s.writer, `</sheetData>`)
 	if e != nil {
 		return e
 	}
 	if s.report && s.row >= s.headerRow {
-		fmt.Fprintf(s.file, `<autoFilter ref="A%d:%s%d"/>`, s.headerRow, column(s.columns), func() int {
+		fmt.Fprintf(s.writer, `<autoFilter ref="A%d:%s%d"/>`, s.headerRow, column(s.columns), func() int {
 			if s.filterEnd > 0 {
 				return s.filterEnd
 			}
@@ -225,18 +239,26 @@ func (s *Sheet) Close() error {
 		}())
 	}
 	if len(s.merges) > 0 {
-		fmt.Fprintf(s.file, `<mergeCells count="%d">`, len(s.merges))
+		fmt.Fprintf(s.writer, `<mergeCells count="%d">`, len(s.merges))
 		for _, ref := range s.merges {
-			fmt.Fprintf(s.file, `<mergeCell ref="%s"/>`, ref)
+			fmt.Fprintf(s.writer, `<mergeCell ref="%s"/>`, ref)
 		}
-		io.WriteString(s.file, `</mergeCells>`)
+		io.WriteString(s.writer, `</mergeCells>`)
 	}
 	if s.report {
-		io.WriteString(s.file, `<pageMargins left="0.25" right="0.25" top="0.4" bottom="0.4" header="0.2" footer="0.2"/><pageSetup paperSize="8" orientation="landscape" fitToWidth="1" fitToHeight="0"/>`)
+		io.WriteString(s.writer, `<pageMargins left="0.25" right="0.25" top="0.4" bottom="0.4" header="0.2" footer="0.2"/><pageSetup paperSize="8" orientation="landscape" fitToWidth="1" fitToHeight="0"/>`)
 	}
-	_, e = io.WriteString(s.file, `</worksheet>`)
+	_, e = io.WriteString(s.writer, `</worksheet>`)
 	if e != nil {
 		return e
+	}
+	if s.buffer != nil {
+		if err := s.buffer.Flush(); err != nil {
+			_ = s.file.Close()
+			return err
+		}
+		s.buffer = nil
+		s.writer = s.file
 	}
 	return s.file.Close()
 }

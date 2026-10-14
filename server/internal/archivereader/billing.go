@@ -120,6 +120,9 @@ func (r Reader) billingPage(ctx context.Context, site string, jobID string, from
 	}
 	projection := []string{"id", "created_at", optional("request_id", "''"), optional("upstream_request_id", "''"), "user_id", optional("username", "''"), optional("token_id", "0"), optional("token_name", "''"), "COALESCE(" + channel + ",0)", "''", "model_name", optional("group", "''"), "prompt_tokens", "completion_tokens", "quota", "COALESCE(LEFT(other,1048577),'')"}
 	query := "SELECT " + strings.Join(projection, ",") + " FROM `" + table + "` WHERE type=2 AND created_at>=? AND created_at<? AND (created_at>? OR (created_at=? AND id>?))"
+	if billing.ZeroOutputOnly(ctx) {
+		query += " AND completion_tokens=0"
+	}
 	args := []any{from.Unix(), to.Unix(), cursor.CreatedUnix, cursor.CreatedUnix, cursor.ID}
 	if user > 0 {
 		query += " AND user_id=?"

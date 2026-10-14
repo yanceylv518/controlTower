@@ -89,6 +89,21 @@ func TestJobReaderMySQL(t *testing.T) {
 	}
 	reader := Reader{ConnectionsFile: file}
 	ctx := context.Background()
+	t.Run("zero output task filters before pagination and excludes NULL", func(t *testing.T) {
+		exec(db, `ALTER TABLE logs_202607 ADD COLUMN other TEXT NULL`)
+		defer exec(db, `ALTER TABLE logs_202607 DROP COLUMN other`)
+		exec(db, `UPDATE logs_202607 SET completion_tokens=5 WHERE id=2`)
+		defer exec(db, `UPDATE logs_202607 SET completion_tokens=0 WHERE id=2`)
+		from := time.Unix(start, 0)
+		rows, e := reader.BillingPageChecked(billing.WithZeroOutputOnly(ctx), "site", from, from.AddDate(0, 0, 1), billing.LogCursor{}, 2000, nil)
+		if e != nil || len(rows) != 1 || rows[0].Log.ID != 1 {
+			t.Fatal(rows, e)
+		}
+		rows, e = reader.BillingPageChecked(ctx, "site", from, from.AddDate(0, 0, 1), billing.LogCursor{}, 2000, nil)
+		if e != nil || len(rows) != 3 {
+			t.Fatal("ordinary read changed", rows, e)
+		}
+	})
 	t.Run("report version guard uses page snapshot and protects empty reads", func(t *testing.T) {
 		exec(db, `ALTER TABLE logs_202607 ADD COLUMN other TEXT NULL`)
 		defer exec(db, `ALTER TABLE logs_202607 DROP COLUMN other`)

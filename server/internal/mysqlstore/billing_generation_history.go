@@ -222,12 +222,15 @@ func recordStandaloneBillingTask(ctx context.Context, tx *sql.Tx, j billing.Job)
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM billing_generation_tasks WHERE instance_id=? AND kind=? AND job_id='' AND JSON_CONTAINS(subject_ids_json,CAST(? AS JSON)) AND range_from<=? AND work_until>=? AND created_at<=?`, j.InstanceID, j.JobType, billingJobSubject(j), j.From.UTC(), j.To.UTC(), j.CreatedAt.UTC()).Scan(&count); err != nil {
 		return err
 	}
-	if count > 0 && j.BillPeriod != "temporary" {
+	if count > 0 && j.BillPeriod != "temporary" && j.BillPeriod != billing.ZeroOutputPeriod {
 		return nil
 	}
 	source := "automatic"
 	if j.BillPeriod == "temporary" {
 		source = "temporary"
+	}
+	if j.BillPeriod == billing.ZeroOutputPeriod {
+		source = billing.ZeroOutputPeriod
 	}
 	raw, _ := json.Marshal([]int64{billingJobSubject(j)})
 	_, err := tx.ExecContext(ctx, `INSERT IGNORE INTO billing_generation_tasks(id,instance_id,kind,range_from,range_to,work_until,source,exclude_zero_output,subject_ids_json,job_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, "job:"+j.ID, j.InstanceID, j.JobType, j.From.UTC(), j.To.UTC(), j.To.UTC(), source, j.ExcludeZeroOutput, string(raw), j.ID, time.Now().UTC())

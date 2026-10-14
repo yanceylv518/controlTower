@@ -67,7 +67,7 @@ export interface BillingWorkspaceBill extends BillingWorkspaceTotals {
 }
 export interface BillingCatalogPage {
   items:(BillingWorkspaceBill & {generated_at:string})[]; total:number; subjects:number;
-  counts:Record<'daily'|'monthly'|'temporary',number>; page:number; page_size:number;
+  counts:Record<'daily'|'monthly'|'temporary'|'zero_output',number>; page:number; page_size:number;
 }
 export interface BillingDetailTask {key:string;kind:'prepare'|'export';status:'running'|'complete'|'failed';processed:number;total:number;matched:number;error?:string}
 export interface BillingDetailPage {preparing?:boolean;task?:BillingDetailTask;items?:BillingDetailRow[];next_cursor?:number;total?:number;currency?:string;models?:string[];tokens?:string[]}

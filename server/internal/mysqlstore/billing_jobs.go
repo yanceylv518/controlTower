@@ -880,7 +880,7 @@ func (s Store) ListExpiredInactiveBillingFiles(ctx context.Context, cutoff time.
 	if limit <= 0 || limit > 1000 {
 		limit = 200
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT files.job_id,files.instance_id,files.bill_day,files.user_id,files.relative_path,files.file_size,files.sha256,files.created_at FROM billing_user_daily_files files LEFT JOIN billing_user_daily_active active ON active.job_id=files.job_id AND active.instance_id=files.instance_id AND active.bill_day=files.bill_day AND active.user_id=files.user_id WHERE files.created_at<? AND active.job_id IS NULL ORDER BY files.created_at LIMIT ?`, cutoff, limit)
+	rows, err := s.db.QueryContext(ctx, `SELECT files.job_id,files.instance_id,files.bill_day,files.user_id,files.relative_path,files.file_size,files.sha256,files.created_at FROM billing_user_daily_files files LEFT JOIN billing_user_daily_active active ON active.job_id=files.job_id AND active.instance_id=files.instance_id AND active.bill_day=files.bill_day AND active.user_id=files.user_id WHERE files.created_at<? AND active.job_id IS NULL AND NOT EXISTS (SELECT 1 FROM billing_jobs j WHERE j.id=files.job_id AND j.bill_period='zero_output' AND j.status IN ('complete','publishing')) ORDER BY files.created_at LIMIT ?`, cutoff, limit)
 	if err != nil {
 		return nil, err
 	}

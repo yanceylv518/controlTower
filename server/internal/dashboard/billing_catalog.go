@@ -25,7 +25,7 @@ func (h BillingCatalogHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	if f.Period == "" {
 		f.Period = "monthly"
 	}
-	if f.Site == "" || (f.Kind != "user_statement" && f.Kind != "upstream_statement") || (f.Period != "daily" && f.Period != "monthly" && f.Period != "temporary") || len(f.Query) > 1024 {
+	if f.Site == "" || (f.Kind != "user_statement" && f.Kind != "upstream_statement") || (f.Period != "daily" && f.Period != "monthly" && f.Period != "temporary" && f.Period != billing.ZeroOutputPeriod) || len(f.Query) > 1024 {
 		writeDashboardError(w, 400, "invalid_query")
 		return
 	}

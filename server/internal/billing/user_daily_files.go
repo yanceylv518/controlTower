@@ -28,6 +28,9 @@ func (g UserDailyFileGenerator) GenerateJobFiles(ctx context.Context, job Job) e
 	if g.Store == nil {
 		return fmt.Errorf("billing file store unavailable")
 	}
+	if job.BillPeriod == ZeroOutputPeriod {
+		return g.generateZeroOutputFile(ctx, job)
+	}
 	if g.Spool != nil {
 		return g.generateSpooledFiles(ctx, job)
 	}

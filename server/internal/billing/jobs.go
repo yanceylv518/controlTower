@@ -466,6 +466,9 @@ func (r JobRunner) RunOnce(ctx context.Context) (bool, error) {
 }
 
 func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error {
+	if job.BillPeriod == ZeroOutputPeriod {
+		ctx = WithZeroOutputOnly(ctx)
+	}
 	started := time.Now()
 	var sourceTime time.Duration
 	var readCalls, readRows int64
@@ -603,6 +606,10 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 		requestDetails := []RequestDetail{}
 		diagnostics := []RequestDetail{}
 		for _, log := range logs {
+			if job.BillPeriod == ZeroOutputPeriod && (!log.CompletionTokens.Valid || log.CompletionTokens.Int64 != 0) {
+				pageRows--
+				continue
+			}
 			if models := upstreamModels[log.ChannelID]; len(models) > 0 {
 				matched := false
 				for _, model := range models {
@@ -628,6 +635,11 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 			billDay := dateOnly(time.Unix(log.CreatedUnix, 0))
 			billDayKey := billDay.Format("2006-01-02")
 			reasons := StatementAnomalyReasons(log, maxByModel[log.ModelName], job.ExcludeZeroOutput)
+			// Diagnostic exports include all matching zero-output rows, including
+			// rows excluded from normal settlement by input-token validation.
+			if job.BillPeriod == ZeroOutputPeriod {
+				reasons = nil
+			}
 			verification, pricingReason, chargeErr := StatementLogCharge(job, log, quotaPerUnit, settlementRules...)
 			if chargeErr != nil {
 				return chargeErr

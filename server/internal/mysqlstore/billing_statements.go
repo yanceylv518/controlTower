@@ -71,7 +71,7 @@ func (s Store) createBillingStatementJobAttempt(ctx context.Context, job billing
 	}
 	var duplicateID, duplicateStatus string
 	err = tx.QueryRowContext(ctx, `SELECT id,status FROM billing_jobs WHERE request_key=? LIMIT 1 FOR UPDATE`, job.RequestKey).Scan(&duplicateID, &duplicateStatus)
-	if err == nil && duplicateStatus == "superseded" {
+	if err == nil && (duplicateStatus == "superseded" || job.BillPeriod == billing.ZeroOutputPeriod && (duplicateStatus == "complete" || duplicateStatus == "no_data" || duplicateStatus == "cancelled")) {
 		if _, err = tx.ExecContext(ctx, `UPDATE billing_jobs SET request_key=NULL WHERE id=?`, duplicateID); err != nil {
 			return err
 		}
@@ -344,6 +344,11 @@ func (s Store) enrichBillingStatement(ctx context.Context, job *billing.Job) err
 }
 
 func (s Store) finalizeBillingStatement(ctx context.Context, tx *sql.Tx, job billing.Job, now time.Time) error {
+	if job.BillPeriod == billing.ZeroOutputPeriod {
+		// A diagnostic task is not a settlement statement and never supersedes one.
+		_, err := tx.ExecContext(ctx, `UPDATE billing_jobs SET status='complete',finished_at=?,updated_at=? WHERE id=? AND completed_steps>=total_steps`, now, now, job.ID)
+		return err
+	}
 	var kind, name string
 	var subjectID int64
 	if err := tx.QueryRowContext(ctx, `SELECT statement_type,subject_id,subject_name FROM billing_statement_jobs WHERE job_id=?`, job.ID).Scan(&kind, &subjectID, &name); err != nil {

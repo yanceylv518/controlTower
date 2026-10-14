@@ -9,10 +9,10 @@ import {coverageLabel,coverageStatus,coverageTooltip} from '../utils/billingCove
 const props=defineProps<{site:string;kind:'user'|'upstream';active:boolean;downloading?:string[]}>();
 const emit=defineEmits<{open:[bill:BillingWorkspaceBill];download:[bill:BillingWorkspaceBill]}>();
 const period=ref('monthly'),month=ref(''),query=ref(''),appliedQuery=ref(''),page=ref(1),size=ref(20);
-const items=ref<BillingCatalogPage['items']>([]),counts=ref<BillingCatalogPage['counts']>({monthly:0,daily:0,temporary:0});
+const items=ref<BillingCatalogPage['items']>([]),counts=ref<BillingCatalogPage['counts']>({monthly:0,daily:0,temporary:0,zero_output:0});
 const total=ref(0),subjects=ref(0),loading=ref(false),error=ref('');
 const subjectLabel=computed(()=>props.kind==='user'?'用户':'上游');
-const labels=[{value:'monthly',label:'月账单'},{value:'daily',label:'日账单'},{value:'temporary',label:'临时账单'}] as const;
+const labels=[{value:'monthly',label:'月账单'},{value:'daily',label:'日账单'},{value:'temporary',label:'临时账单'},{value:'zero_output',label:'空输出账单'}] as const;
 let revision=0,controller:AbortController|undefined,debounce:ReturnType<typeof setTimeout>|undefined,disposed=false;
 const name=(b:BillingWorkspaceBill)=>(props.kind==='user'?b.job.user_name:b.job.upstream_name)||`${subjectLabel.value} #${subjectID(b)}`;
 const subjectID=(b:BillingWorkspaceBill)=>props.kind==='user'?b.job.user_id:b.job.upstream_id;
@@ -35,7 +35,7 @@ function reset(){clearTimeout(debounce);query.value='';appliedQuery.value='';mon
 watch(query,()=>{clearTimeout(debounce);debounce=setTimeout(search,300);});
 watch([period,month,appliedQuery,size],()=>{if(page.value!==1)page.value=1;else void load();});
 watch(page,()=>void load());
-watch(()=>[props.site,props.kind],()=>{revision++;controller?.abort();clearTimeout(debounce);query.value='';appliedQuery.value='';month.value='';period.value='monthly';page.value=1;items.value=[];counts.value={monthly:0,daily:0,temporary:0};total.value=subjects.value=0;error.value='';loading.value=false;void load();},{immediate:true});
+watch(()=>[props.site,props.kind],()=>{revision++;controller?.abort();clearTimeout(debounce);query.value='';appliedQuery.value='';month.value='';period.value='monthly';page.value=1;items.value=[];counts.value={monthly:0,daily:0,temporary:0,zero_output:0};total.value=subjects.value=0;error.value='';loading.value=false;void load();},{immediate:true});
 watch(()=>props.active,active=>{if(active)void load();else{revision++;controller?.abort();loading.value=false;}});
 const timer=setInterval(()=>{if(!loading.value&&props.active&&document.visibilityState!=='hidden')void load(true);},15000);
 onBeforeUnmount(()=>{disposed=true;revision++;controller?.abort();clearTimeout(debounce);clearInterval(timer);});
@@ -45,7 +45,7 @@ defineExpose({refresh:load,month});
 <template>
  <section class="catalog" aria-label="已生成账单">
   <div class="catalog-toolbar">
-  <div class="catalog-types" aria-label="账单分类"><button v-for="item in labels" :key="item.value" :class="{active:period===item.value}" :aria-pressed="period===item.value" @click="period=item.value">{{item.label}}<span>{{counts[item.value].toLocaleString()}}</span></button></div>
+  <div class="catalog-types" aria-label="账单分类"><button v-for="item in labels" :key="item.value" :class="{active:period===item.value}" :aria-pressed="period===item.value" @click="period=item.value">{{item.label}}<span>{{(counts[item.value]||0).toLocaleString()}}</span></button></div>
   <div class="catalog-filters">
    <div class="catalog-search"><el-input :aria-label="`${subjectLabel}或账单编号`" v-model="query" clearable :placeholder="`搜索${subjectLabel}名称、ID 或账单编号`" @keyup.enter="search"/></div>
    <el-date-picker aria-label="账单月份" v-model="month" type="month" value-format="YYYY-MM" placeholder="全部月份" clearable/>
@@ -55,12 +55,12 @@ defineExpose({refresh:load,month});
   <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon><el-button link @click="load()">重新加载</el-button></el-alert>
   <el-table v-loading="loading" :data="error?[]:items" row-key="job.id" :empty-text="error?'账单加载失败，请重试':loading?'正在加载':query||month?'没有符合条件的已生成账单':'暂无已生成账单'">
    <el-table-column :label="subjectLabel" min-width="160"><template #default="s"><div class="catalog-person"><span class="avatar">{{name(s.row).slice(0,1)}}</span><div><b>{{name(s.row)}}</b><small>#{{subjectID(s.row)}}</small></div></div></template></el-table-column>
-   <el-table-column label="账期" :min-width="period==='temporary'?290:240"><template #default="s">
+   <el-table-column label="账期" :min-width="(period==='temporary'||period==='zero_output')?290:240"><template #default="s">
     <template v-if="period==='monthly'"><b>{{day(s.row.job.range_from).slice(0,7)}}</b><el-tooltip :content="coverageTooltip(s.row.job.monthly_coverage)"><div class="coverage" :class="{partial:!s.row.job.monthly_coverage?.complete}">{{coverageLabel(s.row.job.monthly_coverage)}}<small>{{coverageStatus(s.row.job.monthly_coverage)}}</small></div></el-tooltip></template>
     <b v-else>{{period==='daily'?day(s.row.job.range_from):local(s.row.job.range_from)+' — '+local(s.row.job.range_to)}}</b>
    </template></el-table-column>
    <el-table-column label="零输出处理" width="140"><template #default="s"><BillingZeroOutputTag :job="s.row.job"/></template></el-table-column>
-   <el-table-column label="账单金额" min-width="165" align="right"><template #default="s"><b class="amount">{{money(s.row.amount)}}</b><small>{{currency(s.row)}}</small></template></el-table-column>
+   <el-table-column :label="period==='zero_output'?'空输出金额':'账单金额'" min-width="165" align="right"><template #default="s"><b class="amount">{{money(s.row.amount)}}</b><small>{{currency(s.row)}}</small></template></el-table-column>
    <el-table-column label="生成时间" min-width="168"><template #default="s">{{local(s.row.generated_at)}}</template></el-table-column>
    <el-table-column label="操作" width="150" fixed="right" align="right"><template #default="s"><el-button link type="primary" @click="emit('open',s.row)">查看</el-button><el-button link :loading="downloading?.includes(s.row.job.id)" :disabled="downloading?.includes(s.row.job.id)" @click="emit('download',s.row)">{{downloading?.includes(s.row.job.id)?'正在准备':'下载'}}</el-button></template></el-table-column>
   </el-table>

@@ -77,6 +77,10 @@ func (h BillingStatementResultHandler) ServeHTTP(w http.ResponseWriter, r *http.
 		h.writeDailyFile(w, r, job)
 		return
 	}
+	if job.BillPeriod == billing.ZeroOutputPeriod && r.URL.Query().Get("download") == "1" {
+		h.writeZeroOutputFile(w, r, job)
+		return
+	}
 	rows, err := h.Store.QueryBillingStatementAggregates(r.Context(), job.ID)
 	if err != nil {
 		writeDashboardError(w, http.StatusInternalServerError, "billing_statement_query_failed")

@@ -259,6 +259,7 @@ func (h *PassthroughHandler) logsPageForBilling(ctx context.Context, site string
 	// cache-usage fields below, so project a compact JSON value inside MySQL
 	// instead of transferring the complete payload over the RDS connection.
 	query, _ := billingLogsPageQuery(userID, channelID, tokenID)
+	query = billingZeroOutputPageQuery(ctx, query)
 	args := billingPageRangeArgs(start, end, cursor)
 	if userID > 0 {
 		args = append(args, userID)
@@ -303,6 +304,7 @@ func (h *PassthroughHandler) logsPageForBillingChannels(ctx context.Context, sit
 		limit = billing.BillingPageSize
 	}
 	query, filters := billingChannelsModelsPageQuery(channelIDs, models)
+	query = billingZeroOutputPageQuery(ctx, query)
 	args := append(billingPageRangeArgs(start, end, cursor), filters...)
 	args = append(args, limit)
 	queryCtx, cancel := context.WithTimeout(ctx, billingLogsPageTimeout)
@@ -389,6 +391,14 @@ func billingPageFromFilter(filter string) string {
 	return billingLogColumns + billingOtherProjection +
 		` FROM (SELECT l.id,l.created_at FROM logs l WHERE l.type=2 AND l.created_at>=? AND l.created_at<? AND (l.created_at>? OR (l.created_at=? AND l.id>?))` + filter +
 		` ORDER BY l.created_at,l.id LIMIT ?) page JOIN logs l ON l.id=page.id LEFT JOIN channels c ON c.id=l.channel_id ORDER BY page.created_at,page.id`
+}
+
+// Apply before LIMIT in the narrow keyset subquery, not after fetching full rows.
+func billingZeroOutputPageQuery(ctx context.Context, query string) string {
+	if billing.ZeroOutputOnly(ctx) {
+		return strings.Replace(query, " ORDER BY l.created_at,l.id LIMIT ?", " AND l.completion_tokens=0 ORDER BY l.created_at,l.id LIMIT ?", 1)
+	}
+	return query
 }
 func billingLogsPageQuery(userID, channelID, tokenID int64) (string, bool) {
 	filter := ""

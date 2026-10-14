@@ -83,3 +83,15 @@ test('current submission failure preserves the draft and permits a retry',async 
  assert.equal(c.generate.value,true);assert.equal(c.temporarySubject.value,7);assert.equal(c.saving.value,false);assert.match(c.messages.at(-1),/current failure/);
  c.dashboard.createNewStatement=async q=>{c.writes.push(q);return {accepted:true};};await c.submit();assert.equal(c.writes.length,1);assert.equal(c.tab.value,'temporary');
 });
+
+for(const kind of ['user','upstream'])test(`${kind} zero-output task is opt-in and uses its own range and tab`,async t=>{
+ const c=create(t,kind);await flush();assert.equal(c.writes.length,0);
+ c.openGenerate('zero_output');await flush();c.temporarySubject.value=kind==='user'?7:9;
+ c.range.value=null;await c.submit();assert.equal(c.writes.length,0);
+ c.range.value=['2025-09-01T00:00:00+08:00','2025-09-03T00:00:00+08:00'];
+ c.excludeZeroOutput.value=true;await c.submit();await flush();
+ assert.equal(c.writes.length,1);const q=c.writes[0];assert.equal(q.period,'zero_output');
+ assert.equal(q.exclude_zero_output,false);assert.equal(q.statement_type,kind);
+ assert.equal(q[kind==='user'?'user_id':'upstream_id'],kind==='user'?7:9);
+ assert.equal(q.to,'2025-09-03T00:00:00+08:00');assert.equal(c.tab.value,'zero_output');assert.equal(c.month.value,'2025-09');
+});
