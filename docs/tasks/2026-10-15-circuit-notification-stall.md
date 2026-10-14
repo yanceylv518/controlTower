@@ -28,3 +28,15 @@
 验证：隔离本机MySQL9.7库ct_notification_fix_20261015，已通过全部ChannelHistoryRetention专项、熔断生命周期与迟到/幂等回归；新增1000条关联受保护审计之后的过期记录可继续清理，解除保护后旧记录可被重扫清理。新增10000条普通调权加501个交错熔断/恢复事件，两轮处理不漏不重，第一轮500个事件约0.43秒（仅本机合成，不代表生产性能）。通知导入失败后已生成恢复消息仍可投递的本机HTTP回归通过，未调用真实群机器人。正式源码快照全量Go检查结果及发布事实在后续补充。
 
 正式源码快照 go vet ./...、go test ./... 全部通过；未提供DSN的全量运行中外部条件测试仍跳过，专项实库结果以上述隔离验证为准。无Web产品改动，远端CI仍执行Web全量门禁。生产MySQL8新增索引耗时及真实负载下延迟需部署后验收。
+
+追加只读性能证据：用户指出几十万条数据不应直接等同于超时，补查确认生产 innodb_buffer_pool_size=134217728（128 MiB），调权表及索引约1072 MiB，命令约185 MiB、审计约327 MiB（information_schema统计估计）。vmstat两次一秒采样读取约43872/43968 KiB/s、iowait均24%；关联ID/command_id/event_id/correlation_id均为utf8mb4_unicode_ci，无排序规则不一致证据。缓存偏小和现场I/O压力是重要放大因素，尚无历史采样证明首次恶化的触发点；全局累计物理读数不能当作本次查询独占耗时。未更改生产MySQL缓存或连接参数。
+
+提交8757ac168a6f9f6397819fa804f3646390c63694已推送main；对应远端CI38655187005成功，包含Go及Web质量门。核验正式Go/SQL文件与本机已验证源码快照一致。本轮专用隔离数据库已删除，其他数据库未动。
+
+## rc174 发布完成
+
+- 标签v2.0.0-rc174固定8757ac168a6f9f6397819fa804f3646390c63694，核验rc173为祖先；未夹带本地规则、历史文档或产物。
+- [CI38655187005](https://github.com/yanceylv518/controlTower/actions/runs/38655187005)与[release38655460741](https://github.com/yanceylv518/controlTower/actions/runs/38655460741)均成功。
+- [发布与下载](https://github.com/yanceylv518/controlTower/releases/tag/v2.0.0-rc174)。三个正式安装包SHA256、ELF架构/执行位、完整提交及vcs.modified=false、Agent版本、脚本LF核验通过；146份迁移与固定提交逐字节一致，既有Web功能标识核验通过。
+- GHCR版本/latest均为sha256:3a7672bd5e3ed28dfc6b340f165cabccdc2fef11932ec0b67931cf873dec5920，linux/amd64。核验报告local/releases/v2.0.0-rc174/remote/VALIDATION.json。
+- 需升级Server并执行143索引迁移；Web/Agent产品代码未变。生产仍由用户决定部署，未执行远程重启、迁移、数据库清理、缓存调整或群消息补发。生产性能与索引创建耗时待升级验收。
