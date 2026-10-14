@@ -6,6 +6,9 @@ import ts from 'typescript'
 const source = readFileSync(new URL('../src/utils/fallbackRequestChain.ts', import.meta.url), 'utf8')
 const code = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 } }).outputText
 const { chainQuery, attemptChannels, buildRequestChain, loadRequestChain, retryLookupUnknown } = await import('data:text/javascript;base64,' + Buffer.from(code).toString('base64'))
+const tokenFilterSource = readFileSync(new URL('../src/utils/logTokenFilter.ts', import.meta.url), 'utf8')
+const tokenFilterCode = ts.transpileModule(tokenFilterSource, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 } }).outputText
+const { emptyLogTokenFilter } = await import('data:text/javascript;base64,' + Buffer.from(tokenFilterCode).toString('base64'))
 const row = (id, channel, path, overrides = {}) => ({ id, channel_id: channel, type: 5, user_id: 7, request_id: 'request-a', created_at: `2026-09-18T00:00:${String(id).padStart(2, '0')}Z`, use_time: 3, other: JSON.stringify({ admin_info: { use_channel: path } }), ...overrides })
 const final = row(3, 148, ['141', '191', '148'], { type: 2 })
 
@@ -99,6 +102,8 @@ test('only-this-request clears conflicting filters and refuses a stale site', as
   const context = { filters: { site_id: 'site-a' }, backgroundRefreshing: { value: false } }
   for (const key of ['username', 'tokenName', 'modelName', 'group', 'channelID', 'statusCode', 'upstreamRequestID', 'logType', 'requestID', 'requestScope', 'timeRange', 'selectedUserID']) context[key] = { value: 'old-filter' }
   context.emptyOutput = { value: true }
+  context.tokenFilter = { value: { mode: 'both', input: '123', output: '456' } }
+  context.emptyLogTokenFilter = emptyLogTokenFilter
   let refreshed = 0
   context.refreshSearch = async () => { refreshed++ }
   const filter = new Function(...Object.keys(context), `${compiled}; return filterRequestChain`)(...Object.values(context))
@@ -109,6 +114,7 @@ test('only-this-request clears conflicting filters and refuses a stale site', as
   assert.equal(refreshed, 1)
   for (const key of ['username', 'tokenName', 'modelName', 'group', 'channelID', 'statusCode', 'upstreamRequestID']) assert.equal(context[key].value, '')
   assert.equal(context.emptyOutput.value, false)
+  assert.deepEqual(context.tokenFilter.value, { mode: 'input', input: '', output: '' })
   assert.equal(context.logType.value, 0)
   assert.equal(context.requestID.value, 'request-a')
   assert.deepEqual(context.requestScope.value, { request: 'request-a', user: '7' })

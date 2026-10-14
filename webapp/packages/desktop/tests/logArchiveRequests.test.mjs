@@ -7,9 +7,12 @@ import * as vue from 'vue'
 const transpile = source => ts.transpileModule(source, {compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText
 const helperExports = {}
 new Function('exports', transpile(readFileSync(new URL('../src/utils/logArchive.ts', import.meta.url), 'utf8')))(helperExports)
-const permissionExports = {}
-new Function('exports', transpile(readFileSync(new URL('../src/permissions.ts', import.meta.url), 'utf8')))(permissionExports)
 class ApiError extends Error { constructor(status) { super('fixture failure'); this.status = status } }
+const permissionExports = {}
+new Function('require', 'exports', transpile(readFileSync(new URL('../src/permissions.ts', import.meta.url), 'utf8')))(name => {
+  if (name === '@ct/shared') return { ApiError }
+  throw new Error('Unexpected permission dependency ' + name)
+}, permissionExports)
 function pending() { let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no});return{promise,resolve,reject} }
 function archiveItem(site) {
   return {site_id:site,name:site,enabled:true,days:[],targets:[{instance_id:site,agent_id:'agent',configured:true,seen_at:new Date().toISOString()}],seen_at:new Date().toISOString(),config:{version:1,instance_id:site,agent_id:'agent',running:false,batch_size:500,interval_seconds:30,delay_seconds:300},status:{supports_daily_check:true,agent_id:'agent',configured:true,applied_version:1,state:'paused',last_id:'1',verified_rows:0,last_batch_rows:0,error:''}}
