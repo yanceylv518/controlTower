@@ -22,6 +22,7 @@ type Store struct {
 	auditCounts     *auditCountCache
 	generationSite  string
 	generationJob   string
+	historyScan     *channelHistoryScan
 }
 
 // A channel snapshot owns the channel's model assignment, but it must not
@@ -37,7 +38,7 @@ updated_by=IF(model_name<>VALUES(model_name),VALUES(updated_by),updated_by),
 model_name=VALUES(model_name)`
 
 func New(db *sql.DB) Store {
-	return Store{db: db, auditCounts: newAuditCountCache()}
+	return Store{db: db, auditCounts: newAuditCountCache(), historyScan: &channelHistoryScan{cursors: make(map[string]channelHistoryCursor)}}
 }
 
 func (s Store) UpsertAgent(agent storage.Agent) error {

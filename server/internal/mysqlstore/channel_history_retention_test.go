@@ -110,6 +110,41 @@ func TestChannelHistoryRetentionLinkedAuditAndBatch(t *testing.T) {
 	require.Zero(t, n)
 }
 
+func TestChannelHistoryRetentionAdvancesPastProtectedCandidates(t *testing.T) {
+	s, site, now := lifelineStore(t)
+	old := now.Add(-8 * 24 * time.Hour)
+	command := rand.Text()
+	_, err := s.db.Exec(`INSERT INTO channel_commands(id,instance_id,channel_id,command_type,payload_json,status,created_by,created_at,updated_at) VALUES(?,?,7,'channel.update','{}','delivered','test',?,?)`, command, site, old, old)
+	require.NoError(t, err)
+	values := []string{}
+	args := []any{}
+	for i := 0; i < 1000; i++ {
+		values = append(values, "(?,?,'channel.update','channel','7','test','{}','{}','succeeded',?,?,?)")
+		args = append(args, rand.Text(), site, command, old, old)
+	}
+	_, err = s.db.Exec(`INSERT INTO operation_audits(id,instance_id,operation_type,target_type,target_id,actor_id,before_summary,after_summary,status,correlation_id,created_at,updated_at) VALUES `+strings.Join(values, ","), args...)
+	require.NoError(t, err)
+	eligible := rand.Text()
+	require.NoError(t, s.InsertOperationAudit(storage.OperationAudit{ID: eligible, InstanceID: site, TargetType: "channel", TargetID: "7", OperationType: "channel.update", Status: "succeeded", CreatedAt: old.Add(time.Second), UpdatedAt: old}))
+	for pass := 0; pass < 2; pass++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err = s.pruneChannelHistory(ctx, now)
+		cancel()
+		require.NoError(t, err)
+	}
+	var n int
+	require.NoError(t, s.db.QueryRow(`SELECT COUNT(*) FROM operation_audits WHERE id=?`, eligible).Scan(&n))
+	require.Zero(t, n)
+	require.NoError(t, s.db.QueryRow(`SELECT COUNT(*) FROM operation_audits WHERE instance_id=?`, site).Scan(&n))
+	require.Equal(t, 1000, n)
+	// Once the protective command ends, wrapping the scan revisits old rows.
+	_, err = s.db.Exec(`UPDATE channel_commands SET status='succeeded' WHERE id=?`, command)
+	require.NoError(t, err)
+	require.NoError(t, s.pruneChannelHistory(context.Background(), now))
+	require.NoError(t, s.db.QueryRow(`SELECT COUNT(*) FROM operation_audits WHERE instance_id=?`, site).Scan(&n))
+	require.Zero(t, n)
+}
+
 func TestChannelLifelineLargeHistory(t *testing.T) {
 	if os.Getenv("CT_LIFELINE_SCALE") != "1" {
 		t.Skip("explicit isolated scale test")

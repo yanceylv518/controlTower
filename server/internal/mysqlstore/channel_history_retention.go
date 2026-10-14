@@ -4,8 +4,18 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 )
+
+type channelHistoryCursor struct {
+	at time.Time
+	id string
+}
+type channelHistoryScan struct {
+	sync.Mutex
+	cursors map[string]channelHistoryCursor
+}
 
 // Resolve the small ownership set first, so history queries use index ranges
 // instead of an OR with a dependent instance-membership subquery.
@@ -60,7 +70,7 @@ UNION SELECT DISTINCT instance_id FROM operation_audits WHERE target_type='chann
 		before := now.Add(-time.Duration(days) * 24 * time.Hour)
 		// One status per range preserves index order and bounded work.
 		for _, status := range []string{"succeeded", "failed", "expired"} {
-			err = s.pruneChannelHistoryBatch(ctx, "channel_commands", "idx_command_history_retention", `instance_id=?
+			err = s.pruneChannelHistoryBatch(ctx, "channel_commands", "idx_command_history_retention", "instance_id=? AND status=? AND created_at<?", 3, `instance_id=?
 AND status=? AND created_at<? AND updated_at<?
 AND NOT EXISTS (SELECT 1 FROM tuning_continuous_states s WHERE s.instance_id=? AND s.channel_id=channel_commands.channel_id
 AND (s.probe_command_id=channel_commands.id OR s.last_probe_command_id=channel_commands.id OR s.circuit_status_command_id=channel_commands.id
@@ -77,7 +87,7 @@ AND NOT EXISTS (SELECT 1 FROM operation_audits a FORCE INDEX (idx_operation_audi
 		}
 		// A linked audit becomes eligible only after its safely expired command
 		// has been removed. Commands with current references keep their audits.
-		err = s.pruneChannelHistoryBatch(ctx, "operation_audits", "idx_audit_channel_retention", `instance_id=? AND target_type='channel'
+		err = s.pruneChannelHistoryBatch(ctx, "operation_audits", "idx_audit_channel_retention", "instance_id=? AND target_type='channel' AND created_at<?", 2, `instance_id=? AND target_type='channel'
 AND created_at<? AND updated_at<? AND status IN ('succeeded','success','failed','expired','canceled','cancelled','rejected')
 AND NOT EXISTS (SELECT 1 FROM channel_commands c WHERE c.id=operation_audits.id)
 AND NOT EXISTS (SELECT 1 FROM channel_commands c WHERE c.id=operation_audits.correlation_id)
@@ -93,24 +103,41 @@ AND NOT EXISTS (SELECT 1 FROM channel_commands c WHERE c.id=operation_audits.cor
 // Lock an index-ordered bounded candidate set, then delete only those primary
 // keys. A direct DELETE with correlated guards can choose an unordered scan and
 // evaluate every old row before applying LIMIT. Never concatenate caller input.
-func (s Store) pruneChannelHistoryBatch(ctx context.Context, table, index, where string, args ...any) error {
+func (s Store) pruneChannelHistoryBatch(ctx context.Context, table, index, candidate string, rangeArgs int, where string, args ...any) error {
+	// LIMIT must precede protection checks. Otherwise thousands of protected
+	// rows can be examined to find just one deletable row. Rotate through all
+	// candidates, including protected ones; restart safely rescans from the start.
+	scan := s.historyScan
+	if scan == nil {
+		scan = &channelHistoryScan{cursors: make(map[string]channelHistoryCursor)}
+	}
+	scan.Lock()
+	defer scan.Unlock()
+	key := fmt.Sprintf("%s/%v", table, args[:rangeArgs-1])
+	cursor := scan.cursors[key]
+	queryArgs := append([]any{}, args[:rangeArgs]...)
+	if cursor.id != "" {
+		candidate += " AND (created_at>? OR (created_at=? AND id>?))"
+		queryArgs = append(queryArgs, cursor.at, cursor.at, cursor.id)
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	rows, err := tx.QueryContext(ctx, "SELECT id FROM "+table+" FORCE INDEX ("+index+") WHERE "+where+" ORDER BY created_at,id LIMIT 1000 FOR UPDATE", args...)
+	rows, err := tx.QueryContext(ctx, "SELECT /*+ MAX_EXECUTION_TIME(1000) */ id,created_at FROM "+table+" FORCE INDEX ("+index+") WHERE "+candidate+" ORDER BY created_at,id LIMIT 1000 FOR UPDATE SKIP LOCKED", queryArgs...)
 	if err != nil {
 		return err
 	}
 	var ids []any
 	for rows.Next() {
 		var id string
-		if err := rows.Scan(&id); err != nil {
+		if err := rows.Scan(&id, &cursor.at); err != nil {
 			rows.Close()
 			return err
 		}
 		ids = append(ids, id)
+		cursor.id = id
 	}
 	err = rows.Err()
 	rows.Close()
@@ -118,10 +145,40 @@ func (s Store) pruneChannelHistoryBatch(ctx context.Context, table, index, where
 		return err
 	}
 	if len(ids) > 0 {
-		_, err = tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE id IN ("+strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")+")", ids...)
+		guardArgs := append(append([]any{}, ids...), args...)
+		// Candidates are already locked. Evaluate all original guards against
+		// primary keys only; never relax current-task or recent-reference safety.
+		guardRows, err := tx.QueryContext(ctx, "SELECT /*+ MAX_EXECUTION_TIME(1000) */ id FROM "+table+" FORCE INDEX (PRIMARY) WHERE id IN ("+strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")+") AND "+where+" FOR UPDATE", guardArgs...)
 		if err != nil {
 			return err
 		}
+		var deletable []any
+		for guardRows.Next() {
+			var id string
+			if err := guardRows.Scan(&id); err != nil {
+				guardRows.Close()
+				return err
+			}
+			deletable = append(deletable, id)
+		}
+		err = guardRows.Err()
+		guardRows.Close()
+		if err != nil {
+			return err
+		}
+		if len(deletable) > 0 {
+			if _, err = tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE id IN ("+strings.TrimSuffix(strings.Repeat("?,", len(deletable)), ",")+")", deletable...); err != nil {
+				return err
+			}
+		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if len(ids) < 1000 {
+		delete(scan.cursors, key)
+	} else {
+		scan.cursors[key] = cursor
+	}
+	return nil
 }

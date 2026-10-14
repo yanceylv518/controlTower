@@ -3,6 +3,7 @@ package dashboard
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"time"
 
@@ -49,12 +50,13 @@ func (r AlertNotificationRunner) RunOnce() error {
 	}
 	computed, err := r.handler.currentAlerts()
 	if err != nil {
-		return err
+		return fmt.Errorf("evaluate current alerts: %w", err)
 	}
 	now := time.Now().UTC()
+	var circuitErr error
 	if r.circuitAlerts != nil {
 		if err := r.circuitAlerts.SyncCircuitAlerts(now); err != nil {
-			return err
+			circuitErr = fmt.Errorf("import circuit events: %w", err)
 		}
 	}
 	if err := r.handler.alertStore.ExpireSilencedAlerts(now); err != nil {
@@ -76,16 +78,16 @@ func (r AlertNotificationRunner) RunOnce() error {
 		return err
 	}
 	if err := r.handler.dispatchAlertNotifications(alerts); err != nil {
-		return err
+		return errors.Join(circuitErr, fmt.Errorf("dispatch current alerts: %w", err))
 	}
 	if r.circuitAlerts != nil {
 		events, err := r.circuitAlerts.CircuitNotificationAlerts(now)
 		if err != nil {
-			return err
+			return errors.Join(circuitErr, fmt.Errorf("query circuit deliveries: %w", err))
 		}
-		return r.handler.dispatchAlertNotifications(events)
+		return errors.Join(circuitErr, r.handler.dispatchAlertNotifications(events))
 	}
-	return nil
+	return circuitErr
 }
 
 func (r AlertNotificationRunner) Run(ctx context.Context) error {

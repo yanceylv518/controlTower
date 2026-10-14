@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"time"
 
 	"controltower/server/internal/storage"
@@ -60,7 +61,8 @@ func circuitEventAlert(e circuitEvent) storage.Alert {
 // Import confirmed execution events atomically. The event ledger survives alert
 // cleanup and process restarts, so an old event can never recreate a notification.
 func (s Store) SyncCircuitAlerts(now time.Time) error {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -70,32 +72,45 @@ func (s Store) SyncCircuitAlerts(now time.Time) error {
 	if err = tx.QueryRowContext(ctx, "SELECT occurred_at FROM circuit_alert_events WHERE event_id='__activation__' FOR UPDATE").Scan(&activated); err != nil {
 		return err
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT r.id,r.instance_id,c.instance_id,r.channel_id,r.channel_name,r.rule,r.created_at,r.evidence_json
- FROM tuning_recommendations r
+	var events []circuitEvent
+	// Separate equality ranges avoid sorting every ordinary weight decision. Fix
+	// the join order so the small circuit-only range drives primary-key lookups.
+	for _, rule := range []string{"circuit_opened", "circuit_recovered"} {
+		rows, err := tx.QueryContext(ctx, `SELECT /*+ MAX_EXECUTION_TIME(3000) */ STRAIGHT_JOIN r.id,r.instance_id,c.instance_id,r.channel_id,r.channel_name,r.rule,r.created_at,r.evidence_json
+ FROM tuning_recommendations r FORCE INDEX (idx_tuning_circuit_import)
  JOIN channel_commands c ON c.id=r.command_id AND c.status='succeeded'
  JOIN instances i ON i.id=c.instance_id AND i.deleted=0
  LEFT JOIN circuit_alert_events e ON e.event_id=r.id
  WHERE e.event_id IS NULL AND r.created_at>=? AND r.created_at<=?
  AND r.mode_at_creation='auto' AND r.status='auto_executed'
- AND r.rule IN ('circuit_opened','circuit_recovered')
+ AND r.rule=?
  AND (CASE WHEN i.site_id='' THEN i.id ELSE i.site_id END)=r.instance_id
- ORDER BY r.created_at,r.id LIMIT 500`, activated, now)
-	if err != nil {
-		return err
-	}
-	var events []circuitEvent
-	for rows.Next() {
-		var e circuitEvent
-		if err = rows.Scan(&e.ID, &e.SiteID, &e.InstanceID, &e.ChannelID, &e.Name, &e.Rule, &e.At, &e.Evidence); err != nil {
-			rows.Close()
+ ORDER BY r.created_at,r.id LIMIT 500`, activated, now, rule)
+		if err != nil {
+			return fmt.Errorf("circuit event candidates (%s): %w", rule, err)
+		}
+		for rows.Next() {
+			var e circuitEvent
+			if err = rows.Scan(&e.ID, &e.SiteID, &e.InstanceID, &e.ChannelID, &e.Name, &e.Rule, &e.At, &e.Evidence); err != nil {
+				rows.Close()
+				return err
+			}
+			events = append(events, e)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
 			return err
 		}
-		events = append(events, e)
 	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return err
+	sort.Slice(events, func(i, j int) bool {
+		if events[i].At.Equal(events[j].At) {
+			return events[i].ID < events[j].ID
+		}
+		return events[i].At.Before(events[j].At)
+	})
+	if len(events) > 500 {
+		events = events[:500]
 	}
 	for _, e := range events {
 		a := circuitEventAlert(e)
@@ -141,7 +156,9 @@ func (s Store) SyncCircuitAlerts(now time.Time) error {
 // Only events with at least one matching, due recipient are returned. Successful
 // events cannot starve older retries, and recovery has its own delivery identity.
 func (s Store) CircuitNotificationAlerts(now time.Time) ([]storage.Alert, error) {
-	rows, err := s.db.QueryContext(context.Background(), `SELECT a.id,a.instance_id,a.rule_key,a.severity,a.status,a.title,a.summary,a.first_seen_at,a.last_seen_at,a.resolved_at
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	rows, err := s.db.QueryContext(ctx, `SELECT /*+ MAX_EXECUTION_TIME(3000) */ a.id,a.instance_id,a.rule_key,a.severity,a.status,a.title,a.summary,a.first_seen_at,a.last_seen_at,a.resolved_at
  FROM alerts a JOIN circuit_alert_events e ON e.alert_id=a.id
  JOIN instances i ON i.id=a.instance_id AND i.deleted=0
  WHERE a.status IN ('firing','resolved')

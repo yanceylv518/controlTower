@@ -10,7 +10,42 @@ import (
 
 	"controltower/server/internal/storage"
 	"controltower/server/internal/tuning"
+	"github.com/stretchr/testify/require"
 )
+
+func TestCircuitImportMixedRulesAcrossBatches(t *testing.T) {
+	s, site, now := lifelineStore(t)
+	node := site + "-node"
+	require.NoError(t, s.CreateInstance(storage.Instance{ID: node, SiteID: site, Name: "test", Enabled: true, CreatedAt: now, UpdatedAt: now}))
+	// Ordinary weight decisions must not drive the event-import scan.
+	digit := `(SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9)`
+	_, err := s.db.Exec(`INSERT INTO tuning_recommendations(id,instance_id,channel_id,channel_name,created_at,rule,evidence_json,current_weight,proposed_weight,mode_at_creation,status) SELECT CONCAT(?,a.n, b.n,c.n,d.n),?,1,'test',?,'adjust','{}',100,101,'auto','auto_executed' FROM `+digit+` a CROSS JOIN `+digit+` b CROSS JOIN `+digit+` c CROSS JOIN `+digit+` d`, site+"-ordinary-", site, now)
+	require.NoError(t, err)
+	for i := 0; i < 501; i++ {
+		id := fmt.Sprintf("%s-%04d", site, i)
+		cmd := id + "-cmd"
+		rule := "circuit_opened"
+		if i%2 == 1 {
+			rule = "circuit_recovered"
+		}
+		at := now.Add(time.Duration(i+1) * time.Millisecond)
+		_, err = s.db.Exec(`INSERT INTO channel_commands(id,instance_id,channel_id,command_type,payload_json,status,created_by,created_at,updated_at) VALUES(?,?,?,'channel.update','{}','succeeded','test',?,?)`, cmd, node, i/2+1, at, at)
+		require.NoError(t, err)
+		require.NoError(t, s.InsertRecommendation(tuning.Recommendation{ID: id, InstanceID: site, ChannelID: int64(i/2 + 1), ChannelName: "test", Rule: rule, ModeAtCreation: "auto", Status: "auto_executed", CommandID: &cmd, CreatedAt: at, Evidence: map[string]any{}}))
+	}
+	start := time.Now()
+	require.NoError(t, s.SyncCircuitAlerts(now.Add(time.Second)))
+	t.Logf("import 500 mixed events with 10000 ordinary decisions: %s", time.Since(start))
+	var count int
+	require.NoError(t, s.db.QueryRow(`SELECT COUNT(*) FROM circuit_alert_events WHERE site_id=?`, site).Scan(&count))
+	require.Equal(t, 500, count)
+	require.NoError(t, s.db.QueryRow(`SELECT COUNT(*) FROM alerts a JOIN circuit_alert_events e ON e.alert_id=a.id WHERE e.site_id=? AND a.status='firing'`, site).Scan(&count))
+	require.Zero(t, count)
+	require.NoError(t, s.SyncCircuitAlerts(now.Add(time.Second)))
+	require.NoError(t, s.SyncCircuitAlerts(now.Add(time.Second)))
+	require.NoError(t, s.db.QueryRow(`SELECT COUNT(*) FROM circuit_alert_events WHERE site_id=?`, site).Scan(&count))
+	require.Equal(t, 501, count)
+}
 
 func TestCircuitEventAlertIdentityAndRecovery(t *testing.T) {
 	e := circuitEvent{ID: "event-a", SiteID: "site-a", InstanceID: "node-a", Name: "channel", ChannelID: 12, Rule: "circuit_opened", At: time.Now(), Evidence: `{"trigger":"agent_report_batch","error_rate":0.6,"secret":"must-not-leak"}`}
