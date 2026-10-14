@@ -142,6 +142,16 @@ func TestMySQLCircuitAlertLifecycle(t *testing.T) {
 		t.Fatalf("expected one open: %+v", alerts)
 	}
 	opened := alerts[0]
+	current, err := s.OverviewAlerts(context.Background(), site, now.Add(time.Second))
+	must(err)
+	if current.Total != 1 || current.Unconfirmed != 0 || len(current.Items) != 1 || current.Items[0].DimensionKey != node+":channel:12" {
+		t.Fatalf("fresh circuit execution missing from overview: %+v", current)
+	}
+	stale, err := s.OverviewAlerts(context.Background(), site, now.Add(3*time.Minute))
+	must(err)
+	if stale.Unconfirmed != 1 || len(stale.Items) != 0 {
+		t.Fatalf("historical circuit event treated as current: %+v", stale)
+	}
 	must(s.ResolveMissingAlerts(nil, now))
 	alerts, err = s.QueryAlerts(storage.AlertQuery{InstanceID: node})
 	must(err)

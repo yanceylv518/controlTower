@@ -112,8 +112,8 @@ func (s Store) SyncCircuitAlerts(now time.Time) error {
 			}
 		}
 		if _, err = tx.ExecContext(ctx, `INSERT INTO alerts
-   (id,instance_id,rule_key,severity,status,title,summary,first_seen_at,last_seen_at,resolved_at)
-   VALUES(?,?,?,?,?,?,?,?,?,?)`, a.ID, a.InstanceID, a.RuleKey, a.Severity, a.Status, a.Title, a.Summary, a.FirstSeenAt, a.LastSeenAt, a.ResolvedAt); err != nil {
+   (id,instance_id,rule_key,severity,status,title,summary,first_seen_at,last_seen_at,resolved_at,confirmed_at,dimension_type,dimension_key)
+   VALUES(?,?,?,?,?,?,?,?,?,?,?,'instance_channel',?)`, a.ID, a.InstanceID, a.RuleKey, a.Severity, a.Status, a.Title, a.Summary, a.FirstSeenAt, a.LastSeenAt, a.ResolvedAt, e.At, fmt.Sprintf("%s:channel:%d", e.InstanceID, e.ChannelID)); err != nil {
 			return err
 		}
 		if _, err = tx.ExecContext(ctx, `INSERT INTO circuit_alert_events(event_id,alert_id,site_id,channel_id,rule_key,occurred_at) VALUES(?,?,?,?,?,?)`, e.ID, a.ID, e.SiteID, e.ChannelID, a.RuleKey, e.At); err != nil {

@@ -1,6 +1,7 @@
 package storage
 
 type AlertQuery struct {
+	SiteID     string
 	InstanceID string
 	Status     string
 	Severity   string

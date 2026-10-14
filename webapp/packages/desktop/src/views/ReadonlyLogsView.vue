@@ -1726,6 +1726,8 @@ onMounted(() => {
   const qMonth = typeof route.query.month === 'string' ? route.query.month : ''
   const qFrom = typeof route.query.from === 'string' ? route.query.from : ''
   const qTo = typeof route.query.to === 'string' ? route.query.to : ''
+  const qType = Number(route.query.log_type)
+  if ([1, 2, 3, 4, 5, 6, 7].includes(qType)) logType.value = qType
   if (qUser) username.value = qUser
   const cap = new Date(Date.now() + 60 * 60 * 1000)
   if (qFrom && qTo && !Number.isNaN(Date.parse(qFrom)) && !Number.isNaN(Date.parse(qTo))) {

@@ -66,6 +66,11 @@ func (r AlertNotificationRunner) RunOnce() error {
 	if err := r.handler.alertStore.ResolveMissingAlerts(alertIDs(computed), now); err != nil {
 		return err
 	}
+	if store, ok := r.handler.alertStore.(interface{ MarkOverviewAlertEvaluation(time.Time) error }); ok {
+		if err := store.MarkOverviewAlertEvaluation(now); err != nil {
+			return err
+		}
+	}
 	alerts, err := r.handler.alertStore.QueryAlerts(storage.AlertQuery{Status: "firing", Limit: storage.MaxAlertQueryLimit})
 	if err != nil {
 		return err

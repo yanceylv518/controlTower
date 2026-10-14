@@ -92,6 +92,24 @@ export interface Overview {
     docker: { running_count: number; stopped_count: number; latest: unknown[] };
   };
 }
+export interface OverviewPoint {
+  from: string; to: string; complete: boolean; received_sources: number; confirmed_at: string | null;
+  metrics: (MetricSummary & { prompt_tokens: number; completion_tokens: number; p95_lower_bound: boolean }) | null;
+}
+export interface OverviewRequests {
+  site: string; queried_at: string; sources: string[]; recent: OverviewPoint; points: OverviewPoint[]; step_seconds: number;
+}
+export interface OverviewRuntime {
+  site: string; queried_at: string; stale_after_seconds: number;
+  items: { instance_id: string; name: string; enabled: boolean; online: boolean; last_seen_at: string | null;
+    health: { target: string; checked_at: string; status: string; http_status_code: number }[] | null;
+    docker: { container_name: string; collected_at: string; running: boolean; status: string }[] | null;
+  }[];
+}
+export interface OverviewAlerts {
+  site: string; queried_at: string; evaluated_at: string | null; fresh: boolean; total: number; unconfirmed: number;
+  items: (AlertItem & { confirmed_at: string | null })[];
+}
 export interface MetricItem {
   instance_id: string;
   instance_name: string;
@@ -923,6 +941,9 @@ export interface BillingVerificationResponse {
 }
 
 export const dashboardApi = (client: ApiClient) => ({
+  overviewRequests: (site: string, hours: number, signal?: AbortSignal) => client.request<OverviewRequests>(`/api/dashboard/overview-snapshot${query({site, hours, section: 'requests'})}`, {signal}),
+  overviewRuntime: (site: string, signal?: AbortSignal) => client.request<OverviewRuntime>(`/api/dashboard/overview-snapshot${query({site, section: 'runtime'})}`, {signal}),
+  overviewAlerts: (site: string, signal?: AbortSignal) => client.request<OverviewAlerts>(`/api/dashboard/overview-snapshot${query({site, section: 'alerts'})}`, {signal}),
   siteCurrency: (site: string) => client.request<{ quota_per_unit: number; price_multiplier: number; symbol: string; type: string }>(`/api/dashboard/passthrough/currency${query({ site })}`),
   instances: () =>
     client.request<ListResponse<InstanceItem>>("/api/dashboard/instances"),
@@ -958,6 +979,7 @@ export const dashboardApi = (client: ApiClient) => ({
     ),
   alerts: (
     params: {
+      site?: string;
       instance_id?: string;
       status?: string;
       severity?: string;

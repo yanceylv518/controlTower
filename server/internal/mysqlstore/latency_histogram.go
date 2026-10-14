@@ -1,7 +1,6 @@
 package mysqlstore
 
 import (
-	"fmt"
 	"strings"
 
 	"controltower/internal/latencyhist"
@@ -90,29 +89,5 @@ func latencyBucketMergeAssignmentsSQL() string {
 	return strings.Join(assignments, ",\n  ")
 }
 
-func latencyP95MergeSQL() string {
-	terms := make([]string, 0, len(latencyBucketColumns))
-	for _, column := range latencyBucketColumns {
-		terms = append(terms, "("+column+" + VALUES("+column+"))")
-	}
-	total := strings.Join(terms, " + ")
-	cumulative := make([]string, 0, len(latencyBucketColumns))
-	cases := make([]string, 0, len(latencyBucketColumns))
-	for i, term := range terms {
-		cumulative = append(cumulative, term)
-		cases = append(cases, fmt.Sprintf(
-			"WHEN %s >= CEIL((%s) * 0.95) THEN %g",
-			strings.Join(cumulative, " + "),
-			total,
-			latencyhist.UpperBounds[i],
-		))
-	}
-	return "CASE\n" +
-		"    WHEN (" + total + ") = 0 THEN CASE\n" +
-		"      WHEN p95_use_time IS NULL THEN VALUES(p95_use_time)\n" +
-		"      WHEN VALUES(p95_use_time) IS NULL THEN p95_use_time\n" +
-		"      ELSE GREATEST(p95_use_time, VALUES(p95_use_time))\n" +
-		"    END\n    " + strings.Join(cases, "\n    ") +
-		"\n    ELSE " + fmt.Sprintf("%g", latencyhist.UpperBounds[latencyhist.BucketCount-1]) +
-		"\n  END"
-}
+// Merged percentiles are reconstructed from counts on read, never MAX or a bucket upper bound.
+func latencyP95MergeSQL() string { return "NULL" }

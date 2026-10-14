@@ -15,6 +15,9 @@ func TestRestrictedAdminEndpointMatrix(t *testing.T) {
 		permission, method, path string
 		want                     bool
 	}{
+		{"overview.read", "GET", "overview-snapshot?section=requests&site=a&hours=1", true},
+		{"overview.read", "GET", "overview-snapshot?section=runtime&site=a", true},
+		{"monitor.channels", "GET", "overview-snapshot?section=alerts&site=a", false},
 		{"monitor.trials", "GET", "trial-followup", true},
 		{"monitor.trials", "PUT", "trial-followup", true},
 		{"monitor.trials", "GET", "trial-followup/identities", true},

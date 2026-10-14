@@ -9,6 +9,7 @@ import (
 	"sort"
 	"time"
 
+	"controltower/internal/latencyhist"
 	"controltower/server/internal/aggregator"
 	ctauth "controltower/server/internal/auth"
 	"controltower/server/internal/settings"
@@ -393,13 +394,24 @@ func appendMetricAlertsWithSettings(items []AlertItem, metric aggregator.Metric,
 		}
 		items = append(items, AlertItem{ID: alertID(metric.InstanceID, "high_error_rate", metric.DimensionKey), InstanceID: metric.InstanceID, DimensionType: metric.DimensionType, DimensionKey: metric.DimensionKey, RuleKey: "high_error_rate", Severity: severity, Status: "firing", Title: "\u9519\u8bef\u7387\u5347\u9ad8", Summary: fmt.Sprintf("\u6700\u8fd1 1 \u5206\u949f\u9519\u8bef\u7387 %.1f%%\uff0c%d/%d \u8bf7\u6c42\u5931\u8d25", *metric.ErrorRate*100, metric.ErrorCount, metric.RequestCount), SeenAt: metric.BucketTime, FirstSeenAt: metric.BucketTime, LastSeenAt: metric.BucketTime})
 	}
-	if metric.P95UseTime != nil && *metric.P95UseTime >= values.P95Warn {
+	p95, lowerBound := metric.P95UseTime, false
+	if p95 == nil {
+		// The metrics API omits an unbounded percentile; its known lower bound
+		// still proves latency thresholds at or below that bound are exceeded.
+		p95, lowerBound = latencyhist.Estimate(metric.LatencyBuckets, metric.LatencyBucketsV2, .95)
+		if p95 == nil {
+			p95, lowerBound = latencyhist.Estimate(metric.LatencyBuckets, nil, .95)
+		}
+	}
+	if p95 != nil && *p95 >= values.P95Warn {
 		severity := "warning"
-		if *metric.P95UseTime >= values.P95Crit {
+		if *p95 >= values.P95Crit {
 			severity = "critical"
 		}
-		summary := fmt.Sprintf("\u6700\u8fd1 1 \u5206\u949f P95 %.2fs\uff0c\u5171 %d \u6761\u8bf7\u6c42", *metric.P95UseTime, metric.RequestCount)
-		if *metric.P95UseTime >= 60 {
+		summary := fmt.Sprintf("\u6700\u8fd1 1 \u5206\u949f P95 %.2fs\uff0c\u5171 %d \u6761\u8bf7\u6c42", *p95, metric.RequestCount)
+		if lowerBound {
+			summary = fmt.Sprintf("最近 1 分钟 P95 ≥%gs（超出直方图量程），共 %d 条请求", *p95, metric.RequestCount)
+		} else if *p95 >= 60 {
 			summary = fmt.Sprintf("\u6700\u8fd1 1 \u5206\u949f P95 \u226560s\uff08\u8d85\u51fa\u76f4\u65b9\u56fe\u91cf\u7a0b\uff09\uff0c\u5171 %d \u6761\u8bf7\u6c42", metric.RequestCount)
 		}
 		items = append(items, AlertItem{ID: alertID(metric.InstanceID, "high_p95_latency", metric.DimensionKey), InstanceID: metric.InstanceID, DimensionType: metric.DimensionType, DimensionKey: metric.DimensionKey, RuleKey: "high_p95_latency", Severity: severity, Status: "firing", Title: "P95 \u8017\u65f6\u504f\u9ad8", Summary: summary, SeenAt: metric.BucketTime, FirstSeenAt: metric.BucketTime, LastSeenAt: metric.BucketTime})
@@ -503,6 +515,7 @@ func alertActionStatus(request AlertActionRequest, now time.Time) (string, *time
 func parseAlertQuery(r *http.Request) storage.AlertQuery {
 	query := r.URL.Query()
 	return storage.AlertQuery{
+		SiteID:     query.Get("site"),
 		InstanceID: query.Get("instance_id"),
 		Status:     query.Get("status"),
 		Severity:   query.Get("severity"),
@@ -515,7 +528,7 @@ func parseAlertQuery(r *http.Request) storage.AlertQuery {
 func alertItemsToStorage(items []AlertItem) []storage.Alert {
 	alerts := make([]storage.Alert, 0, len(items))
 	for _, item := range items {
-		alerts = append(alerts, storage.Alert{ID: item.ID, InstanceID: item.InstanceID, RuleKey: item.RuleKey, Severity: item.Severity, Status: item.Status, Title: item.Title, Summary: item.Summary, FirstSeenAt: item.FirstSeenAt, LastSeenAt: item.LastSeenAt, ResolvedAt: item.ResolvedAt, SilenceUntil: item.SilenceUntil})
+		alerts = append(alerts, storage.Alert{DimensionType: item.DimensionType, DimensionKey: item.DimensionKey, ID: item.ID, InstanceID: item.InstanceID, RuleKey: item.RuleKey, Severity: item.Severity, Status: item.Status, Title: item.Title, Summary: item.Summary, FirstSeenAt: item.FirstSeenAt, LastSeenAt: item.LastSeenAt, ResolvedAt: item.ResolvedAt, SilenceUntil: item.SilenceUntil})
 	}
 	return alerts
 }
@@ -523,7 +536,7 @@ func alertItemsToStorage(items []AlertItem) []storage.Alert {
 func storageAlertsToItems(alerts []storage.Alert) []AlertItem {
 	items := make([]AlertItem, 0, len(alerts))
 	for _, alert := range alerts {
-		items = append(items, AlertItem{ID: alert.ID, InstanceID: alert.InstanceID, RuleKey: alert.RuleKey, Severity: alert.Severity, Status: alert.Status, Title: alert.Title, Summary: alert.Summary, SeenAt: alert.LastSeenAt, FirstSeenAt: alert.FirstSeenAt, LastSeenAt: alert.LastSeenAt, ResolvedAt: alert.ResolvedAt, SilenceUntil: alert.SilenceUntil})
+		items = append(items, AlertItem{DimensionType: alert.DimensionType, DimensionKey: alert.DimensionKey, ID: alert.ID, InstanceID: alert.InstanceID, RuleKey: alert.RuleKey, Severity: alert.Severity, Status: alert.Status, Title: alert.Title, Summary: alert.Summary, SeenAt: alert.LastSeenAt, FirstSeenAt: alert.FirstSeenAt, LastSeenAt: alert.LastSeenAt, ResolvedAt: alert.ResolvedAt, SilenceUntil: alert.SilenceUntil})
 	}
 	sortAlerts(items)
 	return items

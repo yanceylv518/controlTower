@@ -608,6 +608,9 @@ func (s Store) ApplyMetricBatch(instanceID string, batchID string, metrics []agg
 	}
 
 	regular := make([]aggregator.Metric, 0, len(metrics))
+	if err := persistOverviewCoverage(ctx, tx, instanceID, metrics); err != nil {
+		return err
+	}
 	rateValues := []string{}
 	rateArgs := []any{}
 	for _, metric := range metrics {

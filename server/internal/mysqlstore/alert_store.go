@@ -45,6 +45,7 @@ func (s Store) UpsertCurrentAlerts(alerts []storage.Alert, now time.Time) error 
 	}
 	rows.Close()
 	for _, alert := range alerts {
+		confirmedAt := overviewAlertConfirmation(alert, now)
 		if alert.FirstSeenAt.IsZero() {
 			alert.FirstSeenAt = now
 		}
@@ -53,8 +54,8 @@ func (s Store) UpsertCurrentAlerts(alerts []storage.Alert, now time.Time) error 
 		}
 		_, err = tx.ExecContext(ctx, `
 INSERT INTO alerts (
-  id, instance_id, rule_key, severity, status, title, summary, first_seen_at, last_seen_at, resolved_at, silence_until
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+  id, instance_id, rule_key, severity, status, title, summary, first_seen_at, last_seen_at, resolved_at, silence_until, confirmed_at, dimension_type, dimension_key
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)
 ON DUPLICATE KEY UPDATE
   instance_id = VALUES(instance_id),
   rule_key = VALUES(rule_key),
@@ -62,6 +63,9 @@ ON DUPLICATE KEY UPDATE
   title = VALUES(title),
   summary = VALUES(summary),
   last_seen_at = VALUES(last_seen_at),
+  confirmed_at = VALUES(confirmed_at),
+  dimension_type = VALUES(dimension_type),
+  dimension_key = VALUES(dimension_key),
   resolved_at = NULL,
   status = CASE WHEN status = 'resolved' THEN 'firing' ELSE status END`,
 			alert.ID,
@@ -74,6 +78,9 @@ ON DUPLICATE KEY UPDATE
 			alert.FirstSeenAt,
 			alert.LastSeenAt,
 			nullTime(alert.SilenceUntil),
+			confirmedAt,
+			alert.DimensionType,
+			alert.DimensionKey,
 		)
 		if err != nil {
 			return err
@@ -98,6 +105,15 @@ ON DUPLICATE KEY UPDATE
 		}
 	}
 	return tx.Commit()
+}
+
+// Re-evaluating an old sample does not confirm a current fault. Offline rules
+// are different: absence of a fresh heartbeat is their current evidence.
+func overviewAlertConfirmation(alert storage.Alert, now time.Time) *time.Time {
+	if alert.RuleKey == "instance_offline" || (!alert.LastSeenAt.IsZero() && !alert.LastSeenAt.After(now.Add(5*time.Second)) && now.Sub(alert.LastSeenAt) <= 2*time.Minute) {
+		return &now
+	}
+	return nil
 }
 
 func (s Store) ResolveMissingAlerts(currentIDs []string, now time.Time) error {
@@ -221,6 +237,8 @@ func (s Store) QueryAlerts(query storage.AlertQuery) ([]storage.Alert, error) {
 			&alert.LastSeenAt,
 			&resolvedAt,
 			&silenceUntil,
+			&alert.DimensionType,
+			&alert.DimensionKey,
 		); err != nil {
 			return nil, err
 		}
@@ -254,6 +272,10 @@ func buildAlertQuery(query storage.AlertQuery) (string, []any) {
 	if query.InstanceID != "" {
 		where, args = appendWhere(where, args, "instance_id = ?", query.InstanceID)
 	}
+	if query.SiteID != "" {
+		where, args = appendWhere(where, args, "(instance_id = ? OR instance_id IN (SELECT id FROM instances WHERE CASE WHEN site_id='' THEN id ELSE site_id END=?))", query.SiteID)
+		args = append(args, query.SiteID)
+	}
 	if query.Status != "" {
 		where, args = appendWhere(where, args, "status = ?", query.Status)
 	}
@@ -264,7 +286,7 @@ func buildAlertQuery(query storage.AlertQuery) (string, []any) {
 		where, args = appendWhere(where, args, "status <> ?", "resolved")
 	}
 	args = append(args, limit, offset)
-	return `SELECT id, instance_id, rule_key, severity, status, title, summary, first_seen_at, last_seen_at, resolved_at, silence_until
+	return `SELECT id, instance_id, rule_key, severity, status, title, summary, first_seen_at, last_seen_at, resolved_at, silence_until, dimension_type, dimension_key
 FROM alerts` + where + `
 ORDER BY FIELD(severity, 'critical', 'warning', 'info'), last_seen_at DESC
 LIMIT ? OFFSET ?`, args

@@ -1,7 +1,9 @@
 package dashboard
 
 import (
+	"controltower/internal/latencyhist"
 	"sort"
+	"time"
 
 	"controltower/server/internal/aggregator"
 	"controltower/server/internal/storage"
@@ -14,14 +16,17 @@ type Overview struct {
 }
 
 type MetricSummary struct {
-	RequestCount int64    `json:"request_count"`
-	SuccessCount int64    `json:"success_count"`
-	ErrorCount   int64    `json:"error_count"`
-	SuccessRate  *float64 `json:"success_rate"`
-	ErrorRate    *float64 `json:"error_rate"`
-	TPM          int64    `json:"tpm"`
-	AvgUseTime   *float64 `json:"avg_use_time"`
-	P95UseTime   *float64 `json:"p95_use_time"`
+	PromptTokens     int64    `json:"prompt_tokens"`
+	CompletionTokens int64    `json:"completion_tokens"`
+	P95LowerBound    bool     `json:"p95_lower_bound"`
+	RequestCount     int64    `json:"request_count"`
+	SuccessCount     int64    `json:"success_count"`
+	ErrorCount       int64    `json:"error_count"`
+	SuccessRate      *float64 `json:"success_rate"`
+	ErrorRate        *float64 `json:"error_rate"`
+	TPM              int64    `json:"tpm"`
+	AvgUseTime       *float64 `json:"avg_use_time"`
+	P95UseTime       *float64 `json:"p95_use_time"`
 }
 
 type RuntimeSummary struct {
@@ -50,10 +55,20 @@ func BuildOverviewWithRuntime(metrics []aggregator.Metric, serverMetrics []stora
 	instanceIDs := make(map[string]struct{})
 	var summary MetricSummary
 	var avgWeightedTotal float64
-	var p95Max *float64
+	var avgSamples int64
+	var buckets latencyhist.Buckets
+	var bucketsV2 latencyhist.BucketsV2
+	allV2, allHist := true, true
+	var selected []aggregator.Metric
+	var latest time.Time
+	for _, m := range metrics {
+		if m.DimensionType == "instance" && m.BucketTime.After(latest) {
+			latest = m.BucketTime
+		}
+	}
 
 	for _, metric := range metrics {
-		if metric.DimensionType != "instance" {
+		if metric.DimensionType != "instance" || !metric.BucketTime.Equal(latest) {
 			continue
 		}
 		instanceIDs[metric.InstanceID] = struct{}{}
@@ -61,22 +76,52 @@ func BuildOverviewWithRuntime(metrics []aggregator.Metric, serverMetrics []stora
 		summary.SuccessCount += metric.SuccessCount
 		summary.ErrorCount += metric.ErrorCount
 		summary.TPM += metric.TPM
+		summary.PromptTokens += metric.PromptTokens
+		summary.CompletionTokens += metric.CompletionTokens
+		selected = append(selected, metric)
 		if metric.AvgUseTime != nil && metric.RequestCount > 0 {
 			avgWeightedTotal += *metric.AvgUseTime * float64(metric.RequestCount)
+			avgSamples += metric.RequestCount
 		}
-		if metric.P95UseTime != nil && (p95Max == nil || *metric.P95UseTime > *p95Max) {
-			value := *metric.P95UseTime
-			p95Max = &value
+		if metric.RequestCount > 0 {
+			var samples int64
+			for _, n := range metric.LatencyBuckets {
+				samples += n
+			}
+			if samples != metric.RequestCount {
+				allHist = false
+			}
+			buckets = latencyhist.Add(buckets, metric.LatencyBuckets)
+			if metric.LatencyBucketsV2 == nil {
+				allV2 = false
+			} else {
+				var v2Samples int64
+				for _, n := range *metric.LatencyBucketsV2 {
+					v2Samples += n
+				}
+				if v2Samples != metric.RequestCount {
+					allV2 = false
+				}
+				bucketsV2 = latencyhist.AddV2(bucketsV2, *metric.LatencyBucketsV2)
+			}
 		}
 	}
 
 	summary.SuccessRate = ratio(summary.SuccessCount, summary.RequestCount)
 	summary.ErrorRate = ratio(summary.ErrorCount, summary.RequestCount)
-	if summary.RequestCount > 0 && avgWeightedTotal > 0 {
-		value := avgWeightedTotal / float64(summary.RequestCount)
+	if avgSamples > 0 {
+		value := avgWeightedTotal / float64(avgSamples)
 		summary.AvgUseTime = &value
 	}
-	summary.P95UseTime = p95Max
+	if allHist || allV2 {
+		var v2 *latencyhist.BucketsV2
+		if allV2 {
+			v2 = &bucketsV2
+		}
+		summary.P95UseTime, summary.P95LowerBound = latencyhist.Estimate(buckets, v2, .95)
+	} else if len(selected) == 1 {
+		summary.P95UseTime = selected[0].P95UseTime
+	}
 
 	return Overview{
 		InstanceCount: len(instanceIDs),

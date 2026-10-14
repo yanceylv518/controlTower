@@ -220,17 +220,20 @@ type ChannelSnapshot struct {
 	CapturedAt  time.Time
 }
 type Alert struct {
-	ID           string
-	InstanceID   string
-	RuleKey      string
-	Severity     string
-	Status       string
-	Title        string
-	Summary      string
-	FirstSeenAt  time.Time
-	LastSeenAt   time.Time
-	ResolvedAt   *time.Time
-	SilenceUntil *time.Time
+	DimensionType string
+	DimensionKey  string
+	ConfirmedAt   *time.Time
+	ID            string
+	InstanceID    string
+	RuleKey       string
+	Severity      string
+	Status        string
+	Title         string
+	Summary       string
+	FirstSeenAt   time.Time
+	LastSeenAt    time.Time
+	ResolvedAt    *time.Time
+	SilenceUntil  *time.Time
 }
 
 type NotificationChannel struct {

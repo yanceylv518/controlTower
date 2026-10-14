@@ -159,7 +159,7 @@ func TestMetricBatchMergeSQLAccumulatesCountsAndDerivedRates(t *testing.T) {
 		"use_time_sum = use_time_sum + VALUES(use_time_sum)",
 		"cache_prompt_tokens = cache_prompt_tokens + VALUES(cache_prompt_tokens)",
 		"latency_le_250ms = latency_le_250ms + VALUES(latency_le_250ms)",
-		"CEIL((",
+		"p95_use_time = NULL",
 		"ELSE GREATEST(ttft_p95_ms, VALUES(ttft_p95_ms))",
 	} {
 		if !strings.Contains(sqlText, fragment) {

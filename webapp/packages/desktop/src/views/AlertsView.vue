@@ -21,25 +21,18 @@ const drawer = ref(false);
 const selected = ref<AlertItem>();
 const displayName = (value: string) => value.replace(/ \(ID \d+\)$/, "");
 const events = ref<AlertEvent[]>([]);
-const siteInstanceIDs = computed(
-  () =>
-    new Set(
-      filters.instances
-        .filter((item) => item.site_id === filters.site_id)
-        .map((item) => item.instance_id),
-    ),
-);
 const state = useAsyncData(
   async () => {
     await filters.loadInstances();
     const items = (
       await dashboard.alerts({
+        site: filters.site_id,
         status: status.value || undefined,
         severity: severity.value || undefined,
         active_only: activeOnly.value || undefined,
         limit: 200,
       })
-    ).items.filter((item) => siteInstanceIDs.value.has(item.instance_id));
+    ).items;
     return items;
   },
 );

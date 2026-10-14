@@ -263,18 +263,29 @@ func nullableV2(values [latencyhist.BucketCountV2]sql.NullInt64) *latencyhist.Bu
 	return &buckets
 }
 
-// quantilePreferV2 keeps the stored exact value when present (unmerged 1m
-// rows), then interpolates from the densified V2 histogram, then from V1.
+// Old merged rows stored a V1 bucket upper bound as if it were exact P95.
+// Always derive all quantiles from the same available distribution. Do not
+// expose an open-ended histogram bucket as an exact numeric percentile.
 func quantilePreferV2(v2 *latencyhist.BucketsV2, exact sql.NullFloat64, v1 latencyhist.Buckets, q float64) *float64 {
+	if v2 != nil {
+		var total int64
+		for _, count := range *v2 {
+			total += count
+		}
+		if total == 0 {
+			v2 = nil
+		}
+	}
+	if value, lowerBound := latencyhist.Estimate(v1, v2, q); value != nil {
+		if lowerBound {
+			return nil
+		}
+		return value
+	}
 	if exact.Valid {
 		return &exact.Float64
 	}
-	if v2 != nil {
-		if value := latencyhist.QuantileV2(*v2, q); value != nil {
-			return value
-		}
-	}
-	return latencyhist.Quantile(v1, q)
+	return nil
 }
 
 func ttftQuantile(hist *latencyhist.BucketsV2, exact sql.NullFloat64, q float64) *float64 {

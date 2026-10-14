@@ -189,6 +189,7 @@ func NewMux(options Options) *http.ServeMux {
 		mux.HandleFunc("POST /api/agent/container-logs/poll", controlSections["container_logs"])
 	}
 	mux.Handle("/api/dashboard/overview", protect(http.HandlerFunc(dashboardHandler.HandleOverview)))
+	mux.Handle("/api/dashboard/overview-snapshot", protect(http.HandlerFunc(dashboardHandler.HandleOverviewSnapshot)))
 	if presetStore, ok := any(options.Store).(dashboard.ChannelGroupPresetStore); ok {
 		mux.Handle("/api/dashboard/tuning/group-presets", protect(dashboard.ChannelGroupPresetsHandler{Store: presetStore}))
 	}
