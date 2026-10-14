@@ -30,6 +30,16 @@ jobs:
           cache-dependency-path: webapp/pnpm-lock.yaml
       - name: Install
         run: pnpm install --frozen-lockfile
+      - name: Set up Go for behavior test helpers
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.24.x
+          cache: true
+          cache-dependency-path: go.sum
+      - name: Behavior tests
+        run: pnpm test
+        env:
+          GOCACHE: ${{ runner.temp }}/ct-web-go-cache
       - name: Typecheck
         run: pnpm typecheck
       - name: Build

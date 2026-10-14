@@ -113,7 +113,18 @@ async function cancelTask(){if(!batch.value||cancelling.value)return;
  cancelling.value=true;try{await dashboard.cancelBillingBatch(batch.value);await refresh();ElMessage.success('任务已取消，已完成的日账单已保留');}catch(e){ElMessage.error(billingTaskErrorMessage(e,'取消失败'));}finally{cancelling.value=false;}
 }
 function progressName(item:BillingGenerationProgress){return item.subject_name||names.value[item.subject_id]||subjectLabel.value;}
-async function refresh(){if(!batch.value||refreshing.value)return;const n=++progressRevision;refreshing.value=true;try{const r=await dashboard.billingBatchProgress(batch.value);if(n===progressRevision&&!disposed){items.value=r.items;if(batch.value&&r.subject_ids)batch.value.subject_ids=r.subject_ids;error.value='';}}catch(e){if(n===progressRevision)error.value=billingTaskErrorMessage(e,'进度读取失败');}finally{if(n===progressRevision)refreshing.value=false;}}
+async function loadProgressNames(values:BillingGenerationProgress[],revision:number){
+ if(statementKind.value!=='user_statement')return;
+ const ids=[...new Set(values.filter(v=>!v.subject_name&&!names.value[v.subject_id]).map(v=>v.subject_id))];
+ if(!ids.length)return;
+ const site=props.site;
+ try{
+  const r=await passthrough.users({site,user_ids:ids.join(','),limit:50});
+  if(disposed||revision!==progressRevision||site!==props.site)return;
+  for(const u of r.items){const name=u.display_name?.trim()||u.username?.trim();if(name)names.value[u.id]=name;}
+ }catch{/* Keep progress available; the next refresh retries missing names. */}
+}
+async function refresh(){if(!batch.value||refreshing.value)return;const n=++progressRevision;refreshing.value=true;try{const r=await dashboard.billingBatchProgress(batch.value);if(n===progressRevision&&!disposed){items.value=r.items;if(batch.value&&r.subject_ids)batch.value.subject_ids=r.subject_ids;error.value='';await loadProgressNames(r.items,n);}}catch(e){if(n===progressRevision)error.value=billingTaskErrorMessage(e,'进度读取失败');}finally{if(n===progressRevision)refreshing.value=false;}}
 watch(()=>[props.site,props.kind],()=>{searchRevision++;progressRevision++;refreshing.value=false;dialog.value=false;progress.value=false;batch.value=undefined;items.value=[];names.value={};roles.value={};selectedUsers.value=[];queryResults.value=[];searchKeyword.value='';searching.value=false;recovered.value=[];});
 const timer=setInterval(()=>{if(active.value||progress.value)void refresh();},4000);
 onBeforeUnmount(()=>{disposed=true;searchRevision++;progressRevision++;previewRevision++;previewController?.abort();clearInterval(timer);});

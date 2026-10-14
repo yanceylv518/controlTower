@@ -10,7 +10,7 @@ before(async () => {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   base = `http://127.0.0.1:${server.address().port}/api/dashboard/tuning/channel-schedules`
 })
-after(() => new Promise(resolve => { server.once('close', resolve); server.stopMock() }))
+after(() => server && new Promise(resolve => { server.once('close', resolve); server.stopMock() }))
 const preview = async value => {
   const response = await fetch(base + '/preview?site_id=mock-a&config=' + encodeURIComponent(JSON.stringify(value)))
   return { status: response.status, value: await response.json() }

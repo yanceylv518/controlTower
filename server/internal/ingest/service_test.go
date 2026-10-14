@@ -105,7 +105,7 @@ func TestFastCircuitIgnoresBacklogAndFutureBuckets(t *testing.T) {
 func TestServiceStoresAggregatedMetrics(t *testing.T) {
 	store := NewMemoryStore()
 	service := NewService(store)
-	reportedAt := time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC)
+	reportedAt := time.Now().UTC().Truncate(time.Minute)
 	successRate := 1.0
 
 	err := service.SaveReport(agentgateway.AgentReportRequest{
@@ -137,7 +137,7 @@ func TestServiceStoresAggregatedMetrics(t *testing.T) {
 func TestServiceMergesDistinctMetricBatchesAndDeduplicatesRetries(t *testing.T) {
 	store := NewMemoryStore()
 	service := NewService(store)
-	bucket := time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC)
+	bucket := time.Now().UTC().Truncate(time.Minute)
 
 	report := func(batchID string, requests, successes, failures int64, useTimeSum float64) agentgateway.AgentReportRequest {
 		return agentgateway.AgentReportRequest{

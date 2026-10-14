@@ -136,3 +136,23 @@ test('incomplete status scan cannot silently select unknown users and stale scan
  v.open();await flush();assert.match(v.previewError.value,/failed page/);assert.deepEqual(v.preview.value,{});v.statusFilter.value='missing';await flush();v.selectFiltered();assert.deepEqual(v.selectedUsers.value,[])
  let finish;calls=0;v.dashboard.billingGenerationPreview=()=>{calls++;return new Promise(r=>finish=r)};const old=v.loadPreview();v.dialog.value=false;await flush();finish({items:[]});await old;assert.equal(calls,1);assert.deepEqual(v.preview.value,{})
 })
+
+
+test('restored user progress resolves names by IDs without opening selection and caches them',async t=>{
+ const v=create(t);v.props.subjects=[];
+ v.dashboard.billingBatchProgress=async()=>({items:[{subject_id:9,outcome:'registered'},{subject_id:71,outcome:'registered'}]});
+ v.passthrough.users=async q=>{v.queries.push(q);return {items:[{id:9,display_name:'中博',username:'user9'},{id:71,username:'user71'}]}};
+ v.restore([{instance_id:'a',kind:'user_statement',subject_id:9,from:'2026-09-01',to:'2026-10-01'}]);await flush();
+ assert.equal(v.progressName(v.items.value[0]),'中博');assert.equal(v.progressName(v.items.value[1]),'user71');
+ assert.equal(v.queries[0].user_ids,'9,71');assert.equal(v.queries[0].exclude_admin,undefined);
+ await v.refresh();assert.equal(v.queries.length,1);
+});
+
+test('late user names cannot cross instance changes',async t=>{
+ const v=create(t);v.props.subjects=[];let resolve;
+ v.dashboard.billingBatchProgress=async()=>({items:[{subject_id:9,outcome:'registered'}]});
+ v.passthrough.users=()=>new Promise(r=>{resolve=r});
+ v.restore([{instance_id:'a',kind:'user_statement',subject_id:9,from:'2026-09-01',to:'2026-10-01'}]);await flush();
+ v.props.site='b';await flush();resolve({items:[{id:9,username:'other-site'}]});await flush();
+ assert.equal(v.names.value[9],undefined);
+});

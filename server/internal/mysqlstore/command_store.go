@@ -574,6 +574,11 @@ type pruneExecutor interface {
 }
 
 func (s Store) PruneBefore(kind string, cutoff time.Time) (int64, error) {
+	if kind == "metric_batches" {
+		// NULL expires_at denotes a legacy batch whose safe expiry is unknown.
+		// Cleanup uses the same database clock as ingestion, not caller wall time.
+		return pruneWithArgs(s.db, `DELETE FROM metric_batches WHERE expires_at < UTC_TIMESTAMP(6) LIMIT ?`)
+	}
 	if kind == "alerts" {
 		// Age out by last-seen time regardless of status: anything still
 		// firing gets its last_seen_at refreshed every evaluation cycle, so
@@ -589,9 +594,14 @@ func (s Store) PruneBefore(kind string, cutoff time.Time) (int64, error) {
 }
 
 func pruneInBatches(executor pruneExecutor, query string, cutoff time.Time) (int64, error) {
+	return pruneWithArgs(executor, query, cutoff)
+}
+
+func pruneWithArgs(executor pruneExecutor, query string, args ...any) (int64, error) {
 	var total int64
+	args = append(args, pruneBatchSize)
 	for {
-		r, e := executor.ExecContext(context.Background(), query, cutoff, pruneBatchSize)
+		r, e := executor.ExecContext(context.Background(), query, args...)
 		if e != nil {
 			return total, e
 		}

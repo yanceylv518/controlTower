@@ -15,11 +15,14 @@ func TestPruneRetentionGroupsAndZeroDisabled(t *testing.T) {
 	now := time.Now().UTC()
 	r := &retentionRecorder{calls: map[string]time.Time{}}
 	pruneRetention(r, 0, 90, 1, 6, 30, now)
-	if len(r.calls) != 12 {
+	if len(r.calls) != 13 {
 		t.Fatalf("calls=%v", r.calls)
 	}
 	if _, ok := r.calls["log_events"]; ok {
 		t.Fatal("zero-day detail pruned")
+	}
+	if !r.calls["metric_batches"].Equal(now.Add(-31 * 24 * time.Hour)) {
+		t.Fatal("metric batch expiry cleanup must remain enabled when detail retention is disabled")
 	}
 	if !r.calls["error_statistics_minutes"].Equal(now.Add(-7*24*time.Hour)) || !r.calls["error_statistics_batches"].Equal(now.Add(-31*24*time.Hour)) {
 		t.Fatal("error statistics retention")

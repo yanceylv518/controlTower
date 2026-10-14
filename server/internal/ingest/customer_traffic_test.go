@@ -15,6 +15,8 @@ func TestTPMOnlyTrafficSurvivesIngestRetryAndRollup(t *testing.T) {
 	if err := json.Unmarshal([]byte(`{"bucket_time":"2026-09-14T10:00:00Z","window_seconds":60,"dimension_type":"instance_user_channel","dimension_key":"site:user:7:channel:3","tpm":30}`), &sparse); err != nil {
 		t.Fatal(err)
 	}
+	// Keep this retry/rollup fixture inside the metric replay window.
+	sparse.BucketTime = time.Now().UTC().Truncate(5 * time.Minute)
 	for _, batch := range []string{"first", "second", "first"} {
 		report := agentgateway.AgentReportRequest{InstanceID: "site", AgentID: "test", ReportedAt: sparse.BucketTime.Add(time.Minute), MetricBatchID: batch, AggregatedMetrics: []agentgateway.AggregatedMetricPayload{sparse}}
 		if err := service.SaveReport(report); err != nil {

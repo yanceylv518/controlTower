@@ -112,7 +112,7 @@ func ApplyDir(ctx context.Context, db *sql.DB, dir string) error {
 		if err != nil {
 			return err
 		}
-		if err = ApplySQL(ctx, conn, string(data)); err != nil {
+		if err = applyMigrationVersion(ctx, conn, version, string(data)); err != nil {
 			return fmt.Errorf("apply migration %s: %w", version, err)
 		}
 		if _, err = conn.ExecContext(ctx, `INSERT INTO schema_migrations(version,applied_at) VALUES(?,UTC_TIMESTAMP(6))`, version); err != nil {

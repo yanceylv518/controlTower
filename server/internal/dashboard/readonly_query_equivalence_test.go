@@ -136,7 +136,8 @@ func legacyReadonlySpecialFilters(values url.Values, ids []int64, viewer bool) (
 		}
 		f.where += " AND (" + strings.Join(conditions, " OR ") + ")"
 	}
-	if value, _ := parseReadonlyBoolean(values.Get("empty_output")); value {
+	// The current permission contract ignores this admin-only filter for viewers.
+	if value, _ := parseReadonlyBoolean(values.Get("empty_output")); value && !viewer {
 		if f.logType == nil {
 			if err := forceReadonlyLogType(&f, 2); err != nil {
 				return f, err

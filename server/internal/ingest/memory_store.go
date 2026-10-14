@@ -319,6 +319,10 @@ func (s *MemoryStore) Upsert1m(metrics []aggregator.Metric) error {
 func (s *MemoryStore) ApplyMetricBatch(instanceID string, batchID string, metrics []aggregator.Metric) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	metrics, _ = aggregator.RetainMetricBatch(metrics, time.Now().UTC())
+	if len(metrics) == 0 {
+		return nil
+	}
 	batchKey := instanceID + ":" + batchID
 	if _, exists := s.metricBatches[batchKey]; exists {
 		return nil

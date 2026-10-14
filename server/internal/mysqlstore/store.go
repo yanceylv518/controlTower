@@ -595,7 +595,16 @@ func (s Store) ApplyMetricBatch(instanceID string, batchID string, metrics []agg
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	result, err := tx.ExecContext(ctx, "INSERT IGNORE INTO metric_batches (instance_id, batch_id, created_at) VALUES (?, ?, ?)", instanceID, batchID, time.Now().UTC())
+	// Use the database clock for both expiry and cleanup across Server replicas.
+	var now time.Time
+	if err := tx.QueryRowContext(ctx, "SELECT UTC_TIMESTAMP(6)").Scan(&now); err != nil {
+		return err
+	}
+	metrics, expiresAt := aggregator.RetainMetricBatch(metrics, now)
+	if len(metrics) == 0 {
+		return nil // Acknowledge old buffered reports without recreating their ledger.
+	}
+	result, err := tx.ExecContext(ctx, "INSERT IGNORE INTO metric_batches (instance_id, batch_id, created_at, expires_at) VALUES (?, ?, ?, ?)", instanceID, batchID, now, expiresAt)
 	if err != nil {
 		return err
 	}

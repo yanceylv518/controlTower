@@ -423,6 +423,7 @@ func pruneRetention(store retentionStore, detailDays, metric5mDays, runtimeDays,
 		days  int
 		kinds []string
 	}{
+		{31, []string{"metric_batches"}},
 		{7, []string{"error_statistics_minutes"}},
 		{31, []string{"error_statistics_batches"}},
 		{analysisRetentionDays, []string{"log_samples", "nginx_timing_1m", "nginx_slow_samples"}},

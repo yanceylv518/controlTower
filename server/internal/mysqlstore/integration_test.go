@@ -28,6 +28,12 @@ func TestMySQLStoreIntegration(t *testing.T) {
 	}
 
 	store := New(db)
+	// Channel snapshots resolve the owning site through the registered instance.
+	if _, err := db.ExecContext(ctx, `INSERT INTO instances(id,site_id,name,env,region,base_url,enabled,created_at,updated_at)
+VALUES('integration-inst','integration-inst','integration','test','local','',1,NOW(),NOW())
+ON DUPLICATE KEY UPDATE site_id=VALUES(site_id)`); err != nil {
+		t.Fatalf("seed registered instance: %v", err)
+	}
 	sourceLogID := time.Now().UnixNano()
 	event := storage.LogEvent{
 		InstanceID:   "integration-inst",

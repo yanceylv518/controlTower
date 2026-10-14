@@ -153,7 +153,11 @@ func NewMux(options Options) *http.ServeMux {
 			{"POST /api/dashboard/archive-datasets/{dataset}/backfill-tasks", "tasks"},
 			{"POST /api/dashboard/archive-datasets/{dataset}/backfill-tasks/{task}/retry", "retry"},
 		} {
-			mux.Handle(route.pattern, protect(dashboard.ArchiveBackfillHandler{Store: archiveStore, Operation: route.operation}))
+			var handler http.Handler = dashboard.ArchiveBackfillHandler{Store: archiveStore, Operation: route.operation}
+			if strings.HasPrefix(route.pattern, "POST ") {
+				handler = http.HandlerFunc(retiredArchiveTask)
+			}
+			mux.Handle(route.pattern, protect(handler))
 		}
 	}
 	if archiveStore, ok := any(options.Store).(dashboard.ArchiveVerifyStore); ok {
@@ -165,7 +169,11 @@ func NewMux(options Options) *http.ServeMux {
 			{"POST /api/dashboard/archive-datasets/{dataset}/seal-tasks", "seal"},
 			{"POST /api/dashboard/archive-datasets/{dataset}/seal-tasks/{task}/retry", "seal_retry"},
 		} {
-			mux.Handle(route.pattern, protect(dashboard.ArchiveVerifyHandler{Store: archiveStore, Operation: route.operation}))
+			var handler http.Handler = dashboard.ArchiveVerifyHandler{Store: archiveStore, Operation: route.operation}
+			if strings.HasPrefix(route.pattern, "POST ") {
+				handler = http.HandlerFunc(retiredArchiveTask)
+			}
+			mux.Handle(route.pattern, protect(handler))
 		}
 	}
 	if options.VoiceHandler != nil {
