@@ -38,7 +38,7 @@ func (s Store) PruneProbeRecords(ctx context.Context, now time.Time) error {
 		return err
 	}
 	// Include disabled/deleted sites: retaining a stopped site must not disable
-	// cleanup. Shared command/audit history is owned by its existing modules.
+	// cleanup. Shared channel commands/audits are handled separately below.
 	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT instance_id FROM tuning_probe_records UNION SELECT DISTINCT instance_id FROM channel_control_requests UNION SELECT DISTINCT instance_id FROM tuning_probe_recorders`)
 	if err != nil {
 		return err
@@ -72,7 +72,7 @@ func (s Store) PruneProbeRecords(ctx context.Context, now time.Time) error {
 			return err
 		}
 	}
-	return nil
+	return s.pruneChannelHistory(ctx, now)
 }
 
 // Restrict every lifecycle read immediately, even while batched cleanup catches up.

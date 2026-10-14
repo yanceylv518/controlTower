@@ -14,6 +14,13 @@ function harness(name,expose,props,api,overrides={}){
  return {...p,filters,stop:()=>{cleanup.forEach(fn=>fn());stops.forEach(fn=>fn());}};
 }
 const deferred=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b});return {promise,resolve,reject}};
+test('state change timeout is explicit and retains the current page',async t=>{
+ const api={channelLifeline:async()=>({items:[{id:'kept'}],next_cursor:'next'})};
+ const p=harness('LifelineChannelDetail','loadEvents,events,error,loading', {channel:{channel_id:7},initialTab:'events'},api);t.after(p.stop);
+ await p.loadEvents(true);
+ api.channelLifeline=async()=>{throw {code:'channel_lifeline_timeout'}};
+ await p.loadEvents();assert.match(p.error.value,/超时/);assert.equal(p.events.value[0].id,'kept');assert.equal(p.loading.value,false);
+});
 test('same-channel status ticks preserve the chosen detail tab, batch and event query',async t=>{
  const props=reactive({channel:{channel_id:7,state:'unknown'},initialTab:'records'});
  let requests=0;const api={channelLifeline:async()=>{requests++;return {items:[{id:'change'}],next_cursor:'older'}}};

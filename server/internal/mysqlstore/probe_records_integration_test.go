@@ -126,7 +126,7 @@ func TestProbeRecordsLifecycleMetricsPaginationAndRetention(t *testing.T) {
 	require.NoError(t, s.db.QueryRow(`SELECT COUNT(*) FROM channel_control_requests WHERE id=?`, journal.ID).Scan(&count))
 	require.Zero(t, count)
 	require.NoError(t, s.db.QueryRow(`SELECT COUNT(*) FROM operation_audits WHERE id=?`, audit.ID).Scan(&count))
-	require.Equal(t, 1, count)
+	require.Zero(t, count) // terminal channel audits share the retention window.
 }
 
 func TestChannelLifelineMergedOperationsSafeFieldsAndRetention(t *testing.T) {

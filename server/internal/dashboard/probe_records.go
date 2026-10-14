@@ -175,6 +175,11 @@ func (h Handler) HandleChannelLifeline(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	v, err := s.QueryChannelLifeline(ctx, q, source)
 	if err != nil {
+		slog.WarnContext(r.Context(), "channel lifeline read failed", "site", q.Site, "channel", q.ChannelID, "source", source, "error", err)
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			writeDashboardError(w, 504, "channel_lifeline_timeout")
+			return
+		}
 		writeDashboardError(w, 503, "channel_lifeline_unavailable")
 		return
 	}

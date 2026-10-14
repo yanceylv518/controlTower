@@ -97,3 +97,21 @@ func TestProbeRecordsQueryValidationAndExplicitErrors(t *testing.T) {
 	require.Equal(t, 503, w.Code)
 	require.NotContains(t, w.Body.String(), "private")
 }
+
+func TestChannelLifelineTimeoutAndFailure(t *testing.T) {
+	for _, tc := range []struct {
+		err    error
+		status int
+		code   string
+	}{
+		{fmt.Errorf("query: %w", context.DeadlineExceeded), 504, "channel_lifeline_timeout"},
+		{errors.New("private mysql details"), 503, "channel_lifeline_unavailable"},
+	} {
+		s := &probeReadStub{tuningStub: &tuningStub{}, err: tc.err}
+		w := httptest.NewRecorder()
+		NewHandler(nil).WithTuningStore(s).HandleChannelLifeline(w, httptest.NewRequest("GET", "/?site_id=s&channel_id=7&source=changes", nil))
+		require.Equal(t, tc.status, w.Code)
+		require.Contains(t, w.Body.String(), tc.code)
+		require.NotContains(t, w.Body.String(), "private")
+	}
+}

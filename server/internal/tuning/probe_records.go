@@ -209,7 +209,7 @@ func (e *Engine) runProbeRecordsWriter(ctx context.Context) {
 			err := s.PruneProbeRecords(c, time.Now().UTC())
 			cancel()
 			if err != nil {
-				log.Printf("probe request record cleanup failed")
+				log.Printf("channel history cleanup failed: %v", err)
 			}
 		}
 	}
