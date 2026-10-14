@@ -1,8 +1,14 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 const props = withDefaults(defineProps<{ label: string; width?: number; triggerText?: string }>(), { width: 460 });
 const open = ref(false), pinned = ref(false);
 const host = ref<HTMLElement>(), body = ref<HTMLElement>();
+let expandedDetails: boolean[] = [];
+watch(open, async (visible) => {
+  if (!visible) { expandedDetails = Array.from(body.value?.querySelectorAll('details') ?? [], detail => detail.open); return; }
+  await nextTick();
+  if (open.value) body.value?.querySelectorAll('details').forEach((detail, index) => { detail.open = expandedDetails[index] ?? false; });
+});
 let timer: ReturnType<typeof setTimeout> | undefined;
 const clear = () => { if (timer) clearTimeout(timer); };
 const show = () => { clear(); open.value = true; };
@@ -19,7 +25,7 @@ onBeforeUnmount(() => { clear(); document.removeEventListener('pointerdown', out
   <span ref="host" class="tuning-info-host">
     <el-popover :visible="open" :width="width" placement="bottom-start" popper-class="tuning-info-popover" :show-after="0">
       <template #reference><button type="button" class="tuning-info-button" :class="{'text-trigger':triggerText != null}" :aria-label="label" :aria-expanded="open" @mouseenter="show" @mouseleave="leave" @focus="show" @blur="leave" @click="toggle">{{ triggerText ?? 'i' }}</button></template>
-      <div ref="body" class="tuning-info-body" @mouseenter="show" @mouseleave="leave" @focusin="show" @focusout="leave">
+      <div v-if="open" ref="body" class="tuning-info-body" @mouseenter="show" @mouseleave="leave" @focusin="show" @focusout="leave">
         <header><b>{{ label }}</b><button type="button" aria-label="关闭提示" @click="close">×</button></header>
         <slot />
         <small class="pin-hint">{{ pinned ? '已固定 · 点击外部或 Esc 关闭' : '点击可固定查看' }}</small>

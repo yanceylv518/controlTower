@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, toRaw, watch, type ComputedRef } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { ArrowLeft, ArrowRight, Clock } from "@element-plus/icons-vue";
 import { ApiError, type ChannelBaseValue, type ChannelSchedule, type ProbeCoverageWindow, type ProbeDispatchCounts, type TuningChannel, type TuningContinuousState, type TuningPolicy, type TuningRecommendation } from "@ct/shared";
@@ -33,6 +33,7 @@ const mobileRowCount = ref(20);
 const loading = ref(false), saving = ref(false), dirty = ref(false), activeTab = ref("overview"), helpOpen = ref(false);
 const mode = ref<"observe" | "confirm" | "auto">("observe");
 const bases = ref<ChannelBaseValue[]>([]), states = ref<TuningContinuousState[]>([]), events = ref<TuningRecommendation[]>([]);
+const eventsLoading = ref(false), eventsError = ref(''), eventsSite = ref('');
 const channels = ref<TuningChannel[]>([]);
 const channelDirectorySite = ref("");
 const channelDirectoryLoading = ref(false);
@@ -546,6 +547,21 @@ const channelDirectoryReady = computed(() => channelDirectorySite.value === site
 const baseRowsForModel = (model: string) => bases.value.filter(row =>
   row.model_name === model && (!channelDirectoryReady.value || channelDirectoryByID.value.get(row.channel_id)?.models.includes(model)),
 );
+// 关闭归属按渠道汇总，不能只取同渠道的第一个模型状态。
+const channelStateFlags = computed<Map<number, { manual: boolean; circuitClosed: boolean; firstTarget: number | undefined }>>(previous => {
+  const flags = new Map<number, { manual: boolean; circuitClosed: boolean; firstTarget: number | undefined }>();
+  if (statesSite.value !== siteID.value) return flags;
+  for (const state of states.value) {
+    let flag = flags.get(state.channel_id);
+    if (!flag) { flag = { manual: false, circuitClosed: false, firstTarget: state.circuit_status_target }; flags.set(state.channel_id, flag); }
+    flag.manual ||= state.paused_reason === 'manual_disabled';
+    flag.circuitClosed ||= !!state.circuit_disabled && state.circuit_status_target !== 2 && state.circuit_status_target !== 3;
+  }
+  return previous?.size === flags.size && [...flags].every(([id, flag]) => {
+    const old = previous.get(id);
+    return old?.manual === flag.manual && old.circuitClosed === flag.circuitClosed && old.firstTarget === flag.firstTarget;
+  }) ? previous : flags;
+});
 const isDirectoryOnlyRow = (row: ChannelDisplayRow): row is DirectoryOnlyChannelRow => "directoryOnly" in row;
 const normalizeChannelStatus = (value: string | number | undefined) => {
   const status = String(value ?? "").trim().toLowerCase();
@@ -556,16 +572,16 @@ const normalizeChannelStatus = (value: string | number | undefined) => {
 const channelStatusFor = (row: ChannelDisplayRow) => {
   const status = normalizeChannelStatus(isDirectoryOnlyRow(row) ? row.status : channelDirectoryByID.value.get(row.channel_id)?.status);
   if (status !== "disabled") return status;
-  if (statesSite.value === siteID.value && states.value.some(item => item.channel_id === row.channel_id && item.paused_reason === 'manual_disabled')) return "disabled";
+  if (channelStateFlags.value.get(row.channel_id)?.manual) return "disabled";
   const scheduleKnown = !schedulesError.value && schedulesSite.value === siteID.value;
   if (scheduleKnown && scheduleFor(row)?.closed_by_schedule) return "scheduled_disabled";
   // 待执行的禁用意图不能证明关闭由 CT 完成，归属检查覆盖同渠道的全部模型。
-  const circuitClosed = statesSite.value === siteID.value && states.value.some(item => item.channel_id === row.channel_id && item.circuit_disabled && item.circuit_status_target !== 2 && item.circuit_status_target !== 3);
+  const circuitClosed = channelStateFlags.value.get(row.channel_id)?.circuitClosed;
   return circuitClosed
     ? "auto_disabled" : scheduleKnown ? "disabled" : "closed_unknown";
 };
 const channelStatusLabels = { enabled: "已启用", disabled: "手动关闭", auto_disabled: "自动关闭", scheduled_disabled: "定时关闭", closed_unknown: "关闭来源待确认", unknown: "状态未知" };
-const manualChannelHeld = (row: ChannelDisplayRow) => statesSite.value === siteID.value && states.value.some(s => s.channel_id === row.channel_id && s.paused_reason === 'manual_disabled');
+const manualChannelHeld = (row: ChannelDisplayRow) => !!channelStateFlags.value.get(row.channel_id)?.manual;
 const manualChannelExcluded = (row: ChannelDisplayRow) => manualChannelHeld(row) || ['disabled','scheduled_disabled','closed_unknown'].includes(channelStatusFor(row));
 const closedChannelExplanation = (row: ChannelDisplayRow) => channelStatusFor(row) === 'scheduled_disabled'
   ? '定时关闭，等待下一个计划开启时点'
@@ -573,7 +589,7 @@ const closedChannelExplanation = (row: ChannelDisplayRow) => channelStatusFor(ro
 const channelStatusLabel = (row: ChannelDisplayRow) => manualChannelHeld(row) && channelStatusFor(row) !== 'disabled' ? '手动接管 · 关闭未确认' : channelStatusLabels[channelStatusFor(row)];
 const channelStatusBusy = reactive(new Set<string>());
 const channelStatusKey = (channel: number, site = siteID.value) => `${site}:${channel}`;
-const canManuallyClose = (row: ChannelDisplayRow) => ['enabled','auto_disabled','scheduled_disabled','closed_unknown'].includes(channelStatusFor(row)) || !!(statesSite.value === siteID.value && states.value.find(s=>s.channel_id===row.channel_id)?.circuit_status_target);
+const canManuallyClose = (row: ChannelDisplayRow) => ['enabled','auto_disabled','scheduled_disabled','closed_unknown'].includes(channelStatusFor(row)) || !!channelStateFlags.value.get(row.channel_id)?.firstTarget;
 const canManuallyOpen = (row: ChannelDisplayRow) => ['disabled','auto_disabled','scheduled_disabled','closed_unknown'].includes(channelStatusFor(row)) || manualChannelHeld(row);
 const channelStatusEditor = ref<{row:ChannelDisplayRow;site:string;generation:number;target:1|2|null}|null>(null);
 const channelStatusSaving = computed(() => {
@@ -654,12 +670,15 @@ const models = computed(() => {
 });
 const visibleModels = computed(() => models.value.filter(model => model.toLowerCase().includes(modelQuery.value.trim().toLowerCase())));
 const activeBaseRows = computed(() => baseRowsForModel(activeModel.value).sort((a, b) => b.current_priority - a.current_priority || b.current_weight - a.current_weight || a.channel_id - b.channel_id));
-const activeRows = computed<ChannelDisplayRow[]>(() => {
+const activeRows = computed<ChannelDisplayRow[]>(previous => {
   const rows: ChannelDisplayRow[] = [...activeBaseRows.value];
   const represented = new Set(activeBaseRows.value.map(row => row.channel_id));
+  const old = new Map(previous?.map(row => [channelRowKey(row), row]));
   for (const channel of currentChannels.value) {
     if (!channel.models.includes(activeModel.value) || represented.has(channel.channel_id)) continue;
-    rows.push({ ...channel, model_name: activeModel.value, current_weight: channel.weight, current_priority: channel.priority, directoryOnly: true });
+    const next: DirectoryOnlyChannelRow = { ...channel, model_name: activeModel.value, current_weight: channel.weight, current_priority: channel.priority, directoryOnly: true };
+    const current = old.get(`${channel.channel_id}:${activeModel.value}`);
+    rows.push(current && isDirectoryOnlyRow(current) ? reconcileSnapshot(current, next) : reactive(next));
   }
   return rows.sort((a, b) => b.current_priority - a.current_priority || b.current_weight - a.current_weight || a.channel_id - b.channel_id);
 });
@@ -712,9 +731,62 @@ const groupCellTitle = (value: string | null | undefined) => {
 };
 const stateMap = computed(() => new Map((statesSite.value === siteID.value ? states.value : []).map(x => [`${x.channel_id}:${x.model_name}`, x])));
 const stateFor = (row: ChannelDisplayRow) => isDirectoryOnlyRow(row) ? undefined : stateMap.value.get(`${row.channel_id}:${row.model_name}`);
+// 弱引用避免刷新替换行对象后积累旧快照，依赖变化由 computed 负责失效。
+function cachedRowValue<T>(calculate: (row: ChannelDisplayRow) => T) {
+  const values = new WeakMap<ChannelDisplayRow, ComputedRef<T>>();
+  return (row: ChannelDisplayRow) => {
+    let value = values.get(row);
+    if (!value) { value = computed(() => calculate(row)); values.set(row, value); }
+    return value.value;
+  };
+}
+function snapshotObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+// 只修改变化字段，避免相同快照替换整棵响应式对象而触发无关单元格。
+// 比较读取原始值，变更仍经代理写入，以保留响应性并避免多余依赖。
+function reconcileSnapshot<T>(previous: T | undefined, incoming: T): T {
+  if (Object.is(previous, incoming)) return incoming;
+  if (Array.isArray(previous) && Array.isArray(incoming)) {
+    const target: unknown[] = previous;
+    const raw = toRaw(target);
+    incoming.forEach((value, index) => {
+      const old = raw[index];
+      if (Object.is(old, toRaw(value)) && index in raw) return;
+      const next = reconcileSnapshot(old !== null && typeof old === 'object' ? target[index] : old, value);
+      if (!Object.is(old, toRaw(next)) || !(index in raw)) target[index] = next;
+    });
+    if (raw.length !== incoming.length) target.length = incoming.length;
+    return previous;
+  }
+  if (snapshotObject(previous) && snapshotObject(incoming)) {
+    const target: Record<string, unknown> = previous;
+    const raw = toRaw(target);
+    for (const key of Object.keys(raw)) if (!Object.hasOwn(incoming, key)) delete target[key];
+    for (const [key, value] of Object.entries(incoming)) {
+      const own = Object.hasOwn(raw, key), old = own ? raw[key] : undefined;
+      if (Object.is(old, toRaw(value)) && own) continue;
+      const next = reconcileSnapshot(old !== null && typeof old === 'object' ? target[key] : old, value);
+      if (Object.is(old, toRaw(next)) && own) continue;
+      if (key === '__proto__') Object.defineProperty(target, key, { value: next, writable: true, enumerable: true, configurable: true });
+      else target[key] = next;
+    }
+    return previous;
+  }
+  return incoming;
+}
+function reconcileRows<T>(previous: T[], incoming: T[], key: (row: T) => string) {
+  const index = new Map(previous.map(row => [key(row), row]));
+  const rows = incoming.map(row => {
+    const old = index.get(key(row));
+    return old ? reconcileSnapshot(old, row) : clone(row);
+  });
+  return rows.length === previous.length && rows.every((row, i) => row === previous[i]) ? previous : rows;
+}
 const acceptProbeCoverage = (site: string, value?: ProbeCoverageWindow) => {
+  const previous = probeCoverageSite.value === site ? probeCoverage.value : undefined;
   probeCoverageSite.value = site;
-  probeCoverage.value = value;
+  probeCoverage.value = reconcileSnapshot(previous, value);
 };
 const probeCoverageCell = (row: ChannelDisplayRow) => {
   if ((savedPolicy.value?.continuous ?? policy.continuous).routine_probe_enabled === false) return { text: "常态探针已关闭", missed: false, lines: ["停止定时和错误加速探针，探针不参与普通调权；熔断后的恢复探测继续运行。历史记录可在渠道生命线查看。"] };
@@ -742,7 +814,7 @@ const acceptStates = (site: string, items: TuningContinuousState[]) => {
     refreshError.value = "评估状态暂时为空，正在显示上次成功结果";
     return;
   }
-  states.value = items;
+  states.value = reconcileRows(statesSite.value === site ? states.value : [], items, row => `${row.channel_id}:${row.model_name}`);
   statesSite.value = site;
   refreshError.value = "";
 };
@@ -822,7 +894,8 @@ const modelMode = (model: string) => policy.dispatch_modes[model] || "off";
 const modeText = (model: string) => ({ off: "已关闭", observe: "只观察", auto: "自动执行" }[modelMode(model)]);
 const modeType = (model: string) => modelMode(model) === "auto" ? "success" : modelMode(model) === "observe" ? "warning" : "info";
 const effectivePause = (s?: TuningContinuousState) => s?.paused_reason === "manual_override" ? "" : s?.paused_reason || "";
-const ruleParams = (s?: TuningContinuousState) => ({ ...defaults(), ...(s?.evaluation?.params ?? savedPolicy.value?.continuous ?? policy.continuous) });
+const ruleDefaults = defaults();
+const ruleParams = (s?: TuningContinuousState) => ({ ...ruleDefaults, ...(s?.evaluation?.params ?? savedPolicy.value?.continuous ?? policy.continuous) });
 const probeParticipates = (s?: TuningContinuousState) => !!s?.probe_speed?.ready && routineProbeEnabledFor(ruleParams(s), s?.channel_id) && ruleParams(s).probe_speed_exponent > 0;
 const phaseText = (s?: TuningContinuousState) => !s ? "等待首次评估" : effectivePause(s) === "write_failed" ? `本次写入失败，每${ruleParams(s).write_retry_seconds / 60}分钟重试，连续失败${ruleParams(s).write_max_attempts}次后${s.routine_circuit_latched ? "保留熔断保护并退避重试" : "结束本次任务并重新评估"}${s.last_write_error ? `：${s.last_write_error}` : ""}` : effectivePause(s) ? "安全保护已暂停" : s.capacity?.pending_command_id ? `权重 ${s.capacity.confirmed_weight} → ${s.capacity.pending_weight}，等待执行回执` : s.circuit_status_target ? (s.circuit_status_target === 1 ? "正在启用渠道，等待执行确认" : "正在禁用渠道，等待执行确认") : s.circuit_disabled ? `已禁用，${s.phase === "probing" ? "恢复检测中" : `下次检测 ${s.next_probe_at ? formatTime(s.next_probe_at) : "待定"}`}` : s.phase === "circuit" ? `已熔断，下次检测 ${s.next_probe_at ? formatTime(s.next_probe_at) : "待定"}` : s.phase === "probing" ? `恢复检测 ${s.probe_attempts || 0}/${policy.continuous.probe_count}` : s.phase === "soft_start" ? "恢复中（低权重运行）" : "运行正常";
 const phaseType = (s?: TuningContinuousState) => s?.phase === "circuit" ? "danger" : s?.phase === "probing" || s?.phase === "soft_start" || effectivePause(s) ? "warning" : "success";
@@ -1012,14 +1085,17 @@ const coefficientSpan = ({column}: {column: {property?: string}}) => {
   if (column.property?.startsWith('coefficient_')) return [0,0];
   return [1,1];
 };
-const displayedRows = computed<ChannelDisplayRow[]>(() => modelChannelRows.value.filter(row => {
+const displayedRows = computed<ChannelDisplayRow[]>(previous => {
+  const rows = modelChannelRows.value.filter(row => {
   if (scheduleOnly.value && !scheduleFor(row)) return false;
   const query = channelQuery.value.trim().toLowerCase();
   const idQuery = query.replace(/^#/, "");
   if (query && !(row.channel_name ?? "").toLowerCase().includes(query) && !(idQuery && String(row.channel_id).includes(idQuery))) return false;
   if (!matchesChannelGroup(row.group_name, selectedGroupName.value)) return false;
   return matchesChannelSwitchFilter(row);
-}));
+  });
+  return previous?.length === rows.length && rows.every((row, index) => row === previous[index]) ? previous : rows;
+});
 const priorityDrafts = reactive(new Map<number, number>());
 watch([activeModel, selectedGroupFilter, channelSwitchFilter, channelQuery, scheduleOnly], () => { mobileRowCount.value = 20; });
 watch(siteID, () => { mobileEditRow.value = null; mobileSaveOpen.value = false; mobileRowCount.value = 20; });
@@ -1138,6 +1214,16 @@ const executionWeightText = (row: ChannelDisplayRow): string => {
   return `本轮目标权重：${target}`;
 };
 
+const coefficientCells = cachedRowValue(row => ({
+  speed: coefficientCell(row, 'speed'), cache: coefficientCell(row, 'cache'),
+  otps: coefficientCell(row, 'otps'), error: coefficientCell(row, 'error'), probe: coefficientCell(row, 'probe'),
+}));
+const rowEvaluation = cachedRowValue(row => ({
+  calculated: calculatedWeight(row), empty: coefficientEmptyText(row), overall: overallEvaluationStatus(row), status: rowStatus(row),
+}));
+const probeCoverageView = cachedRowValue(probeCoverageCell);
+const factorExplanationView = cachedRowValue(factorExplanation);
+
 const eventResult = (row: TuningRecommendation) => ({ succeeded: "执行成功", failed: "执行失败", pending: "等待执行", delivered: "已下发，待确认", unknown: "结果未知", auto_executed: "结果未知", expired: "已过期", recorded: "已记录", approved: "已批准", rejected: "已拒绝" } as Record<string, string>)[row.status] || row.status || "—";
 const eventResultClass = (row: TuningRecommendation) => row.status === "failed" || row.status === "expired" ? "danger" : ["pending", "delivered", "unknown", "auto_executed"].includes(row.status) ? "warning" : "muted";
 const resetEventFilters = () => { eventModelFilter.value = ""; eventRuleFilter.value = ""; eventChannelQuery.value = ""; eventDateRange.value = null; eventPage.value = 1; };
@@ -1154,8 +1240,8 @@ const hasPolicyDraft = () => !savedPolicy.value || mode.value !== savedMode.valu
 const normalizePolicy = (value: TuningPolicy) => ({ ...clone(value), continuous: {...defaults(), ...value.continuous, routine_probe_channel_ids: [...(value.continuous?.routine_probe_channel_ids ?? [])]}, dispatch_modes: {...value.dispatch_modes} });
 const captureSavedState = () => {
   priorityDrafts.clear();
-  savedBases.value = clone(bases.value);
-  savedPolicy.value = clone(policy);
+  savedBases.value = reconcileRows(savedBases.value, bases.value, channelRowKey);
+  savedPolicy.value = reconcileSnapshot(savedPolicy.value ?? undefined, clone(policy));
   savedMode.value = mode.value;
 };
 const cancelChanges = (notify = true) => {
@@ -1178,12 +1264,70 @@ const selectModel = (model: string) => {
 };
 
 let loadingSite = "", loadGeneration = 0;
+function createRefreshQueue(work: (site: string, load: number, signal: AbortSignal) => Promise<boolean>) {
+  type Pending = { promise: Promise<boolean>; resolve: (value: boolean | PromiseLike<boolean>) => void };
+  type Request = { site: string; load: number; abort: AbortController; promise: Promise<boolean>; pending?: Pending };
+  let current: Request | undefined;
+  const cancel = () => { current?.abort.abort(); current?.pending?.resolve(false); current = undefined; };
+  const run = (site = siteID.value): Promise<boolean> => {
+    if (!site || site !== siteID.value) return Promise.resolve(false);
+    if (current && (current.site !== site || current.load !== loadGeneration)) cancel();
+    if (current) {
+      if (!current.pending) {
+        let resolve!: Pending['resolve'];
+        const promise = new Promise<boolean>(complete => { resolve = complete; });
+        current.pending = { promise, resolve };
+      }
+      return current.pending.promise;
+    }
+    const abort = new AbortController(), load = loadGeneration;
+    // 单轮读取不能永久占住刷新入口；预算覆盖服务端默认30秒读取超时。
+    const timeout = setTimeout(() => abort.abort(), 45000);
+    const promise = work(site, load, abort.signal);
+    const request: Request = { site, load, abort, promise };
+    current = request;
+    request.promise = promise.finally(() => {
+      abort.abort();
+      clearTimeout(timeout);
+      if (current !== request) return;
+      current = undefined;
+      if (request.pending) request.pending.resolve(site === siteID.value && load === loadGeneration ? run(site) : false);
+    });
+    return request.promise;
+  };
+  return { run, cancel };
+}
+const runtimeQueue = createRefreshQueue(performRuntimeRefresh);
+const eventsQueue = createRefreshQueue(async (site, load, signal) => {
+  eventsLoading.value = true;
+  try {
+    const result = await dashboard.tuningRecommendations(site, 300, undefined, signal);
+    if (site !== siteID.value || load !== loadGeneration) return false;
+    events.value = result.items ?? []; eventsSite.value = site; eventsError.value = '';
+    return true;
+  } catch (error) {
+    if (site === siteID.value && load === loadGeneration) eventsError.value = signal.aborted ? '变更记录读取超时，请重试' : error instanceof Error ? error.message : '变更记录读取失败';
+    return false;
+  } finally { if (site === siteID.value && load === loadGeneration) eventsLoading.value = false; }
+});
+const loadEvents = () => eventsQueue.run();
+function readEventsForRefresh(signal: AbortSignal) {
+  const result = loadEvents();
+  return new Promise<boolean>((resolve, reject) => {
+    const interrupted = () => resolve(false);
+    signal.addEventListener('abort', interrupted, { once: true });
+    if (signal.aborted) interrupted();
+    result.then(value => { signal.removeEventListener('abort', interrupted); resolve(value); }, error => { signal.removeEventListener('abort', interrupted); reject(error); });
+  });
+}
 async function load(syncOnline = false) {
   await filters.loadInstances(); if (!siteID.value) return;
   const site = siteID.value;
   if (loading.value && loadingSite === site) return;
   loadingSite = site;
   const generation = ++loadGeneration;
+  runtimeQueue.cancel(); eventsQueue.cancel();
+  if (eventsSite.value !== site) { events.value = []; eventsSite.value = ''; eventsError.value = ''; eventsLoading.value = false; }
   runtimeRefreshGeneration++;
   loading.value = true;
   const groupGeneration = groupWriteGeneration;
@@ -1191,13 +1335,14 @@ async function load(syncOnline = false) {
   // Only cached page reads own the loading overlay. Live synchronization
   // continues independently and is merged after the overlay is released.
   const synced = syncOnline ? syncChannels(site, false) : Promise.resolve(false);
+  if (activeTab.value === 'events') void loadEvents();
   try {
-    const [p, b, r] = await Promise.all([dashboard.tuningPolicy(site), dashboard.tuningBaseValues(site), dashboard.tuningRecommendations(site, 300)]);
+    const [p, b] = await Promise.all([dashboard.tuningPolicy(site), dashboard.tuningBaseValues(site)]);
     if (!isCurrentLoad()) return;
     policyConflict.value = false; latestServerPolicy.value = null;
     probeSelectionSupported.value = typeof p.policy.continuous?.routine_probe_selected_only === 'boolean';
     mode.value = p.mode; Object.assign(policy, normalizePolicy(p.policy)); policy.continuous.max_increase_percent ??= 10; policy.dispatch_modes ||= {};
-    mergeOnlineRows(b.items ?? [], groupGeneration !== groupWriteGeneration); events.value = r.items ?? []; for (const model of models.value) policy.dispatch_modes[model] ||= "off";
+    mergeOnlineRows(b.items ?? [], groupGeneration !== groupWriteGeneration); for (const model of models.value) policy.dispatch_modes[model] ||= "off";
     if (!models.value.includes(activeModel.value)) activeModel.value = models.value[0] || "";
     void loadChannelDirectory(site);
     void loadGroupDirectory(site);
@@ -1248,7 +1393,7 @@ async function syncChannels(site: string, explicit: boolean): Promise<boolean> {
   }
 }
 // 分组编辑使用全渠道目录，不能复用只服务调权引擎的基础值列表。
-async function loadChannelDirectory(site: string) {
+async function loadChannelDirectory(site: string, signal?: AbortSignal) {
   void loadSchedules(site);
   const generation = ++channelDirectoryGeneration;
   const groupGeneration = groupWriteGeneration;
@@ -1260,7 +1405,7 @@ async function loadChannelDirectory(site: string) {
   }
   if (site === siteID.value) channelDirectoryLoading.value = true;
   try {
-    const result = await dashboard.tuningChannels(site);
+    const result = await dashboard.tuningChannels(site, signal);
     if (site !== siteID.value || generation !== channelDirectoryGeneration) return;
     let items = result.items ?? [];
     // 目录请求可能早于分组保存开始；避免它的旧快照覆盖已确认的本地结果。
@@ -1269,7 +1414,7 @@ async function loadChannelDirectory(site: string) {
       for (const row of bases.value) localGroups.set(row.channel_id, row.group_name);
       items = items.map(row => localGroups.has(row.channel_id) ? { ...row, group_name: localGroups.get(row.channel_id)! } : row);
     }
-    channels.value = items;
+    channels.value = reconcileRows(channelDirectorySite.value === site ? channels.value : [], items, row => String(row.channel_id));
     channelDirectorySite.value = site;
     for (const model of models.value) policy.dispatch_modes[model] ||= "off";
     if (!models.value.includes(activeModel.value)) activeModel.value = models.value[0] || "";
@@ -1471,11 +1616,12 @@ function mergeOnlineRows(refreshed: ChannelBaseValue[], preserveConfirmedGroups 
   // The saved baseline always tracks the server: cancelling unsaved edits must
   // restore the latest persisted base values and keep the online columns that
   // arrived while editing, not roll them back to the last load.
-  savedBases.value = clone(merged);
-  bases.value = merged.map(row => {
+  savedBases.value = reconcileRows(savedBases.value, merged, channelRowKey);
+  const editedRows = merged.map(row => {
     const edited = local.get(`${row.channel_id}:${row.model_name}`);
     return dirty.value && edited ? { ...row, base_weight: edited.base_weight, base_priority: edited.base_priority, max_rpm: edited.max_rpm, max_tpm: edited.max_tpm } : row;
   });
+  bases.value = reconcileRows(bases.value, editedRows, channelRowKey);
   for (const model of models.value) policy.dispatch_modes[model] ||= "off";
   if (!models.value.includes(activeModel.value)) activeModel.value = models.value[0] || "";
 }
@@ -1506,19 +1652,22 @@ async function watchChannelChanges() {
     }
   }
 }
-async function refreshRuntime() {
+function refreshRuntime() {
+  if (!siteID.value || loading.value || saving.value) return Promise.resolve(false);
+  return runtimeQueue.run();
+}
+async function performRuntimeRefresh(site: string, loadAtStart: number, signal: AbortSignal) {
   if (!siteID.value || loading.value || saving.value) return false;
-  const site = siteID.value;
   const generation = ++runtimeRefreshGeneration;
-  const loadAtStart = loadGeneration;
   const groupGeneration = groupWriteGeneration;
   // A newer pending poll must not invalidate completed data: otherwise
   // responses slower than the 30-second polling interval never reach the UI.
   const canApply = () => generation > runtimeSettledGeneration && loadAtStart === loadGeneration && site === siteID.value && !loading.value && !saving.value;
   refreshNow.value = Date.now();
   try {
-    const [s, r, b, p] = await Promise.all([dashboard.tuningContinuousStates(site), dashboard.tuningRecommendations(site, 300), dashboard.tuningBaseValues(site), dashboard.tuningPolicy(site)]);
+    const [s, b, p, recordsOK] = await Promise.all([dashboard.tuningContinuousStates(site, signal), dashboard.tuningBaseValues(site, undefined, signal), dashboard.tuningPolicy(site, signal), activeTab.value === 'events' ? readEventsForRefresh(signal) : Promise.resolve(true)]);
     if (!canApply()) return false;
+    if (signal.aborted) { refreshError.value = '刷新超时，请重试'; return false; }
     runtimeSettledGeneration = generation;
     const incomingPolicy = normalizePolicy(p.policy);
     probeSelectionSupported.value = typeof p.policy.continuous?.routine_probe_selected_only === 'boolean';
@@ -1530,18 +1679,18 @@ async function refreshRuntime() {
       savedPolicy.value = clone(policy); savedMode.value = p.mode;
       policyConflict.value = false;
     }
-    acceptStates(site, s.items ?? []); events.value = r.items ?? [];
+    acceptStates(site, s.items ?? []);
     acceptProbeCoverage(site, s.probe_coverage);
     mergeOnlineRows(b.items ?? [], groupGeneration !== groupWriteGeneration);
-    void loadChannelDirectory(site);
     for (const model of models.value) policy.dispatch_modes[model] ||= "off";
     if (!models.value.includes(activeModel.value)) activeModel.value = models.value[0] || "";
     if (!dirty.value) captureSavedState();
-    return true;
+    await loadChannelDirectory(site, signal);
+    return recordsOK && site === siteID.value && loadAtStart === loadGeneration && !signal.aborted;
   } catch (error) {
     if (canApply()) {
       runtimeSettledGeneration = generation;
-      refreshError.value = error instanceof Error ? error.message : "刷新失败";
+      refreshError.value = signal.aborted ? '刷新超时，请重试' : error instanceof Error ? error.message : "刷新失败";
     }
   }
   return false;
@@ -1678,8 +1827,9 @@ async function save() {
 watch(() => filters.site_id, () => { probeSelectionSupported.value = false; channelStatusEditor.value = null; groupDialogOpen.value = false; groupManagerOpen.value = false; groupFilterOpen.value = false; selectedGroupFilter.value = null; channelQuery.value = ""; channelSwitchFilter.value = "active"; cancelGroupPolls(); channels.value = []; channelDirectorySite.value = ""; channelDirectoryLoading.value = false; availableGroups.value = []; pendingGroups.value = new Map(); groupErrors.value = new Map(); channelDirectoryGeneration++; groupDirectoryGeneration++; void load(true); void watchChannelChanges(); });
 watch(siteID, () => { ratesReady.value = false; ratesError.value = ""; currentRates.value.clear(); void refreshCurrentRates(); });
 watch([eventModelFilter, eventRuleFilter, eventChannelQuery, eventDateRange, activeModel], () => { eventPage.value = 1; });
+watch(activeTab, tab => { if (tab === 'events') void loadEvents(); });
 onMounted(() => { void load(true); void watchChannelChanges(); void refreshCurrentRates(); refreshTimer = setInterval(() => void refreshRuntime(), 30000); ratesTimer = setInterval(() => { if (!document.hidden) void refreshCurrentRates(); }, 5000); });
-onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPolls(); if (refreshTimer) clearInterval(refreshTimer); if (ratesTimer) clearInterval(ratesTimer); });
+onBeforeUnmount(() => { loadGeneration++; runtimeQueue.cancel(); eventsQueue.cancel(); changesAbort?.abort(); cancelGroupPolls(); if (refreshTimer) clearInterval(refreshTimer); if (ratesTimer) clearInterval(ratesTimer); });
 </script>
 
 <template><AppShell title="调权中心" class="tuning-shell" :before-site-change="beforeSiteChange"><template #tools><div v-if="!mobile" class="tuning-header-actions"><span v-if="dirty" class="unsaved-status" role="status">有未保存更改</span><el-button v-if="dirty" :disabled="saving" @click="cancelChanges()">取消更改</el-button><el-button type="primary" :disabled="!dirty || loading || !siteID" :loading="saving" @click="save">保存更改</el-button></div></template><div ref="pageElement" v-loading="loading" class="page" :class="{'events-page':activeTab==='events', 'compact-layout':compactLayout}">
@@ -1760,17 +1910,17 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
               </div>
               <el-empty v-if="!displayedRows.length" description="没有匹配渠道" />
               <article v-for="row in displayedRows.slice(0,mobileRowCount)" :key="channelRowKey(row)" class="mobile-tuning-card">
-                <header><b>{{ row.channel_name }} <small>#{{ row.channel_id }}</small><button type="button" class="channel-switch-badge channel-status-trigger" :class="channelStatusClass(row)" :title="`${channelStatusTitle(row)} · 点击修改状态`" :aria-label="`修改渠道 #${row.channel_id} 状态：${channelStatusLabel(row)}`" :disabled="saving || loading || channelStatusBusy.has(channelStatusKey(row.channel_id)) || (!canManuallyClose(row) && !canManuallyOpen(row))" @click="openChannelStatus(row)">{{ channelStatusBusy.has(channelStatusKey(row.channel_id)) ? '处理中…' : channelStatusLabel(row) }}<span aria-hidden="true">⌄</span></button></b><span :class="rowStatus(row).kind">{{ rowStatus(row).label || '参与评估' }}</span></header>
+                <header><b>{{ row.channel_name }} <small>#{{ row.channel_id }}</small><button type="button" class="channel-switch-badge channel-status-trigger" :class="channelStatusClass(row)" :title="`${channelStatusTitle(row)} · 点击修改状态`" :aria-label="`修改渠道 #${row.channel_id} 状态：${channelStatusLabel(row)}`" :disabled="saving || loading || channelStatusBusy.has(channelStatusKey(row.channel_id)) || (!canManuallyClose(row) && !canManuallyOpen(row))" @click="openChannelStatus(row)">{{ channelStatusBusy.has(channelStatusKey(row.channel_id)) ? '处理中…' : channelStatusLabel(row) }}<span aria-hidden="true">⌄</span></button></b><span :class="rowEvaluation(row).status.kind">{{ rowEvaluation(row).status.label || '参与评估' }}</span></header>
 
                 <button class="priority-line" type="button" :disabled="saving || isDirectoryOnlyRow(row) || priorityLocked(row)" @click="openMobileEdit(row)"><span>线上优先级 <b>{{ row.current_priority }}</b><small v-if="priorityDrafts.has(row.channel_id)"> → {{ displayedPriority(row) }} 待保存</small></span><span>{{ isDirectoryOnlyRow(row) ? '只读' : '编辑 ›' }}</span></button>
                 <button class="mobile-groups" type="button" :disabled="groupSaving" @click="openGroupEditor(groupEditorRowFor(row))"><span>分组</span><span class="group-tags"><span v-for="group in visibleChannelGroups(row.group_name)" :key="group">{{ group }}</span><span v-if="hiddenChannelGroupCount(row.group_name)">+{{ hiddenChannelGroupCount(row.group_name) }}</span><span v-if="!row.group_name">未设置</span></span><span>编辑 ›</span></button>
                 <p v-if="pendingGroups.has(row.channel_id) || groupErrors.has(row.channel_id)" class="warning">{{ groupErrors.get(row.channel_id) || '分组等待执行' }}</p>
                 <button class="mobile-groups mobile-schedule" type="button" :aria-label="row.channel_name + ' 定时启停'" @click="openSchedule(row)"><span>定时</span><span class="mobile-schedule-value" :class="scheduleFor(row) ? scheduleChipClass(row) : 'is-off'">{{ scheduleLabel(row) }}<small v-if="scheduleFor(row)?.enabled && scheduleFor(row)?.next_at"> · {{ scheduleFor(row)?.next_status === 1 ? '开启' : '关闭' }} {{ scheduleTime(scheduleFor(row)!.next_at!) }}</small></span><span>{{ scheduleFor(row) ? '编辑 ›' : '设置 ›' }}</span></button>
                 <p v-if="scheduleNeedsAttention(scheduleFor(row))" class="schedule-row-result" :class="`is-${scheduleTone(scheduleFor(row)?.execution)}`">{{ scheduleResult(scheduleFor(row)?.execution) }}<span v-if="scheduleFor(row)?.execution?.error"> · {{ scheduleFor(row)?.execution?.error }}</span></p>
-                <dl class="mobile-weight-grid"><div><dt>基础权重</dt><dd>{{ isDirectoryOnlyRow(row) ? '—' : row.base_weight }}</dd></div><div><dt>计算参考</dt><dd>{{ calculatedWeight(row) ?? '—' }}</dd></div><div><dt>线上权重</dt><dd>{{ row.current_weight }}</dd></div></dl>
+                <dl class="mobile-weight-grid"><div><dt>基础权重</dt><dd>{{ isDirectoryOnlyRow(row) ? '—' : row.base_weight }}</dd></div><div><dt>计算参考</dt><dd>{{ rowEvaluation(row).calculated ?? '—' }}</dd></div><div><dt>线上权重</dt><dd>{{ row.current_weight }}</dd></div></dl>
                 <div v-if="!isDirectoryOnlyRow(row)" class="mobile-capacity"><TuningCapacityMetric metric="TPM" :channel="row.channel_name" :model-value="row.max_tpm" :disabled="saving || loading || !siteID" :persist="value => saveCapacity(row, 'max_tpm', value)" :current="currentRateFor(row)?.tpm" :modified="fieldChanged(row,'max_tpm')"/><TuningCapacityMetric metric="RPM" :channel="row.channel_name" :model-value="row.max_rpm" :disabled="saving || loading || !siteID" :persist="value => saveCapacity(row, 'max_rpm', value)" :current="currentRateFor(row)?.rpm" :modified="fieldChanged(row,'max_rpm')"/></div><div v-else class="mobile-capacity read-only-capacity">TPM — · RPM —</div>
-                <details><summary>{{ probeCoverageCell(row).text }}</summary><p v-for="line in probeCoverageCell(row).lines" :key="line">{{ line }}</p></details>
-                <details><summary>查看计算与状态</summary><p>{{ evaluationText(row) }}</p><p>{{ executionWeightText(row) }}</p><p v-if="limitReason(row)">{{ limitReason(row) }}</p><pre>{{ factorExplanation(row) }}</pre></details>
+                <details><summary>{{ probeCoverageView(row).text }}</summary><p v-for="line in probeCoverageView(row).lines" :key="line">{{ line }}</p></details>
+                <details><summary>查看计算与状态</summary><p>{{ evaluationText(row) }}</p><p>{{ executionWeightText(row) }}</p><p v-if="limitReason(row)">{{ limitReason(row) }}</p><pre>{{ factorExplanationView(row) }}</pre></details>
                 <el-button v-if="!isDirectoryOnlyRow(row)" type="primary" plain :disabled="saving" @click="mobileEditRow = row">编辑基础值与优先级</el-button>
               </article>
               <ScrollLoadMore :loading="loading" :has-more="mobileRowCount < displayedRows.length" @load="mobileRowCount += 20" />
@@ -1787,17 +1937,17 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
               <el-table-column label="评估系数" align="center">
                 <el-table-column v-for="metric in coefficientColumns" :key="metric.key" :prop="'coefficient_' + metric.key" :label="metric.label" :width="tableColumns.factor" align="center" class-name="coefficient-merged"><template #default="{row}">
                   <div v-if="metric.key === 'speed'" class="coefficient-group">
-                    <div v-if="!coefficientEmptyText(row)" class="coefficient-values"><div v-for="item in coefficientColumns" :key="item.key" class="coefficient-cell" :title="coefficientCell(row, item.key).detail"><b v-if="item.key !== 'speed' || coefficientCell(row, item.key).value != null || !coefficientCell(row, item.key).status" :class="{'factor-up':(coefficientCell(row, item.key).value ?? 1)>1,'factor-down':(coefficientCell(row, item.key).value ?? 1)<1}">{{ coefficientCell(row, item.key).value == null ? '—' : factor(coefficientCell(row, item.key).value!) }}<el-tooltip v-if="item.key === 'speed' && coefficientCell(row, item.key).status === '输出替代'" content="TTFT 样本或基线不足，本轮使用输出速度系数替代。" placement="top"><span class="output-fallback-icon" tabindex="0" role="img" aria-label="输出替代：TTFT 样本或基线不足，本轮使用输出速度系数"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 5h10m-3-3 3 3-3 3M13 11H3m3-3-3 3 3 3"/></svg></span></el-tooltip></b><small v-if="item.key === 'speed' && !overallEvaluationStatus(row) && coefficientCell(row, item.key).status && coefficientCell(row, item.key).status !== 'TTFT 有效' && coefficientCell(row, item.key).status !== '输出替代'">{{ coefficientCell(row, item.key).status }}</small></div></div>
-                    <div v-if="overallEvaluationStatus(row)" class="coefficient-overall" :class="[rowStatus(row).kind, {'only-status':!!coefficientEmptyText(row)}]" :title="evaluationText(row)">{{ coefficientEmptyText(row) || overallEvaluationStatus(row) }}</div>
+                    <div v-if="!rowEvaluation(row).empty" class="coefficient-values"><div v-for="item in coefficientColumns" :key="item.key" class="coefficient-cell" :title="coefficientCells(row)[item.key].detail"><b v-if="item.key !== 'speed' || coefficientCells(row)[item.key].value != null || !coefficientCells(row)[item.key].status" :class="{'factor-up':(coefficientCells(row)[item.key].value ?? 1)>1,'factor-down':(coefficientCells(row)[item.key].value ?? 1)<1}">{{ coefficientCells(row)[item.key].value == null ? '—' : factor(coefficientCells(row)[item.key].value!) }}<el-tooltip v-if="item.key === 'speed' && coefficientCells(row)[item.key].status === '输出替代'" content="TTFT 样本或基线不足，本轮使用输出速度系数替代。" placement="top"><span class="output-fallback-icon" tabindex="0" role="img" aria-label="输出替代：TTFT 样本或基线不足，本轮使用输出速度系数"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 5h10m-3-3 3 3-3 3M13 11H3m3-3-3 3 3 3"/></svg></span></el-tooltip></b><small v-if="item.key === 'speed' && !rowEvaluation(row).overall && coefficientCells(row)[item.key].status && coefficientCells(row)[item.key].status !== 'TTFT 有效' && coefficientCells(row)[item.key].status !== '输出替代'">{{ coefficientCells(row)[item.key].status }}</small></div></div>
+                    <div v-if="rowEvaluation(row).overall" class="coefficient-overall" :class="[rowEvaluation(row).status.kind, {'only-status':!!rowEvaluation(row).empty}]" :title="evaluationText(row)">{{ rowEvaluation(row).empty || rowEvaluation(row).overall }}</div>
                     <span class="coefficient-samples" :title="'本轮评估窗口请求数；最低要求 ' + (savedPolicy?.continuous.min_samples ?? policy.continuous.min_samples) + ' 条'">样本 <b>{{ sampleText(row) }}</b></span>
-                    <div class="probe-coverage" :class="{warning:probeCoverageCell(row).missed}"><TuningInfo :trigger-text="probeCoverageCell(row).text" :label="'探针覆盖 · ' + row.channel_name" :width="440"><p v-for="line in probeCoverageCell(row).lines" :key="line">{{ line }}</p><router-link :to="{path:'/channel-lifeline',query:{channel_id:row.channel_id}}">查看渠道生命线</router-link></TuningInfo></div>
+                    <div class="probe-coverage" :class="{warning:probeCoverageView(row).missed}"><TuningInfo :trigger-text="probeCoverageView(row).text" :label="'探针覆盖 · ' + row.channel_name" :width="440"><p v-for="line in probeCoverageView(row).lines" :key="line">{{ line }}</p><router-link :to="{path:'/channel-lifeline',query:{channel_id:row.channel_id}}">查看渠道生命线</router-link></TuningInfo></div>
                   </div>
                 </template></el-table-column>
               </el-table-column>
               <el-table-column label="权重" align="center">
                 <el-table-column label="基础" :width="tableColumns.input" align="center"><template #default="{row}"><el-input-number v-if="!isDirectoryOnlyRow(row)" v-model="row.base_weight" :class="{modified:fieldChanged(row,'base_weight')}" :aria-label="row.channel_name + ' 基础权重'" :min="0" :controls="false" size="small" @change="dirty=true"/><span v-else class="tuning-readonly-value">—</span></template></el-table-column>
-                <el-table-column label="计算" :width="tableColumns.number" align="center"><template #default="{row}"><div class="weight-calculated"><TuningInfo v-if="!isDirectoryOnlyRow(row)" :trigger-text="String(calculatedWeight(row) ?? '—')" :class="{accent: calculatedWeight(row) !== null && calculatedWeight(row) !== row.current_weight}" :key="channelRowKey(row)" :label="'本轮计算 · ' + row.channel_name" :width="500">
-                    <template v-if="stateFor(row)"><p class="calculation-formula">{{ originalBase(row) }} × {{ factor(stateFor(row)?.k_speed) }} × {{ factor(stateFor(row)?.k_otps) }} × {{ factor(stateFor(row)?.k_cache) }} × {{ factor(stateFor(row)?.k_error) }} × {{ factor(probeParticipates(stateFor(row)) ? stateFor(row)?.probe_speed?.factor : 1) }}</p><p class="formula-caption">基础 × {{ speedLabel(row) }} × 输出 × 缓存 × 错误 × 探针</p><p>{{ evaluationText(row) }}</p><p v-if="displayedSpeedFactor(row) === null && calculatedWeight(row) !== null" class="formula-caption">参考值使用接口最近保留的系数；速度当前不可用于本轮评估，此处不代表本轮重新测得。</p><p v-if="speedLabel(row).includes('替代')">TTFT 不足，使用本轮 OTPS；输出系数参与两次。</p><div class="evidence-pairs"><span>窗口样本 <b>{{ sampleText(row) }}</b></span><span>TTFT 有效 <b>{{ stateFor(row)?.speed_sample_count ?? 0 }}</b></span><span>输出有效 <b>{{ stateFor(row)?.otps_sample_count ?? 0 }}</b></span><span>重试排除 <b>{{ stateFor(row)?.speed_retry_count ?? 0 }}</b></span></div><p>公式目标：<b>{{ calculatedWeight(row) ?? '—' }}</b><small>（按本轮参数快照与系数计算；缺少快照、窗口不足或基础权重为0时不展示，不代表会执行）</small></p><p><b>{{ executionWeightText(row) }}</b> · 线上权重：{{ row.current_weight }}</p><p v-if="fieldChanged(row, 'base_weight')" class="warning">基础值有未保存修改；本轮结果仍对应上次评估。</p><p v-if="limitReason(row)" class="limit-note">{{ limitReason(row) }}</p><details class="full-evidence"><summary>完整指标与计算依据</summary><pre class="factor-explanation">{{ factorExplanation(row) }}</pre></details></template><p v-else>等待首次评估，尚无计算数据。</p>
+                <el-table-column label="计算" :width="tableColumns.number" align="center"><template #default="{row}"><div class="weight-calculated"><TuningInfo v-if="!isDirectoryOnlyRow(row)" :trigger-text="String(rowEvaluation(row).calculated ?? '—')" :class="{accent: rowEvaluation(row).calculated !== null && rowEvaluation(row).calculated !== row.current_weight}" :key="channelRowKey(row)" :label="'本轮计算 · ' + row.channel_name" :width="500">
+                    <template v-if="stateFor(row)"><p class="calculation-formula">{{ originalBase(row) }} × {{ factor(stateFor(row)?.k_speed) }} × {{ factor(stateFor(row)?.k_otps) }} × {{ factor(stateFor(row)?.k_cache) }} × {{ factor(stateFor(row)?.k_error) }} × {{ factor(probeParticipates(stateFor(row)) ? stateFor(row)?.probe_speed?.factor : 1) }}</p><p class="formula-caption">基础 × {{ speedLabel(row) }} × 输出 × 缓存 × 错误 × 探针</p><p>{{ evaluationText(row) }}</p><p v-if="displayedSpeedFactor(row) === null && rowEvaluation(row).calculated !== null" class="formula-caption">参考值使用接口最近保留的系数；速度当前不可用于本轮评估，此处不代表本轮重新测得。</p><p v-if="speedLabel(row).includes('替代')">TTFT 不足，使用本轮 OTPS；输出系数参与两次。</p><div class="evidence-pairs"><span>窗口样本 <b>{{ sampleText(row) }}</b></span><span>TTFT 有效 <b>{{ stateFor(row)?.speed_sample_count ?? 0 }}</b></span><span>输出有效 <b>{{ stateFor(row)?.otps_sample_count ?? 0 }}</b></span><span>重试排除 <b>{{ stateFor(row)?.speed_retry_count ?? 0 }}</b></span></div><p>公式目标：<b>{{ rowEvaluation(row).calculated ?? '—' }}</b><small>（按本轮参数快照与系数计算；缺少快照、窗口不足或基础权重为0时不展示，不代表会执行）</small></p><p><b>{{ executionWeightText(row) }}</b> · 线上权重：{{ row.current_weight }}</p><p v-if="fieldChanged(row, 'base_weight')" class="warning">基础值有未保存修改；本轮结果仍对应上次评估。</p><p v-if="limitReason(row)" class="limit-note">{{ limitReason(row) }}</p><details class="full-evidence"><summary>完整指标与计算依据</summary><pre class="factor-explanation">{{ factorExplanationView(row) }}</pre></details></template><p v-else>等待首次评估，尚无计算数据。</p>
                   </TuningInfo><span v-else class="tuning-readonly-value">未参与调权</span><el-tooltip v-if="limitReason(row)" :content="limitReason(row)" placement="top"><button class="status-icon warning limit-icon" :aria-label="limitReason(row)"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 3h12M10 17V7m-4 4 4-4 4 4"/></svg></button></el-tooltip></div></template></el-table-column>
                 <el-table-column label="线上" :width="tableColumns.number" align="center"><template #default="{row}"><span class="current-weight">{{ row.current_weight }}</span></template></el-table-column>
               </el-table-column>
@@ -1828,9 +1978,10 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
        </el-dialog>
        <ChannelScheduleEditor ref="scheduleEditor" v-model="scheduleDialogOpen" :site="siteID" :channel="scheduleChannel" :state="scheduleState" @saved="scheduleSaved" />
      </el-tab-pane>
-    <el-tab-pane label="变更记录" name="events">
-      <div class="summary compact"><div><span>近 7 天自动调权</span><b>{{ eventCount(7,'weight_write') }}</b></div><div><span>近 7 天熔断</span><b>{{ eventCount(7,'circuit_opened') }}</b></div><div><span>近 7 天恢复</span><b>{{ eventCount(7,'circuit_recovered') }}</b></div><div><span>近 7 天人工接管</span><b>{{ eventCount(7,'manual_takeover') }}</b></div></div>
-      <el-card shadow="never" class="event-history-card">
+    <el-tab-pane label="变更记录" name="events" lazy>
+      <el-alert v-if="eventsError" :title="eventsError" type="warning" :closable="false"><el-button link :loading="eventsLoading" @click="loadEvents">重试</el-button></el-alert>
+      <div class="summary compact"><div><span>近 7 天自动调权</span><b>{{ eventsSite === siteID ? eventCount(7,'weight_write') : '—' }}</b></div><div><span>近 7 天熔断</span><b>{{ eventsSite === siteID ? eventCount(7,'circuit_opened') : '—' }}</b></div><div><span>近 7 天恢复</span><b>{{ eventsSite === siteID ? eventCount(7,'circuit_recovered') : '—' }}</b></div><div><span>近 7 天人工接管</span><b>{{ eventsSite === siteID ? eventCount(7,'manual_takeover') : '—' }}</b></div></div>
+      <el-card v-loading="eventsLoading" shadow="never" class="event-history-card">
         <div class="event-toolbar"><div class="event-filters">
             <el-select v-model="eventModelFilter" placeholder="模型" style="width:220px"><el-option label="全部模型" value=""/><el-option :label="`当前模型${activeModel ? `（${activeModel}）` : ''}`" value="__current__"/><el-option v-for="model in models" :key="model" :label="model" :value="model"/></el-select>
             <el-select v-model="eventRuleFilter" clearable placeholder="全部事件" style="width:170px"><el-option v-for="rule in eventRuleOptions" :key="rule" :label="eventName(rule)" :value="rule"/></el-select>
@@ -1846,10 +1997,10 @@ onBeforeUnmount(() => { loadGeneration++; changesAbort?.abort(); cancelGroupPoll
           <el-table-column label="详情" width="80"><template #default="{row}"><TuningInfo label="变更详情"><div class="event-detail"><p><b>{{ eventName(row.rule) }}</b> · {{ eventModel(row) }}</p><p>{{ row.channel_name }} · #{{ row.channel_id }}</p><p>权重 {{ row.current_weight }} → {{ row.proposed_weight }}</p><p>模式：{{ row.mode_at_creation==='auto'?'自动':row.mode_at_creation==='observe'?'观察':'关闭' }}</p><p>状态：{{ eventResult(row) }}</p><p>记录时间：{{ formatTime(row.created_at) }}</p><p v-if="row.outcome?.command_error">执行说明：{{ row.outcome.command_error }}</p><p v-if="row.outcome_at">结果时间：{{ formatTime(row.outcome_at) }}</p><details><summary>记录依据</summary><pre class="factor-explanation">{{ JSON.stringify(row.evidence, null, 2) }}</pre><pre v-if="row.outcome" class="factor-explanation">{{ JSON.stringify(row.outcome, null, 2) }}</pre></details></div></TuningInfo></template></el-table-column>
         </el-table></div>
         <div v-if="filteredEvents.length" class="event-footer"><el-pagination v-model:current-page="eventPage" v-model:page-size="eventPageSize" layout="total, sizes, prev, pager, next" :page-sizes="[20,50,100]" :total="filteredEvents.length"/></div>
-        <el-empty v-else description="当前筛选条件下暂无记录"/>
+        <el-empty v-else-if="eventsSite === siteID && !eventsLoading && !eventsError" description="当前筛选条件下暂无记录"/>
       </el-card>
     </el-tab-pane>
-<el-tab-pane label="规则设置" name="settings"><el-card shadow="never" class="settings-card"><template #header><div class="head"><div><b>规则设置</b><small>当前站点 · {{ siteID }}</small></div><el-button @click="helpOpen=true">使用说明</el-button></div></template><el-tabs v-model="settingsSection" class="settings-sections"><el-tab-pane label="基础评估" name="basic"><div class="settings-intro"><div><h3>基础评估</h3><p>样本与评估周期，决定每轮使用的数据范围。</p></div><TuningInfo label="系数如何参与计算"><p>速度 × 输出 × 缓存 × 错误 × 探针</p><p>TTFT 不足：输出² × 缓存 × 错误 × 探针</p><p>最终受综合倍率、容量保护及单次上调上限约束。</p></TuningInfo></div><el-form label-position="top" class="settings-form"><div class="params"><el-form-item label="评估窗口（分钟）"><el-input-number v-model="policy.continuous.window_minutes" :min="1" @change="dirty=true"/><small>每次计算使用最近多少分钟的指标</small></el-form-item><el-form-item label="每渠道最少请求数"><el-input-number v-model="policy.continuous.min_samples" :min="1" @change="dirty=true"/><small>低于此数量不参与本轮性能比较，错误历史仍参与可靠性计算</small></el-form-item><el-form-item label="单次上调上限（%）"><el-input-number v-model="policy.continuous.max_increase_percent" :min="1" :max="100" :step="1" :precision="0" @change="dirty=true"/><small>自动模式每轮最多按当前有效权重上调该比例（至少允许 +1），默认 10%；下调不受限制</small></el-form-item><el-form-item label="单次容量最大降幅（%）"><el-input-number v-model="policy.continuous.capacity_max_decrease_percent" :min="1" :max="100" :step="1" :precision="0" @change="dirty=true"/><small>持续超容量时，每轮最多按已确认权重降低该比例，默认25%；整数权重至少降1，最低权重使用运行规则配置。性能惩罚与熔断不受此项限制</small></el-form-item><el-form-item label="调整灵敏度 S"><el-input-number v-model="policy.continuous.sensitivity" :min=".1" :max="5" :step=".1" @change="dirty=true"/><small>放大或缩小渠道相对差异；1 为标准</small></el-form-item></div></el-form></el-tab-pane><el-tab-pane label="性能系数" name="performance"><div class="settings-intro"><div><h3>性能系数</h3><p>TTFT 不足时复用本轮输出系数；缓存保留原逻辑。</p></div><TuningInfo label="系数如何参与计算"><p>速度 × 输出 × 缓存 × 错误 × 探针</p><p>TTFT 不足：输出² × 缓存 × 错误 × 探针</p><p>最终受综合倍率、容量保护及单次上调上限约束。</p></TuningInfo></div><el-form label-position="top" class="settings-form"><div class="factor-matrix"><div class="factor-matrix-head"><span>指标</span><span>影响指数</span><span>系数下限</span><span>系数上限</span></div><div class="factor-matrix-row"><b>TTFT 速度</b><el-form-item label="速度影响指数 αs"><el-input-number v-model="policy.continuous.speed_exponent" :min=".01" :max="2" :step=".05" :precision="2" @change="dirty=true"/><small>速度差异进入幂运算的强度；默认 0.35</small></el-form-item><el-form-item label="速度系数下限 Ls"><el-input-number v-model="policy.continuous.speed_min_factor" :min=".01" :max="1" :step=".05" :precision="2" @change="dirty=true"/><small>慢渠道速度系数最低值；默认 0.75</small></el-form-item><el-form-item label="速度系数上限 Us"><el-input-number v-model="policy.continuous.speed_max_factor" :min="1" :max="3" :step=".05" :precision="2" @change="dirty=true"/><small>快渠道速度系数最高值；默认 1.25</small></el-form-item></div><div class="factor-matrix-row"><b>平均输出速度</b><el-form-item label="输出影响指数 αo"><el-input-number v-model="policy.continuous.otps_exponent" :min=".01" :max="2" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="输出系数下限 Lo"><el-input-number v-model="policy.continuous.otps_min_factor" :min=".01" :max="1" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="输出系数上限 Uo"><el-input-number v-model="policy.continuous.otps_max_factor" :min="1" :max="3" :step=".05" :precision="2" @change="dirty=true"/></el-form-item></div><div class="factor-matrix-row"><b>探针完整耗时</b><el-form-item label="探针影响指数 αp"><el-input-number v-model="policy.continuous.probe_speed_exponent" :min="0" :max="2" :step=".05" :precision="2" @change="dirty=true"/><small>默认0.25；0表示不参与调权，仍保留故障探测。要停止常态探针，请在运行规则 → 探针与恢复中关闭开关</small></el-form-item><el-form-item label="探针系数下限 Lp"><el-input-number v-model="policy.continuous.probe_speed_min_factor" :min=".01" :max="1" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="探针系数上限 Up"><el-input-number v-model="policy.continuous.probe_speed_max_factor" :min="1" :max="3" :step=".05" :precision="2" @change="dirty=true"/></el-form-item></div><div class="factor-matrix-row"><b>缓存</b><el-form-item label="缓存影响指数 αc"><el-input-number v-model="policy.continuous.cache_exponent" :min=".01" :max="2" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="缓存系数下限 Lc"><el-input-number v-model="policy.continuous.cache_min_factor" :min=".01" :max="1" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="缓存系数上限 Uc"><el-input-number v-model="policy.continuous.cache_max_factor" :min="1" :max="3" :step=".05" :precision="2" @change="dirty=true"/></el-form-item></div></div><h4 class="parameter-heading">综合倍率边界</h4><div class="params two-columns"><el-form-item label="综合倍率下限 Lm"><el-input-number v-model="policy.continuous.combined_min_factor" :min=".01" :max="1" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="综合倍率上限 Um"><el-input-number v-model="policy.continuous.combined_max_factor" :min="1" :max="5" :step=".05" :precision="2" @change="dirty=true"/></el-form-item></div><h4 class="parameter-heading">TTFT 分位权重</h4><div class="params"><el-form-item label="P50 占比 w50"><el-input-number v-model="policy.continuous.speed_p50_weight" :min="0" :max="1" :step=".05" :precision="2" @change="dirty=true"/><small>默认 0.50；三个占比之和必须为 1</small></el-form-item><el-form-item label="P90 占比 w90"><el-input-number v-model="policy.continuous.speed_p90_weight" :min="0" :max="1" :step=".05" :precision="2" @change="dirty=true"/><small>默认 0.30；三个占比之和必须为 1</small></el-form-item><el-form-item label="P95 占比 w95"><el-input-number v-model="policy.continuous.speed_p95_weight" :min="0" :max="1" :step=".05" :precision="2" @change="dirty=true"/><small>默认 0.20；三个占比之和必须为 1</small></el-form-item></div></el-form></el-tab-pane><el-tab-pane label="运行规则" name="business"><div class="settings-intro"><div><h3>运行规则</h3><p>按当前站点保存；各项默认值保持原行为。容量利用率使用小数，例如0.9表示90%；RPM/TPM仍按滚动60秒度量。</p></div></div><el-form label-position="top" class="settings-form"><section v-for="group in businessRuleGroups" :key="group"><h4>{{ group }}</h4><div class="params"><el-form-item v-if="group === '探针与恢复'" label="启用常态探针"><el-switch v-model="policy.continuous.routine_probe_enabled" aria-label="启用常态探针" @change="dirty=true"/><small>默认开启。关闭后停止定时及错误加速探针，历史探针样本也不参与普通调权；熔断后的恢复探测继续运行。保存后生效。</small></el-form-item><el-form-item v-if="group === '探针与恢复'" label="常态探针渠道范围" class="probe-selection"><el-radio-group v-model="policy.continuous.routine_probe_selected_only" :disabled="loading || saving || !probeSelectionSupported || !policy.continuous.routine_probe_enabled" @change="dirty=true"><el-radio :value="false">全部符合条件的渠道</el-radio><el-radio :value="true">仅指定渠道</el-radio></el-radio-group><el-cascader v-if="policy.continuous.routine_probe_selected_only" v-model="policy.continuous.routine_probe_channel_ids" :options="probeChannelOptions" :props="{multiple:true, emitPath:false}" filterable clearable collapse-tags collapse-tags-tooltip :max-collapse-tags="3" :show-all-levels="true" placeholder="先选模型，再选渠道；也可搜索模型、名称或 ID" aria-label="常态探针渠道" popper-class="probe-channel-cascader" :disabled="loading || saving || !probeSelectionSupported || !policy.continuous.routine_probe_enabled" @change="dirty=true"><template #default="{ data }"><span v-if="data.children" class="probe-model-option">{{ data.label }} <span>({{ data.children.filter((channel: ProbeChannelOption) => !channel.disabled).length }} 可选)</span></span><span v-else class="probe-channel-option"><span>{{ data.label }}</span><span class="probe-channel-meta">优先级 {{ data.priority ?? '—' }} · 线上权重 {{ data.weight ?? '—' }}</span><span v-if="data.statusLabel" class="probe-channel-meta">{{ data.statusLabel }}</span></span></template><template #suggestion-item="{ item }"><span class="probe-channel-option"><span>{{ item.text }}</span><span class="probe-channel-meta">优先级 {{ item.data.priority ?? '—' }} · 线上权重 {{ item.data.weight ?? '—' }}</span><span v-if="item.data.statusLabel" class="probe-channel-meta">{{ item.data.statusLabel }}</span></span></template></el-cascader><el-button v-if="policy.continuous.routine_probe_selected_only && selectedManualProbeChannelIDs.length" link type="primary" :disabled="loading || saving || !probeSelectionSupported || !policy.continuous.routine_probe_enabled" @click="removeManualProbeChannels">移除已选的手动关闭渠道（{{ selectedManualProbeChannelIDs.length }}）</el-button><small v-if="!probeSelectionSupported">当前服务端尚不支持渠道选择，请升级服务端后使用。</small><small v-else>保存后生效。仅指定渠道模式下，未选择任何渠道即停止全部常态探针；新增渠道不会自动加入。未选中的手动关闭渠道不显示；已选中的保留标签但不探测，可通过上方入口移除。选中渠道仍须满足自动模式、单模型等运行条件。未选渠道不发送定时或错误加速探针，探针数据不参与普通调权；熔断恢复探测不受影响。</small></el-form-item><el-form-item v-for="item in businessRuleFields.filter(field => field.group === group)" :key="item.key" :label="item.label"><el-input-number v-model="policy.continuous[item.key]" :min="item.min" :max="item.max" :step="item.step" :precision="item.step < 1 ? 2 : 0" @change="dirty=true"/><small>默认 {{ item.value }}<template v-if="item.key === 'channel_history_retention_days'"> 天；超期探针与直连操作记录自动清理</template></small></el-form-item></div></section></el-form></el-tab-pane><el-tab-pane label="错误率曲线" name="errors"><div class="settings-intro"><div><h3>错误率曲线</h3><p>错误率节点与惩罚系数之间采用线性插值。</p></div><TuningInfo label="系数如何参与计算"><p>速度 × 输出 × 缓存 × 错误 × 探针</p><p>TTFT 不足：输出² × 缓存 × 错误 × 探针</p><p>最终受综合倍率、容量保护及单次上调上限约束。</p></TuningInfo></div><el-form label-position="top" class="settings-form"><div class="params"><el-form-item label="健康错误率节点 E1"><el-input-number v-model="policy.continuous.error_healthy_rate" :min="0" :max="1" :step=".01" :precision="2" @change="dirty=true"/><small>此错误率以内系数为 1</small></el-form-item><el-form-item label="轻度错误率节点 E2"><el-input-number v-model="policy.continuous.error_degraded_rate" :min="0" :max="1" :step=".01" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="轻度错误系数 K2"><el-input-number v-model="policy.continuous.error_degraded_factor" :min=".01" :max=".99" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="严重错误率节点 E3"><el-input-number v-model="policy.continuous.error_poor_rate" :min="0" :max="1" :step=".01" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="严重错误系数 K3"><el-input-number v-model="policy.continuous.error_poor_factor" :min=".01" :max=".99" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="封底错误率节点 E4"><el-input-number v-model="policy.continuous.error_floor_rate" :min="0" :max="1" :step=".01" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="错误系数下限 Kmin"><el-input-number v-model="policy.continuous.error_min_factor" :min=".01" :max=".99" :step=".05" :precision="2" @change="dirty=true"/></el-form-item></div></el-form></el-tab-pane><el-tab-pane label="熔断与恢复" name="safety"><div class="settings-intro"><div><h3>熔断与恢复</h3><p>自动模式静默后主动探测，观察模式使用真实流量恢复。</p></div><TuningInfo label="系数如何参与计算"><p>速度 × 输出 × 缓存 × 错误 × 探针</p><p>TTFT 不足：输出² × 缓存 × 错误 × 探针</p><p>最终受综合倍率、容量保护及单次上调上限约束。</p></TuningInfo></div><el-form label-position="top" class="settings-form"><div class="params"><el-form-item label="启用批次快速熔断"><el-switch v-model="policy.continuous.fast_circuit_enabled" @change="dirty=true"/><small>直接检查每次 Agent 上报的渠道增量，不等待分钟桶稳定</small></el-form-item><el-form-item label="快速熔断最少请求数"><el-input-number v-model="policy.continuous.fast_circuit_min_samples" :min="1" :max="100000" @change="dirty=true"/><small>单次上报达到该请求数后才判断，默认 50</small></el-form-item><el-form-item label="快速熔断错误率"><el-input-number v-model="policy.continuous.fast_circuit_error_rate" :min=".01" :max="1" :step=".05" :precision="2" @change="dirty=true"/><small>非用户错误率达到阈值立即熔断，默认 50%</small></el-form-item><el-form-item label="熔断错误率"><el-input-number v-model="policy.continuous.circuit_error_rate" :min=".01" :max="1" :step=".01" @change="dirty=true"/><small>平滑渠道错误率达到此值才停止分流</small></el-form-item><el-form-item label="被动恢复错误率"><el-input-number v-model="policy.continuous.recovery_error_rate" :min="0" :max=".99" :step=".01" @change="dirty=true"/><small>观察模式降到此值后解除模拟熔断</small></el-form-item><el-form-item label="探针恢复阈值"><el-input-number v-model="policy.continuous.recovery_threshold" :min=".01" :max="1" :step=".01" @change="dirty=true"/><small>自动模式探针成功率×探针速度达到此值才恢复</small></el-form-item><el-form-item label="熔断静默期（分钟）"><el-input-number v-model="policy.continuous.silent_minutes" :min="1" @change="dirty=true"/><small>自动模式熔断后等待多久再开始探测</small></el-form-item><el-form-item label="探测时长保护"><small>恢复探测单次满 {{ policy.continuous.probe_timeout_seconds }} 秒未返回即计慢；累计 {{ policy.continuous.probe_slow_limit }} 次慢触发禁用，渠道错误不清零、健康成功清零。同渠道逐次探测，间隔 {{ policy.continuous.recovery_interval_seconds }} 秒；不同渠道并发执行。</small></el-form-item><el-form-item label="探测次数"><el-input-number v-model="policy.continuous.probe_count" :min="1" @change="dirty=true"/><small>一次恢复判断发送多少次请求</small></el-form-item><el-form-item label="恢复初始倍率"><el-input-number v-model="policy.continuous.soft_start_multiplier" :min=".01" :max="1" :step=".05" @change="dirty=true"/><small>恢复首轮使用基础权重的比例</small></el-form-item></div></el-form></el-tab-pane></el-tabs></el-card></el-tab-pane>
+<el-tab-pane label="规则设置" name="settings" lazy><el-card shadow="never" class="settings-card"><template #header><div class="head"><div><b>规则设置</b><small>当前站点 · {{ siteID }}</small></div><el-button @click="helpOpen=true">使用说明</el-button></div></template><el-tabs v-model="settingsSection" class="settings-sections"><el-tab-pane label="基础评估" name="basic" lazy><div class="settings-intro"><div><h3>基础评估</h3><p>样本与评估周期，决定每轮使用的数据范围。</p></div><TuningInfo label="系数如何参与计算"><p>速度 × 输出 × 缓存 × 错误 × 探针</p><p>TTFT 不足：输出² × 缓存 × 错误 × 探针</p><p>最终受综合倍率、容量保护及单次上调上限约束。</p></TuningInfo></div><el-form label-position="top" class="settings-form"><div class="params"><el-form-item label="评估窗口（分钟）"><el-input-number v-model="policy.continuous.window_minutes" :min="1" @change="dirty=true"/><small>每次计算使用最近多少分钟的指标</small></el-form-item><el-form-item label="每渠道最少请求数"><el-input-number v-model="policy.continuous.min_samples" :min="1" @change="dirty=true"/><small>低于此数量不参与本轮性能比较，错误历史仍参与可靠性计算</small></el-form-item><el-form-item label="单次上调上限（%）"><el-input-number v-model="policy.continuous.max_increase_percent" :min="1" :max="100" :step="1" :precision="0" @change="dirty=true"/><small>自动模式每轮最多按当前有效权重上调该比例（至少允许 +1），默认 10%；下调不受限制</small></el-form-item><el-form-item label="单次容量最大降幅（%）"><el-input-number v-model="policy.continuous.capacity_max_decrease_percent" :min="1" :max="100" :step="1" :precision="0" @change="dirty=true"/><small>持续超容量时，每轮最多按已确认权重降低该比例，默认25%；整数权重至少降1，最低权重使用运行规则配置。性能惩罚与熔断不受此项限制</small></el-form-item><el-form-item label="调整灵敏度 S"><el-input-number v-model="policy.continuous.sensitivity" :min=".1" :max="5" :step=".1" @change="dirty=true"/><small>放大或缩小渠道相对差异；1 为标准</small></el-form-item></div></el-form></el-tab-pane><el-tab-pane label="性能系数" name="performance" lazy><div class="settings-intro"><div><h3>性能系数</h3><p>TTFT 不足时复用本轮输出系数；缓存保留原逻辑。</p></div><TuningInfo label="系数如何参与计算"><p>速度 × 输出 × 缓存 × 错误 × 探针</p><p>TTFT 不足：输出² × 缓存 × 错误 × 探针</p><p>最终受综合倍率、容量保护及单次上调上限约束。</p></TuningInfo></div><el-form label-position="top" class="settings-form"><div class="factor-matrix"><div class="factor-matrix-head"><span>指标</span><span>影响指数</span><span>系数下限</span><span>系数上限</span></div><div class="factor-matrix-row"><b>TTFT 速度</b><el-form-item label="速度影响指数 αs"><el-input-number v-model="policy.continuous.speed_exponent" :min=".01" :max="2" :step=".05" :precision="2" @change="dirty=true"/><small>速度差异进入幂运算的强度；默认 0.35</small></el-form-item><el-form-item label="速度系数下限 Ls"><el-input-number v-model="policy.continuous.speed_min_factor" :min=".01" :max="1" :step=".05" :precision="2" @change="dirty=true"/><small>慢渠道速度系数最低值；默认 0.75</small></el-form-item><el-form-item label="速度系数上限 Us"><el-input-number v-model="policy.continuous.speed_max_factor" :min="1" :max="3" :step=".05" :precision="2" @change="dirty=true"/><small>快渠道速度系数最高值；默认 1.25</small></el-form-item></div><div class="factor-matrix-row"><b>平均输出速度</b><el-form-item label="输出影响指数 αo"><el-input-number v-model="policy.continuous.otps_exponent" :min=".01" :max="2" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="输出系数下限 Lo"><el-input-number v-model="policy.continuous.otps_min_factor" :min=".01" :max="1" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="输出系数上限 Uo"><el-input-number v-model="policy.continuous.otps_max_factor" :min="1" :max="3" :step=".05" :precision="2" @change="dirty=true"/></el-form-item></div><div class="factor-matrix-row"><b>探针完整耗时</b><el-form-item label="探针影响指数 αp"><el-input-number v-model="policy.continuous.probe_speed_exponent" :min="0" :max="2" :step=".05" :precision="2" @change="dirty=true"/><small>默认0.25；0表示不参与调权，仍保留故障探测。要停止常态探针，请在运行规则 → 探针与恢复中关闭开关</small></el-form-item><el-form-item label="探针系数下限 Lp"><el-input-number v-model="policy.continuous.probe_speed_min_factor" :min=".01" :max="1" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="探针系数上限 Up"><el-input-number v-model="policy.continuous.probe_speed_max_factor" :min="1" :max="3" :step=".05" :precision="2" @change="dirty=true"/></el-form-item></div><div class="factor-matrix-row"><b>缓存</b><el-form-item label="缓存影响指数 αc"><el-input-number v-model="policy.continuous.cache_exponent" :min=".01" :max="2" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="缓存系数下限 Lc"><el-input-number v-model="policy.continuous.cache_min_factor" :min=".01" :max="1" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="缓存系数上限 Uc"><el-input-number v-model="policy.continuous.cache_max_factor" :min="1" :max="3" :step=".05" :precision="2" @change="dirty=true"/></el-form-item></div></div><h4 class="parameter-heading">综合倍率边界</h4><div class="params two-columns"><el-form-item label="综合倍率下限 Lm"><el-input-number v-model="policy.continuous.combined_min_factor" :min=".01" :max="1" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="综合倍率上限 Um"><el-input-number v-model="policy.continuous.combined_max_factor" :min="1" :max="5" :step=".05" :precision="2" @change="dirty=true"/></el-form-item></div><h4 class="parameter-heading">TTFT 分位权重</h4><div class="params"><el-form-item label="P50 占比 w50"><el-input-number v-model="policy.continuous.speed_p50_weight" :min="0" :max="1" :step=".05" :precision="2" @change="dirty=true"/><small>默认 0.50；三个占比之和必须为 1</small></el-form-item><el-form-item label="P90 占比 w90"><el-input-number v-model="policy.continuous.speed_p90_weight" :min="0" :max="1" :step=".05" :precision="2" @change="dirty=true"/><small>默认 0.30；三个占比之和必须为 1</small></el-form-item><el-form-item label="P95 占比 w95"><el-input-number v-model="policy.continuous.speed_p95_weight" :min="0" :max="1" :step=".05" :precision="2" @change="dirty=true"/><small>默认 0.20；三个占比之和必须为 1</small></el-form-item></div></el-form></el-tab-pane><el-tab-pane label="运行规则" name="business" lazy><div class="settings-intro"><div><h3>运行规则</h3><p>按当前站点保存；各项默认值保持原行为。容量利用率使用小数，例如0.9表示90%；RPM/TPM仍按滚动60秒度量。</p></div></div><el-form label-position="top" class="settings-form"><section v-for="group in businessRuleGroups" :key="group"><h4>{{ group }}</h4><div class="params"><el-form-item v-if="group === '探针与恢复'" label="启用常态探针"><el-switch v-model="policy.continuous.routine_probe_enabled" aria-label="启用常态探针" @change="dirty=true"/><small>默认开启。关闭后停止定时及错误加速探针，历史探针样本也不参与普通调权；熔断后的恢复探测继续运行。保存后生效。</small></el-form-item><el-form-item v-if="group === '探针与恢复'" label="常态探针渠道范围" class="probe-selection"><el-radio-group v-model="policy.continuous.routine_probe_selected_only" :disabled="loading || saving || !probeSelectionSupported || !policy.continuous.routine_probe_enabled" @change="dirty=true"><el-radio :value="false">全部符合条件的渠道</el-radio><el-radio :value="true">仅指定渠道</el-radio></el-radio-group><el-cascader v-if="policy.continuous.routine_probe_selected_only" v-model="policy.continuous.routine_probe_channel_ids" :options="probeChannelOptions" :props="{multiple:true, emitPath:false}" filterable clearable collapse-tags collapse-tags-tooltip :max-collapse-tags="3" :show-all-levels="true" placeholder="先选模型，再选渠道；也可搜索模型、名称或 ID" aria-label="常态探针渠道" popper-class="probe-channel-cascader" :disabled="loading || saving || !probeSelectionSupported || !policy.continuous.routine_probe_enabled" @change="dirty=true"><template #default="{ data }"><span v-if="data.children" class="probe-model-option">{{ data.label }} <span>({{ data.children.filter((channel: ProbeChannelOption) => !channel.disabled).length }} 可选)</span></span><span v-else class="probe-channel-option"><span>{{ data.label }}</span><span class="probe-channel-meta">优先级 {{ data.priority ?? '—' }} · 线上权重 {{ data.weight ?? '—' }}</span><span v-if="data.statusLabel" class="probe-channel-meta">{{ data.statusLabel }}</span></span></template><template #suggestion-item="{ item }"><span class="probe-channel-option"><span>{{ item.text }}</span><span class="probe-channel-meta">优先级 {{ item.data.priority ?? '—' }} · 线上权重 {{ item.data.weight ?? '—' }}</span><span v-if="item.data.statusLabel" class="probe-channel-meta">{{ item.data.statusLabel }}</span></span></template></el-cascader><el-button v-if="policy.continuous.routine_probe_selected_only && selectedManualProbeChannelIDs.length" link type="primary" :disabled="loading || saving || !probeSelectionSupported || !policy.continuous.routine_probe_enabled" @click="removeManualProbeChannels">移除已选的手动关闭渠道（{{ selectedManualProbeChannelIDs.length }}）</el-button><small v-if="!probeSelectionSupported">当前服务端尚不支持渠道选择，请升级服务端后使用。</small><small v-else>保存后生效。仅指定渠道模式下，未选择任何渠道即停止全部常态探针；新增渠道不会自动加入。未选中的手动关闭渠道不显示；已选中的保留标签但不探测，可通过上方入口移除。选中渠道仍须满足自动模式、单模型等运行条件。未选渠道不发送定时或错误加速探针，探针数据不参与普通调权；熔断恢复探测不受影响。</small></el-form-item><el-form-item v-for="item in businessRuleFields.filter(field => field.group === group)" :key="item.key" :label="item.label"><el-input-number v-model="policy.continuous[item.key]" :min="item.min" :max="item.max" :step="item.step" :precision="item.step < 1 ? 2 : 0" @change="dirty=true"/><small>默认 {{ item.value }}<template v-if="item.key === 'channel_history_retention_days'"> 天；超期探针与直连操作记录自动清理</template></small></el-form-item></div></section></el-form></el-tab-pane><el-tab-pane label="错误率曲线" name="errors" lazy><div class="settings-intro"><div><h3>错误率曲线</h3><p>错误率节点与惩罚系数之间采用线性插值。</p></div><TuningInfo label="系数如何参与计算"><p>速度 × 输出 × 缓存 × 错误 × 探针</p><p>TTFT 不足：输出² × 缓存 × 错误 × 探针</p><p>最终受综合倍率、容量保护及单次上调上限约束。</p></TuningInfo></div><el-form label-position="top" class="settings-form"><div class="params"><el-form-item label="健康错误率节点 E1"><el-input-number v-model="policy.continuous.error_healthy_rate" :min="0" :max="1" :step=".01" :precision="2" @change="dirty=true"/><small>此错误率以内系数为 1</small></el-form-item><el-form-item label="轻度错误率节点 E2"><el-input-number v-model="policy.continuous.error_degraded_rate" :min="0" :max="1" :step=".01" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="轻度错误系数 K2"><el-input-number v-model="policy.continuous.error_degraded_factor" :min=".01" :max=".99" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="严重错误率节点 E3"><el-input-number v-model="policy.continuous.error_poor_rate" :min="0" :max="1" :step=".01" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="严重错误系数 K3"><el-input-number v-model="policy.continuous.error_poor_factor" :min=".01" :max=".99" :step=".05" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="封底错误率节点 E4"><el-input-number v-model="policy.continuous.error_floor_rate" :min="0" :max="1" :step=".01" :precision="2" @change="dirty=true"/></el-form-item><el-form-item label="错误系数下限 Kmin"><el-input-number v-model="policy.continuous.error_min_factor" :min=".01" :max=".99" :step=".05" :precision="2" @change="dirty=true"/></el-form-item></div></el-form></el-tab-pane><el-tab-pane label="熔断与恢复" name="safety" lazy><div class="settings-intro"><div><h3>熔断与恢复</h3><p>自动模式静默后主动探测，观察模式使用真实流量恢复。</p></div><TuningInfo label="系数如何参与计算"><p>速度 × 输出 × 缓存 × 错误 × 探针</p><p>TTFT 不足：输出² × 缓存 × 错误 × 探针</p><p>最终受综合倍率、容量保护及单次上调上限约束。</p></TuningInfo></div><el-form label-position="top" class="settings-form"><div class="params"><el-form-item label="启用批次快速熔断"><el-switch v-model="policy.continuous.fast_circuit_enabled" @change="dirty=true"/><small>直接检查每次 Agent 上报的渠道增量，不等待分钟桶稳定</small></el-form-item><el-form-item label="快速熔断最少请求数"><el-input-number v-model="policy.continuous.fast_circuit_min_samples" :min="1" :max="100000" @change="dirty=true"/><small>单次上报达到该请求数后才判断，默认 50</small></el-form-item><el-form-item label="快速熔断错误率"><el-input-number v-model="policy.continuous.fast_circuit_error_rate" :min=".01" :max="1" :step=".05" :precision="2" @change="dirty=true"/><small>非用户错误率达到阈值立即熔断，默认 50%</small></el-form-item><el-form-item label="熔断错误率"><el-input-number v-model="policy.continuous.circuit_error_rate" :min=".01" :max="1" :step=".01" @change="dirty=true"/><small>平滑渠道错误率达到此值才停止分流</small></el-form-item><el-form-item label="被动恢复错误率"><el-input-number v-model="policy.continuous.recovery_error_rate" :min="0" :max=".99" :step=".01" @change="dirty=true"/><small>观察模式降到此值后解除模拟熔断</small></el-form-item><el-form-item label="探针恢复阈值"><el-input-number v-model="policy.continuous.recovery_threshold" :min=".01" :max="1" :step=".01" @change="dirty=true"/><small>自动模式探针成功率×探针速度达到此值才恢复</small></el-form-item><el-form-item label="熔断静默期（分钟）"><el-input-number v-model="policy.continuous.silent_minutes" :min="1" @change="dirty=true"/><small>自动模式熔断后等待多久再开始探测</small></el-form-item><el-form-item label="探测时长保护"><small>恢复探测单次满 {{ policy.continuous.probe_timeout_seconds }} 秒未返回即计慢；累计 {{ policy.continuous.probe_slow_limit }} 次慢触发禁用，渠道错误不清零、健康成功清零。同渠道逐次探测，间隔 {{ policy.continuous.recovery_interval_seconds }} 秒；不同渠道并发执行。</small></el-form-item><el-form-item label="探测次数"><el-input-number v-model="policy.continuous.probe_count" :min="1" @change="dirty=true"/><small>一次恢复判断发送多少次请求</small></el-form-item><el-form-item label="恢复初始倍率"><el-input-number v-model="policy.continuous.soft_start_multiplier" :min=".01" :max="1" :step=".05" @change="dirty=true"/><small>恢复首轮使用基础权重的比例</small></el-form-item></div></el-form></el-tab-pane></el-tabs></el-card></el-tab-pane>
   </el-tabs></div>
   <div v-if="mobile && dirty" class="tuning-save-bar" role="status"><span><i/>有未保存更改<span class="save-context">基础值、容量与规则统一保存</span></span><div><el-button :disabled="saving" @click="cancelChanges()">取消更改</el-button><el-button type="primary" :loading="saving" :disabled="loading || !siteID" @click="mobileSaveOpen = true">预览更改</el-button></div></div>
   <MobileTuningEditor v-if="mobile && mobileEditRow" :row="mobileEditRow" :site="siteID" :priority="displayedPriority(mobileEditRow)" :priority-locked="priorityLocked(mobileEditRow)" @close="mobileEditRow = null" @apply="stageMobileEdit" />

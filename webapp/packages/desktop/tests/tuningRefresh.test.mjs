@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import ts from 'typescript'
-import { computed, reactive, ref } from 'vue'
+import { toRaw, computed, reactive, ref } from 'vue'
 
 // Exercise the actual page script with controlled API promises. Lifecycle
 // timers and unrelated components are excluded so request ordering is explicit.
@@ -366,6 +366,7 @@ class ApiError extends Error {
 }
 
 function page() {
+  const cleanup = []
   const filters = reactive({ site_id: 'a', loadInstances: async () => {} })
   const dashboard = {
     tuningPolicy: async () => ({ mode: 'observe', policy: { dispatch_modes: { m: 'auto' } } }),
@@ -375,15 +376,15 @@ function page() {
     tuningChannels: async () => { throw new Error('channel directory unavailable') },
     channelSchedules: async () => ({ items: [], direct_configured: true, worker_enabled: true }),
   }
-  const names = ['computed', 'reactive', 'ref', 'watch', 'onMounted', 'onBeforeUnmount', 'useFiltersStore', 'dashboard', 'formatTime', 'ApiError', 'ElMessage', 'ElMessageBox', 'useMobileViewport', 'hiddenChannelGroupCount', 'matchesChannelGroup', 'MAX_VISIBLE_CHANNEL_GROUPS', 'normalizeChannelGroups', 'splitChannelGroups', 'visibleChannelGroups']
-  const create = new Function(...names, `${compiled}\nreturn { selectedManualProbeChannelIDs, removeManualProbeChannels, probeChannelOptions, openChannelStatus, saveChannelStatus, channelStatusEditor, channelStatusSaving, canSaveChannelStatus, canManuallyClose, canManuallyOpen, manualChannelHeld, channelStatusBusy, probeCoverageCell, acceptProbeCoverage, phaseText, watchChannelChanges, stopWatching: () => changesAbort?.abort(), sync, save, savedPolicy, mode, policyConflict, factorExplanation, refreshCurrentRates, ratesError, saveCapacity, saving, mobileEditRow, stageMobileEdit, mobileChanges, mobilePriorityChanges, mobileRuleChanges, mobileSaveOpen, load, refreshRuntime, loadChannelDirectory, applyGroupLocally, acceptStates, stateFor, sampleText, evaluationText, states, refreshError, bases, channels, channelDirectorySite, channelDirectoryLoading, policy, channelQuery, channelSwitchFilter, selectedGroupFilter, toggleGroupFilter, selectedGroupName, displayedRows, activeRows, modelChannelRows, models, modelChannelCount, modelChannelCountLabel, activeModel, dirty, selectModel, fieldChanged, savedBases, originalBase, calculatedWeight, executionWeightText, displayedSpeedFactor, coefficientCell, overallEvaluationStatus, coefficientEmptyText, coefficientSpan, displayedPriority, editPriority, priorityLocked, cancelChanges, limitReason, currentRates, ratesReady, rowStatus, channelStatusFor, channelStatusLabel, isDirectoryOnlyRow, eventResult, eventResultClass, events, filteredEvents, eventDateRange, schedules, schedulesSite, schedulesError };`)
+  const names = ['toRaw', 'computed', 'reactive', 'ref', 'watch', 'onMounted', 'onBeforeUnmount', 'useFiltersStore', 'dashboard', 'formatTime', 'ApiError', 'ElMessage', 'ElMessageBox', 'useMobileViewport', 'hiddenChannelGroupCount', 'matchesChannelGroup', 'MAX_VISIBLE_CHANNEL_GROUPS', 'normalizeChannelGroups', 'splitChannelGroups', 'visibleChannelGroups']
+  const create = new Function(...names, `${compiled}\nreturn { activeTab, loadEvents, eventsLoading, eventsError, eventsSite, coefficientCells, rowEvaluation, probeCoverageView, factorExplanationView, selectedManualProbeChannelIDs, removeManualProbeChannels, probeChannelOptions, openChannelStatus, saveChannelStatus, channelStatusEditor, channelStatusSaving, canSaveChannelStatus, canManuallyClose, canManuallyOpen, manualChannelHeld, channelStatusBusy, probeCoverageCell, acceptProbeCoverage, phaseText, watchChannelChanges, stopWatching: () => changesAbort?.abort(), sync, save, savedPolicy, mode, policyConflict, factorExplanation, refreshCurrentRates, ratesError, saveCapacity, saving, mobileEditRow, stageMobileEdit, mobileChanges, mobilePriorityChanges, mobileRuleChanges, mobileSaveOpen, load, refreshRuntime, loadChannelDirectory, applyGroupLocally, acceptStates, stateFor, sampleText, evaluationText, states, refreshError, bases, channels, channelDirectorySite, channelDirectoryLoading, policy, channelQuery, channelSwitchFilter, selectedGroupFilter, toggleGroupFilter, selectedGroupName, displayedRows, activeRows, modelChannelRows, models, modelChannelCount, modelChannelCountLabel, activeModel, dirty, selectModel, fieldChanged, savedBases, originalBase, calculatedWeight, executionWeightText, displayedSpeedFactor, coefficientCell, overallEvaluationStatus, coefficientEmptyText, coefficientSpan, displayedPriority, editPriority, priorityLocked, cancelChanges, limitReason, currentRates, ratesReady, rowStatus, channelStatusFor, channelStatusLabel, isDirectoryOnlyRow, eventResult, eventResultClass, events, filteredEvents, eventDateRange, schedules, schedulesSite, schedulesError };`)
   const messages = []; const messageBox = {confirm: async () => {}};
-  const view = create(computed, reactive, ref, () => {}, () => {}, () => {}, () => filters, dashboard, String, ApiError, {info() {}, success() {}, error(message) {messages.push(message)}}, messageBox, () => ref(false), groupUtils.hiddenChannelGroupCount, groupUtils.matchesChannelGroup, groupUtils.MAX_VISIBLE_CHANNEL_GROUPS, groupUtils.normalizeChannelGroups, groupUtils.splitChannelGroups, groupUtils.visibleChannelGroups)
+  const view = create(toRaw, computed, reactive, ref, () => {}, () => {}, fn => cleanup.push(fn), () => filters, dashboard, String, ApiError, {info() {}, success() {}, error(message) {messages.push(message)}}, messageBox, () => ref(false), groupUtils.hiddenChannelGroupCount, groupUtils.matchesChannelGroup, groupUtils.MAX_VISIBLE_CHANNEL_GROUPS, groupUtils.normalizeChannelGroups, groupUtils.splitChannelGroups, groupUtils.visibleChannelGroups)
   const initialPolicy = JSON.parse(JSON.stringify({...view.policy, dispatch_modes:{m:'auto'}}));
   dashboard.tuningPolicy = async () => ({mode:'observe', policy: JSON.parse(JSON.stringify(initialPolicy))});
   // 关闭来源仅在本站计划已加载后归类，夹具默认为空计划列表。
   view.schedulesSite.value = filters.site_id
-  return { ...view, filters, dashboard, messages, messageBox }
+  return { ...view, filters, dashboard, messages, messageBox, unmount: () => cleanup.forEach(fn => fn()) }
 }
 
 test('rate failures distinguish transport, permissions and server availability; recovery clears the warning', async () => {
@@ -449,15 +450,19 @@ test('a failed second site cannot reuse matching channel IDs from the first', as
   assert.equal(p.sampleText(row), '—')
 })
 
-test('late refresh results cannot overwrite a newer completed refresh', async () => {
+test('overlapping refreshes share one follow-up and apply its latest result', async () => {
   const p = page()
   await p.load()
   const old = deferred(), latest = deferred()
   let call = 0
   p.dashboard.tuningContinuousStates = () => (++call === 1 ? old.promise : latest.promise)
-  const first = p.refreshRuntime(), second = p.refreshRuntime()
-  latest.resolve({ items: [state(90)] }); await second
+  const first = p.refreshRuntime(), second = p.refreshRuntime(), third = p.refreshRuntime()
+  assert.equal(call, 1)
+  assert.equal(second, third)
   old.resolve({ items: [state(10)] }); await first
+  assert.equal(p.stateFor(row).last_observed_requests, 10)
+  assert.equal(call, 2)
+  latest.resolve({ items: [state(90)] }); await Promise.all([second, third])
   assert.equal(p.stateFor(row).last_observed_requests, 90)
 })
 
@@ -511,15 +516,16 @@ test('slow polling still displays completed results while a newer request is pen
   assert.equal(p.stateFor(row).last_observed_requests, 90)
 })
 
-test('late failures cannot replace a newer successful result with an error', async () => {
+test('a failed refresh releases the queued retry and its success clears the error', async () => {
   const p = page()
   await p.load()
   const old = deferred(), latest = deferred()
   let call = 0
   p.dashboard.tuningContinuousStates = () => (++call === 1 ? old.promise : latest.promise)
   const first = p.refreshRuntime(), second = p.refreshRuntime()
+  old.reject(new Error('old timeout')); assert.equal(await first, false)
+  assert.equal(call, 2)
   latest.resolve({ items: [state(90)] }); await second
-  old.reject(new Error('old timeout')); await first
   assert.equal(p.stateFor(row).last_observed_requests, 90)
   assert.equal(p.refreshError.value, '')
 })
@@ -1080,6 +1086,7 @@ test('queued circuit zero is displayed as awaiting confirmation', async () => {
 
 test('channel notification refreshes evaluation and execution result without the periodic timer', async () => {
   const p = page(); await p.load();
+  p.activeTab.value = 'events';
   p.policy.dispatch_modes.m = 'off'; p.dirty.value = true;
   p.dashboard.tuningContinuousStates = async () => ({items:[state(99, 0)]});
   p.dashboard.tuningRecommendations = async () => ({items:[{id:'circuit',status:'succeeded',channel_id:1}]});
@@ -1218,6 +1225,218 @@ test('capacity decrease setting defaults for old policies and survives save and 
   assert.match(p.factorExplanation(row), /单次容量最大降幅 25%/);
   assert.match(sfc, /v-model="policy\.continuous\.capacity_max_decrease_percent" :min="1" :max="100"/);
 });
+
+test('cached channel flags aggregate every model and react to in-place state changes', async () => {
+  const p = await manualStatusPage('disabled', { ...state(42), circuit_disabled: true, circuit_status_target: 0 });
+  p.acceptStates('a', [p.states.value[0], { ...state(42), model_name: 'other', paused_reason: 'manual_disabled' }]);
+  assert.equal(p.channelStatusFor(row), 'disabled');
+  p.states.value[1].paused_reason = '';
+  assert.equal(p.channelStatusFor(row), 'auto_disabled');
+  p.states.value[0].circuit_status_target = 2;
+  assert.equal(p.channelStatusFor(row), 'disabled');
+  p.filters.site_id = 'b';
+  assert.equal(p.manualChannelHeld(row), false);
+});
+
+test('cached display values invalidate on state and editable row changes without using rule drafts', async () => {
+  const p = page(); await p.load();
+  const base = p.bases.value[0];
+  p.states.value[0].k_speed = 1.05;
+  const first = p.coefficientCells(base);
+  assert.equal(p.coefficientCells(base), first);
+  assert.equal(first.speed.value, 1.05);
+  p.states.value[0].k_speed = 1.2;
+  assert.equal(p.coefficientCells(base).speed.value, 1.2);
+  assert.notEqual(p.coefficientCells(base), first);
+  assert.deepEqual(p.coefficientCells(base).speed, p.coefficientCell(base, 'speed'));
+  const calculated = p.rowEvaluation(base).calculated;
+  p.policy.continuous.min_samples = 999; p.dirty.value = true;
+  assert.equal(p.rowEvaluation(base).calculated, calculated);
+  base.base_weight = 0;
+  assert.equal(p.rowEvaluation(base).calculated, calculated);
+  assert.equal(p.rowEvaluation(base).empty, '未参与调权');
+  base.base_weight = 100;
+  p.states.value[0].paused_reason = 'manual_disabled';
+  assert.equal(p.coefficientCells(base).speed.value, null);
+  assert.equal(p.rowEvaluation(base).calculated, null);
+});
+
+test('overview loads without requesting records and record failures retain the last successful list', async () => {
+  const p = page(); let count = 0;
+  p.dashboard.tuningRecommendations = async () => { count++; return { items: [{ id: 'old', rule: 'weight_write', channel_id: 1, channel_name: 'mock' }] }; };
+  await p.load(); await p.refreshRuntime();
+  assert.equal(count, 0);
+  assert.equal(p.eventsSite.value, '');
+  await p.loadEvents();
+  assert.equal(count, 1); assert.equal(p.events.value[0].id, 'old');
+  p.dashboard.tuningRecommendations = async () => { throw new Error('record timeout'); };
+  assert.equal(await p.loadEvents(), false);
+  assert.equal(p.events.value[0].id, 'old'); assert.match(p.eventsError.value, /timeout/);
+  p.dashboard.tuningRecommendations = async () => ({ items: [] });
+  assert.equal(await p.loadEvents(), true);
+  assert.equal(p.eventsError.value, ''); assert.equal(p.eventsLoading.value, false);
+  assert.equal(p.events.value.length, 0);
+});
+
+test('a slow record request does not block the overview loading mask', async () => {
+  const p = page(), records = deferred();
+  p.activeTab.value = 'events';
+  p.dashboard.tuningRecommendations = () => records.promise;
+  await p.load();
+  assert.equal(p.eventsLoading.value, true);
+  assert.equal(p.stateFor(row).last_observed_requests, 42);
+  p.activeTab.value = 'overview';
+  records.resolve({ items: [] });
+  await records.promise;
+});
+
+test('site changes cancel queued refreshes and prevent old records from crossing sites', async () => {
+  const p = page(); await p.load();
+  const oldState = deferred(), oldRecords = deferred();
+  p.dashboard.tuningContinuousStates = () => oldState.promise;
+  p.dashboard.tuningRecommendations = () => oldRecords.promise;
+  const first = p.refreshRuntime(), queued = p.refreshRuntime(), records = p.loadEvents();
+  p.filters.site_id = 'b';
+  p.dashboard.tuningContinuousStates = async () => ({ items: [state(77)] });
+  await p.load();
+  assert.equal(await queued, false);
+  oldState.resolve({ items: [state(1)] }); oldRecords.resolve({ items: [{ id: 'old-site' }] });
+  await Promise.all([first, records]);
+  assert.equal(p.stateFor(row).last_observed_requests, 77);
+  assert.equal(p.events.value.length, 0); assert.equal(p.eventsError.value, '');
+});
+
+test('a full reload aborts the previous read and releases its queued callers', async () => {
+  const p = page(); await p.load(); let count = 0, previousSignal;
+  p.dashboard.tuningContinuousStates = (_site, signal) => {
+    if (++count !== 1) return Promise.resolve({ items: [state(88)] });
+    previousSignal = signal;
+    return new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true }));
+  };
+  const first = p.refreshRuntime(), followup = p.refreshRuntime();
+  await p.load();
+  assert.equal(previousSignal.aborted, true);
+  assert.equal(await first, false); assert.equal(await followup, false);
+  assert.equal(p.stateFor(row).last_observed_requests, 88);
+  assert.equal(await p.refreshRuntime(), true);
+});
+
+test('a read deadline releases the queued retry and reports its recovered state', async t => {
+  const p = page(); await p.load();
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let count = 0;
+  p.dashboard.tuningContinuousStates = (_site, signal) => ++count === 1
+    ? new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true }))
+    : Promise.resolve({ items: [state(88)] });
+  const first = p.refreshRuntime(), followup = p.refreshRuntime();
+  t.mock.timers.tick(45000);
+  assert.equal(await first, false); assert.equal(await followup, true);
+  assert.equal(count, 2); assert.equal(p.stateFor(row).last_observed_requests, 88);
+  assert.equal(p.refreshError.value, '');
+});
+
+test('a failed component read aborts the remaining requests before retrying', async () => {
+  const p = page(); await p.load();
+  let failedSignal;
+  p.dashboard.tuningContinuousStates = (_site, signal) => {
+    failedSignal = signal;
+    return new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true }));
+  };
+  p.dashboard.tuningBaseValues = async () => { throw new Error('base read failed'); };
+  assert.equal(await p.refreshRuntime(), false);
+  assert.equal(failedSignal.aborted, true, 'failed batches must release still-running sibling reads');
+  assert.equal(p.stateFor(row).last_observed_requests, 42);
+  assert.match(p.refreshError.value, /base read failed/);
+  p.dashboard.tuningBaseValues = async () => ({ items: [{ ...row }] });
+  p.dashboard.tuningContinuousStates = async () => ({ items: [state(99)] });
+  assert.equal(await p.refreshRuntime(), true);
+  assert.equal(p.stateFor(row).last_observed_requests, 99);
+});
+
+test('unmount cancels both read queues and discards late results even when transport ignores abort', async () => {
+  const p = page(); await p.load();
+  const states = deferred(), records = deferred();
+  let stateSignal, recordSignal;
+  p.dashboard.tuningContinuousStates = (_site, signal) => { stateSignal = signal; return states.promise; };
+  p.dashboard.tuningRecommendations = (_site, _limit, _rule, signal) => { recordSignal = signal; return records.promise; };
+  const first = p.refreshRuntime(), followup = p.refreshRuntime(), history = p.loadEvents();
+  p.unmount();
+  assert.equal(stateSignal.aborted, true);
+  assert.equal(recordSignal.aborted, true);
+  assert.equal(await followup, false);
+  states.resolve({ items: [state(999)] });
+  records.resolve({ items: [{ id: 'late', channel_id: 1 }] });
+  assert.equal(await first, false);
+  assert.equal(await history, false);
+  assert.equal(p.stateFor(row).last_observed_requests, 42);
+  assert.deepEqual(p.events.value, []);
+});
+
+
+test('unchanged snapshot fields retain row identity and omitted recovery fields are cleared', async () => {
+  const p = page(); await p.load();
+  const base = p.bases.value[0], saved = p.savedBases.value[0], existing = p.states.value[0];
+  existing.last_write_error = 'old error';
+  existing.probe_command_id = 'old probe';
+  p.acceptStates('a', [state(42)]);
+  assert.equal(p.states.value[0], existing);
+  assert.equal(Object.hasOwn(existing, 'last_write_error'), false);
+  assert.equal(Object.hasOwn(existing, 'probe_command_id'), false);
+  await p.refreshRuntime();
+  assert.equal(p.bases.value[0], base);
+  assert.equal(p.savedBases.value[0], saved);
+  assert.notEqual(base, saved);
+  base.base_weight = 33; p.dirty.value = true;
+  assert.equal(saved.base_weight, 100);
+  await p.refreshRuntime();
+  assert.equal(base.base_weight, 33);
+  assert.equal(saved.base_weight, 100);
+  p.cancelChanges(false);
+  assert.equal(p.bases.value[0].base_weight, 100);
+});
+
+test('directory identity is stable while weight, model and removed rows still update', async () => {
+  const p = page(); await p.load();
+  const directory = [{ channel_id: 1, channel_name: 'one', status: 'enabled', weight: 80, priority: 1, group_name: 'default', models: ['m'] }];
+  p.dashboard.tuningChannels = async () => ({ items: cloneFixture(directory) });
+  await p.loadChannelDirectory('a');
+  const original = p.channels.value[0], models = original.models;
+  await p.loadChannelDirectory('a');
+  assert.equal(p.channels.value[0], original); assert.equal(original.models, models);
+  directory[0].weight = 10; directory[0].models = ['other'];
+  await p.loadChannelDirectory('a');
+  assert.equal(original.weight, 10); assert.deepEqual(original.models, ['other']);
+  assert.equal(p.activeModel.value, 'other');
+  assert.equal(p.activeRows.value[0].current_weight, 10);
+  assert.equal(p.isDirectoryOnlyRow(p.activeRows.value[0]), true);
+  directory.length = 0;
+  await p.loadChannelDirectory('a');
+  assert.equal(p.channels.value.length, 0);
+});
+
+
+test('a pending record follow-up cannot extend the main refresh deadline', async t => {
+  const p = page(); await p.load();
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const secondRecord = deferred(); let calls = 0;
+  p.dashboard.tuningRecommendations = (_site, _limit, _rule, signal) => ++calls === 1
+    ? new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(new Error('record timeout')), { once: true }))
+    : secondRecord.promise;
+  const firstRecord = p.loadEvents();
+  t.mock.timers.tick(40000);
+  p.activeTab.value = 'events';
+  p.dashboard.tuningContinuousStates = async () => ({ items: [state(999)] });
+  const refresh = p.refreshRuntime();
+  t.mock.timers.tick(5000);
+  assert.equal(await firstRecord, false);
+  t.mock.timers.tick(40000);
+  assert.equal(await refresh, false);
+  assert.equal(p.stateFor(row).last_observed_requests, 42);
+  assert.match(p.refreshError.value, /超时/);
+  secondRecord.resolve({ items: [] });
+  await secondRecord.promise;
+});
+
 
 test('manual closures wait for the schedule list before being attributed, and scheduled closures are labelled', () => {
   const p = page()

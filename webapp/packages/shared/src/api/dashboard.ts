@@ -1128,22 +1128,22 @@ export const dashboardApi = (client: ApiClient) => ({
     client.request<ListResponse<NginxSlowSample>>(
       `/api/dashboard/nginx-timing/slow-samples${query(params)}`,
     ),
-  tuningPolicy: (site_id: string) =>
-    client.request<TuningPolicyResponse>(`/api/dashboard/tuning/policy${query({ site_id })}`),
+  tuningPolicy: (site_id: string, signal?: AbortSignal) =>
+    client.request<TuningPolicyResponse>(`/api/dashboard/tuning/policy${query({ site_id })}`, { signal }),
   saveTuningPolicy: (site_id: string, policy: TuningPolicy, mode: "observe" | "confirm" | "auto", preflight_command_id?: string, expected_policy?: TuningPolicy, expected_mode?: "observe" | "confirm" | "auto") =>
     client.request<TuningPolicyResponse>(`/api/dashboard/tuning/policy${query({ site_id })}`, { method: "PUT", body: JSON.stringify({ policy, mode, preflight_command_id, expected_policy, expected_mode }) }),
   startTuningPreflight: (site_id: string, channel_id: number) =>
     client.request<{ command_id: string; status: string; error?: string }>(`/api/dashboard/tuning/preflight${query({ site_id })}`, { method: "POST", body: JSON.stringify({ channel_id }) }),
   tuningPreflight: (site_id: string, command_id: string) =>
     client.request<{ command_id: string; status: string; error?: string }>(`/api/dashboard/tuning/preflight${query({ site_id, command_id })}`),
-  tuningRecommendations: (site_id: string, limit = 100, rule?: string) =>
-    client.request<ListResponse<TuningRecommendation>>(`/api/dashboard/tuning/recommendations${query({ site_id, limit, rule })}`),
+  tuningRecommendations: (site_id: string, limit = 100, rule?: string, signal?: AbortSignal) =>
+    client.request<ListResponse<TuningRecommendation>>(`/api/dashboard/tuning/recommendations${query({ site_id, limit, rule })}`, { signal }),
   tuningReport: (site_id: string, days: 7 | 30) =>
     client.request<TuningReport>(`/api/dashboard/tuning/report${query({ site_id, days })}`),
-  tuningBaseValues: (site_id: string, model?: string) =>
-    client.request<ListResponse<ChannelBaseValue>>(`/api/dashboard/tuning/base-values${query({ site_id, model })}`),
-  tuningChannels: (site_id: string) =>
-    client.request<ListResponse<TuningChannel>>(`/api/dashboard/tuning/channels${query({ site_id })}`),
+  tuningBaseValues: (site_id: string, model?: string, signal?: AbortSignal) =>
+    client.request<ListResponse<ChannelBaseValue>>(`/api/dashboard/tuning/base-values${query({ site_id, model })}`, { signal }),
+  tuningChannels: (site_id: string, signal?: AbortSignal) =>
+    client.request<ListResponse<TuningChannel>>(`/api/dashboard/tuning/channels${query({ site_id })}`, { signal }),
   saveTuningChannelStatus: (site_id: string, channel_id: number, status: 1 | 2) =>
     client.request<{command_id:string;channel_id:number;channel_status:1|2;status:string}>(`/api/dashboard/tuning/channels/${channel_id}/status${query({ site_id })}`, {method:"PUT",body:JSON.stringify({status,confirm:true})}),
   channelSchedules: (site_id:string, signal?:AbortSignal) => client.request<ChannelScheduleList>(`/api/dashboard/tuning/channel-schedules${query({site_id})}`, {signal}),
@@ -1159,8 +1159,8 @@ export const dashboardApi = (client: ApiClient) => ({
     client.request<{ synced: boolean }>(`/api/dashboard/tuning/channels/refresh${query({ site_id })}`, { method: "POST" }),
   tuningChannelChanges: (site_id: string, after: string, signal: AbortSignal) =>
     client.request<{ revision: string }>(`/api/dashboard/tuning/channels/changes${query({ site_id, after })}`, { signal }),
-  tuningContinuousStates: (site_id: string) =>
-    client.request<ListResponse<TuningContinuousState> & { probe_coverage?: ProbeCoverageWindow }>(`/api/dashboard/tuning/continuous-states${query({ site_id })}`),
+  tuningContinuousStates: (site_id: string, signal?: AbortSignal) =>
+    client.request<ListResponse<TuningContinuousState> & { probe_coverage?: ProbeCoverageWindow }>(`/api/dashboard/tuning/continuous-states${query({ site_id })}`, { signal }),
   probeOverview: (params: ProbeQuery, signal?: AbortSignal) => client.request<ProbeOverview>(`/api/dashboard/tuning/probes/overview${query({...params})}`, {signal}),
   lifelineCurrent: (site_id:string, signal?:AbortSignal) => client.request<LifelineCurrent>(`/api/dashboard/tuning/probes/current${query({site_id})}`,{signal}),
   probeRounds: (params:ProbeQuery, signal?:AbortSignal) => client.request<{items:ProbeRound[];next_cursor?:string}>(`/api/dashboard/tuning/probes/rounds${query({...params})}`,{signal}),

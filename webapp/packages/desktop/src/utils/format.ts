@@ -8,9 +8,10 @@ export function formatBytes(value: number | null | undefined) {
   while (size >= 1024 && index < units.length - 1) { size /= 1024; index++ }
   return `${size.toFixed(index ? 1 : 0)} ${units[index]}`
 }
+const timeFormatter = new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric', hour12: false })
 export function formatTime(value: string | null | undefined) {
   if (!value) return '—'; const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN', { hour12: false })
+  return Number.isNaN(date.getTime()) ? value : timeFormatter.format(date)
 }
 const beijingTimeFormatter = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })
 export function formatBeijingTime(value: string | null | undefined) {
