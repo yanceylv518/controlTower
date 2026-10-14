@@ -259,6 +259,12 @@ Instance tokens are stored only as `SHA-256(pepper + token)` hashes. A token may
 
 只读使用日志 `GET /api/dashboard/passthrough/logs` 兼容 rc35 的 `type`、`channel`、`p`、`page_size` 参数以及 CT 旧的 `log_type`、`channel_id`、`offset`、`limit` 参数；另支持 `username`、`token_name`、`model_name`、`group`、`request_id`、`upstream_request_id`，时间可用 RFC3339 `start_time/end_time` 或 rc35 秒级 `start_timestamp/end_timestamp`。响应保留 `content_summary` 脱敏摘要，同时提供兼容字段 `content`、`channel`、`channel_id`、`channel_name`、`token_id`、`other`、`has_more`、`page/page_size`；`fallback` 表示同一请求是否实际尝试过多个渠道，`fallback_channels`（仅管理员）保留可确认的有序渠道链，通常只有最终尝试记录带完整的 `191 → 141` 链路。服务端同时兼容 `other.fallback`/`other.is_fallback`/`other.fallback_flag` 和 `other.admin_info.use_channel`，并按当前页请求 ID 批量关联其它尝试记录，因此首个错误尝试也不会丢失 fallback 标志。管理员渠道名称在 `channels` 权限不可用时退化为 ID。`GET /api/dashboard/passthrough/logs/count` 与 `/stat` 复用同一筛选口径，统计完整小时优先使用只读日志聚合，带请求 ID 或模糊模型/用户名筛选时回源原表。viewer 站点/用户范围由服务端强制注入，同一用户同一 Request ID 只保留最后结果，`other` 按角色剥离特权元数据。
 
+使用日志的列表、`/count` 和 `/stat` 支持 `prompt_tokens_min`、`prompt_tokens_max`、`completion_tokens_min`、`completion_tokens_max` 四个可选数量边界。下限和上限均包含边界，留空不限制；同项上下限相同表示精确数量，只传输入或输出参数表示仅筛选该项，两项同时提供时按 AND 匹配。按原始日志 `prompt_tokens` / `completion_tokens` 数量筛选，缺失数量与列表展示一致按 0 处理，不根据缓存或计费字段重算。参数必须为非负 int64，非法值返回 400 `invalid_<参数名>`，最小值大于最大值返回 400 `invalid_prompt_tokens_range` / `invalid_completion_tokens_range`。有效 Tokens 条件参与游标范围绑定，并强制统计回源逐条日志，避免小时聚合无法区分数量范围；既有站点、用户权限、日志类型、错误码及最后尝试筛选继续组合生效。
+
+Tokens 范围直接比较原始列，仅当范围包含 0 时追加 `IS NULL`，避免用函数包裹列而阻碍源库已有数量索引的范围扫描。没有数量索引时仍依赖既有时间范围和其他条件缩小扫描；CT 不新增或修改只读源库索引。`/count` 与 `/stat` 继续复用同一条件的并发原表统计，未设置 Tokens 边界的查询保留原有聚合路径。
+
+Web 的 Tokens 控件按精确数量筛选，每项只提供一个数量输入框，保留仅输入、仅输出、输入和输出三种模式。填写值同时作为该项相同的下限和上限发送，复用上述查询契约；例如输入 `32` 只匹配输入数量为 `32` 的日志，两项填写时均须精确匹配。留空不限制，0 有效；切换为单项时不发送另一项草稿。列表、统计和分页使用同一已提交快照。
+
 编辑时 Webhook 地址留空保留原值；同类型渠道 Secret 留空保留原密钥。省略 `rule_keys` 保留原选择，显式 `[]` 改为全部类型。响应始终只返回脱敏地址和是否有密钥。
 
 升级需应用 `075_notification_routing.sql` 并同步更新前后端。历史渠道 `site_id` 为空，暂停投递，在通知设置“旧渠道待分配”中确认归属并保存后恢复。旧投递记录按原告警所属实例的站点查询，避免随渠道分配而串站点。Agent 独立企微直推不使用此路由配置。

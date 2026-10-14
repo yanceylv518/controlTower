@@ -8,6 +8,8 @@ import ts from 'typescript'
 const source = readFileSync(new URL('../src/views/ReadonlyLogsView.vue', import.meta.url), 'utf8')
 const asyncSource = readFileSync(new URL('../src/composables/useAsyncData.ts', import.meta.url), 'utf8').replace(/^import .*$/gm, '').replace('export function', 'function')
 const compile = text => ts.transpileModule(text, {compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText
+const tokenUtils = {}
+new Function('exports', compile(readFileSync(new URL('../src/utils/logTokenFilter.ts', import.meta.url), 'utf8')))(tokenUtils)
 const useAsyncData = new Function('ref','shallowRef','billingReadErrorMessage',compile(asyncSource)+';return useAsyncData')(ref,shallowRef,String)
 const range = (start,end) => source.slice(source.indexOf(start),source.indexOf(end,source.indexOf(start)))
 const code = range('const parsedChannelID =','// 首屏加载实例') + range('function commitQuery()', 'const pageSizeOptions =') + range('const changePage =','function closePageSizeMenu()')
@@ -15,11 +17,14 @@ const deferred = () => {let resolve,reject;const promise=new Promise((a,b)=>{res
 function setup() {
   const calls={logs:[],logStat:[],logCount:[]}, messages=[]
   const passthrough=Object.fromEntries(Object.keys(calls).map(name=>[name,(params,signal)=>{const d=deferred();calls[name].push({...d,params,signal});return d.promise}]))
-  const deps={ref,shallowRef,computed,useAsyncData,useAppendPages:()=>({}),passthrough,filters:{site_id:'a'},auth:{user:{role:'admin'}},scopedUserIDs:ref(undefined),selectedUserID:ref(undefined),timeRange:ref([new Date('2026-09-01'),new Date('2026-09-02')]),logType:ref(0),limit:ref(100),offset:ref(0),closeRequestChain(){},ElMessage:{warning:m=>messages.push(m),error:m=>messages.push(m)},pageSizeOptions:[10,20,50,100]}
+  const deps={ref,shallowRef,computed,useAsyncData,useAppendPages:(_data,_busy,load)=>({load}),passthrough,filters:{site_id:'a'},auth:{user:{role:'admin'}},scopedUserIDs:ref(undefined),selectedUserID:ref(undefined),timeRange:ref([new Date('2026-09-01'),new Date('2026-09-02')]),logType:ref(0),limit:ref(100),offset:ref(0),closeRequestChain(){},ElMessage:{warning:m=>messages.push(m),error:m=>messages.push(m)},pageSizeOptions:[10,20,50,100]}
   for(const key of ['channelID','username','tokenName','modelName','group','requestID','upstreamRequestID','statusCode'])deps[key]=ref('')
   deps.emptyOutput=ref(false)
   deps.fallbackFinalOnly=ref(false)
-  const state=new Function(...Object.keys(deps),compile(code)+';return {state,statState,countState,reloadAll,refreshSearch,reloadPage,changePage,changePageSize,submitted,listIsCurrent,countIsCurrent,backgroundRefreshing,tableScroll} ')(...Object.values(deps))
+  deps.tokenFilter=ref(tokenUtils.emptyLogTokenFilter())
+  deps.logTokenFilterParams=tokenUtils.logTokenFilterParams
+  deps.validateLogTokenFilter=tokenUtils.validateLogTokenFilter
+  const state=new Function(...Object.keys(deps),compile(code)+';return {state,statState,countState,reloadAll,refreshSearch,reloadPage,changePage,changePageSize,submitted,listIsCurrent,countIsCurrent,backgroundRefreshing,tableScroll,mobileFeed} ')(...Object.values(deps))
   return {...deps,...state,calls,messages}
 }
 const response={items:[{id:1}],configured:true,total:1000,has_more:true}
@@ -187,4 +192,58 @@ test('superseded summary failures do not produce error messages for a new query'
   h.calls.logCount[1].resolve({total:1})
   await new Promise(setImmediate)
   assert.deepEqual(h.messages, [])
+})
+
+test('input, output and combined Tokens reach the list and both summaries, including zero',async()=>{
+  for(const [tokens,expected] of [
+    [{mode:'input',input:'0',output:'500'}, {prompt_tokens_min:0,prompt_tokens_max:0}],
+    [{mode:'output',output:'10',input:'500'}, {completion_tokens_min:10,completion_tokens_max:10}],
+    [{mode:'both',input:'32',output:'0'}, {prompt_tokens_min:32,prompt_tokens_max:32,completion_tokens_min:0,completion_tokens_max:0}],
+  ]){
+    const h=setup();h.tokenFilter.value={...tokenUtils.emptyLogTokenFilter(),...tokens}
+    const job=h.refreshSearch();h.calls.logs[0].resolve(response);await job
+    for(const name of ['logs','logStat','logCount']){
+      const actual=Object.fromEntries(Object.entries(h.calls[name][0].params).filter(([key,value])=>key.includes('_tokens_')&&value!==undefined))
+      assert.deepEqual(actual,expected,name)
+    }
+  }
+})
+
+test('Tokens drafts cannot change submitted pagination, mobile append or pending summaries',async()=>{
+  const h=setup();h.tokenFilter.value={...tokenUtils.emptyLogTokenFilter(),mode:'output',output:'20'}
+  const job=h.refreshSearch();h.calls.logs[0].resolve({...response,next_cursor:'next-1'});await job
+  h.tokenFilter.value.output='30';h.tokenFilter.value.mode='both';h.tokenFilter.value.input='100'
+  h.changePage(2)
+  assert.equal(h.calls.logs[1].params.completion_tokens_max,20)
+  assert.equal(h.calls.logs[1].params.completion_tokens_min,20)
+  assert.equal(h.calls.logs[1].params.prompt_tokens_min,undefined)
+  assert.equal(h.calls.logs[1].params.cursor,'next-1')
+  h.calls.logs[1].resolve(response);await new Promise(setImmediate)
+  assert.equal(h.calls.logStat[1].params.completion_tokens_max,20)
+  assert.equal(h.calls.logCount[1].params.completion_tokens_max,20)
+  const append=h.mobileFeed.load(h.state.data.value,200)
+  assert.equal(h.calls.logs[2].params.completion_tokens_max,20)
+  assert.equal(h.calls.logs[2].params.prompt_tokens_min,undefined)
+  h.calls.logs[2].resolve(response);await append
+  const next=h.refreshSearch()
+  assert.equal(h.calls.logs[3].params.completion_tokens_max,30)
+  assert.equal(h.calls.logs[3].params.prompt_tokens_min,100)
+  assert.equal(h.calls.logs[3].params.prompt_tokens_max,100)
+  assert.equal(h.calls.logs[3].params.completion_tokens_min,30)
+  assert.equal(h.calls.logs[3].params.cursor,undefined)
+  h.calls.logs[3].resolve(response);await next
+})
+
+test('invalid Tokens block submission while hidden drafts do not block single-dimension queries',async()=>{
+  for(const tokens of [
+    {input:'-1'}, {input:'1.2'}, {input:'1e3'}, {input:'9007199254740992'},
+    {input:'invalid'}, {mode:'both',output:'-1'},
+  ]){
+    const h=setup();h.tokenFilter.value={...tokenUtils.emptyLogTokenFilter(),...tokens};await h.refreshSearch()
+    assert.equal(h.calls.logs.length,0);assert.equal(h.calls.logCount.length,0);assert.equal(h.messages.length,1)
+  }
+  const h=setup();h.tokenFilter.value={...tokenUtils.emptyLogTokenFilter(),mode:'output',output:'0',input:'invalid'}
+  const job=h.refreshSearch();assert.equal(h.messages.length,0)
+  assert.equal(h.calls.logs[0].params.completion_tokens_max,0)
+  h.calls.logs[0].resolve(response);await job
 })

@@ -1590,6 +1590,45 @@ func parseReadonlyLogFiltersMode(values url.Values, userIDs []int64, viewer, cur
 		}
 	}
 
+	for _, column := range []string{"prompt_tokens", "completion_tokens"} {
+		var bounds [2]*int64
+		for index, suffix := range []string{"min", "max"} {
+			param := column + "_" + suffix
+			raw := strings.TrimSpace(values.Get(param))
+			if raw == "" {
+				continue
+			}
+			value, err := strconv.ParseInt(raw, 10, 64)
+			if err != nil || value < 0 {
+				return filters, fmt.Errorf("invalid_%s", param)
+			}
+			bounds[index] = &value
+		}
+		if bounds[0] != nil && bounds[1] != nil && *bounds[0] > *bounds[1] {
+			return filters, fmt.Errorf("invalid_%s_range", column)
+		}
+		var conditions []string
+		for index, bound := range bounds {
+			if bound == nil {
+				continue
+			}
+			operator := []string{">=", "<="}[index]
+			conditions = append(conditions, "l."+column+" "+operator+" ?")
+			filters.args = append(filters.args, *bound)
+		}
+		if len(conditions) == 0 {
+			continue
+		}
+		condition := strings.Join(conditions, " AND ")
+		// 直接比较原列以保留索引范围扫描能力；范围包含 0 时才纳入空数量。
+		if bounds[0] == nil || *bounds[0] == 0 {
+			condition = "(" + condition + " OR l." + column + " IS NULL)"
+		}
+		filters.where += " AND " + condition
+		// 小时汇总不包含单条日志的 Tokens 范围维度。
+		filters.hasRawFilter = true
+	}
+
 	statusCodeValue := firstQueryValue(values, "status_code")
 	if statusCodeValue != "" {
 		statusCode, parseErr := strconv.Atoi(statusCodeValue)

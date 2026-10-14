@@ -1,4 +1,5 @@
 <script lang="ts">
+import type { LogTokenFilterValue } from '../utils/logTokenFilter'
 export interface MobileLogFilterValues {
   logType: number
   modelName: string
@@ -8,6 +9,7 @@ export interface MobileLogFilterValues {
   upstreamRequestID: string
   channelID: string
   statusCode: string
+  tokens: LogTokenFilterValue
   emptyOutput: boolean
   fallbackFinalOnly: boolean
 }
@@ -17,6 +19,8 @@ import { computed, reactive, ref } from 'vue'
 import { Filter, RefreshLeft, Hide, View } from '@element-plus/icons-vue'
 import CompactDateTimeRangePicker from './CompactDateTimeRangePicker.vue'
 import UserNamePicker, { type UserPickerOption } from './UserNamePicker.vue'
+import LogTokenFilter from './LogTokenFilter.vue'
+import { emptyLogTokenFilter, hasLogTokenFilter } from '../utils/logTokenFilter'
 
 const props = defineProps<{
   username: string
@@ -38,16 +42,16 @@ const emit = defineEmits<{
   privacy: []
 }>()
 const sheetOpen = ref(false)
-const emptyFilters = (): MobileLogFilterValues => ({ logType:0, modelName:'', group:'', tokenName:'', requestID:'', upstreamRequestID:'', channelID:'', statusCode:'', emptyOutput:false, fallbackFinalOnly:false })
+const emptyFilters = (): MobileLogFilterValues => ({ logType:0, modelName:'', group:'', tokenName:'', requestID:'', upstreamRequestID:'', channelID:'', statusCode:'', tokens:emptyLogTokenFilter(), emptyOutput:false, fallbackFinalOnly:false })
 const draft = reactive(emptyFilters())
-const filterCount = computed(() => Object.entries(props.filters).filter(([key, value]) => (props.admin || !['channelID', 'emptyOutput', 'fallbackFinalOnly'].includes(key)) && Boolean(typeof value === 'string' ? value.trim() : value)).length)
+const filterCount = computed(() => Object.entries(props.filters).filter(([key, value]) => key !== 'tokens' && (props.admin || !['channelID', 'emptyOutput', 'fallbackFinalOnly'].includes(key)) && Boolean(typeof value === 'string' ? value.trim() : value)).length + Number(hasLogTokenFilter(props.filters.tokens)))
 function openFilters() {
-  Object.assign(draft, props.filters)
+  Object.assign(draft, props.filters, { tokens: { ...props.filters.tokens } })
   sheetOpen.value = true
 }
 function applyFilters() {
   if (props.busy) return
-  emit('apply', { ...draft, channelID: props.admin ? draft.channelID : '', emptyOutput: props.admin && draft.emptyOutput })
+  emit('apply', { ...draft, tokens: { ...draft.tokens }, channelID: props.admin ? draft.channelID : '', emptyOutput: props.admin && draft.emptyOutput })
   sheetOpen.value = false
 }
 </script>
@@ -76,6 +80,7 @@ function applyFilters() {
         <el-form-item label="令牌名称"><el-input v-model="draft.tokenName" aria-label="令牌名称" placeholder="输入令牌名称" clearable /></el-form-item>
         <el-form-item label="请求 ID"><el-input v-model="draft.requestID" aria-label="请求 ID" placeholder="输入请求 ID" clearable /></el-form-item>
         <el-form-item label="上游请求 ID"><el-input v-model="draft.upstreamRequestID" aria-label="上游请求 ID" placeholder="输入上游请求 ID" clearable /></el-form-item>
+        <el-form-item label="Tokens"><LogTokenFilter v-model="draft.tokens" :disabled="busy" :teleported="false" class="mobile-tokens-filter" /></el-form-item>
         <el-form-item label="错误码"><el-input v-model="draft.statusCode" aria-label="错误码" placeholder="例如 429、503" inputmode="numeric" clearable /></el-form-item>
         <el-form-item v-if="admin"><el-checkbox v-model="draft.emptyOutput">空输出</el-checkbox></el-form-item>
         <el-form-item v-if="admin"><el-checkbox v-model="draft.fallbackFinalOnly">Fallback 仅显示最后一条</el-checkbox></el-form-item>
@@ -100,6 +105,7 @@ function applyFilters() {
 .filter-count { display:inline-grid;place-items:center;min-width:18px;height:18px;margin-left:4px;border-radius:9px;background:var(--ct-accent-weak);color:var(--ct-accent); }
 .mobile-sheet-footer { display:grid;grid-template-columns:1fr 2fr;gap:12px; }
 .mobile-sheet-footer .el-button { margin:0;min-height:36px; }
+.mobile-tokens-filter { width:100%; }
 </style>
 <style>
 .mobile-log-filter-sheet { max-height:calc(100dvh - 24px);border-radius:18px 18px 0 0; }

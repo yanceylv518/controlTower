@@ -106,7 +106,7 @@ func TestReadonlySummaryCacheSeparatesScopeAndFilters(t *testing.T) {
 	calls := 0
 	run := func(w http.ResponseWriter, r *http.Request) { calls++; w.Write([]byte(`{"total":3}`)) }
 	base := "/?start_time=2026-09-01T00:00:00Z&end_time=2026-09-02T00:00:00Z&site=a&user_ids=1"
-	for _, suffix := range []string{"", "", "&model_name=x", "&user_ids=2", "&site=b"} {
+	for _, suffix := range []string{"", "", "&model_name=x", "&user_ids=2", "&site=b", "&completion_tokens_max=0", "&completion_tokens_max=100", "&prompt_tokens_min=0"} {
 		// Set replaces existing values, as a real site/scope change would.
 		r := httptest.NewRequest("GET", base, nil)
 		if suffix != "" {
@@ -119,7 +119,7 @@ func TestReadonlySummaryCacheSeparatesScopeAndFilters(t *testing.T) {
 		}
 		h.cachedReadonlySummary(httptest.NewRecorder(), r, "count", run)
 	}
-	require.Equal(t, 4, calls)
+	require.Equal(t, 7, calls)
 }
 func TestReadonlyCursorPreservesTimeTieAndScope(t *testing.T) {
 	args := []any{int64(10), int64(100), int64(7)}

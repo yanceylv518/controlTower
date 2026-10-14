@@ -12,6 +12,8 @@ import StreamStatusError from '../components/StreamStatusError.vue'
 import { attemptChannels, retryLookupUnknown, type ChainQuery } from '../utils/fallbackRequestChain'
 import CompactDateTimeRangePicker from '../components/CompactDateTimeRangePicker.vue'
 import MobileLogFilters, { type MobileLogFilterValues } from '../components/MobileLogFilters.vue'
+import LogTokenFilter from '../components/LogTokenFilter.vue'
+import { emptyLogTokenFilter, hasLogTokenFilter, logTokenFilterParams, validateLogTokenFilter } from '../utils/logTokenFilter'
 import UserNamePicker, { type UserPickerOption } from '../components/UserNamePicker.vue'
 import { passthrough } from '../api'
 import { useAuthStore } from '../stores/auth'
@@ -142,10 +144,11 @@ const username = ref(''), tokenName = ref(''), modelName = ref(''), group = ref(
 const selectedUserID = ref<number | undefined>(undefined)
 const channelID = ref('')
 const statusCode = ref('')
+const tokenFilter = ref(emptyLogTokenFilter())
 const emptyOutput = ref(false)
 const fallbackFinalOnly = ref(false)
 const secondaryFiltersOpen = ref(false)
-const secondaryFilterCount = computed(() => [group.value, tokenName.value, statusCode.value].filter(value => value.trim() !== '').length)
+const secondaryFilterCount = computed(() => [group.value, tokenName.value, statusCode.value].filter(value => value.trim() !== '').length + Number(hasLogTokenFilter(tokenFilter.value)))
 const requestScope = ref<{ request: string; user: string } | null>(null)
 const scopedUserIDs = computed(() => requestScope.value?.request === requestID.value ? requestScope.value.user : undefined)
 const logType = ref(0), offset = ref(0), limit = ref(100)
@@ -215,7 +218,7 @@ const parsedStatusCode = computed(() => {
   const value = statusCode.value.trim()
   return /^\d{3}$/.test(value) ? Number(value) : undefined
 })
-const params = computed(() => ({ site: filters.site_id, user_ids: selectedUserID.value !== undefined ? String(selectedUserID.value) : scopedUserIDs.value, username: selectedUserID.value !== undefined ? undefined : username.value, start_time: timeRange.value[0].toISOString(), end_time: timeRange.value[1].toISOString(), token_name: tokenName.value, model_name: modelName.value, group: group.value, request_id: requestID.value, upstream_request_id: upstreamRequestID.value, channel_id: parsedChannelID.value, status_code: parsedStatusCode.value, empty_output: auth.user?.role === 'admin' && emptyOutput.value ? 1 : undefined, fallback_final_only: auth.user?.role === 'admin' && fallbackFinalOnly.value ? 1 : undefined, log_type: logType.value || undefined, limit: limit.value, offset: offset.value }))
+const params = computed(() => ({ site: filters.site_id, user_ids: selectedUserID.value !== undefined ? String(selectedUserID.value) : scopedUserIDs.value, username: selectedUserID.value !== undefined ? undefined : username.value, start_time: timeRange.value[0].toISOString(), end_time: timeRange.value[1].toISOString(), token_name: tokenName.value, model_name: modelName.value, group: group.value, request_id: requestID.value, upstream_request_id: upstreamRequestID.value, channel_id: parsedChannelID.value, status_code: parsedStatusCode.value, ...logTokenFilterParams(tokenFilter.value), empty_output: auth.user?.role === 'admin' && emptyOutput.value ? 1 : undefined, fallback_final_only: auth.user?.role === 'admin' && fallbackFinalOnly.value ? 1 : undefined, log_type: logType.value || undefined, limit: limit.value, offset: offset.value }))
 // 输入框为草稿；翻页与附属查询只消费点击查询时保存的快照。
 const submitted = shallowRef({ ...params.value })
 const queryRevision = ref(0)
@@ -249,7 +252,7 @@ const backgroundRefreshing = ref(false)
 const mobileFeed = useAppendPages(() => state.data.value, () => state.loading.value || backgroundRefreshing.value || !listIsCurrent.value,
   (base, offset, signal) => passthrough.logs({ ...base.feedQuery, offset }, signal),
   (row: ReadonlyLog) => row.id, base => base.feedQuery.offset)
-const mobileFilters = computed<MobileLogFilterValues>(() => ({ logType:logType.value, modelName:modelName.value, group:group.value, tokenName:tokenName.value, requestID:requestID.value, upstreamRequestID:upstreamRequestID.value, channelID:channelID.value, statusCode:statusCode.value, emptyOutput:auth.user?.role === 'admin' && emptyOutput.value, fallbackFinalOnly:fallbackFinalOnly.value }))
+const mobileFilters = computed<MobileLogFilterValues>(() => ({ logType:logType.value, modelName:modelName.value, group:group.value, tokenName:tokenName.value, requestID:requestID.value, upstreamRequestID:upstreamRequestID.value, channelID:channelID.value, statusCode:statusCode.value, tokens:tokenFilter.value, emptyOutput:auth.user?.role === 'admin' && emptyOutput.value, fallbackFinalOnly:fallbackFinalOnly.value }))
 function applyMobileFilters(value: MobileLogFilterValues) {
   logType.value = value.logType
   modelName.value = value.modelName
@@ -259,6 +262,7 @@ function applyMobileFilters(value: MobileLogFilterValues) {
   upstreamRequestID.value = value.upstreamRequestID
   channelID.value = value.channelID
   statusCode.value = value.statusCode
+  tokenFilter.value = { ...value.tokens }
   emptyOutput.value = value.emptyOutput
   fallbackFinalOnly.value = value.fallbackFinalOnly
   search()
@@ -326,6 +330,11 @@ function commitQuery() {
   }
   if (statusCode.value.trim() && (parsedStatusCode.value === undefined || parsedStatusCode.value < 100 || parsedStatusCode.value > 599)) {
     ElMessage.warning('错误码必须是 100-599 的三位数字')
+    return false
+  }
+  const tokenError = validateLogTokenFilter(tokenFilter.value)
+  if (tokenError) {
+    ElMessage.warning(tokenError)
     return false
   }
   statState.cancel()
@@ -578,6 +587,7 @@ const reset = () => {
   upstreamRequestID.value = ''
   channelID.value = ''
   statusCode.value = ''
+  tokenFilter.value = emptyLogTokenFilter()
   emptyOutput.value = false
   fallbackFinalOnly.value = false
   logType.value = 0
@@ -731,6 +741,7 @@ async function filterRequestChain(query: ChainQuery) {
   selectedUserID.value = undefined
   username.value = ''; tokenName.value = ''; modelName.value = ''; group.value = ''
   channelID.value = ''; statusCode.value = ''; emptyOutput.value = false; upstreamRequestID.value = ''; logType.value = 0
+  tokenFilter.value = emptyLogTokenFilter()
   requestID.value = query.request_id
   requestScope.value = { request: query.request_id, user: query.user_ids }
   timeRange.value = [new Date(query.start_time), new Date(query.end_time)]
@@ -1793,6 +1804,7 @@ watch(() => filters.site_id, (site, previous) => {
             <div v-show="secondaryFiltersOpen" id="readonly-log-secondary-filters" class="filter-row filter-row-secondary">
               <el-input v-model="group" clearable placeholder="分组" @keyup.enter="search" class="filter-group" />
               <el-input v-model="tokenName" clearable placeholder="令牌名称" @keyup.enter="search" class="filter-token" />
+              <LogTokenFilter v-model="tokenFilter" :disabled="backgroundRefreshing" class="filter-tokens" />
               <el-input v-model="statusCode" clearable placeholder="错误码" aria-label="错误码" inputmode="numeric" @keyup.enter="search" class="filter-status-code" />
             </div>
           </div>
@@ -2369,6 +2381,7 @@ watch(() => filters.site_id, (site, previous) => {
 .filter-request { width: 165px; min-width: 145px; flex: 0 1 165px; }
 .filter-model, .filter-group { width: 150px; min-width: 132px; flex: 0 1 150px; }
 .filter-token, .filter-upstream { width: 184px; min-width: 156px; flex: 0 1 184px; }
+.filter-tokens { width:184px;min-width:156px;flex:0 1 184px; }
 .filter-status-code { width: 112px; min-width: 100px; flex: 0 1 112px; }
 .filter-row-primary .filter-username { width: auto; flex: 1 1 145px; }
 .filter-row-primary .filter-channel { width: auto; flex: 1 1 125px; }

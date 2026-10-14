@@ -7,11 +7,13 @@ import { computed, reactive, ref } from 'vue'
 const source = readFileSync(new URL('../src/components/MobileLogFilters.vue', import.meta.url), 'utf8')
 const script = source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1].replace(/^import .*$/gm, '')
 const compiled = ts.transpileModule(script, { compilerOptions: { target:ts.ScriptTarget.ES2022, module:ts.ModuleKind.ES2022 } }).outputText
-const factory = new Function('defineProps', 'defineEmits', 'computed', 'reactive', 'ref', compiled + '\nreturn { draft, sheetOpen, openFilters, applyFilters, filterCount, emptyFilters };')
-const initial = () => ({logType:2,modelName:'gpt-4.1',group:'default',tokenName:'',requestID:'',upstreamRequestID:'',channelID:'',statusCode:'',emptyOutput:false,fallbackFinalOnly:false})
+const tokenUtils = {}
+new Function('exports', ts.transpileModule(readFileSync(new URL('../src/utils/logTokenFilter.ts', import.meta.url), 'utf8'), { compilerOptions: { target:ts.ScriptTarget.ES2022, module:ts.ModuleKind.CommonJS } }).outputText)(tokenUtils)
+const factory = new Function('defineProps', 'defineEmits', 'computed', 'reactive', 'ref', 'emptyLogTokenFilter', 'hasLogTokenFilter', compiled + '\nreturn { draft, sheetOpen, openFilters, applyFilters, filterCount, emptyFilters };')
+const initial = () => ({logType:2,modelName:'gpt-4.1',group:'default',tokenName:'',requestID:'',upstreamRequestID:'',channelID:'',statusCode:'',tokens:tokenUtils.emptyLogTokenFilter(),emptyOutput:false,fallbackFinalOnly:false})
 function setup(extra = {}) {
   const props = reactive({filters:initial(),admin:false,busy:false,...extra}), events=[]
-  const panel = factory(()=>props,()=>((...args)=>events.push(args)),computed,reactive,ref)
+  const panel = factory(()=>props,()=>((...args)=>events.push(args)),computed,reactive,ref,tokenUtils.emptyLogTokenFilter,tokenUtils.hasLogTokenFilter)
   return {props,events,...panel}
 }
 test('closing filter sheet discards edits; reopening starts from current query',()=>{
@@ -40,7 +42,27 @@ test('all mobile filter values reach the shared query before search',()=>{
   const fn=page.match(/function applyMobileFilters\(value: MobileLogFilterValues\) \{([\s\S]*?)\n\}/)[1]
   const values={...initial(),tokenName:'key',requestID:'request',upstreamRequestID:'upstream',channelID:'9',statusCode:'429',emptyOutput:true,fallbackFinalOnly:true}
   const keys=Object.keys(values),refs=keys.map(()=>ref('old'));let calls=0
-  const run=new Function(...keys,'search','value',fn)
+  const run=new Function(...keys.map(key=>key==='tokens'?'tokenFilter':key),'search','value',fn)
   run(...refs,()=>{calls++;assert.deepEqual(Object.fromEntries(keys.map((k,i)=>[k,refs[i].value])),values)},values)
   assert.equal(calls,1)
+})
+
+test('Tokens drafts and emitted snapshots stay independent from the parent and later edits',()=>{
+  const tokens={...tokenUtils.emptyLogTokenFilter(),mode:'output',output:'0'}
+  const p=setup({filters:{...initial(),tokens}});p.openFilters()
+  p.draft.tokens.output='50'
+  assert.equal(p.props.filters.tokens.output,'0')
+  p.applyFilters();p.draft.tokens.output='100'
+  assert.equal(p.events[0][1].tokens.output,'50')
+  p.openFilters();assert.equal(p.draft.tokens.output,'0')
+})
+
+test('Tokens counts only active dimensions and resetting the sheet clears the exact count',()=>{
+  const p=setup();assert.equal(p.filterCount.value,3)
+  p.props.filters.tokens={...tokenUtils.emptyLogTokenFilter(),mode:'output',input:'50'}
+  assert.equal(p.filterCount.value,3)
+  p.props.filters.tokens.output='0';assert.equal(p.filterCount.value,4)
+  p.openFilters();Object.assign(p.draft,p.emptyFilters());p.applyFilters()
+  assert.deepEqual(p.events[0][1].tokens,tokenUtils.emptyLogTokenFilter())
+  assert.equal(p.props.filters.tokens.output,'0')
 })
