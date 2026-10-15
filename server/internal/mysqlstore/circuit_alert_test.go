@@ -47,6 +47,58 @@ func TestCircuitImportMixedRulesAcrossBatches(t *testing.T) {
 	require.Equal(t, 501, count)
 }
 
+func TestCircuitNotificationCutoffPreservesHistoryAndNewEvents(t *testing.T) {
+	s, site, now := lifelineStore(t)
+	var cutoff time.Time
+	require.NoError(t, s.db.QueryRow(`SELECT occurred_at FROM circuit_alert_events WHERE event_id='__notification_cutoff__'`).Scan(&cutoff))
+	node := site + "-node"
+	require.NoError(t, s.CreateInstance(storage.Instance{ID: node, SiteID: site, Name: "test", Enabled: true, CreatedAt: now, UpdatedAt: now}))
+	require.NoError(t, s.UpsertNotificationChannel(storage.NotificationChannel{ID: site, SiteID: site, ChannelType: "webhook", RuleKeys: []string{"channel_circuit_opened", "channel_circuit_recovered"}, Enabled: true, CreatedAt: now, UpdatedAt: now}))
+	for _, rule := range []string{"circuit_opened", "circuit_recovered"} {
+		for _, historical := range []bool{true, false} {
+			id := fmt.Sprintf("%s-%s-%t", site, rule, historical)
+			at := cutoff
+			if historical {
+				at = cutoff.Add(-time.Millisecond)
+			}
+			a := circuitEventAlert(circuitEvent{ID: id, SiteID: site, InstanceID: node, Rule: rule, At: at})
+			require.NoError(t, s.UpsertCurrentAlerts([]storage.Alert{a}, now))
+			_, err := s.db.Exec(`INSERT INTO circuit_alert_events(event_id,alert_id,site_id,channel_id,rule_key,occurred_at) VALUES(?,?,?,1,?,?)`, id, a.ID, site, a.RuleKey, at)
+			require.NoError(t, err)
+			require.NoError(t, s.InsertNotificationDelivery(storage.NotificationDelivery{ID: a.ID, AlertID: a.ID, ChannelID: site, Status: "failed", AttemptedAt: now.Add(-time.Minute), NextAttemptAt: now.Add(-time.Second), Attempts: 2}))
+			due, err := New(s.db).NotificationDeliveryDue(a.ID, site, now)
+			require.NoError(t, err)
+			require.Equal(t, !historical, due)
+		}
+	}
+	alerts, err := New(s.db).CircuitNotificationAlerts(now)
+	require.NoError(t, err)
+	var n int
+	for _, a := range alerts {
+		if a.InstanceID == node {
+			n++
+			require.False(t, a.FirstSeenAt.Before(cutoff))
+		}
+	}
+	require.Equal(t, 2, n)
+	require.NoError(t, s.db.QueryRow(`SELECT COUNT(*) FROM alerts WHERE instance_id=?`, node).Scan(&n))
+	require.Equal(t, 4, n) // Suppression must not delete history.
+	// An old decision confirmed only after upgrade must not become a new
+	// notification merely because its command acknowledgement is recent.
+	legacy := site + "-late-old"
+	_, err = s.db.Exec(`INSERT INTO channel_commands(id,instance_id,channel_id,command_type,payload_json,status,created_by,created_at,updated_at) VALUES(?,?,2,'channel.update','{}','succeeded','test',?,?)`, legacy, node, cutoff.Add(-time.Millisecond), now)
+	require.NoError(t, err)
+	require.NoError(t, s.InsertRecommendation(tuning.Recommendation{ID: legacy, InstanceID: site, ChannelID: 2, Rule: "circuit_opened", ModeAtCreation: "auto", Status: "auto_executed", CommandID: &legacy, CreatedAt: cutoff.Add(-time.Millisecond)}))
+	require.NoError(t, New(s.db).SyncCircuitAlerts(now))
+	require.NoError(t, s.db.QueryRow(`SELECT COUNT(*) FROM circuit_alert_events WHERE event_id=?`, legacy).Scan(&n))
+	require.Zero(t, n)
+	// The migration and process restarts must not move the boundary forward.
+	require.NoError(t, ApplyDir(context.Background(), s.db, "../../migrations"))
+	var after time.Time
+	require.NoError(t, s.db.QueryRow(`SELECT occurred_at FROM circuit_alert_events WHERE event_id='__notification_cutoff__'`).Scan(&after))
+	require.True(t, cutoff.Equal(after))
+}
+
 func TestCircuitEventAlertIdentityAndRecovery(t *testing.T) {
 	e := circuitEvent{ID: "event-a", SiteID: "site-a", InstanceID: "node-a", Name: "channel", ChannelID: 12, Rule: "circuit_opened", At: time.Now(), Evidence: `{"trigger":"agent_report_batch","error_rate":0.6,"secret":"must-not-leak"}`}
 	a := circuitEventAlert(e)

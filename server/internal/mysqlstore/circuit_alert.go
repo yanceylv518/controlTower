@@ -72,6 +72,13 @@ func (s Store) SyncCircuitAlerts(now time.Time) error {
 	if err = tx.QueryRowContext(ctx, "SELECT occurred_at FROM circuit_alert_events WHERE event_id='__activation__' FOR UPDATE").Scan(&activated); err != nil {
 		return err
 	}
+	var cutoff time.Time
+	if err = tx.QueryRowContext(ctx, "SELECT occurred_at FROM circuit_alert_events WHERE event_id='__notification_cutoff__'").Scan(&cutoff); err != nil {
+		return err
+	}
+	if cutoff.After(activated) {
+		activated = cutoff
+	}
 	var events []circuitEvent
 	// Separate equality ranges avoid sorting every ordinary weight decision. Fix
 	// the join order so the small circuit-only range drives primary-key lookups.
@@ -162,6 +169,7 @@ func (s Store) CircuitNotificationAlerts(now time.Time) ([]storage.Alert, error)
  FROM alerts a JOIN circuit_alert_events e ON e.alert_id=a.id
  JOIN instances i ON i.id=a.instance_id AND i.deleted=0
  WHERE a.status IN ('firing','resolved')
+ AND e.occurred_at >= (SELECT occurred_at FROM circuit_alert_events WHERE event_id='__notification_cutoff__')
  AND (CASE WHEN i.site_id='' THEN i.id ELSE i.site_id END)=e.site_id AND EXISTS (
   SELECT 1 FROM notification_channels n WHERE n.enabled=1 AND n.site_id=e.site_id
   AND (n.rule_keys IS NULL OR JSON_LENGTH(n.rule_keys)=0 OR JSON_CONTAINS(n.rule_keys,JSON_QUOTE(a.rule_key)))

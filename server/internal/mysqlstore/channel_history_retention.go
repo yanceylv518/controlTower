@@ -2,6 +2,7 @@ package mysqlstore
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -14,8 +15,11 @@ type channelHistoryCursor struct {
 }
 type channelHistoryScan struct {
 	sync.Mutex
-	cursors map[string]channelHistoryCursor
+	cursors   map[string]channelHistoryCursor
+	nextOwner string
 }
+
+const channelHistoryBatchSize = 100
 
 // Resolve the small ownership set first, so history queries use index ranges
 // instead of an OR with a dependent instance-membership subquery.
@@ -62,10 +66,33 @@ UNION SELECT DISTINCT instance_id FROM operation_audits WHERE target_type='chann
 	if err != nil {
 		return err
 	}
-	for _, o := range owners {
+	// Rotate ownership so a slow owner cannot consume every pass's shared
+	// deadline and permanently starve owners later in lexical order.
+	if s.historyScan != nil && len(owners) > 0 {
+		s.historyScan.Lock()
+		next := s.historyScan.nextOwner
+		s.historyScan.Unlock()
+		for i, o := range owners {
+			if o.id >= next {
+				owners = append(owners[i:], owners[:i]...)
+				break
+			}
+		}
+	}
+	var failures error
+	for i, o := range owners {
+		if ctx.Err() != nil {
+			return errors.Join(failures, ctx.Err())
+		}
+		if s.historyScan != nil {
+			s.historyScan.Lock()
+			s.historyScan.nextOwner = owners[(i+1)%len(owners)].id
+			s.historyScan.Unlock()
+		}
 		days, err := s.channelHistoryDays(ctx, o.site)
 		if err != nil {
-			return err
+			failures = errors.Join(failures, fmt.Errorf("history policy (%s): %w", o.id, err))
+			continue
 		}
 		before := now.Add(-time.Duration(days) * 24 * time.Hour)
 		// One status per range preserves index order and bounded work.
@@ -82,7 +109,7 @@ AND NOT EXISTS (SELECT 1 FROM operation_audits a WHERE a.id=channel_commands.id 
 AND NOT EXISTS (SELECT 1 FROM operation_audits a FORCE INDEX (idx_operation_audits_correlation) WHERE a.correlation_id=channel_commands.id AND (a.created_at>=? OR a.updated_at>=?))
 `, o.id, status, before, before, o.site, o.site, now, before, before, before, before, before, before)
 			if err != nil {
-				return fmt.Errorf("channel command retention: %w", err)
+				failures = errors.Join(failures, fmt.Errorf("channel command retention (%s/%s): %w", o.id, status, err))
 			}
 		}
 		// A linked audit becomes eligible only after its safely expired command
@@ -93,11 +120,11 @@ AND NOT EXISTS (SELECT 1 FROM channel_commands c WHERE c.id=operation_audits.id)
 AND NOT EXISTS (SELECT 1 FROM channel_commands c WHERE c.id=operation_audits.correlation_id)
 `, o.id, before, before)
 		if err != nil {
-			return fmt.Errorf("channel audit retention: %w", err)
+			failures = errors.Join(failures, fmt.Errorf("channel audit retention (%s): %w", o.id, err))
 		}
 
 	}
-	return nil
+	return failures
 }
 
 // Lock an index-ordered bounded candidate set, then delete only those primary
@@ -125,9 +152,9 @@ func (s Store) pruneChannelHistoryBatch(ctx context.Context, table, index, candi
 		return err
 	}
 	defer tx.Rollback()
-	rows, err := tx.QueryContext(ctx, "SELECT /*+ MAX_EXECUTION_TIME(1000) */ id,created_at FROM "+table+" FORCE INDEX ("+index+") WHERE "+candidate+" ORDER BY created_at,id LIMIT 1000 FOR UPDATE SKIP LOCKED", queryArgs...)
+	rows, err := tx.QueryContext(ctx, "SELECT /*+ MAX_EXECUTION_TIME(1000) */ id,created_at FROM "+table+" FORCE INDEX ("+index+") WHERE "+candidate+fmt.Sprintf(" ORDER BY created_at,id LIMIT %d FOR UPDATE SKIP LOCKED", channelHistoryBatchSize), queryArgs...)
 	if err != nil {
-		return err
+		return fmt.Errorf("select candidates: %w", err)
 	}
 	var ids []any
 	for rows.Next() {
@@ -142,7 +169,7 @@ func (s Store) pruneChannelHistoryBatch(ctx context.Context, table, index, candi
 	err = rows.Err()
 	rows.Close()
 	if err != nil {
-		return err
+		return fmt.Errorf("read candidates: %w", err)
 	}
 	if len(ids) > 0 {
 		guardArgs := append(append([]any{}, ids...), args...)
@@ -150,7 +177,7 @@ func (s Store) pruneChannelHistoryBatch(ctx context.Context, table, index, candi
 		// primary keys only; never relax current-task or recent-reference safety.
 		guardRows, err := tx.QueryContext(ctx, "SELECT /*+ MAX_EXECUTION_TIME(1000) */ id FROM "+table+" FORCE INDEX (PRIMARY) WHERE id IN ("+strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")+") AND "+where+" FOR UPDATE", guardArgs...)
 		if err != nil {
-			return err
+			return fmt.Errorf("check protections: %w", err)
 		}
 		var deletable []any
 		for guardRows.Next() {
@@ -164,7 +191,7 @@ func (s Store) pruneChannelHistoryBatch(ctx context.Context, table, index, candi
 		err = guardRows.Err()
 		guardRows.Close()
 		if err != nil {
-			return err
+			return fmt.Errorf("read protections: %w", err)
 		}
 		if len(deletable) > 0 {
 			if _, err = tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE id IN ("+strings.TrimSuffix(strings.Repeat("?,", len(deletable)), ",")+")", deletable...); err != nil {
@@ -175,7 +202,7 @@ func (s Store) pruneChannelHistoryBatch(ctx context.Context, table, index, candi
 	if err := tx.Commit(); err != nil {
 		return err
 	}
-	if len(ids) < 1000 {
+	if len(ids) < channelHistoryBatchSize {
 		delete(scan.cursors, key)
 	} else {
 		scan.cursors[key] = cursor

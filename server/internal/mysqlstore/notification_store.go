@@ -108,6 +108,19 @@ AND a.rule_key NOT IN ('channel_circuit_opened','channel_circuit_recovered')`, n
 }
 
 func (s Store) NotificationDeliveryDue(alertID string, channelID string, now time.Time) (bool, error) {
+	// Both the ordinary firing-alert path and circuit-event path reach this
+	// check. Keep historical retries from bypassing the persistent cutoff.
+	var historical bool
+	if err := s.db.QueryRowContext(context.Background(), `SELECT EXISTS (
+SELECT 1 FROM alerts a WHERE a.id=? AND a.rule_key IN ('channel_circuit_opened','channel_circuit_recovered')
+AND (NOT EXISTS (SELECT 1 FROM circuit_alert_events WHERE event_id='__notification_cutoff__')
+OR a.first_seen_at < (SELECT occurred_at FROM circuit_alert_events WHERE event_id='__notification_cutoff__'))
+)`, alertID).Scan(&historical); err != nil {
+		return false, err
+	}
+	if historical {
+		return false, nil
+	}
 	var status string
 	var nextAttemptAt time.Time
 	err := s.db.QueryRowContext(context.Background(), `

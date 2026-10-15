@@ -75,6 +75,31 @@ func TestChannelHistoryRetentionOwnershipAndActiveProtection(t *testing.T) {
 	}
 }
 
+func TestChannelHistoryRetentionFailureDoesNotBlockOtherOwners(t *testing.T) {
+	s, site, now := lifelineStore(t)
+	old := now.Add(-8 * 24 * time.Hour)
+	bad, good := site+"-a", site+"-b"
+	for _, owner := range []string{bad, good} {
+		_, err := s.db.Exec(`INSERT INTO channel_commands(id,instance_id,channel_id,command_type,payload_json,status,created_by,created_at,updated_at) VALUES(?,?,7,'channel.update','{}','succeeded','test',?,?)`, owner, owner, old, old)
+		require.NoError(t, err)
+	}
+	// Invalid stored JSON deterministically fails a protection check. It must
+	// neither relax the guard nor prevent the healthy owner's cleanup.
+	_, err := s.db.Exec(`INSERT INTO tuning_continuous_states(instance_id,channel_id,model_name,capacity_control_json,updated_at) VALUES(?,7,'m','{',?)`, bad, now)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		s.db.Exec(`DELETE FROM tuning_continuous_states WHERE instance_id=?`, bad)
+		s.db.Exec(`DELETE FROM channel_commands WHERE id IN (?,?)`, bad, good)
+	})
+	err = s.pruneChannelHistory(context.Background(), now)
+	require.ErrorContains(t, err, "protections")
+	var n int
+	require.NoError(t, s.db.QueryRow(`SELECT COUNT(*) FROM channel_commands WHERE id=?`, bad).Scan(&n))
+	require.Equal(t, 1, n)
+	require.NoError(t, s.db.QueryRow(`SELECT COUNT(*) FROM channel_commands WHERE id=?`, good).Scan(&n))
+	require.Zero(t, n)
+}
+
 func TestChannelHistoryRetentionLinkedAuditAndBatch(t *testing.T) {
 	s, site, now := lifelineStore(t)
 	ctx := context.Background()
@@ -96,7 +121,7 @@ func TestChannelHistoryRetentionLinkedAuditAndBatch(t *testing.T) {
 	require.Zero(t, n)
 	values := []string{}
 	args := []any{}
-	for i := 0; i < 1005; i++ {
+	for i := 0; i < channelHistoryBatchSize+5; i++ {
 		values = append(values, "(?,?,7,'channel.update','{}','succeeded','test',?,?)")
 		args = append(args, rand.Text(), site, old, old)
 	}
@@ -118,7 +143,7 @@ func TestChannelHistoryRetentionAdvancesPastProtectedCandidates(t *testing.T) {
 	require.NoError(t, err)
 	values := []string{}
 	args := []any{}
-	for i := 0; i < 1000; i++ {
+	for i := 0; i < channelHistoryBatchSize; i++ {
 		values = append(values, "(?,?,'channel.update','channel','7','test','{}','{}','succeeded',?,?,?)")
 		args = append(args, rand.Text(), site, command, old, old)
 	}
@@ -136,7 +161,7 @@ func TestChannelHistoryRetentionAdvancesPastProtectedCandidates(t *testing.T) {
 	require.NoError(t, s.db.QueryRow(`SELECT COUNT(*) FROM operation_audits WHERE id=?`, eligible).Scan(&n))
 	require.Zero(t, n)
 	require.NoError(t, s.db.QueryRow(`SELECT COUNT(*) FROM operation_audits WHERE instance_id=?`, site).Scan(&n))
-	require.Equal(t, 1000, n)
+	require.Equal(t, channelHistoryBatchSize, n)
 	// Once the protective command ends, wrapping the scan revisits old rows.
 	_, err = s.db.Exec(`UPDATE channel_commands SET status='succeeded' WHERE id=?`, command)
 	require.NoError(t, err)
