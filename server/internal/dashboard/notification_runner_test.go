@@ -44,7 +44,7 @@ func TestNotificationRunnerImportFailureStillDeliversExistingCircuit(t *testing.
 	if err := store.UpsertNotificationChannel(storage.NotificationChannel{ID: "group", SiteID: "site", ChannelType: "dingtalk", Name: "test", WebhookURL: endpoint.URL, Enabled: true, CreatedAt: now, UpdatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	source := &failedCircuitImport{event: storage.Alert{ID: "existing", InstanceID: "node", RuleKey: "channel_circuit_recovered", Status: "resolved", Severity: "info", Title: "existing recovery", FirstSeenAt: now, LastSeenAt: now}}
+	source := &failedCircuitImport{event: storage.Alert{ID: "existing", InstanceID: "node", SiteID: "site", RuleKey: "channel_circuit_recovered", Status: "resolved", Severity: "info", Title: "existing recovery", FirstSeenAt: now, LastSeenAt: now}}
 	runner := NewAlertNotificationRunner(store, store, store, store, store, time.Second).WithInstanceStore(store).WithCircuitAlerts(source)
 	if err := runner.RunOnce(); err == nil || !strings.Contains(err.Error(), "import circuit events") {
 		t.Fatalf("missing stage error: %v", err)

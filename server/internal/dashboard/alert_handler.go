@@ -32,6 +32,7 @@ type AlertListResponse struct {
 }
 
 type AlertItem struct {
+	SiteID        string     `json:"site_id,omitempty"`
 	ID            string     `json:"id"`
 	InstanceID    string     `json:"instance_id"`
 	InstanceName  string     `json:"instance_name"`
@@ -528,7 +529,7 @@ func parseAlertQuery(r *http.Request) storage.AlertQuery {
 func alertItemsToStorage(items []AlertItem) []storage.Alert {
 	alerts := make([]storage.Alert, 0, len(items))
 	for _, item := range items {
-		alerts = append(alerts, storage.Alert{DimensionType: item.DimensionType, DimensionKey: item.DimensionKey, ID: item.ID, InstanceID: item.InstanceID, RuleKey: item.RuleKey, Severity: item.Severity, Status: item.Status, Title: item.Title, Summary: item.Summary, FirstSeenAt: item.FirstSeenAt, LastSeenAt: item.LastSeenAt, ResolvedAt: item.ResolvedAt, SilenceUntil: item.SilenceUntil})
+		alerts = append(alerts, storage.Alert{SiteID: item.SiteID, DimensionType: item.DimensionType, DimensionKey: item.DimensionKey, ID: item.ID, InstanceID: item.InstanceID, RuleKey: item.RuleKey, Severity: item.Severity, Status: item.Status, Title: item.Title, Summary: item.Summary, FirstSeenAt: item.FirstSeenAt, LastSeenAt: item.LastSeenAt, ResolvedAt: item.ResolvedAt, SilenceUntil: item.SilenceUntil})
 	}
 	return alerts
 }
@@ -536,7 +537,7 @@ func alertItemsToStorage(items []AlertItem) []storage.Alert {
 func storageAlertsToItems(alerts []storage.Alert) []AlertItem {
 	items := make([]AlertItem, 0, len(alerts))
 	for _, alert := range alerts {
-		items = append(items, AlertItem{DimensionType: alert.DimensionType, DimensionKey: alert.DimensionKey, ID: alert.ID, InstanceID: alert.InstanceID, RuleKey: alert.RuleKey, Severity: alert.Severity, Status: alert.Status, Title: alert.Title, Summary: alert.Summary, SeenAt: alert.LastSeenAt, FirstSeenAt: alert.FirstSeenAt, LastSeenAt: alert.LastSeenAt, ResolvedAt: alert.ResolvedAt, SilenceUntil: alert.SilenceUntil})
+		items = append(items, AlertItem{SiteID: alert.SiteID, DimensionType: alert.DimensionType, DimensionKey: alert.DimensionKey, ID: alert.ID, InstanceID: alert.InstanceID, RuleKey: alert.RuleKey, Severity: alert.Severity, Status: alert.Status, Title: alert.Title, Summary: alert.Summary, SeenAt: alert.LastSeenAt, FirstSeenAt: alert.FirstSeenAt, LastSeenAt: alert.LastSeenAt, ResolvedAt: alert.ResolvedAt, SilenceUntil: alert.SilenceUntil})
 	}
 	sortAlerts(items)
 	return items

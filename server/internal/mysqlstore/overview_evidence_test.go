@@ -61,7 +61,7 @@ func TestOverviewQuantilesUseOneHistogramInsteadOfStoredP95(t *testing.T) {
 }
 func TestOverviewAlertSiteFilterPrecedesLimit(t *testing.T) {
 	query, args := buildAlertQuery(storage.AlertQuery{SiteID: "site-a", ActiveOnly: true, Limit: 5})
-	if !strings.Contains(query, "CASE WHEN site_id='' THEN id ELSE site_id END=?") || len(args) != 5 || args[0] != "site-a" || args[1] != "site-a" {
+	if !strings.Contains(query, "CASE WHEN site_id='' THEN id ELSE site_id END=?") || len(args) != 6 || args[0] != "site-a" || args[1] != "site-a" || args[2] != "site-a" || !strings.Contains(query, "e.site_id=?") {
 		t.Fatalf("site not filtered in SQL: %s %#v", query, args)
 	}
 }

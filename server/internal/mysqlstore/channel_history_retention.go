@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -17,37 +18,68 @@ type channelHistoryScan struct {
 	sync.Mutex
 	cursors   map[string]channelHistoryCursor
 	nextOwner string
+	pending   bool
 }
 
 const channelHistoryBatchSize = 100
+const channelHistoryPassBatches = 50
+
+func (s Store) ChannelHistoryCleanupPending() bool {
+	if s.historyScan == nil {
+		return false
+	}
+	s.historyScan.Lock()
+	defer s.historyScan.Unlock()
+	return s.historyScan.pending
+}
+
+type historyBatchStats struct {
+	candidates, deleted, protected                        int
+	candidateTime, protectionTime, deleteTime, commitTime time.Duration
+}
 
 // Resolve the small ownership set first, so history queries use index ranges
 // instead of an OR with a dependent instance-membership subquery.
 func (s Store) channelHistoryOwners(ctx context.Context, site string) ([]any, error) {
-	owners := []any{site}
-	rows, err := s.db.QueryContext(ctx, `SELECT id FROM instances WHERE site_id=? AND id<>? ORDER BY id`, site, site)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		owners = append(owners, id)
-	}
-	return owners, rows.Err()
+	return []any{site}, nil
 }
 
 // Each invocation does bounded work. Terminal records must be old both by
 // creation and completion time; late results receive a full retention window.
 // Unknown command states and non-channel audits are deliberately preserved.
 func (s Store) pruneChannelHistory(ctx context.Context, now time.Time) error {
-	rows, err := s.db.QueryContext(ctx, `SELECT h.instance_id,COALESCE(NULLIF(i.site_id,''),h.instance_id) FROM (
-SELECT DISTINCT instance_id FROM channel_commands
-UNION SELECT DISTINCT instance_id FROM operation_audits WHERE target_type='channel'
-) h LEFT JOIN instances i ON i.id=h.instance_id ORDER BY h.instance_id`)
+	started := time.Now()
+	deadline := started.Add(4 * time.Second)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	ctx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
+	var totals historyBatchStats
+	batches := 0
+	workBatches := 0
+	pending := false
+	defer func() {
+		if s.historyScan != nil {
+			s.historyScan.Lock()
+			s.historyScan.pending = pending
+			s.historyScan.Unlock()
+		}
+		log.Printf("channel history cleanup batches=%d candidates=%d deleted=%d protected=%d candidate_time=%s protection_time=%s delete_time=%s commit_time=%s elapsed=%s pending=%t", batches, totals.candidates, totals.deleted, totals.protected, totals.candidateTime, totals.protectionTime, totals.deleteTime, totals.commitTime, time.Since(started), pending)
+	}()
+	var failures error
+	if err := s.backfillChannelHistory(ctx); err != nil {
+		failures = fmt.Errorf("history ownership backfill: %w", err)
+	}
+	// A database upgraded from legacy history may have no owned rows yet.
+	// Keep the bounded evidence backfill on the catch-up cadence too.
+	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM channel_commands WHERE ownership_evidence='' LIMIT 1) OR EXISTS(SELECT 1 FROM operation_audits WHERE ownership_evidence='' AND target_type='channel' LIMIT 1)`).Scan(&pending); err != nil {
+		return errors.Join(failures, err)
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT site_id,site_id FROM (
+SELECT DISTINCT site_id FROM channel_commands WHERE site_id<>''
+UNION SELECT DISTINCT site_id FROM operation_audits WHERE site_id<>'' AND target_type='channel'
+) h ORDER BY site_id`)
 	if err != nil {
 		return err
 	}
@@ -79,50 +111,89 @@ UNION SELECT DISTINCT instance_id FROM operation_audits WHERE target_type='chann
 			}
 		}
 	}
-	var failures error
-	for i, o := range owners {
-		if ctx.Err() != nil {
-			return errors.Join(failures, ctx.Err())
-		}
-		if s.historyScan != nil {
-			s.historyScan.Lock()
-			s.historyScan.nextOwner = owners[(i+1)%len(owners)].id
-			s.historyScan.Unlock()
-		}
-		days, err := s.channelHistoryDays(ctx, o.site)
-		if err != nil {
-			failures = errors.Join(failures, fmt.Errorf("history policy (%s): %w", o.id, err))
-			continue
-		}
-		before := now.Add(-time.Duration(days) * 24 * time.Hour)
-		// One status per range preserves index order and bounded work.
-		for _, status := range []string{"succeeded", "failed", "expired"} {
-			err = s.pruneChannelHistoryBatch(ctx, "channel_commands", "idx_command_history_retention", "instance_id=? AND status=? AND created_at<?", 3, `instance_id=?
-AND status=? AND created_at<? AND updated_at<?
-AND NOT EXISTS (SELECT 1 FROM tuning_continuous_states s WHERE s.instance_id=? AND s.channel_id=channel_commands.channel_id
-AND (s.probe_command_id=channel_commands.id OR s.last_probe_command_id=channel_commands.id OR s.circuit_status_command_id=channel_commands.id
-OR JSON_UNQUOTE(JSON_EXTRACT(s.capacity_control_json,'$.pending_command_id'))=channel_commands.id))
-AND NOT EXISTS (SELECT 1 FROM tuning_probe_records p FORCE INDEX (idx_probe_round) WHERE p.instance_id=? AND p.round_id=channel_commands.id AND p.outcome='pending' AND p.deadline_at>=?)
-AND NOT EXISTS (SELECT 1 FROM tuning_recommendations r WHERE r.command_id=channel_commands.id AND r.created_at>=?)
-AND NOT EXISTS (SELECT 1 FROM channel_control_requests j FORCE INDEX (idx_control_command) WHERE j.command_id=channel_commands.id AND j.started_at>=?)
-AND NOT EXISTS (SELECT 1 FROM operation_audits a WHERE a.id=channel_commands.id AND (a.created_at>=? OR a.updated_at>=?))
-AND NOT EXISTS (SELECT 1 FROM operation_audits a FORCE INDEX (idx_operation_audits_correlation) WHERE a.correlation_id=channel_commands.id AND (a.created_at>=? OR a.updated_at>=?))
-`, o.id, status, before, before, o.site, o.site, now, before, before, before, before, before, before)
+	done := make(map[string]bool)
+	policies := make(map[string]int)
+	for {
+		allDone := true
+		for i, o := range owners {
+			if workBatches >= channelHistoryPassBatches || time.Until(deadline) < 500*time.Millisecond {
+				pending = true
+				return failures
+			}
+			if ctx.Err() != nil {
+				return errors.Join(failures, ctx.Err())
+			}
+			if s.historyScan != nil {
+				s.historyScan.Lock()
+				s.historyScan.nextOwner = owners[(i+1)%len(owners)].id
+				s.historyScan.Unlock()
+			}
+			days, known := policies[o.site]
+			var err error
+			if !known {
+				days, err = s.channelHistoryDays(ctx, o.site)
+				if err == nil {
+					policies[o.site] = days
+				}
+			}
 			if err != nil {
-				failures = errors.Join(failures, fmt.Errorf("channel command retention (%s/%s): %w", o.id, status, err))
+				failures = errors.Join(failures, fmt.Errorf("history policy (%s): %w", o.id, err))
+				continue
+			}
+			before := now.Add(-time.Duration(days) * 24 * time.Hour)
+			// One status per range preserves index order and bounded work.
+			for _, status := range []string{"succeeded", "failed", "expired"} {
+				key := o.id + "/" + status
+				if done[key] {
+					continue
+				}
+				if workBatches >= channelHistoryPassBatches || time.Until(deadline) < 500*time.Millisecond {
+					pending = true
+					return failures
+				}
+				stats, batchErr := s.pruneChannelHistoryBatch(ctx, now, "channel_commands", "idx_command_site_retention", "site_id=? AND status=? AND created_at<?", 3,
+					`site_id=? AND status=? AND created_at<? AND updated_at<?`, o.id, status, before, before)
+				batches++
+				if stats.candidates > 0 {
+					workBatches++
+				}
+				totals.add(stats)
+				done[key] = batchErr != nil || stats.candidates < channelHistoryBatchSize
+				if !done[key] {
+					allDone = false
+				}
+				if batchErr != nil {
+					failures = errors.Join(failures, fmt.Errorf("channel command retention (%s/%s): %w", o.id, status, batchErr))
+				}
+			}
+			// A linked audit becomes eligible only after its safely expired command
+			// has been removed. Commands with current references keep their audits.
+			key := o.id + "/audits"
+			if done[key] {
+				continue
+			}
+			if workBatches >= channelHistoryPassBatches || time.Until(deadline) < 500*time.Millisecond {
+				pending = true
+				return failures
+			}
+			stats, batchErr := s.pruneChannelHistoryBatch(ctx, now, "operation_audits", "idx_audit_site_retention", "site_id=? AND target_type='channel' AND created_at<?", 2,
+				`site_id=? AND target_type='channel' AND created_at<? AND updated_at<? AND status IN ('succeeded','success','failed','expired','canceled','cancelled','rejected')`, o.id, before, before)
+			batches++
+			if stats.candidates > 0 {
+				workBatches++
+			}
+			totals.add(stats)
+			done[key] = batchErr != nil || stats.candidates < channelHistoryBatchSize
+			if !done[key] {
+				allDone = false
+			}
+			if batchErr != nil {
+				failures = errors.Join(failures, fmt.Errorf("channel audit retention (%s): %w", o.id, batchErr))
 			}
 		}
-		// A linked audit becomes eligible only after its safely expired command
-		// has been removed. Commands with current references keep their audits.
-		err = s.pruneChannelHistoryBatch(ctx, "operation_audits", "idx_audit_channel_retention", "instance_id=? AND target_type='channel' AND created_at<?", 2, `instance_id=? AND target_type='channel'
-AND created_at<? AND updated_at<? AND status IN ('succeeded','success','failed','expired','canceled','cancelled','rejected')
-AND NOT EXISTS (SELECT 1 FROM channel_commands c WHERE c.id=operation_audits.id)
-AND NOT EXISTS (SELECT 1 FROM channel_commands c WHERE c.id=operation_audits.correlation_id)
-`, o.id, before, before)
-		if err != nil {
-			failures = errors.Join(failures, fmt.Errorf("channel audit retention (%s): %w", o.id, err))
+		if allDone {
+			break
 		}
-
 	}
 	return failures
 }
@@ -130,7 +201,7 @@ AND NOT EXISTS (SELECT 1 FROM channel_commands c WHERE c.id=operation_audits.cor
 // Lock an index-ordered bounded candidate set, then delete only those primary
 // keys. A direct DELETE with correlated guards can choose an unordered scan and
 // evaluate every old row before applying LIMIT. Never concatenate caller input.
-func (s Store) pruneChannelHistoryBatch(ctx context.Context, table, index, candidate string, rangeArgs int, where string, args ...any) error {
+func (s Store) pruneChannelHistoryBatch(ctx context.Context, now time.Time, table, index, candidate string, rangeArgs int, where string, args ...any) (stats historyBatchStats, resultErr error) {
 	// LIMIT must precede protection checks. Otherwise thousands of protected
 	// rows can be examined to find just one deletable row. Rotate through all
 	// candidates, including protected ones; restart safely rescans from the start.
@@ -149,19 +220,20 @@ func (s Store) pruneChannelHistoryBatch(ctx context.Context, table, index, candi
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return stats, err
 	}
 	defer tx.Rollback()
+	stage := time.Now()
 	rows, err := tx.QueryContext(ctx, "SELECT /*+ MAX_EXECUTION_TIME(1000) */ id,created_at FROM "+table+" FORCE INDEX ("+index+") WHERE "+candidate+fmt.Sprintf(" ORDER BY created_at,id LIMIT %d FOR UPDATE SKIP LOCKED", channelHistoryBatchSize), queryArgs...)
 	if err != nil {
-		return fmt.Errorf("select candidates: %w", err)
+		return stats, fmt.Errorf("select candidates: %w", err)
 	}
 	var ids []any
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id, &cursor.at); err != nil {
 			rows.Close()
-			return err
+			return stats, err
 		}
 		ids = append(ids, id)
 		cursor.id = id
@@ -169,43 +241,47 @@ func (s Store) pruneChannelHistoryBatch(ctx context.Context, table, index, candi
 	err = rows.Err()
 	rows.Close()
 	if err != nil {
-		return fmt.Errorf("read candidates: %w", err)
+		return stats, fmt.Errorf("read candidates: %w", err)
 	}
+	stats.candidates = len(ids)
+	stats.candidateTime = time.Since(stage)
 	if len(ids) > 0 {
-		guardArgs := append(append([]any{}, ids...), args...)
-		// Candidates are already locked. Evaluate all original guards against
-		// primary keys only; never relax current-task or recent-reference safety.
-		guardRows, err := tx.QueryContext(ctx, "SELECT /*+ MAX_EXECUTION_TIME(1000) */ id FROM "+table+" FORCE INDEX (PRIMARY) WHERE id IN ("+strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")+") AND "+where+" FOR UPDATE", guardArgs...)
+		stage = time.Now()
+		deletable, err := channelHistoryDeletable(ctx, tx, table, ids, where, args, now)
+		stats.protectionTime = time.Since(stage)
 		if err != nil {
-			return fmt.Errorf("check protections: %w", err)
+			return stats, fmt.Errorf("check protections: %w", err)
 		}
-		var deletable []any
-		for guardRows.Next() {
-			var id string
-			if err := guardRows.Scan(&id); err != nil {
-				guardRows.Close()
-				return err
-			}
-			deletable = append(deletable, id)
-		}
-		err = guardRows.Err()
-		guardRows.Close()
-		if err != nil {
-			return fmt.Errorf("read protections: %w", err)
-		}
+		stage = time.Now()
 		if len(deletable) > 0 {
 			if _, err = tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE id IN ("+strings.TrimSuffix(strings.Repeat("?,", len(deletable)), ",")+")", deletable...); err != nil {
-				return err
+				return stats, err
 			}
 		}
+		stats.deleteTime = time.Since(stage)
+		stats.deleted = len(deletable)
+		stats.protected = len(ids) - len(deletable)
 	}
+	stage = time.Now()
 	if err := tx.Commit(); err != nil {
-		return err
+		stats.deleted = 0
+		return stats, err
 	}
+	stats.commitTime = time.Since(stage)
 	if len(ids) < channelHistoryBatchSize {
 		delete(scan.cursors, key)
 	} else {
 		scan.cursors[key] = cursor
 	}
-	return nil
+	return stats, nil
+}
+
+func (s *historyBatchStats) add(b historyBatchStats) {
+	s.candidates += b.candidates
+	s.deleted += b.deleted
+	s.protected += b.protected
+	s.candidateTime += b.candidateTime
+	s.protectionTime += b.protectionTime
+	s.deleteTime += b.deleteTime
+	s.commitTime += b.commitTime
 }

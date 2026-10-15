@@ -48,7 +48,8 @@ const valid = computed(
 const state = useAsyncData(async () =>
   (
     await dashboard.channelCommands({
-      instance_id: defaultInstanceID.value || undefined,
+      site_id: filters.site_id || undefined,
+      channel_id: props.channelId,
       limit: 100,
     })
   ).items.filter((x) => x.channel_id === props.channelId),
@@ -101,7 +102,7 @@ useAutoRefresh(state.reload);
           label="命令 ID" /><el-table-column label="状态"
           ><template #default="s"
             ><StatusTag :value="s.row.status" /></template></el-table-column
-        ><el-table-column prop="error_summary" label="错误" /></el-table
+        ><el-table-column label="执行来源"><template #default="s">{{s.row.execution_kind==='ct_direct'?'CT 直连':s.row.execution_kind==='agent'?`Agent（${s.row.instance_name||s.row.instance_id}）`:'来源未确认'}}</template></el-table-column><el-table-column prop="error_summary" label="错误" /></el-table
       ><ListPager
         v-model:page="page"
         v-model:page-size="pageSize"

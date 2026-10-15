@@ -26,7 +26,7 @@ func TestLifelineRuntimeAndRecoveryBatchIsolation(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, values)
 	id := rand.Text()
-	_, err = s.db.Exec(`INSERT INTO channel_commands(id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at) VALUES(?,?,7,'channel.probe','{"model":"m","probe_count":10}','executing','system:auto','',?,?)`, id, site, now.Add(-time.Minute), now)
+	_, err = s.db.Exec(`INSERT INTO channel_commands(site_id,execution_kind,ownership_evidence,id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at) VALUES(?,'ct_direct','recorded',?,?,7,'channel.probe','{"model":"m","probe_count":10}','executing','system:auto','',?,?)`, site, id, "", now.Add(-time.Minute), now)
 	require.NoError(t, err)
 	records := []tuning.ProbeRecord{}
 	for i, outcome := range []string{"success", "error", "pending"} {

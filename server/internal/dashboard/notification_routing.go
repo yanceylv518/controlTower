@@ -42,6 +42,9 @@ func normalizeNotificationRules(keys []string) ([]string, bool) {
 
 func notificationChannelMatches(channel storage.NotificationChannel, alert storage.Alert, instanceSites map[string]string) bool {
 	site := instanceSites[alert.InstanceID]
+	if alert.RuleKey == "channel_circuit_opened" || alert.RuleKey == "channel_circuit_recovered" {
+		site = alert.SiteID
+	}
 	if site == "" || channel.SiteID == "" || channel.SiteID != site {
 		return false
 	}

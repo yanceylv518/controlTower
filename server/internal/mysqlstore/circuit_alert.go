@@ -22,7 +22,7 @@ type circuitEvent struct {
 
 func circuitEventAlert(e circuitEvent) storage.Alert {
 	hash := sha1.Sum([]byte("circuit:" + e.ID))
-	a := storage.Alert{ID: hex.EncodeToString(hash[:]), InstanceID: e.InstanceID,
+	a := storage.Alert{ID: hex.EncodeToString(hash[:]), InstanceID: e.InstanceID, SiteID: e.SiteID,
 		RuleKey: "channel_" + e.Rule, Status: "firing", Severity: "critical",
 		Title: "渠道已熔断", FirstSeenAt: e.At, LastSeenAt: e.At}
 	// Read only the event snapshot: live state may have advanced before delivery.
@@ -83,15 +83,15 @@ func (s Store) SyncCircuitAlerts(now time.Time) error {
 	// Separate equality ranges avoid sorting every ordinary weight decision. Fix
 	// the join order so the small circuit-only range drives primary-key lookups.
 	for _, rule := range []string{"circuit_opened", "circuit_recovered"} {
-		rows, err := tx.QueryContext(ctx, `SELECT /*+ MAX_EXECUTION_TIME(3000) */ STRAIGHT_JOIN r.id,r.instance_id,c.instance_id,r.channel_id,r.channel_name,r.rule,r.created_at,r.evidence_json
+		rows, err := tx.QueryContext(ctx, `SELECT /*+ MAX_EXECUTION_TIME(3000) */ STRAIGHT_JOIN r.id,r.instance_id,IF(c.execution_kind='agent',c.instance_id,''),r.channel_id,r.channel_name,r.rule,r.created_at,r.evidence_json
  FROM tuning_recommendations r FORCE INDEX (idx_tuning_circuit_import)
  JOIN channel_commands c ON c.id=r.command_id AND c.status='succeeded'
- JOIN instances i ON i.id=c.instance_id AND i.deleted=0
+
  LEFT JOIN circuit_alert_events e ON e.event_id=r.id
  WHERE e.event_id IS NULL AND r.created_at>=? AND r.created_at<=?
  AND r.mode_at_creation='auto' AND r.status='auto_executed'
  AND r.rule=?
- AND (CASE WHEN i.site_id='' THEN i.id ELSE i.site_id END)=r.instance_id
+ AND c.site_id=r.instance_id
  ORDER BY r.created_at,r.id LIMIT 500`, activated, now, rule)
 		if err != nil {
 			return fmt.Errorf("circuit event candidates (%s): %w", rule, err)
@@ -135,7 +135,7 @@ func (s Store) SyncCircuitAlerts(now time.Time) error {
 		}
 		if _, err = tx.ExecContext(ctx, `INSERT INTO alerts
    (id,instance_id,rule_key,severity,status,title,summary,first_seen_at,last_seen_at,resolved_at,confirmed_at,dimension_type,dimension_key)
-   VALUES(?,?,?,?,?,?,?,?,?,?,?,'instance_channel',?)`, a.ID, a.InstanceID, a.RuleKey, a.Severity, a.Status, a.Title, a.Summary, a.FirstSeenAt, a.LastSeenAt, a.ResolvedAt, e.At, fmt.Sprintf("%s:channel:%d", e.InstanceID, e.ChannelID)); err != nil {
+   VALUES(?,?,?,?,?,?,?,?,?,?,?,'site_channel',?)`, a.ID, a.InstanceID, a.RuleKey, a.Severity, a.Status, a.Title, a.Summary, a.FirstSeenAt, a.LastSeenAt, a.ResolvedAt, e.At, fmt.Sprintf("%s:channel:%d", e.SiteID, e.ChannelID)); err != nil {
 			return err
 		}
 		if _, err = tx.ExecContext(ctx, `INSERT INTO circuit_alert_events(event_id,alert_id,site_id,channel_id,rule_key,occurred_at) VALUES(?,?,?,?,?,?)`, e.ID, a.ID, e.SiteID, e.ChannelID, a.RuleKey, e.At); err != nil {
@@ -165,14 +165,14 @@ func (s Store) SyncCircuitAlerts(now time.Time) error {
 func (s Store) CircuitNotificationAlerts(now time.Time) ([]storage.Alert, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	rows, err := s.db.QueryContext(ctx, `SELECT /*+ MAX_EXECUTION_TIME(3000) */ a.id,a.instance_id,a.rule_key,a.severity,a.status,a.title,a.summary,a.first_seen_at,a.last_seen_at,a.resolved_at
+	rows, err := s.db.QueryContext(ctx, `SELECT /*+ MAX_EXECUTION_TIME(3000) */ a.id,a.instance_id,a.rule_key,a.severity,a.status,a.title,a.summary,a.first_seen_at,a.last_seen_at,a.resolved_at,e.site_id
  FROM alerts a JOIN circuit_alert_events e ON e.alert_id=a.id
- JOIN instances i ON i.id=a.instance_id AND i.deleted=0
+
  WHERE a.status IN ('firing','resolved')
  AND e.occurred_at >= (SELECT occurred_at FROM circuit_alert_events WHERE event_id='__notification_cutoff__')
- AND (CASE WHEN i.site_id='' THEN i.id ELSE i.site_id END)=e.site_id AND EXISTS (
+ AND EXISTS (
   SELECT 1 FROM notification_channels n WHERE n.enabled=1 AND n.site_id=e.site_id
-  AND (n.rule_keys IS NULL OR JSON_LENGTH(n.rule_keys)=0 OR JSON_CONTAINS(n.rule_keys,JSON_QUOTE(a.rule_key)))
+  AND (n.rule_keys IS NULL OR JSON_TYPE(n.rule_keys)='NULL' OR JSON_LENGTH(n.rule_keys)=0 OR JSON_CONTAINS(n.rule_keys,JSON_QUOTE(a.rule_key)))
   AND NOT EXISTS (SELECT 1 FROM notification_deliveries d WHERE d.alert_id=a.id AND d.channel_id=n.id
    AND (d.status IN ('sent','exhausted') OR d.next_attempt_at>?))
  ) ORDER BY e.occurred_at,e.event_id LIMIT 500`, now)
@@ -184,7 +184,7 @@ func (s Store) CircuitNotificationAlerts(now time.Time) ([]storage.Alert, error)
 	for rows.Next() {
 		var a storage.Alert
 		var resolved sql.NullTime
-		if err = rows.Scan(&a.ID, &a.InstanceID, &a.RuleKey, &a.Severity, &a.Status, &a.Title, &a.Summary, &a.FirstSeenAt, &a.LastSeenAt, &resolved); err != nil {
+		if err = rows.Scan(&a.ID, &a.InstanceID, &a.RuleKey, &a.Severity, &a.Status, &a.Title, &a.Summary, &a.FirstSeenAt, &a.LastSeenAt, &resolved, &a.SiteID); err != nil {
 			return nil, err
 		}
 		if resolved.Valid {

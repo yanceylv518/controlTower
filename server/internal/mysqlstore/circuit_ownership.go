@@ -57,8 +57,8 @@ func reconcileChannelOwnership(tx *sql.Tx, site string, snapshot storage.Channel
 WHERE instance_id=? AND channel_id=? AND (
  (circuit_disabled=1 AND circuit_status_target=0 AND (last_write_at IS NULL OR last_write_at<?))
  OR (paused_reason='manual_disabled' AND (? OR last_write_at IS NOT NULL) AND updated_at<?
-  AND NOT EXISTS (SELECT 1 FROM channel_commands c JOIN instances i ON i.id=c.instance_id
-   WHERE COALESCE(NULLIF(i.site_id,''),i.id)=? AND c.channel_id=? AND c.command_type='channel.update'
+  AND NOT EXISTS (SELECT 1 FROM channel_commands c
+   WHERE c.site_id=? AND c.channel_id=? AND c.command_type='channel.update'
     AND c.status='delivered' AND JSON_EXTRACT(c.payload_json,'$.manual_control')=true
     AND JSON_EXTRACT(c.payload_json,'$.control_revision')=tuning_continuous_states.control_revision))
 )`, snapshot.Weight, snapshot.Weight, snapshot.CapturedAt, snapshot.CapturedAt, site, snapshot.ChannelID, snapshot.CapturedAt, previouslyDisabled, snapshot.CapturedAt, site, snapshot.ChannelID)

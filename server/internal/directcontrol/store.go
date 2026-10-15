@@ -376,7 +376,7 @@ func (s Store) runProbeRound(controller Controller, siteID string, channelID int
 		return
 	}
 	summary, _ := json.Marshal(map[string]any{"result": map[string]any{"status": status, "error": lastError, "attempts": attempts, "successes": successes, "duration_seconds": durationSum, "probe_slow_streak": round.SlowStreak, "direct": true}})
-	_ = s.Store.InsertOperationAudit(storage.OperationAudit{ID: commandID, InstanceID: siteID, OperationType: "channel.probe", TargetType: "channel", TargetID: fmt.Sprint(channelID), ActorID: "system:auto", AfterSummary: string(summary), Status: status, CreatedAt: now})
+	_ = s.Store.InsertOperationAudit(storage.OperationAudit{ID: commandID, SiteID: siteID, InstanceID: siteID, OperationType: "channel.probe", TargetType: "channel", TargetID: fmt.Sprint(channelID), ActorID: "system:auto", AfterSummary: string(summary), Status: status, CreatedAt: now})
 	_ = s.Store.RecordContinuousProbeResultWithLatency(siteID, channelID, commandID, attempts, successes, durationSum, round.SlowStreak, now)
 }
 

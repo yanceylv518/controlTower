@@ -21,13 +21,16 @@ import (
 
 func insertOperationAuditTx(tx *sql.Tx, value storage.OperationAudit) error {
 	value = storage.NormalizeOperationAudit(value)
+	if value.SiteID == "" && value.TargetType == "channel" {
+		value.SiteID = channelAuditSite(tx, value.InstanceID)
+	}
 	if !storage.IsManualOperationAudit(value) {
 		return nil
 	}
 	_, err := tx.Exec(`INSERT INTO operation_audits
-(id,instance_id,operation_type,target_type,target_id,actor_id,actor_type,actor_role,source_component,trigger_type,request_id,correlation_id,client_ip,auth_method,http_method,route,http_status,error_summary,before_summary,after_summary,status,created_at,updated_at)
-VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		value.ID, value.InstanceID, value.OperationType, value.TargetType, value.TargetID, value.ActorID,
+(site_id,ownership_evidence,id,instance_id,operation_type,target_type,target_id,actor_id,actor_type,actor_role,source_component,trigger_type,request_id,correlation_id,client_ip,auth_method,http_method,route,http_status,error_summary,before_summary,after_summary,status,created_at,updated_at)
+VALUES(?,'recorded',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		value.SiteID, value.ID, value.InstanceID, value.OperationType, value.TargetType, value.TargetID, value.ActorID,
 		value.ActorType, value.ActorRole, value.SourceComponent, value.TriggerType, value.RequestID,
 		value.CorrelationID, value.ClientIP, value.AuthMethod, value.HTTPMethod, value.Route,
 		value.HTTPStatus, value.ErrorSummary, value.BeforeSummary, value.AfterSummary, value.Status,
@@ -203,6 +206,7 @@ func (s Store) SaveChannelBaseValuesWithAudit(instanceID, actor string, values [
 		audit := auditContext
 		audit.ID = id
 		audit.InstanceID = instanceID
+		audit.SiteID = instanceID
 		audit.OperationType = "tuning.base_update"
 		audit.TargetType = "channel"
 		audit.TargetID = fmt.Sprint(v.ChannelID)
@@ -298,8 +302,8 @@ func (s Store) UpdateChannelGroup(ctx context.Context, siteID string, channelID 
 		return storage.ChannelCommand{}, err
 	}
 	payload, _ := json.Marshal(map[string]string{"group": normalized, "before_group": beforeGroup.String})
-	command := storage.ChannelCommand{ID: randomCommandID(), InstanceID: controlInstanceID, ChannelID: channelID, CommandType: "channel.update", PayloadJSON: string(payload), Status: "pending", CreatedBy: actor, CreatedAt: now, UpdatedAt: now}
-	if _, err = tx.Exec(`INSERT INTO channel_commands(id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, command.ID, command.InstanceID, command.ChannelID, command.CommandType, command.PayloadJSON, command.Status, command.CreatedBy, "", command.CreatedAt, command.UpdatedAt); err != nil {
+	command := storage.ChannelCommand{SiteID: siteID, ExecutionKind: "agent", ID: randomCommandID(), InstanceID: controlInstanceID, ChannelID: channelID, CommandType: "channel.update", PayloadJSON: string(payload), Status: "pending", CreatedBy: actor, CreatedAt: now, UpdatedAt: now}
+	if _, err = tx.Exec(`INSERT INTO channel_commands(site_id,execution_kind,ownership_evidence,id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at) VALUES(?,'agent','recorded',?,?,?,?,?,?,?,?,?,?)`, siteID, command.ID, command.InstanceID, command.ChannelID, command.CommandType, command.PayloadJSON, command.Status, command.CreatedBy, "", command.CreatedAt, command.UpdatedAt); err != nil {
 		return storage.ChannelCommand{}, err
 	}
 	if err = tx.Commit(); err != nil {
@@ -307,6 +311,7 @@ func (s Store) UpdateChannelGroup(ctx context.Context, siteID string, channelID 
 	}
 	return command, nil
 }
+
 func (s Store) ListEnabledSites() ([]string, error) {
 	rows, e := s.db.QueryContext(context.Background(), `SELECT DISTINCT CASE WHEN site_id='' THEN id ELSE site_id END FROM instances WHERE enabled=1`)
 	if e != nil {
@@ -573,7 +578,7 @@ func (s Store) CreateContinuousWeightChangeWithAudit(v tuning.Recommendation, ac
 	if _, err = tx.Exec(`INSERT INTO tuning_recommendations(id,instance_id,channel_id,channel_name,created_at,rule,evidence_json,current_weight,proposed_weight,current_priority,proposed_priority,mode_at_creation,status,command_id,acted_by,acted_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, v.ID, v.InstanceID, v.ChannelID, v.ChannelName, v.CreatedAt, v.Rule, string(ev), v.CurrentWeight, v.ProposedWeight, v.CurrentPriority, v.ProposedPriority, v.ModeAtCreation, "auto_executed", commandID, actor, now); err != nil {
 		return "", err
 	}
-	if _, err = tx.Exec(`INSERT INTO channel_commands(id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at) VALUES(?,?,?,?,?,'pending',?,'',?,?)`, commandID, controlInstanceID, v.ChannelID, "channel.update", string(payload), actor, now, now); err != nil {
+	if _, err = tx.Exec(`INSERT INTO channel_commands(site_id,execution_kind,ownership_evidence,id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at) VALUES(?,'agent','recorded',?,?,?,?,?,'pending',?,'',?,?)`, v.InstanceID, commandID, controlInstanceID, v.ChannelID, "channel.update", string(payload), actor, now, now); err != nil {
 		return "", err
 	}
 	if err = linkCapacityCommand(tx, v, commandID); err != nil {
@@ -603,6 +608,7 @@ func (s Store) CreateContinuousWeightChangeWithAudit(v tuning.Recommendation, ac
 	audit := auditContext
 	audit.ID = commandID
 	audit.InstanceID = v.InstanceID
+	audit.SiteID = v.InstanceID
 	audit.OperationType = operation
 	audit.TargetType = "channel"
 	audit.TargetID = fmt.Sprint(v.ChannelID)
@@ -638,7 +644,7 @@ func (s Store) CreateContinuousProbe(v tuning.Recommendation, model string, coun
 	commandID := randomCommandID()
 	probeOptions := tuning.RecoveryProbeOptions(v)
 	payload, _ := json.Marshal(map[string]any{"model": model, "probe_count": count, "probe_interval_seconds": interval, "probe_timeout_seconds": probeOptions.TimeoutSeconds, "probe_slow_limit": probeOptions.SlowLimit, "probe_round_seconds": probeOptions.RoundSeconds})
-	_, err = tx.Exec(`INSERT INTO channel_commands(id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at) VALUES(?,?,?,?,?,'pending','system:auto','',?,?)`, commandID, controlInstanceID, v.ChannelID, "channel.probe", string(payload), now, now)
+	_, err = tx.Exec(`INSERT INTO channel_commands(site_id,execution_kind,ownership_evidence,id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at) VALUES(?,'agent','recorded',?,?,?,?,?,'pending','system:auto','',?,?)`, v.InstanceID, commandID, controlInstanceID, v.ChannelID, "channel.probe", string(payload), now, now)
 	if err != nil {
 		return "", err
 	}
@@ -669,10 +675,7 @@ func (s Store) RecordDirectWeightChangeWithAudit(v tuning.Recommendation, actor 
 		return "", err
 	}
 	defer tx.Rollback()
-	controlInstanceID, err := controlInstanceForSite(tx, v.InstanceID)
-	if err != nil {
-		return "", err
-	}
+	controlInstanceID := ""
 	ev, _ := json.Marshal(v.Evidence)
 	commandID := randomCommandID()
 	payloadValues := map[string]any{}
@@ -689,7 +692,7 @@ func (s Store) RecordDirectWeightChangeWithAudit(v tuning.Recommendation, actor 
 	if _, err = tx.Exec(`INSERT INTO tuning_recommendations(id,instance_id,channel_id,channel_name,created_at,rule,evidence_json,current_weight,proposed_weight,current_priority,proposed_priority,mode_at_creation,status,command_id,acted_by,acted_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, v.ID, v.InstanceID, v.ChannelID, v.ChannelName, v.CreatedAt, v.Rule, string(ev), v.CurrentWeight, v.ProposedWeight, v.CurrentPriority, v.ProposedPriority, v.ModeAtCreation, "auto_executed", commandID, actor, now); err != nil {
 		return "", err
 	}
-	if _, err = tx.Exec(`INSERT INTO channel_commands(id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at) VALUES(?,?,?,?,?,'succeeded',?,'',?,?)`, commandID, controlInstanceID, v.ChannelID, "channel.update", string(payload), actor, now, now); err != nil {
+	if _, err = tx.Exec(`INSERT INTO channel_commands(site_id,execution_kind,ownership_evidence,id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at) VALUES(?,'ct_direct','recorded',?,?,?,?,?,'succeeded',?,'',?,?)`, v.InstanceID, commandID, controlInstanceID, v.ChannelID, "channel.update", string(payload), actor, now, now); err != nil {
 		return "", err
 	}
 	if err = linkCapacityCommand(tx, v, commandID); err != nil {
@@ -719,6 +722,7 @@ func (s Store) RecordDirectWeightChangeWithAudit(v tuning.Recommendation, actor 
 	audit := auditContext
 	audit.ID = commandID
 	audit.InstanceID = v.InstanceID
+	audit.SiteID = v.InstanceID
 	audit.OperationType = operation
 	audit.TargetType = "channel"
 	audit.TargetID = fmt.Sprint(v.ChannelID)
@@ -746,18 +750,15 @@ func (s Store) RecordDirectChannelGroupChange(siteID string, channelID int64, ac
 		return storage.ChannelCommand{}, err
 	}
 	defer tx.Rollback()
-	controlInstanceID, err := controlInstanceForSite(tx, siteID)
-	if err != nil {
-		return storage.ChannelCommand{}, err
-	}
+	controlInstanceID := ""
 	payload, _ := json.Marshal(map[string]string{"group": after})
-	command := storage.ChannelCommand{ID: randomCommandID(), InstanceID: controlInstanceID, ChannelID: channelID, CommandType: "channel.update", PayloadJSON: string(payload), Status: "succeeded", CreatedBy: actor, CreatedAt: now, UpdatedAt: now}
-	if _, err = tx.Exec(`INSERT INTO channel_commands(id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, command.ID, command.InstanceID, command.ChannelID, command.CommandType, command.PayloadJSON, command.Status, command.CreatedBy, "", command.CreatedAt, command.UpdatedAt); err != nil {
+	command := storage.ChannelCommand{SiteID: siteID, ExecutionKind: "ct_direct", ID: randomCommandID(), InstanceID: controlInstanceID, ChannelID: channelID, CommandType: "channel.update", PayloadJSON: string(payload), Status: "succeeded", CreatedBy: actor, CreatedAt: now, UpdatedAt: now}
+	if _, err = tx.Exec(`INSERT INTO channel_commands(site_id,execution_kind,ownership_evidence,id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at) VALUES(?,'ct_direct','recorded',?,?,?,?,?,?,?,?,?,?)`, siteID, command.ID, command.InstanceID, command.ChannelID, command.CommandType, command.PayloadJSON, command.Status, command.CreatedBy, "", command.CreatedAt, command.UpdatedAt); err != nil {
 		return storage.ChannelCommand{}, err
 	}
 	beforeSummary, _ := json.Marshal(map[string]string{"group": before})
 	afterSummary, _ := json.Marshal(map[string]any{"group": after, "direct": true})
-	if err = insertOperationAuditTx(tx, storage.OperationAudit{ID: command.ID, InstanceID: siteID, OperationType: "channel.update", TargetType: "channel", TargetID: fmt.Sprint(channelID), ActorID: actor, CorrelationID: command.ID, BeforeSummary: string(beforeSummary), AfterSummary: string(afterSummary), Status: "succeeded", CreatedAt: now, UpdatedAt: now}); err != nil {
+	if err = insertOperationAuditTx(tx, storage.OperationAudit{ID: command.ID, SiteID: siteID, InstanceID: siteID, OperationType: "channel.update", TargetType: "channel", TargetID: fmt.Sprint(channelID), ActorID: actor, CorrelationID: command.ID, BeforeSummary: string(beforeSummary), AfterSummary: string(afterSummary), Status: "succeeded", CreatedAt: now, UpdatedAt: now}); err != nil {
 		return storage.ChannelCommand{}, err
 	}
 	if err = tx.Commit(); err != nil {
@@ -778,14 +779,11 @@ func (s Store) CreateContinuousProbeExecuting(v tuning.Recommendation, model str
 	if err := checkManualChannelControl(tx, v); err != nil {
 		return "", err
 	}
-	controlInstanceID, err := controlInstanceForSite(tx, v.InstanceID)
-	if err != nil {
-		return "", err
-	}
+	controlInstanceID := ""
 	commandID := randomCommandID()
 	probeOptions := tuning.RecoveryProbeOptions(v)
 	payload, _ := json.Marshal(map[string]any{"model": model, "probe_count": count, "probe_interval_seconds": interval, "probe_timeout_seconds": probeOptions.TimeoutSeconds, "probe_slow_limit": probeOptions.SlowLimit, "probe_round_seconds": probeOptions.RoundSeconds})
-	_, err = tx.Exec(`INSERT INTO channel_commands(id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at) VALUES(?,?,?,?,?,'delivered','system:auto','',?,?)`, commandID, controlInstanceID, v.ChannelID, "channel.probe", string(payload), now, now)
+	_, err = tx.Exec(`INSERT INTO channel_commands(site_id,execution_kind,ownership_evidence,id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at) VALUES(?,'ct_direct','recorded',?,?,?,?,?,'delivered','system:auto','',?,?)`, v.InstanceID, commandID, controlInstanceID, v.ChannelID, "channel.probe", string(payload), now, now)
 	if err != nil {
 		return "", err
 	}
@@ -809,12 +807,9 @@ func (s Store) RecordTuningPreflightResult(siteID string, channelID int64, actor
 		return storage.ChannelCommand{}, err
 	}
 	defer tx.Rollback()
-	instanceID, err := controlInstanceForSite(tx, siteID)
-	if err != nil {
-		return storage.ChannelCommand{}, err
-	}
-	command := storage.ChannelCommand{ID: randomCommandID(), InstanceID: instanceID, ChannelID: channelID, CommandType: "channel.verify", PayloadJSON: `{}`, Status: status, CreatedBy: actor, ErrorSummary: errorSummary, CreatedAt: now, UpdatedAt: now}
-	if _, err = tx.Exec(`INSERT INTO channel_commands(id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, command.ID, command.InstanceID, command.ChannelID, command.CommandType, command.PayloadJSON, command.Status, command.CreatedBy, command.ErrorSummary, now, now); err != nil {
+	instanceID := ""
+	command := storage.ChannelCommand{SiteID: siteID, ExecutionKind: "ct_direct", ID: randomCommandID(), InstanceID: instanceID, ChannelID: channelID, CommandType: "channel.verify", PayloadJSON: `{}`, Status: status, CreatedBy: actor, ErrorSummary: errorSummary, CreatedAt: now, UpdatedAt: now}
+	if _, err = tx.Exec(`INSERT INTO channel_commands(site_id,execution_kind,ownership_evidence,id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at) VALUES(?,'ct_direct','recorded',?,?,?,?,?,?,?,?,?,?)`, siteID, command.ID, command.InstanceID, command.ChannelID, command.CommandType, command.PayloadJSON, command.Status, command.CreatedBy, command.ErrorSummary, now, now); err != nil {
 		return storage.ChannelCommand{}, err
 	}
 	return command, tx.Commit()
@@ -833,8 +828,8 @@ func (s Store) CreateTuningPreflight(siteID string, channelID int64, actor strin
 	if err != nil {
 		return storage.ChannelCommand{}, err
 	}
-	command := storage.ChannelCommand{ID: randomCommandID(), InstanceID: instanceID, ChannelID: channelID, CommandType: "channel.verify", PayloadJSON: `{}`, Status: "pending", CreatedBy: actor, CreatedAt: now, UpdatedAt: now}
-	if _, err = tx.Exec(`INSERT INTO channel_commands(id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, command.ID, command.InstanceID, command.ChannelID, command.CommandType, command.PayloadJSON, command.Status, command.CreatedBy, "", now, now); err != nil {
+	command := storage.ChannelCommand{SiteID: siteID, ExecutionKind: "agent", ID: randomCommandID(), InstanceID: instanceID, ChannelID: channelID, CommandType: "channel.verify", PayloadJSON: `{}`, Status: "pending", CreatedBy: actor, CreatedAt: now, UpdatedAt: now}
+	if _, err = tx.Exec(`INSERT INTO channel_commands(site_id,execution_kind,ownership_evidence,id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at) VALUES(?,'agent','recorded',?,?,?,?,?,?,?,?,?,?)`, siteID, command.ID, command.InstanceID, command.ChannelID, command.CommandType, command.PayloadJSON, command.Status, command.CreatedBy, "", now, now); err != nil {
 		return storage.ChannelCommand{}, err
 	}
 	return command, tx.Commit()
@@ -842,9 +837,9 @@ func (s Store) CreateTuningPreflight(siteID string, channelID int64, actor strin
 
 func (s Store) GetTuningPreflight(siteID, commandID string) (storage.ChannelCommand, bool, error) {
 	var command storage.ChannelCommand
-	err := s.db.QueryRowContext(context.Background(), `SELECT c.id,c.instance_id,c.channel_id,c.command_type,c.payload_json,c.status,c.created_by,c.error_summary,c.created_at,c.updated_at
-FROM channel_commands c JOIN instances i ON i.id=c.instance_id
-WHERE c.id=? AND c.command_type='channel.verify' AND CASE WHEN i.site_id='' THEN i.id ELSE i.site_id END=?`, commandID, siteID).Scan(&command.ID, &command.InstanceID, &command.ChannelID, &command.CommandType, &command.PayloadJSON, &command.Status, &command.CreatedBy, &command.ErrorSummary, &command.CreatedAt, &command.UpdatedAt)
+	err := s.db.QueryRowContext(context.Background(), `SELECT c.id,c.instance_id,c.channel_id,c.command_type,c.payload_json,c.status,c.created_by,c.error_summary,c.created_at,c.updated_at,c.site_id,c.execution_kind
+FROM channel_commands c
+WHERE c.id=? AND c.command_type='channel.verify' AND c.site_id=?`, commandID, siteID).Scan(&command.ID, &command.InstanceID, &command.ChannelID, &command.CommandType, &command.PayloadJSON, &command.Status, &command.CreatedBy, &command.ErrorSummary, &command.CreatedAt, &command.UpdatedAt, &command.SiteID, &command.ExecutionKind)
 	if err == sql.ErrNoRows {
 		return storage.ChannelCommand{}, false, nil
 	}
@@ -1025,7 +1020,7 @@ func parseChannelModels(raw string) []string {
 
 func (s Store) HasExpiredAutoCommands(id string, since time.Time) (bool, error) {
 	var found int
-	err := s.db.QueryRowContext(context.Background(), `SELECT EXISTS(SELECT 1 FROM channel_commands WHERE instance_id IN (SELECT id FROM instances WHERE CASE WHEN site_id='' THEN id ELSE site_id END=?) AND created_by='system:auto' AND status='expired' AND error_summary<>'capacity decision or mode changed' AND updated_at>=?)`, id, since).Scan(&found)
+	err := s.db.QueryRowContext(context.Background(), `SELECT EXISTS(SELECT 1 FROM channel_commands WHERE site_id=? AND created_by='system:auto' AND status='expired' AND error_summary<>'capacity decision or mode changed' AND updated_at>=?)`, id, since).Scan(&found)
 	return found == 1, err
 }
 

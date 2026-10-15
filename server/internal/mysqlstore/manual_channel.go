@@ -82,7 +82,7 @@ func (s Store) BeginManualChannelStatus(ctx context.Context, site string, channe
 	defer tx.Rollback()
 	// Lock queued writes before checking their state so an Agent cannot claim
 	// an old recovery between the ownership check and pending-command expiry.
-	commands, err := tx.QueryContext(ctx, `SELECT c.status,c.command_type,c.created_by FROM channel_commands c JOIN instances i ON i.id=c.instance_id WHERE COALESCE(NULLIF(i.site_id,''),i.id)=? AND c.channel_id=? AND c.status IN ('pending','delivered') AND COALESCE(JSON_EXTRACT(c.payload_json,'$.manual_control'),false)=false FOR UPDATE`, site, channel)
+	commands, err := tx.QueryContext(ctx, `SELECT c.status,c.command_type,c.created_by FROM channel_commands c WHERE c.site_id=? AND c.channel_id=? AND c.status IN ('pending','delivered') AND COALESCE(JSON_EXTRACT(c.payload_json,'$.manual_control'),false)=false FOR UPDATE`, site, channel)
 	if err != nil {
 		return storage.ChannelCommand{}, err
 	}
@@ -131,30 +131,26 @@ WHERE instance_id=? AND channel_id=?`, tuning.ManualDisabled, weight, weight, no
 		return storage.ChannelCommand{}, err
 	}
 	for _, query := range []string{
-		`UPDATE operation_audits a JOIN channel_commands c ON c.id=a.id JOIN instances i ON i.id=c.instance_id SET a.status='expired',a.error_summary='manual channel control',a.updated_at=? WHERE COALESCE(NULLIF(i.site_id,''),i.id)=? AND c.channel_id=? AND c.created_by='system:auto' AND c.status='pending' AND a.status='submitted'`,
-		`UPDATE tuning_recommendations r JOIN channel_commands c ON c.id=r.command_id JOIN instances i ON i.id=c.instance_id SET r.status='expired',r.outcome_at=? WHERE COALESCE(NULLIF(i.site_id,''),i.id)=? AND c.channel_id=? AND c.created_by='system:auto' AND c.status='pending'`,
+		`UPDATE operation_audits a JOIN channel_commands c ON c.id=a.id SET a.status='expired',a.error_summary='manual channel control',a.updated_at=? WHERE c.site_id=? AND c.channel_id=? AND c.created_by='system:auto' AND c.status='pending' AND a.status='submitted'`,
+		`UPDATE tuning_recommendations r JOIN channel_commands c ON c.id=r.command_id SET r.status='expired',r.outcome_at=? WHERE c.site_id=? AND c.channel_id=? AND c.created_by='system:auto' AND c.status='pending'`,
 	} {
 		if _, err = tx.ExecContext(ctx, query, now, site, channel); err != nil {
 			return storage.ChannelCommand{}, err
 		}
 	}
-	_, err = tx.ExecContext(ctx, `UPDATE channel_commands c JOIN instances i ON i.id=c.instance_id SET c.status='expired',c.error_summary='manual channel control',c.updated_at=? WHERE COALESCE(NULLIF(i.site_id,''),i.id)=? AND c.channel_id=? AND c.created_by='system:auto' AND c.status='pending'`, now, site, channel)
-	if err != nil {
-		return storage.ChannelCommand{}, err
-	}
-	instance, err := controlInstanceForSite(tx, site)
+	_, err = tx.ExecContext(ctx, `UPDATE channel_commands c SET c.status='expired',c.error_summary='manual channel control',c.updated_at=? WHERE c.site_id=? AND c.channel_id=? AND c.created_by='system:auto' AND c.status='pending'`, now, site, channel)
 	if err != nil {
 		return storage.ChannelCommand{}, err
 	}
 	payload, _ := json.Marshal(map[string]any{"status": target, "manual_control": true, "control_revision": revision})
-	cmd := storage.ChannelCommand{ID: randomCommandID(), InstanceID: instance, ChannelID: channel, CommandType: "channel.update", PayloadJSON: string(payload), Status: "delivered", CreatedBy: actor, CreatedAt: now, UpdatedAt: now}
-	_, err = tx.ExecContext(ctx, `INSERT INTO channel_commands(id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'',?,?)`, cmd.ID, instance, channel, cmd.CommandType, cmd.PayloadJSON, cmd.Status, actor, now, now)
+	cmd := storage.ChannelCommand{ID: randomCommandID(), SiteID: site, ExecutionKind: "ct_direct", ChannelID: channel, CommandType: "channel.update", PayloadJSON: string(payload), Status: "delivered", CreatedBy: actor, CreatedAt: now, UpdatedAt: now}
+	_, err = tx.ExecContext(ctx, `INSERT INTO channel_commands(site_id,execution_kind,ownership_evidence,id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at) VALUES(?,'ct_direct','recorded',?,?,?,?,?,?,?,'',?,?)`, site, cmd.ID, "", channel, cmd.CommandType, cmd.PayloadJSON, cmd.Status, actor, now, now)
 	if err != nil {
 		return storage.ChannelCommand{}, err
 	}
 	before, _ := json.Marshal(map[string]any{"status": previous})
 	after, _ := json.Marshal(map[string]any{"status": target, "manual_control": true, "command_id": cmd.ID})
-	err = insertOperationAuditTx(tx, storage.OperationAudit{ID: cmd.ID, InstanceID: site, OperationType: "channel.update", TargetType: "channel", TargetID: fmt.Sprint(channel), ActorID: actor, CorrelationID: cmd.ID, BeforeSummary: string(before), AfterSummary: string(after), Status: "submitted", CreatedAt: now, UpdatedAt: now})
+	err = insertOperationAuditTx(tx, storage.OperationAudit{ID: cmd.ID, SiteID: site, InstanceID: site, OperationType: "channel.update", TargetType: "channel", TargetID: fmt.Sprint(channel), ActorID: actor, CorrelationID: cmd.ID, BeforeSummary: string(before), AfterSummary: string(after), Status: "submitted", CreatedAt: now, UpdatedAt: now})
 	if err != nil {
 		return storage.ChannelCommand{}, err
 	}

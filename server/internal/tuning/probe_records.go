@@ -194,7 +194,7 @@ func (e *Engine) runProbeRecordsWriter(ctx context.Context) {
 		return
 	}
 	tick := time.NewTicker(5 * time.Second)
-	cleanup := time.NewTicker(time.Minute)
+	cleanup := time.NewTimer(time.Minute)
 	defer tick.Stop()
 	defer cleanup.Stop()
 	for {
@@ -205,12 +205,20 @@ func (e *Engine) runProbeRecordsWriter(ctx context.Context) {
 			e.flushProbeRuntime(ctx)
 			e.flushProbeRecords(ctx)
 		case <-cleanup.C:
+			started := time.Now()
 			c, cancel := context.WithTimeout(ctx, 5*time.Second)
 			err := s.PruneProbeRecords(c, time.Now().UTC())
 			cancel()
 			if err != nil {
 				log.Printf("channel history cleanup failed: %v", err)
 			}
+			pending := false
+			if source, ok := s.(interface{ ChannelHistoryCleanupPending() bool }); ok {
+				pending = source.ChannelHistoryCleanupPending()
+			}
+			next := historyCleanupInterval(pending, err)
+			log.Printf("channel history maintenance elapsed=%s pending=%t next=%s success=%t", time.Since(started), pending, next, err == nil)
+			cleanup.Reset(next)
 		}
 	}
 }
@@ -244,4 +252,12 @@ func probeRecordResult(v ProbeRecord, r routineResult) ProbeRecord {
 		v.Reason = "control_unavailable"
 	}
 	return v
+}
+
+// Slow/error passes back off. A successful budget-limited pass catches up sooner.
+func historyCleanupInterval(pending bool, err error) time.Duration {
+	if pending && err == nil {
+		return 10 * time.Second
+	}
+	return time.Minute
 }

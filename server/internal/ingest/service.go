@@ -177,7 +177,13 @@ func (s Service) SaveReport(req agentgateway.AgentReportRequest) error {
 				continue
 			}
 		} else {
-			command, changed, err = s.store.CompleteChannelCommand(result.ID, status, result.Error, time.Now().UTC())
+			if scoped, ok := s.store.(interface {
+				CompleteAgentChannelCommand(string, string, string, string, time.Time) (storage.ChannelCommand, bool, error)
+			}); ok {
+				command, changed, err = scoped.CompleteAgentChannelCommand(req.InstanceID, result.ID, status, result.Error, time.Now().UTC())
+			} else {
+				command, changed, err = s.store.CompleteChannelCommand(result.ID, status, result.Error, time.Now().UTC())
+			}
 		}
 		if err != nil {
 			return err
@@ -215,7 +221,7 @@ func (s Service) SaveReport(req agentgateway.AgentReportRequest) error {
 			afterSummary = string(summary)
 		}
 		now := time.Now().UTC()
-		if err = s.store.InsertOperationAudit(storage.OperationAudit{ID: command.ID, InstanceID: command.InstanceID, OperationType: command.CommandType, TargetType: "channel", TargetID: strconv.FormatInt(command.ChannelID, 10), ActorID: command.CreatedBy, CorrelationID: command.ID, BeforeSummary: beforeSummary, AfterSummary: afterSummary, ErrorSummary: auditError, Status: status, CreatedAt: now, UpdatedAt: now}); err != nil {
+		if err = s.store.InsertOperationAudit(storage.OperationAudit{SiteID: command.SiteID, ID: command.ID, InstanceID: command.InstanceID, OperationType: command.CommandType, TargetType: "channel", TargetID: strconv.FormatInt(command.ChannelID, 10), ActorID: command.CreatedBy, CorrelationID: command.ID, BeforeSummary: beforeSummary, AfterSummary: afterSummary, ErrorSummary: auditError, Status: status, CreatedAt: now, UpdatedAt: now}); err != nil {
 			return err
 		}
 	}

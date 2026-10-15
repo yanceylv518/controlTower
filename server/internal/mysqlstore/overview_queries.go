@@ -167,13 +167,13 @@ func (s Store) OverviewAlerts(ctx context.Context, site string, now time.Time) (
 	if at.Valid {
 		out.EvaluatedAt = &at.Time
 	}
-	where := ` FROM alerts a WHERE a.status IN ('firing','acknowledged','silenced') AND (a.instance_id=? OR a.instance_id IN (SELECT id FROM instances WHERE CASE WHEN site_id='' THEN id ELSE site_id END=?))`
+	where := ` FROM alerts a WHERE a.status IN ('firing','acknowledged','silenced') AND (EXISTS(SELECT 1 FROM circuit_alert_events e WHERE e.alert_id=a.id AND e.site_id=?) OR (a.rule_key NOT IN ('channel_circuit_opened','channel_circuit_recovered') AND (a.instance_id=? OR a.instance_id IN (SELECT id FROM instances WHERE CASE WHEN site_id='' THEN id ELSE site_id END=?))))`
 	cutoff := now.Add(-2 * time.Minute)
-	err = s.db.QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(SUM(confirmed_at IS NULL OR confirmed_at<? OR confirmed_at>?),0)`+where, cutoff, now, site, site).Scan(&out.Total, &out.Unconfirmed)
+	err = s.db.QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(SUM(confirmed_at IS NULL OR confirmed_at<? OR confirmed_at>?),0)`+where, cutoff, now, site, site, site).Scan(&out.Total, &out.Unconfirmed)
 	if err != nil {
 		return out, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id,instance_id,rule_key,severity,status,title,summary,first_seen_at,last_seen_at,confirmed_at,dimension_type,dimension_key`+where+` AND confirmed_at>=? AND confirmed_at<=? ORDER BY FIELD(severity,'critical','warning','info'),confirmed_at DESC,id LIMIT 5`, site, site, cutoff, now)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,instance_id,rule_key,severity,status,title,summary,first_seen_at,last_seen_at,confirmed_at,dimension_type,dimension_key`+where+` AND confirmed_at>=? AND confirmed_at<=? ORDER BY FIELD(severity,'critical','warning','info'),confirmed_at DESC,id LIMIT 5`, site, site, site, cutoff, now)
 	if err != nil {
 		return out, err
 	}
@@ -182,6 +182,9 @@ func (s Store) OverviewAlerts(ctx context.Context, site string, now time.Time) (
 		var a storage.Alert
 		if err = rows.Scan(&a.ID, &a.InstanceID, &a.RuleKey, &a.Severity, &a.Status, &a.Title, &a.Summary, &a.FirstSeenAt, &a.LastSeenAt, &a.ConfirmedAt, &a.DimensionType, &a.DimensionKey); err != nil {
 			return out, err
+		}
+		if a.RuleKey == "channel_circuit_opened" || a.RuleKey == "channel_circuit_recovered" {
+			a.SiteID = site
 		}
 		out.Items = append(out.Items, a)
 	}

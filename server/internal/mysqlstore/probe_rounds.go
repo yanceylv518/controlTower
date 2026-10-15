@@ -18,8 +18,8 @@ func (s Store) QueryProbeRounds(ctx context.Context, q tuning.ProbeRecordQuery) 
 		return out, err
 	}
 	defer tx.Rollback()
-	where := ` WHERE (c.instance_id=? OR c.instance_id IN (SELECT id FROM instances WHERE site_id=?)) AND c.channel_id=? AND c.command_type='channel.probe' AND c.created_at>=? AND c.created_at<?`
-	args := []any{q.Site, q.Site, q.ChannelID, q.From, q.To}
+	where := ` WHERE c.site_id=? AND c.channel_id=? AND c.command_type='channel.probe' AND c.created_at>=? AND c.created_at<?`
+	args := []any{q.Site, q.ChannelID, q.From, q.To}
 	if q.RoundID != "" {
 		where += " AND c.id=?"
 		args = append(args, q.RoundID)
@@ -38,14 +38,14 @@ func (s Store) QueryProbeRounds(ctx context.Context, q tuning.ProbeRecordQuery) 
 	}
 	limit := max(1, min(q.Limit, 50))
 	args = append(args, limit+1)
-	rows, err := tx.QueryContext(ctx, `SELECT c.id,c.channel_id,c.payload_json,c.status,c.created_at,c.updated_at,COALESCE((SELECT a.after_summary FROM operation_audits a WHERE a.id=c.id LIMIT 1),'{}') FROM channel_commands c`+where+` ORDER BY c.created_at DESC,c.id DESC LIMIT ?`, args...)
+	rows, err := tx.QueryContext(ctx, `SELECT c.id,c.channel_id,c.payload_json,c.status,c.created_at,c.updated_at,COALESCE((SELECT a.after_summary FROM operation_audits a WHERE a.id=c.id LIMIT 1),'{}'),c.execution_kind,IF(c.execution_kind='agent',c.instance_id,'') FROM channel_commands c`+where+` ORDER BY c.created_at DESC,c.id DESC LIMIT ?`, args...)
 	if err != nil {
 		return out, err
 	}
 	for rows.Next() {
 		var v tuning.ProbeRound
 		var payload, report []byte
-		if err = rows.Scan(&v.ID, &v.ChannelID, &payload, &v.Status, &v.CreatedAt, &v.UpdatedAt, &report); err != nil {
+		if err = rows.Scan(&v.ID, &v.ChannelID, &payload, &v.Status, &v.CreatedAt, &v.UpdatedAt, &report, &v.ExecutionKind, &v.ExecutorInstanceID); err != nil {
 			rows.Close()
 			return out, err
 		}

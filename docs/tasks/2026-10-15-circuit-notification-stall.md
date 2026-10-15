@@ -89,3 +89,19 @@
 ## 提交前复查（2026-10-15）
 
 按用户要求复查后提交推送，先不打包。核对main与origin/main起点一致、迁移边界仅首次执行、两条自动发送路径均拦截历史、清理全部保护条件未放宽、失败隔离及下一所属实例续跑。再次执行go vet ./...与go test ./...通过（部分复用有效测试缓存，外部条件用例仍按既有规则跳过）；此前隔离实库验证覆盖本次最终业务实现，追加迟到旧事件用例也已通过。只提交本任务五个Go文件、144迁移、此交接和精确选取的当前进度条目，保留其他未提交资料。未新增标签、触发release或操作生产；提交推送结果以Git核验为准。
+
+## 最新20条命令查询慢（2026-10-15，只读）
+
+用户截图手工SQL按instance_id过滤、按created_at/id倒序LIMIT20耗时2.93秒。生产复现2873.066ms，会话Handler_read_next=51081，Sort_scan=1、Sort_rows=20、Sort_merge_passes=0。执行计划选(instance_id,status)索引且Using filesort；实际该实例51081行，计划估算78622行不是实际扫描数。没有(instance_id,created_at,id)连续排序索引；现有生命线索引中间有channel_id，清理索引中间有status，未限定时均不能直接提供所需全局时间顺序。不是只读20行，而是扫描候选并选出最新20行；filesort不能单独证明磁盘落盘。
+
+只读对照增加status=succeeded并使用现有清理索引，Backward index scan，无filesort，约7.860ms、Handler_read_prev=19；与原查询语义不同且在原查询之后缓存已预热，不能当作严格性能倍数或无损替换。128MiB缓存仍为放大因素，直接问题为这条手工SQL与索引不匹配。该SQL是助手此前提供的排查命令，不能据此声称页面同样使用此查询。未新增索引、改配置、改代码或发布。
+
+## 渠道命令执行路径核对（2026-10-15，只读）
+
+当前pinducloud-cn站点具有直连配置（仅查询URL/Token是否非空，未读取值）；生产00:25:13 UTC日志确认站点渠道167/253/256由direct control同步写入成功。main将directcontrol.Wrap注入调权worker和HTTP处理器；有配置时权重/优先级/熔断状态、分组、恢复探针和预检由CT执行，无配置时部分操作保留Agent队列回退，解密或直连请求出错并不会静默回退；手动开关及计划要求直连，常态探针使用站点直连控制器。
+
+RecordDirectWeightChangeWithAudit在CT已执行后仍调用controlInstanceForSite选启用实例（渠道快照/Agent心跳时间排序），写入succeeded命令记录，审计则归站点。直连恢复探针写delivered后由CT异步执行并更新结果。因此channel_commands.instance_id不是可靠的实际执行者标识，不能据其值宣称Agent执行；此前对其含义的泛化解释需纠正。此次没有修改代码/数据库/生产配置。
+
+## 渠道历史站点归属修正（2026-10-15，本地实现）
+
+用户已授权统一站点归属、区分 CT 直连与 Agent 执行，连同查询、通知和清理修复，明确先不打包。实现、验证及迁移边界续见 [站点历史交接](../ai-tasks/2026-10-15-channel-history-site.md)。本轮未连接生产、未修改生产配置、未发送外部通知、未提交或发布，不推送 Workspace。

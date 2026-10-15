@@ -18,6 +18,7 @@ func TestChannelHistoryRetentionOwnershipAndActiveProtection(t *testing.T) {
 	s, site, now := lifelineStore(t)
 	ctx := context.Background()
 	agent := site + "-agent"
+	t.Cleanup(func() { s.db.Exec("DELETE FROM channel_commands WHERE site_id IN (?,?)", site, site+"-other") })
 	_, err := s.db.Exec(`INSERT INTO instances(id,site_id,name,env,region,base_url,enabled,created_at,updated_at) VALUES(?,?,'test','test','','',0,?,?)`, agent, site, now, now)
 	require.NoError(t, err)
 	p := tuning.DefaultPolicy()
@@ -43,7 +44,11 @@ func TestChannelHistoryRetentionOwnershipAndActiveProtection(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			id := rand.Text()
-			_, err := s.db.Exec(`INSERT INTO channel_commands(id,instance_id,channel_id,command_type,payload_json,status,created_by,created_at,updated_at) VALUES(?,?,7,'channel.update','{}',?,'test',?,?)`, id, tc.owner, tc.status, tc.created, tc.updated)
+			fixtureSite := tc.owner
+			if fixtureSite == agent {
+				fixtureSite = site
+			}
+			_, err := s.db.Exec(`INSERT INTO channel_commands(site_id,execution_kind,ownership_evidence,id,instance_id,channel_id,command_type,payload_json,status,created_by,created_at,updated_at) VALUES(?,'agent','recorded',?,?,7,'channel.update','{}',?,'test',?,?)`, fixtureSite, id, tc.owner, tc.status, tc.created, tc.updated)
 			require.NoError(t, err)
 			if tc.reference {
 				_, err = s.db.Exec(`INSERT INTO tuning_continuous_states(instance_id,channel_id,model_name,probe_command_id,updated_at) VALUES(?,7,'m',?,?)`, site, id, now)
@@ -80,7 +85,7 @@ func TestChannelHistoryRetentionFailureDoesNotBlockOtherOwners(t *testing.T) {
 	old := now.Add(-8 * 24 * time.Hour)
 	bad, good := site+"-a", site+"-b"
 	for _, owner := range []string{bad, good} {
-		_, err := s.db.Exec(`INSERT INTO channel_commands(id,instance_id,channel_id,command_type,payload_json,status,created_by,created_at,updated_at) VALUES(?,?,7,'channel.update','{}','succeeded','test',?,?)`, owner, owner, old, old)
+		_, err := s.db.Exec(`INSERT INTO channel_commands(site_id,execution_kind,ownership_evidence,id,instance_id,channel_id,command_type,payload_json,status,created_by,created_at,updated_at) VALUES(?,'agent','recorded',?,?,7,'channel.update','{}','succeeded','test',?,?)`, owner, owner, owner, old, old)
 		require.NoError(t, err)
 	}
 	// Invalid stored JSON deterministically fails a protection check. It must
@@ -105,7 +110,7 @@ func TestChannelHistoryRetentionLinkedAuditAndBatch(t *testing.T) {
 	ctx := context.Background()
 	old := now.Add(-8 * 24 * time.Hour)
 	command := rand.Text()
-	_, err := s.db.Exec(`INSERT INTO channel_commands(id,instance_id,channel_id,command_type,payload_json,status,created_by,created_at,updated_at) VALUES(?,?,7,'channel.update','{}','delivered','test',?,?)`, command, site, old, old)
+	_, err := s.db.Exec(`INSERT INTO channel_commands(site_id,execution_kind,ownership_evidence,id,instance_id,channel_id,command_type,payload_json,status,created_by,created_at,updated_at) VALUES(?,'agent','recorded',?,?,7,'channel.update','{}','delivered','test',?,?)`, site, command, site, old, old)
 	require.NoError(t, err)
 	audit := storage.OperationAudit{ID: rand.Text(), InstanceID: site, TargetType: "channel", TargetID: "7", OperationType: "channel.update", CorrelationID: command, Status: "succeeded", CreatedAt: old, UpdatedAt: old}
 	require.NoError(t, s.InsertOperationAudit(audit))
@@ -122,14 +127,15 @@ func TestChannelHistoryRetentionLinkedAuditAndBatch(t *testing.T) {
 	values := []string{}
 	args := []any{}
 	for i := 0; i < channelHistoryBatchSize+5; i++ {
-		values = append(values, "(?,?,7,'channel.update','{}','succeeded','test',?,?)")
-		args = append(args, rand.Text(), site, old, old)
+		values = append(values, "(?,'agent','recorded',?,?,7,'channel.update','{}','succeeded','test',?,?)")
+		args = append(args, site, rand.Text(), site, old, old)
 	}
-	_, err = s.db.Exec(`INSERT INTO channel_commands(id,instance_id,channel_id,command_type,payload_json,status,created_by,created_at,updated_at) VALUES `+strings.Join(values, ","), args...)
+	_, err = s.db.Exec(`INSERT INTO channel_commands(site_id,execution_kind,ownership_evidence,id,instance_id,channel_id,command_type,payload_json,status,created_by,created_at,updated_at) VALUES `+strings.Join(values, ","), args...)
 	require.NoError(t, err)
 	require.NoError(t, s.pruneChannelHistory(ctx, now))
 	require.NoError(t, s.db.QueryRow(`SELECT COUNT(*) FROM channel_commands WHERE instance_id=?`, site).Scan(&n))
-	require.Equal(t, 5, n)
+	// A pass now drains multiple small transactions, not just the first 100.
+	require.Zero(t, n)
 	require.NoError(t, s.pruneChannelHistory(ctx, now))
 	require.NoError(t, s.db.QueryRow(`SELECT COUNT(*) FROM channel_commands WHERE instance_id=?`, site).Scan(&n))
 	require.Zero(t, n)
@@ -139,15 +145,15 @@ func TestChannelHistoryRetentionAdvancesPastProtectedCandidates(t *testing.T) {
 	s, site, now := lifelineStore(t)
 	old := now.Add(-8 * 24 * time.Hour)
 	command := rand.Text()
-	_, err := s.db.Exec(`INSERT INTO channel_commands(id,instance_id,channel_id,command_type,payload_json,status,created_by,created_at,updated_at) VALUES(?,?,7,'channel.update','{}','delivered','test',?,?)`, command, site, old, old)
+	_, err := s.db.Exec(`INSERT INTO channel_commands(site_id,execution_kind,ownership_evidence,id,instance_id,channel_id,command_type,payload_json,status,created_by,created_at,updated_at) VALUES(?,'agent','recorded',?,?,7,'channel.update','{}','delivered','test',?,?)`, site, command, site, old, old)
 	require.NoError(t, err)
 	values := []string{}
 	args := []any{}
 	for i := 0; i < channelHistoryBatchSize; i++ {
-		values = append(values, "(?,?,'channel.update','channel','7','test','{}','{}','succeeded',?,?,?)")
-		args = append(args, rand.Text(), site, command, old, old)
+		values = append(values, "(?,'recorded',?,?,'channel.update','channel','7','test','{}','{}','succeeded',?,?,?)")
+		args = append(args, site, rand.Text(), site, command, old, old)
 	}
-	_, err = s.db.Exec(`INSERT INTO operation_audits(id,instance_id,operation_type,target_type,target_id,actor_id,before_summary,after_summary,status,correlation_id,created_at,updated_at) VALUES `+strings.Join(values, ","), args...)
+	_, err = s.db.Exec(`INSERT INTO operation_audits(site_id,ownership_evidence,id,instance_id,operation_type,target_type,target_id,actor_id,before_summary,after_summary,status,correlation_id,created_at,updated_at) VALUES `+strings.Join(values, ","), args...)
 	require.NoError(t, err)
 	eligible := rand.Text()
 	require.NoError(t, s.InsertOperationAudit(storage.OperationAudit{ID: eligible, InstanceID: site, TargetType: "channel", TargetID: "7", OperationType: "channel.update", Status: "succeeded", CreatedAt: old.Add(time.Second), UpdatedAt: old}))
@@ -179,11 +185,21 @@ func TestChannelLifelineLargeHistory(t *testing.T) {
 	at := now.Add(-time.Hour)
 	for batch := 0; batch < 50; batch++ {
 		sequence := fmt.Sprintf("(SELECT a.n+10*b.n+100*c.n+1000*d.n+%d n FROM ", batch*10000) + digit + " a CROSS JOIN " + digit + " b CROSS JOIN " + digit + " c CROSS JOIN " + digit + " d) seq"
-		_, err := s.db.Exec(`INSERT INTO channel_commands(id,instance_id,channel_id,command_type,payload_json,status,created_by,created_at,updated_at) SELECT CONCAT(?,n),?,1+MOD(n,1000),'channel.update','{}','succeeded','test',?,? FROM `+sequence, site, site, at, at)
+		_, err := s.db.Exec(`INSERT INTO channel_commands(site_id,execution_kind,ownership_evidence,id,instance_id,channel_id,command_type,payload_json,status,created_by,created_at,updated_at) SELECT ?,'agent','recorded',CONCAT(?,n),?,1+MOD(n,1000),'channel.update','{}','succeeded','test',?,? FROM `+sequence, site, site, site, at, at)
 		require.NoError(t, err)
-		_, err = s.db.Exec(`INSERT INTO operation_audits(id,instance_id,operation_type,target_type,target_id,actor_id,before_summary,after_summary,status,created_at,updated_at) SELECT CONCAT('a',?,n),?,'tuning.base_update','channel',CAST(1+MOD(n,1000) AS CHAR),'test','{}','{}','succeeded',?,? FROM `+sequence, site, site, at, at)
+		_, err = s.db.Exec(`INSERT INTO operation_audits(site_id,ownership_evidence,id,instance_id,operation_type,target_type,target_id,actor_id,before_summary,after_summary,status,created_at,updated_at) SELECT ?,'recorded',CONCAT('a',?,n),?,'tuning.base_update','channel',CAST(1+MOD(n,1000) AS CHAR),'test','{}','{}','succeeded',?,? FROM `+sequence, site, site, site, at, at)
 		require.NoError(t, err)
 	}
+	// The formerly slow latest-20 query must use the site's contiguous time index.
+	latestStart := time.Now()
+	latest, latestErr := s.QueryChannelCommands(storage.ChannelCommandQuery{SiteID: site, Limit: 20})
+	require.NoError(t, latestErr)
+	require.Len(t, latest, 20)
+	t.Logf("site latest 20 of 500000 commands: %s", time.Since(latestStart))
+	var latestPlan string
+	require.NoError(t, s.db.QueryRow("EXPLAIN FORMAT=JSON SELECT id,instance_id,channel_id,status,created_at FROM channel_commands WHERE site_id=? ORDER BY created_at DESC,id DESC LIMIT 20", site).Scan(&latestPlan))
+	require.Contains(t, latestPlan, "idx_command_site_history")
+	require.NotContains(t, latestPlan, `"using_filesort": true`)
 	q := tuning.ProbeRecordQuery{Site: site, ChannelID: 7, Now: now, From: now.Add(-24 * time.Hour), To: now, Limit: 50}
 	query, args, err := channelLifelineSQL(q, "changes", []any{site})
 	require.NoError(t, err)
@@ -239,6 +255,23 @@ func TestChannelHistoryLargeCleanup(t *testing.T) {
 		t.Skip("explicit isolated scale test")
 	}
 	s, _, now := lifelineStore(t)
+	rows, err := s.db.Query(`SELECT id FROM channel_commands LIMIT 100`)
+	require.NoError(t, err)
+	var args []any
+	for rows.Next() {
+		var id string
+		require.NoError(t, rows.Scan(&id))
+		args = append(args, id)
+	}
+	require.NoError(t, rows.Err())
+	rows.Close()
+	require.Len(t, args, 100, "seed the isolated scale fixture first")
+	args = append(args, now, now)
+	var plan string
+	require.NoError(t, s.db.QueryRow("EXPLAIN FORMAT=TREE "+channelHistoryAuditReferenceSQL(100), args...).Scan(&plan))
+	require.Contains(t, plan, "index lookup on a using idx_audit_correlation_guard")
+	require.Contains(t, plan, `idx_audit_correlation_guard`)
+	require.NotContains(t, plan, "index scan on a", "must not scan the entire correlation index")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	start := time.Now()
@@ -249,10 +282,10 @@ func TestChannelHistoryLargeCleanup(t *testing.T) {
 func TestChannelHistoryRetentionRecentReferences(t *testing.T) {
 	s, site, now := lifelineStore(t)
 	old := now.Add(-8 * 24 * time.Hour)
-	for _, kind := range []string{"pending_probe", "recent_audit", "recent_recommendation"} {
+	for _, kind := range []string{"pending_probe", "recent_audit", "recent_recommendation", "recent_direct_audit", "recent_request", "last_probe", "circuit_command", "capacity_command"} {
 		t.Run(kind, func(t *testing.T) {
 			id := rand.Text()
-			_, err := s.db.Exec(`INSERT INTO channel_commands(id,instance_id,channel_id,command_type,payload_json,status,created_by,created_at,updated_at) VALUES(?,?,7,'channel.update','{}','succeeded','test',?,?)`, id, site, old, old)
+			_, err := s.db.Exec(`INSERT INTO channel_commands(site_id,execution_kind,ownership_evidence,id,instance_id,channel_id,command_type,payload_json,status,created_by,created_at,updated_at) VALUES(?,'agent','recorded',?,?,7,'channel.update','{}','succeeded','test',?,?)`, site, id, site, old, old)
 			require.NoError(t, err)
 			switch kind {
 			case "pending_probe":
@@ -261,6 +294,20 @@ func TestChannelHistoryRetentionRecentReferences(t *testing.T) {
 				require.NoError(t, s.InsertOperationAudit(storage.OperationAudit{ID: rand.Text(), InstanceID: site, TargetType: "channel", TargetID: "7", OperationType: "channel.update", CorrelationID: id, Status: "succeeded", CreatedAt: old, UpdatedAt: now}))
 			case "recent_recommendation":
 				require.NoError(t, s.InsertRecommendation(tuning.Recommendation{ID: rand.Text(), InstanceID: site, ChannelID: 7, ChannelName: "test", CreatedAt: now, Rule: "weight_write", ModeAtCreation: "auto", Status: "auto_executed", CommandID: &id}))
+			case "recent_direct_audit":
+				require.NoError(t, s.InsertOperationAudit(storage.OperationAudit{ID: id, SiteID: site, InstanceID: site, TargetType: "channel", TargetID: "7", OperationType: "channel.update", Status: "succeeded", CreatedAt: old, UpdatedAt: now}))
+			case "recent_request":
+				requestID := rand.Text()
+				require.NoError(t, s.BeginChannelControlRequest(context.Background(), tuning.ChannelControlRequest{ID: requestID, InstanceID: site, ChannelID: 7, Operation: "channel.update", Payload: map[string]any{}, StartedAt: now}))
+				require.NoError(t, s.LinkChannelControlRequest(context.Background(), requestID, id))
+			case "last_probe", "circuit_command", "capacity_command":
+				field := map[string]string{"last_probe": "last_probe_command_id", "circuit_command": "circuit_status_command_id", "capacity_command": "capacity_control_json"}[kind]
+				value := id
+				if kind == "capacity_command" {
+					value = fmt.Sprintf(`{"pending_command_id":%q}`, id)
+				}
+				_, err = s.db.Exec(`INSERT INTO tuning_continuous_states(instance_id,channel_id,model_name,`+field+`,updated_at) VALUES(?,7,'m',?,?) ON DUPLICATE KEY UPDATE `+field+`=VALUES(`+field+`)`, site, value, now)
+				require.NoError(t, err)
 			}
 			require.NoError(t, s.pruneChannelHistory(context.Background(), now))
 			var count int
@@ -279,7 +326,7 @@ func TestChannelLifelineAgentOwnershipAndBoundedPages(t *testing.T) {
 	at := now.Add(-time.Minute)
 	for i := 0; i < 12; i++ {
 		id := rand.Text()
-		_, err = s.db.Exec(`INSERT INTO channel_commands(id,instance_id,channel_id,command_type,payload_json,status,created_by,created_at,updated_at) VALUES(?,?,7,'channel.update','{}','succeeded','test',?,?)`, id, agent, at, at)
+		_, err = s.db.Exec(`INSERT INTO channel_commands(site_id,execution_kind,ownership_evidence,id,instance_id,channel_id,command_type,payload_json,status,created_by,created_at,updated_at) VALUES(?,'agent','recorded',?,?,7,'channel.update','{}','succeeded','test',?,?)`, site, id, agent, at, at)
 		require.NoError(t, err)
 		require.NoError(t, s.InsertOperationAudit(storage.OperationAudit{ID: rand.Text(), InstanceID: agent, TargetType: "channel", TargetID: "7", OperationType: "tuning.base_update", Status: "succeeded", CreatedAt: at, UpdatedAt: at}))
 	}
@@ -311,4 +358,31 @@ func TestChannelLifelineAgentOwnershipAndBoundedPages(t *testing.T) {
 	page, err := s.QueryChannelLifeline(ctx, q, "changes")
 	require.NoError(t, err)
 	require.Empty(t, page.Items)
+}
+
+func TestChannelHistoryCatchupBudgetAndResume(t *testing.T) {
+	s, site, now := lifelineStore(t)
+	old := now.Add(-8 * 24 * time.Hour)
+	const count = 6005
+	for offset := 0; offset < count; offset += 500 {
+		var values []string
+		var args []any
+		for i := offset; i < count && i < offset+500; i++ {
+			values = append(values, "(?,'agent','recorded',?,?,7,'channel.update','{}','succeeded','test',?,?)")
+			args = append(args, site, rand.Text(), site, old, old)
+		}
+		_, err := s.db.Exec(`INSERT INTO channel_commands(site_id,execution_kind,ownership_evidence,id,instance_id,channel_id,command_type,payload_json,status,created_by,created_at,updated_at) VALUES `+strings.Join(values, ","), args...)
+		require.NoError(t, err)
+	}
+	require.NoError(t, s.pruneChannelHistory(context.Background(), now))
+	var remaining int
+	require.NoError(t, s.db.QueryRow("SELECT COUNT(*) FROM channel_commands WHERE site_id=?", site).Scan(&remaining))
+	require.Greater(t, count-remaining, 100)
+	require.LessOrEqual(t, count-remaining, channelHistoryBatchSize*channelHistoryPassBatches)
+	require.True(t, s.ChannelHistoryCleanupPending())
+	for i := 0; i < 5 && remaining > 0; i++ {
+		require.NoError(t, s.pruneChannelHistory(context.Background(), now))
+		require.NoError(t, s.db.QueryRow("SELECT COUNT(*) FROM channel_commands WHERE site_id=?", site).Scan(&remaining))
+	}
+	require.Zero(t, remaining)
 }

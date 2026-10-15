@@ -16,6 +16,15 @@ func (s *MemoryStore) CreateChannelCommand(v storage.ChannelCommand) error {
 	if _, ok := s.channelCommands[v.ID]; ok {
 		return errors.New("command exists")
 	}
+	if v.ExecutionKind == "" {
+		v.ExecutionKind = "agent"
+	}
+	if v.SiteID == "" {
+		v.SiteID = v.InstanceID
+		if i, ok := s.instances[v.InstanceID]; ok && i.SiteID != "" {
+			v.SiteID = i.SiteID
+		}
+	}
 	s.channelCommands[v.ID] = v
 	return nil
 }
@@ -24,7 +33,7 @@ func (s *MemoryStore) ClaimPendingCommands(instanceID string, now time.Time) ([]
 	defer s.mu.Unlock()
 	var out []storage.ChannelCommand
 	for id, v := range s.channelCommands {
-		if v.InstanceID == instanceID && v.Status == "pending" {
+		if v.InstanceID == instanceID && v.ExecutionKind == "agent" && v.Status == "pending" {
 			v.Status = "delivered"
 			v.UpdatedAt = now
 			s.channelCommands[id] = v
@@ -72,7 +81,7 @@ func (s *MemoryStore) QueryChannelCommands(q storage.ChannelCommandQuery) ([]sto
 	defer s.mu.Unlock()
 	var all []storage.ChannelCommand
 	for _, v := range s.channelCommands {
-		if (q.InstanceID == "" || v.InstanceID == q.InstanceID) && (q.Status == "" || v.Status == q.Status) {
+		if (q.ChannelID == 0 || v.ChannelID == q.ChannelID) && (q.SiteID == "" || v.SiteID == q.SiteID) && (q.ExecutionKind == "" || v.ExecutionKind == q.ExecutionKind) && (q.InstanceID == "" || v.InstanceID == q.InstanceID) && (q.Status == "" || v.Status == q.Status) {
 			all = append(all, v)
 		}
 	}

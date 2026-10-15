@@ -43,6 +43,10 @@ const pageItems = computed(() =>
   ),
 );
 const dimensionRoute = (item: AlertItem) => {
+  if(item.dimension_type==='site_channel') {
+    const channel=item.dimension_key.split(':channel:').at(-1);
+    return `/channel-lifeline?channel_id=${encodeURIComponent(channel||'')}`;
+  }
   const base =
     item.dimension_type === "instance_user"
       ? "/customers"
@@ -184,7 +188,7 @@ useAutoRefresh(state.reload);
             <p>{{ item.summary }}</p>
             <small
               ><el-tooltip :content="item.instance_id"
-                ><span>{{ item.instance_name }}</span></el-tooltip
+                ><span>{{ item.site_id || item.instance_name }}</span></el-tooltip
               >
               ·
               <span :title="item.display_key">{{
@@ -194,7 +198,7 @@ useAutoRefresh(state.reload);
             >
           </div>
           <div class="row-actions" @click.stop>
-            <router-link v-if="item.dimension_key" :to="dimensionRoute(item)"
+            <router-link v-if="item.dimension_key" :to="dimensionRoute(item)" @click="item.site_id && filters.selectSite(item.site_id)"
               ><el-button size="small" type="primary" plain
                 >查看维度</el-button
               ></router-link
@@ -225,7 +229,7 @@ useAutoRefresh(state.reload);
       size="480px"
       ><p v-if="selected">
         <el-tooltip :content="selected.instance_id"
-          ><span>{{ selected.instance_name }}</span></el-tooltip
+          ><span>{{ selected.site_id || selected.instance_name }}</span></el-tooltip
         >
         · {{ selected.summary }}
       </p>

@@ -268,17 +268,26 @@ func (h Handler) dispatchAlertNotifications(alerts []storage.Alert) error {
 	if len(channels) == 0 {
 		return nil
 	}
-	if h.instanceStore == nil {
-		return fmt.Errorf("notification routing: instance store not configured")
+	instanceSites := map[string]string{}
+	needsInstances := false
+	for _, alert := range alerts {
+		if !isCircuitAlert(alert.RuleKey) {
+			needsInstances = true
+			break
+		}
 	}
-	instances, err := h.instanceStore.ListInstances()
-	if err != nil {
-		return err
-	}
-	instanceSites := make(map[string]string, len(instances))
-	for _, instance := range instances {
-		if !instance.Deleted {
-			instanceSites[instance.ID] = siteOf(instance)
+	if needsInstances {
+		if h.instanceStore == nil {
+			return fmt.Errorf("notification routing: instance store not configured")
+		}
+		instances, err := h.instanceStore.ListInstances()
+		if err != nil {
+			return err
+		}
+		for _, instance := range instances {
+			if !instance.Deleted {
+				instanceSites[instance.ID] = siteOf(instance)
+			}
 		}
 	}
 	client := http.Client{Timeout: 3 * time.Second}

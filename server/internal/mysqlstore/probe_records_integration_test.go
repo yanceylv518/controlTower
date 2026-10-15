@@ -135,7 +135,7 @@ func TestChannelLifelineMergedOperationsSafeFieldsAndRetention(t *testing.T) {
 	at := now.Add(-time.Minute)
 	command, recID := rand.Text(), rand.Text()
 	insertCommand := func(id string) {
-		_, err := s.db.Exec(`INSERT INTO channel_commands(id,instance_id,channel_id,command_type,payload_json,status,created_by,created_at,updated_at) VALUES(?,?,7,'channel.update',?,'succeeded','test',?,?)`, id, site, `{"weight":0,"status":2,"secret":"never-show"}`, at, at)
+		_, err := s.db.Exec(`INSERT INTO channel_commands(site_id,execution_kind,ownership_evidence,id,instance_id,channel_id,command_type,payload_json,status,created_by,created_at,updated_at) VALUES(?,'agent','recorded',?,?,7,'channel.update',?,'succeeded','test',?,?)`, site, id, site, `{"weight":0,"status":2,"secret":"never-show"}`, at, at)
 		require.NoError(t, err)
 	}
 	insertCommand(command)

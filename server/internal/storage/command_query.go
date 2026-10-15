@@ -15,10 +15,13 @@ var auditBearerCredential = regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9._~+/-]
 var auditURLCredential = regexp.MustCompile(`(?i)(https?://)[^/@\s]+@`)
 
 type ChannelCommandQuery struct {
-	InstanceID string
-	Status     string
-	Limit      int
-	Offset     int
+	ChannelID     int64
+	SiteID        string
+	ExecutionKind string
+	InstanceID    string
+	Status        string
+	Limit         int
+	Offset        int
 }
 
 type OperationAuditQuery struct {

@@ -100,24 +100,23 @@ func (s Store) QueryLifelineCurrent(ctx context.Context, site string) (tuning.Li
 
 // Start from indexed active commands and live pending requests, rather than
 // visiting every historical command and checking its probe history.
-const currentRecoveryRoundsSQL = `SELECT c.id,c.channel_id,c.payload_json,c.status,c.created_at,c.updated_at
+const currentRecoveryRoundsSQL = `SELECT c.id,c.channel_id,c.payload_json,c.status,c.created_at,c.updated_at,c.execution_kind,IF(c.execution_kind='agent',c.instance_id,'')
 FROM (
- SELECT cmd.id FROM (SELECT ? AS instance_id UNION SELECT id FROM instances WHERE site_id=?) scoped
- JOIN channel_commands cmd ON cmd.instance_id=scoped.instance_id
- WHERE cmd.status IN ('pending','delivered','executing') AND cmd.command_type='channel.probe'
+ SELECT cmd.id FROM channel_commands cmd
+ WHERE cmd.site_id=? AND cmd.status IN ('pending','delivered','executing') AND cmd.command_type='channel.probe'
  UNION
  SELECT cmd.id FROM tuning_probe_records p
  JOIN channel_commands cmd ON cmd.id=p.round_id AND cmd.channel_id=p.channel_id
  WHERE p.instance_id=? AND p.outcome='pending' AND p.deadline_at>? AND p.started_at>=?
  AND cmd.command_type='channel.probe'
- AND (cmd.instance_id=? OR cmd.instance_id IN (SELECT id FROM instances WHERE site_id=?))
+ AND cmd.site_id=?
 ) active JOIN channel_commands c ON c.id=active.id
 ORDER BY (c.status IN ('pending','delivered','executing')) DESC,c.created_at DESC,c.id DESC`
 
 func (s Store) currentRecoveryRounds(ctx context.Context, site string, now time.Time, days int) (map[int64]tuning.ProbeRound, error) {
 	out := map[int64]tuning.ProbeRound{}
 	floor := now.Add(-time.Duration(days) * 24 * time.Hour)
-	rows, err := s.db.QueryContext(ctx, currentRecoveryRoundsSQL, site, site, site, now, floor, site, site)
+	rows, err := s.db.QueryContext(ctx, currentRecoveryRoundsSQL, site, site, now, floor, site)
 	if err != nil {
 		return out, err
 	}
@@ -125,7 +124,7 @@ func (s Store) currentRecoveryRounds(ctx context.Context, site string, now time.
 	for rows.Next() {
 		var r tuning.ProbeRound
 		var raw []byte
-		if err = rows.Scan(&r.ID, &r.ChannelID, &raw, &r.Status, &r.CreatedAt, &r.UpdatedAt); err != nil {
+		if err = rows.Scan(&r.ID, &r.ChannelID, &raw, &r.Status, &r.CreatedAt, &r.UpdatedAt, &r.ExecutionKind, &r.ExecutorInstanceID); err != nil {
 			rows.Close()
 			return out, err
 		}

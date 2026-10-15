@@ -1,6 +1,8 @@
 # Control Tower 项目进度
 
 <!-- AI_CURRENT_START -->
+- **渠道历史修复与查询优化提交交付（2026-10-15）**：统一历史站点归属、区分CT直连/Agent，联动通知路由与证据回填（145）；批量保护及有预算的积压追赶（146）；生命线原生索引分页和提前去重。Go vet/test、MySQL整包、百万历史与重复数据分页回归通过；Web类型/构建沿用覆盖最终Web代码的站点修复验证。按本次授权在main精确提交推送，Git结果另行核验；未打包部署、未修改生产缓存。本地测试库已清理，其他未提交资料保留。见[站点归属](docs/ai-tasks/2026-10-15-channel-history-site.md)、[清理优化](docs/ai-tasks/2026-10-15-channel-history-catchup.md)、[查询优化](docs/ai-tasks/2026-10-15-lifeline-query-optimization.md)。
+
 
 - **rc175远程发布完成（2026-10-15，未部署）**：固定e9ff05f8，核验包含rc174及发布时最新主线；CI38657929820与release38658179577成功。三个包哈希/架构/内嵌提交、147份迁移逐字节及既有Web标识通过，GHCR版本/latest摘要一致。新增144持久通知边界和100条清理批次/失败隔离，需升级Server执行迁移才生效；未生产改配置或部署。见[发布记录](docs/tasks/2026-10-15-rc175-remote-release.md)。
 

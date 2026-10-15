@@ -16,9 +16,16 @@ import (
 )
 
 func (s Store) CreateChannelCommand(v storage.ChannelCommand) error {
+	// This public queue entry point is exclusively Agent execution.
+	v.ExecutionKind = "agent"
+	site := siteIDForInstance(s.db, v.InstanceID)
+	if site == "" || (v.SiteID != "" && v.SiteID != site) {
+		return errors.New("invalid command site")
+	}
+	v.SiteID = site
 	_, err := s.db.ExecContext(context.Background(), `INSERT INTO channel_commands
-(id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at)
-VALUES(?,?,?,?,?,?,?,?,?,?)`, v.ID, v.InstanceID, v.ChannelID, v.CommandType, v.PayloadJSON, v.Status, v.CreatedBy, v.ErrorSummary, v.CreatedAt, v.UpdatedAt)
+(site_id,execution_kind,ownership_evidence,id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at)
+VALUES(?,'agent','recorded',?,?,?,?,?,?,?,?,?,?)`, v.SiteID, v.ID, v.InstanceID, v.ChannelID, v.CommandType, v.PayloadJSON, v.Status, v.CreatedBy, v.ErrorSummary, v.CreatedAt, v.UpdatedAt)
 	return err
 }
 
@@ -29,8 +36,8 @@ func (s Store) ClaimPendingCommands(instanceID string, now time.Time) ([]storage
 		return nil, err
 	}
 	defer tx.Rollback()
-	rows, err := tx.QueryContext(ctx, `SELECT id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at
-FROM channel_commands c WHERE instance_id=? AND status='pending'
+	rows, err := tx.QueryContext(ctx, `SELECT id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at,site_id,execution_kind,ownership_evidence,legacy_instance_id
+FROM channel_commands c WHERE instance_id=? AND execution_kind='agent' AND status='pending'
 AND (NOT EXISTS (SELECT 1 FROM tuning_recommendations pending_rec WHERE pending_rec.command_id=c.id AND pending_rec.mode_at_creation='auto')
 OR NOT EXISTS (SELECT 1 FROM channel_commands delivered JOIN tuning_recommendations delivered_rec ON delivered_rec.command_id=delivered.id AND delivered_rec.mode_at_creation='auto'
 WHERE delivered.instance_id=c.instance_id AND delivered.channel_id=c.channel_id AND delivered.command_type='channel.update' AND delivered.status='delivered'))
@@ -41,7 +48,7 @@ ORDER BY created_at FOR UPDATE`, instanceID)
 	var out []storage.ChannelCommand
 	for rows.Next() {
 		var v storage.ChannelCommand
-		if err = rows.Scan(&v.ID, &v.InstanceID, &v.ChannelID, &v.CommandType, &v.PayloadJSON, &v.Status, &v.CreatedBy, &v.ErrorSummary, &v.CreatedAt, &v.UpdatedAt); err != nil {
+		if err = rows.Scan(&v.ID, &v.InstanceID, &v.ChannelID, &v.CommandType, &v.PayloadJSON, &v.Status, &v.CreatedBy, &v.ErrorSummary, &v.CreatedAt, &v.UpdatedAt, &v.SiteID, &v.ExecutionKind, &v.OwnershipEvidence, &v.LegacyInstanceID); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -137,6 +144,10 @@ ORDER BY created_at FOR UPDATE`, instanceID)
 	return out, nil
 }
 
+func (s Store) CompleteAgentChannelCommand(instanceID, id, status, reason string, now time.Time) (storage.ChannelCommand, bool, error) {
+	return s.completeChannelCommand(id, status, reason, now, instanceID, nil)
+}
+
 func (s Store) CompleteChannelCommand(id, status, errorSummary string, now time.Time) (storage.ChannelCommand, bool, error) {
 	return s.completeChannelCommand(id, status, errorSummary, now, "", nil)
 }
@@ -144,7 +155,7 @@ func (s Store) CompleteChannelCommand(id, status, errorSummary string, now time.
 // Reconcile only reads delivered automatic writes. It never replays an old
 // control operation, including after the operator has turned auto mode off.
 func (s Store) CommandsToReconcile(instanceID string, before time.Time) ([]storage.ChannelCommand, error) {
-	rows, err := s.db.QueryContext(context.Background(), `SELECT c.id,c.instance_id,c.channel_id,c.payload_json FROM channel_commands c WHERE c.instance_id=? AND c.status='delivered' AND c.command_type='channel.update' AND c.updated_at<? AND EXISTS (SELECT 1 FROM tuning_recommendations r WHERE r.command_id=c.id AND r.mode_at_creation='auto') ORDER BY c.updated_at LIMIT 100`, instanceID, before)
+	rows, err := s.db.QueryContext(context.Background(), `SELECT c.id,c.instance_id,c.channel_id,c.payload_json FROM channel_commands c WHERE c.instance_id=? AND c.execution_kind='agent' AND c.status='delivered' AND c.command_type='channel.update' AND c.updated_at<? AND EXISTS (SELECT 1 FROM tuning_recommendations r WHERE r.command_id=c.id AND r.mode_at_creation='auto') ORDER BY c.updated_at LIMIT 100`, instanceID, before)
 	if err != nil {
 		return nil, err
 	}
@@ -176,12 +187,15 @@ func (s Store) completeChannelCommand(id, status, errorSummary string, now time.
 	}
 	defer tx.Rollback()
 	var v storage.ChannelCommand
-	err = tx.QueryRowContext(ctx, `SELECT id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at FROM channel_commands WHERE id=? FOR UPDATE`, id).Scan(&v.ID, &v.InstanceID, &v.ChannelID, &v.CommandType, &v.PayloadJSON, &v.Status, &v.CreatedBy, &v.ErrorSummary, &v.CreatedAt, &v.UpdatedAt)
+	err = tx.QueryRowContext(ctx, `SELECT id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at,site_id,execution_kind,ownership_evidence,legacy_instance_id FROM channel_commands WHERE id=? FOR UPDATE`, id).Scan(&v.ID, &v.InstanceID, &v.ChannelID, &v.CommandType, &v.PayloadJSON, &v.Status, &v.CreatedBy, &v.ErrorSummary, &v.CreatedAt, &v.UpdatedAt, &v.SiteID, &v.ExecutionKind, &v.OwnershipEvidence, &v.LegacyInstanceID)
 	if err == sql.ErrNoRows {
 		return storage.ChannelCommand{}, false, nil
 	}
 	if err != nil {
 		return storage.ChannelCommand{}, false, err
+	}
+	if instanceID != "" && (v.InstanceID != instanceID || v.ExecutionKind != "agent") {
+		return v, false, nil
 	}
 	if v.Status != "delivered" {
 		return v, false, nil
@@ -222,7 +236,7 @@ func (s Store) completeChannelCommand(id, status, errorSummary string, now time.
 	v.Status = status
 	v.ErrorSummary = errorSummary
 	v.UpdatedAt = now
-	siteID := siteIDForInstance(tx, v.InstanceID)
+	siteID := v.SiteID
 	if observed == nil && status == "succeeded" && v.CommandType == "channel.update" {
 		if err = applyCompletedChannelWrite(tx, v, now); err != nil {
 			return storage.ChannelCommand{}, false, err
@@ -350,6 +364,18 @@ func (s Store) QueryChannelCommands(q storage.ChannelCommandQuery) ([]storage.Ch
 	limit, offset := storage.NormalizeCommandPagination(q.Limit, q.Offset)
 	where := []string{}
 	args := []any{}
+	if q.SiteID != "" {
+		where = append(where, "site_id=?")
+		args = append(args, q.SiteID)
+	}
+	if q.ChannelID > 0 {
+		where = append(where, "channel_id=?")
+		args = append(args, q.ChannelID)
+	}
+	if q.ExecutionKind != "" {
+		where = append(where, "execution_kind=?")
+		args = append(args, q.ExecutionKind)
+	}
 	if q.InstanceID != "" {
 		where = append(where, "instance_id=?")
 		args = append(args, q.InstanceID)
@@ -358,11 +384,11 @@ func (s Store) QueryChannelCommands(q storage.ChannelCommandQuery) ([]storage.Ch
 		where = append(where, "status=?")
 		args = append(args, q.Status)
 	}
-	sqlText := `SELECT id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at FROM channel_commands`
+	sqlText := `SELECT id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at,site_id,execution_kind,ownership_evidence,legacy_instance_id FROM channel_commands`
 	if len(where) > 0 {
 		sqlText += " WHERE " + strings.Join(where, " AND ")
 	}
-	sqlText += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+	sqlText += " ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?"
 	args = append(args, limit, offset)
 	rows, e := s.db.QueryContext(context.Background(), sqlText, args...)
 	if e != nil {
@@ -372,7 +398,7 @@ func (s Store) QueryChannelCommands(q storage.ChannelCommandQuery) ([]storage.Ch
 	var out []storage.ChannelCommand
 	for rows.Next() {
 		var v storage.ChannelCommand
-		if e = rows.Scan(&v.ID, &v.InstanceID, &v.ChannelID, &v.CommandType, &v.PayloadJSON, &v.Status, &v.CreatedBy, &v.ErrorSummary, &v.CreatedAt, &v.UpdatedAt); e != nil {
+		if e = rows.Scan(&v.ID, &v.InstanceID, &v.ChannelID, &v.CommandType, &v.PayloadJSON, &v.Status, &v.CreatedBy, &v.ErrorSummary, &v.CreatedAt, &v.UpdatedAt, &v.SiteID, &v.ExecutionKind, &v.OwnershipEvidence, &v.LegacyInstanceID); e != nil {
 			return nil, e
 		}
 		out = append(out, v)
@@ -382,6 +408,9 @@ func (s Store) QueryChannelCommands(q storage.ChannelCommandQuery) ([]storage.Ch
 
 func (s Store) InsertOperationAudit(v storage.OperationAudit) error {
 	v = storage.NormalizeOperationAudit(v)
+	if v.SiteID == "" && v.TargetType == "channel" {
+		v.SiteID = channelAuditSite(s.db, v.InstanceID)
+	}
 	if !storage.IsManualOperationAudit(v) && !storage.IsChannelScheduleExecutionAudit(v) {
 		return nil
 	}
@@ -392,15 +421,15 @@ func (s Store) InsertOperationAudit(v storage.OperationAudit) error {
 		return storage.ErrUnsupportedOperationAudit
 	}
 	_, e := s.db.ExecContext(context.Background(), `INSERT INTO operation_audits
-(id,instance_id,operation_type,target_type,target_id,actor_id,actor_type,actor_role,source_component,trigger_type,request_id,correlation_id,client_ip,auth_method,http_method,route,http_status,error_summary,before_summary,after_summary,status,created_at,updated_at)
-VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+(site_id,ownership_evidence,id,instance_id,operation_type,target_type,target_id,actor_id,actor_type,actor_role,source_component,trigger_type,request_id,correlation_id,client_ip,auth_method,http_method,route,http_status,error_summary,before_summary,after_summary,status,created_at,updated_at)
+VALUES(?,'recorded',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON DUPLICATE KEY UPDATE
 after_summary=IF(status='submitted' AND VALUES(status)<>'submitted',VALUES(after_summary),after_summary),
 error_summary=IF(status='submitted' AND VALUES(status)<>'submitted',VALUES(error_summary),error_summary),
 http_status=IF(status='submitted' AND VALUES(status)<>'submitted',VALUES(http_status),http_status),
 updated_at=IF(status='submitted' AND VALUES(status)<>'submitted',VALUES(updated_at),updated_at),
 status=IF(status='submitted' AND VALUES(status)<>'submitted',VALUES(status),status)`,
-		v.ID, v.InstanceID, v.OperationType, v.TargetType, v.TargetID, v.ActorID, v.ActorType, v.ActorRole, v.SourceComponent, v.TriggerType, v.RequestID, v.CorrelationID, v.ClientIP, v.AuthMethod, v.HTTPMethod, v.Route, v.HTTPStatus, v.ErrorSummary, v.BeforeSummary, v.AfterSummary, v.Status, v.CreatedAt, v.UpdatedAt)
+		v.SiteID, v.ID, v.InstanceID, v.OperationType, v.TargetType, v.TargetID, v.ActorID, v.ActorType, v.ActorRole, v.SourceComponent, v.TriggerType, v.RequestID, v.CorrelationID, v.ClientIP, v.AuthMethod, v.HTTPMethod, v.Route, v.HTTPStatus, v.ErrorSummary, v.BeforeSummary, v.AfterSummary, v.Status, v.CreatedAt, v.UpdatedAt)
 	return e
 }
 
@@ -431,8 +460,8 @@ func (s Store) QueryOperationAuditsContext(ctx context.Context, q storage.Operat
 		args = append(args, q.InstanceID)
 	}
 	if q.SiteID != "" {
-		where = append(where, "(a.instance_id=? OR COALESCE(NULLIF(i.site_id,''),i.id)=?)")
-		args = append(args, q.SiteID, q.SiteID)
+		where = append(where, "(a.site_id=? OR (a.target_type<>'channel' AND (a.instance_id=? OR COALESCE(NULLIF(i.site_id,''),i.id)=?)))")
+		args = append(args, q.SiteID, q.SiteID, q.SiteID)
 	}
 	if q.OperationType != "" {
 		if prefix, ok := storage.OperationAuditTypeFilterPrefix(q.OperationType); ok {
@@ -539,7 +568,7 @@ func (s Store) QueryOperationAuditsContext(ctx context.Context, q storage.Operat
 		args = append(args, q.BeforeTime, q.BeforeTime, q.BeforeID)
 		offset = 0
 	}
-	sqlText := `SELECT a.id,a.instance_id,a.operation_type,a.target_type,a.target_id,a.actor_id,a.actor_type,a.actor_role,a.source_component,a.trigger_type,a.request_id,a.correlation_id,a.client_ip,a.auth_method,a.http_method,a.route,a.http_status,a.error_summary,a.before_summary,a.after_summary,a.status,a.created_at,a.updated_at` + fromSQL + whereSQL + ` ORDER BY a.created_at DESC,a.id DESC LIMIT ? OFFSET ?`
+	sqlText := `SELECT a.id,a.instance_id,a.operation_type,a.target_type,a.target_id,a.actor_id,a.actor_type,a.actor_role,a.source_component,a.trigger_type,a.request_id,a.correlation_id,a.client_ip,a.auth_method,a.http_method,a.route,a.http_status,a.error_summary,a.before_summary,a.after_summary,a.status,a.created_at,a.updated_at,a.site_id` + fromSQL + whereSQL + ` ORDER BY a.created_at DESC,a.id DESC LIMIT ? OFFSET ?`
 	args = append(args, limit+1, offset)
 	rows, e := s.db.QueryContext(ctx, sqlText, args...)
 	if e != nil {
@@ -548,7 +577,7 @@ func (s Store) QueryOperationAuditsContext(ctx context.Context, q storage.Operat
 	defer rows.Close()
 	for rows.Next() {
 		var v storage.OperationAudit
-		if e = rows.Scan(&v.ID, &v.InstanceID, &v.OperationType, &v.TargetType, &v.TargetID, &v.ActorID, &v.ActorType, &v.ActorRole, &v.SourceComponent, &v.TriggerType, &v.RequestID, &v.CorrelationID, &v.ClientIP, &v.AuthMethod, &v.HTTPMethod, &v.Route, &v.HTTPStatus, &v.ErrorSummary, &v.BeforeSummary, &v.AfterSummary, &v.Status, &v.CreatedAt, &v.UpdatedAt); e != nil {
+		if e = rows.Scan(&v.ID, &v.InstanceID, &v.OperationType, &v.TargetType, &v.TargetID, &v.ActorID, &v.ActorType, &v.ActorRole, &v.SourceComponent, &v.TriggerType, &v.RequestID, &v.CorrelationID, &v.ClientIP, &v.AuthMethod, &v.HTTPMethod, &v.Route, &v.HTTPStatus, &v.ErrorSummary, &v.BeforeSummary, &v.AfterSummary, &v.Status, &v.CreatedAt, &v.UpdatedAt, &v.SiteID); e != nil {
 			return page, e
 		}
 		page.Items = append(page.Items, storage.NormalizeOperationAudit(v))

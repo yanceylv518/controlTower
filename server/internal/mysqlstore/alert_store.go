@@ -239,6 +239,7 @@ func (s Store) QueryAlerts(query storage.AlertQuery) ([]storage.Alert, error) {
 			&silenceUntil,
 			&alert.DimensionType,
 			&alert.DimensionKey,
+			&alert.SiteID,
 		); err != nil {
 			return nil, err
 		}
@@ -273,8 +274,8 @@ func buildAlertQuery(query storage.AlertQuery) (string, []any) {
 		where, args = appendWhere(where, args, "instance_id = ?", query.InstanceID)
 	}
 	if query.SiteID != "" {
-		where, args = appendWhere(where, args, "(instance_id = ? OR instance_id IN (SELECT id FROM instances WHERE CASE WHEN site_id='' THEN id ELSE site_id END=?))", query.SiteID)
-		args = append(args, query.SiteID)
+		where, args = appendWhere(where, args, "(EXISTS(SELECT 1 FROM circuit_alert_events e WHERE e.alert_id=alerts.id AND e.site_id=?) OR (rule_key NOT IN ('channel_circuit_opened','channel_circuit_recovered') AND (instance_id = ? OR instance_id IN (SELECT id FROM instances WHERE CASE WHEN site_id='' THEN id ELSE site_id END=?))))", query.SiteID)
+		args = append(args, query.SiteID, query.SiteID)
 	}
 	if query.Status != "" {
 		where, args = appendWhere(where, args, "status = ?", query.Status)
@@ -286,7 +287,7 @@ func buildAlertQuery(query storage.AlertQuery) (string, []any) {
 		where, args = appendWhere(where, args, "status <> ?", "resolved")
 	}
 	args = append(args, limit, offset)
-	return `SELECT id, instance_id, rule_key, severity, status, title, summary, first_seen_at, last_seen_at, resolved_at, silence_until, dimension_type, dimension_key
+	return `SELECT id, instance_id, rule_key, severity, status, title, summary, first_seen_at, last_seen_at, resolved_at, silence_until, dimension_type, dimension_key,COALESCE((SELECT e.site_id FROM circuit_alert_events e WHERE e.alert_id=alerts.id LIMIT 1),'')
 FROM alerts` + where + `
 ORDER BY FIELD(severity, 'critical', 'warning', 'info'), last_seen_at DESC
 LIMIT ? OFFSET ?`, args

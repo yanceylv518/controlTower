@@ -33,25 +33,35 @@ func (h CommandHandler) WithNameSource(source NameSource) CommandHandler {
 }
 
 type channelCommandItem struct {
-	ID           string         `json:"id"`
-	InstanceID   string         `json:"instance_id"`
-	InstanceName string         `json:"instance_name"`
-	ChannelID    int64          `json:"channel_id"`
-	Status       string         `json:"status"`
-	Payload      map[string]any `json:"payload"`
-	CreatedBy    string         `json:"created_by"`
-	ErrorSummary string         `json:"error_summary,omitempty"`
-	CreatedAt    time.Time      `json:"created_at"`
+	SiteID           string         `json:"site_id"`
+	ExecutionKind    string         `json:"execution_kind"`
+	LegacyInstanceID string         `json:"legacy_instance_id,omitempty"`
+	ID               string         `json:"id"`
+	InstanceID       string         `json:"instance_id"`
+	InstanceName     string         `json:"instance_name"`
+	ChannelID        int64          `json:"channel_id"`
+	Status           string         `json:"status"`
+	Payload          map[string]any `json:"payload"`
+	CreatedBy        string         `json:"created_by"`
+	ErrorSummary     string         `json:"error_summary,omitempty"`
+	CreatedAt        time.Time      `json:"created_at"`
 }
 
 func (h CommandHandler) commandItem(v storage.ChannelCommand) channelCommandItem {
+	if v.ExecutionKind == "" || v.ExecutionKind == "unknown" {
+		v.ExecutionKind = "unknown"
+		if v.LegacyInstanceID == "" {
+			v.LegacyInstanceID = v.InstanceID
+		}
+		v.InstanceID = ""
+	}
 	p := map[string]any{}
 	_ = json.Unmarshal([]byte(v.PayloadJSON), &p)
 	name := v.InstanceID
 	if h.names != nil {
 		name = h.names.InstanceName(v.InstanceID)
 	}
-	return channelCommandItem{ID: v.ID, InstanceID: v.InstanceID, InstanceName: name, ChannelID: v.ChannelID, Status: v.Status, Payload: p, CreatedBy: v.CreatedBy, ErrorSummary: v.ErrorSummary, CreatedAt: v.CreatedAt}
+	return channelCommandItem{SiteID: v.SiteID, ExecutionKind: v.ExecutionKind, LegacyInstanceID: v.LegacyInstanceID, ID: v.ID, InstanceID: v.InstanceID, InstanceName: name, ChannelID: v.ChannelID, Status: v.Status, Payload: p, CreatedBy: v.CreatedBy, ErrorSummary: v.ErrorSummary, CreatedAt: v.CreatedAt}
 }
 
 func (h CommandHandler) Create(w http.ResponseWriter, r *http.Request) {
@@ -141,7 +151,7 @@ func (h CommandHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now().UTC()
-	v := storage.ChannelCommand{ID: hex.EncodeToString(b[:]), InstanceID: q.InstanceID, ChannelID: channelID, CommandType: "channel.update", PayloadJSON: string(payload), Status: "pending", CreatedBy: ctauth.Actor(r), CreatedAt: now, UpdatedAt: now}
+	v := storage.ChannelCommand{SiteID: siteOf(instance), ExecutionKind: "agent", ID: hex.EncodeToString(b[:]), InstanceID: q.InstanceID, ChannelID: channelID, CommandType: "channel.update", PayloadJSON: string(payload), Status: "pending", CreatedBy: ctauth.Actor(r), CreatedAt: now, UpdatedAt: now}
 	if h.Store.CreateChannelCommand(v) != nil {
 		writeDashboardError(w, 500, "create_failed")
 		return
@@ -152,7 +162,12 @@ func (h CommandHandler) List(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	limit, _ := strconv.Atoi(q.Get("limit"))
 	offset, _ := strconv.Atoi(q.Get("offset"))
-	items, e := h.Store.QueryChannelCommands(storage.ChannelCommandQuery{InstanceID: q.Get("instance_id"), Status: q.Get("status"), Limit: limit, Offset: offset})
+	channel, parseErr := strconv.ParseInt(q.Get("channel_id"), 10, 64)
+	if q.Get("channel_id") != "" && (parseErr != nil || channel <= 0) {
+		writeDashboardError(w, 400, "invalid_channel_id")
+		return
+	}
+	items, e := h.Store.QueryChannelCommands(storage.ChannelCommandQuery{ChannelID: channel, SiteID: q.Get("site_id"), ExecutionKind: q.Get("execution_kind"), InstanceID: q.Get("instance_id"), Status: q.Get("status"), Limit: limit, Offset: offset})
 	if e != nil {
 		writeDashboardError(w, 500, "query_failed")
 		return
@@ -165,6 +180,7 @@ func (h CommandHandler) List(w http.ResponseWriter, r *http.Request) {
 }
 
 type operationAuditItem struct {
+	SiteID          string    `json:"site_id"`
 	ID              string    `json:"id"`
 	InstanceID      string    `json:"instance_id"`
 	InstanceName    string    `json:"instance_name"`
@@ -269,7 +285,7 @@ func (h CommandHandler) Audits(w http.ResponseWriter, r *http.Request) {
 			name = h.names.InstanceName(v.InstanceID)
 		}
 		out = append(out, operationAuditItem{
-			ID: v.ID, InstanceID: v.InstanceID, InstanceName: name, OperationType: v.OperationType,
+			SiteID: v.SiteID, ID: v.ID, InstanceID: v.InstanceID, InstanceName: name, OperationType: v.OperationType,
 			TargetType: v.TargetType, TargetID: v.TargetID, ActorID: v.ActorID, ActorType: v.ActorType,
 			ActorRole: v.ActorRole, SourceComponent: v.SourceComponent, TriggerType: v.TriggerType,
 			RequestID: v.RequestID, CorrelationID: v.CorrelationID, ClientIP: v.ClientIP,

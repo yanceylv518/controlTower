@@ -66,8 +66,8 @@ func TestCommandExpiryConcurrentBatches(t *testing.T) {
 		if i == expired+1001 {
 			status = "delivered"
 		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO channel_commands(id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at)
-VALUES(?,?,1,'channel.update','{}',?,'test','',?,?)`, id, prefix, status, at, at); err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO channel_commands(site_id,execution_kind,ownership_evidence,id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at)
+VALUES(?,'agent','recorded',?,?,1,'channel.update','{}',?,'test','',?,?)`, prefix, id, prefix, status, at, at); err != nil {
 			t.Fatal(err)
 		}
 		if i < expired {
@@ -145,8 +145,8 @@ VALUES(?,?,'channel.update','channel','1','test','','','submitted','',?,?)`, id,
 
 func insertExpiryTestCommand(t *testing.T, tx *sql.Tx, id, instance, status string, at time.Time, audit bool) {
 	t.Helper()
-	if _, err := tx.Exec(`INSERT INTO channel_commands(id,instance_id,channel_id,command_type,payload_json,status,created_by,created_at,updated_at)
-VALUES(?,?,1,'channel.update','{}',?,'test',?,?)`, id, instance, status, at, at); err != nil {
+	if _, err := tx.Exec(`INSERT INTO channel_commands(site_id,execution_kind,ownership_evidence,id,instance_id,channel_id,command_type,payload_json,status,created_by,created_at,updated_at)
+VALUES(?,'agent','recorded',?,?,1,'channel.update','{}',?,'test',?,?)`, instance, id, instance, status, at, at); err != nil {
 		t.Fatal(err)
 	}
 	if audit {
@@ -242,7 +242,7 @@ VALUES(?,?,?,'test','local','',1,?,?)`, instance, instance, instance, before, be
 	}
 	var expired, delivered, succeeded, audits int
 	if err := db.QueryRow(`SELECT COALESCE(SUM(status='expired'),0),COALESCE(SUM(status='delivered'),0),COALESCE(SUM(status='succeeded'),0)
-FROM channel_commands WHERE instance_id LIKE ?`, prefix+"%").Scan(&expired, &delivered, &succeeded); err != nil {
+FROM channel_commands WHERE site_id LIKE ?`, prefix+"%").Scan(&expired, &delivered, &succeeded); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.QueryRow(`SELECT COUNT(*) FROM operation_audits WHERE instance_id LIKE ? AND status='expired'`, prefix+"%").Scan(&audits); err != nil {

@@ -80,10 +80,9 @@ func applyCompletedChannelWrite(tx *sql.Tx, command storage.ChannelCommand, at t
 		return nil
 	}
 	_, err := tx.Exec(`UPDATE channel_current c JOIN instances i ON i.id=c.instance_id
-JOIN instances source ON source.id=?
 SET c.weight=COALESCE(?,c.weight),c.priority=COALESCE(?,c.priority),c.status=COALESCE(?,c.status),c.group_name=COALESCE(?,c.group_name),c.captured_at=GREATEST(c.captured_at,?)
-WHERE CASE WHEN i.site_id='' THEN i.id ELSE i.site_id END=CASE WHEN source.site_id='' THEN source.id ELSE source.site_id END
-AND c.channel_id=?`, command.InstanceID, payload.Weight, payload.Priority, channelStatusLabelPtr(payload.Status), payload.Group, at, command.ChannelID)
+WHERE CASE WHEN i.site_id='' THEN i.id ELSE i.site_id END=?
+AND c.channel_id=?`, payload.Weight, payload.Priority, channelStatusLabelPtr(payload.Status), payload.Group, at, command.SiteID, command.ChannelID)
 	return err
 }
 
@@ -122,4 +121,14 @@ func siteIDForInstance(q interface {
 		return ""
 	}
 	return siteID
+}
+
+// Channel audit callers use either the site itself or the selected Agent.
+// Resolve at insertion; historical evidence backfill deliberately does not use
+// current instance membership to guess ownership.
+func channelAuditSite(q interface{ QueryRow(string, ...any) *sql.Row }, owner string) string {
+	if site := siteIDForInstance(q, owner); site != "" {
+		return site
+	}
+	return owner
 }

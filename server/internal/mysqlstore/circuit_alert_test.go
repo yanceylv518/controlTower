@@ -29,7 +29,7 @@ func TestCircuitImportMixedRulesAcrossBatches(t *testing.T) {
 			rule = "circuit_recovered"
 		}
 		at := now.Add(time.Duration(i+1) * time.Millisecond)
-		_, err = s.db.Exec(`INSERT INTO channel_commands(id,instance_id,channel_id,command_type,payload_json,status,created_by,created_at,updated_at) VALUES(?,?,?,'channel.update','{}','succeeded','test',?,?)`, cmd, node, i/2+1, at, at)
+		_, err = s.db.Exec(`INSERT INTO channel_commands(site_id,execution_kind,ownership_evidence,id,instance_id,channel_id,command_type,payload_json,status,created_by,created_at,updated_at) VALUES(?,'agent','recorded',?,?,?,'channel.update','{}','succeeded','test',?,?)`, site, cmd, node, i/2+1, at, at)
 		require.NoError(t, err)
 		require.NoError(t, s.InsertRecommendation(tuning.Recommendation{ID: id, InstanceID: site, ChannelID: int64(i/2 + 1), ChannelName: "test", Rule: rule, ModeAtCreation: "auto", Status: "auto_executed", CommandID: &cmd, CreatedAt: at, Evidence: map[string]any{}}))
 	}
@@ -86,7 +86,7 @@ func TestCircuitNotificationCutoffPreservesHistoryAndNewEvents(t *testing.T) {
 	// An old decision confirmed only after upgrade must not become a new
 	// notification merely because its command acknowledgement is recent.
 	legacy := site + "-late-old"
-	_, err = s.db.Exec(`INSERT INTO channel_commands(id,instance_id,channel_id,command_type,payload_json,status,created_by,created_at,updated_at) VALUES(?,?,2,'channel.update','{}','succeeded','test',?,?)`, legacy, node, cutoff.Add(-time.Millisecond), now)
+	_, err = s.db.Exec(`INSERT INTO channel_commands(site_id,execution_kind,ownership_evidence,id,instance_id,channel_id,command_type,payload_json,status,created_by,created_at,updated_at) VALUES(?,'agent','recorded',?,?,2,'channel.update','{}','succeeded','test',?,?)`, site, legacy, node, cutoff.Add(-time.Millisecond), now)
 	require.NoError(t, err)
 	require.NoError(t, s.InsertRecommendation(tuning.Recommendation{ID: legacy, InstanceID: site, ChannelID: 2, Rule: "circuit_opened", ModeAtCreation: "auto", Status: "auto_executed", CommandID: &legacy, CreatedAt: cutoff.Add(-time.Millisecond)}))
 	require.NoError(t, New(s.db).SyncCircuitAlerts(now))
@@ -204,7 +204,7 @@ func TestMySQLCircuitAlertLifecycle(t *testing.T) {
 		t.Helper()
 		id := site + suffix
 		cmd := id + "-cmd"
-		_, err = db.Exec(`INSERT INTO channel_commands(id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at) VALUES(?,?,12,'channel.update','{}',?,'system:auto','',?,?)`, cmd, node, status, at, at)
+		_, err = db.Exec(`INSERT INTO channel_commands(site_id,execution_kind,ownership_evidence,id,instance_id,channel_id,command_type,payload_json,status,created_by,error_summary,created_at,updated_at) VALUES(?,'agent','recorded',?,?,12,'channel.update','{}',?,'system:auto','',?,?)`, site, cmd, node, status, at, at)
 		must(err)
 		must(s.InsertRecommendation(tuning.Recommendation{ID: id, InstanceID: site, ChannelID: 12, ChannelName: "test channel", Rule: rule, ModeAtCreation: mode, Status: "auto_executed", CommandID: &cmd, CreatedAt: at, Evidence: map[string]any{}}))
 		return cmd
@@ -231,7 +231,7 @@ func TestMySQLCircuitAlertLifecycle(t *testing.T) {
 	opened := alerts[0]
 	current, err := s.OverviewAlerts(context.Background(), site, now.Add(time.Second))
 	must(err)
-	if current.Total != 1 || current.Unconfirmed != 0 || len(current.Items) != 1 || current.Items[0].DimensionKey != node+":channel:12" {
+	if current.Total != 1 || current.Unconfirmed != 0 || len(current.Items) != 1 || current.Items[0].DimensionKey != site+":channel:12" {
 		t.Fatalf("fresh circuit execution missing from overview: %+v", current)
 	}
 	stale, err := s.OverviewAlerts(context.Background(), site, now.Add(3*time.Minute))

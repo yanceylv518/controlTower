@@ -21,10 +21,10 @@ watch(()=>[filters.site_id,props.channelId,props.focusedRound],()=>void load(tru
  <div class="rounds"><header><span>{{focusedRound?'指定恢复检测批次':'最近 7 天的恢复检测批次（受站点保留期限制）'}}</span><el-button :loading="loading" @click="load(true)">刷新批次</el-button></header>
  <el-alert title="单次探针成功、批次任务完成、渠道实际恢复是不同结果。检测完成后按规则评估，通过后才尝试开启，以渠道状态确认结果为准。" type="info" :closable="false"/>
  <el-alert v-if="error" :title="error" type="error" :closable="false"/>
- <section v-for="r in items" :key="r.id" class="round"><header><div><strong>{{statuses[r.status]||r.status}}</strong><small>{{formatTime(r.created_at)}} · {{r.model}}</small></div><el-button :aria-expanded="expanded===r.id" @click="expanded=expanded===r.id?'':r.id">{{expanded===r.id?'收起请求':'查看请求'}}</el-button></header>
+ <section v-for="r in items" :key="r.id" class="round"><header><div><strong>{{r.execution_kind==='ct_direct'&&r.status==='delivered'?'CT 正在执行':statuses[r.status]||r.status}}</strong><small>{{formatTime(r.created_at)}} · {{r.model}}</small></div><el-button :aria-expanded="expanded===r.id" @click="expanded=expanded===r.id?'':r.id">{{expanded===r.id?'收起请求':'查看请求'}}</el-button></header>
   <p class="muted">批次 {{r.id}} · 状态更新 {{formatTime(r.updated_at)}}</p>
   <template v-if="r.metrics"><p>计划 {{r.planned}} 次 · 已发起 {{r.metrics.sent}} 次 · 已完成 {{r.metrics.sent-r.metrics.pending-r.metrics.unconfirmed}} 次</p><p>成功 {{r.metrics.success}} · 错误 {{r.metrics.errors}} · 慢 {{r.metrics.slow}} · 执行中 {{r.metrics.pending}} · 结果待确认 {{r.metrics.unconfirmed}}</p><el-progress :percentage="Math.min(100,Math.round((r.metrics.sent-r.metrics.pending-r.metrics.unconfirmed)/Math.max(1,r.planned)*100))" :show-text="false"/><p class="muted">{{Math.max(0,r.planned-r.metrics.sent)}} 次{{terminal(r)?'未执行（批次已结束）':'尚未发起'}}，不计为漏测。控制异常 {{r.metrics.unknown}} · 取消 {{r.metrics.canceled}}。</p></template>
-  <p v-else>计划 {{r.planned}} 次 · 尚无可关联的逐条记录<span v-if="r.reported_attempts!=null">；任务报告完成 {{r.reported_attempts}} 次、成功 {{r.reported_successes??'未知'}} 次</span>。</p>
+  <p class="muted">执行来源：{{r.execution_kind==='ct_direct'?'CT 直连':r.execution_kind==='agent'?`Agent（${r.executor_instance_id}）`:'未确认'}}</p><p v-if="!r.metrics">计划 {{r.planned}} 次 · 尚无可关联的逐条记录<span v-if="r.reported_attempts!=null">；任务报告完成 {{r.reported_attempts}} 次、成功 {{r.reported_successes??'未知'}} 次</span>。</p>
   <p v-if="!r.metrics" class="muted">可能是尚未开始、Agent 任务或旧版记录；不据此判断没有发送，也不补造进度。</p>
   <LifelineProbeRecords v-if="expanded===r.id&&r.metrics" :channel-id="channelId" :round-id="r.id" :from="r.created_at" :to="new Date().toISOString()"/>
  </section>

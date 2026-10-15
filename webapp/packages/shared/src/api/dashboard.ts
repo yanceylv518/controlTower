@@ -146,6 +146,7 @@ export interface MetricItem {
   otps_duration_seconds?: number;
 }
 export interface AlertItem {
+  site_id?: string;
   id: string;
   instance_id: string;
   instance_name: string;
@@ -350,6 +351,9 @@ export interface ChannelCommandInput {
   group?: string;
 }
 export interface ChannelCommandItem {
+  site_id: string;
+  execution_kind: string;
+  legacy_instance_id?: string;
   id: string;
   instance_id: string;
   instance_name: string;
@@ -361,6 +365,7 @@ export interface ChannelCommandItem {
   created_at: string;
 }
 export interface OperationAuditItem {
+  site_id?: string;
   id: string;
   instance_id: string;
   instance_name: string;
@@ -591,6 +596,7 @@ export interface LifelineChannel {
 }
 export interface LifelineCurrent {queried_at:string; channels:LifelineChannel[]}
 export interface ProbeRound {
+ execution_kind?:string; executor_instance_id?:string;
  id:string; channel_id:number; model:string; planned:number; status:string; created_at:string; updated_at:string;
  metrics?:ProbeMetrics; reported_attempts?:number; reported_successes?:number;
 }
@@ -1110,6 +1116,9 @@ export const dashboardApi = (client: ApiClient) => ({
     ),
   channelCommands: (
     params: {
+      site_id?: string;
+      channel_id?: number;
+      execution_kind?: string;
       instance_id?: string;
       status?: string;
       limit?: number;

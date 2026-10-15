@@ -50,10 +50,10 @@ func TestLifelineCurrentLargeHistory(t *testing.T) {
 		probeArgs := []any{}
 		for i := 0; i < 500; i++ {
 			id := fmt.Sprintf("%s-%d", site, batch*500+i)
-			args = append(args, id, site, now, now)
+			args = append(args, site, id, site, now, now)
 			probeArgs = append(probeArgs, fmt.Sprintf("%s%05d", site[5:], batch*500+i), site, now, now.Add(-time.Second), id)
 		}
-		_, err := s.db.ExecContext(ctx, `INSERT INTO channel_commands(id,instance_id,channel_id,command_type,payload_json,status,created_by,created_at,updated_at) VALUES `+strings.TrimSuffix(strings.Repeat("(?,?,7,'channel.probe','{}','succeeded','test',?,?),", 500), ","), args...)
+		_, err := s.db.ExecContext(ctx, `INSERT INTO channel_commands(site_id,execution_kind,ownership_evidence,id,instance_id,channel_id,command_type,payload_json,status,created_by,created_at,updated_at) VALUES `+strings.TrimSuffix(strings.Repeat("(?,'agent','recorded',?,?,7,'channel.probe','{}','succeeded','test',?,?),", 500), ","), args...)
 		require.NoError(t, err)
 		_, err = s.db.ExecContext(ctx, `INSERT INTO tuning_probe_records(id,instance_id,channel_id,channel_name,model_name,kind,started_at,deadline_at,outcome,reason,round_id,round_index) VALUES `+strings.TrimSuffix(strings.Repeat("(?,?,7,'test','m','recovery',?,?,'pending','',?,1),", 500), ","), probeArgs...)
 		require.NoError(t, err)
@@ -61,10 +61,10 @@ func TestLifelineCurrentLargeHistory(t *testing.T) {
 	agent := site + "-agent"
 	_, err := s.db.ExecContext(ctx, `INSERT INTO instances(id,site_id,name,env,region,base_url,enabled,created_at) VALUES(?,?,'test','','','',1,?)`, agent, site, now)
 	require.NoError(t, err)
-	// Agent commands are scoped through instances; other-site commands must
+	// Agent commands retain their recorded business site; other-site commands must
 	// never enter the current snapshot.
 	id := site + "-active"
-	_, err = s.db.ExecContext(ctx, `INSERT INTO channel_commands(id,instance_id,channel_id,command_type,payload_json,status,created_by,created_at,updated_at) VALUES(?,?,8,'channel.probe','{"model":"m","probe_count":3}','executing','test',?,?)`, id, agent, now, now)
+	_, err = s.db.ExecContext(ctx, `INSERT INTO channel_commands(site_id,execution_kind,ownership_evidence,id,instance_id,channel_id,command_type,payload_json,status,created_by,created_at,updated_at) VALUES(?,'agent','recorded',?,?,8,'channel.probe','{"model":"m","probe_count":3}','executing','test',?,?)`, site, id, agent, now, now)
 	require.NoError(t, err)
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -75,7 +75,7 @@ func TestLifelineCurrentLargeHistory(t *testing.T) {
 	require.Equal(t, id, active[8].ID)
 	t.Logf("20,000 finished commands + expired pending records: %s", time.Since(started))
 	var plan string
-	err = s.db.QueryRowContext(ctx, "EXPLAIN FORMAT=JSON "+currentRecoveryRoundsSQL, site, site, site, now, now.Add(-7*24*time.Hour), site, site).Scan(&plan)
+	err = s.db.QueryRowContext(ctx, "EXPLAIN FORMAT=JSON "+currentRecoveryRoundsSQL, site, site, now, now.Add(-7*24*time.Hour), site).Scan(&plan)
 	require.NoError(t, err)
 	require.Contains(t, plan, "idx_probe_pending", "pending requests must have an indexed path")
 	other, err := s.currentRecoveryRounds(ctx, site+"-other", now, 7)

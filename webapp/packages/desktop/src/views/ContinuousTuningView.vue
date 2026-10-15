@@ -1473,7 +1473,7 @@ function setGroupError(channelID: number, message: string) {
 async function pollGroupCommand(site: string, channelID: number, instanceID: string, commandID: string, expectedGroup: string, token: number, attempt = 0): Promise<void> {
   if (site !== siteID.value || groupPollTokens.get(channelID) !== token) return;
   try {
-    const result = await dashboard.channelCommands({ instance_id: instanceID, limit: 100 });
+    const result = await dashboard.channelCommands({ site_id: site, channel_id: channelID, instance_id: instanceID || undefined, limit: 100 });
     if (site !== siteID.value || groupPollTokens.get(channelID) !== token) return;
     const command = result.items.find(item => item.id === commandID);
     if (command?.status === "succeeded") {

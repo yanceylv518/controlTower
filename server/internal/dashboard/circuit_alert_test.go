@@ -54,7 +54,7 @@ func TestCircuitNotificationsRespectSiteCategoryAndRecoveryDedup(t *testing.T) {
 		must(s.UpsertNotificationChannel(ch))
 	}
 	h := NewHandler(s).WithNotificationStore(s).WithInstanceStore(s)
-	open := storage.Alert{ID: "open", InstanceID: "node", RuleKey: "channel_circuit_opened", Status: "firing", FirstSeenAt: now, LastSeenAt: now}
+	open := storage.Alert{ID: "open", InstanceID: "node", SiteID: "site", RuleKey: "channel_circuit_opened", Status: "firing", FirstSeenAt: now, LastSeenAt: now}
 	must(s.UpsertCurrentAlerts([]storage.Alert{open}, now))
 	must(h.dispatchAlertNotifications([]storage.Alert{open}))
 	must(h.dispatchAlertNotifications([]storage.Alert{open}))
@@ -68,7 +68,7 @@ func TestCircuitNotificationsRespectSiteCategoryAndRecoveryDedup(t *testing.T) {
 		t.Fatal("false resolution")
 	}
 	must(s.UpdateAlertAction(open.ID, "resolved", nil, now))
-	recovery := storage.Alert{ID: "recovery", InstanceID: "node", RuleKey: "channel_circuit_recovered", Status: "resolved", FirstSeenAt: now, LastSeenAt: now}
+	recovery := storage.Alert{ID: "recovery", InstanceID: "node", SiteID: "site", RuleKey: "channel_circuit_recovered", Status: "resolved", FirstSeenAt: now, LastSeenAt: now}
 	must(s.UpsertCurrentAlerts([]storage.Alert{recovery}, now))
 	must(h.dispatchAlertNotifications([]storage.Alert{recovery}))
 	must(h.dispatchAlertNotifications([]storage.Alert{recovery}))
@@ -79,5 +79,21 @@ func TestCircuitNotificationsRespectSiteCategoryAndRecoveryDedup(t *testing.T) {
 	must(err)
 	if due {
 		t.Fatal("old open released after recovery")
+	}
+}
+
+func TestCircuitNotificationRoutesWithoutInstanceMembership(t *testing.T) {
+	channel := storage.NotificationChannel{SiteID: "original-site"}
+	alert := storage.Alert{RuleKey: "channel_circuit_opened", SiteID: "original-site", InstanceID: "old-node"}
+	if !notificationChannelMatches(channel, alert, map[string]string{"old-node": "other-site"}) {
+		t.Fatal("event lost its recorded site")
+	}
+	alert.InstanceID = ""
+	if !notificationChannelMatches(channel, alert, nil) {
+		t.Fatal("CT direct requires no Agent")
+	}
+	alert.SiteID = ""
+	if notificationChannelMatches(channel, alert, map[string]string{"old-node": "original-site"}) {
+		t.Fatal("unproven circuit ownership must not route")
 	}
 }

@@ -220,6 +220,7 @@ type ChannelSnapshot struct {
 	CapturedAt  time.Time
 }
 type Alert struct {
+	SiteID        string // Set from the circuit event ledger, independent of Agent membership.
 	DimensionType string
 	DimensionKey  string
 	ConfirmedAt   *time.Time
@@ -266,12 +267,14 @@ type NotificationDelivery struct {
 }
 
 type ChannelCommand struct {
+	SiteID, ExecutionKind, OwnershipEvidence, LegacyInstanceID                string
 	ID, InstanceID, CommandType, PayloadJSON, Status, CreatedBy, ErrorSummary string
 	ChannelID                                                                 int64
 	CreatedAt, UpdatedAt                                                      time.Time
 }
 
 type OperationAudit struct {
+	SiteID                                                               string
 	ID, InstanceID, OperationType, TargetType, TargetID, ActorID, Status string
 	ActorType, ActorRole, SourceComponent, TriggerType                   string
 	RequestID, CorrelationID, ClientIP, AuthMethod                       string
