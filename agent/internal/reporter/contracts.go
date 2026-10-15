@@ -118,6 +118,7 @@ type AggregatedMetricPayload struct {
 	DimensionType     string              `json:"dimension_type"`
 	DimensionKey      string              `json:"dimension_key"`
 	RequestCount      int64               `json:"request_count"`
+	ConsumeCount      *int64              `json:"consume_count,omitempty"`
 	SuccessCount      int64               `json:"success_count"`
 	ErrorCount        int64               `json:"error_count"`
 	UserErrorCount    int64               `json:"user_error_count"`

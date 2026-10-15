@@ -38,7 +38,7 @@ func latencyBucketColumnSQL() string {
 }
 
 func v2BucketColumnSQL() string {
-	return strings.Join(latency2BucketColumns, ", ") + ", " + strings.Join(ttft2BucketColumns, ", ") + ", " + strings.Join(speedTTFTColumns(), ", ") + ", " + strings.Join(outputSpeedColumns, ", ")
+	return strings.Join(latency2BucketColumns, ", ") + ", " + strings.Join(ttft2BucketColumns, ", ") + ", " + strings.Join(speedTTFTColumns(), ", ") + ", " + strings.Join(outputSpeedColumns, ", ") + ", consume_count"
 }
 
 func v2BucketReplaceAssignmentsSQL() string {
@@ -48,6 +48,7 @@ func v2BucketReplaceAssignmentsSQL() string {
 	}
 	assignments = append(assignments, speedTTFTAssignments(false)...)
 	assignments = append(assignments, outputSpeedAssignments(false)...)
+	assignments = append(assignments, "consume_count = VALUES(consume_count)")
 	return strings.Join(assignments, ",\n  ")
 }
 
@@ -61,11 +62,12 @@ func v2BucketMergeAssignmentsSQL() string {
 	}
 	assignments = append(assignments, speedTTFTAssignments(true)...)
 	assignments = append(assignments, outputSpeedAssignments(true)...)
+	assignments = append(assignments, "consume_count = consume_count + VALUES(consume_count)")
 	return strings.Join(assignments, ",\n  ")
 }
 
 func metricValuePlaceholders() string {
-	count := 34 + latencyhist.BucketCount + 2*latencyhist.BucketCountV2 + len(speedTTFTColumns()) + len(outputSpeedColumns)
+	count := 35 + latencyhist.BucketCount + 2*latencyhist.BucketCountV2 + len(speedTTFTColumns()) + len(outputSpeedColumns)
 	values := make([]string, 0, count)
 	for i := 0; i < count; i++ {
 		values = append(values, "?")

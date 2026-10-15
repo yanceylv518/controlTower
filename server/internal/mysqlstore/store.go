@@ -891,10 +891,10 @@ func metricBatchMergeSQL(table string, rows int) string {
 		percentileAssignments = "p50_use_time = NULL,\n  p95_use_time = " + latencyP95MergeSQL() + ",\n  p99_use_time = NULL,\n  " + ttftMax("ttft_p50_ms") + "\n  " + ttftMax("ttft_p90_ms") + "\n  " + ttftMax("ttft_p95_ms")
 	}
 	return sqlText[:updateAt] + `ON DUPLICATE KEY UPDATE
-  success_rate = (success_count + VALUES(success_count)) / NULLIF(request_count + VALUES(request_count), 0),
-  error_rate = (error_count + VALUES(error_count)) / NULLIF(request_count + VALUES(request_count), 0),
-  avg_use_time = (use_time_sum + VALUES(use_time_sum)) / NULLIF(request_count + VALUES(request_count), 0),
-  stream_rate = (stream_count + VALUES(stream_count)) / NULLIF(request_count + VALUES(request_count), 0),
+  success_rate = IF(dimension_type = 'instance_user_channel', NULL, (success_count + VALUES(success_count)) / NULLIF(request_count + VALUES(request_count), 0)),
+  error_rate = IF(dimension_type = 'instance_user_channel', NULL, (error_count + VALUES(error_count)) / NULLIF(request_count + VALUES(request_count), 0)),
+  avg_use_time = IF(dimension_type = 'instance_user_channel', NULL, (use_time_sum + VALUES(use_time_sum)) / NULLIF(request_count + VALUES(request_count), 0)),
+  stream_rate = IF(dimension_type = 'instance_user_channel', NULL, (stream_count + VALUES(stream_count)) / NULLIF(request_count + VALUES(request_count), 0)),
   cache_token_rate = (cache_tokens_total + VALUES(cache_tokens_total)) / NULLIF(cache_prompt_tokens + VALUES(cache_prompt_tokens), 0),
   ` + percentileAssignments + `
   request_count = request_count + VALUES(request_count),
@@ -1012,6 +1012,7 @@ func metricArgs(metric aggregator.Metric) []any {
 	args = appendV2Args(args, metric.TTFTBuckets)
 	args = append(args, speedTTFTArgs(metric.SpeedTTFT)...)
 	args = append(args, outputSpeedArgs(metric.OutputSpeed)...)
+	args = append(args, nullInt64(metric.ConsumeCount))
 	return append(args, time.Now().UTC())
 }
 

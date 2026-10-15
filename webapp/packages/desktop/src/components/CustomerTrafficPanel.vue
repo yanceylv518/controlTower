@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
-import { buildCustomerTraffic, formatTrafficTPM as formatTokens, type TrafficDimension } from "../utils/customerTraffic";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { buildCustomerTraffic, formatTrafficTPM as formatTokens, type TrafficDimension, type TrafficSeries } from "../utils/customerTraffic";
 import CustomerTrafficChart from "./CustomerTrafficChart.vue";
 
 const props = defineProps<{
@@ -19,6 +19,18 @@ const props = defineProps<{
   hideMode?: boolean;
 }>();
 const emit = defineEmits<{ dimension: [value: TrafficDimension]; retry: [] }>();
+const element = ref<HTMLElement>();
+const nearViewport = ref(typeof IntersectionObserver === "undefined");
+let observer: IntersectionObserver | undefined;
+onMounted(() => {
+  if (!element.value || typeof IntersectionObserver === "undefined") return;
+  observer = new IntersectionObserver(entries => {
+    nearViewport.value = entries.some(entry => entry.isIntersecting);
+  }, { rootMargin: "400px 0px" });
+  observer.observe(element.value);
+});
+onBeforeUnmount(() => observer?.disconnect());
+const chartActive = computed(() => props.active && (props.expanded || nearViewport.value));
 const chart = ref<InstanceType<typeof CustomerTrafficChart>>();
 const moreVisible = ref(false);
 const search = ref("");
@@ -39,23 +51,26 @@ function selectAll(checked: boolean) {
 watch(() => props.dimension, () => { selectedKeys.value = null; search.value = ""; });
 const hasPlot = computed(() => props.traffic.series.length > 0 && props.traffic.coveredMinutes > 0);
 const dimensionLabel = computed(() => props.dimension === "model" ? "模型" : props.dimension === "user" ? "客户" : "渠道");
+const metricLabel = computed(() => props.traffic.metric === "rpm" ? "RPM" : "TPM");
+const totalCount = computed(() => props.traffic.metric === "rpm" ? props.traffic.totalRequests : props.traffic.totalTokens);
+const seriesCount = (item: TrafficSeries) => props.traffic.metric === "rpm" ? item.requests : item.tokens;
 watch(() => [props.dimension, props.active], () => { moreVisible.value = false; });
 </script>
 
 <template>
-  <div class="traffic-panel">
-    <div v-if="!hideMode" class="traffic-mode"><span>流量构成</span><span v-if="dimension === 'user'">按客户 · TPM</span><el-segmented v-else :model-value="dimension" @update:model-value="emit('dimension', $event as TrafficDimension)" :options="[{ label: '按模型', value: 'model' }, { label: '按渠道', value: 'channel' }]" size="small" /></div>
+  <div ref="element" class="traffic-panel">
+    <div v-if="!hideMode" class="traffic-mode"><span>流量构成</span><span v-if="dimension === 'user'">按客户 · {{ metricLabel }}</span><el-segmented v-else :model-value="dimension" @update:model-value="emit('dimension', $event as TrafficDimension)" :options="[{ label: '按模型', value: 'model' }, { label: '按渠道', value: 'channel' }]" size="small" /></div>
     <div v-if="hasPlot && !expanded" class="traffic-legend" :aria-label="`按流量排序的${dimensionLabel}图例`">
       <button v-for="item in traffic.ranked.slice(0, 2)" :key="item.key" type="button" :title="item.name" @mouseenter="chart?.highlight(item.key)" @mouseleave="chart?.highlight()" @focus="chart?.highlight(item.key)" @blur="chart?.highlight()"><i :style="{ background: item.color }" /><span>{{ item.name }}</span></button>
       <el-popover v-if="traffic.ranked.length > 2" v-model:visible="moreVisible" trigger="click" placement="bottom-end" :width="360" popper-class="customer-traffic-popover">
         <template #reference><button class="more" type="button">⋯ 更多 {{ traffic.ranked.length - 2 }}</button></template>
         <div class="legend-title">{{ name }} · 全部{{ dimensionLabel }}</div>
         <div class="legend-note">按完整拆分的 {{ traffic.coveredMinutes }} 分钟统计</div>
-        <div class="legend-table-head"><span>{{ dimensionLabel }}</span><span>平均 TPM</span><span>占比</span></div>
+        <div class="legend-table-head"><span>{{ dimensionLabel }}</span><span>平均 {{ metricLabel }}</span><span>占比</span></div>
         <el-scrollbar max-height="300px">
           <div v-for="item in traffic.ranked" :key="item.key" class="legend-table-row">
             <span class="legend-name"><i :style="{ background: item.color }" />{{ item.name }}</span>
-            <span>{{ formatTokens(item.tokens / traffic.coveredMinutes) }}</span><span>{{ traffic.totalTokens ? (item.tokens / traffic.totalTokens * 100).toFixed(1) : '0.0' }}%</span>
+            <span>{{ formatTokens(seriesCount(item) / traffic.coveredMinutes) }}</span><span>{{ totalCount ? (seriesCount(item) / totalCount * 100).toFixed(1) : '0.0' }}%</span>
           </div>
         </el-scrollbar>
       </el-popover>
@@ -65,7 +80,7 @@ watch(() => [props.dimension, props.active], () => { moreVisible.value = false; 
     <div class="traffic-layout" :class="{ expanded }">
     <div v-loading="loading && !hasPlot" class="traffic-content">
       <div v-if="hasPlot && expanded && !selectedSeries.length" class="traffic-empty selection-empty" role="status">请勾选列表中的{{ dimensionLabel }}<el-button link type="primary" @click="selectAll(true)">显示全部</el-button></div>
-      <CustomerTrafficChart v-else-if="hasPlot && active" ref="chart" :series="selectedSeries" :expanded="expanded" :filtered="filtered" />
+      <CustomerTrafficChart v-else-if="hasPlot && chartActive" ref="chart" :series="selectedSeries" :metric="traffic.metric" :expanded="expanded" :filtered="filtered" />
       <div v-else-if="hasPlot" :style="{ height: expanded ? '320px' : '190px' }" />
       <div v-else class="traffic-empty">{{ loading ? '正在读取流量构成…' : emptyText }}</div>
     </div>
@@ -73,12 +88,12 @@ watch(() => [props.dimension, props.active], () => { moreVisible.value = false; 
       <div class="selection-heading"><strong>{{ dimensionLabel }}列表</strong><span>已选 {{ selectedSeries.length }} / {{ traffic.series.length }}</span></div>
       <div class="selection-tools"><el-input v-model="search" size="small" clearable :placeholder="`搜索${dimensionLabel}`" :aria-label="`搜索${dimensionLabel}`" /><el-button link type="primary" @click="selectAll(true)">全选</el-button><el-button link @click="selectAll(false)">清空</el-button></div>
       <div class="selection-note">完整拆分 {{ traffic.coveredMinutes }} 分钟 · 占比按全部流量</div>
-      <div class="selection-columns"><span>{{ dimensionLabel }}</span><span>平均 TPM / 占比</span></div>
+      <div class="selection-columns"><span>{{ dimensionLabel }}</span><span>平均 {{ metricLabel }} / 占比</span></div>
       <div class="selection-list">
         <label v-for="item in listedItems" :key="item.key" class="selection-row" :class="{ muted: !isSelected(item.key) }" @mouseenter="isSelected(item.key) && chart?.highlight(item.key)" @mouseleave="chart?.highlight()">
           <input type="checkbox" :checked="isSelected(item.key)" :aria-label="`显示${dimensionLabel} ${item.name}`" @change="toggleSeries(item.key, ($event.target as HTMLInputElement).checked)" />
           <i :style="{ background: item.color }" /><span class="selection-name">{{ item.name }}</span>
-          <span class="selection-values"><b>{{ formatTokens(item.tokens / traffic.coveredMinutes) }}</b><small>{{ traffic.totalTokens ? (item.tokens / traffic.totalTokens * 100).toFixed(1) : '0.0' }}%</small></span>
+          <span class="selection-values"><b>{{ formatTokens(seriesCount(item) / traffic.coveredMinutes) }}</b><small>{{ totalCount ? (seriesCount(item) / totalCount * 100).toFixed(1) : '0.0' }}%</small></span>
         </label>
         <div v-if="!listedItems.length" class="selection-no-results">未找到匹配的{{ dimensionLabel }}</div>
       </div>
@@ -86,6 +101,7 @@ watch(() => [props.dimension, props.active], () => { moreVisible.value = false; 
     </div>
     <div class="traffic-caption">
       <span title="最近结束的时段会随采集上报继续补齐">近 {{ hours }} 小时 · {{ bucketMinutes }}分钟粒度</span>
+      <span v-if="traffic.metric === 'rpm'">仅统计消费请求</span>
       <span v-if="lastPlotTime" title="最后一段总量与拆分对齐、实际绘制的时间区间；可能早于顶部最近一分钟。24 小时视图的曲线为 5 分钟均值。">曲线最后有效：{{ lastPlotTime }}</span>
       <span v-if="hasPlot && traffic.incompleteBuckets" title="总量与拆分未对齐的时段留空；不将缺失流量填成零">部分时段拆分未齐</span>
     </div>

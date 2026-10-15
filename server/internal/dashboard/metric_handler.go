@@ -51,6 +51,7 @@ type MetricItem struct {
 	DisplayKey        string    `json:"display_key"`
 	DisplayName       string    `json:"display_name"`
 	RequestCount      int64     `json:"request_count"`
+	ConsumeCount      *int64    `json:"consume_count"`
 	SuccessCount      int64     `json:"success_count"`
 	ErrorCount        int64     `json:"error_count"`
 	SuccessRate       *float64  `json:"success_rate"`
@@ -319,6 +320,7 @@ func (h Handler) filterMetricItemsByInstances(metrics []aggregator.Metric, dimen
 			DisplayKey:        h.displayDimensionKey(metric.DimensionType, metric.DimensionKey),
 			DisplayName:       h.displayDimensionName(metric.DimensionType, metric.DimensionKey),
 			RequestCount:      metric.RequestCount,
+			ConsumeCount:      metric.ConsumeCount,
 			SuccessCount:      metric.SuccessCount,
 			ErrorCount:        metric.ErrorCount,
 			SuccessRate:       metric.SuccessRate,

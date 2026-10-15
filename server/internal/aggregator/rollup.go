@@ -87,10 +87,16 @@ func (a *rollupAccumulator) add(metric Metric) {
 	a.metric.TTFTP95MS = maxNullableFloat64(a.metric.TTFTP95MS, metric.TTFTP95MS)
 	a.metric.LatencyBuckets = latencyhist.Add(a.metric.LatencyBuckets, metric.LatencyBuckets)
 	if !a.seeded {
+		a.metric.ConsumeCount = metric.ConsumeCount
 		a.metric.LatencyBucketsV2 = cloneV2(metric.LatencyBucketsV2)
 		a.metric.TTFTBuckets = cloneV2(metric.TTFTBuckets)
 		a.seeded = true
 	} else {
+		if a.metric.ConsumeCount != nil && metric.ConsumeCount != nil {
+			a.metric.ConsumeCount = addNullableInt64(a.metric.ConsumeCount, metric.ConsumeCount)
+		} else {
+			a.metric.ConsumeCount = nil
+		}
 		a.metric.LatencyBucketsV2 = addNullableV2(a.metric.LatencyBucketsV2, metric.LatencyBucketsV2)
 		a.metric.TTFTBuckets = addNullableV2(a.metric.TTFTBuckets, metric.TTFTBuckets)
 	}
@@ -116,6 +122,9 @@ func maxNullableFloat64(left, right *float64) *float64 {
 
 func (a *rollupAccumulator) finalize() Metric {
 	metric := a.metric
+	if metric.DimensionType == "instance_user_channel" {
+		return metric
+	}
 	metric.SuccessRate = ratio(metric.SuccessCount, metric.RequestCount)
 	metric.ErrorRate = ratio(metric.ErrorCount, metric.RequestCount)
 	metric.StreamRate = ratio(metric.StreamCount, metric.RequestCount)

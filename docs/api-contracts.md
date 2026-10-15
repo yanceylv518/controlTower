@@ -222,6 +222,8 @@ Instance tokens are stored only as `SHA-256(pepper + token)` hashes. A token may
 | `GET /api/dashboard/metric-history` | Query `window,instance_id,site,dimension_type,dimension_key,since` | `{"items":[{"bucket_time":"...","request_count":10}]}` |
 | `GET /api/dashboard/usage` | Query `window,instance_id,limit` | `{"items":[{"dimension_key":"user:7","quota":100}]}` |
 
+指标条目新增 `consume_count: number | null`，表示窗口内 `consume` 日志条数，每条计1，包含零输出消费，`error` 不计入。Agent聚合条目可选携带同名字段，缺失或非法时保留未知；旧指标及混合缺失计数的汇总返回null。监控RPM使用该计数除以窗口分钟数，1/6小时视图沿用1分钟桶、24小时视图沿用5分钟桶；不改变原 `request_count`、成功率/错误率或TPM口径。需配套147迁移，先升级Server，再升级Agent与Web；不回填旧历史。
+
 总览快照各区域独立请求，单区查询上限10秒。`requests` 返回固定最近已结束分钟 `recent` 和趋势 `points`，带 `from,to,complete,received_sources,confirmed_at,metrics`；以分钟覆盖证据区分缺失与零请求，未完整时不返回比率/耗时，趋势留空。`metrics.tpm` 是窗口Token合计，24小时视图每点5分钟，显示TPM需除以5；`p95_lower_bound` 为真时耗时只表示下界。共享源仍要求单采集者部署；升级前没有覆盖证据的历史不会自动补齐。`runtime` 返回本站全部实例及各健康/容器对象最新记录；`alerts` 按站点先过滤，再返回最多5条近期确认记录及完整当前/未确认数量，评估过期时 `fresh=false`。需配套迁移141。
 
 ### 日志与运行态

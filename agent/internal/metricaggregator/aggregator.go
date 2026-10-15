@@ -41,12 +41,19 @@ func Aggregate(instanceID string, events []logcollector.Event, cacheHitMinPrompt
 		userCodes = configuredUserCodes[0]
 	}
 	accumulators := make(map[string]*accumulator)
-	traffic := make(map[customerChannelBucket]int64)
+	traffic := make(map[customerChannelBucket]customerChannelCounts)
 	for _, event := range events {
 		event.ClassifyError()
 		bucket := event.CreatedAt.Truncate(time.Minute)
 		if event.UserID > 0 && event.ChannelID > 0 {
-			traffic[customerChannelBucket{bucket: bucket, user: event.UserID, channel: event.ChannelID}] += event.TotalTokens
+			key := customerChannelBucket{bucket: bucket, user: event.UserID, channel: event.ChannelID}
+			counts := traffic[key]
+			counts.tokens += event.TotalTokens
+			counts.requests++
+			if event.LogType == "consume" {
+				counts.consumes++
+			}
+			traffic[key] = counts
 		}
 		for _, dimension := range dimensionsFor(instanceID, event) {
 			key := bucket.Format(time.RFC3339) + "|" + dimension.dimensionType + "|" + dimension.dimensionKey
@@ -63,12 +70,14 @@ func Aggregate(instanceID string, events []logcollector.Event, cacheHitMinPrompt
 	for _, acc := range accumulators {
 		metrics = append(metrics, acc.finalize())
 	}
-	for key, tokens := range traffic {
+	for key, counts := range traffic {
 		metrics = append(metrics, reporter.AggregatedMetricPayload{
 			BucketTime: key.bucket, WindowSeconds: 60,
 			DimensionType: "instance_user_channel",
 			DimensionKey:  instanceID + ":user:" + strconv.FormatInt(key.user, 10) + ":channel:" + strconv.FormatInt(key.channel, 10),
-			TPM:           tokens,
+			TPM:           counts.tokens,
+			RequestCount:  counts.requests,
+			ConsumeCount:  &counts.consumes,
 		})
 	}
 	sort.Slice(metrics, func(i, j int) bool {
@@ -84,6 +93,12 @@ func Aggregate(instanceID string, events []logcollector.Event, cacheHitMinPrompt
 }
 
 func (a *accumulator) add(event logcollector.Event, cacheHitMinPromptTokens int64, userCodes map[int]bool) {
+	if a.metric.ConsumeCount == nil {
+		a.metric.ConsumeCount = new(int64)
+	}
+	if event.LogType == "consume" {
+		*a.metric.ConsumeCount++
+	}
 	if a.metric.DimensionType == "instance_channel" && a.metric.SpeedTTFT == nil {
 		a.metric.SpeedTTFT = speedstats.New()
 	}

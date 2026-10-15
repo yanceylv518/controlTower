@@ -13,6 +13,7 @@ func TestCustomerChannelRawAndRollup(t *testing.T) {
 	metrics := Aggregate1m([]storage.LogEvent{
 		{InstanceID: "site", CreatedAt: now, UserID: 7, ChannelID: 3, TotalTokens: 30},
 		{InstanceID: "site", CreatedAt: now.Add(time.Minute), UserID: 7, ChannelID: 3, TotalTokens: 40},
+		{InstanceID: "site", CreatedAt: now.Add(2 * time.Minute), UserID: 7, ChannelID: 3, LogType: "error"},
 		{InstanceID: "site", CreatedAt: now, UserID: 8, ChannelID: 3, TotalTokens: 90},
 		{InstanceID: "other", CreatedAt: now, UserID: 7, ChannelID: 3, TotalTokens: 60},
 	})
@@ -22,19 +23,20 @@ func TestCustomerChannelRawAndRollup(t *testing.T) {
 			combined = MergeMetric(combined, m)
 		}
 	}
-	if combined.TPM != 70 || combined.RequestCount != 0 {
+	if combined.TPM != 70 || combined.RequestCount != 3 {
 		t.Fatalf("wrong customer total: %#v", combined)
 	}
 	rolled, ok := findMetric(Rollup5m(metrics), "instance_user_channel", "site:user:7:channel:3")
-	if !ok || rolled.TPM != 70 || rolled.RequestCount != 0 {
+	if !ok || rolled.TPM != 70 || rolled.RequestCount != 3 {
 		t.Fatalf("wrong 5m customer/channel rollup: %#v", rolled)
 	}
-	onlyTokens := Metric{InstanceID: rolled.InstanceID, BucketTime: rolled.BucketTime, DimensionType: rolled.DimensionType, DimensionKey: rolled.DimensionKey, TPM: 70}
-	if !reflect.DeepEqual(rolled, onlyTokens) {
-		t.Fatalf("rollup synthesized non-TPM statistics: %#v", rolled)
+	consumeCount := int64(0)
+	onlyTraffic := Metric{InstanceID: rolled.InstanceID, BucketTime: rolled.BucketTime, DimensionType: rolled.DimensionType, DimensionKey: rolled.DimensionKey, TPM: 70, RequestCount: 3, ConsumeCount: &consumeCount}
+	if !reflect.DeepEqual(rolled, onlyTraffic) {
+		t.Fatalf("rollup synthesized non-traffic statistics: %#v", rolled)
 	}
-	if !reflect.DeepEqual(combined, onlyTokens) {
-		t.Fatalf("merge synthesized non-TPM statistics: %#v", combined)
+	if !reflect.DeepEqual(combined, onlyTraffic) {
+		t.Fatalf("merge synthesized non-traffic statistics: %#v", combined)
 	}
 }
 
@@ -63,9 +65,9 @@ func TestCustomerChannelRawPreservesExistingMetrics(t *testing.T) {
 	}
 	for _, m := range Aggregate1m(events) {
 		if m.DimensionType == "instance_user_channel" {
-			onlyTokens := Metric{InstanceID: m.InstanceID, DimensionType: m.DimensionType, DimensionKey: m.DimensionKey, BucketTime: m.BucketTime, TPM: m.TPM}
-			if !reflect.DeepEqual(m, onlyTokens) {
-				t.Fatal("raw aggregation emitted non-TPM data")
+			onlyTraffic := Metric{InstanceID: m.InstanceID, DimensionType: m.DimensionType, DimensionKey: m.DimensionKey, BucketTime: m.BucketTime, TPM: m.TPM, RequestCount: m.RequestCount, ConsumeCount: m.ConsumeCount}
+			if !reflect.DeepEqual(m, onlyTraffic) {
+				t.Fatal("raw aggregation emitted non-traffic data")
 			}
 			continue
 		}

@@ -18,6 +18,7 @@ type Metric struct {
 	DimensionType     string
 	DimensionKey      string
 	RequestCount      int64
+	ConsumeCount      *int64
 	SuccessCount      int64
 	ErrorCount        int64
 	UserErrorCount    int64
@@ -63,10 +64,17 @@ type accumulator struct {
 
 func Aggregate1m(events []storage.LogEvent) []Metric {
 	accumulators := make(map[string]*accumulator)
-	traffic := make(map[customerChannelBucket]int64)
+	traffic := make(map[customerChannelBucket]customerChannelCounts)
 	for _, event := range events {
 		if event.UserID > 0 && event.ChannelID > 0 {
-			traffic[customerChannelBucket{instance: event.InstanceID, bucket: event.CreatedAt.Truncate(time.Minute), user: event.UserID, channel: event.ChannelID}] += event.TotalTokens
+			key := customerChannelBucket{instance: event.InstanceID, bucket: event.CreatedAt.Truncate(time.Minute), user: event.UserID, channel: event.ChannelID}
+			counts := traffic[key]
+			counts.tokens += event.TotalTokens
+			counts.requests++
+			if event.LogType == "consume" {
+				counts.consumes++
+			}
+			traffic[key] = counts
 		}
 		for _, dimension := range dimensionsFor(event) {
 			key := event.InstanceID + "|" + event.CreatedAt.Truncate(time.Minute).Format(time.RFC3339) + "|" + dimension.dimensionType + "|" + dimension.dimensionKey
@@ -90,12 +98,14 @@ func Aggregate1m(events []storage.LogEvent) []Metric {
 	for _, acc := range accumulators {
 		results = append(results, acc.finalize())
 	}
-	for key, tokens := range traffic {
+	for key, counts := range traffic {
 		results = append(results, Metric{
 			InstanceID: key.instance, BucketTime: key.bucket,
 			DimensionType: "instance_user_channel",
 			DimensionKey:  key.instance + ":user:" + strconv.FormatInt(key.user, 10) + ":channel:" + strconv.FormatInt(key.channel, 10),
-			TPM:           tokens,
+			TPM:           counts.tokens,
+			RequestCount:  counts.requests,
+			ConsumeCount:  &counts.consumes,
 		})
 	}
 	sort.Slice(results, func(i, j int) bool {
@@ -111,6 +121,12 @@ func Aggregate1m(events []storage.LogEvent) []Metric {
 }
 
 func (a *accumulator) add(event storage.LogEvent) {
+	if a.metric.ConsumeCount == nil {
+		a.metric.ConsumeCount = new(int64)
+	}
+	if event.LogType == "consume" {
+		*a.metric.ConsumeCount++
+	}
 	a.metric.RequestCount++
 	zeroOutput := event.LogType == "consume" && event.CompletionTokens == 0
 	if event.LogType == "consume" && !zeroOutput {
@@ -216,6 +232,11 @@ func MergeMetric(current Metric, incoming Metric) Metric {
 	}
 	merged := current
 	merged.RequestCount += incoming.RequestCount
+	// 任一批次缺少消费计数，合并结果仍未知，不能把旧批次当作零。
+	merged.ConsumeCount = nil
+	if current.ConsumeCount != nil && incoming.ConsumeCount != nil {
+		merged.ConsumeCount = addNullableInt64(current.ConsumeCount, incoming.ConsumeCount)
+	}
 	merged.SuccessCount += incoming.SuccessCount
 	merged.ErrorCount += incoming.ErrorCount
 	merged.UserErrorCount += incoming.UserErrorCount
@@ -238,6 +259,10 @@ func MergeMetric(current Metric, incoming Metric) Metric {
 	merged.LatencyBuckets = latencyhist.Add(merged.LatencyBuckets, incoming.LatencyBuckets)
 	merged.LatencyBucketsV2 = addNullableV2(merged.LatencyBucketsV2, incoming.LatencyBucketsV2)
 	merged.TTFTBuckets = addNullableV2(merged.TTFTBuckets, incoming.TTFTBuckets)
+	// 流量交叉桶没有成功率或耗时样本，不能由请求数推导出这些指标。
+	if merged.DimensionType == "instance_user_channel" {
+		return merged
+	}
 	merged.SuccessRate = ratio(merged.SuccessCount, merged.RequestCount)
 	merged.ErrorRate = ratio(merged.ErrorCount, merged.RequestCount)
 	merged.StreamRate = ratio(merged.StreamCount, merged.RequestCount)

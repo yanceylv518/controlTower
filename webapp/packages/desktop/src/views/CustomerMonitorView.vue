@@ -14,7 +14,7 @@ import MonitorCopyButton from "../components/MonitorCopyButton.vue";
 import MonitorSearch from "../components/MonitorSearch.vue";
 import { filterMonitorOptions, monitorSearchOptions } from "../utils/monitorSearch";
 import MiniSparkline from "../components/MiniSparkline.vue";
-import { latestCustomerMinute, verifiedCustomerBuckets } from "../utils/customerTraffic";
+import { latestCustomerMinute, verifiedCustomerBuckets, type TrafficMetric } from "../utils/customerTraffic";
 import { useAutoRefresh } from "../composables/useAutoRefresh";
 import { useFiltersStore } from "../stores/filters";
 import { usePrefsStore } from "../stores/prefs";
@@ -27,7 +27,9 @@ void prefs.load();
 const router = useRouter();
 const hours = ref(1);
 const activeTab = ref<"charts" | "ranking">("charts");
-const activeMetric = ref<"ttft" | "tpm" | "otps" | "cache">("tpm");
+const activeMetric = ref<"ttft" | "tpm" | "rpm" | "otps" | "cache">("tpm");
+const isTrafficMetric = computed(() => activeMetric.value === "tpm" || activeMetric.value === "rpm");
+const trafficMetric = computed<TrafficMetric>(() => activeMetric.value === "rpm" ? "rpm" : "tpm");
 const ttftThresholds = computed(() => [
   { name: "P50", value: prefs.ttftP50Threshold, color: "#2f6fed" },
   { name: "P90", value: prefs.ttftP90Threshold, color: "#16a6b6" },
@@ -39,9 +41,11 @@ const selectedKeys = ref<string[]>([]);
 const page = ref(1);
 const pageSize = ref(50);
 const mobileCount = ref(20);
-const history = ref<MetricItem[]>([]);
+// 历史指标整批替换且只读，避免为大量采样点创建深层响应式代理。
+const history = shallowRef<MetricItem[]>([]);
 const recentHistory = shallowRef<MetricItem[]>([]);
 const coverageByInstance = shallowRef(new Map<string, number[]>());
+const rpmCoverageByInstance = shallowRef(new Map<string, number[]>());
 const asOf = ref(Date.now());
 const refreshKey = ref(0);
 const trafficSort = ref("current");
@@ -64,6 +68,7 @@ function reload(silent = false): Promise<void> {
       if (token !== generation) return;
       const instanceIDs = filters.instances.filter(item => item.enabled && siteOf(item) === site).map(item => item.instance_id);
       const window = range === 24 ? "5m" : "1m";
+      const requestedAt = Date.now();
       const responses = await Promise.all(instanceIDs.map(async instanceID => {
         const params = { instance_id: instanceID, window, dimension_type: "instance_user", dimension_key_prefix: `${instanceID}:user:`, hours: range };
         const [summary, points, recent, instancePoints] = await Promise.all([
@@ -73,14 +78,18 @@ function reload(silent = false): Promise<void> {
           // A denied/unavailable instance history only disables zero inference.
           dashboard.metricHistory({ instance_id: instanceID, window, dimension_type: "instance", dimension_key: instanceID, hours: range }).catch(() => ({ items: [] as MetricItem[] })),
         ]);
-        return { instanceID, coverage: verifiedCustomerBuckets(instanceID, instancePoints.items, points.items), summary: summary.items, points: points.items, recent: recent?.items || points.items };
+        return { instanceID,
+          coverage: verifiedCustomerBuckets(instanceID, instancePoints.items, points.items),
+          rpmCoverage: verifiedCustomerBuckets(instanceID, instancePoints.items, points.items, "rpm"),
+          summary: summary.items, points: points.items, recent: recent?.items || points.items };
       }));
       if (token !== generation) return;
       history.value = responses.flatMap(response => response.points);
       recentHistory.value = responses.flatMap(response => response.recent);
       coverageByInstance.value = new Map(responses.map(response => [response.instanceID, response.coverage]));
+      rpmCoverageByInstance.value = new Map(responses.map(response => [response.instanceID, response.rpmCoverage]));
       data.value = responses.flatMap(response => response.summary).sort((a, b) => totalTokens(b) - totalTokens(a));
-      asOf.value = Date.now();
+      asOf.value = requestedAt;
       refreshKey.value++;
     } catch {
       if (token === generation) error.value = "客户指标加载失败，请重试；已有数据保留至下次成功刷新";
@@ -99,6 +108,7 @@ watch([hours, () => filters.site_id], () => {
   history.value = [];
   recentHistory.value = [];
   coverageByInstance.value = new Map();
+  rpmCoverageByInstance.value = new Map();
   selectedKeys.value = [];
   page.value = 1;
   void state.reload();
@@ -133,6 +143,7 @@ const totalPrompt = computed(() => allRows.value.reduce((sum, item) => sum + ite
 const totalCompletion = computed(() => allRows.value.reduce((sum, item) => sum + item.completion_tokens, 0));
 const totalRequests = computed(() => allRows.value.reduce((sum, item) => sum + item.request_count, 0));
 const bucketMinutes = computed(() => hours.value === 24 ? 5 : 1);
+const trafficCoverageByInstance = computed(() => trafficMetric.value === "rpm" ? rpmCoverageByInstance.value : coverageByInstance.value);
 // 按 dimension_key 预分组并排好时间序，避免表格每行渲染都全量扫描 history。
 const historyByKey = computed(() => {
   const map = new Map<string, MetricItem[]>();
@@ -181,12 +192,12 @@ watch(() => filters.site_id, () => { search.value = ""; searchKey.value = ""; })
 const minuteByKey = computed(() => {
   const groups = new Map<string, MetricItem[]>();
   recentHistory.value.forEach(item => { const items = groups.get(item.dimension_key) || []; items.push(item); groups.set(item.dimension_key, items); });
-  return new Map([...groups].map(([key, points]) => [key, latestCustomerMinute(points, asOf.value, hours.value === 24 ? [] : coverageByInstance.value.get(points[0].instance_id))]));
+  return new Map([...groups].map(([key, points]) => [key, latestCustomerMinute(points, asOf.value, hours.value === 24 ? [] : trafficCoverageByInstance.value.get(points[0].instance_id), trafficMetric.value)]));
 });
 const sortedTrafficRows = computed(() => [...filteredRows.value].sort((a, b) => {
   const delta = trafficSort.value === "current"
-    ? (minuteByKey.value.get(b.dimension_key)?.tpm ?? -1) - (minuteByKey.value.get(a.dimension_key)?.tpm ?? -1)
-    : totalTokens(b) - totalTokens(a);
+    ? (minuteByKey.value.get(b.dimension_key)?.[trafficMetric.value] ?? -1) - (minuteByKey.value.get(a.dimension_key)?.[trafficMetric.value] ?? -1)
+    : trafficMetric.value === "rpm" ? (b.consume_count ?? -1) - (a.consume_count ?? -1) : totalTokens(b) - totalTokens(a);
   return delta || a.dimension_key.localeCompare(b.dimension_key);
 }));
 const topTen = computed(() => filteredRows.value.slice(0, 10).map(item => ({ name: customerName(item), prompt: item.prompt_tokens, completion: item.completion_tokens })));
@@ -261,13 +272,13 @@ function openDetail(row: MetricItem) {
         </div>
         <template v-if="activeTab === 'charts'">
           <span class="customer-toolbar-divider" aria-hidden="true" />
-          <el-segmented v-model="activeMetric" class="customer-metric-switch" :options="[{ label: 'TPM', value: 'tpm' }, { label: 'TTFT', value: 'ttft' }, { label: 'OTPS', value: 'otps' }, { label: '缓存命中率', value: 'cache' }]" size="small" aria-label="监控指标" />
+          <el-segmented v-model="activeMetric" class="customer-metric-switch" :options="[{ label: 'TPM', value: 'tpm' }, { label: 'RPM', value: 'rpm' }, { label: 'TTFT', value: 'ttft' }, { label: 'OTPS', value: 'otps' }, { label: '缓存命中率', value: 'cache' }]" size="small" aria-label="监控指标" />
         </template>
         <div class="customer-toolbar-right">
           <span class="customer-toolbar-count">{{ filteredRows.length }} 位客户</span>
-          <el-select v-if="activeTab === 'charts' && activeMetric === 'tpm'" v-model="trafficSort" size="small" aria-label="客户流量排序">
-            <el-option label="最近结束1分钟 TPM ↓" value="current" />
-            <el-option label="所选时段总 Token ↓" value="total" />
+          <el-select v-if="activeTab === 'charts' && isTrafficMetric" v-model="trafficSort" size="small" aria-label="客户流量排序">
+            <el-option :label="`最近结束1分钟 ${trafficMetric.toUpperCase()} ↓`" value="current" />
+            <el-option :label="trafficMetric === 'rpm' ? '所选时段消费请求数 ↓' : '所选时段总 Token ↓'" value="total" />
           </el-select>
         </div>
       </div>
@@ -290,14 +301,14 @@ function openDetail(row: MetricItem) {
       </section>
 
       <section v-show="activeTab === 'charts'" class="customer-metric-view">
-        <el-empty v-if="activeMetric === 'tpm' && !filteredRows.length" description="没有匹配的客户" />
-        <template v-if="activeMetric === 'tpm' && activeTab === 'charts'">
+        <el-empty v-if="isTrafficMetric && !filteredRows.length" description="没有匹配的客户" />
+        <template v-if="isTrafficMetric && activeTab === 'charts'">
           <div class="customer-traffic-grid">
-            <CustomerTrafficCard v-for="row in sortedTrafficRows" :key="`${filters.site_id}:${row.dimension_key}`" :customer="row" :totals="historyByKey.get(row.dimension_key) || []" :minute="minuteByKey.get(row.dimension_key) || null" :verified-buckets="coverageByInstance.get(row.instance_id) || []" :hours="hours" :as-of="asOf" :refresh-key="refreshKey" @detail="openDetail(row)" />
+            <CustomerTrafficCard v-for="row in sortedTrafficRows" :key="`${filters.site_id}:${row.dimension_key}`" :customer="row" :metric="trafficMetric" :totals="historyByKey.get(row.dimension_key) || []" :minute="minuteByKey.get(row.dimension_key) || null" :verified-buckets="trafficCoverageByInstance.get(row.instance_id) || []" :hours="hours" :as-of="asOf" :refresh-key="refreshKey" @detail="openDetail(row)" />
           </div>
           <footer class="traffic-footer"><span>图层顺序固定 · 图例按时段流量排序</span></footer>
         </template>
-        <div v-else-if="activeMetric !== 'tpm'" class="customer-trend-groups">
+        <div v-else-if="!isTrafficMetric" class="customer-trend-groups">
           <article v-for="group in selectedTrendGroups" :key="group.key" class="customer-trend-group">
             <header><div><div class="customer-name-line"><MonitorNameButton :name="group.name" @detail="router.push(`/customers/${encodeURIComponent(group.key)}`)" /><MonitorCopyButton :value="group.name" label="复制客户名称" /></div><p>客户 ID {{ group.id }} · 按 Token 排名</p></div></header>
             <section v-if="activeMetric === 'ttft'" class="customer-metric-card"><h3>TTFT</h3><p>P50 / P90 / P95 首字响应分位数</p><CustomerCompareChart :series="group.ttft" unit="s" :thresholds="ttftThresholds" /></section>

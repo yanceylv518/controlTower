@@ -119,6 +119,7 @@ export interface MetricItem {
   display_key: string;
   display_name: string;
   request_count: number;
+  consume_count?: number | null;
   success_count: number;
   error_count: number;
   success_rate: number | null;

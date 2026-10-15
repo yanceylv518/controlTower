@@ -2,16 +2,17 @@
 import { withChartTheme } from "../utils/chartTheme";
 import { useTheme } from "../composables/useTheme";
 const { themeSignature } = useTheme();
-import { nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import * as echarts from "echarts/core";
 import { LineChart } from "echarts/charts";
 import { GridComponent, TooltipComponent } from "echarts/components";
 import { SVGRenderer } from "echarts/renderers";
 import { cancelChartRender, scheduleChartRender } from "../utils/chartRenderQueue";
 import { customerTooltipPosition, highlightCustomerTooltip } from "../utils/customerTooltip";
-import { escapeChartText, trafficRGBA, formatTrafficTPM as formatTokens, type TrafficSeries } from "../utils/customerTraffic";
+import { escapeChartText, trafficRGBA, formatTrafficTPM as formatTokens, type TrafficMetric, type TrafficSeries } from "../utils/customerTraffic";
 
-const props = defineProps<{ series: TrafficSeries[]; expanded?: boolean; filtered?: boolean }>();
+const props = defineProps<{ series: TrafficSeries[]; metric?: TrafficMetric; expanded?: boolean; filtered?: boolean }>();
+const metricLabel = computed(() => props.metric === "rpm" ? "RPM" : "TPM");
 echarts.use([LineChart, GridComponent, TooltipComponent, SVGRenderer]);
 const element = ref<HTMLDivElement>();
 const token = {};
@@ -72,7 +73,7 @@ function renderNow() {
         const time = items[0]?.value?.[0];
         if (time == null) return "该时段暂无完整拆分数据";
         const exact = (value: number) => value.toLocaleString("zh-CN", { maximumFractionDigits: 2 });
-        return [`<div style="margin-bottom:5px">${escapeChartText(new Date(time).toLocaleString())}<br/>${props.filtered ? '已选 TPM 合计' : '总 TPM'}：${exact(total)}${props.filtered ? '<br/>占比按已选流量' : ''}</div>`,
+        return [`<div style="margin-bottom:5px">${escapeChartText(new Date(time).toLocaleString())}<br/>${props.filtered ? `已选 ${metricLabel.value} 合计` : `总 ${metricLabel.value}`}：${exact(total)}${props.filtered ? '<br/>占比按已选流量' : ''}</div>`,
           ...items.sort((a: any, b: any) => b.value[1] - a.value[1]).map((item: any) => {
             const series = props.series[item.seriesIndex];
             return `<div data-traffic-key="${escapeChartText(series?.key || "")}" data-traffic-color="${escapeChartText(series?.color || "#4170cd")}" style="padding:3px 6px;border-left:2px solid transparent;border-radius:3px;line-height:1.5">${item.marker}${escapeChartText(item.seriesName)}：${exact(item.value[1])} · ${total ? (item.value[1] / total * 100).toFixed(1) : "0.0"}%</div>`;
@@ -83,7 +84,7 @@ function renderNow() {
     xAxis: { type: "time", axisPointer: { triggerEmphasis: false }, min: props.series[0]?.data[0]?.[0], max: props.series[0]?.data.at(-1)?.[0], splitNumber: props.expanded ? 6 : 3, axisTick: { show: false }, axisLine: { lineStyle: { color: line } }, axisLabel: { color: muted, fontSize: 11, hideOverlap: true } },
     yAxis: { type: "value", min: 0, splitNumber: 3, axisLabel: { color: muted, fontSize: 11, formatter: formatTokens }, splitLine: { lineStyle: { color: line, opacity: .65 } } },
     series: props.series.map(item => ({
-      id: item.key, name: item.name, type: "line", stack: "customer-tpm", data: item.data,
+      id: item.key, name: item.name, type: "line", stack: "customer-traffic", data: item.data,
       smooth: .18, smoothMonotone: "x", connectNulls: false, triggerLineEvent: true,
       showSymbol: item.data.filter(([, value]) => value != null).length < 3, symbolSize: 4,
       itemStyle: { color: item.color }, lineStyle: { width: .8, color: trafficRGBA(item.color, .62) },
@@ -102,7 +103,7 @@ function highlight(key?: string) {
   if (key) chart?.dispatchAction({ type: "highlight", seriesId: key });
 }
 defineExpose({ highlight });
-watch(() => [props.series, props.expanded, props.filtered], async () => { await nextTick(); scheduleChartRender(token, renderNow); }, { deep: true, immediate: true });
+watch(() => [props.series, props.metric, props.expanded, props.filtered], async () => { await nextTick(); scheduleChartRender(token, renderNow); }, { deep: true, immediate: true });
 watch(element, node => {
   observer?.disconnect();
   if (node) { observer = new ResizeObserver(() => { chart?.resize(); }); observer.observe(node); scheduleChartRender(token, renderNow); }
@@ -111,7 +112,7 @@ onBeforeUnmount(() => { cancelChartRender(token); observer?.disconnect(); chart?
 watch(themeSignature, () => { scheduleChartRender(token, renderNow); }, { flush: "post" });
 </script>
 
-<template><div ref="element" class="traffic-chart" :class="{ expanded }" role="img" aria-label="按固定顺序叠加的 TPM 流量趋势" @mouseleave="resetHighlight" /></template>
+<template><div ref="element" class="traffic-chart" :class="{ expanded }" role="img" :aria-label="`按固定顺序叠加的 ${metricLabel} 流量趋势`" @mouseleave="resetHighlight" /></template>
 <style scoped>
 .traffic-chart { width: 100%; height: 190px; }
 .traffic-chart.expanded { height: 320px; }

@@ -94,8 +94,8 @@ func TestMetricArgsConvertsNilRatesToSQLNulls(t *testing.T) {
 		DimensionKey:  "inst-1",
 		RequestCount:  5,
 	})
-	if len(args) != 99 {
-		t.Fatalf("metric args len = %d, want 99", len(args))
+	if len(args) != 100 {
+		t.Fatalf("metric args len = %d, want 100", len(args))
 	}
 	for _, idx := range []int{7, 8, 13, 14, 15, 16} {
 		value, ok := args[idx].(interface{ IsZero() bool })
@@ -155,7 +155,10 @@ func TestMetricBatchMergeSQLAccumulatesCountsAndDerivedRates(t *testing.T) {
 	sqlText := metricBatchMergeSQL("metric_5m", 1)
 	for _, fragment := range []string{
 		"request_count = request_count + VALUES(request_count)",
-		"success_rate = (success_count + VALUES(success_count))",
+		"success_rate = IF(dimension_type = 'instance_user_channel', NULL, (success_count + VALUES(success_count)) / NULLIF(request_count + VALUES(request_count), 0))",
+		"error_rate = IF(dimension_type = 'instance_user_channel', NULL, (error_count + VALUES(error_count)) / NULLIF(request_count + VALUES(request_count), 0))",
+		"avg_use_time = IF(dimension_type = 'instance_user_channel', NULL, (use_time_sum + VALUES(use_time_sum)) / NULLIF(request_count + VALUES(request_count), 0))",
+		"stream_rate = IF(dimension_type = 'instance_user_channel', NULL, (stream_count + VALUES(stream_count)) / NULLIF(request_count + VALUES(request_count), 0))",
 		"use_time_sum = use_time_sum + VALUES(use_time_sum)",
 		"cache_prompt_tokens = cache_prompt_tokens + VALUES(cache_prompt_tokens)",
 		"latency_le_250ms = latency_le_250ms + VALUES(latency_le_250ms)",
@@ -183,8 +186,8 @@ func TestMetricBatchUpsertSQLAndArgs(t *testing.T) {
 	}
 	now := time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC)
 	args := metricBatchArgs([]aggregator.Metric{{InstanceID: "inst-1", BucketTime: now}, {InstanceID: "inst-2", BucketTime: now}})
-	if len(args) != 198 {
-		t.Fatalf("args len = %d, want 198", len(args))
+	if len(args) != 200 {
+		t.Fatalf("args len = %d, want 200", len(args))
 	}
 }
 

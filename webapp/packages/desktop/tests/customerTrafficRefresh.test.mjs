@@ -14,7 +14,7 @@ function card() {
   const props = reactive({ customer: { instance_id: 'a', dimension_key: 'a:user:7' }, totals: [], hours: 1, asOf: Date.now(), refreshKey: 1, minute: null })
   const requests = []
   const dashboard = { metricHistory: params => { const pending = deferred(); requests.push({ ...pending, params }); return pending.promise } }
-  const create = new Function('computed', 'ref', 'shallowRef', 'watch', 'onBeforeUnmount', 'onMounted', 'defineProps', 'defineEmits', 'dashboard', 'buildCustomerTraffic', `${compiled}\nreturn {load, dimension, points, loadedScope, scope, error, notice, emptyText, loading, nearViewport, expanded, traffic, minuteStatus, lastPlotTime};`)
+  const create = new Function('computed', 'ref', 'shallowRef', 'watch', 'onBeforeUnmount', 'onMounted', 'defineProps', 'defineEmits', 'dashboard', 'buildCustomerTraffic', `${compiled}\nreturn {load, dimension, points, loadedScope, scope, error, notice, emptyText, loading, nearViewport, expanded, traffic, minuteValue, metricLabel, minuteStatus, lastPlotTime};`)
   return { ...create(computed, ref, shallowRef, () => {}, () => {}, () => {}, () => props, () => () => {}, dashboard, trafficApi.buildCustomerTraffic), props, requests }
 }
 
@@ -197,4 +197,24 @@ test('elapsed time alone does not escalate one failure, but permission errors ar
   assert.equal(c.notice.value, '')
   const retry = c.load(); c.requests.at(-1).reject({ status: 403 }); await retry
   assert.equal(c.error.value, '暂无查看权限，请联系管理员')
+})
+
+test('customer RPM/TPM switches reuse breakdown cache and update the headline without mixing counters', async () => {
+  const c = latestCard()
+  c.props.totals = [Object.assign(bucket('26', 1000), { request_count: 7, consume_count: 7 })]
+  c.props.minute = { tpm: 1000, rpm: 7, time: stamp('26'), stale: false }
+  const loading = c.load()
+  c.requests[0].resolve({ items: [Object.assign(bucket('26', 1000, true), { request_count: 7, consume_count: 7 })] })
+  await loading
+  const color = c.traffic.value.series[0].color
+  for (let i = 0; i < 40; i++) {
+    c.props.metric = i % 2 ? 'tpm' : 'rpm'
+    await c.load()
+    assert.equal(c.requests.length, 1)
+    assert.equal(c.minuteValue.value, c.props.metric === 'rpm' ? 7 : 1000)
+    assert.equal(c.metricLabel.value, c.props.metric.toUpperCase())
+    assert.equal(c.traffic.value.series[0].color, color)
+    assert.equal(c.traffic.value.series[0].data.find(([at]) => at === stamp('26'))[1], c.minuteValue.value)
+    assert.equal(c.minuteStatus.value, '')
+  }
 })

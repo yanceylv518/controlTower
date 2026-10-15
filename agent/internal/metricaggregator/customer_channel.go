@@ -5,11 +5,14 @@ import (
 	"time"
 )
 
-// TPM-only buckets avoid allocating latency samples and histogram accumulators.
-// Format the wire dimension key once per bucket, rather than once per event.
+// 交叉桶只累计 Token 和请求数，避免分配耗时样本和直方图。
 type customerChannelBucket struct {
 	bucket        time.Time
 	user, channel int64
+}
+
+type customerChannelCounts struct {
+	tokens, requests, consumes int64
 }
 
 // Protect existing metrics when the optional breakdown exceeds the report's

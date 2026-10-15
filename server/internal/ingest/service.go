@@ -481,6 +481,7 @@ func toAggregatorMetrics(instanceID string, payloads []agentgateway.AggregatedMe
 			DimensionType:     payload.DimensionType,
 			DimensionKey:      payload.DimensionKey,
 			RequestCount:      payload.RequestCount,
+			ConsumeCount:      validConsumeCount(payload),
 			SuccessCount:      payload.SuccessCount,
 			ErrorCount:        payload.ErrorCount,
 			UserErrorCount:    payload.UserErrorCount,
@@ -518,6 +519,14 @@ func toAggregatorMetrics(instanceID string, payloads []agentgateway.AggregatedMe
 	}
 	return metrics
 }
+func validConsumeCount(payload agentgateway.AggregatedMetricPayload) *int64 {
+	if payload.ConsumeCount == nil || *payload.ConsumeCount < 0 || *payload.ConsumeCount > payload.RequestCount {
+		return nil
+	}
+	value := *payload.ConsumeCount
+	return &value
+}
+
 func bucketsV2FromSlice(values []int64) *latencyhist.BucketsV2 {
 	if len(values) != latencyhist.BucketCountV2 {
 		return nil

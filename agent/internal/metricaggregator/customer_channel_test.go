@@ -13,22 +13,24 @@ import (
 	"controltower/agent/internal/reporter"
 )
 
-func TestCustomerChannelTokensRemainIndependent(t *testing.T) {
+func TestCustomerChannelCountersRemainIndependent(t *testing.T) {
 	now := time.Date(2026, 9, 14, 10, 0, 10, 0, time.UTC)
 	metrics := Aggregate("site", []logcollector.Event{
 		{CreatedAt: now, UserID: 7, ChannelID: 3, ModelName: "a", TotalTokens: 30},
 		{CreatedAt: now, UserID: 7, ChannelID: 3, ModelName: "b", TotalTokens: 20},
+		{CreatedAt: now, UserID: 7, ChannelID: 3, LogType: "error"},
 		{CreatedAt: now, UserID: 7, ChannelID: 9, ModelName: "a", TotalTokens: 40},
 		{CreatedAt: now, UserID: 8, ChannelID: 3, TotalTokens: 60},
 		{CreatedAt: now, UserID: 7, ChannelID: 0, TotalTokens: 10},
 		{CreatedAt: now, UserID: 0, ChannelID: 3, TotalTokens: 15},
 	}, 512)
 	want := map[string]int64{"site:user:7:channel:3": 50, "site:user:7:channel:9": 40, "site:user:8:channel:3": 60}
+	wantRequests := map[string]int64{"site:user:7:channel:3": 3, "site:user:7:channel:9": 1, "site:user:8:channel:3": 1}
 	for _, m := range metrics {
 		if m.DimensionType != "instance_user_channel" {
 			continue
 		}
-		if tokens, ok := want[m.DimensionKey]; !ok || m.TPM != tokens {
+		if tokens, ok := want[m.DimensionKey]; !ok || m.TPM != tokens || m.RequestCount != wantRequests[m.DimensionKey] {
 			t.Fatalf("unexpected user/channel metric: %#v", m)
 		}
 		delete(want, m.DimensionKey)
@@ -96,9 +98,9 @@ func TestCustomerChannelLeavesExistingMetricsUnchanged(t *testing.T) {
 			existing = append(existing, m)
 			continue
 		}
-		onlyTokens := reporter.AggregatedMetricPayload{BucketTime: m.BucketTime, WindowSeconds: 60, DimensionType: m.DimensionType, DimensionKey: m.DimensionKey, TPM: m.TPM}
-		if !reflect.DeepEqual(m, onlyTokens) {
-			t.Fatalf("TPM-only metric contains unrelated data: %#v", m)
+		onlyTraffic := reporter.AggregatedMetricPayload{BucketTime: m.BucketTime, WindowSeconds: 60, DimensionType: m.DimensionType, DimensionKey: m.DimensionKey, TPM: m.TPM, RequestCount: m.RequestCount, ConsumeCount: m.ConsumeCount}
+		if !reflect.DeepEqual(m, onlyTraffic) {
+			t.Fatalf("traffic metric contains unrelated data: %#v", m)
 		}
 	}
 	if !reflect.DeepEqual(existing, want) {
@@ -106,8 +108,8 @@ func TestCustomerChannelLeavesExistingMetricsUnchanged(t *testing.T) {
 	}
 	full := referenceCustomerAggregate(events, true)
 	for i := range got {
-		if got[i].DimensionType == "instance_user_channel" && (got[i].DimensionKey != full[i].DimensionKey || got[i].TPM != full[i].TPM) {
-			t.Fatal("channel TPM changed")
+		if got[i].DimensionType == "instance_user_channel" && (got[i].DimensionKey != full[i].DimensionKey || got[i].TPM != full[i].TPM || got[i].RequestCount != full[i].RequestCount) {
+			t.Fatal("channel traffic counters differ from full aggregation")
 		}
 	}
 }

@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
 import type { MetricItem } from "@ct/shared";
 import { dashboard } from "../api";
-import { buildModelTraffic } from "../utils/customerTraffic";
+import { buildModelTraffic, type TrafficMetric } from "../utils/customerTraffic";
 import CustomerTrafficPanel from "./CustomerTrafficPanel.vue";
 
 const props = defineProps<{
@@ -14,6 +14,7 @@ const props = defineProps<{
   active: boolean;
   expanded?: boolean;
   dimension?: "user" | "channel";
+  metric?: TrafficMetric;
 }>();
 const emit = defineEmits<{ "update:dimension": [value: "user" | "channel"] }>();
 const element = ref<HTMLElement>();
@@ -23,6 +24,7 @@ const mode = computed({
   set: (value: "user" | "channel") => { localMode.value = value; emit("update:dimension", value); },
 });
 const dimensionLabel = computed(() => mode.value === "user" ? "客户" : "渠道");
+const metricLabel = computed(() => props.metric === "rpm" ? "RPM" : "TPM");
 const nearViewport = ref(typeof IntersectionObserver === "undefined");
 let observer: IntersectionObserver | undefined;
 onMounted(() => {
@@ -98,6 +100,7 @@ const traffic = computed(() => buildModelTraffic({
   dimension: mode.value,
   points: loadedScope.value === scope.value ? points.value : [], totals: props.totals,
   bucketMinutes: bucketMinutes.value, hours: props.hours, now: props.asOf,
+  metric: props.metric,
 }));
 const lastPlotTime = computed(() => {
   const start = traffic.value.lastCompleteTime;
@@ -110,8 +113,8 @@ const lastPlotTime = computed(() => {
 <template>
   <div ref="element" class="model-traffic">
     <div class="model-traffic-mode">
-      <span>TPM · 流量构成</span>
-      <el-segmented v-model="mode" :options="[{ label: '按客户', value: 'user' }, { label: '按渠道', value: 'channel' }]" size="small" :aria-label="`${model.display_name || model.display_key} TPM 图层`" />
+      <span>{{ metricLabel }} · 流量构成</span>
+      <el-segmented v-model="mode" :options="[{ label: '按客户', value: 'user' }, { label: '按渠道', value: 'channel' }]" size="small" :aria-label="`${model.display_name || model.display_key} ${metricLabel} 图层`" />
     </div>
     <CustomerTrafficPanel
       :traffic="traffic" :dimension="mode" hide-mode

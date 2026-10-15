@@ -45,8 +45,10 @@ func TestZeroOutputCannotSupplyCircuitErrorsInAnyDimension(t *testing.T) {
 	}
 	metrics := Aggregate("inst", events, 512)
 	for _, metric := range metrics {
-		// Traffic-only cross dimensions carry tokens without request counters.
-		if metric.RequestCount == 0 {
+		if metric.DimensionType == "instance_user_channel" {
+			if metric.RequestCount != 50 || metric.TPM != 500 || metric.ErrorCount != 0 || metric.SuccessRate != nil || metric.ErrorRate != nil {
+				t.Fatalf("unexpected traffic-only counters: %#v", metric)
+			}
 			continue
 		}
 		if metric.RequestCount != 50 || metric.SuccessCount != 50 || metric.ErrorCount != 0 || metric.UserErrorCount != 0 || metric.ErrorRate == nil || *metric.ErrorRate != 0 {

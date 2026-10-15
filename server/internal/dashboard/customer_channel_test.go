@@ -15,12 +15,12 @@ import (
 
 func TestCustomerChannelHistoryNames(t *testing.T) {
 	source := &metricSourceStub{metrics: []aggregator.Metric{
-		{InstanceID: "inst", BucketTime: time.Now().UTC(), DimensionType: "instance_user_channel", DimensionKey: "inst:user:12:channel:5", TPM: 1234},
+		{InstanceID: "inst", BucketTime: time.Now().UTC(), DimensionType: "instance_user_channel", DimensionKey: "inst:user:12:channel:5", TPM: 1234, RequestCount: 7},
 	}}
 	h := NewHandler(nil).WithMetricSource(source).WithNameSource(&nameSourceFake{calls: map[string]int{}})
 	rr := httptest.NewRecorder()
 	h.HandleMetricHistory(rr, httptest.NewRequest(http.MethodGet, "/api/dashboard/metric-history?dimension_type=instance_user_channel&dimension_key_prefix=inst:user:12:channel:&hours=1", nil))
-	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"display_name":"主渠道"`) || !strings.Contains(rr.Body.String(), `"tpm":1234`) {
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"display_name":"主渠道"`) || !strings.Contains(rr.Body.String(), `"tpm":1234`) || !strings.Contains(rr.Body.String(), `"request_count":7`) {
 		t.Fatalf("unexpected history: %d %s", rr.Code, rr.Body.String())
 	}
 	if got := h.displayDimensionName("instance_user_channel", "inst:user:12:channel:99"); got != "渠道 99" {
@@ -80,14 +80,14 @@ func TestCustomerChannelViewerCannotReadOtherUsersOrSites(t *testing.T) {
 
 func TestChannelCustomerHistory(t *testing.T) {
 	source := &scopedCustomerChannelSource{metricSourceStub: metricSourceStub{metrics: []aggregator.Metric{
-		{InstanceID: "inst", BucketTime: time.Now(), DimensionType: "instance_user_channel", DimensionKey: "inst:user:12:channel:5", TPM: 1234},
+		{InstanceID: "inst", BucketTime: time.Now(), DimensionType: "instance_user_channel", DimensionKey: "inst:user:12:channel:5", TPM: 1234, RequestCount: 7},
 		{InstanceID: "other", BucketTime: time.Now(), DimensionType: "instance_user_channel", DimensionKey: "other:user:12:channel:5", TPM: 999},
 	}}}
 	h := NewHandler(nil).WithMetricSource(source).WithNameSource(&nameSourceFake{calls: map[string]int{}})
 	for _, window := range []string{"1m", "5m"} {
 		rr := httptest.NewRecorder()
 		h.HandleMetricHistory(rr, httptest.NewRequest("GET", "/api/dashboard/metric-history?dimension_type=instance_channel_user&instance_id=inst&dimension_key_prefix=inst:channel:&window="+window, nil))
-		if rr.Code != 200 || !strings.Contains(rr.Body.String(), `"dimension_key":"inst:channel:5:user:12"`) || !strings.Contains(rr.Body.String(), `"tpm":1234`) || strings.Contains(rr.Body.String(), "other:channel") {
+		if rr.Code != 200 || !strings.Contains(rr.Body.String(), `"dimension_key":"inst:channel:5:user:12"`) || !strings.Contains(rr.Body.String(), `"tpm":1234`) || !strings.Contains(rr.Body.String(), `"request_count":7`) || strings.Contains(rr.Body.String(), "other:channel") {
 			t.Fatalf("%d %s", rr.Code, rr.Body.String())
 		}
 	}

@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vu
 import { FullScreen } from "@element-plus/icons-vue";
 import type { MetricItem } from "@ct/shared";
 import { dashboard } from "../api";
-import { buildCustomerTraffic, formatTrafficTPM as formatTokens, type TrafficDimension } from "../utils/customerTraffic";
+import { buildCustomerTraffic, formatTrafficTPM as formatTokens, type TrafficDimension, type TrafficMetric } from "../utils/customerTraffic";
 import CustomerTrafficPanel from "./CustomerTrafficPanel.vue";
 import MonitorNameButton from "./MonitorNameButton.vue";
 import MonitorCopyButton from "./MonitorCopyButton.vue";
@@ -12,7 +12,8 @@ const props = defineProps<{
   customer: MetricItem;
   totals: MetricItem[];
   verifiedBuckets?: number[];
-  minute: { tpm: number; time: number; stale: boolean } | null;
+  minute: { tpm: number; rpm?: number | null; time: number; stale: boolean } | null;
+  metric?: TrafficMetric;
   hours: number;
   asOf: number;
   refreshKey: number;
@@ -46,6 +47,8 @@ const notice = computed(() => {
 });
 const scope = computed(() => `${props.customer.instance_id}|${props.customer.dimension_key}|${props.hours}|${dimension.value}`);
 const bucketMinutes = computed(() => props.hours === 24 ? 5 : 1);
+const metricLabel = computed(() => props.metric === "rpm" ? "RPM" : "TPM");
+const minuteValue = computed(() => props.metric === "rpm" ? props.minute?.rpm : props.minute?.tpm);
 const name = computed(() => props.customer.display_name || props.customer.display_key || props.customer.dimension_key);
 const id = computed(() => props.customer.dimension_key.slice(props.customer.dimension_key.lastIndexOf(":user:") + 6));
 const scopeCache = new Map<string, { revision: number; items: MetricItem[]; updatedAt: number }>();
@@ -110,6 +113,7 @@ const traffic = computed(() => buildCustomerTraffic({
   customerKey: props.customer.dimension_key, instanceID: props.customer.instance_id,
   dimension: dimension.value, points: loadedScope.value === scope.value ? points.value : [],
   totals: props.totals, verifiedBuckets: props.verifiedBuckets, bucketMinutes: bucketMinutes.value, hours: props.hours, now: props.asOf,
+  metric: props.metric,
 }));
 const hasPlot = computed(() => traffic.value.series.length > 0 && traffic.value.coveredMinutes > 0);
 function timeRange(start: number, minutes: number) {
@@ -154,16 +158,16 @@ const panelProps = computed(() => ({
         </div>
         <span class="customer-id">ID {{ id }}</span>
       </div>
-      <div class="compact-rate" :class="{ stale: minuteStatus }" title="最近结束的 1 分钟已收到的 Token；每 30 秒刷新，后续上报可能补齐。数据更新中表示拆分正在加载或与该分钟总量尚未对齐；对齐也不代表采集已全部结束。">
-        <div><strong>{{ minute ? formatTokens(minute.tpm) : '—' }}</strong><span>TPM</span></div>
+      <div class="compact-rate" :class="{ stale: minuteStatus }" :title="`最近结束的 1 分钟已收到的${metric === 'rpm' ? '请求数' : ' Token'}；每 30 秒刷新，后续上报可能补齐。数据更新中表示拆分正在加载或与该分钟总量尚未对齐；对齐也不代表采集已全部结束。`">
+        <div><strong>{{ minuteValue == null ? '—' : formatTokens(minuteValue) }}</strong><span>{{ metricLabel }}</span></div>
         <small>{{ minuteTime }}<span v-if="minuteStatus" class="rate-status"> · {{ minuteStatus }}</span></small>
       </div>
       <el-button class="expand-button" text :icon="FullScreen" aria-label="弹窗查看大图" title="弹窗查看大图" @click="expanded = true" />
     </header>
     <CustomerTrafficPanel v-bind="panelProps" :active="nearViewport && !expanded" @dimension="dimension = $event" @retry="load" />
-    <el-dialog v-model="expanded" :title="`${name} · #${id} · TPM 流量构成`" width="min(1100px, calc(100vw - 40px))" top="8vh" append-to-body destroy-on-close class="customer-traffic-dialog">
+    <el-dialog v-model="expanded" :title="`${name} · #${id} · ${metricLabel} 流量构成`" width="min(1100px, calc(100vw - 40px))" top="8vh" append-to-body destroy-on-close class="customer-traffic-dialog">
       <div class="dialog-summary">
-        <span>最近 1 分钟 <strong>{{ minute ? formatTokens(minute.tpm) : '—' }}</strong> TPM</span>
+        <span>最近 1 分钟 <strong>{{ minuteValue == null ? '—' : formatTokens(minuteValue) }}</strong> {{ metricLabel }}</span>
         <span>{{ minuteTime }}{{ minuteStatus ? ` · ${minuteStatus}` : '' }}</span>
       </div>
       <CustomerTrafficPanel v-if="expanded" :key="customer.dimension_key" v-bind="panelProps" active expanded @dimension="dimension = $event" @retry="load" />

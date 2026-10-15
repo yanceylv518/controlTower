@@ -205,3 +205,19 @@ test('unmount disconnects visibility observer and prevents late response or retr
   assert.equal(c.observers[0].disconnected, true)
   assert.deepEqual({ points: c.points.value, scope: c.loadedScope.value, revision: c.loadedRevision.value, loading: c.loading.value, error: c.error.value }, before)
 })
+
+test('repeated RPM/TPM switches reuse the same model breakdown with no additional request', async t => {
+  const c = card(); t.after(c.unmount)
+  c.props.totals = [{ ...metric(c.props.model, 1000), request_count: 7, consume_count: 7 }]
+  await c.visible()
+  c.props.metric = 'rpm'; await nextTick()
+  c.requests[0].resolve({ items: [{ ...metric(c.props.model, 1000, 3), request_count: 7, consume_count: 7 }] }); await flush()
+  const color = c.traffic.value.series[0].color
+  for (let i = 0; i < 40; i++) {
+    c.props.metric = i % 2 ? 'rpm' : 'tpm'
+    await nextTick()
+    assert.equal(c.requests.length, 1)
+    assert.equal(c.traffic.value.series[0].color, color)
+    assert.equal(c.traffic.value.series[0].data.find(([at]) => at === Date.parse('2026-09-26T10:05:00Z'))[1], c.props.metric === 'rpm' ? 7 : 1000)
+  }
+})

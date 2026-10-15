@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, shallowRef, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { siteOf, type ChannelSnapshot, type MetricItem } from "@ct/shared";
 import { FullScreen, Refresh } from "@element-plus/icons-vue";
@@ -15,7 +15,7 @@ import { formatTokens } from "../utils/format";
 import { usePrefsStore } from "../stores/prefs";
 import CustomerTrafficPanel from "../components/CustomerTrafficPanel.vue";
 import ModelChannelTraffic from "../components/ModelChannelTraffic.vue";
-import { buildCustomerTraffic } from "../utils/customerTraffic";
+import { buildCustomerTraffic, type TrafficMetric } from "../utils/customerTraffic";
 import CustomerCompareChart from "../components/CustomerCompareChart.vue";
 import CustomerTokenChart from "../components/CustomerTokenChart.vue";
 import MiniSparkline from "../components/MiniSparkline.vue";
@@ -35,7 +35,9 @@ const search = ref("");
 const searchKey = ref("");
 const hours = ref(1);
 const activeTab = ref<"charts" | "ranking">("charts");
-const activeMetric = ref<"ttft" | "tpm" | "otps" | "cache">("tpm");
+const activeMetric = ref<"ttft" | "tpm" | "rpm" | "otps" | "cache">("tpm");
+const isTrafficMetric = computed(() => activeMetric.value === "tpm" || activeMetric.value === "rpm");
+const trafficMetric = computed<TrafficMetric>(() => activeMetric.value === "rpm" ? "rpm" : "tpm");
 const ttftThresholds = computed(() => [
   { name: "P50", value: prefs.ttftP50Threshold, color: "#2f6fed" },
   { name: "P90", value: prefs.ttftP90Threshold, color: "#16a6b6" },
@@ -44,8 +46,9 @@ const ttftThresholds = computed(() => [
 const selectedKeys = ref<string[]>([]);
 const expandedKey = ref("");
 watch(() => [props.kind, filters.site_id, hours.value, activeMetric.value, activeTab.value], () => { expandedKey.value = ""; });
-const history = ref<MetricItem[]>([]);
-const customerPoints = ref<MetricItem[]>([]);
+// 历史与拆分指标均整批替换且只读，避免为大量采样点创建深层响应式代理。
+const history = shallowRef<MetricItem[]>([]);
+const customerPoints = shallowRef<MetricItem[]>([]);
 const customerError = ref("");
 const asOf = ref(Date.now());
 const refreshKey = ref(0);
@@ -308,12 +311,18 @@ function metricHeadline(key: string, row?: DimRow) {
   const time = point ? Date.parse(point.bucket_time) : 0;
   const stale = point && asOf.value - time - bucketMinutes.value * 60_000 > 120_000;
   const range = point ? `${new Date(time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}–${new Date(time + bucketMinutes.value * 60_000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "等待采集";
-  return { label: bucketMinutes.value === 5 ? "TPM · 5分钟均值" : "TPM", value: point ? formatTokens(point.tpm / bucketMinutes.value) : "—", detail: `${range}${stale ? " · 数据滞后" : ""}` };
+  const metric = activeMetric.value === "rpm" ? "RPM" : "TPM";
+  const count = point ? activeMetric.value === "rpm" ? point.consume_count : point.tpm : null;
+  return { label: bucketMinutes.value === 5 ? `${metric} · 5分钟均值` : metric, value: count != null ? formatTokens(count / bucketMinutes.value) : "—", detail: `${range}${stale ? " · 数据滞后" : ""}` };
 }
-// TPM 展示当前筛选下的全部项；TTFT、OTPS 沿用最多 8 项的图表选择。
-const chartKeys = computed(() => activeMetric.value === "tpm"
-  ? visibleRows.value.map((item) => item.dimension_key)
-  : selectedKeys.value);
+// TPM/RPM 展示当前筛选下的全部项；其余指标沿用最多 8 项的图表选择。
+const chartKeys = computed(() => {
+  if (!isTrafficMetric.value) return selectedKeys.value;
+  const items = trafficMetric.value === "rpm"
+    ? [...visibleRows.value].sort((a, b) => (b.consume_count ?? -1) - (a.consume_count ?? -1))
+    : visibleRows.value;
+  return items.map((item) => item.dimension_key);
+});
 const customerPointsByDimension = computed(() => {
   const groups = new Map<string, MetricItem[]>();
   for (const point of customerPoints.value) {
@@ -326,7 +335,7 @@ const customerPointsByDimension = computed(() => {
   return groups;
 });
 function customerTraffic(key: string, row?: DimRow) {
-  return buildCustomerTraffic({ customerKey: key, instanceID: row?.instance_id || "", dimension: "user", customerParent: props.kind === "channels" ? "channel" : "model", points: customerPointsByDimension.value.get(key) || [], totals: historyByKey.value.get(key) || [], bucketMinutes: bucketMinutes.value, hours: hours.value, now: asOf.value });
+  return buildCustomerTraffic({ customerKey: key, instanceID: row?.instance_id || "", dimension: "user", customerParent: props.kind === "channels" ? "channel" : "model", points: customerPointsByDimension.value.get(key) || [], totals: historyByKey.value.get(key) || [], bucketMinutes: bucketMinutes.value, hours: hours.value, now: asOf.value, metric: trafficMetric.value });
 }
 function trafficTime(time: number | null) {
   if (time === null) return "";
@@ -341,8 +350,7 @@ const chartTrendGroups = computed(() => chartKeys.value.map((key) => {
     id: key.split(":").pop() || key,
     row,
     headline: metricHeadline(key, row),
-    traffic: activeMetric.value === "tpm" ? customerTraffic(key, row) : null,
-    tpm: dimensionSeries(key, "tpm", bucketMinutes.value, "TPM"),
+    traffic: isTrafficMetric.value ? customerTraffic(key, row) : null,
     otps: dimensionSeries(key, "otps", 1, "OTPS"),
     cache: dimensionSeries(key, "cache_hit_rate", 0.01, "缓存命中率"),
     ttft: [
@@ -430,9 +438,9 @@ function rowClass({ row }: { row: DimRow }) {
         </div>
         <template v-if="activeTab === 'charts'">
           <span class="dimension-toolbar-divider" aria-hidden="true" />
-          <el-segmented v-model="activeMetric" class="dimension-metric-switch" :options="[{ label: 'TTFT', value: 'ttft' }, { label: 'TPM', value: 'tpm' }, { label: 'OTPS', value: 'otps' }, { label: '缓存命中率', value: 'cache' }]" size="small" aria-label="监控指标" />
+          <el-segmented v-model="activeMetric" class="dimension-metric-switch" :options="[{ label: 'TTFT', value: 'ttft' }, { label: 'TPM', value: 'tpm' }, { label: 'RPM', value: 'rpm' }, { label: 'OTPS', value: 'otps' }, { label: '缓存命中率', value: 'cache' }]" size="small" aria-label="监控指标" />
         </template>
-        <span class="dimension-toolbar-count">按总 Token 排序 · {{ visibleRows.length }} 个{{ kind === 'channels' ? '渠道' : '模型' }}</span>
+        <span class="dimension-toolbar-count">按{{ activeTab === 'charts' && trafficMetric === 'rpm' ? '消费请求数' : '总 Token' }}排序 · {{ visibleRows.length }} 个{{ kind === 'channels' ? '渠道' : '模型' }}</span>
       </div>
       <section v-show="activeTab === 'charts'" class="dimension-metric-view">
         <div class="dimension-chart-grid">
@@ -442,13 +450,12 @@ function rowClass({ row }: { row: DimRow }) {
                 <div class="dimension-name"><MonitorNameButton :name="group.name" @detail="group.row && openDetail(group.row)" /><MonitorCopyButton :value="group.name" :label="kind === 'channels' ? '复制渠道名称' : '复制模型名称'" /></div>
                 <span v-if="kind === 'channels'" class="dimension-id">ID {{ group.id }}</span>
               </div>
-              <div class="dimension-headline" :title="group.headline.detail"><span>{{ group.headline.label }}</span><strong>{{ group.headline.value }}</strong><small v-if="activeMetric === 'tpm'">{{ group.headline.detail }}</small></div>
-              <el-button v-if="activeMetric === 'tpm'" class="dimension-expand" text :icon="FullScreen" aria-label="弹窗查看大图" title="弹窗查看大图" @click="expandedKey = group.key" />
+              <div class="dimension-headline" :title="group.headline.detail"><span>{{ group.headline.label }}</span><strong>{{ group.headline.value }}</strong><small v-if="isTrafficMetric">{{ group.headline.detail }}</small></div>
+              <el-button v-if="isTrafficMetric" class="dimension-expand" text :icon="FullScreen" aria-label="弹窗查看大图" title="弹窗查看大图" @click="expandedKey = group.key" />
             </header>
             <section v-if="activeMetric === 'ttft'" class="dimension-chart"><CustomerCompareChart :series="group.ttft" :time-range="chartTimeRange" unit="s" :thresholds="ttftThresholds" /></section>
-            <ModelChannelTraffic v-else-if="kind === 'models' && activeMetric === 'tpm' && group.row" v-model:dimension="modelDimensions[group.key]" :model="group.row" :totals="historyByKey.get(group.key) || []" :hours="hours" :as-of="asOf" :refresh-key="refreshKey" :active="activeTab === 'charts' && expandedKey !== group.key" />
-            <CustomerTrafficPanel v-else-if="activeMetric === 'tpm' && group.traffic" :traffic="group.traffic" dimension="user" :name="group.name" :loading="state.loading.value" :error="customerError" empty-text="暂无完整客户拆分数据" :hours="hours" :bucket-minutes="bucketMinutes" :last-plot-time="trafficTime(group.traffic.lastCompleteTime)" :active="activeTab === 'charts' && expandedKey !== group.key" @retry="state.reload" />
-            <section v-else-if="activeMetric === 'tpm'" class="dimension-chart"><CustomerCompareChart :series="group.tpm" :time-range="chartTimeRange" compact /></section>
+            <ModelChannelTraffic v-else-if="kind === 'models' && isTrafficMetric && group.row" v-model:dimension="modelDimensions[group.key]" :model="group.row" :metric="trafficMetric" :totals="historyByKey.get(group.key) || []" :hours="hours" :as-of="asOf" :refresh-key="refreshKey" :active="activeTab === 'charts' && expandedKey !== group.key" />
+            <CustomerTrafficPanel v-else-if="isTrafficMetric && group.traffic" :traffic="group.traffic" dimension="user" :name="group.name" :loading="state.loading.value" :error="customerError" empty-text="暂无完整客户拆分数据" :hours="hours" :bucket-minutes="bucketMinutes" :last-plot-time="trafficTime(group.traffic.lastCompleteTime)" :active="activeTab === 'charts' && expandedKey !== group.key" @retry="state.reload" />
             <section v-else-if="activeMetric === 'cache'" class="dimension-chart"><CustomerCompareChart :series="group.cache" :time-range="chartTimeRange" unit="%" /></section>
             <section v-else class="dimension-chart"><CustomerCompareChart :series="group.otps" :time-range="chartTimeRange" unit=" token/s" /></section>
           </article>
@@ -586,13 +593,13 @@ function rowClass({ row }: { row: DimRow }) {
         </el-table>
       </div>
     </AsyncPanel>
-    <el-dialog v-model="expanded" :title="`${expandedGroup?.name || ''}${kind === 'channels' ? ` · #${expandedGroup?.id || ''}` : ''} · TPM 流量构成`" width="min(1100px, calc(100vw - 40px))" top="8vh" append-to-body destroy-on-close class="dimension-traffic-dialog">
+    <el-dialog v-model="expanded" :title="`${expandedGroup?.name || ''}${kind === 'channels' ? ` · #${expandedGroup?.id || ''}` : ''} · ${trafficMetric.toUpperCase()} 流量构成`" width="min(1100px, calc(100vw - 40px))" top="8vh" append-to-body destroy-on-close class="dimension-traffic-dialog">
       <template v-if="expanded && expandedGroup?.traffic">
         <div class="dimension-dialog-summary">
           <span>{{ expandedGroup.headline.label }} <strong>{{ expandedGroup.headline.value }}</strong></span>
           <span>{{ expandedGroup.headline.detail }}</span>
         </div>
-        <ModelChannelTraffic v-if="kind === 'models' && expandedGroup.row" :key="expandedGroup.key" v-model:dimension="modelDimensions[expandedGroup.key]" :model="expandedGroup.row" :totals="historyByKey.get(expandedGroup.key) || []" :hours="hours" :as-of="asOf" :refresh-key="refreshKey" active expanded />
+        <ModelChannelTraffic v-if="kind === 'models' && expandedGroup.row" :key="expandedGroup.key" v-model:dimension="modelDimensions[expandedGroup.key]" :model="expandedGroup.row" :metric="trafficMetric" :totals="historyByKey.get(expandedGroup.key) || []" :hours="hours" :as-of="asOf" :refresh-key="refreshKey" active expanded />
         <CustomerTrafficPanel v-else :key="expandedGroup.key" :traffic="expandedGroup.traffic" dimension="user" :name="expandedGroup.name" :loading="state.loading.value" :error="customerError" empty-text="暂无完整客户拆分数据" :hours="hours" :bucket-minutes="bucketMinutes" :last-plot-time="trafficTime(expandedGroup.traffic.lastCompleteTime)" active expanded @retry="state.reload" />
       </template>
     </el-dialog>
