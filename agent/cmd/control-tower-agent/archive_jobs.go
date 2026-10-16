@@ -67,10 +67,12 @@ func refreshArchiveJobs(ctx context.Context, worker archiveJobsReporter, cfg con
 		return
 	}
 	if st.State == "error" && st.Engine != nil {
-		if snapshot.Collection.Error == "" {
+		// A failed batch may be unable to persist its diagnosis. Prefer this
+		// attempt's error over an older nonempty error read from the database.
+		if st.Engine.Collection.Error != "" {
 			snapshot.Collection.Error = st.Engine.Collection.Error
 		}
-		if snapshot.History.Error == "" {
+		if st.Engine.History.Error != "" {
 			snapshot.History.Error = st.Engine.History.Error
 		}
 	}

@@ -167,35 +167,29 @@ func (e *Engine) collect(ctx context.Context, c *sql.Conn, s *state, batch, dela
 		accepted = append(accepted, r)
 	}
 	before := s.Collection.AfterID
+	months := map[string]bool{}
 	for _, r := range accepted {
 		created, _ := r.number("created_at")
-		if err = e.ensureMonth(ctx, c, table(day(created))); err != nil {
+		name := table(day(created))
+		if months[name] {
+			continue
+		}
+		if err = e.ensureMonth(ctx, c, name); err != nil {
 			return err
 		}
+		months[name] = true
 	}
 	tx, err := c.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	inserted, changed, unchanged := 0, 0, 0
-	for _, r := range accepted {
-		a, b, err := writeRaw(ctx, tx, r, s)
-		if err != nil {
-			return err
-		}
-		if a {
-			inserted++
-		} else if b {
-			changed++
-		} else {
-			unchanged++
-		}
-		n, err := r.number("id")
-		if err != nil {
-			return errors.New("invalid_log_id")
-		}
-		s.Collection.AfterID = n
+	inserted, changed, unchanged, err := writeCollectionBatch(ctx, tx, accepted, s)
+	if err != nil {
+		return err
+	}
+	if len(accepted) > 0 {
+		s.Collection.AfterID, _ = accepted[len(accepted)-1].number("id")
 	}
 	s.Collection.Rows += uint64(len(accepted))
 	s.Collection.Step = "collect"
@@ -316,12 +310,20 @@ func writeRaw(ctx context.Context, tx *sql.Tx, r row, s *state) (bool, bool, err
 }
 
 func touchRawDay(ctx context.Context, tx *sql.Tx, s *state, date string, changed bool) error {
+	count := 0
+	if changed {
+		count = 1
+	}
+	return touchRawDayCount(ctx, tx, s, date, count)
+}
+
+func touchRawDayCount(ctx context.Context, tx *sql.Tx, s *state, date string, changes int) error {
 	var err error
 	if _, err = tx.ExecContext(ctx, "INSERT INTO log_archive_days(log_date,revision,state,updated_at) VALUES(?,1,'pending',UTC_TIMESTAMP(6)) ON DUPLICATE KEY UPDATE log_date=VALUES(log_date)", date); err != nil {
 		return err
 	}
-	if changed {
-		if _, err = tx.ExecContext(ctx, "UPDATE log_archive_days SET revision=revision+1,state='pending',version_id='',raw_rows=NULL,error_code='',updated_at=UTC_TIMESTAMP(6) WHERE log_date=?", date); err != nil {
+	if changes > 0 {
+		if _, err = tx.ExecContext(ctx, "UPDATE log_archive_days SET revision=revision+?,state='pending',version_id='',raw_rows=NULL,error_code='',updated_at=UTC_TIMESTAMP(6) WHERE log_date=?", changes, date); err != nil {
 			return err
 		}
 	}

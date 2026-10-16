@@ -383,22 +383,36 @@ func (e *Engine) Step(ctx context.Context, settings aj.Settings, batch, delay in
 		// On failure the batch transaction has rolled back. Persist only diagnostic
 		// state and consumed scheduling slots; never advance failed data cursors.
 		if err != nil {
+			// A timeout may have already closed the connection. Diagnostic reads
+			// and writes must never replace the batch's original failure.
+			if ctx.Err() != nil {
+				return err
+			}
 			committed, readErr := load(ctx, c)
 			if readErr != nil {
-				return readErr
+				return err
 			}
 			committed = failedAttempt(committed, s, historyTurn)
 			s = committed
 		}
 		tx, txErr := c.BeginTx(ctx, nil)
 		if txErr != nil {
+			if err != nil {
+				return err
+			}
 			return txErr
 		}
 		defer tx.Rollback()
 		if txErr = save(ctx, tx, s); txErr != nil {
+			if err != nil {
+				return err
+			}
 			return txErr
 		}
 		if txErr = tx.Commit(); txErr != nil {
+			if err != nil {
+				return err
+			}
 			return txErr
 		}
 		if err == nil && (settings.Collection || settings.History) {
@@ -410,12 +424,10 @@ func (e *Engine) Step(ctx context.Context, settings aj.Settings, batch, delay in
 	// not advance the reporting cursor and skip every other page of days.
 	st, readErr := e.status(ctx, false)
 	if err != nil {
-		if st.Collection.Error == "" && st.History.Error == "" {
-			if historyTurn {
-				st.History.Error = code(err)
-			} else {
-				st.Collection.Error = code(err)
-			}
+		if historyTurn {
+			st.History.Error = code(err)
+		} else {
+			st.Collection.Error = code(err)
 		}
 		return st, err
 	}

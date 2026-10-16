@@ -71,4 +71,13 @@ func TestArchiveCountFailureRetainsPositionAndTaskError(t *testing.T) {
 	if st.Engine.Collection.Error != "batch_failed" || st.Engine.CountsError != "" {
 		t.Fatal("count reporting hid task error", st.Engine)
 	}
+	r.status.Collection.Error = "driver: bad connection"
+	r.status.Collection.AfterID = 101
+	st.Engine.Collection.Error = "database_timeout"
+	st.Engine.History.Error = "mysql_1205_HY000"
+	r.status.History.Error = "old_history_failure"
+	refreshArchiveJobs(context.Background(), r, cfg, out, time.Now(), &st)
+	if st.Engine.Collection.Error != "database_timeout" || st.Engine.History.Error != "mysql_1205_HY000" || st.Engine.Collection.AfterID != 101 {
+		t.Fatal("stale persisted error replaced the original failure", st.Engine)
+	}
 }

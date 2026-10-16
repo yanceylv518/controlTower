@@ -62,7 +62,7 @@ func flushLive(ctx context.Context, tx *sql.Tx, s *state) error {
 	}
 	if err := applyLiveChanges(ctx, tx, s); err != nil {
 		if _, rollbackErr := tx.ExecContext(ctx, "ROLLBACK TO SAVEPOINT live_statistics"); rollbackErr != nil {
-			return rollbackErr
+			return err
 		}
 		dates := map[string]bool{}
 		for _, change := range changes {
@@ -80,7 +80,7 @@ func flushLive(ctx context.Context, tx *sql.Tx, s *state) error {
 				continue
 			}
 			if _, resetErr := tx.ExecContext(ctx, `UPDATE log_archive_live_stats SET version_id=?,after_created=0,after_id=0,upper_created=-1,upper_id=0,ready=0,error_code=?,retry_at=DATE_ADD(UTC_TIMESTAMP(6),INTERVAL 60 SECOND),updated_at=UTC_TIMESTAMP(6) WHERE log_date=?`, id(), code(err), date); resetErr != nil {
-				return resetErr
+				return err
 			}
 		}
 	}
