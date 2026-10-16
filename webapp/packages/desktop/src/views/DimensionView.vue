@@ -303,6 +303,17 @@ function dimensionSeries(key: string, field: "ttft_p50_ms" | "ttft_p90_ms" | "tt
 function peakDimTPM(key: string) {
   return Math.max(...(historyByKey.value.get(key) || []).map((item) => item.tpm / bucketMinutes.value), 0);
 }
+function ttftEmptyState(row?: DimRow) {
+  if (row?.request_count === 0) {
+    return { text: "所选时段暂无请求", hint: "有流式请求并采集到首字响应耗时后，将展示 TTFT。" };
+  }
+  if (row && row.request_count > 0 && row.stream_rate === 0) {
+    return { text: "所选时段无流式请求", hint: "TTFT 仅适用于流式请求，非流式请求可查看 TPM 或 OTPS。" };
+  }
+  return { text: "暂无 TTFT 样本", hint: row?.stream_rate != null && row.stream_rate > 0
+    ? "已记录流式请求，但尚未采集到可展示的首字响应耗时。"
+    : "TTFT 需要流式请求的首字响应耗时数据。" };
+}
 function metricHeadline(key: string, row?: DimRow) {
   if (activeMetric.value === "ttft") return { label: "时段 P95", value: msFmt(row?.ttft_p95_ms), detail: "所选时段首字响应 P95" };
   if (activeMetric.value === "otps") return { label: "时段 OTPS", value: row?.otps == null ? "—" : `${row.otps.toFixed(2)} token/s`, detail: "所选时段有效输出 Token ÷ 总耗时（含非流式）" };
@@ -350,6 +361,7 @@ const chartTrendGroups = computed(() => chartKeys.value.map((key) => {
     id: key.split(":").pop() || key,
     row,
     headline: metricHeadline(key, row),
+    ttftEmpty: ttftEmptyState(row),
     traffic: isTrafficMetric.value ? customerTraffic(key, row) : null,
     otps: dimensionSeries(key, "otps", 1, "OTPS"),
     cache: dimensionSeries(key, "cache_hit_rate", 0.01, "缓存命中率"),
@@ -453,7 +465,7 @@ function rowClass({ row }: { row: DimRow }) {
               <div class="dimension-headline" :title="group.headline.detail"><span>{{ group.headline.label }}</span><strong>{{ group.headline.value }}</strong><small v-if="isTrafficMetric">{{ group.headline.detail }}</small></div>
               <el-button v-if="isTrafficMetric" class="dimension-expand" text :icon="FullScreen" aria-label="弹窗查看大图" title="弹窗查看大图" @click="expandedKey = group.key" />
             </header>
-            <section v-if="activeMetric === 'ttft'" class="dimension-chart"><CustomerCompareChart :series="group.ttft" :time-range="chartTimeRange" unit="s" :thresholds="ttftThresholds" /></section>
+            <section v-if="activeMetric === 'ttft'" class="dimension-chart"><CustomerCompareChart :series="group.ttft" :time-range="chartTimeRange" unit="s" :thresholds="ttftThresholds" :empty-text="group.ttftEmpty.text" :empty-hint="group.ttftEmpty.hint" /></section>
             <ModelChannelTraffic v-else-if="kind === 'models' && isTrafficMetric && group.row" v-model:dimension="modelDimensions[group.key]" :model="group.row" :metric="trafficMetric" :totals="historyByKey.get(group.key) || []" :hours="hours" :as-of="asOf" :refresh-key="refreshKey" :active="activeTab === 'charts' && expandedKey !== group.key" />
             <CustomerTrafficPanel v-else-if="isTrafficMetric && group.traffic" :traffic="group.traffic" dimension="user" :name="group.name" :loading="state.loading.value" :error="customerError" empty-text="暂无完整客户拆分数据" :hours="hours" :bucket-minutes="bucketMinutes" :last-plot-time="trafficTime(group.traffic.lastCompleteTime)" :active="activeTab === 'charts' && expandedKey !== group.key" @retry="state.reload" />
             <section v-else-if="activeMetric === 'cache'" class="dimension-chart"><CustomerCompareChart :series="group.cache" :time-range="chartTimeRange" unit="%" /></section>

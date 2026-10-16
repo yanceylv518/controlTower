@@ -2,7 +2,7 @@
 import { withChartTheme } from "../utils/chartTheme";
 import { useTheme } from "../composables/useTheme";
 const { themeSignature } = useTheme();
-import { nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import * as echarts from "echarts/core";
 import { LineChart } from "echarts/charts";
 import { DataZoomComponent, GridComponent, LegendComponent, MarkLineComponent, TooltipComponent } from "echarts/components";
@@ -11,7 +11,16 @@ import { cancelChartRender, scheduleChartRender } from "../utils/chartRenderQueu
 
 export interface CustomerCompareSeries { name: string; data: Array<[string, number | null]> }
 export interface CustomerCompareThreshold { name: string; value: number; color: string }
-const props = withDefaults(defineProps<{ series: CustomerCompareSeries[]; unit?: string; thresholds?: CustomerCompareThreshold[]; compact?: boolean; timeRange?: [number, number] }>(), { unit: "", compact: false, thresholds: () => [] });
+const props = withDefaults(defineProps<{
+  series: CustomerCompareSeries[];
+  unit?: string;
+  thresholds?: CustomerCompareThreshold[];
+  compact?: boolean;
+  timeRange?: [number, number];
+  emptyText?: string;
+  emptyHint?: string;
+}>(), { unit: "", compact: false, thresholds: () => [] });
+const hasData = computed(() => props.series.some(item => item.data.some(([, value]) => value != null && Number.isFinite(value))));
 const chartEl = ref<HTMLDivElement>();
 let chart: echarts.ECharts | undefined;
 let observer: ResizeObserver | undefined;
@@ -22,12 +31,12 @@ const compactNumber = (value: number) => value >= 1_000_000 ? `${(value / 1_000_
 
 async function render() {
   await nextTick();
-  if (!chartEl.value || !props.series.length) return;
+  if (!chartEl.value || !hasData.value) return;
   scheduleChartRender(renderToken, renderNow);
 }
 
 function renderNow() {
-  if (!chartEl.value || !props.series.length) return;
+  if (!chartEl.value || !hasData.value) return;
   const initial = !chart;
   chart ??= echarts.init(chartEl.value);
   const observedMax = Math.max(...props.series.flatMap(item => item.data.map(([, value]) => value ?? 0)), 0);
@@ -135,7 +144,18 @@ function renderNow() {
 }
 
 watch(() => [props.series, props.unit, props.thresholds, props.compact, props.timeRange], () => void render(), { deep: true, immediate: true });
-watch(chartEl, element => { observer?.disconnect(); if (element) { observer = new ResizeObserver(() => chart?.resize()); observer.observe(element); void render(); } });
+watch(chartEl, element => {
+  cancelChartRender(renderToken);
+  observer?.disconnect();
+  observer = undefined;
+  chart?.dispose();
+  chart = undefined;
+  if (element) {
+    observer = new ResizeObserver(() => chart?.resize());
+    observer.observe(element);
+    void render();
+  }
+});
 onBeforeUnmount(() => {
   cancelChartRender(renderToken);
   observer?.disconnect();
@@ -145,6 +165,14 @@ watch(themeSignature, () => { void render(); }, { flush: "post" });
 </script>
 
 <template>
-  <div v-if="series.length" ref="chartEl" class="customer-chart-canvas"></div>
-  <el-empty v-else :image-size="52" description="请选择客户进行对比" />
+  <div v-if="hasData" ref="chartEl" class="customer-chart-canvas"></div>
+  <el-empty v-else class="customer-chart-canvas customer-chart-empty" :image-size="52" :description="emptyText || (series.length ? '暂无可展示的数据' : '请选择客户进行对比')" role="status">
+    <p v-if="emptyHint" class="customer-chart-empty-hint">{{ emptyHint }}</p>
+  </el-empty>
 </template>
+
+<style scoped>
+.customer-chart-empty { box-sizing: border-box; padding: 16px; }
+.customer-chart-empty :deep(.el-empty__bottom) { margin-top: 8px; }
+.customer-chart-empty-hint { max-width: 320px; margin: 0; color: var(--ct-ink-3); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+</style>
