@@ -142,7 +142,10 @@ func (pressureReportStore) ListBillingDiscountRules(context.Context, string, str
 func (pressureReportStore) ListBillingUpstreams(context.Context, string) ([]billing.Upstream, error) {
 	return nil, nil
 }
-func TestReportChecksIndexAndStopsOnShortSourcePage(t *testing.T) {
+func TestReportChecksIndexAndScansAllTimeWindows(t *testing.T) {
+	oldPause := sourceBillingBudget.pause
+	SetBillingSourceReadPause(0)
+	defer SetBillingSourceReadPause(oldPause)
 	for _, hasIndex := range []bool{false, true} {
 		t.Run(fmt.Sprint(hasIndex), func(t *testing.T) {
 			logCalls, optionCalls := 0, 0
@@ -162,6 +165,12 @@ func TestReportChecksIndexAndStopsOnShortSourcePage(t *testing.T) {
 					return &reviewRows{columns: []string{"count"}, values: [][]driver.Value{{int64(0)}}}, nil
 				}
 				logCalls++
+				if logCalls > 1 {
+					return &reviewRows{columns: strings.Fields("id created request upstream user username token tokenname channel channelname model group prompt completion quota other")}, nil
+				}
+				if !strings.Contains(q, "FORCE INDEX (`time_idx`)") {
+					t.Fatal("source scan did not use inspected time index")
+				}
 				return &reviewRows{columns: strings.Fields("id created request upstream user username token tokenname channel channelname model group prompt completion quota other"), values: [][]driver.Value{{int64(1), int64(100), "r", "", int64(7), "u", int64(1), "t", int64(1), "c", "m", "g", int64(10), int64(2), int64(100), "{}"}}}, nil
 			}})
 			defer db.Close()
@@ -176,8 +185,8 @@ func TestReportChecksIndexAndStopsOnShortSourcePage(t *testing.T) {
 				}
 				return
 			}
-			if err != nil || logCalls != 1 || len(doc.Items) != 1 || doc.Items[0].Requests != 1 {
-				t.Fatal("short page should not issue an empty tail read", err, logCalls, doc)
+			if err != nil || logCalls != 96 || len(doc.Items) != 1 || doc.Items[0].Requests != 1 {
+				t.Fatal("windows must cover the whole day without duplicating rows", err, logCalls, doc)
 			}
 		})
 	}

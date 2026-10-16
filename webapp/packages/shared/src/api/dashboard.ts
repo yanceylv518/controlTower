@@ -51,7 +51,8 @@ export interface ChannelSchedulePreview {
 }
 
 export interface BillingGenerationDay {day:string;status:string;job_id?:string;processed:number;error?:string;updated_at?:string}
-export interface BillingGenerationProgress {subject_name?:string;waiting_for?:string;subject_id:number;outcome:string;total_days:number;checked:number;complete:number;empty:number;pending:number;running:number;failed:number;processed:number;error?:string;last_attempt?:string;days:BillingGenerationDay[];monthly?:BillingGenerationDay}
+export interface BillingGenerationBlocker {kind:string;period?:string;status:string;reason:string;attempts?:number;updated_at:string}
+export interface BillingGenerationProgress {blocker?:BillingGenerationBlocker;subject_name?:string;waiting_for?:string;subject_id:number;outcome:string;total_days:number;checked:number;complete:number;empty:number;pending:number;running:number;failed:number;processed:number;error?:string;last_attempt?:string;days:BillingGenerationDay[];monthly?:BillingGenerationDay}
 export interface BillingGenerationTask {id:string;instance_id:string;kind:string;from:string;to:string;work_until:string;source:string;overwrite:boolean;exclude_zero_output?:boolean;subject_ids:number[];created_at:string;outcome:string;percentage:number;completed_users:number;failed_users:number;complete_days:number;empty_days:number;items?:BillingGenerationProgress[]}
 export interface BillingGenerationBatch {kind?:string;instance_id:string;subject_ids:number[];from:string;to:string;overwrite?:boolean;exclude_zero_output?:boolean}
 export interface BillingDetailRow {unit_price?:string;image_input_tokens?:string;image_output_tokens?:string;audio_input_tokens?:string;audio_output_tokens?:string;time:string;request_id:string;model:string;token:string;token_id:string;input:string;output:string;cache_read:string;cache_write:string;amount:string;before_amount?:string;discount?:string}

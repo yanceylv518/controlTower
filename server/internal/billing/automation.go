@@ -42,22 +42,34 @@ type GenerationDay struct {
 	UpdatedAt *time.Time `json:"updated_at,omitempty"`
 }
 type GenerationProgress struct {
-	WaitingFor  string          `json:"waiting_for,omitempty"`
-	SubjectID   int64           `json:"subject_id"`
-	SubjectName string          `json:"subject_name,omitempty"`
-	Outcome     string          `json:"outcome"`
-	TotalDays   int             `json:"total_days"`
-	Checked     int             `json:"checked"`
-	Complete    int             `json:"complete"`
-	Empty       int             `json:"empty"`
-	Pending     int             `json:"pending"`
-	Running     int             `json:"running"`
-	Failed      int             `json:"failed"`
-	Processed   int64           `json:"processed"`
-	Error       string          `json:"error,omitempty"`
-	LastAttempt *time.Time      `json:"last_attempt,omitempty"`
-	Days        []GenerationDay `json:"days"`
-	Monthly     *GenerationDay  `json:"monthly,omitempty"`
+	Blocker     *GenerationBlocker `json:"blocker,omitempty"`
+	WaitingFor  string             `json:"waiting_for,omitempty"`
+	SubjectID   int64              `json:"subject_id"`
+	SubjectName string             `json:"subject_name,omitempty"`
+	Outcome     string             `json:"outcome"`
+	TotalDays   int                `json:"total_days"`
+	Checked     int                `json:"checked"`
+	Complete    int                `json:"complete"`
+	Empty       int                `json:"empty"`
+	Pending     int                `json:"pending"`
+	Running     int                `json:"running"`
+	Failed      int                `json:"failed"`
+	Processed   int64              `json:"processed"`
+	Error       string             `json:"error,omitempty"`
+	LastAttempt *time.Time         `json:"last_attempt,omitempty"`
+	Days        []GenerationDay    `json:"days"`
+	Monthly     *GenerationDay     `json:"monthly,omitempty"`
+}
+
+// Site queue diagnostics omit identities and raw source errors: a billing
+// administrator may not have permission to inspect the other task's subject.
+type GenerationBlocker struct {
+	Kind      string    `json:"kind"`
+	Period    string    `json:"period,omitempty"`
+	Status    string    `json:"status"`
+	Reason    string    `json:"reason"`
+	Attempts  int       `json:"attempts,omitempty"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 var ErrGenerationInProgress = errors.New("billing generation in progress")

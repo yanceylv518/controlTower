@@ -3,6 +3,7 @@ import {computed,onBeforeUnmount,ref,watch} from 'vue';
 import {ElMessage,ElMessageBox} from 'element-plus';
 import type {BillingGenerationBatch,BillingGenerationProgress} from '@ct/shared';
 import {dashboard,passthrough} from '../api';
+import {billingGenerationReason} from '../utils/billingGenerationReason';
 import {billingTaskErrorMessage} from '../utils/httpError';
 type Subject={id:number;name:string;role?:number};
 const props=defineProps<{site:string;kind?:string;month:string;selected?:number;subjects:Subject[];busy?:boolean}>();
@@ -94,6 +95,7 @@ const active=computed(()=>!!batch.value&&(items.value.length===0||items.value.so
 const totals=computed(()=>items.value.reduce((a,v)=>({users:a.users+(['complete','no_consumption'].includes(v.outcome)?1:0),errors:a.errors+(v.outcome==='failed'?1:0),days:a.days+v.total_days,done:a.done+v.complete+v.empty,empty:a.empty+v.empty,pending:a.pending+v.pending,running:a.running+v.running,requests:a.requests+v.processed}),{users:0,errors:0,days:0,done:0,empty:0,pending:0,running:0,requests:0}));
 const succeeded=computed(()=>!!batch.value&&items.value.length===batch.value.subject_ids.length&&items.value.every(v=>['complete','no_consumption'].includes(v.outcome)));
 const cancelled=computed(()=>items.value.some(v=>v.outcome==='cancelled')&&!active.value);
+const blockingReasons=computed(()=>[...new Set(items.value.map(billingGenerationReason).filter(Boolean))]);
 const waitingForReport=computed(()=>active.value&&items.value.some(v=>v.waiting_for==='report'));
 const resultLabel=computed(()=>waitingForReport.value?'等待报表完成':cancelled.value?'已取消':succeeded.value?(items.value.every(v=>v.outcome==='no_consumption')?'无消费，无需生成账单':'生成成功'):totals.value.errors?(active.value?'生成中，部分失败':'生成失败'):'正在生成');
 const progressStatus=computed(()=>totals.value.errors?'exception':succeeded.value?'success':undefined);
@@ -166,14 +168,14 @@ defineExpose({open,active,hasBatch,saving,restore});
 </el-dialog>
 <el-dialog v-model="progress" :title="batchMonth+(active?' · 账单生成进度':' · 账单生成结果')" width="min(1180px,96vw)">
  <el-alert v-if="error" :title="error" type="error" :closable="false"/>
- <el-alert v-if="waitingForReport" title="等待本站点报表完成后生成账单，其他站点独立排队。" type="info" :closable="false"/><div class="batch-metrics"><div><small>已完成{{subjectLabel}}</small><b>{{totals.users}} / {{batch?.subject_ids.length||0}}</b><span v-if="totals.errors">失败 {{totals.errors}} {{unit}}</span></div><div><small>已处理日账期</small><b>{{totals.done}} / {{totals.days}}</b><span>无消费跳过 {{totals.empty}} 个</span></div><div><small>排队 / 执行中</small><b>{{totals.pending}} / {{totals.running}}</b></div><div><small>已处理请求</small><b>{{totals.requests.toLocaleString()}}</b></div></div>
+ <el-alert v-if="waitingForReport" title="等待本站点报表完成后生成账单，其他站点独立排队。" type="info" :closable="false"/><el-alert v-for="reason in blockingReasons" :key="reason" :title="reason" type="warning" :closable="false"/><div class="batch-metrics"><div><small>已完成{{subjectLabel}}</small><b>{{totals.users}} / {{batch?.subject_ids.length||0}}</b><span v-if="totals.errors">失败 {{totals.errors}} {{unit}}</span></div><div><small>已处理日账期</small><b>{{totals.done}} / {{totals.days}}</b><span>无消费跳过 {{totals.empty}} 个</span></div><div><small>本批日账：排队 / 执行中</small><b>{{totals.pending}} / {{totals.running}}</b></div><div><small>已处理请求</small><b>{{totals.requests.toLocaleString()}}</b></div></div>
  <div class="batch-overall"><el-progress :percentage="percentage" :status="progressStatus"/><el-button v-if="active" type="danger" plain :loading="cancelling" @click="cancelTask">取消任务</el-button><el-button :loading="refreshing" @click="refresh">刷新进度</el-button></div>
  <el-table :data="items" row-key="subject_id" size="small" max-height="530" empty-text="正在读取进度">
   <el-table-column type="expand"><template #default="s"><div class="batch-days"><el-alert v-if="s.row.error" :title="s.row.error" type="error" :closable="false"/><div v-if="s.row.monthly" class="monthly-status">月账单：{{labels[s.row.monthly.status]||s.row.monthly.status}}<span v-if="s.row.monthly.error"> · {{s.row.monthly.error}}</span></div>
    <el-table :data="s.row.days" size="small" max-height="380"><el-table-column prop="day" label="日期" width="120"/><el-table-column label="阶段" width="150"><template #default="d">{{labels[d.row.status]||d.row.status}}</template></el-table-column><el-table-column label="已处理请求" width="130" align="right"><template #default="d">{{d.row.processed.toLocaleString()}}</template></el-table-column><el-table-column label="更新时间" width="190"><template #default="d">{{local(d.row.updated_at)}}</template></el-table-column><el-table-column prop="error" label="失败原因" min-width="220" show-overflow-tooltip/></el-table>
   </div></template></el-table-column>
   <el-table-column :label="subjectLabel" min-width="180"><template #default="s"><b>{{progressName(s.row)}}</b><small class="id">#{{s.row.subject_id}}</small></template></el-table-column>
-  <el-table-column label="当前状态" min-width="155"><template #default="s"><el-tag :type="s.row.outcome==='failed'?'danger':['complete','no_consumption'].includes(s.row.outcome)?'success':'primary'" size="small">{{s.row.waiting_for==='report'?'等待报表完成':labels[s.row.outcome]||s.row.outcome}}</el-tag></template></el-table-column>
+  <el-table-column label="当前状态 / 等待原因" min-width="250"><template #default="s"><el-tag :type="s.row.outcome==='failed'?'danger':['complete','no_consumption'].includes(s.row.outcome)?'success':'primary'" size="small">{{s.row.waiting_for==='report'?'等待报表完成':labels[s.row.outcome]||s.row.outcome}}</el-tag><small v-if="billingGenerationReason(s.row)" class="id">{{billingGenerationReason(s.row)}}</small></template></el-table-column>
   <el-table-column label="已检查日期" width="115"><template #default="s">{{s.row.checked}} / {{s.row.total_days}}</template></el-table-column>
   <el-table-column label="已生成 / 无消费" width="135"><template #default="s">{{s.row.complete}} / {{s.row.empty}}</template></el-table-column>
   <el-table-column label="排队 / 执行 / 失败" width="155"><template #default="s">{{s.row.pending}} / {{s.row.running}} / {{s.row.failed}}</template></el-table-column>

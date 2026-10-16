@@ -389,6 +389,8 @@ type JobRunner struct {
 	Spool     DetailPageSpool
 	Poll      time.Duration
 	PagePause time.Duration
+	// Yield only after a committed page; zero disables cooperative scheduling.
+	StepQuantum time.Duration
 }
 
 func (r JobRunner) Run(ctx context.Context) error {
@@ -524,7 +526,7 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 		}
 	}
 	cursor := step.Cursor
-	var processed, abnormal int64
+	processed, abnormal := step.ProcessedRows, step.AbnormalRows
 	var upstreamModels map[int64][]string
 	var upstreamChannelIDs []int64
 	if job.JobType == "upstream_statement" {
@@ -750,6 +752,13 @@ func (r JobRunner) processStep(ctx context.Context, job Job, step JobStep) error
 		}
 		if len(logs) < BillingPageSize && job.DataSource != "archive" {
 			break
+		}
+		if r.StepQuantum > 0 && time.Since(started) >= r.StepQuantum {
+			if store, ok := r.Store.(interface {
+				YieldBillingStep(context.Context, Job, JobStep) error
+			}); ok {
+				return store.YieldBillingStep(ctx, job, step)
+			}
 		}
 		if r.PagePause > 0 {
 			timer := time.NewTimer(r.PagePause)

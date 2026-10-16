@@ -15,6 +15,9 @@ import (
 type SiteGenerationWorker struct {
 	Store   billing.GenerationQueueStore
 	Recover func(context.Context, string) error
+	// Prepare runs inside the site lease, before selecting the next job. It
+	// must only enqueue CT-local work, never wait for source reads.
+	Prepare func(context.Context, string) error
 	RunTask func(context.Context, string, billing.QueuedGeneration) (bool, error)
 	Poll    time.Duration
 }
@@ -64,6 +67,11 @@ func (w SiteGenerationWorker) runSite(ctx context.Context, site string) {
 		}
 	}
 	for lease.Err() == nil {
+		if w.Prepare != nil {
+			if err := w.Prepare(lease, site); err != nil {
+				log.Printf("generation prepare site=%s: %v", site, err)
+			}
+		}
 		task, err := w.Store.NextGeneration(lease, site)
 		if errors.Is(err, sql.ErrNoRows) {
 			return

@@ -20,6 +20,9 @@ func (s Store) CreateBillingStatementJob(ctx context.Context, job billing.Job, s
 }
 
 func (s Store) createBillingStatementJobAttempt(ctx context.Context, job billing.Job, steps []billing.JobStep, subjectName string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if job.MoneySnapshot == nil && !(job.UsageVersion >= 3 && job.BillPeriod == "monthly") {
 		return fmt.Errorf("billing money snapshot required")
 	}
@@ -36,7 +39,7 @@ func (s Store) createBillingStatementJobAttempt(ctx context.Context, job billing
 	// Monthly enqueue reads completed day snapshots and can invalidate an empty
 	// month without a queued job. Acquire the same site lease before opening its
 	// read view. Never wait for it while holding the queue lock: fill retries later.
-	if job.UsageVersion >= 3 && job.BillPeriod == "monthly" {
+	if job.UsageVersion >= 3 && job.BillPeriod == "monthly" && !s.ownsGenerationLease(ctx, job.InstanceID) {
 		key := generationSiteLockKey(job.InstanceID)
 		var owns int
 		if e := conn.QueryRowContext(ctx, `SELECT GET_LOCK(?,0)`, key).Scan(&owns); e != nil {

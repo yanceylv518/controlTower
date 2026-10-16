@@ -37,10 +37,10 @@ func (s Store) GenerationSites(ctx context.Context) ([]string, error) {
 
 func (s Store) NextGeneration(ctx context.Context, site string) (billing.QueuedGeneration, error) {
 	var task billing.QueuedGeneration
-	// A running whole task survives new arrivals and restart. At idle, billing
-	// takes priority over pending reports. The caller owns the site lock.
+	// Continue active reports; otherwise CT-only monthly publication precedes
+	// source-reading jobs at their durable checkpoints. No source scans overlap.
 	err := s.db.QueryRowContext(ctx, `SELECT kind,id,status FROM (
-SELECT 'billing' kind,id,status,IF(status IN ('running','publishing'),0,1) priority,created_at FROM billing_jobs WHERE instance_id=? AND status IN ('pending','running','publishing')
+SELECT 'billing' kind,id,status,CASE WHEN bill_period='monthly' AND usage_version>=3 AND NOT EXISTS (SELECT 1 FROM settlement_report_tasks active_report WHERE active_report.instance_id=billing_jobs.instance_id AND active_report.status='running') THEN -1 WHEN status IN ('running','publishing') THEN 0 ELSE 1 END priority,created_at FROM billing_jobs WHERE instance_id=? AND status IN ('pending','running','publishing')
 UNION ALL SELECT 'report' kind,id,status,IF(status='running',0,2) priority,created_at FROM settlement_report_tasks WHERE instance_id=? AND status IN ('pending','running')
 ) queue ORDER BY priority,created_at,id LIMIT 1`, site, site).Scan(&task.Kind, &task.ID, &task.Status)
 	return task, err
@@ -68,6 +68,17 @@ func generationSiteLockKey(site string) string {
 	return fmt.Sprintf("ct:generation:%x", sha256.Sum256([]byte(site)))[:64]
 }
 
+type generationLeaseKey struct{}
+type generationLeaseOwner struct {
+	db   *sql.DB
+	site string
+}
+
+func (s Store) ownsGenerationLease(ctx context.Context, site string) bool {
+	owner, ok := ctx.Value(generationLeaseKey{}).(generationLeaseOwner)
+	return ok && ctx.Err() == nil && owner.db == s.db && owner.site == site
+}
+
 func (s Store) LockGenerationSite(ctx context.Context, site string) (context.Context, func(), error) {
 	if site == "" {
 		return nil, nil, fmt.Errorf("generation site required")
@@ -85,7 +96,7 @@ func (s Store) LockGenerationSite(ctx context.Context, site string) (context.Con
 		conn.Close()
 		return nil, nil, billing.ErrGenerationInProgress
 	}
-	lease, cancel := context.WithCancel(ctx)
+	lease, cancel := context.WithCancel(context.WithValue(ctx, generationLeaseKey{}, generationLeaseOwner{s.db, site}))
 	done := make(chan struct{})
 	go func() {
 		defer close(done)

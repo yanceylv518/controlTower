@@ -3,6 +3,7 @@ package mysqlstore
 import (
 	"context"
 	"controltower/server/internal/billing"
+	"errors"
 	"fmt"
 	"os"
 	"testing"
@@ -61,6 +62,7 @@ func TestQueuedMonthInvalidatedByNewDailySnapshot(t *testing.T) {
 			t.Fatal(e)
 		}
 	}
+	enqueueCtx := ctx
 	month := func() billing.Job {
 		j, _, _ := billing.NewJob(site, from, from.AddDate(0, 1, 0), "test")
 		j.JobType = "user_statement"
@@ -68,13 +70,48 @@ func TestQueuedMonthInvalidatedByNewDailySnapshot(t *testing.T) {
 		j.UsageVersion = 3
 		j.BillPeriod = "monthly"
 		j.RequestKey = "month:" + site
-		if e := s.CreateBillingStatementJob(ctx, j, nil, ""); e != nil {
+		if e := s.CreateBillingStatementJob(enqueueCtx, j, nil, ""); e != nil {
 			t.Fatal(e)
 		}
 		return j
 	}
 	day(0)
+	lease, release, err := s.LockGenerationSite(ctx, site)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if !s.ownsGenerationLease(lease, site) || s.ownsGenerationLease(ctx, site) || s.ownsGenerationLease(lease, site+"-other") {
+		t.Fatal("lease ownership scope")
+	}
+	blocked, _, _ := billing.NewJob(site, from, from.AddDate(0, 1, 0), "test")
+	blocked.JobType, blocked.BillPeriod, blocked.UserID, blocked.UsageVersion, blocked.RequestKey = "user_statement", "monthly", 7, 3, blocked.ID
+	if err = s.CreateBillingStatementJob(ctx, blocked, nil, ""); !errors.Is(err, billing.ErrStatementQueueFull) {
+		t.Fatal("external enqueue bypassed lease", err)
+	}
+	enqueueCtx = lease
+	busy, steps, _ := billing.NewJob(site, from, from.AddDate(0, 0, 1), "test")
+	if err = s.CreateBillingJob(lease, busy, steps); err != nil {
+		t.Fatal(err)
+	}
+	claimed, step, ok, err := s.ForGeneration(site, busy.ID).ClaimBillingStep(lease)
+	if err != nil || !ok {
+		t.Fatal(err, ok)
+	}
+	if err = s.YieldBillingStep(lease, claimed, step); err != nil {
+		t.Fatal(err)
+	}
+	var attempts int
+	if err = db.QueryRowContext(lease, `SELECT attempts FROM billing_job_steps WHERE job_id=?`, busy.ID).Scan(&attempts); err != nil || attempts != 0 {
+		t.Fatal("voluntary yield consumed retry", attempts, err)
+	}
 	old := month()
+	if next, e := s.NextGeneration(lease, site); e != nil || next.ID != old.ID {
+		t.Fatal("running day starved monthly publication", next, e)
+	}
+	if _, err = db.ExecContext(lease, `UPDATE billing_jobs SET status='cancelled' WHERE id=?`, busy.ID); err != nil {
+		t.Fatal(err)
+	}
 	if j, e := s.BillingJob(ctx, old.ID); e != nil || j.Status != "pending" {
 		t.Fatal(j.Status, e)
 	}

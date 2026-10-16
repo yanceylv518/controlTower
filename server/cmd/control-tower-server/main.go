@@ -258,18 +258,20 @@ func startBillingJobRunner(workers *workerGroup, store mysqlstore.Store, secretK
 			default:
 			}
 		},
-		Source:    dashboard.BillingSources{BillingReadonlySource: dashboard.BillingReadonlySource{Handler: readonly}, Archive: archivereader.Reader{Connections: store, SecretKey: secretKey, BillingVersions: store}},
-		Store:     store,
-		Spool:     billing.FileDetailSpool{},
-		Files:     billing.UserDailyFileGenerator{Store: store, Spool: billing.FileDetailSpool{}},
-		PagePause: pagePause,
+		Source:      dashboard.BillingSources{BillingReadonlySource: dashboard.BillingReadonlySource{Handler: readonly}, Archive: archivereader.Reader{Connections: store, SecretKey: secretKey, BillingVersions: store}},
+		Store:       store,
+		Spool:       billing.FileDetailSpool{},
+		Files:       billing.UserDailyFileGenerator{Store: store, Spool: billing.FileDetailSpool{}},
+		PagePause:   pagePause,
+		StepQuantum: 30 * time.Second,
 	}
 	reports := dashboard.SettlementReportWorker{Store: store, Calculator: dashboard.SettlementReportHandler{Store: store, Source: dashboard.BillingSources{BillingReadonlySource: dashboard.BillingReadonlySource{Handler: readonly}, Archive: archivereader.Reader{Connections: store, SecretKey: secretKey, BillingVersions: store}}}}
 	workers.Go(reports.Schedule)
 	// Billing continuation is part of the enabled billing worker, including API-only mode.
 	workers.Go(dashboard.BillingAutomation{Wake: wakeBilling, Store: store, Source: dashboard.BillingReadonlySource{Handler: readonly}, Archive: archivereader.Reader{Connections: store, SecretKey: secretKey, BillingVersions: store}}.Run)
 	workers.Go(dashboard.SiteGenerationWorker{
-		Store: store,
+		Store:   store,
+		Prepare: (dashboard.BillingAutomation{Store: store}).FillMonthly,
 		Recover: func(ctx context.Context, site string) error {
 			return store.ForGeneration(site, "").RecoverReportTasks(ctx)
 		},

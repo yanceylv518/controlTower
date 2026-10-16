@@ -232,6 +232,16 @@ func (h *PassthroughHandler) ValidateBillingIndexes(ctx context.Context, site st
 		h.billingIndexes = map[*sql.DB]time.Time{}
 	}
 	h.billingIndexes[db] = time.Now().Add(5 * time.Minute)
+	if h.billingTimeIndexes == nil {
+		h.billingTimeIndexes = map[*sql.DB]string{}
+	}
+	best := ""
+	for name, columns := range indexes {
+		if len(columns) > 0 && columns[0] == "created_at" && (best == "" || len(columns) < len(indexes[best]) || len(columns) == len(indexes[best]) && name < best) {
+			best = name
+		}
+	}
+	h.billingTimeIndexes[db] = best
 	h.mu.Unlock()
 	return nil
 }
@@ -246,11 +256,6 @@ func (h *PassthroughHandler) logsPageForBilling(ctx context.Context, site string
 	if !configured {
 		return nil, fmt.Errorf("readonly database is not configured for %s", site)
 	}
-	release, err := sourceBillingBudget.acquire(ctx, site)
-	if err != nil {
-		return nil, err
-	}
-	defer release()
 
 	if limit <= 0 || limit > 5000 {
 		limit = billing.BillingPageSize
@@ -260,7 +265,7 @@ func (h *PassthroughHandler) logsPageForBilling(ctx context.Context, site string
 	// instead of transferring the complete payload over the RDS connection.
 	query, _ := billingLogsPageQuery(userID, channelID, tokenID)
 	query = billingZeroOutputPageQuery(ctx, query)
-	args := billingPageRangeArgs(start, end, cursor)
+	args := []any{}
 	if userID > 0 {
 		args = append(args, userID)
 	}
@@ -270,20 +275,7 @@ func (h *PassthroughHandler) logsPageForBilling(ctx context.Context, site string
 	if tokenID >= 0 {
 		args = append(args, tokenID)
 	}
-	args = append(args, limit)
-	// Large users and channels can still need more than 30 seconds for the
-	// first indexed page on a remote new-api database. Keep every page bounded,
-	// but use the same ceiling as the existing detailed billing-log read path.
-	queryCtx, cancel := context.WithTimeout(ctx, billingLogsPageTimeout)
-	rows, err := db.QueryContext(queryCtx, query, args...)
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("billing logs page site=%s user=%d channel=%d cursor=%d/%d: %w", site, userID, channelID, cursor.CreatedUnix, cursor.ID, err)
-	}
-	defer cancel()
-	defer rows.Close()
-	out := make([]billing.PagedLogRecord, 0, limit)
-	return scanBillingLogRows(rows, out)
+	return h.readBillingWindowPage(ctx, db, site, query, args, start, end, cursor, limit)
 }
 
 func (h *PassthroughHandler) logsPageForBillingChannels(ctx context.Context, site string, channelIDs []int64, models map[int64][]string, start, end time.Time, cursor billing.LogCursor, limit int) ([]billing.PagedLogRecord, error) {
@@ -294,28 +286,13 @@ func (h *PassthroughHandler) logsPageForBillingChannels(ctx context.Context, sit
 	if !configured {
 		return nil, fmt.Errorf("readonly database is not configured for %s", site)
 	}
-	release, err := sourceBillingBudget.acquire(ctx, site)
-	if err != nil {
-		return nil, err
-	}
-	defer release()
 
 	if limit <= 0 || limit > 5000 {
 		limit = billing.BillingPageSize
 	}
 	query, filters := billingChannelsModelsPageQuery(channelIDs, models)
 	query = billingZeroOutputPageQuery(ctx, query)
-	args := append(billingPageRangeArgs(start, end, cursor), filters...)
-	args = append(args, limit)
-	queryCtx, cancel := context.WithTimeout(ctx, billingLogsPageTimeout)
-	rows, err := db.QueryContext(queryCtx, query, args...)
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("billing channel logs page site=%s channels=%d cursor=%d/%d: %w", site, len(channelIDs), cursor.CreatedUnix, cursor.ID, err)
-	}
-	defer cancel()
-	defer rows.Close()
-	return scanBillingLogRows(rows, make([]billing.PagedLogRecord, 0, limit))
+	return h.readBillingWindowPage(ctx, db, site, query, filters, start, end, cursor, limit)
 }
 
 func scanBillingLogRows(rows *sql.Rows, out []billing.PagedLogRecord) ([]billing.PagedLogRecord, error) {
@@ -865,17 +842,18 @@ func configureReadonlyDB(db *sql.DB) {
 }
 
 type PassthroughHandler struct {
-	Config         ReadonlyConfigStore
-	Audit          PassthroughAuditStore
-	Rollups        ReadonlyLogRollupStore
-	SecretKey      string
-	mu             sync.Mutex
-	pools          map[string]passthroughPool
-	summaryCache   *readonlyQueryCache
-	rawSummaries   readonlyRawSummaryGroup
-	summarySlots   map[*sql.DB]chan struct{}
-	channelNames   map[readonlyChannelKey]readonlyChannelName
-	billingIndexes map[*sql.DB]time.Time
+	Config             ReadonlyConfigStore
+	Audit              PassthroughAuditStore
+	Rollups            ReadonlyLogRollupStore
+	SecretKey          string
+	mu                 sync.Mutex
+	pools              map[string]passthroughPool
+	summaryCache       *readonlyQueryCache
+	rawSummaries       readonlyRawSummaryGroup
+	summarySlots       map[*sql.DB]chan struct{}
+	channelNames       map[readonlyChannelKey]readonlyChannelName
+	billingIndexes     map[*sql.DB]time.Time
+	billingTimeIndexes map[*sql.DB]string
 }
 
 type PassthroughUser struct {

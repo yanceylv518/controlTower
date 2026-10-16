@@ -90,7 +90,7 @@ func TestBillingModelFilterMySQLEquivalence(t *testing.T) {
 		}
 		// IDs are deliberately not monotonic with timestamps, and exceed 2^53.
 		id := int64(9007199254740993 + (187-i)*3)
-		if _, err = insert.ExecContext(ctx, id, 100+i/8, typ, 7+i%2, 1+i%4, token, fmt.Sprint(id), names[i%len(names)], output, i*5, other); err != nil {
+		if _, err = insert.ExecContext(ctx, id, 100+(i/8)*1000, typ, 7+i%2, 1+i%4, token, fmt.Sprint(id), names[i%len(names)], output, i*5, other); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -98,7 +98,7 @@ func TestBillingModelFilterMySQLEquivalence(t *testing.T) {
 		t.Fatal(err)
 	}
 	ids := []int64{1, 2, 4} // channel 4 has no name; unbound channel 3 must stay excluded
-	from, to := time.Unix(102, 0), time.Unix(120, 0)
+	from, to := time.Unix(2100, 0), time.Unix(20100, 0)
 	for _, tc := range []struct {
 		name   string
 		models map[int64][]string
@@ -108,7 +108,7 @@ func TestBillingModelFilterMySQLEquivalence(t *testing.T) {
 		{"unrestricted", nil},
 		{"large-fallback", map[int64][]string{1: make([]string, 1001)}},
 	} {
-		for _, initial := range []billing.LogCursor{{}, {CreatedUnix: 110, ID: 9007199254741340}, {CreatedUnix: 120, ID: 1}} {
+		for _, initial := range []billing.LogCursor{{}, {CreatedUnix: 10100, ID: 9007199254741340}, {CreatedUnix: 20100, ID: 1}} {
 			read := func(optimized bool) ([]billing.PagedLogRecord, int) {
 				cursor := initial
 				var out []billing.PagedLogRecord
@@ -125,15 +125,32 @@ func TestBillingModelFilterMySQLEquivalence(t *testing.T) {
 							args = append(args, id)
 						}
 					}
-					args = append(args, 3)
-					rows, e := conn.QueryContext(ctx, rewrite(q), args...)
+					var values []billing.PagedLogRecord
+					var e error
+					if optimized {
+						q, extra := billingChannelsModelsPageQuery(ids, tc.models)
+						q = strings.Replace(q, "FROM logs l WHERE", "FROM logs l FORCE INDEX (`time_idx`) WHERE", 1)
+						values, e = billingWindowPage(ctx, from, to, cursor, 3, func(start, end time.Time, c billing.LogCursor, n int) ([]billing.PagedLogRecord, error) {
+							args := append(billingPageRangeArgs(start, end, c), extra...)
+							args = append(args, n)
+							rows, err := conn.QueryContext(ctx, rewrite(q), args...)
+							if err != nil {
+								return nil, err
+							}
+							defer rows.Close()
+							return scanBillingLogRows(rows, nil)
+						})
+					} else {
+						args = append(args, 3)
+						rows, err := conn.QueryContext(ctx, rewrite(q), args...)
+						if err != nil {
+							t.Fatal(err)
+						}
+						values, e = scanBillingLogRows(rows, nil)
+						rows.Close()
+					}
 					if e != nil {
 						t.Fatal(tc.name, e)
-					}
-					values, e := scanBillingLogRows(rows, nil)
-					rows.Close()
-					if e != nil {
-						t.Fatal(e)
 					}
 					nRead += len(values)
 					for _, v := range values {

@@ -88,6 +88,15 @@ func TestGenerationSiteQueueMySQL(t *testing.T) {
 	if _, _, ok, e := s.ForGeneration(b, jb.ID).ClaimBillingStep(ctx); e != nil || !ok {
 		t.Fatal("independent billing claim", ok, e)
 	}
+	if _, e := db.ExecContext(ctx, `UPDATE billing_jobs SET error_message='Error 3024 private-source-details' WHERE id=?`, jb.ID); e != nil {
+		t.Fatal(e)
+	}
+	if blocker, e := s.BillingGenerationBlocker(ctx, b); e != nil || blocker == nil || blocker.Reason != "source_timeout" || blocker.Attempts != 1 {
+		t.Fatal("missing source wait reason", blocker, e)
+	}
+	if blocker, e := s.BillingGenerationBlocker(ctx, a); e != nil || blocker == nil || blocker.Reason == "source_timeout" {
+		t.Fatal("cross-site source error leaked", blocker, e)
+	}
 	// Upgrade may encounter both kinds marked running by the old workers.
 	// Waiting explanations must follow the single selected owner.
 	legacy, e := s.CreateReportTask(ctx, billing.ReportTask{ID: b + "-legacy", Site: b, From: "2025-01-01", To: "2025-01-02", Overwrite: true})

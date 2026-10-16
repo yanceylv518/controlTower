@@ -248,6 +248,22 @@ func (h BillingBatchGenerationHandler) ServeHTTP(w http.ResponseWriter, r *http.
 			}
 		}
 	}
+	if queue, ok := h.Store.(interface {
+		BillingGenerationBlocker(context.Context, string) (*billing.GenerationBlocker, error)
+	}); ok {
+		blocker, err := queue.BillingGenerationBlocker(r.Context(), req.InstanceID)
+		if err != nil {
+			writeDashboardError(w, 500, "billing_progress_unavailable")
+			return
+		}
+		for i := range items {
+			switch items[i].Outcome {
+			case "complete", "no_consumption", "failed", "cancelled":
+			default:
+				items[i].Blocker = blocker
+			}
+		}
+	}
 	status := 200
 	if r.Method == "POST" {
 		status = 202
